@@ -1,0 +1,22 @@
+[package]
+name = "emulsion-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Emulsion image editor"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+gpui-kit = { workspace = true }
+emulsion-ui = { workspace = true }
+emulsion-core = { workspace = true }
+emulsion-mcp = { workspace = true }
+[[bin]]
+name = "emulsion"
+path = "src/main.rs"

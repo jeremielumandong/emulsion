@@ -1,0 +1,14 @@
+[package]
+name = "emulsion-color"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ICC profiles, working spaces, and transfer functions"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }

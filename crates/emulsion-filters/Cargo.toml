@@ -1,0 +1,16 @@
+[package]
+name = "emulsion-filters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Adjustments and filters as pure functions over tiles, with CPU and GPU implementations"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+rayon = { workspace = true }
+emulsion-raster = { workspace = true }
+emulsion-gpu = { workspace = true }

@@ -1,0 +1,63 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.98"
+license = "TBD"
+
+[workspace.dependencies]
+# internal
+emulsion-core = { path = "crates/emulsion-core" }
+emulsion-raster = { path = "crates/emulsion-raster" }
+emulsion-gpu = { path = "crates/emulsion-gpu" }
+emulsion-tools = { path = "crates/emulsion-tools" }
+emulsion-filters = { path = "crates/emulsion-filters" }
+emulsion-color = { path = "crates/emulsion-color" }
+emulsion-io = { path = "crates/emulsion-io" }
+emulsion-recipes = { path = "crates/emulsion-recipes" }
+emulsion-ai = { path = "crates/emulsion-ai" }
+emulsion-mcp = { path = "crates/emulsion-mcp" }
+emulsion-assistant = { path = "crates/emulsion-assistant" }
+emulsion-ui = { path = "crates/emulsion-ui" }
+
+# ui (pinned exactly; GPUI is pre-1.0)
+gpui-kit = "=0.6.4"
+
+# common
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+rayon = "1"
+smallvec = "1"
+glam = "0.33"
+
+# pixels / io
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff", "bmp", "gif"] }
+wgpu = "29"            # same major as gpui-pre 0.3.5 so one wgpu is linked (spike 6)
+zip = "8"
+quick-xml = { version = "0.42", features = ["serialize"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[profile.dev]
+opt-level = 1            # GPUI and image decoding are unusable at opt-level 0
+
+[profile.dev.package."*"]
+opt-level = 3            # dependencies always optimized; our crates stay fast to rebuild
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

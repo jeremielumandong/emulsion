@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+*.pdb
+.DS_Store
+/spikes/**/out/
+/.cargo/config.local.toml
+
+# Private planning and design material (kept locally, not part of the open-source repo)
+/PLAN.md
+/design/

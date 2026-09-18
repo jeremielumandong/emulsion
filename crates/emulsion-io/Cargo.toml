@@ -1,0 +1,23 @@
+[package]
+name = "emulsion-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Import and export"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+image = { workspace = true }
+zip = { workspace = true }
+quick-xml = { workspace = true }
+tracing = { workspace = true }
+emulsion-core = { workspace = true }
+emulsion-raster = { workspace = true }
+emulsion-color = { workspace = true }

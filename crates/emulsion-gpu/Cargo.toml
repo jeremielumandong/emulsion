@@ -1,0 +1,17 @@
+[package]
+name = "emulsion-gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "wgpu device, compositor, filter kernels, brush shaders, and readback"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+wgpu = { workspace = true }
+emulsion-raster = { workspace = true }

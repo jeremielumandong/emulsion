@@ -1,0 +1,17 @@
+[package]
+name = "emulsion-raster"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Tiled pixel buffers, pixel formats, blend math, mip chains, and SIMD CPU paths"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+smallvec = { workspace = true }
+glam = { workspace = true }

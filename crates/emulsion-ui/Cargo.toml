@@ -1,0 +1,16 @@
+[package]
+name = "emulsion-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "GPUI views and design tokens for Emulsion"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+gpui-kit = { workspace = true }
+emulsion-core = { workspace = true }

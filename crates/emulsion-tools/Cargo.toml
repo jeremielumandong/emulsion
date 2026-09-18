@@ -1,0 +1,17 @@
+[package]
+name = "emulsion-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Interactive tools"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+glam = { workspace = true }
+emulsion-core = { workspace = true }
+emulsion-raster = { workspace = true }
