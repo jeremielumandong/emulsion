@@ -69,69 +69,199 @@ gpui_kit::actions!(
     ]
 );
 
+/// Every action a key can trigger, by name, so a keymap file can refer
+/// to them.
+macro_rules! make_binding {
+    ($name:expr, $keys:expr, $ctx:expr; $($a:ident),* $(,)?) => {
+        match $name {
+            $(stringify!($a) => Some(KeyBinding::new($keys, $a, $ctx)),)*
+            _ => None,
+        }
+    };
+}
+
+/// A binding for the action called `name`, or None for an unknown name.
+pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> {
+    make_binding!(name, keys, ctx;
+        NewDocument, Open, Save, SaveAs, Export, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
+        Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleTheme, ShowHome,
+        ShowEditor, DeleteNode, DuplicateNode, GroupNodes, Ungroup, MoveNodeUp, MoveNodeDown,
+        ToggleNodeVisible, Ask, ToolHand, ToolMove, ToolPen, ToolType, ToolMarquee, ToolLasso,
+        ToolWand, ToolBrush, ToolEraser, ToolBucket, ToolGradient, ToolHeal, ToolClone,
+        ToolCrop, ToolShape, SwapColors, DefaultColors, BrushSmaller, BrushLarger, CommitTool,
+        SelectAll, Deselect, InvertSelection, FillSelection, ContentAwareFill, ShowSettings,
+        Suggestion1, Suggestion2, Suggestion3, Suggestion4, Quit,
+    )
+}
+
+/// The binding contexts a keymap file may name.
+pub const CONTEXTS: [(&str, &str); 3] = [
+    ("workspace", "Workspace"),
+    ("canvas", "Canvas"),
+    ("panel", "NodePanel"),
+];
+
+/// Default shortcuts: (context key, action, keystrokes).
+pub const DEFAULTS: &[(&str, &str, &str)] = &[
+    ("workspace", "NewDocument", "ctrl-n"),
+    ("workspace", "Open", "ctrl-o"),
+    ("workspace", "Save", "ctrl-s"),
+    ("workspace", "SaveAs", "ctrl-shift-s"),
+    ("workspace", "Export", "ctrl-shift-e"),
+    ("workspace", "Undo", "ctrl-z"),
+    ("workspace", "Redo", "ctrl-shift-z"),
+    ("workspace", "Redo", "ctrl-y"),
+    ("workspace", "ZoomIn", "ctrl-="),
+    ("workspace", "ZoomIn", "ctrl-+"),
+    ("workspace", "ZoomIn", "ctrl-shift-="),
+    ("workspace", "ZoomOut", "ctrl--"),
+    ("workspace", "ZoomFit", "ctrl-0"),
+    ("workspace", "Zoom100", "ctrl-1"),
+    ("workspace", "ToggleRulers", "ctrl-r"),
+    ("workspace", "DuplicateNode", "ctrl-j"),
+    ("workspace", "GroupNodes", "ctrl-g"),
+    ("workspace", "Ungroup", "ctrl-shift-g"),
+    ("workspace", "MoveNodeUp", "ctrl-]"),
+    ("workspace", "MoveNodeDown", "ctrl-["),
+    ("workspace", "ToggleNodeVisible", "ctrl-,"),
+    ("workspace", "Quit", "ctrl-q"),
+    ("workspace", "Ask", "ctrl-k"),
+    ("workspace", "Suggestion1", "alt-1"),
+    ("workspace", "Suggestion2", "alt-2"),
+    ("workspace", "Suggestion3", "alt-3"),
+    ("workspace", "Suggestion4", "alt-4"),
+    ("workspace", "SelectAll", "ctrl-a"),
+    ("workspace", "Deselect", "ctrl-d"),
+    ("workspace", "InvertSelection", "ctrl-shift-i"),
+    ("canvas", "ToolHand", "h"),
+    ("canvas", "ToolPen", "p"),
+    ("canvas", "ToolType", "t"),
+    ("canvas", "ToolMove", "v"),
+    ("canvas", "ToolMarquee", "m"),
+    ("canvas", "ToolLasso", "l"),
+    ("canvas", "ToolWand", "w"),
+    ("canvas", "ToolBrush", "b"),
+    ("canvas", "ToolEraser", "e"),
+    ("canvas", "ToolBucket", "g"),
+    ("canvas", "ToolGradient", "shift-g"),
+    ("canvas", "ToolHeal", "j"),
+    ("canvas", "ToolClone", "s"),
+    ("canvas", "ToolCrop", "c"),
+    ("canvas", "ToolShape", "u"),
+    ("canvas", "SwapColors", "x"),
+    ("canvas", "DefaultColors", "d"),
+    ("canvas", "BrushSmaller", "["),
+    ("canvas", "BrushLarger", "]"),
+    ("canvas", "CommitTool", "enter"),
+    ("canvas", "FillSelection", "alt-backspace"),
+    ("canvas", "ContentAwareFill", "shift-backspace"),
+    ("canvas", "RotateCw", "r"),
+    ("canvas", "RotateCcw", "shift-r"),
+    ("canvas", "ResetRotation", "escape"),
+    ("canvas", "DeleteNode", "delete"),
+    ("canvas", "DeleteNode", "backspace"),
+    ("panel", "DeleteNode", "delete"),
+    ("panel", "DeleteNode", "backspace"),
+];
+
+/// Where the person's overrides live.
+pub fn keymap_path() -> std::path::PathBuf {
+    emulsion_io::recent::data_dir().join("keymap.toml")
+}
+
+/// A starter file with every default, commented, for editing.
+pub fn keymap_template() -> String {
+    let mut out = String::from(
+        r#"# Emulsion shortcuts. Uncomment a line and change its keys; a later
+# binding for the same keys wins. Several keys: ["ctrl-z", "f1"].
+# Contexts: [workspace] modifier shortcuts, [canvas] bare keys while
+# the canvas has focus, [panel] the scene graph.
+
+"#,
+    );
+    for (ctx, _) in CONTEXTS {
+        out.push_str(&format!("[{ctx}]\n"));
+        for (c, action, keys) in DEFAULTS {
+            if *c == ctx {
+                out.push_str(&format!("# {action} = \"{keys}\"\n"));
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Overrides from the keymap file: (context key, action, keystrokes).
+pub fn user_bindings() -> Vec<(String, String, String)> {
+    let Ok(text) = std::fs::read_to_string(keymap_path()) else {
+        return Vec::new();
+    };
+    let Ok(v) = toml::from_str::<toml::Table>(&text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (ctx, _) in CONTEXTS {
+        let Some(table) = v.get(ctx).and_then(|t| t.as_table()) else {
+            continue;
+        };
+        for (action, keys) in table {
+            match keys {
+                toml::Value::String(k) => out.push((ctx.to_string(), action.clone(), k.clone())),
+                toml::Value::Array(a) => {
+                    for k in a.iter().filter_map(|k| k.as_str()) {
+                        out.push((ctx.to_string(), action.clone(), k.to_string()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Defaults with the person's overrides applied (an override replaces
+/// every default of the same action in that context).
+pub fn effective() -> Vec<(String, String, String)> {
+    let user = user_bindings();
+    let mut out: Vec<(String, String, String)> = DEFAULTS
+        .iter()
+        .filter(|(c, a, _)| !user.iter().any(|(uc, ua, _)| uc == c && ua == a))
+        .map(|(c, a, k)| (c.to_string(), a.to_string(), k.to_string()))
+        .collect();
+    out.extend(user);
+    out
+}
+
+fn context_name(key: &str) -> Option<&'static str> {
+    CONTEXTS.iter().find(|(k, _)| *k == key).map(|(_, n)| *n)
+}
+
 pub fn bind(cx: &mut App) {
-    let ws = Some("Workspace");
-    let canvas = Some("Canvas");
-    let panel = Some("NodePanel");
-    cx.bind_keys([
-        KeyBinding::new("ctrl-n", NewDocument, ws),
-        KeyBinding::new("ctrl-o", Open, ws),
-        KeyBinding::new("ctrl-s", Save, ws),
-        KeyBinding::new("ctrl-shift-s", SaveAs, ws),
-        KeyBinding::new("ctrl-shift-e", Export, ws),
-        KeyBinding::new("ctrl-z", Undo, ws),
-        KeyBinding::new("ctrl-shift-z", Redo, ws),
-        KeyBinding::new("ctrl-y", Redo, ws),
-        KeyBinding::new("ctrl-=", ZoomIn, ws),
-        KeyBinding::new("ctrl-+", ZoomIn, ws),
-        KeyBinding::new("ctrl-shift-=", ZoomIn, ws),
-        KeyBinding::new("ctrl--", ZoomOut, ws),
-        KeyBinding::new("ctrl-0", ZoomFit, ws),
-        KeyBinding::new("ctrl-1", Zoom100, ws),
-        KeyBinding::new("ctrl-r", ToggleRulers, ws),
-        KeyBinding::new("ctrl-j", DuplicateNode, ws),
-        KeyBinding::new("ctrl-g", GroupNodes, ws),
-        KeyBinding::new("ctrl-shift-g", Ungroup, ws),
-        KeyBinding::new("ctrl-]", MoveNodeUp, ws),
-        KeyBinding::new("ctrl-[", MoveNodeDown, ws),
-        KeyBinding::new("ctrl-,", ToggleNodeVisible, ws),
-        KeyBinding::new("ctrl-q", Quit, ws),
-        KeyBinding::new("ctrl-k", Ask, ws),
-        KeyBinding::new("alt-1", Suggestion1, ws),
-        KeyBinding::new("alt-2", Suggestion2, ws),
-        KeyBinding::new("alt-3", Suggestion3, ws),
-        KeyBinding::new("alt-4", Suggestion4, ws),
-        KeyBinding::new("ctrl-a", SelectAll, ws),
-        KeyBinding::new("ctrl-d", Deselect, ws),
-        KeyBinding::new("ctrl-shift-i", InvertSelection, ws),
-        KeyBinding::new("h", ToolHand, canvas),
-        KeyBinding::new("p", ToolPen, canvas),
-        KeyBinding::new("t", ToolType, canvas),
-        KeyBinding::new("v", ToolMove, canvas),
-        KeyBinding::new("m", ToolMarquee, canvas),
-        KeyBinding::new("l", ToolLasso, canvas),
-        KeyBinding::new("w", ToolWand, canvas),
-        KeyBinding::new("b", ToolBrush, canvas),
-        KeyBinding::new("e", ToolEraser, canvas),
-        KeyBinding::new("g", ToolBucket, canvas),
-        KeyBinding::new("shift-g", ToolGradient, canvas),
-        KeyBinding::new("j", ToolHeal, canvas),
-        KeyBinding::new("s", ToolClone, canvas),
-        KeyBinding::new("c", ToolCrop, canvas),
-        KeyBinding::new("u", ToolShape, canvas),
-        KeyBinding::new("x", SwapColors, canvas),
-        KeyBinding::new("d", DefaultColors, canvas),
-        KeyBinding::new("[", BrushSmaller, canvas),
-        KeyBinding::new("]", BrushLarger, canvas),
-        KeyBinding::new("enter", CommitTool, canvas),
-        KeyBinding::new("alt-backspace", FillSelection, canvas),
-        KeyBinding::new("shift-backspace", ContentAwareFill, canvas),
-        KeyBinding::new("r", RotateCw, canvas),
-        KeyBinding::new("shift-r", RotateCcw, canvas),
-        KeyBinding::new("escape", ResetRotation, canvas),
-        KeyBinding::new("delete", DeleteNode, canvas),
-        KeyBinding::new("backspace", DeleteNode, canvas),
-        KeyBinding::new("delete", DeleteNode, panel),
-        KeyBinding::new("backspace", DeleteNode, panel),
-    ]);
+    let mut bindings = Vec::new();
+    for (ctx, action, keys) in effective() {
+        if let Some(b) = binding(&action, &keys, context_name(&ctx)) {
+            bindings.push(b);
+        }
+    }
+    cx.bind_keys(bindings);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULTS, binding, context_name, keymap_template};
+
+    #[test]
+    fn every_default_names_a_real_action_and_the_template_parses() {
+        for (ctx, action, keys) in DEFAULTS {
+            assert!(
+                binding(action, keys, context_name(ctx)).is_some(),
+                "{action} is not an action"
+            );
+        }
+        let t = keymap_template();
+        if let Err(e) = toml::from_str::<toml::Table>(&t) {
+            panic!("{e}");
+        }
+        assert!(t.contains("# Undo = \"ctrl-z\""));
+    }
 }

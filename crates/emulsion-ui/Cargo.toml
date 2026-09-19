@@ -25,6 +25,7 @@ emulsion-filters = { workspace = true }
 rayon = { workspace = true }
 smallvec = { workspace = true }
 image = { workspace = true }
+toml = { workspace = true }
 parking_lot = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

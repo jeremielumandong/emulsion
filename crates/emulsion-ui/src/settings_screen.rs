@@ -9,6 +9,18 @@ use gpui_kit::component::input::Input;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
+/// "ToggleNodeVisible" → "toggle node visible".
+fn humanize(action: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in action.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push(' ');
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
 fn tier(n: u8, title: &str, on: bool, state: &str, p: &Palette) -> Div {
     div()
         .flex()
@@ -297,10 +309,78 @@ impl Workspace {
                     )
                     .children(self.jev_test.clone().map(|(msg, err)| mono(msg, 10.5, if err { p.accent } else { p.ink }))),
             )
+            .child({
+                let eff = crate::actions::effective();
+                let overrides = crate::actions::user_bindings().len();
+                let mut rows = div().flex().flex_wrap().gap(px(6.)).max_w(px(760.));
+                for (ctx, action, keys) in &eff {
+                    let ctx_mark = match ctx.as_str() { "canvas" => "", "panel" => "panel · ", _ => "" };
+                    rows = rows.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .border_1()
+                            .border_color(p.line)
+                            .font_family(crate::theme::MONO_FONT)
+                            .text_size(px(10.))
+                            .child(div().text_color(p.ink).child(keys.clone()))
+                            .child(div().text_color(p.muted).child(format!("{ctx_mark}{}", humanize(action)))),
+                    );
+                }
+                section(&p)
+                    .child(tier(5, "Shortcuts", overrides > 0, if overrides > 0 { "custom" } else { "default" }, &p))
+                    .child(body("Every shortcut, as it works right now. To change one, open the keymap file, uncomment a line and set its keys, then reload. Bare letters work while the canvas has focus; modifier shortcuts work anywhere.", &p))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(chip("km-open", "open keymap file", false, &p).on_click(cx.listener(|this, _, _, cx| this.open_keymap_file(cx))))
+                            .child(chip("km-reload", "reload", false, &p).on_click(cx.listener(|this, _, _, cx| {
+                                crate::actions::bind(cx);
+                                this.keymap_note = Some(format!("Reloaded: {} custom binding(s).", crate::actions::user_bindings().len()).into());
+                                cx.notify();
+                            })))
+                            .children(self.keymap_note.clone().map(|m| mono(m, 10.5, p.ink))),
+                    )
+                    .child(rows)
+            })
             .child(div().px(px(40.)).py(px(24.)).child(button("done", "Back to the editor", false, &p).on_click(cx.listener(|this, _, _, cx| {
                 this.screen = if this.editor.is_some() { crate::workspace::Screen::Editor } else { crate::workspace::Screen::Home };
                 cx.notify();
             }))))
+    }
+
+    /// Write the keymap template if there is no file yet, then hand it to
+    /// the system's editor.
+    fn open_keymap_file(&mut self, cx: &mut Context<Self>) {
+        let path = crate::actions::keymap_path();
+        if !path.exists() {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&path, crate::actions::keymap_template());
+        }
+        let shown = path.display().to_string();
+        let opened = std::process::Command::new("xdg-open")
+            .arg(&path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .is_ok();
+        self.keymap_note = Some(
+            if opened {
+                format!("Editing {shown}; press reload when saved.")
+            } else {
+                format!("Keymap file: {shown}")
+            }
+            .into(),
+        );
+        cx.notify();
     }
 
     fn ensure_image_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
