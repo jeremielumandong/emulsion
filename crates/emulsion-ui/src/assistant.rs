@@ -92,6 +92,55 @@ pub struct Assistant {
     /// Which provider the running session belongs to; a different choice
     /// in Settings ends it so the next request starts the chosen CLI.
     session_provider: Option<&'static str>,
+    /// Phase (0–1) of the "working" shimmer, and whether its loop runs.
+    anim: f32,
+    anim_running: bool,
+}
+
+/// "thinking…" / "working…" with a pulse and a highlight sweeping across
+/// it, so it is plain the AI is busy. `phase` cycles 0–1.
+fn working_badge(status: String, phase: f32, p: &Palette) -> AnyElement {
+    let k = (phase * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+    let mut col = p.muted;
+    col.l += (p.ink.l - p.muted.l) * k;
+    col.a = 1.0;
+    let band = 36.0f32;
+    let travel = 110.0f32;
+    let x = -band + (travel + band) * phase;
+    let glow = p.accent.opacity(0.45);
+    let clear = p.accent.opacity(0.0);
+    div()
+        .relative()
+        .flex_none()
+        .overflow_hidden()
+        .child(mono(format!("✦ {status}"), 10., col).whitespace_nowrap())
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(x))
+                .w(px(band / 2.0))
+                .bg(linear_gradient(
+                    90.,
+                    linear_color_stop(clear, 0.),
+                    linear_color_stop(glow, 1.),
+                )),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(x + band / 2.0))
+                .w(px(band / 2.0))
+                .bg(linear_gradient(
+                    90.,
+                    linear_color_stop(glow, 0.),
+                    linear_color_stop(clear, 1.),
+                )),
+        )
+        .into_any_element()
 }
 
 /// The CLI chosen in Settings.
@@ -532,6 +581,7 @@ impl EditorView {
         }
         self.assistant.running = true;
         self.assistant.dock_open = true;
+        self.start_working_anim(cx);
         self.assistant.turn = Some(Turn {
             prompt: text,
             started: Some(Instant::now()),
@@ -540,6 +590,35 @@ impl EditorView {
         });
         self.set_status("Assistant is working…", false, cx);
         Ok(())
+    }
+
+    /// Animate the dock's shimmer while a turn runs; stops itself when
+    /// the turn ends.
+    fn start_working_anim(&mut self, cx: &mut Context<Self>) {
+        if self.assistant.anim_running {
+            return;
+        }
+        self.assistant.anim_running = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(33))
+                    .await;
+                let more = this.update(cx, |this, cx| {
+                    if !this.assistant.running {
+                        this.assistant.anim_running = false;
+                        return false;
+                    }
+                    this.assistant.anim = (this.assistant.anim + 0.011).rem_euclid(1.0);
+                    cx.notify();
+                    true
+                });
+                if !matches!(more, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn end_turn(&mut self, cost: f64, error: Option<String>, cx: &mut Context<Self>) {
@@ -1447,6 +1526,45 @@ impl EditorView {
                 }))
         });
         let show_t = a.show_transcript;
+        let phase = a.anim;
+        // An indeterminate progress line along the top while the AI works.
+        let progress = running.then(|| {
+            div()
+                .relative()
+                .h(px(2.))
+                .w_full()
+                .flex_none()
+                .overflow_hidden()
+                .bg(p.line.opacity(0.4))
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(relative(phase * 1.35 - 0.35))
+                        .w(relative(0.35))
+                        .bg(linear_gradient(
+                            90.,
+                            linear_color_stop(p.accent.opacity(0.0), 0.),
+                            linear_color_stop(p.accent, 1.),
+                        )),
+                )
+        });
+        let status_el = if running {
+            working_badge(status, phase, p)
+        } else {
+            mono(
+                status,
+                10.,
+                if turn.error.is_some() {
+                    p.accent
+                } else {
+                    p.muted
+                },
+            )
+            .whitespace_nowrap()
+            .into_any_element()
+        };
         Some(
             div()
                 .flex()
@@ -1458,6 +1576,7 @@ impl EditorView {
                 .border_t_1()
                 .border_color(p.line)
                 .bg(p.panel)
+                .children(progress)
                 .child(
                     div()
                         .flex()
@@ -1468,18 +1587,7 @@ impl EditorView {
                             mono(format!("> {}", short(&turn.prompt)), 10.5, p.ink)
                                 .whitespace_nowrap(),
                         )
-                        .child(
-                            mono(
-                                status,
-                                10.,
-                                if turn.error.is_some() {
-                                    p.accent
-                                } else {
-                                    p.muted
-                                },
-                            )
-                            .whitespace_nowrap(),
-                        )
+                        .child(status_el)
                         .child(div().flex_1())
                         .child(
                             chip("transcript", "transcript", show_t, p).on_click(cx.listener(
