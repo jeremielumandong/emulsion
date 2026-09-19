@@ -342,6 +342,18 @@ impl Database {
         Ok(())
     }
 
+    /// The database loaded once per process (about 100 ms), when installed.
+    pub fn shared() -> Option<std::sync::Arc<Database>> {
+        static DB: std::sync::OnceLock<std::sync::Mutex<Option<std::sync::Arc<Database>>>> =
+            std::sync::OnceLock::new();
+        let cell = DB.get_or_init(|| std::sync::Mutex::new(None));
+        let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() && installed() {
+            *guard = Database::load().ok().map(std::sync::Arc::new);
+        }
+        guard.clone()
+    }
+
     /// Load every installed file.
     pub fn load() -> Result<Database> {
         let mut db = Database::default();

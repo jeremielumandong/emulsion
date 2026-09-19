@@ -1051,9 +1051,76 @@ impl EditorView {
         self.suggest_busy = true;
         let rev = self.editor.revision;
         let doc = self.editor.doc.clone();
+        // Model-backed proposals need a small picture and what is installed.
+        let tree = self.tree.clone();
+        let faces_possible = emulsion_ai::face::detector_available().is_some()
+            && emulsion_ai::face::available().is_some();
+        let lens_possible = doc.info.is_some() && emulsion_io::lensfun::installed();
         cx.spawn(async move |this, cx| {
             let s = cx
-                .background_spawn(async move { suggest::suggest(&doc) })
+                .background_spawn(async move {
+                    let mut out = suggest::suggest(&doc);
+                    if lens_possible
+                        && let Some(info) = &doc.info
+                        && let Some(db) = emulsion_io::lensfun::Database::shared()
+                        && let Some(p) = emulsion_io::lensfun::profile_for(
+                            &db,
+                            &info.make,
+                            &info.model,
+                            &info.lens,
+                            info.focal_mm,
+                            info.f_number,
+                        )
+                        && !doc.nodes.iter().any(|n| {
+                            matches!(&n.kind, NodeKind::Smart { filters, .. }
+                                if filters.iter().any(|f| f.key() == "lens_profile"))
+                        })
+                    {
+                        out.push(suggest::Suggestion::action(
+                            format!("Correct lens: {}", p.lens),
+                            "lens_profile",
+                        ));
+                    }
+                    if faces_possible
+                        && !doc
+                            .nodes
+                            .iter()
+                            .any(|n| n.name.starts_with("Faces restored"))
+                    {
+                        // Detect on a small composite: a few hundred ms.
+                        let (w, h, bgra) = crate::editor::doc_thumb(&doc, 640);
+                        let _ = tree;
+                        let rgba: Vec<u8> = bgra
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .flat_map(|p| [p[2], p[1], p[0], p[3]])
+                            .collect();
+                        let small = emulsion_raster::Raster::from_srgba8(w, h, &rgba);
+                        let job = emulsion_ai::jobs::Job::new();
+                        if let Ok(faces) = emulsion_ai::face::detect(&small, &job)
+                            && !faces.is_empty()
+                        {
+                            // Only small faces gain from restoration.
+                            let biggest = faces
+                                .iter()
+                                .map(|f| (f.x1 - f.x0).max(f.y1 - f.y0))
+                                .fold(0.0f32, f32::max)
+                                / w.min(h).max(1) as f32;
+                            if biggest < 0.45 {
+                                out.push(suggest::Suggestion::action(
+                                    format!(
+                                        "Restore {} face{}",
+                                        faces.len(),
+                                        if faces.len() == 1 { "" } else { "s" }
+                                    ),
+                                    "restore_faces",
+                                ));
+                            }
+                        }
+                    }
+                    out
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.suggest_busy = false;
@@ -1071,6 +1138,32 @@ impl EditorView {
         let Some(s) = self.suggestions.get(i).cloned() else {
             return;
         };
+        if let suggest::Kind::Action(action) = &s.kind {
+            self.suggestions.remove(i);
+            match action.as_str() {
+                "lens_profile" => {
+                    // Aim at the photo's pixel node.
+                    if self.selected.is_none() {
+                        self.selected = self
+                            .editor
+                            .doc
+                            .nodes
+                            .iter()
+                            .rev()
+                            .find(|n| {
+                                matches!(n.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. })
+                            })
+                            .map(|n| n.id);
+                    }
+                    self.lens_profile_auto(cx);
+                }
+                "restore_faces" => self.restore_faces(cx),
+                "remove_background" => self.remove_background(cx),
+                "select_subject" => self.select_subject(cx),
+                _ => {}
+            }
+            return;
+        }
         let mut node = Node::adjust(0, s.adjustment.clone());
         node.name = s.node_name.clone();
         if let Some(id) = self.execute(

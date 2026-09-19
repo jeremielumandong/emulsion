@@ -11,6 +11,35 @@ pub struct Suggestion {
     /// Name the node gets when accepted.
     pub node_name: String,
     pub adjustment: Adjustment,
+    /// What accepting does; adjustments add a node, actions run a tool.
+    pub kind: Kind,
+}
+
+/// What a suggestion does when accepted.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum Kind {
+    /// Add `adjustment` as a node.
+    #[default]
+    Adjust,
+    /// Run a named editor action: "lens_profile", "restore_faces",
+    /// "remove_background", "select_subject".
+    Action(String),
+}
+
+impl Suggestion {
+    /// A suggestion that runs an editor action instead of adding a node.
+    pub fn action(label: impl Into<String>, action: &str) -> Self {
+        Suggestion {
+            label: label.into(),
+            node_name: action.to_string(),
+            adjustment: Adjustment::Exposure {
+                exposure: 0.0,
+                offset: 0.0,
+                gamma: 1.0,
+            },
+            kind: Kind::Action(action.to_string()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -98,6 +127,7 @@ pub fn from_stats(s: &Stats) -> Vec<Suggestion> {
         out.push(Suggestion {
             label: format!("Stretch levels {b:.0}–{w:.0}"),
             node_name: "Levels (suggested)".into(),
+            kind: Kind::Adjust,
             adjustment: Adjustment::Levels {
                 in_black: b,
                 in_white: w,
@@ -111,6 +141,7 @@ pub fn from_stats(s: &Stats) -> Vec<Suggestion> {
         out.push(Suggestion {
             label: format!("Recover highlights ({:.0}% clipped)", s.clipped * 100.0),
             node_name: "Recover highlights".into(),
+            kind: Kind::Adjust,
             adjustment: Adjustment::Exposure {
                 exposure: -0.4,
                 offset: 0.0,
@@ -121,6 +152,7 @@ pub fn from_stats(s: &Stats) -> Vec<Suggestion> {
         out.push(Suggestion {
             label: "Lift the shadows".into(),
             node_name: "Lift shadows".into(),
+            kind: Kind::Adjust,
             adjustment: Adjustment::Levels {
                 in_black: 0.0,
                 in_white: 255.0,
@@ -134,6 +166,7 @@ pub fn from_stats(s: &Stats) -> Vec<Suggestion> {
         out.push(Suggestion {
             label: "Cool the warm cast".into(),
             node_name: "Cool down".into(),
+            kind: Kind::Adjust,
             adjustment: Adjustment::WhiteBalance {
                 temperature: -20.0,
                 tint: 0.0,
@@ -143,6 +176,7 @@ pub fn from_stats(s: &Stats) -> Vec<Suggestion> {
         out.push(Suggestion {
             label: "Warm the cool cast".into(),
             node_name: "Warm up".into(),
+            kind: Kind::Adjust,
             adjustment: Adjustment::WhiteBalance {
                 temperature: 20.0,
                 tint: 0.0,
@@ -153,6 +187,7 @@ pub fn from_stats(s: &Stats) -> Vec<Suggestion> {
         out.push(Suggestion {
             label: "Add saturation".into(),
             node_name: "Saturation (suggested)".into(),
+            kind: Kind::Adjust,
             adjustment: Adjustment::HueSaturation {
                 hue: 0.0,
                 saturation: 20.0,

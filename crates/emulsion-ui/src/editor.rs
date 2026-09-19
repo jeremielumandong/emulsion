@@ -28,6 +28,7 @@ use emulsion_raster::{Adjustment, BlendMode, Placement, Raster, TileCoord, color
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+pub(crate) use history::doc_thumb;
 pub use history::recovery_dir;
 use rayon::prelude::*;
 pub use recipes::recipes_dir;
