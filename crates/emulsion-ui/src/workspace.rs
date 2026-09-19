@@ -65,8 +65,14 @@ fn summary(doc: &Document) -> String {
 
 impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // Imported brush tips and grains, so saved brushes render at once.
-        emulsion_io::brushset::load_textures();
+        // Imported brush tips and grains register into a shared registry;
+        // decoding them off the UI thread keeps the first frame quick.
+        std::thread::Builder::new()
+            .name("brush-textures".into())
+            .spawn(|| {
+                emulsion_io::brushset::load_textures();
+            })
+            .ok();
         let weak = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             let Some(this) = weak.upgrade() else {
