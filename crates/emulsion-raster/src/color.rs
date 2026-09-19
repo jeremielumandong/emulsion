@@ -54,6 +54,24 @@ pub fn linear_to_srgb8(l: f32) -> u8 {
     LINEAR_TO_SRGB8[(l * (ENC_N - 1) as f32 + 0.5) as usize]
 }
 
+/// Linear (16-bit steps) → 16-bit sRGB, built once. The toe below the
+/// linear segment's knee is computed directly, where the table would
+/// quantise too coarsely.
+static LINEAR_TO_SRGB16: LazyLock<Vec<u16>> = LazyLock::new(|| {
+    (0..=u16::MAX)
+        .map(|i| f_to_u16(linear_to_srgb(i as f32 / 65535.0)))
+        .collect()
+});
+
+#[inline]
+pub fn linear_to_srgb16(l: f32) -> u16 {
+    let l = l.clamp(0.0, 1.0);
+    if l <= 0.003_130_8 {
+        return f_to_u16(l * 12.92);
+    }
+    LINEAR_TO_SRGB16[(l * 65535.0 + 0.5) as usize]
+}
+
 #[inline]
 pub fn u16_to_f(v: u16) -> f32 {
     v as f32 * (1.0 / 65535.0)
@@ -134,9 +152,9 @@ pub fn premul_to_srgba16(p: [f32; 4]) -> [u16; 4] {
     }
     let inv = 1.0 / a;
     [
-        f_to_u16(linear_to_srgb((p[0] * inv).clamp(0.0, 1.0))),
-        f_to_u16(linear_to_srgb((p[1] * inv).clamp(0.0, 1.0))),
-        f_to_u16(linear_to_srgb((p[2] * inv).clamp(0.0, 1.0))),
+        linear_to_srgb16(p[0] * inv),
+        linear_to_srgb16(p[1] * inv),
+        linear_to_srgb16(p[2] * inv),
         f_to_u16(a),
     ]
 }

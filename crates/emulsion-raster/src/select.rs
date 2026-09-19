@@ -429,22 +429,41 @@ pub fn bounds(m: &Mask) -> IRect {
     IRect::new(e.x + x0, e.y + y0, x1 - x0 + 1, y1 - y0 + 1)
 }
 
-fn box_blur_1d(src: &[f32], dst: &mut [f32], n: usize, stride: usize, count: usize, r: usize) {
-    for line in 0..count {
-        let base = line * if stride == 1 { n } else { 1 };
-        let at = |i: usize| src[base + i * stride];
-        let mut sum = 0.0;
-        for i in 0..=r.min(n - 1) {
-            sum += at(i);
-        }
-        sum += at(0) * r as f32;
-        for i in 0..n {
-            dst[base + i * stride] = sum / (2 * r + 1) as f32;
-            let add = at((i + r + 1).min(n - 1));
-            let sub = at(i.saturating_sub(r));
-            sum += add - sub;
-        }
+/// One row of a running box blur, edges clamped.
+fn box_blur_line(src: &[f32], dst: &mut [f32], r: usize) {
+    let n = src.len();
+    let mut sum = 0.0;
+    for i in 0..=r.min(n - 1) {
+        sum += src[i];
     }
+    sum += src[0] * r as f32;
+    let inv = 1.0 / (2 * r + 1) as f32;
+    for i in 0..n {
+        dst[i] = sum * inv;
+        let add = src[(i + r + 1).min(n - 1)];
+        let sub = src[i.saturating_sub(r)];
+        sum += add - sub;
+    }
+}
+
+/// Box-blur every row of a `w`×`h` buffer, rows in parallel.
+fn box_blur_rows(src: &[f32], dst: &mut [f32], w: usize, r: usize) {
+    use rayon::prelude::*;
+    dst.par_chunks_mut(w)
+        .zip(src.par_chunks(w))
+        .for_each(|(d, s)| box_blur_line(s, d, r));
+}
+
+/// `w`×`h` → `h`×`w`, output rows in parallel.
+fn transpose(src: &[f32], w: usize, h: usize) -> Vec<f32> {
+    use rayon::prelude::*;
+    let mut out = vec![0.0f32; w * h];
+    out.par_chunks_mut(h).enumerate().for_each(|(x, col)| {
+        for (y, v) in col.iter_mut().enumerate() {
+            *v = src[y * w + x];
+        }
+    });
+    out
 }
 
 /// Feather edges by `radius` pixels (three box passes ≈ Gaussian).
@@ -463,10 +482,19 @@ pub fn feather(m: &Mask, radius: f32) -> Mask {
     let (w, h) = (region.w as usize, region.h as usize);
     let mut a: Vec<f32> = m.read_rect(region).into_iter().map(|v| v as f32).collect();
     let mut b = vec![0.0; a.len()];
+    // Box passes commute, so all three horizontal passes run first, then
+    // the buffer is transposed once for the three vertical ones.
     for _ in 0..3 {
-        box_blur_1d(&a, &mut b, w, 1, h, r);
-        box_blur_1d(&b, &mut a, h, w, w, r);
+        box_blur_rows(&a, &mut b, w, r);
+        std::mem::swap(&mut a, &mut b);
     }
+    let mut a = transpose(&a, w, h);
+    let mut b = vec![0.0; a.len()];
+    for _ in 0..3 {
+        box_blur_rows(&a, &mut b, h, r);
+        std::mem::swap(&mut a, &mut b);
+    }
+    let a = transpose(&a, h, w);
     let out: Vec<u8> = a
         .into_iter()
         .map(|v| v.round().clamp(0.0, 255.0) as u8)

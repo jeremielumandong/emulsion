@@ -341,23 +341,39 @@ impl<P: Pix> Plane<P> {
         plane
     }
 
+    /// Run `f` over every row of the level-0 image in parallel, writing
+    /// `per` output values per pixel into a row-major buffer.
+    pub fn rows_par<T: Copy + Send + Sync>(
+        &self,
+        per: usize,
+        init: T,
+        f: impl Fn(&[P], &mut [T]) + Sync,
+    ) -> Vec<T> {
+        use rayon::prelude::*;
+        let (w, h) = (self.width as usize, self.height as usize);
+        let t = TILE as usize;
+        let mut out = vec![init; w * h * per];
+        out.par_chunks_mut(w * per)
+            .enumerate()
+            .for_each(|(y, dst)| {
+                let mut row: Vec<P> = vec![self.fill; w];
+                let ty = (y / t) as i32;
+                let ly = y % t;
+                for tx in 0..w.div_ceil(t) {
+                    if let Some(tile) = self.tiles.get(&TileCoord::new(tx as i32, ty)) {
+                        let x0 = tx * t;
+                        let cw = t.min(w - x0);
+                        row[x0..x0 + cw].copy_from_slice(&tile[ly * t..ly * t + cw]);
+                    }
+                }
+                f(&row, dst);
+            });
+        out
+    }
+
     /// Copy out the full level-0 image row-major.
     pub fn to_pixels(&self) -> Vec<P> {
-        let (w, h) = (self.width as usize, self.height as usize);
-        let mut out = vec![self.fill; w * h];
-        for (c, t) in &self.tiles {
-            let x0 = c.x as usize * TILE as usize;
-            let y0 = c.y as usize * TILE as usize;
-            if x0 >= w || y0 >= h {
-                continue;
-            }
-            let cw = (TILE as usize).min(w - x0);
-            for ly in 0..(TILE as usize).min(h - y0) {
-                let src = &t[ly * TILE as usize..ly * TILE as usize + cw];
-                out[(y0 + ly) * w + x0..(y0 + ly) * w + x0 + cw].copy_from_slice(src);
-            }
-        }
-        out
+        self.rows_par(1, self.fill, |row, dst| dst.copy_from_slice(row))
     }
 }
 
@@ -421,17 +437,19 @@ impl Raster {
     }
 
     pub fn to_srgba8(&self) -> Vec<u8> {
-        self.to_pixels()
-            .into_iter()
-            .flat_map(|p| color::premul_to_srgba8(color::px_to_f(p)))
-            .collect()
+        self.rows_par(4, 0u8, |row, dst| {
+            for (p, o) in row.iter().zip(dst.as_chunks_mut::<4>().0.iter_mut()) {
+                o.copy_from_slice(&color::premul_to_srgba8(color::px_to_f(*p)));
+            }
+        })
     }
 
     pub fn to_srgba16(&self) -> Vec<u16> {
-        self.to_pixels()
-            .into_iter()
-            .flat_map(|p| color::premul_to_srgba16(color::px_to_f(p)))
-            .collect()
+        self.rows_par(4, 0u16, |row, dst| {
+            for (p, o) in row.iter().zip(dst.as_chunks_mut::<4>().0.iter_mut()) {
+                o.copy_from_slice(&color::premul_to_srgba16(color::px_to_f(*p)));
+            }
+        })
     }
 }
 

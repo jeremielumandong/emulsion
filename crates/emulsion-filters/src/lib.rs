@@ -497,28 +497,44 @@ fn gaussian_kernel(radius: f32) -> Vec<f32> {
 }
 
 fn convolve_1d(img: &Image, kernel: &[f32], horizontal: bool) -> Image {
-    let r = (kernel.len() / 2) as i64;
-    let w = img.w;
-    let px: Vec<[f32; 4]> = (0..img.w * img.h)
-        .into_par_iter()
-        .map(|i| {
-            let (x, y) = ((i % w) as i64, (i / w) as i64);
-            let mut acc = [0.0f32; 4];
-            for (k, wgt) in kernel.iter().enumerate() {
-                let o = k as i64 - r;
-                let p = if horizontal {
-                    img.get(x + o, y)
-                } else {
-                    img.get(x, y + o)
-                };
-                for c in 0..4 {
-                    acc[c] += p[c] * wgt;
+    let r = kernel.len() / 2;
+    let (w, h) = (img.w, img.h);
+    let mut px = vec![[0.0f32; 4]; w * h];
+    if horizontal {
+        px.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
+            let row = &img.px[y * w..(y + 1) * w];
+            for (x, o) in out.iter_mut().enumerate() {
+                let lo = x.saturating_sub(r);
+                let hi = (x + r).min(w - 1);
+                let mut acc = [0.0f32; 4];
+                for xx in lo..=hi {
+                    let wgt = kernel[xx + r - x];
+                    let p = row[xx];
+                    acc[0] += p[0] * wgt;
+                    acc[1] += p[1] * wgt;
+                    acc[2] += p[2] * wgt;
+                    acc[3] += p[3] * wgt;
+                }
+                *o = acc;
+            }
+        });
+    } else {
+        px.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
+            let lo = y.saturating_sub(r);
+            let hi = (y + r).min(h - 1);
+            for yy in lo..=hi {
+                let wgt = kernel[yy + r - y];
+                let row = &img.px[yy * w..(yy + 1) * w];
+                for (o, p) in out.iter_mut().zip(row) {
+                    o[0] += p[0] * wgt;
+                    o[1] += p[1] * wgt;
+                    o[2] += p[2] * wgt;
+                    o[3] += p[3] * wgt;
                 }
             }
-            acc
-        })
-        .collect();
-    Image { w, h: img.h, px }
+        });
+    }
+    Image { w, h, px }
 }
 
 fn gaussian(img: &Image, radius: f32) -> Image {
@@ -919,18 +935,18 @@ pub fn apply_stack(source: &Raster, stack: &[Filter]) -> (Raster, (i32, i32)) {
         .sum::<i32>()
         .min(MAX_SPREAD);
     let (w, h) = (source.width() as usize, source.height() as usize);
-    let px: Vec<[f32; 4]> = source
-        .read_rect(source.bounds())
-        .into_iter()
-        .map(color::px_to_f)
-        .collect();
+    let px: Vec<[f32; 4]> = source.rows_par(1, [0.0f32; 4], |row, dst| {
+        for (p, o) in row.iter().zip(dst.iter_mut()) {
+            *o = color::px_to_f(*p);
+        }
+    });
     let mut img = Image { w, h, px }.pad(spread as usize);
     for f in stack {
         img = apply_one(f, &img);
     }
     let out: Vec<[u16; 4]> = img
         .px
-        .into_iter()
+        .par_iter()
         .map(|p| color::f_to_px(p.map(|v| v.clamp(0.0, 1.0))))
         .collect();
     (
