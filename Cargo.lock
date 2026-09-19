@@ -1592,6 +1592,7 @@ dependencies = [
  "anyhow",
  "emulsion-core",
  "emulsion-raster",
+ "glam",
  "image",
  "ndarray",
  "ort",

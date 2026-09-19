@@ -768,6 +768,39 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 message: format!("Added depth map {name:?}: near is bright, far is dark"),
             })
         }
+        "restore_faces" => {
+            if emulsion_ai::face::detector_available().is_none()
+                || emulsion_ai::face::available().is_none()
+            {
+                return Err(err(
+                    "face restore needs yoloface and gfpgan; download_model both first",
+                ));
+            }
+            let strength = args.get("strength").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+            let img = doc_raster(doc);
+            let job = emulsion_ai::jobs::Job::new();
+            let (restored, n) =
+                emulsion_ai::face::restore(&img, strength, &job).map_err(|e| err(e.to_string()))?;
+            Ok(Planned {
+                commands: vec![Command::AddNode {
+                    node: Box::new(
+                        Node::raster(
+                            0,
+                            "Faces restored (AI)",
+                            Arc::new(restored),
+                            Placement::default(),
+                        )
+                        .from_model(
+                            emulsion_ai::face::available()
+                                .map(|m| m.id)
+                                .unwrap_or("gfpgan"),
+                        ),
+                    ),
+                    slot: Slot::TOP,
+                }],
+                message: format!("Restored {n} face(s) into a new node on top"),
+            })
+        }
         "upscale" => {
             if emulsion_ai::upscale::available().is_none() {
                 return Err(err(
@@ -2682,10 +2715,19 @@ mod tests {
             let r = plan_heavy(&e.doc, "select_by_points", &json!({ "points": [[1, 1]] }));
             assert!(failed(r).contains("not installed"));
         }
-        assert!(
-            crate::tools::HEAVY.contains(&"select_subject")
-                && crate::tools::READ_ONLY.contains(&"list_models")
-        );
+        for t in [
+            "select_subject",
+            "select_by_points",
+            "remove_background",
+            "inpaint",
+            "depth_map",
+            "upscale",
+            "restore_faces",
+            "download_model",
+        ] {
+            assert!(crate::tools::HEAVY.contains(&t), "{t} is heavy");
+        }
+        assert!(crate::tools::READ_ONLY.contains(&"list_models"));
     }
 
     #[test]

@@ -43,6 +43,7 @@ pub const HEAVY: &[&str] = &[
     "inpaint",
     "depth_map",
     "upscale",
+    "restore_faces",
 ];
 
 const BLEND_MODES: &[&str] = &[
@@ -399,6 +400,12 @@ pub fn definitions() -> Vec<ToolDef> {
             "depth_map",
             "Add a grey depth-map node of the picture (near is bright) with Depth Anything; use it as a mask for depth of field, fog or depth-aware grading. Needs the depth model.",
             json!({ "name": { "type": "string" } }),
+            &[],
+        ),
+        def(
+            "restore_faces",
+            "Find every face and restore it with GFPGAN into a new node on top (strength 0–1 blends the restored face over the original; default 1). Good for old, small or blurry portraits. Needs the face detector and GFPGAN.",
+            json!({ "strength": { "type": "number", "minimum": 0, "maximum": 1 } }),
             &[],
         ),
         def(

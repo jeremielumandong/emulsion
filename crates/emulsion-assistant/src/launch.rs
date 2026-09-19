@@ -58,7 +58,7 @@ eraser, smudge), paint (strokes on a pixel layer: each stroke is either points [
 crisp editable vector shape from SVG data), add_text (an editable text layer: titles, captions, \
 lettering; list_fonts for families), add_layer, and get_view to look. Local models (list_models): \
 select_subject and remove_background use a matte model, select_by_points uses Segment Anything, \
-inpaint fills a selection with LaMa, depth_map and upscale need their models; when one is \
+inpaint fills a selection with LaMa, depth_map, upscale and restore_faces need their models; when one is \
 missing, say so and offer download_model rather than fetching it unasked.
 
 Draw like a trained artist, in this order, one paint call per step and a get_view after each:

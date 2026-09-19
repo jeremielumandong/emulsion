@@ -16,6 +16,7 @@
 pub mod critique;
 pub mod decide;
 pub mod depth;
+pub mod face;
 pub mod inpaint;
 pub mod jev;
 pub mod jobs;

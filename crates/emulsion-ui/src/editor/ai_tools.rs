@@ -6,7 +6,7 @@
 use super::*;
 use emulsion_ai::jobs::Job;
 use emulsion_ai::models::Task;
-use emulsion_ai::{depth, inpaint, matte, sam, upscale};
+use emulsion_ai::{depth, face, inpaint, matte, sam, upscale};
 use emulsion_raster::IRect;
 use emulsion_raster::composite::region;
 use emulsion_raster::select::Combine;
@@ -456,6 +456,63 @@ impl EditorView {
                     );
                 }
                 Err(e) => this.set_status(format!("Upscale: {e}"), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Restore every face in the picture into a new node.
+    pub fn restore_faces(&mut self, cx: &mut Context<Self>) {
+        if face::detector_available().is_none() {
+            self.set_status(missing(Task::FaceDetect), true, cx);
+            return;
+        }
+        if face::available().is_none() {
+            self.set_status(missing(Task::FaceRestore), true, cx);
+            return;
+        }
+        let img = self.composite_raster();
+        let job = Job::new();
+        self.watch_job(job.clone(), cx);
+        let j = job.clone();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_spawn(async move {
+                    let img = img.await;
+                    let r = face::restore(&img, 1.0, &j);
+                    j.finish();
+                    r
+                })
+                .await;
+            this.update(cx, |this, cx| match r {
+                Ok((restored, n)) => {
+                    let node = Node::raster(
+                        0,
+                        "Faces restored (AI)",
+                        Arc::new(restored),
+                        Placement::default(),
+                    )
+                    .from_model(face::available().map(|m| m.id).unwrap_or("gfpgan"));
+                    if let Some(id) = this.execute(
+                        Command::AddNode {
+                            node: Box::new(node),
+                            slot: Slot::TOP,
+                        },
+                        cx,
+                    ) {
+                        this.selected = Some(id);
+                        this.set_status(
+                            format!(
+                                "Restored {n} face{}: lower the node's opacity to keep it natural.",
+                                if n == 1 { "" } else { "s" }
+                            ),
+                            false,
+                            cx,
+                        );
+                    }
+                }
+                Err(e) => this.set_status(format!("Restore faces: {e}"), true, cx),
             })
             .ok();
         })

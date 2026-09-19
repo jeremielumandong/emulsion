@@ -28,6 +28,10 @@ pub enum Task {
     Inpaint,
     /// Super-resolution.
     Upscale,
+    /// Face boxes and landmarks.
+    FaceDetect,
+    /// Face restoration.
+    FaceRestore,
 }
 
 impl Task {
@@ -38,6 +42,8 @@ impl Task {
             Task::Depth => "depth",
             Task::Inpaint => "fill",
             Task::Upscale => "upscale",
+            Task::FaceDetect => "face detection",
+            Task::FaceRestore => "face restore",
         }
     }
 }
@@ -168,6 +174,32 @@ pub const MANIFEST: &[ModelSpec] = &[
         license: "BSD-3-Clause",
         note: "The well-known ×4 upscaler for photos and renders; larger and slower than Swin2SR, often cleaner on detail.",
         default: false,
+    },
+    ModelSpec {
+        id: "yoloface",
+        name: "YOLOv8 face",
+        task: Task::FaceDetect,
+        files: &[ModelFile {
+            name: "yoloface_8n.onnx",
+            url: "https://huggingface.co/facefusion/models-3.0.0/resolve/main/yoloface_8n.onnx",
+            bytes: 12_659_761,
+        }],
+        license: "AGPL-3.0 (Ultralytics)",
+        note: "Finds faces and their eyes, nose and mouth; needed by face restore.",
+        default: true,
+    },
+    ModelSpec {
+        id: "gfpgan",
+        name: "GFPGAN 1.4",
+        task: Task::FaceRestore,
+        files: &[ModelFile {
+            name: "gfpgan_1.4.onnx",
+            url: "https://huggingface.co/facefusion/models-3.0.0/resolve/main/gfpgan_1.4.onnx",
+            bytes: 340_299_087,
+        }],
+        license: "Apache-2.0",
+        note: "Sharpens and repairs faces in old, small or blurry photos; each face is aligned, restored at 512² and blended back.",
+        default: true,
     },
     ModelSpec {
         id: "swin2sr-lightweight-x2",
@@ -440,6 +472,8 @@ mod tests {
             Task::Depth,
             Task::Inpaint,
             Task::Upscale,
+            Task::FaceDetect,
+            Task::FaceRestore,
         ] {
             assert_eq!(
                 MANIFEST.iter().filter(|m| m.task == t && m.default).count(),
