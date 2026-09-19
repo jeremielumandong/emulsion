@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(a[pos("--mcp-config") + 1], "/tmp/s/mcp.json");
         assert_eq!(
             a[pos("--allowedTools") + 1],
-            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes,mcp__emulsion__list_recipes,mcp__emulsion__critique,mcp__emulsion__list_fonts,mcp__emulsion__list_models"
+            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__get_reference_image,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes,mcp__emulsion__list_recipes,mcp__emulsion__critique,mcp__emulsion__list_fonts,mcp__emulsion__list_models"
         );
         assert_eq!(a[pos("--model") + 1], "sonnet");
         assert!(

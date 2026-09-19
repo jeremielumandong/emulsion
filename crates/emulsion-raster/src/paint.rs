@@ -42,7 +42,8 @@ pub enum GrainKind {
     /// Streaks along the stroke, like the hairs of a loaded brush.
     Bristle,
     /// Screentone: a regular grid of dots fixed to the canvas; `scale` is
-    /// the dot pitch and `grain_strength` the dot size (0 = tiny, 1 = solid).
+    /// the dot pitch and `grain_strength` the ink area fraction (0 = empty,
+    /// 1 = solid). Dots grow into their neighbours at high densities.
     Halftone,
     /// Parallel hatching lines fixed to the canvas at 45°; `scale` is the
     /// line pitch.
@@ -88,7 +89,7 @@ pub struct Brush {
     pub grain: GrainKind,
     /// Grain feature size in pixels.
     pub grain_scale: f32,
-    /// How much grain shows, 0–1.
+    /// How much grain shows, 0–1. For Halftone, the fraction of area inked.
     pub grain_strength: f32,
 
     // ── Dynamics ──
@@ -290,7 +291,8 @@ pub struct Stroke {
     smooth: Option<(f32, f32)>,
     speed: f32,
     /// Stamping state along `path`.
-    last: Option<(f32, f32)>,
+    last: Option<Sample>,
+    /// Remaining path distance to the next dab, carried across input samples.
     carry: f32,
     distance: f32,
     dir: f32,
@@ -390,15 +392,14 @@ pub fn grain(kind: GrainKind, x: f32, y: f32, scale: f32) -> f32 {
                 (x - y) / std::f32::consts::SQRT_2,
             );
             let (fu, fv) = (
-                (u / scale).fract().abs() - 0.5,
-                (v / scale).fract().abs() - 0.5,
+                (u / scale).rem_euclid(1.0) - 0.5,
+                (v / scale).rem_euclid(1.0) - 0.5,
             );
-            let d = (fu * fu + fv * fv).sqrt() * 2.0;
-            (1.0 - d * 1.6).clamp(0.0, 1.0)
+            1.0 - halftone_area(fu.hypot(fv) as f64) as f32
         }
         GrainKind::Hatch => {
             let u = (x + y) / std::f32::consts::SQRT_2;
-            let f = (u / scale).fract().abs();
+            let f = (u / scale).rem_euclid(1.0);
             if f < 0.28 { 1.0 } else { 0.0 }
         }
         GrainKind::CrossHatch => {
@@ -406,10 +407,74 @@ pub fn grain(kind: GrainKind, x: f32, y: f32, scale: f32) -> f32 {
                 (x + y) / std::f32::consts::SQRT_2,
                 (x - y) / std::f32::consts::SQRT_2,
             );
-            let (fu, fv) = ((u / scale).fract().abs(), (v / scale).fract().abs());
+            let (fu, fv) = ((u / scale).rem_euclid(1.0), (v / scale).rem_euclid(1.0));
             if fu < 0.24 || fv < 0.24 { 1.0 } else { 0.0 }
         }
     }
+}
+
+/// Area of a centred circle clipped to one unit square of the tone grid.
+fn halftone_area(radius: f64) -> f64 {
+    if radius >= std::f64::consts::FRAC_1_SQRT_2 {
+        return 1.0;
+    }
+    let area = std::f64::consts::PI * radius * radius;
+    if radius <= 0.5 {
+        area
+    } else {
+        // Subtract the four circular segments beyond the cell's edges.
+        area - 4.0
+            * (radius * radius * (0.5 / radius).acos() - 0.5 * (radius * radius - 0.25).sqrt())
+    }
+}
+
+/// Invert area once per render, not for every pixel or dab.
+fn halftone_radius(density: f32) -> f32 {
+    let density = density.clamp(0.0, 1.0) as f64;
+    if density <= std::f64::consts::FRAC_PI_4 {
+        return (density / std::f64::consts::PI).sqrt() as f32;
+    }
+    if density >= 1.0 {
+        return std::f32::consts::FRAC_1_SQRT_2;
+    }
+    let (mut lo, mut hi) = (0.5, std::f64::consts::FRAC_1_SQRT_2);
+    for _ in 0..24 {
+        let mid = (lo + hi) * 0.5;
+        if halftone_area(mid) < density {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    ((lo + hi) * 0.5) as f32
+}
+
+/// Pixel-area coverage of a page-fixed ink pattern. Apply after accumulating
+/// dabs so overlapping stamps cannot fill antialiased pattern boundaries.
+fn pattern_coverage(kind: GrainKind, x: f32, y: f32, scale: f32, radius: f32) -> f32 {
+    if kind == GrainKind::Halftone {
+        if radius <= 0.0 {
+            return 0.0;
+        }
+        if radius >= std::f32::consts::FRAC_1_SQRT_2 {
+            return 1.0;
+        }
+    }
+    let mut coverage = 0.0;
+    for sy in [0.125, 0.375, 0.625, 0.875] {
+        for sx in [0.125, 0.375, 0.625, 0.875] {
+            let (px, py) = (x + sx, y + sy);
+            let inked = if kind == GrainKind::Halftone {
+                let u = ((px + py) * std::f32::consts::FRAC_1_SQRT_2 / scale).rem_euclid(1.0) - 0.5;
+                let v = ((px - py) * std::f32::consts::FRAC_1_SQRT_2 / scale).rem_euclid(1.0) - 0.5;
+                (u * u + v * v <= radius * radius) as u8 as f32
+            } else {
+                grain(kind, px, py, scale)
+            };
+            coverage += inked;
+        }
+    }
+    coverage / 16.0
 }
 
 /// Bristle streaks: vary across the stroke (`across`, in pixels), stay
@@ -684,8 +749,10 @@ impl Stroke {
         let tip = textures::get(self.brush.tip);
         self.dabs = self.dabs.wrapping_add(1);
         let dab_no = self.dabs;
-        // Tiny tips: spread the dab over the pixel so thin lines stay continuous.
-        let aa = if r < 1.0 { r } else { 1.0 };
+        // Integrate sharp procedural edges over the pixel. Sampling just its
+        // centre can miss a thin dab entirely when it lands between centres.
+        let footprint = std::f32::consts::FRAC_1_SQRT_2 / (r * round);
+        let antialias = (1.0 - hard) * r * round < 1.0 || r * round < 2.0;
         for ty in b.y.div_euclid(t)..=(b.bottom() - 1).div_euclid(t) {
             for tx in b.x.div_euclid(t)..=(b.right() - 1).div_euclid(t) {
                 let coord = TileCoord::new(tx, ty);
@@ -698,7 +765,7 @@ impl Stroke {
                     for x in tr.x..tr.right() {
                         let (ox, oy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
                         let (rx, ry) = (ox * c - oy * s, (ox * s + oy * c) / round);
-                        let d = (rx * rx + ry * ry).sqrt() / r.max(0.5);
+                        let d = (rx * rx + ry * ry).sqrt() / r;
                         let shape = match &tip {
                             // Image tips: sample the alpha in the dab's frame.
                             Some(t) => {
@@ -710,40 +777,39 @@ impl Stroke {
                                     // Hardness sharpens the tip's own edges.
                                     let s = t.sample(u, v);
                                     ((s - 0.5) * (1.0 + hard * 3.0) + 0.5).clamp(0.0, 1.0)
+                                        * r.min(1.0)
                                 }
+                            }
+                            None if antialias && d + footprint > hard && d - footprint < 1.0 => {
+                                let mut coverage = 0.0;
+                                for sy in [-0.375, -0.125, 0.125, 0.375] {
+                                    for sx in [-0.375, -0.125, 0.125, 0.375] {
+                                        let u = rx + sx * c - sy * s;
+                                        let v = ry + (sx * s + sy * c) / round;
+                                        coverage += falloff(u.hypot(v) / r, hard);
+                                    }
+                                }
+                                coverage / 16.0
                             }
                             None => falloff(d, hard),
                         };
-                        let mut a = shape * flow * aa;
+                        let mut a = shape * flow;
                         if a <= 0.0 {
                             continue;
                         }
                         let mut thick = a;
-                        if gstr > 0.0 {
-                            match gk {
-                                // Bristles live in the dab's frame and follow the stroke;
-                                // the same bristles persist so their streaks build up.
-                                GrainKind::Bristle => {
-                                    let g = bristle(ry, rx, gs, seed.wrapping_add(dab_no / 12));
-                                    // Bristles leave shallow gaps in the paint but carry
-                                    // most of its thickness, so the body stays opaque
-                                    // while the ridges catch the light.
-                                    thick = a * (0.3 + 1.7 * g);
-                                    a *= 1.0 - gstr * 0.3 * (1.0 - g);
-                                }
-                                // Screentone: strength sets the dot size; the tone is crisp.
-                                GrainKind::Halftone => {
-                                    let g = grain(gk, x as f32, y as f32, gs);
-                                    a *= if g >= 1.0 - gstr { 1.0 } else { 0.0 };
-                                }
-                                GrainKind::Hatch | GrainKind::CrossHatch => {
-                                    a *= grain(gk, x as f32, y as f32, gs);
-                                }
-                                // Paper-like grains apply to the whole stroke in `render`,
-                                // so overlapping dabs cannot fill the tooth by themselves.
-                                _ => {}
-                            }
+                        // Bristles live in the dab's frame and follow the stroke;
+                        // the same bristles persist so their streaks build up.
+                        if gstr > 0.0 && gk == GrainKind::Bristle {
+                            let g = bristle(ry, rx, gs, seed.wrapping_add(dab_no / 12));
+                            // Bristles leave shallow gaps in the paint but carry
+                            // most of its thickness, so the body stays opaque
+                            // while the ridges catch the light.
+                            thick = a * (0.3 + 1.7 * g);
+                            a *= 1.0 - gstr * 0.3 * (1.0 - g);
                         }
+                        // Page patterns and paper-like grains apply to the whole
+                        // stroke in `render`, preserving gaps between the marks.
                         if a <= 0.0005 {
                             continue;
                         }
@@ -886,10 +952,13 @@ impl Stroke {
         self.stamp_segment(s, None);
     }
 
-    /// Stamp from the last stamped point to `s`. `total` is the stroke
+    /// Stamp from the previous input sample to `s`. `total` is the stroke
     /// length when known (a finished stroke), which enables the end taper.
     fn stamp_segment(&mut self, s: Sample, total: Option<f32>) {
-        let step = (self.brush.size * self.brush.spacing).max(0.5);
+        let step = |pressure: f32, taper: f32, b: &Brush| {
+            let size = b.size * (1.0 - b.size_pressure * (1.0 - pressure)) * taper;
+            (size * b.spacing).max(0.5)
+        };
         let taper = |dist: f32, b: &Brush| -> f32 {
             let mut t = 1.0f32;
             if b.taper_start > 0.0 {
@@ -905,26 +974,31 @@ impl Stroke {
             None => {
                 let t = taper(0.0, &self.brush);
                 self.dab(s.x, s.y, s.pressure, s.tilt, t);
-                self.carry = 0.0;
+                self.carry = step(s.pressure, t, &self.brush);
             }
-            Some((lx, ly)) => {
-                let (dx, dy) = (s.x - lx, s.y - ly);
+            Some(last) => {
+                let (dx, dy) = (s.x - last.x, s.y - last.y);
                 let len = (dx * dx + dy * dy).sqrt();
                 if len > 0.01 {
                     self.dir = dy.atan2(dx).to_degrees();
                 }
-                let mut d = step - self.carry;
-                while d <= len {
+                let mut d = self.carry;
+                while len > 0.0 && d <= len {
                     let f = d / len;
                     let t = taper(self.distance + d, &self.brush);
-                    self.dab(lx + dx * f, ly + dy * f, s.pressure, s.tilt, t);
-                    d += step;
+                    let pressure = last.pressure + (s.pressure - last.pressure) * f;
+                    let tilt = (
+                        last.tilt.0 + (s.tilt.0 - last.tilt.0) * f,
+                        last.tilt.1 + (s.tilt.1 - last.tilt.1) * f,
+                    );
+                    self.dab(last.x + dx * f, last.y + dy * f, pressure, tilt, t);
+                    d += step(pressure, t, &self.brush);
                 }
-                self.carry = len - (d - step);
+                self.carry = d - len;
                 self.distance += len;
             }
         }
-        self.last = Some((s.x, s.y));
+        self.last = Some(s);
     }
 
     /// The pointer lifted. Catches the stabilizer up to the last input and
@@ -941,6 +1015,7 @@ impl Stroke {
             && self.brush.stabilizer > 0.0
         {
             let p = self.path.last().map_or(1.0, |s| s.pressure);
+            let tilt = self.path.last().map_or((0.0, 0.0), |s| s.tilt);
             // Finish the line in a few steps so the taper below sees them.
             for i in 1..=4 {
                 let f = i as f32 / 4.0;
@@ -948,7 +1023,7 @@ impl Stroke {
                     x: sx + (rx - sx) * f,
                     y: sy + (ry - sy) * f,
                     pressure: p,
-                    tilt: (0.0, 0.0),
+                    tilt,
                 });
             }
             changed = true;
@@ -1003,6 +1078,14 @@ impl Stroke {
                     gk,
                     GrainKind::Paper | GrainKind::Canvas | GrainKind::Chalk | GrainKind::Speckle
                 ));
+        let patterned = grain_tex.is_none()
+            && (gk == GrainKind::Halftone
+                || (gstr > 0.0 && matches!(gk, GrainKind::Hatch | GrainKind::CrossHatch)));
+        let tone_radius = if patterned && gk == GrainKind::Halftone {
+            halftone_radius(gstr)
+        } else {
+            0.0
+        };
         let edge = self.brush.edge_darken;
         let relief = self.brush.relief;
         let base_fill = self.base.fill();
@@ -1054,6 +1137,9 @@ impl Stroke {
                 };
                 k *= 1.0 + edge * rim * 0.6;
                 k = k.min(1.0) * opacity;
+                if patterned {
+                    k *= pattern_coverage(gk, x as f32, y as f32, gs, tone_radius);
+                }
                 if let Some(clip) = &self.clip {
                     k *= clip(x, y);
                 }
@@ -1209,6 +1295,185 @@ mod tests {
         }
     }
 
+    fn pattern_sheet(mut brush: Brush, overlap: bool) -> Raster {
+        let base = Arc::new(Raster::transparent(128, 128));
+        brush.size = 1000.0;
+        brush.hardness = 1.0;
+        brush.spacing = 0.02;
+        let mut stroke = Stroke::new(base.clone(), brush, opaque_red(), None);
+        stroke.point(64.0, 64.0);
+        if overlap {
+            stroke.point(0.0, 64.0);
+            stroke.point(128.0, 64.0);
+            stroke.point(0.0, 64.0);
+        }
+        stroke.finish();
+        stroke.render(&base).0
+    }
+
+    fn ink_fraction(raster: &Raster) -> f64 {
+        (0..128)
+            .flat_map(|y| (0..128).map(move |x| (x, y)))
+            .map(|(x, y)| raster.get(x, y)[3] as f64 / 65535.0)
+            .sum::<f64>()
+            / (128.0 * 128.0)
+    }
+
+    #[test]
+    fn screentone_presets_deliver_named_ink_coverage() {
+        for (name, expected) in [
+            ("Screentone 20%", 0.2),
+            ("Screentone 40%", 0.4),
+            ("Screentone 60%", 0.6),
+        ] {
+            let brush = crate::library::find(name).unwrap().brush;
+            let sheet = pattern_sheet(brush, false);
+            let actual = ink_fraction(&sheet);
+            assert!((actual - expected).abs() < 0.01, "{name}: actual {actual}");
+            eprintln!("{name}: {:.2}% measured ink coverage", actual * 100.0);
+        }
+    }
+
+    #[test]
+    fn screentone_density_is_monotonic_through_empty_and_solid() {
+        let mut previous = Raster::transparent(128, 128);
+        for density in [0.0, 0.001, 0.01, 0.2, 0.4, 0.6, 0.8, 0.9, 0.99, 0.999, 1.0] {
+            let sheet = pattern_sheet(
+                Brush {
+                    grain: GrainKind::Halftone,
+                    grain_scale: 6.0,
+                    grain_strength: density,
+                    ..Brush::default()
+                },
+                false,
+            );
+            let actual = ink_fraction(&sheet);
+            assert!(
+                (actual - density as f64).abs() < 0.01,
+                "density {density}: actual {actual}"
+            );
+            for y in 0..128 {
+                for x in 0..128 {
+                    let alpha = sheet.get(x, y)[3];
+                    assert!(
+                        alpha >= previous.get(x, y)[3],
+                        "density {density} lost ink at {x},{y}"
+                    );
+                    if density == 0.0 {
+                        assert_eq!(alpha, 0);
+                    }
+                    if density == 1.0 {
+                        assert_eq!(alpha, 65535);
+                    }
+                }
+            }
+            previous = sheet;
+        }
+    }
+
+    #[test]
+    fn manga_patterns_are_periodic_across_negative_grid_coordinates() {
+        let pitch = 6.0;
+        let shift = pitch * std::f32::consts::FRAC_1_SQRT_2;
+        for kind in [GrainKind::Halftone, GrainKind::Hatch, GrainKind::CrossHatch] {
+            for (x, y) in [(-3.17, 2.41), (1.23, 4.56), (-7.31, -8.91)] {
+                let original = pattern_coverage(kind, x, y, pitch, halftone_radius(0.4));
+                for (dx, dy) in [
+                    (shift, shift),
+                    (shift, -shift),
+                    (-shift, shift),
+                    (-shift, -shift),
+                ] {
+                    assert_eq!(
+                        original,
+                        pattern_coverage(kind, x + dx, y + dy, pitch, halftone_radius(0.4)),
+                        "{kind:?}: shift {dx},{dy} at {x},{y}"
+                    );
+                    assert!(
+                        (grain(kind, x, y, pitch) - grain(kind, x + dx, y + dy, pitch)).abs()
+                            < 1e-5
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn manga_pattern_antialiasing_survives_overlapping_dabs() {
+        for kind in [GrainKind::Halftone, GrainKind::Hatch, GrainKind::CrossHatch] {
+            let brush = Brush {
+                grain: kind,
+                grain_strength: if kind == GrainKind::Halftone {
+                    0.4
+                } else {
+                    1.0
+                },
+                grain_scale: 6.0,
+                ..Brush::default()
+            };
+            let single = pattern_sheet(brush, false);
+            let overlapping = pattern_sheet(brush, true);
+            let mut partial = 0;
+            for y in 0..128 {
+                for x in 0..128 {
+                    let pixel = single.get(x, y);
+                    partial += usize::from(pixel[3] > 0 && pixel[3] < 65535);
+                    assert_eq!(
+                        pixel,
+                        overlapping.get(x, y),
+                        "{kind:?}: dab overlap changed pattern at {x},{y}"
+                    );
+                }
+            }
+            assert!(
+                partial > 100,
+                "{kind:?} needs antialiased interior pattern boundaries"
+            );
+        }
+    }
+
+    #[test]
+    fn image_grain_replaces_manga_patterns_including_zero_strength() {
+        let texture_id = textures::id_for(b"manga image grain precedence regression");
+        textures::register(texture_id, textures::Texture::from_gray8(2, 1, &[0, 255]));
+        for strength in [0.0, 0.4] {
+            let brush = Brush {
+                grain_tex: texture_id,
+                grain_scale: 6.0,
+                grain_strength: strength,
+                ..Brush::default()
+            };
+            let expected = pattern_sheet(brush, false);
+            let coverage = ink_fraction(&expected);
+            if strength == 0.0 {
+                assert_eq!(coverage, 1.0, "zero strength disables the image grain");
+            } else {
+                assert!(
+                    coverage > 0.5 && coverage < 0.95,
+                    "the reference must visibly use the image texture: {coverage}"
+                );
+            }
+            for kind in [GrainKind::Halftone, GrainKind::Hatch, GrainKind::CrossHatch] {
+                let actual = pattern_sheet(
+                    Brush {
+                        grain: kind,
+                        ..brush
+                    },
+                    false,
+                );
+                for y in 0..128 {
+                    for x in 0..128 {
+                        assert_eq!(
+                            actual.get(x, y),
+                            expected.get(x, y),
+                            "{kind:?} must defer to the image grain at strength {strength}, pixel {x},{y}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_line_paints_along_its_path_only() {
         let base = Arc::new(Raster::transparent(300, 300));
@@ -1219,6 +1484,96 @@ mod tests {
         assert!(color::px_to_f(r.get(150, 50))[0] > 0.99);
         assert_eq!(r.get(150, 80), [0; 4]);
         assert!(dirty.x <= 20 && dirty.right() >= 280);
+    }
+
+    #[test]
+    fn thin_round_dabs_cover_pixels_at_integer_coordinates() {
+        let base = Arc::new(Raster::transparent(32, 32));
+        for pressure in [1.0, 0.1] {
+            let mut s = Stroke::new(
+                base.clone(),
+                Brush {
+                    size_pressure: 1.0,
+                    ..hard(1.0)
+                },
+                opaque_red(),
+                None,
+            );
+            s.point_at(16.0, 16.0, Some(pressure), None);
+            let (r, _) = s.render(&base);
+            let alpha = r.get(16, 16)[3];
+            assert!(
+                alpha > 0 && alpha < 32000,
+                "a thin dab has partial pixel coverage"
+            );
+            for (x, y) in [(15, 15), (15, 16), (16, 15)] {
+                assert_eq!(r.get(x, y)[3], alpha, "coverage is symmetric");
+            }
+            let area = 4.0 * alpha as f32 / 65535.0;
+            let radius = (pressure / 2.0_f32).max(0.3);
+            assert!((area - std::f32::consts::PI * radius * radius).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn pressure_and_tilt_interpolate_between_sparse_samples() {
+        let base = Arc::new(Raster::transparent(240, 100));
+        for tilt_dynamics in [false, true] {
+            let brush = Brush {
+                size_pressure: if tilt_dynamics { 0.0 } else { 1.0 },
+                tilt: if tilt_dynamics { 1.0 } else { 0.0 },
+                ..hard(20.0)
+            };
+            let draw = |segments: usize| {
+                let mut stroke = Stroke::new(base.clone(), brush, opaque_red(), None);
+                for i in 0..=segments {
+                    let f = i as f32 / segments as f32;
+                    stroke.point_full(
+                        20.0 + 200.0 * f,
+                        50.0,
+                        Some(0.1 + 0.9 * f),
+                        Some((60.0 * f, 0.0)),
+                        None,
+                    );
+                }
+                stroke.render(&base).0
+            };
+            let sparse = draw(1);
+            let dense = draw(20);
+            for x in [40, 100, 180] {
+                assert_eq!(
+                    band(&sparse, x),
+                    band(&dense, x),
+                    "sample density must not change dynamics at {x}"
+                );
+            }
+            if !tilt_dynamics {
+                assert!(band(&sparse, 40) < band(&sparse, 100));
+                assert!(band(&sparse, 100) < band(&sparse, 180));
+            }
+        }
+    }
+
+    #[test]
+    fn pressure_and_taper_shrink_dab_spacing_to_keep_tips_connected() {
+        let base = Arc::new(Raster::transparent(240, 100));
+        for tapered in [false, true] {
+            let brush = Brush {
+                size_pressure: 1.0,
+                taper_start: if tapered { 100.0 } else { 0.0 },
+                taper_end: if tapered { 100.0 } else { 0.0 },
+                ..hard(100.0)
+            };
+            let mut stroke = Stroke::new(base.clone(), brush, opaque_red(), None);
+            let pressure = if tapered { 0.1 } else { 0.01 };
+            stroke.point_at(20.0, 50.0, Some(pressure), None);
+            stroke.point_at(220.0, 50.0, Some(pressure), None);
+            stroke.finish();
+            let (r, _) = stroke.render(&base);
+            for x in 20..220 {
+                assert!(r.get(x, 50)[3] > 0, "gap at x={x}, tapered={tapered}");
+            }
+        }
     }
 
     #[test]

@@ -302,6 +302,7 @@ pub fn date_stamp(w: u32, h: u32, date: Option<&str>) -> TextSpec {
         y: h as f32 - size * 2.1,
         width: Some(w as f32 * 0.92),
         letter_spacing: size * 0.08,
+        rotation: 0.0,
     }
 }
 

@@ -24,11 +24,27 @@ const NAV_MAX: u32 = 256;
 impl EditorView {
     pub fn toggle_navigator(&mut self, cx: &mut Context<Self>) {
         self.panels.navigator = !self.panels.navigator;
+        self.select_sidebar(
+            if self.panels.navigator {
+                SidebarTab::Navigator
+            } else {
+                SidebarTab::Properties
+            },
+            cx,
+        );
         cx.notify();
     }
 
     pub fn toggle_info(&mut self, cx: &mut Context<Self>) {
         self.panels.info = !self.panels.info;
+        self.select_sidebar(
+            if self.panels.info {
+                SidebarTab::Info
+            } else {
+                SidebarTab::Properties
+            },
+            cx,
+        );
         cx.notify();
     }
 

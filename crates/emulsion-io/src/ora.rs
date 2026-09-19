@@ -42,7 +42,10 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 pub const FORMAT_VERSION: u32 = 1;
 const MANIFEST: &str = "emulsion.json";
-const MAX_MANIFEST_BYTES: u64 = 4 << 20;
+// Editable geometry can be large, especially in legacy pretty-printed files.
+// Keep the much smaller generic ORA XML limit separate.
+pub(crate) const MAX_NATIVE_MANIFEST_BYTES: u64 = 512 << 20;
+const MAX_STACK_BYTES: u64 = 4 << 20;
 const MAX_ENTRY_BYTES: u64 = 1 << 30;
 
 #[derive(Serialize, Deserialize)]
@@ -509,7 +512,13 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
     let enc = encode(doc)?;
     let xml = stack_xml(doc, &enc.ora_layers);
     let manifest =
-        serde_json::to_vec_pretty(&enc.manifest).map_err(|e| IoError::Manifest(e.to_string()))?;
+        serde_json::to_vec(&enc.manifest).map_err(|e| IoError::Manifest(e.to_string()))?;
+    if manifest.len() as u64 > MAX_NATIVE_MANIFEST_BYTES {
+        return Err(IoError::Manifest(format!(
+            "entry {MANIFEST} exceeds the supported {} MiB limit",
+            MAX_NATIVE_MANIFEST_BYTES >> 20
+        )));
+    }
     let history = match graph {
         Some(g) => {
             let tip = g.commit(g.head_branch().tip).map(|c| &c.doc);
@@ -593,7 +602,11 @@ pub fn read_full(path: &Path) -> Result<Opened> {
     let file = std::fs::File::open(path)?;
     let mut zip = ZipArchive::new(std::io::BufReader::new(file))?;
     let manifest = if zip.by_name(MANIFEST).is_ok() {
-        Some(read_entry(&mut zip, MANIFEST, MAX_MANIFEST_BYTES)?)
+        Some(crate::history::fingerprint(&read_entry(
+            &mut zip,
+            MANIFEST,
+            MAX_NATIVE_MANIFEST_BYTES,
+        )?))
     } else {
         None
     };
@@ -606,8 +619,7 @@ pub fn read_full(path: &Path) -> Result<Opened> {
         Ok(Some(h)) => {
             // Use the exact tip (16-bit, buffers shared with older commits)
             // when this file's live stack was written from it.
-            let same =
-                h.live.is_some() && h.live == manifest.as_deref().map(crate::history::fingerprint);
+            let same = h.live.is_some() && h.live == manifest;
             let tip = h
                 .graph
                 .commit(h.graph.head_branch().tip)
@@ -652,11 +664,17 @@ pub fn read(path: &Path) -> Result<Document> {
 }
 
 fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
-    let bytes = read_entry(zip, MANIFEST, MAX_MANIFEST_BYTES)?;
-    // Check the version before trusting the rest of the shape.
-    let probe: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
-    let version = probe.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let bytes = read_entry(zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES)?;
+    // Probe only the version: a generic Value tree duplicates every path
+    // coordinate and costs far more memory than the editable geometry itself.
+    #[derive(Deserialize)]
+    struct VersionProbe {
+        #[serde(default)]
+        version: u32,
+    }
+    let version = serde_json::from_slice::<VersionProbe>(&bytes)
+        .map_err(|e| IoError::Manifest(e.to_string()))?
+        .version;
     if version > FORMAT_VERSION {
         return Err(IoError::TooNew(version));
     }
@@ -664,7 +682,8 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
         return Err(IoError::Manifest("missing version".into()));
     }
     let m: Manifest =
-        serde_json::from_value(probe).map_err(|e| IoError::Manifest(e.to_string()))?;
+        serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
+    drop(bytes);
     if m.format != "emulsion" {
         return Err(IoError::Manifest(format!("unknown format {:?}", m.format)));
     }
@@ -845,7 +864,7 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     use quick_xml::Reader;
     use quick_xml::events::Event;
 
-    let xml = read_entry(zip, "stack.xml", MAX_MANIFEST_BYTES)?;
+    let xml = read_entry(zip, "stack.xml", MAX_STACK_BYTES)?;
     let mut reader = Reader::from_reader(xml.as_slice());
     reader.config_mut().trim_text(true);
 
@@ -1137,6 +1156,54 @@ mod tests {
     }
 
     #[test]
+    fn legacy_manifest_above_four_mib_keeps_editable_paths() {
+        let mut doc = Document::new(8, 8);
+        let path =
+            Arc::new(emulsion_raster::vector::Path::from_svg("M 1 1 L 7 1 L 1 7 Z").unwrap());
+        Command::AddNode {
+            node: Box::new(Node::path(
+                0,
+                "Drawing",
+                path.clone(),
+                Default::default(),
+                8,
+                8,
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let saved = tmp("large-legacy-manifest.ora");
+        write(&doc, &saved).unwrap();
+        let mut input = ZipArchive::new(std::fs::File::open(&saved).unwrap()).unwrap();
+        let mut archive = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for index in 0..input.len() {
+            let mut entry = input.by_index(index).unwrap();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).unwrap();
+            if entry.name() == MANIFEST {
+                assert!(!data.contains(&b'\n'), "new manifests use compact JSON");
+                // Valid legacy formatting above the former 4 MiB limit.
+                data.extend(std::iter::repeat_n(b' ', (4 << 20) + 1));
+            }
+            archive
+                .start_file(
+                    entry.name(),
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
+                )
+                .unwrap();
+            archive.write_all(&data).unwrap();
+        }
+        std::fs::write(&saved, archive.finish().unwrap().into_inner()).unwrap();
+        let loaded = read_full(&saved).unwrap();
+        assert!(loaded.history_error.is_none());
+        let NodeKind::Path { path: reopened, .. } = &loaded.doc.nodes[0].kind else {
+            panic!("large native files must retain editable geometry");
+        };
+        assert_eq!(reopened.as_ref(), path.as_ref());
+    }
+
+    #[test]
     fn native_roundtrip_preserves_everything() {
         let mut d = sample_doc();
         d.guides = vec![
@@ -1184,6 +1251,138 @@ mod tests {
         let a = flatten(&d.composite_tree(), 0).to_srgba8();
         let b = flatten(&back.composite_tree(), 0).to_srgba8();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn rotated_text_and_paths_roundtrip_as_editable_native_content() {
+        use emulsion_core::text::TextSpec;
+        use emulsion_raster::vector::{Path, PathStyle};
+        let legacy: TextSpec =
+            serde_json::from_value(serde_json::json!({"text": "Old document"})).unwrap();
+        assert_eq!(
+            legacy.rotation, 0.0,
+            "older text metadata defaults to no rotation"
+        );
+        let mut doc = Document::new(240, 180);
+        let path_id = Command::AddNode {
+            node: Box::new(Node::path(
+                0,
+                "Arrow",
+                Arc::new(
+                    Path::from_svg("M 35 45 L 95 45 L 95 30 L 125 60 L 95 90 L 95 75 L 35 75 Z")
+                        .unwrap(),
+                ),
+                PathStyle {
+                    stroke: None,
+                    fill: Some([20, 60, 180, 255]),
+                    width: 0.0,
+                },
+                240,
+                180,
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        let text_id = Command::AddNode {
+            node: Box::new(Node::text(
+                0,
+                "Editable label",
+                TextSpec {
+                    text: "Turn".into(),
+                    x: 135.0,
+                    y: 55.0,
+                    size: 24.0,
+                    ..TextSpec::default()
+                },
+                240,
+                180,
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        Command::RotateNode {
+            id: path_id,
+            degrees: 30.0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Command::RotateNode {
+            id: text_id,
+            degrees: -25.0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let NodeKind::Text { spec, .. } = &doc.node(text_id).unwrap().kind else {
+            panic!()
+        };
+        assert!((spec.rotation.rem_euclid(360.0) - 335.0).abs() < 1e-5);
+        let file = tmp("rotated-editable-content.ora");
+        write(&doc, &file).unwrap();
+        let mut restored = read(&file).unwrap();
+        for id in [path_id, text_id] {
+            match (
+                &doc.node(id).unwrap().kind,
+                &restored.node(id).unwrap().kind,
+            ) {
+                (
+                    NodeKind::Path {
+                        path: a, style: sa, ..
+                    },
+                    NodeKind::Path {
+                        path: b, style: sb, ..
+                    },
+                ) => {
+                    assert_eq!(a, b);
+                    assert_eq!(sa, sb);
+                }
+                (NodeKind::Text { spec: a, .. }, NodeKind::Text { spec: b, .. }) => {
+                    assert_eq!(a, b)
+                }
+                _ => panic!("native content must remain editable after reopening"),
+            }
+        }
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&restored.composite_tree(), 0).to_srgba8()
+        );
+        let NodeKind::Text { spec, .. } = &restored.node(text_id).unwrap().kind else {
+            panic!()
+        };
+        let mut edited = (**spec).clone();
+        edited.text = "Still editable".into();
+        Command::SetText {
+            id: text_id,
+            spec: Box::new(edited),
+        }
+        .apply(&mut restored)
+        .unwrap();
+        let NodeKind::Text { spec, .. } = &restored.node(text_id).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(spec.text, "Still editable");
+        assert!((spec.rotation.rem_euclid(360.0) - 335.0).abs() < 1e-5);
+        let NodeKind::Path { path, style, .. } = &restored.node(path_id).unwrap().kind else {
+            panic!()
+        };
+        let mut edited = (**path).clone();
+        edited.subpaths[0].anchors[0].p.0 += 2.0;
+        let expected = edited.subpaths[0].anchors[0].p;
+        let style = *style;
+        Command::SetPath {
+            id: path_id,
+            path: Arc::new(edited),
+            style,
+        }
+        .apply(&mut restored)
+        .unwrap();
+        let NodeKind::Path { path, .. } = &restored.node(path_id).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(path.subpaths[0].anchors[0].p, expected);
     }
 
     #[test]

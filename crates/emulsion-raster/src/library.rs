@@ -143,7 +143,7 @@ pub fn library() -> Vec<BrushPreset> {
                 spacing: 0.1,
                 grain: GrainKind::Halftone,
                 grain_scale: 6.0,
-                grain_strength: 0.32,
+                grain_strength: 0.2,
                 ..d
             },
         ),
@@ -157,7 +157,7 @@ pub fn library() -> Vec<BrushPreset> {
                 spacing: 0.1,
                 grain: GrainKind::Halftone,
                 grain_scale: 6.0,
-                grain_strength: 0.5,
+                grain_strength: 0.4,
                 ..d
             },
         ),
@@ -171,7 +171,7 @@ pub fn library() -> Vec<BrushPreset> {
                 spacing: 0.1,
                 grain: GrainKind::Halftone,
                 grain_scale: 6.0,
-                grain_strength: 0.68,
+                grain_strength: 0.6,
                 ..d
             },
         ),

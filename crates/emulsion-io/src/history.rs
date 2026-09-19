@@ -31,7 +31,7 @@ use zip::ZipArchive;
 
 pub const HISTORY_VERSION: u32 = 1;
 pub(crate) const GRAPH: &str = "history/graph.json";
-const MAX_GRAPH_BYTES: u64 = 64 << 20;
+const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
 
 /// Tile pixels as bytes.
 trait TileBytes: Pix {
@@ -351,6 +351,9 @@ pub(crate) fn encode(graph: &Graph, live: Option<String>) -> Result<Vec<(String,
         commits,
     };
     let json = serde_json::to_vec(&file).map_err(|e| IoError::Manifest(e.to_string()))?;
+    if json.len() as u64 > MAX_GRAPH_BYTES {
+        return Err(IoError::Manifest(format!("entry {GRAPH} is too large")));
+    }
     entries.insert(0, (GRAPH.into(), json));
     Ok(entries)
 }
@@ -402,13 +405,21 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         return Ok(None);
     }
     let bytes = crate::ora::read_entry(zip, GRAPH, MAX_GRAPH_BYTES)?;
-    let probe: serde_json::Value =
+    // Skip other fields without constructing a second copy of all editable
+    // path geometry as a generic JSON tree.
+    #[derive(Deserialize)]
+    struct Version {
+        #[serde(default)]
+        version: u32,
+    }
+    let probe: Version =
         serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
-    let version = probe.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let version = probe.version;
     if version > HISTORY_VERSION {
         return Err(IoError::TooNew(version));
     }
-    let f: HFile = serde_json::from_value(probe).map_err(|e| IoError::Manifest(e.to_string()))?;
+    let f: HFile = serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
+    drop(bytes);
     if f.format != "emulsion-history" || version == 0 {
         return Err(IoError::Manifest("not an Emulsion history graph".into()));
     }
@@ -550,4 +561,59 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         graph,
         live: f.live,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+    #[test]
+    fn history_larger_than_old_limit_preserves_graph() {
+        let original = Graph::new(Document::new(8, 8), "Initial");
+        let entries = encode(&original, Some("live-fingerprint".into())).unwrap();
+        let mut output = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(1));
+        for (name, bytes) in entries {
+            output.start_file(&name, options).unwrap();
+            output.write_all(&bytes).unwrap();
+            if name == GRAPH {
+                // Exercise the old 64 MiB boundary without millions of nodes,
+                // large image buffers, or a large compressed test fixture.
+                let padding = [b' '; 64 * 1024];
+                for _ in 0..1024 {
+                    output.write_all(&padding).unwrap();
+                }
+            }
+        }
+        let mut archive = ZipArchive::new(output.finish().unwrap()).unwrap();
+        assert!(archive.by_name(GRAPH).unwrap().size() > 64 << 20);
+        let restored = read(&mut archive).unwrap().unwrap();
+        assert_eq!(restored.live.as_deref(), Some("live-fingerprint"));
+        assert_eq!(restored.graph.len(), original.len());
+        assert_eq!(restored.graph.head(), original.head());
+        assert_eq!(
+            restored
+                .graph
+                .commit(restored.graph.head_branch().tip)
+                .unwrap()
+                .doc,
+            original.commit(original.head_branch().tip).unwrap().doc
+        );
+    }
+
+    #[test]
+    fn future_history_version_rejected_before_schema() {
+        let mut output = ZipWriter::new(Cursor::new(Vec::new()));
+        output
+            .start_file(GRAPH, SimpleFileOptions::default())
+            .unwrap();
+        // A future format need not have the fields expected by HFile.
+        write!(output, "{{\"version\":{}}}", HISTORY_VERSION + 1).unwrap();
+        let mut archive = ZipArchive::new(output.finish().unwrap()).unwrap();
+        assert!(matches!(read(&mut archive), Err(IoError::TooNew(_))));
+    }
 }

@@ -11,6 +11,7 @@
 pub mod launch;
 pub mod protocol;
 pub mod provider;
+pub mod review;
 pub mod session;
 
 pub use protocol::{Event, Parser};

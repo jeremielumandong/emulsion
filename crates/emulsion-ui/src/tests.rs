@@ -173,6 +173,177 @@ fn requests_that_need_the_assistant_say_so_when_it_is_missing(cx: &mut TestAppCo
     assert_eq!(steps, 0, "nothing changed");
 }
 
+mod reference_images {
+    use super::*;
+    use crate::editor::EditorView;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new(bytes: &[u8]) -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "emulsion-ui-reference-{}-{}.png",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::write(&path, bytes).unwrap();
+            Self(path)
+        }
+
+        fn image(width: u32, height: u32) -> Self {
+            let pixels = image::RgbaImage::from_pixel(width, height, image::Rgba([255, 0, 0, 255]));
+            Self::new(&emulsion_io::export::png8(width, height, pixels.as_raw()).unwrap())
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn load(view: &Entity<EditorView>, path: PathBuf, cx: &mut VisualTestContext) {
+        cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.load_reference(path, cx);
+                assert!(view.assistant.reference_loading);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| assert!(!view.read(cx).assistant.reference_loading));
+    }
+
+    #[gpui_kit::test]
+    fn reference_attachment_preserves_canvas_and_survives_failed_replacement(
+        cx: &mut TestAppContext,
+    ) {
+        let source = Fixture::image(40, 20);
+        let invalid = Fixture::new(b"This is not an image.");
+        let (ws, cx) = open(cx, doc(&["Grass", "Sun"], None));
+        let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        let (before, revision, steps) = cx.update(|_, cx| {
+            let view = view.read(cx);
+            assert!(view.reference_result().is_error);
+            (
+                view.editor.doc.clone(),
+                view.editor.revision,
+                view.editor.history.len(),
+            )
+        });
+        load(&view, source.0.clone(), cx);
+        let attached = cx.update(|_, cx| {
+            let view = view.read(cx);
+            let reference = &view
+                .assistant
+                .reference
+                .as_ref()
+                .expect("reference loaded")
+                .image;
+            assert_eq!((reference.width(), reference.height()), (40, 20));
+            let pixels = image::load_from_memory(reference.png()).unwrap().to_rgba8();
+            assert_eq!(pixels.dimensions(), (40, 20));
+            assert_eq!(pixels.get_pixel(20, 10).0, [255, 0, 0, 255]);
+            let result = view.reference_result();
+            assert!(!result.is_error);
+            assert_eq!(result.content[0]["type"], "image");
+            assert_eq!(result.content[0]["mimeType"], "image/png");
+            assert!(!result.content[0]["data"].as_str().unwrap().is_empty());
+            assert_eq!(result.content, reference.tool_result().content);
+            assert_eq!(view.editor.doc, before);
+            assert_eq!(view.editor.revision, revision);
+            assert_eq!(view.editor.history.len(), steps);
+            reference.clone()
+        });
+
+        for path in [source.0.with_extension("missing"), invalid.0.clone()] {
+            load(&view, path, cx);
+            cx.update(|_, cx| {
+                let view = view.read(cx);
+                assert!(Arc::ptr_eq(
+                    &view.assistant.reference.as_ref().unwrap().image,
+                    &attached
+                ));
+                assert!(
+                    !view.reference_result().is_error,
+                    "the previous image remains available"
+                );
+                let (message, error) = view.status.as_ref().unwrap();
+                assert!(
+                    *error && message.contains("Could not load reference"),
+                    "{message}"
+                );
+                assert_eq!(view.editor.doc, before);
+                assert_eq!(view.editor.revision, revision);
+                assert_eq!(view.editor.history.len(), steps);
+            });
+        }
+
+        cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.remove_reference(cx);
+                assert!(view.assistant.reference.is_none());
+                assert!(view.reference_result().is_error);
+                assert_eq!(view.editor.doc, before);
+                assert_eq!(view.editor.revision, revision);
+                assert_eq!(view.editor.history.len(), steps);
+            });
+        });
+    }
+
+    #[gpui_kit::test]
+    fn reference_is_fixed_during_a_turn_and_prompts_bypass_keyword_edits(cx: &mut TestAppContext) {
+        let source = Fixture::image(40, 20);
+        let replacement = Fixture::image(20, 40);
+        let (ws, cx) = open(cx, doc(&["Grass", "Sun"], None));
+        let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        load(&view, source.0.clone(), cx);
+        let (before, revision, steps) = cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                let attached = view.assistant.reference.as_ref().unwrap().image.clone();
+                view.assistant.running = true;
+                view.load_reference(replacement.0.clone(), cx);
+                view.remove_reference(cx);
+                assert!(
+                    !view.assistant.reference_loading,
+                    "replacement must not even start"
+                );
+                assert!(Arc::ptr_eq(
+                    &view.assistant.reference.as_ref().unwrap().image,
+                    &attached
+                ));
+                view.assistant.running = false;
+                let snapshot = (
+                    view.editor.doc.clone(),
+                    view.editor.revision,
+                    view.editor.history.len(),
+                );
+                view.submit_ask("hide sun".into(), cx);
+                snapshot
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let view = view.read(cx);
+            let (message, error) = view.status.as_ref().unwrap();
+            assert!(
+                *error && message.contains("Claude Code is not installed"),
+                "{message}"
+            );
+            assert!(!view.assistant.running);
+            assert!(view.assistant.reference.is_some());
+            assert_eq!(
+                view.editor.doc, before,
+                "the reference request must not hide Sun through keyword fallback"
+            );
+            assert_eq!(view.editor.revision, revision);
+            assert_eq!(view.editor.history.len(), steps);
+        });
+    }
+}
+
 #[gpui_kit::test]
 fn suggestions_appear_and_accept_as_one_labelled_node(cx: &mut TestAppContext) {
     // A flat, dark, warm image: levels, shadows and white balance all apply.
@@ -399,6 +570,296 @@ mod tools {
         let (a, b) = (at(e, cx, a), at(e, cx, b));
         cx.update(|window, cx| window.drag(a, b, cx));
         cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_tabs_preserve_document_and_adjustments_open_properties(cx: &mut TestAppContext) {
+        let (ws, cx) = open(cx, doc(&["Paper", "Ink", "Tone"], None));
+        let e = editor(&ws, cx);
+        let (before, revision, steps, selected) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            (
+                e.editor.doc.clone(),
+                e.editor.revision,
+                e.editor.history.len(),
+                e.selected,
+            )
+        });
+        cx.update(|window, _| {
+            assert!(window.find("sidebar-properties-content").visible());
+            assert!(window.try_find("sidebar-adjustments-content").is_none());
+            assert!(window.try_find("reference-panel").is_none());
+            assert!(window.find(("row", 3u64)).visible());
+        });
+
+        for (tab, content) in [
+            ("sidebar-adjustments", "sidebar-adjustments-content"),
+            ("sidebar-reference", "reference-panel"),
+            ("sidebar-properties", "sidebar-properties-content"),
+        ] {
+            cx.update(|window, cx| window.click(tab, cx));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert!(
+                    window.find(content).visible(),
+                    "{tab} displays its own controls"
+                );
+                assert!(
+                    window.find(("row", 3u64)).visible(),
+                    "Layers remains available"
+                );
+                let e = e.read(cx);
+                assert_eq!(e.editor.doc, before);
+                assert_eq!(e.editor.revision, revision);
+                assert_eq!(e.editor.history.len(), steps);
+                assert_eq!(e.selected, selected);
+            });
+        }
+
+        cx.update(|window, cx| window.click("sidebar-panels-toggle", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("sidebar-history").visible());
+            window.click("sidebar-history", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("sidebar-history-content").visible());
+            assert!(window.try_find("sidebar-panel-menu").is_none());
+            assert!(window.find(("row", 3u64)).visible());
+            let e = e.read(cx);
+            assert_eq!(e.editor.doc, before);
+            assert_eq!(e.editor.history.len(), steps);
+            assert_eq!(e.selected, selected);
+        });
+
+        cx.update(|window, cx| window.click("sidebar-adjustments", cx));
+        cx.run_until_parked();
+        // Exposure is the first quick adjustment in the Light group.
+        cx.update(|window, cx| window.click(("qa", 500usize), cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("sidebar-properties-content").visible());
+            assert!(window.try_find("sidebar-adjustments-content").is_none());
+            let e = e.read(cx);
+            let id = e.selected.expect("new adjustment selected");
+            let NodeKind::Adjust(adjustment) = &e.editor.doc.node(id).unwrap().kind else {
+                panic!("the selected node must be the new adjustment");
+            };
+            assert_eq!(adjustment.key(), "exposure");
+            assert_eq!(e.editor.doc.nodes.len(), before.nodes.len() + 1);
+            assert_eq!(e.editor.history.len(), steps + 1);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_leaving_recipes_cancels_preview_before_the_next_edit(cx: &mut TestAppContext) {
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        let e = editor(&ws, cx);
+        let (before, steps) = cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.execute(
+                    Command::SetOpacity {
+                        id: 1,
+                        opacity: 0.8,
+                    },
+                    cx,
+                );
+                (e.editor.doc.clone(), e.editor.history.len())
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("sidebar-panels-toggle", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("sidebar-recipes", cx));
+        cx.run_until_parked();
+        let recipe = emulsion_recipes::starter_set()
+            .into_iter()
+            .find(|recipe| recipe.name == "Slide Punch")
+            .unwrap();
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.preview_recipe(&recipe, cx);
+                assert!(e.recipes.preview.is_some());
+                assert!(e.editor.in_transaction());
+                assert_ne!(
+                    e.editor.doc, before,
+                    "the preview is visible but not committed"
+                );
+                assert_eq!(e.editor.history.len(), steps);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("sidebar-properties", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("sidebar-properties-content").visible());
+            e.update(cx, |e, cx| {
+                assert!(e.recipes.preview.is_none());
+                assert!(
+                    !e.editor.in_transaction(),
+                    "leaving Recipes closes its preview transaction"
+                );
+                assert_eq!(e.editor.doc, before);
+                assert_eq!(e.editor.history.len(), steps);
+                e.execute(
+                    Command::SetOpacity {
+                        id: 1,
+                        opacity: 0.4,
+                    },
+                    cx,
+                );
+                assert_eq!(
+                    e.editor.history.len(),
+                    steps + 1,
+                    "the next edit gets its own undo step"
+                );
+                // A later Recipes cleanup must not roll that unrelated edit back.
+                e.cancel_preview(cx);
+                assert_eq!(e.editor.doc.node(1).unwrap().opacity, 0.4);
+                e.undo(cx);
+                assert_eq!(
+                    e.editor.doc, before,
+                    "undo restores the pre-preview document"
+                );
+                assert_eq!(e.editor.history.len(), steps);
+                e.redo(cx);
+                assert_eq!(e.editor.doc.node(1).unwrap().opacity, 0.4);
+                assert_eq!(
+                    e.editor.doc.nodes.len(),
+                    before.nodes.len(),
+                    "redo never resurrects the discarded recipe"
+                );
+            });
+        });
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_leaving_timeline_stops_playback_and_restores_the_full_canvas(
+        cx: &mut TestAppContext,
+    ) {
+        let (ws, cx) = open(cx, doc(&["Frame 1", "Frame 2", "Frame 3"], None));
+        let e = editor(&ws, cx);
+        let (before, revision, steps) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            (
+                e.editor.doc.clone(),
+                e.editor.revision,
+                e.editor.history.len(),
+            )
+        });
+        cx.update(|window, cx| window.click("sidebar-panels-toggle", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("sidebar-timeline", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                assert!(e.anim.open);
+                assert_ne!(
+                    e.render_doc(),
+                    before,
+                    "Timeline previews an individual frame"
+                );
+                e.anim_play(true, cx);
+                assert!(e.anim.playing);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("sidebar-properties", cx));
+        cx.run_until_parked();
+        let stopped_frame = cx.update(|window, cx| {
+            assert!(window.find("sidebar-properties-content").visible());
+            let e = e.read(cx);
+            assert!(!e.anim.open && !e.anim.playing);
+            assert_eq!(
+                e.render_doc(),
+                before,
+                "all original layers return to the canvas"
+            );
+            e.anim.frame
+        });
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            assert_eq!(
+                e.anim.frame, stopped_frame,
+                "the old playback timer stays stopped"
+            );
+            assert_eq!(e.render_doc(), before);
+            assert_eq!(e.editor.doc, before);
+            assert_eq!(e.editor.revision, revision);
+            assert_eq!(e.editor.history.len(), steps);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_layers_scroll_independently_and_keep_reference_open_on_selection(
+        cx: &mut TestAppContext,
+    ) {
+        let names: Vec<String> = (1..=40).map(|i| format!("Layer {i}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let (ws, cx) = open(cx, doc(&names, None));
+        let e = editor(&ws, cx);
+        let (before, revision, steps) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            (
+                e.editor.doc.clone(),
+                e.editor.revision,
+                e.editor.history.len(),
+            )
+        });
+        cx.update(|window, cx| window.click("sidebar-reference", cx));
+        cx.run_until_parked();
+        let tab_bounds = cx.update(|window, cx| {
+            let list = window.find("sidebar-layers-list").bounds();
+            let first = window.find(("row", 40u64));
+            assert!(first.visible());
+            assert!(list.size.height > gpui_kit::px(0.));
+            assert!(
+                list.size.height < first.bounds().size.height * 40.,
+                "the list is bounded rather than pushing panels out of view"
+            );
+            assert!(window.find("reference-panel").visible());
+            let bounds = window.find("sidebar-reference").bounds();
+            window.scroll(
+                "sidebar-layers-list",
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(-5000.),
+                )),
+                cx,
+            );
+            bounds
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                window.find(("row", 1u64)).visible(),
+                "bottom layer can be reached by scrolling Layers"
+            );
+            assert_eq!(
+                window.find("sidebar-reference").bounds(),
+                tab_bounds,
+                "only the Layers list scrolls"
+            );
+            assert!(window.find("reference-panel").visible());
+            window.click(("row", 1u64), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                window.find("reference-panel").visible(),
+                "selecting a layer keeps the reference beside the canvas"
+            );
+            assert!(window.try_find("sidebar-properties-content").is_none());
+            let e = e.read(cx);
+            assert_eq!(e.selected, Some(1));
+            assert_eq!(e.editor.doc, before);
+            assert_eq!(e.editor.revision, revision);
+            assert_eq!(e.editor.history.len(), steps);
+        });
     }
 
     #[gpui_kit::test]
@@ -971,6 +1432,122 @@ mod tools {
                 panic!()
             };
             assert!(raster.get(128, 96)[0] > 60000, "the line is on the layer");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn assistant_strokes_pressure_matches_immediate_render(cx: &mut TestAppContext) {
+        assert_assistant_strokes_pressure(
+            cx,
+            1.0,
+            serde_json::json!([[10, 96, 0.2], [246, 96, 1.0]]),
+        );
+    }
+
+    #[gpui_kit::test]
+    fn assistant_strokes_curved_pressure_matches_immediate_render(cx: &mut TestAppContext) {
+        assert_assistant_strokes_pressure(
+            cx,
+            2.0,
+            serde_json::json!([[10, 96, 0.2], [246, 96, 1.0]]),
+        );
+    }
+
+    #[gpui_kit::test]
+    fn assistant_strokes_optional_pressure_matches_immediate_render(cx: &mut TestAppContext) {
+        assert_assistant_strokes_pressure(cx, 2.0, serde_json::json!([[10, 96], [246, 96, 0.2]]));
+    }
+
+    #[gpui_kit::test]
+    fn assistant_strokes_optional_end_pressure_matches_immediate_render(cx: &mut TestAppContext) {
+        assert_assistant_strokes_pressure(cx, 2.0, serde_json::json!([[10, 96, 0.2], [246, 96]]));
+    }
+
+    fn assert_assistant_strokes_pressure(
+        cx: &mut TestAppContext,
+        pressure_curve: f32,
+        points: serde_json::Value,
+    ) {
+        use emulsion_core::NodeKind;
+        let base = Raster::transparent(256, 192);
+        let (ws, cx) = open(cx, doc(&["Ink"], Some(base.clone())));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        let id = cx.update(|_, cx| e.read(cx).editor.doc.nodes[0].id);
+        let script = cx.update(|_, cx| {
+            emulsion_mcp::exec::paint_script(
+                &e.read(cx).editor.doc,
+                &serde_json::json!({
+                    "node": id,
+                    "color": "#000000",
+                    "settings": {
+                        "size": 32, "hardness": 1, "spacing": 0.05,
+                        "opacity": 1, "flow": 1, "size_pressure": 1,
+                        "flow_pressure": 0, "pressure_curve": pressure_curve,
+                        "grain": "None", "grain_strength": 0,
+                        "wetness": 0, "taper_start": 0, "taper_end": 0,
+                        "stabilizer": 0, "size_jitter": 0, "scatter": 0
+                    },
+                    "strokes": [{"points": points}]
+                }),
+            )
+            .unwrap()
+        });
+        let (expected, _) = script.render(&base);
+        let steps = cx.update(|_, cx| e.read(cx).editor.history.len());
+        cx.update(|_, cx| e.update(cx, |e, cx| e.start_playback(None, script, cx)));
+        let mut ticks = 0;
+        for _ in 0..600 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(16));
+            cx.run_until_parked();
+            ticks += 1;
+            if cx.update(|_, cx| e.read(cx).assistant.playback.is_none()) {
+                break;
+            }
+        }
+        cx.update(|_, cx| {
+            e.update(cx, |e, _| {
+                assert!(e.assistant.playback.is_none(), "playback finished");
+                assert!(ticks > 1, "the stroke crossed playback tick boundaries");
+                assert_eq!(e.editor.history.len(), steps + 1, "one undo step");
+                let NodeKind::Raster { raster, .. } = &e.editor.doc.node(id).unwrap().kind else {
+                    panic!("expected the ink layer");
+                };
+                let mut error = 0u64;
+                let mut coverage = 0u64;
+                for y in 0..192 {
+                    for x in 0..256 {
+                        let want = expected.get(x, y)[3];
+                        error += raster.get(x, y)[3].abs_diff(want) as u64;
+                        coverage += want as u64;
+                    }
+                }
+                assert!(coverage > 0, "the reference stroke is visible");
+                assert!(
+                    error as f64 / (coverage as f64) < 0.005,
+                    "animated coverage differs from immediate rendering: {error}/{coverage}"
+                );
+                let width = |r: &Raster, x| (0..192).filter(|&y| r.get(x, y)[3] > 6553).count();
+                assert!(
+                    width(&expected, 32) != width(&expected, 224),
+                    "pressure changes the reference stroke's width"
+                );
+                for x in [32, 64, 128, 192, 224] {
+                    assert!(
+                        width(raster, x).abs_diff(width(&expected, x)) <= 1,
+                        "animated width differs at x={x}"
+                    );
+                }
+                assert!(e.editor.undo(), "the stroke can be undone once");
+                let NodeKind::Raster { raster, .. } = &e.editor.doc.node(id).unwrap().kind else {
+                    panic!("expected the ink layer after undo");
+                };
+                assert_eq!(
+                    raster.read_rect(base.bounds()),
+                    base.read_rect(base.bounds())
+                );
+            });
         });
     }
 

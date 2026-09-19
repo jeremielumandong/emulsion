@@ -40,11 +40,13 @@ impl EditorView {
                     let est_w = spec.width.map(f64::from).unwrap_or(
                         spec.size as f64 * 0.6 * spec.text.chars().count().max(1) as f64,
                     );
-                    let bx = d.0 >= spec.x as f64
-                        && d.0 <= spec.x as f64 + est_w
-                        && d.1 >= spec.y as f64
-                        && d.1
-                            <= spec.y as f64 + spec.size as f64 * spec.line_height as f64 * lines;
+                    let delta = glam::dvec2(d.0 - spec.x as f64, d.1 - spec.y as f64);
+                    let local =
+                        glam::DMat2::from_angle(-(spec.rotation as f64).to_radians()) * delta;
+                    let bx = local.x >= 0.0
+                        && local.x <= est_w
+                        && local.y >= 0.0
+                        && local.y <= spec.size as f64 * spec.line_height as f64 * lines;
                     (ink || bx).then_some(n.id)
                 }
                 _ => None,

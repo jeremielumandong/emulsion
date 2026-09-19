@@ -11,6 +11,7 @@
 mod brush_discovery;
 pub mod exec;
 mod preview;
+pub mod reference;
 pub mod relay;
 mod review;
 pub mod server;

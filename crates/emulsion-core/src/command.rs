@@ -20,6 +20,10 @@ pub enum CommandError {
     NoSuchParam(NodeId, String),
     #[error("nothing to group")]
     Empty,
+    #[error("node {0} is locked")]
+    Locked(NodeId),
+    #[error("node {0} has no content or mask to rotate")]
+    NothingToRotate(NodeId),
     #[error("the result is invalid: {0}")]
     Invalid(#[from] crate::document::DocumentError),
 }
@@ -94,6 +98,11 @@ pub enum Command {
     SetPlacement {
         id: NodeId,
         placement: Placement,
+    },
+    /// Rotate the selected node/subtree clockwise around its content bounds.
+    RotateNode {
+        id: NodeId,
+        degrees: f64,
     },
     SetClip {
         id: NodeId,
@@ -236,6 +245,7 @@ impl Command {
             Command::SetParam { key, .. } => key.replace('_', " "),
             Command::SetAdjustment { .. } => "Adjustment".into(),
             Command::SetPlacement { .. } => "Transform".into(),
+            Command::RotateNode { .. } => "Rotate node".into(),
             Command::SetClip { clip_to, .. } => {
                 if clip_to.is_some() { "Clip" } else { "Unclip" }.into()
             }
@@ -517,6 +527,10 @@ impl Command {
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "placement".into())),
                 }
+            }
+            Command::RotateNode { id, degrees } => {
+                crate::geometry::rotate_node(doc, *id, *degrees)?;
+                Ok(None)
             }
             Command::SetClip { id, clip_to } => {
                 need(doc, *id)?;

@@ -8,6 +8,7 @@ mod batch;
 pub mod editor;
 mod home;
 pub mod landing;
+mod reference;
 mod settings_models;
 mod settings_screen;
 pub mod tablet;

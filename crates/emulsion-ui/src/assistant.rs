@@ -16,6 +16,7 @@ use emulsion_ai::decide::{Decide, Keywords};
 use emulsion_ai::jev::{Jev, JevDecider};
 use emulsion_ai::palette;
 use emulsion_ai::suggest::{self, Suggestion};
+use emulsion_assistant::review::{self, Completion, DrawingReview};
 use emulsion_assistant::{Event, ProdLauncher, Session, launch};
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Node, NodeKind};
@@ -26,6 +27,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -69,10 +71,17 @@ pub struct Turn {
     pub local: Option<&'static str>,
     /// A tool ran since the last text.
     pub text_break: bool,
+    /// Visual inspection state and cost across bounded review continuations.
+    review: DrawingReview,
+    review_pending: bool,
+    cost: f64,
 }
 
 #[derive(Default)]
 pub struct Assistant {
+    pub(crate) reference: Option<crate::reference::AttachedReference>,
+    pub(crate) reference_loading: bool,
+    pub(crate) reference_collapsed: bool,
     relay: Option<Relay>,
     session: Option<Session>,
     session_id: Option<String>,
@@ -85,6 +94,16 @@ pub struct Assistant {
     pub dock_open: bool,
     /// A `paint` call being played back stroke by stroke.
     pub(crate) playback: Option<Playback>,
+    /// Mutations execute in arrival order so parallel tool calls cannot plan
+    /// against the same snapshot and then discard each other's changes.
+    tool_busy: bool,
+    tool_queue: VecDeque<RelayCall>,
+    tool_generation: u64,
+    tool_stopped: bool,
+    tool_feedback_pending: usize,
+    completion_pending: bool,
+    /// A one-shot process can exit before queued tool work has drained.
+    provider_exit: Option<Option<i32>>,
     /// Relayed tool calls waiting for the person's Apply/Skip, for CLIs
     /// that do not ask before running tools; keyed by card id.
     held: Vec<(String, RelayCall)>,
@@ -95,6 +114,8 @@ pub struct Assistant {
     /// Phase (0–1) of the "working" shimmer, and whether its loop runs.
     anim: f32,
     anim_running: bool,
+    /// Discards bookkeeping from previews belonging to an earlier user turn.
+    turn_generation: u64,
 }
 
 /// "thinking…" / "working…" with a pulse and a highlight sweeping across
@@ -159,9 +180,28 @@ pub(crate) struct Playback {
     speed: f32,
     carry: f32,
     /// Where the brush is within the current segment, in layer pixels.
-    pos: Option<(f32, f32)>,
+    pos: Option<(f32, f32, Option<f32>)>,
+    revision_before: u64,
+    tool_generation: u64,
     /// Ghost brush position in document pixels and its size.
     pub cursor: Option<((f64, f64), f32)>,
+}
+
+/// Interpolate the same effective pressure as the raster engine, then undo the
+/// response curve before point_at applies it. Untimed script points without
+/// pressure use full pressure.
+fn playback_pressure(start: Option<f32>, end: Option<f32>, t: f32, curve: f32) -> Option<f32> {
+    if start.is_none() && end.is_none() {
+        return None;
+    }
+    let curve = if (curve - 1.0).abs() > 1e-3 {
+        curve
+    } else {
+        1.0
+    };
+    let a = start.unwrap_or(1.0).clamp(0.0, 1.0).powf(curve);
+    let b = end.unwrap_or(1.0).clamp(0.0, 1.0).powf(curve);
+    Some((a + (b - a) * t).clamp(0.0, 1.0).powf(1.0 / curve))
 }
 
 pub struct AskBar {
@@ -192,6 +232,7 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
     match tool {
         "describe_document" => "read the document".into(),
         "get_view" => "look at the image".into(),
+        "get_reference_image" => "look at the reference".into(),
         "set_visibility" => format!(
             "{} {}",
             if input["visible"].as_bool() == Some(true) {
@@ -320,6 +361,14 @@ impl EditorView {
             if let InputEvent::PressEnter { .. } = ev {
                 let text = st.read(cx).value().to_string();
                 if !text.trim().is_empty() {
+                    if this.assistant.reference_loading {
+                        this.set_status(
+                            "Wait for the reference image to finish loading.",
+                            false,
+                            cx,
+                        );
+                        return;
+                    }
                     this.close_ask(window, cx);
                     this.submit_ask(text.trim().to_string(), cx);
                 }
@@ -339,6 +388,16 @@ impl EditorView {
 
     /// Plan without a language model; apply if complete, else hand over.
     pub fn submit_ask(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.assistant.reference_loading {
+            self.set_status("Wait for the reference image to finish loading.", false, cx);
+            return;
+        }
+        if self.assistant.reference.is_some() {
+            if let Err(e) = self.start_turn(text, cx) {
+                self.set_status(e, true, cx);
+            }
+            return;
+        }
         let doc = self.editor.doc.clone();
         let key = app_state::settings(cx).jev_key().map(|(k, _)| k);
         self.set_status(
@@ -568,18 +627,29 @@ impl EditorView {
     }
 
     fn start_turn(&mut self, text: String, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.assistant.reference_loading {
+            return Err("Wait for the reference image to finish loading.".into());
+        }
         if self.assistant.running {
             return Err("The assistant is still working on the last request.".into());
         }
         self.ensure_session(cx)?;
         self.editor.begin(format!("Assistant: {}", short(&text)));
-        let sent = self.assistant.session.as_mut().map(|s| s.send(&text, &[]));
+        let prompt = crate::reference::reference_prompt(&text, self.assistant.reference.as_ref());
+        let sent = self
+            .assistant
+            .session
+            .as_mut()
+            .map(|s| s.send(&prompt, &[]));
         if let Some(Err(e)) = sent {
             self.editor.end();
             self.assistant.session = None;
             return Err(format!("Could not reach {}: {e}", provider(cx).label));
         }
         self.assistant.running = true;
+        self.assistant.tool_stopped = false;
+        self.assistant.provider_exit = None;
+        self.assistant.turn_generation = self.assistant.turn_generation.wrapping_add(1);
         self.assistant.dock_open = true;
         self.start_working_anim(cx);
         self.assistant.turn = Some(Turn {
@@ -626,10 +696,16 @@ impl EditorView {
             return;
         }
         self.assistant.running = false;
+        self.cancel_tool_work(
+            "The assistant request ended before this change completed.",
+            cx,
+        );
         if self.editor.in_transaction() {
             self.editor.end();
         }
+        let mut cost = cost;
         if let Some(mut t) = self.assistant.turn.take() {
+            cost += t.cost;
             let elapsed = t.started.map(|s| s.elapsed()).unwrap_or_default();
             t.done = Some((elapsed, cost));
             t.thinking = false;
@@ -655,6 +731,91 @@ impl EditorView {
             ),
         }
         self.after_change(cx);
+    }
+
+    fn complete_provider_turn(&mut self, cost: f64, cx: &mut Context<Self>) {
+        if !self.assistant.running {
+            return;
+        }
+        let Some(turn) = &mut self.assistant.turn else {
+            return;
+        };
+        turn.cost += cost;
+        if self.assistant.tool_busy || self.assistant.tool_feedback_pending > 0 {
+            self.assistant.completion_pending = true;
+            return;
+        }
+        self.assistant.completion_pending = false;
+        match turn.review.completion(self.editor.revision) {
+            Completion::Finish => self.end_turn(0.0, None, cx),
+            Completion::Unreviewed => {
+                turn.text.push_str("\nThe final drawing was not visually inspected after its last change; the review limit was reached.");
+                self.end_turn(0.0, None, cx);
+            }
+            Completion::Review => {
+                turn.review_pending = true;
+                // One-shot readers share parser state with the next process.
+                // Wait for stdout to drain and Exited before resuming it.
+                if !self
+                    .assistant
+                    .session
+                    .as_ref()
+                    .is_some_and(Session::is_one_shot)
+                    || self.assistant.provider_exit == Some(Some(0))
+                {
+                    self.continue_visual_review(cx);
+                } else if let Some(code) = self.assistant.provider_exit {
+                    self.end_turn(
+                        0.0,
+                        Some(format!(
+                            "Assistant stopped before the drawing review (exit {code:?})."
+                        )),
+                        cx,
+                    );
+                } else {
+                    self.set_status("Preparing final drawing review…", false, cx);
+                }
+            }
+        }
+    }
+
+    fn continue_visual_review(&mut self, cx: &mut Context<Self>) {
+        let Some(turn) = &mut self.assistant.turn else {
+            return;
+        };
+        if !self.assistant.running || !turn.review_pending {
+            return;
+        }
+        turn.review_pending = false;
+        turn.text_break = true;
+        turn.thinking = true;
+        let prompt = review::review_request(&turn.prompt);
+        self.assistant.provider_exit = None;
+        let result = self
+            .assistant
+            .session
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("assistant session is unavailable"))
+            .and_then(|session| session.send(&prompt, &[]));
+        match result {
+            Ok(()) => self.set_status("Reviewing the drawing…", false, cx),
+            Err(e) => self.end_turn(0.0, Some(format!("Could not review the drawing: {e}")), cx),
+        }
+    }
+
+    fn observe_drawing_tool(
+        &mut self,
+        name: &str,
+        args: &Value,
+        result: &emulsion_mcp::server::ToolResult,
+        revision: u64,
+        changed: bool,
+    ) {
+        if self.assistant.running
+            && let Some(turn) = &mut self.assistant.turn
+        {
+            turn.review.observe(name, args, result, revision, changed);
+        }
     }
 
     fn on_event(&mut self, ev: Event, cx: &mut Context<Self>) {
@@ -739,7 +900,7 @@ impl EditorView {
                     };
                 }
             }
-            Event::Result { cost_usd, .. } => self.end_turn(cost_usd, None, cx),
+            Event::Result { cost_usd, .. } => self.complete_provider_turn(cost_usd, cx),
             Event::Error(e) => self.end_turn(0.0, Some(format!("Assistant: {e}")), cx),
             Event::Exited(code) => {
                 // One-shot CLIs exit after every turn; their Result or Error
@@ -749,8 +910,31 @@ impl EditorView {
                     .session
                     .as_ref()
                     .is_some_and(|s| s.is_one_shot());
+                if one_shot {
+                    self.assistant.provider_exit = Some(code);
+                }
                 if !one_shot {
                     self.assistant.session = None;
+                }
+                if one_shot
+                    && self.assistant.running
+                    && self
+                        .assistant
+                        .turn
+                        .as_ref()
+                        .is_some_and(|turn| turn.review_pending)
+                {
+                    if code == Some(0) {
+                        self.continue_visual_review(cx);
+                    } else {
+                        self.end_turn(
+                            0.0,
+                            Some(format!(
+                                "Assistant stopped before the drawing review (exit {code:?})."
+                            )),
+                            cx,
+                        );
+                    }
                 }
                 if self.assistant.running && !one_shot {
                     self.end_turn(
@@ -771,6 +955,12 @@ impl EditorView {
     /// Run a relayed tool call against this document, or hold it for the
     /// person's Apply/Skip when the CLI does not ask first itself.
     fn run_tool(&mut self, call: RelayCall, cx: &mut Context<Self>) {
+        if self.assistant.tool_stopped {
+            call.reply(emulsion_mcp::server::ToolResult::error(
+                "This assistant request has ended. Do not retry the change.",
+            ));
+            return;
+        }
         let settings = app_state::settings(cx);
         let auto = settings.approve_all
             || (settings.auto_apply && !tools::DESTRUCTIVE.contains(&call.name.as_str()));
@@ -816,11 +1006,92 @@ impl EditorView {
     }
 
     fn run_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
+        if self.assistant.tool_stopped {
+            call.reply(emulsion_mcp::server::ToolResult::error(
+                "This assistant request has ended. Do not retry the change.",
+            ));
+            return;
+        }
+        if !tools::READ_ONLY.contains(&call.name.as_str()) {
+            if self.assistant.tool_busy {
+                self.assistant.tool_queue.push_back(call);
+                return;
+            }
+            self.assistant.tool_busy = true;
+        }
+        self.execute_tool_now(call, cx);
+    }
+
+    fn complete_tool_work(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if generation != self.assistant.tool_generation {
+            return;
+        }
+        if let Some(call) = self.assistant.tool_queue.pop_front() {
+            // Yield between mutations, and snapshot the document only when
+            // the queued operation starts. Keep the queue reserved meanwhile.
+            cx.spawn(async move |this, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if generation == this.assistant.tool_generation {
+                        this.execute_tool_now(call, cx);
+                    } else {
+                        call.reply(emulsion_mcp::server::ToolResult::error(
+                            "The request was stopped before this change began. Do not retry it.",
+                        ));
+                    }
+                });
+            })
+            .detach();
+        } else {
+            self.assistant.tool_busy = false;
+            self.complete_deferred_provider_turn(cx);
+        }
+    }
+
+    fn complete_deferred_provider_turn(&mut self, cx: &mut Context<Self>) {
+        if self.assistant.completion_pending
+            && !self.assistant.tool_busy
+            && self.assistant.tool_feedback_pending == 0
+        {
+            self.complete_provider_turn(0.0, cx);
+        }
+    }
+
+    fn cancel_tool_work(&mut self, reason: &str, cx: &mut Context<Self>) {
+        self.assistant.tool_generation = self.assistant.tool_generation.wrapping_add(1);
+        self.assistant.tool_busy = false;
+        self.assistant.tool_stopped = true;
+        self.assistant.tool_feedback_pending = 0;
+        self.assistant.completion_pending = false;
+        for call in self.assistant.tool_queue.drain(..) {
+            call.reply(emulsion_mcp::server::ToolResult::error(reason));
+        }
+        self.finish_playback(Some(reason), cx);
+    }
+
+    fn execute_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
+        let tool_generation = self.assistant.tool_generation;
+        let mutates = !tools::READ_ONLY.contains(&call.name.as_str());
+        if call.name == "get_reference_image" {
+            call.reply(self.reference_result());
+            return;
+        }
         if matches!(call.name.as_str(), "get_view" | "critique" | "list_brushes") {
             let doc = self.editor.doc.clone();
             let args = call.arguments.clone();
-            cx.background_spawn(async move {
-                let r = exec::inspect(&doc, &call.name, &args).unwrap_or_else(|e| e);
+            let name = call.name.clone();
+            let revision = self.editor.revision;
+            let generation = self.assistant.turn_generation;
+            cx.spawn(async move |this, cx| {
+                let r = cx
+                    .background_spawn(async move {
+                        exec::inspect(&doc, &name, &args).unwrap_or_else(|e| e)
+                    })
+                    .await;
+                let _ = this.update(cx, |this, _| {
+                    if this.assistant.turn_generation == generation {
+                        this.observe_drawing_tool(&call.name, &call.arguments, &r, revision, false);
+                    }
+                });
                 call.reply(r);
             })
             .detach();
@@ -832,7 +1103,10 @@ impl EditorView {
         {
             match exec::paint_script_for(&self.editor.doc, &call.name, &call.arguments) {
                 Ok(script) => self.start_playback(Some(call), script, cx),
-                Err(e) => call.reply(e),
+                Err(e) => {
+                    call.reply(e);
+                    self.complete_tool_work(tool_generation, cx);
+                }
             }
             return;
         }
@@ -840,30 +1114,50 @@ impl EditorView {
             // Compute off the UI thread against a snapshot, then apply only
             // if nobody edited the document in the meantime.
             let (doc, rev) = (self.editor.doc.clone(), self.editor.revision);
+            let generation = self.assistant.turn_generation;
             self.set_status("Working…", false, cx);
             cx.spawn(async move |this, cx| {
                 let (name, args) = (call.name.clone(), call.arguments.clone());
                 let planned = cx.background_spawn(async move { exec::plan_heavy(&doc, &name, &args) }).await;
                 this.update(cx, |this, cx| {
-                    this.status = None;
+                    if this.assistant.tool_generation == tool_generation {
+                        this.status = None;
+                    }
                     let r = match planned {
                         Err(e) => e,
+                        Ok(_) if this.assistant.turn_generation != generation
+                            || this.assistant.tool_generation != tool_generation => {
+                            emulsion_mcp::server::ToolResult::error("the assistant request ended while this was computing; the change was not applied")
+                        }
                         Ok(_) if this.editor.revision != rev => {
                             emulsion_mcp::server::ToolResult::error("the document changed while this was computing; call the tool again")
                         }
                         Ok(p) => exec::apply(&mut this.editor, p),
                     };
+                    this.observe_drawing_tool(&call.name, &call.arguments, &r, this.editor.revision, this.editor.revision != rev);
                     call.reply(r);
                     this.after_change(cx);
+                    this.complete_tool_work(tool_generation, cx);
                 })
                 .ok();
             })
             .detach();
             return;
         }
+        let before = self.editor.revision;
         let r = exec::execute(&mut self.editor, &call.name, &call.arguments);
+        self.observe_drawing_tool(
+            &call.name,
+            &call.arguments,
+            &r,
+            self.editor.revision,
+            self.editor.revision != before,
+        );
         call.reply(r);
         self.after_change(cx);
+        if mutates {
+            self.complete_tool_work(tool_generation, cx);
+        }
     }
 
     // ── Live playback of the assistant's strokes ────────────────────────
@@ -891,6 +1185,8 @@ impl EditorView {
             speed,
             carry: 0.0,
             pos: None,
+            revision_before: self.editor.revision,
+            tool_generation: self.assistant.tool_generation,
             cursor: None,
         });
         cx.spawn(async move |this, cx| {
@@ -941,12 +1237,13 @@ impl EditorView {
             // way along a long segment so the brush visibly travels.
             while pb.point < s.points.len() {
                 let (x, y, p) = s.points[pb.point];
-                if let Some((px0, py0)) = pb.pos {
+                if let Some((px0, py0, pressure0)) = pb.pos {
                     let d = (x - px0).hypot(y - py0);
                     if d > budget {
                         let t = budget / d;
-                        let step = (px0 + (x - px0) * t, py0 + (y - py0) * t);
-                        stroke.point_at(step.0, step.1, p, None);
+                        let pressure = playback_pressure(pressure0, p, t, s.brush.pressure_curve);
+                        let step = (px0 + (x - px0) * t, py0 + (y - py0) * t, pressure);
+                        stroke.point_at(step.0, step.1, step.2, None);
                         pb.pos = Some(step);
                         let dp = to_doc.transform_point2(glam::dvec2(step.0 as f64, step.1 as f64));
                         pb.cursor = Some(((dp.x, dp.y), size));
@@ -956,7 +1253,7 @@ impl EditorView {
                     budget -= d;
                 }
                 stroke.point_at(x, y, p, None);
-                pb.pos = Some((x, y));
+                pb.pos = Some((x, y, p));
                 pb.point += 1;
                 let dp = to_doc.transform_point2(glam::dvec2(x as f64, y as f64));
                 pb.cursor = Some(((dp.x, dp.y), size));
@@ -1014,35 +1311,38 @@ impl EditorView {
             match error {
                 Some(e) => call.reply(emulsion_mcp::server::ToolResult::error(e)),
                 None => {
-                    // Reply with a quick critique of the result; Jev ranks it
-                    // when the person has a key.
                     let doc = self.editor.doc.clone();
-                    let key = app_state::settings(cx).jev_key().map(|(k, _)| k);
                     let message = pb.script.message;
+                    let revision = self.editor.revision;
+                    let changed = revision != pb.revision_before;
+                    let generation = self.assistant.turn_generation;
+                    let tool_generation = pb.tool_generation;
+                    self.assistant.tool_feedback_pending += 1;
                     cx.spawn(async move |this, cx| {
-                        let note = cx
-                            .background_spawn(
-                                async move { exec::critique_note(&doc, key.as_deref()) },
-                            )
+                        let result = cx
+                            .background_spawn(async move { exec::paint_feedback(&doc, message) })
                             .await;
-                        let first = note
-                            .trim_start_matches('\n')
-                            .split(": ")
-                            .nth(1)
-                            .map(|s| s.split(". ").next().unwrap_or(s).to_string());
-                        call.reply(emulsion_mcp::server::ToolResult::text(format!(
-                            "{message}{note}"
-                        )));
-                        this.update(cx, |this, cx| {
-                            if let Some(f) = first {
-                                this.set_status(format!("Critique: {f}."), false, cx);
+                        let _ = this.update(cx, |this, cx| {
+                            if this.assistant.turn_generation == generation
+                                && this.assistant.tool_generation == tool_generation
+                            {
+                                this.observe_drawing_tool(
+                                    &call.name,
+                                    &call.arguments,
+                                    &result,
+                                    revision,
+                                    changed,
+                                );
+                                this.assistant.tool_feedback_pending -= 1;
+                                this.complete_deferred_provider_turn(cx);
                             }
-                        })
-                        .ok();
+                        });
+                        call.reply(result);
                     })
                     .detach();
                 }
             }
+            self.complete_tool_work(pb.tool_generation, cx);
         }
         self.after_change(cx);
     }
@@ -1110,11 +1410,36 @@ impl EditorView {
     }
 
     pub fn stop_assistant(&mut self, cx: &mut Context<Self>) {
+        let mut finished = self.assistant.completion_pending;
+        self.cancel_tool_work(
+            "The person stopped this request. Do not retry this change.",
+            cx,
+        );
+        if let Some(turn) = &mut self.assistant.turn {
+            turn.review.stop();
+            // A one-shot provider may already have completed its Result and
+            // be waiting to exit. End here so cancelling cannot start a review.
+            if turn.review_pending {
+                turn.review_pending = false;
+                finished = true;
+            }
+        }
+        if finished {
+            self.end_turn(0.0, None, cx);
+        }
         if let Some(s) = &mut self.assistant.session {
             let _ = s.interrupt();
         }
         self.answer(None, false, cx);
-        self.set_status("Stopping the assistant…", false, cx);
+        self.set_status(
+            if finished {
+                "Assistant stopped."
+            } else {
+                "Stopping the assistant…"
+            },
+            false,
+            cx,
+        );
     }
 
     // ── Suggestions ─────────────────────────────────────────────────────
@@ -1305,6 +1630,11 @@ impl EditorView {
                     }
                 }))
                 .child(mono("ASK", 10., p.accent).flex_none())
+                .child(
+                    chip("ask-reference", "Add reference", false, p).on_click(
+                        cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)),
+                    ),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -1736,4 +2066,410 @@ pub fn test_jev(key: String) -> Result<String, String> {
 #[allow(dead_code)]
 fn _assert_suggestion_is_clone(s: &Suggestion) -> Suggestion {
     s.clone()
+}
+
+#[cfg(test)]
+mod mutation_queue_tests {
+    use super::*;
+    use crate::theme;
+    use core::prelude::v1::test;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+
+    // Use the real local relay so tests exercise replies as well as pixels.
+    fn call(relay: &Relay, name: &str, args: Value) -> (RelayCall, std::thread::JoinHandle<Value>) {
+        let (addr, token, name) = (relay.addr, relay.token.clone(), name.to_string());
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            writeln!(
+                stream,
+                "{}",
+                serde_json::json!({
+                    "token": token, "name": name, "arguments": args,
+                })
+            )
+            .unwrap();
+            let mut line = String::new();
+            BufReader::new(stream).read_line(&mut line).unwrap();
+            serde_json::from_str(&line).unwrap()
+        });
+        (relay.calls.recv_blocking().unwrap(), client)
+    }
+
+    fn painting(cx: &mut TestAppContext, live: bool) -> Entity<EditorView> {
+        cx.update(|cx| {
+            theme::install(cx);
+            cx.set_global(app_state::AppSettings(emulsion_io::settings::Settings {
+                show_drawing: live,
+                suggestions: false,
+                ..Default::default()
+            }));
+            cx.new(|cx| {
+                let mut doc = Document::new(300, 100);
+                Command::AddNode {
+                    node: Box::new(Node::raster(
+                        0,
+                        "Ink",
+                        Arc::new(emulsion_raster::Raster::transparent(300, 100)),
+                        emulsion_raster::Placement::default(),
+                    )),
+                    slot: Slot::TOP,
+                }
+                .apply(&mut doc)
+                .unwrap();
+                let mut view = EditorView::new(doc, None, None, None, "test".into(), cx);
+                view.editor.begin("Assistant drawing");
+                view.assistant.running = true;
+                let mut turn = Turn::default();
+                // This test isolates transport/painting from optional review.
+                turn.review.stop();
+                view.assistant.turn = Some(turn);
+                view
+            })
+        })
+    }
+
+    fn stroke(y: u32, color: &str) -> Value {
+        serde_json::json!({
+            "node": 1, "brush": "Maru pen", "color": color,
+            "settings": {"size": 8, "hardness": 1, "opacity": 1, "flow": 1,
+                "size_pressure": 0, "taper_start": 0, "taper_end": 0},
+            "strokes": [{"points": [[10, y], [290, y]]}]
+        })
+    }
+
+    #[gpui_kit::test]
+    fn parallel_paint_calls_keep_both_results_before_provider_completion(cx: &mut TestAppContext) {
+        for live in [true, false] {
+            let relay = Relay::start().unwrap();
+            let view = painting(cx, live);
+            let (first, first_reply) = call(&relay, "paint", stroke(25, "#ff0000"));
+            let (second, second_reply) = call(&relay, "paint", stroke(75, "#0000ff"));
+            let (inspect, inspect_reply) = call(&relay, "describe_document", serde_json::json!({}));
+            view.update(cx, |view, cx| {
+                view.run_tool_now(first, cx);
+                view.run_tool_now(second, cx);
+                view.run_tool_now(inspect, cx);
+                assert_eq!(view.assistant.tool_queue.len(), 1);
+                // A prematurely delivered provider result must not cancel the
+                // active paint, discard its queued successor, or split undo.
+                view.complete_provider_turn(0.25, cx);
+                assert!(view.assistant.running && view.assistant.completion_pending);
+                assert!(view.editor.history.is_empty());
+            });
+            assert_eq!(
+                inspect_reply.join().unwrap()["isError"],
+                false,
+                "inspection is available during painting"
+            );
+            for _ in 0..100 {
+                cx.executor().advance_clock(Duration::from_millis(16));
+                cx.run_until_parked();
+                if view.read_with(cx, |view, _| !view.assistant.running) {
+                    break;
+                }
+            }
+            view.update(cx, |view, _| {
+                assert!(!view.assistant.running, "both paints and feedback finished");
+                assert!(!view.assistant.tool_busy && view.assistant.tool_queue.is_empty());
+                assert_eq!(view.assistant.cost, 0.25);
+                assert_eq!(view.editor.history.len(), 1);
+                let NodeKind::Raster { raster, .. } = &view.editor.doc.node(1).unwrap().kind else {
+                    panic!("ink layer");
+                };
+                assert!(raster.get(150, 25)[0] > 60000, "first call survives");
+                assert!(raster.get(150, 75)[2] > 60000, "second call survives");
+                assert!(view.editor.undo());
+                let NodeKind::Raster { raster, .. } = &view.editor.doc.node(1).unwrap().kind else {
+                    panic!("ink layer");
+                };
+                assert_eq!(raster.get(150, 25)[3], 0);
+                assert_eq!(raster.get(150, 75)[3], 0);
+            });
+            for response in [first_reply.join().unwrap(), second_reply.join().unwrap()] {
+                assert_eq!(response["isError"], false, "{response}");
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn stop_rejects_queued_and_late_mutations_and_discards_heavy_work(cx: &mut TestAppContext) {
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        let (paint, paint_reply) = call(&relay, "paint", stroke(25, "#ff0000"));
+        let (queued, queued_reply) = call(
+            &relay,
+            "set_visibility",
+            serde_json::json!({"node": 1, "visible": false}),
+        );
+        let (late, late_reply) = call(
+            &relay,
+            "set_visibility",
+            serde_json::json!({"node": 1, "visible": false}),
+        );
+        let before = view.update(cx, |view, cx| {
+            let before = view.editor.doc.clone();
+            view.run_tool_now(paint, cx);
+            view.run_tool_now(queued, cx);
+            view.stop_assistant(cx);
+            view.run_tool_now(late, cx);
+            view.complete_provider_turn(0.125, cx);
+            before
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            assert_eq!(
+                view.editor.doc, before,
+                "a stopped background result must never apply"
+            );
+            assert!(view.editor.history.is_empty());
+            assert_eq!(view.assistant.cost, 0.125);
+            assert!(!view.assistant.tool_busy && view.assistant.tool_queue.is_empty());
+        });
+        for response in [
+            paint_reply.join().unwrap(),
+            queued_reply.join().unwrap(),
+            late_reply.join().unwrap(),
+        ] {
+            assert_eq!(response["isError"], true, "{response}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn stop_freezes_visible_playback_and_keeps_partial_paint_undoable(cx: &mut TestAppContext) {
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, true);
+        let (first, first_reply) = call(&relay, "paint", stroke(25, "#ff0000"));
+        let (queued, queued_reply) = call(&relay, "paint", stroke(75, "#0000ff"));
+        let partial = view.update(cx, |view, cx| {
+            view.run_tool_now(first, cx);
+            view.run_tool_now(queued, cx);
+            assert!(view.playback_tick(cx));
+            let NodeKind::Raster { raster, .. } = &view.editor.doc.node(1).unwrap().kind else {
+                panic!("ink layer");
+            };
+            assert!(raster.get(20, 25)[3] > 0);
+            assert_eq!(raster.get(250, 25)[3], 0);
+            let partial = view.editor.doc.clone();
+            view.complete_provider_turn(0.125, cx);
+            view.stop_assistant(cx);
+            assert!(
+                !view.assistant.running,
+                "Stop completes a deferred provider result without waiting for another event"
+            );
+            partial
+        });
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            assert!(view.assistant.playback.is_none());
+            assert_eq!(view.editor.doc, partial);
+            assert_eq!(view.editor.history.len(), 1);
+            assert!(view.editor.undo());
+            let NodeKind::Raster { raster, .. } = &view.editor.doc.node(1).unwrap().kind else {
+                panic!("ink layer");
+            };
+            assert_eq!(raster.get(20, 25)[3], 0);
+        });
+        for response in [first_reply.join().unwrap(), queued_reply.join().unwrap()] {
+            assert_eq!(response["isError"], true, "{response}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::{EditorView, Turn, app_state, exec, launch};
+    use crate::theme;
+    use emulsion_assistant::session::{CliProcess, Launcher, LineSink};
+    use emulsion_assistant::{Event, Session};
+    use emulsion_core::Document;
+    use gpui_kit::{AppContext as _, Entity, TestAppContext};
+    use serde_json::Value;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    struct FakeLauncher(Arc<Mutex<Vec<String>>>);
+    struct FakeProcess(Arc<Mutex<Vec<String>>>);
+
+    impl Launcher for FakeLauncher {
+        fn spawn(
+            &self,
+            _: &launch::LaunchSpec,
+            _: LineSink,
+        ) -> std::io::Result<Box<dyn CliProcess>> {
+            Ok(Box::new(FakeProcess(self.0.clone())))
+        }
+    }
+
+    impl CliProcess for FakeProcess {
+        fn write_line(&mut self, line: &str) -> std::io::Result<()> {
+            self.0.lock().unwrap().push(line.to_string());
+            Ok(())
+        }
+        fn kill(&mut self) {}
+    }
+
+    fn drawing(cx: &mut TestAppContext) -> Entity<EditorView> {
+        cx.update(|cx| {
+            theme::install(cx);
+            cx.set_global(app_state::AppSettings(emulsion_io::settings::Settings {
+                suggestions: false,
+                ..Default::default()
+            }));
+            cx.new(|cx| {
+                let mut view = EditorView::new(Document::new(80, 60), None, None, None, "test".into(), cx);
+                view.editor.begin("Assistant drawing");
+                view.assistant.running = true;
+                view.assistant.turn = Some(Turn {
+                    prompt: "Draw a blue triangle; keep it centred.".into(),
+                    ..Default::default()
+                });
+                let args = serde_json::json!({"name":"Triangle", "d":"M 10 50 L 40 10 L 70 50 Z", "fill":"#3344FF", "stroke":"none"});
+                let result = exec::execute(&mut view.editor, "draw_path", &args);
+                assert!(!result.is_error);
+                view.observe_drawing_tool("draw_path", &args, &result, view.editor.revision, true);
+                view
+            })
+        })
+    }
+
+    #[gpui_kit::test]
+    fn final_drawing_review_preserves_brief_cost_and_single_undo(cx: &mut TestAppContext) {
+        let view = drawing(cx);
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let session = Session::start(
+            &FakeLauncher(written.clone()),
+            &launch::LaunchSpec {
+                program: "unused".into(),
+                args: vec![],
+                env: vec![],
+                cwd: ".".into(),
+            },
+        )
+        .unwrap();
+        view.update(cx, |view, cx| {
+            view.assistant.session = Some(session);
+            view.complete_provider_turn(0.25, cx);
+            assert!(view.assistant.running);
+            assert!(view.editor.in_transaction());
+            assert!(view.editor.history.is_empty());
+            let sent = written.lock().unwrap();
+            let message: Value = serde_json::from_str(sent.last().unwrap()).unwrap();
+            assert!(
+                message
+                    .to_string()
+                    .contains("Draw a blue triangle; keep it centred.")
+            );
+            assert!(message.to_string().contains("skipped"));
+            drop(sent);
+            let args = serde_json::json!({});
+            let preview = exec::execute(&mut view.editor, "get_view", &args);
+            view.observe_drawing_tool("get_view", &args, &preview, view.editor.revision, false);
+            view.complete_provider_turn(0.125, cx);
+            assert!(!view.assistant.running);
+            assert_eq!(view.assistant.cost, 0.375);
+            assert_eq!(view.assistant.turn.as_ref().unwrap().done.unwrap().1, 0.375);
+            assert_eq!(view.assistant.history.len(), 1);
+            assert_eq!(view.editor.history.len(), 1);
+            assert!(view.editor.undo());
+            assert!(view.editor.doc.nodes.is_empty());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn final_review_resumes_when_one_shot_exit_precedes_tool_completion(cx: &mut TestAppContext) {
+        let view = drawing(cx);
+        let attempts = Arc::new(Mutex::new(0));
+        let count = attempts.clone();
+        view.update(cx, |view, cx| {
+            view.assistant.session = Some(Session::one_shot(
+                emulsion_assistant::protocol::Flavor::Codex,
+                Box::new(move |_, _| {
+                    *count.lock().unwrap() += 1;
+                    Err(std::io::Error::other("test resume failed"))
+                }),
+            ));
+            view.assistant.tool_busy = true;
+            view.complete_provider_turn(0.25, cx);
+            view.on_event(Event::Exited(Some(0)), cx);
+            assert_eq!(*attempts.lock().unwrap(), 0);
+            assert!(view.assistant.running && view.assistant.completion_pending);
+            view.complete_tool_work(view.assistant.tool_generation, cx);
+            assert_eq!(
+                *attempts.lock().unwrap(),
+                1,
+                "the prior Exited must not be lost while tools drain"
+            );
+            assert!(!view.assistant.running);
+            assert_eq!(view.assistant.cost, 0.25);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn final_drawing_review_waits_for_one_shot_exit_and_reports_resume_failure(
+        cx: &mut TestAppContext,
+    ) {
+        let view = drawing(cx);
+        let attempts = Arc::new(Mutex::new(0));
+        let count = attempts.clone();
+        view.update(cx, |view, cx| {
+            view.assistant.session = Some(Session::one_shot(
+                emulsion_assistant::protocol::Flavor::Codex,
+                Box::new(move |_, _| {
+                    *count.lock().unwrap() += 1;
+                    Err(std::io::Error::other("test resume failed"))
+                }),
+            ));
+            view.complete_provider_turn(0.25, cx);
+            assert_eq!(
+                *attempts.lock().unwrap(),
+                0,
+                "do not reset a still-running parser"
+            );
+            assert!(view.assistant.turn.as_ref().unwrap().review_pending);
+            view.on_event(Event::Exited(Some(0)), cx);
+            assert_eq!(*attempts.lock().unwrap(), 1);
+            assert!(!view.assistant.running);
+            assert_eq!(view.assistant.cost, 0.25);
+            assert!(
+                view.assistant
+                    .turn
+                    .as_ref()
+                    .unwrap()
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .contains("test resume failed")
+            );
+            view.on_event(Event::Exited(Some(0)), cx);
+            assert_eq!(*attempts.lock().unwrap(), 1);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn final_drawing_review_never_resumes_after_stop_or_failed_exit(cx: &mut TestAppContext) {
+        for stop in [true, false] {
+            let view = drawing(cx);
+            view.update(cx, |view, cx| {
+                view.assistant.session = Some(Session::one_shot(
+                    emulsion_assistant::protocol::Flavor::Codex,
+                    Box::new(|_, _| panic!("must not restart after Stop or process failure")),
+                ));
+                view.complete_provider_turn(0.25, cx);
+                if stop {
+                    view.stop_assistant(cx);
+                    view.on_event(Event::Exited(Some(0)), cx);
+                } else {
+                    view.on_event(Event::Exited(Some(1)), cx);
+                }
+                assert!(!view.assistant.running);
+                assert_eq!(view.assistant.cost, 0.25);
+                assert_eq!(view.assistant.history.len(), 1);
+            });
+        }
+    }
 }

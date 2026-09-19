@@ -81,7 +81,10 @@ impl EditorView {
         }
         self.recipes.open = !self.recipes.open;
         if self.recipes.open {
+            self.select_sidebar(SidebarTab::Recipes, cx);
             self.recipes.cache = Some(store::list(&recipes_dir()));
+        } else {
+            self.select_sidebar(SidebarTab::Properties, cx);
         }
         cx.notify();
     }

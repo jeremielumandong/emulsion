@@ -694,6 +694,7 @@ impl EditorView {
         let Some(a) = Adjustment::catalogue().into_iter().find(|a| a.key() == key) else {
             return;
         };
+        self.select_sidebar(SidebarTab::Properties, cx);
         let node = Node::adjust(0, a);
         let slot = self.insertion_slot();
         if let Some(id) = self.execute(
@@ -704,11 +705,7 @@ impl EditorView {
             cx,
         ) {
             self.selected = Some(id);
-            self.set_status(
-                "Added — drag its sliders below; hide or delete the node to undo the look.",
-                false,
-                cx,
-            );
+            self.set_status("Added adjustment layer — edit it in Properties.", false, cx);
         }
     }
 
@@ -725,6 +722,7 @@ impl EditorView {
             self.set_status("Select a pixel node to filter first.", false, cx);
             return;
         };
+        self.select_sidebar(SidebarTab::Properties, cx);
         let kind = self.editor.doc.node(id).map(|n| n.kind.tag());
         match kind {
             Some("pixels") => {
@@ -776,7 +774,8 @@ impl EditorView {
                 let id = group.len() * 100 + i;
                 row = row.child(
                     chip(("qa", id), text, false, p)
-                        .on_click(cx.listener(move |this, _, _, cx| this.quick_adjust(k, cx))),
+                        .on_click(cx.listener(move |this, _, _, cx| this.quick_adjust(k, cx)))
+                        .test_support(),
                 );
             }
             body = body.child(row);

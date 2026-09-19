@@ -18,6 +18,9 @@ mod pen;
 mod presets;
 mod raw_panel;
 mod recipes;
+mod rotation;
+mod sidebar;
+pub(crate) use sidebar::SidebarTab;
 mod smart;
 mod snap;
 mod styles_ui;
@@ -284,6 +287,8 @@ pub struct EditorView {
     pub(crate) seen_rev: u64,
     /// A composite tree is being built off the UI thread for this revision.
     tree_building: Option<u64>,
+    /// Content requests also include animation/preview changes without edits.
+    tree_request: u64,
     /// Dirty area accumulated since the tree on screen was built.
     tree_dirty: emulsion_core::Dirty,
     pub(crate) gen_counter: u64,
@@ -300,6 +305,8 @@ pub struct EditorView {
     pub(crate) space_held: bool,
     pub(crate) renaming: Option<(NodeId, Entity<InputState>, Subscription)>,
     menu: Option<Menu>,
+    pub(crate) sidebar_tab: SidebarTab,
+    sidebar_menu: bool,
     tracks: HashMap<SliderKey, TrackBounds>,
     pub(crate) thumbs: HashMap<usize, Arc<RenderImage>>,
     pub(crate) checker: (u8, u8),
@@ -323,6 +330,7 @@ pub struct EditorView {
     pub(crate) snap_lines: Vec<(bool, f64)>,
     pub(crate) size_panel: Option<canvas_size::SizePanel>,
     pub(crate) transform_fields: Option<transform::TransformFields>,
+    pub(crate) rotation_fields: Option<rotation::RotationFields>,
     pub(crate) presets: presets::PresetState,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
     pub(crate) recipes: recipes::RecipeState,
@@ -368,6 +376,7 @@ impl EditorView {
             cache: Default::default(),
             seen_rev: rev,
             tree_building: None,
+            tree_request: 0,
             tree_dirty: emulsion_core::Dirty::Nothing,
             gen_counter: 1,
             render_gen: 1,
@@ -383,6 +392,8 @@ impl EditorView {
             space_held: false,
             renaming: None,
             menu: None,
+            sidebar_tab: SidebarTab::Properties,
+            sidebar_menu: false,
             tracks: HashMap::new(),
             thumbs: HashMap::new(),
             checker: theme::palette(cx).checker,
@@ -403,6 +414,7 @@ impl EditorView {
             snap_lines: Vec::new(),
             size_panel: None,
             transform_fields: None,
+            rotation_fields: None,
             presets: Default::default(),
             adjust_ui: Default::default(),
             recipes: Default::default(),
@@ -501,6 +513,7 @@ impl EditorView {
             self.seen_commit = u64::MAX; // force the before tree to rebuild too
         }
         if self.editor.revision != self.seen_rev {
+            self.tree_request = self.tree_request.wrapping_add(1);
             self.seen_rev = self.editor.revision;
             let dirty = self.editor.take_dirty();
             self.tree_dirty =
@@ -551,14 +564,15 @@ impl EditorView {
         }
     }
 
-    /// Build the composite tree for the current revision in the background;
-    /// if the document moves on meanwhile, the newest revision is built
-    /// next and intermediate ones are skipped.
+    /// Build in the background and display completed progress while the next
+    /// revision is prepared. Continuous painting must not starve the viewport.
     fn build_tree_async(&mut self, cx: &mut Context<Self>) {
         if self.tree_building.is_some() {
             return;
         }
         let rev = self.editor.revision;
+        let displayed_tree = self.tree.clone();
+        let request = self.tree_request;
         self.tree_building = Some(rev);
         let doc = self.render_doc();
         cx.spawn(async move |this, cx| {
@@ -567,10 +581,8 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 this.tree_building = None;
-                if this.editor.revision == rev {
-                    this.install_tree(tree);
-                } else {
-                    // Stale: the newest revision is what matters.
+                this.install_completed_tree(tree, rev, request, &displayed_tree);
+                if this.editor.revision != rev || this.tree_request != request {
                     this.build_tree_async(cx);
                 }
                 cx.notify();
@@ -578,6 +590,26 @@ impl EditorView {
             .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn install_completed_tree(
+        &mut self,
+        tree: CompositeTree,
+        revision: u64,
+        request: u64,
+        displayed_tree: &Arc<CompositeTree>,
+    ) {
+        // A synchronous rebuild may already have installed a newer view (for
+        // example after removing the last layer style). Never replace it.
+        if !Arc::ptr_eq(&self.tree, displayed_tree) {
+            return;
+        }
+        self.install_tree(tree);
+        if self.editor.revision != revision || self.tree_request != request {
+            // install_tree consumed changes accumulated after this snapshot.
+            // Keep those pixels invalid for the next, newer tree as well.
+            self.tree_dirty = emulsion_core::Dirty::All;
+        }
     }
 
     fn before_active(&self) -> bool {
@@ -788,6 +820,7 @@ impl EditorView {
     }
 
     fn add_node(&mut self, node: Node, cx: &mut Context<Self>) {
+        self.select_sidebar(SidebarTab::Properties, cx);
         let slot = self.insertion_slot();
         if let Some(id) = self.execute(
             Command::AddNode {
@@ -1884,32 +1917,7 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        div()
-            .id("node-panel")
-            .flex()
-            .flex_none()
-            .flex_col()
-            .w(dim::NODE_PANEL_W)
-            .min_h_0()
-            .border_l_1()
-            .border_color(p.line)
-            .overflow_y_scroll()
-            .track_focus(&self.panel_focus)
-            .key_context("NodePanel")
-            .child(self.scene_graph(p, cx))
-            .children(self.animation_panel(p, cx))
-            .child(self.quick_adjust_view(p, cx))
-            .child(self.inspector(p, window, cx))
-            .child(
-                div()
-                    .px(px(15.))
-                    .pt(px(10.))
-                    .children(self.navigator_view(p, cx))
-                    .children(self.info_view(p))
-                    .children(self.recipes_view(p, window, cx))
-                    .child(self.histogram_view(p, cx)),
-            )
-            .child(self.history_list(p, cx))
+        self.sidebar(p, window, cx)
     }
 
     fn scene_graph(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1923,51 +1931,23 @@ impl EditorView {
             .pb(px(6.))
             .drag_over::<DraggedNode>(move |s, _, _, _| s.bg(accent.opacity(0.12)))
             .on_drop(cx.listener(|this, d: &DraggedNode, _, cx| this.drop_on(d.id, None, cx)))
-            .child(label("Scene graph", p))
+            .child(label("Layers", p))
             .child(div().flex_1())
             .child(
-                chip("smart", "smart", false, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.convert_smart(cx))),
-            )
+                chip("sidebar-panels-toggle", "Panels ▾", self.sidebar_menu, p)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.sidebar_menu = !this.sidebar_menu;
+                        cx.notify();
+                    }))
+                    .test_support(),
+            );
+        let actions = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(5.))
+            .pt(px(6.))
             .child(
-                chip("nav", "nav", self.panels.navigator, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_navigator(cx))),
-            )
-            .child(
-                chip("info", "info", self.panels.info, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_info(cx))),
-            )
-            .child(
-                chip("recipes", "recipes", self.recipes.open, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_recipes(cx))),
-            )
-            .child(
-                chip("animate", "animate", self.anim.open, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_animation(cx))),
-            )
-            .child(
-                chip(
-                    "timelapse",
-                    if self.anim.record {
-                        format!("rec ● {}", self.anim.captured)
-                    } else if self.anim.captured > 0 {
-                        format!("rec {}", self.anim.captured)
-                    } else {
-                        "rec".to_string()
-                    },
-                    self.anim.record,
-                    p,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_timelapse(cx))),
-            )
-            .when(self.anim.captured > 0, |d| {
-                d.child(
-                    chip("timelapse-gif", "time-lapse GIF", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.export_timelapse_gif(cx))),
-                )
-            })
-            .child(
-                chip("add", "+ node", self.menu == Some(Menu::Add), p).on_click(cx.listener(
+                chip("add", "+ Layer", self.menu == Some(Menu::Add), p).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.menu = if this.menu == Some(Menu::Add) {
                             None
@@ -1979,15 +1959,15 @@ impl EditorView {
                 )),
             )
             .child(
-                chip("grp", "grp", false, p)
+                chip("grp", "Group", false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.group_selected(cx))),
             )
             .child(
-                chip("dup", "dup", false, p)
+                chip("dup", "Duplicate", false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.duplicate_selected(cx))),
             )
             .child(
-                chip("del", "del", false, p)
+                chip("del", "Delete", false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
             );
 
@@ -2039,11 +2019,29 @@ impl EditorView {
             .border_b_1()
             .border_color(p.line)
             .child(header)
-            .children(add_menu)
+            .children(self.sidebar_panel_menu(p, cx))
             .when(rows.is_empty(), |d| {
                 d.child(mono("empty document", 10., p.muted))
             })
-            .children(row_els)
+            .child(
+                div()
+                    .id("sidebar-layers-list")
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .max_h(px(180.))
+                    .overflow_y_scroll()
+                    .children(row_els)
+                    .test_support(),
+            )
+            .child(actions)
+            .child(
+                div()
+                    .id("layer-add-menu")
+                    .max_h(px(180.))
+                    .overflow_y_scroll()
+                    .children(add_menu),
+            )
     }
 
     fn node_row(
@@ -2213,7 +2211,10 @@ impl EditorView {
                 if e.click_count() >= 2 {
                     this.start_rename(id, window, cx);
                 } else {
-                    this.selected = Some(id);
+                    if this.sidebar_tab != SidebarTab::Reference {
+                        this.select_sidebar(SidebarTab::Properties, cx);
+                    }
+                    this.selected = this.editor.doc.node(id).map(|_| id);
                     cx.notify();
                 }
             }))
@@ -2243,6 +2244,7 @@ impl EditorView {
             .child(name_el)
             .children(ai_badge)
             .child(mono(meta, 9.5, meta_fg).flex_none())
+            .test_support()
     }
 
     fn inspector(
@@ -2261,7 +2263,7 @@ impl EditorView {
                 .py(px(13.))
                 .border_b_1()
                 .border_color(p.line)
-                .child(mono("select a node", 10., p.muted));
+                .child(mono("Select a layer to edit its properties", 10., p.muted));
         };
         let id = n.id;
         let mut body = div()
@@ -2273,6 +2275,15 @@ impl EditorView {
             .border_b_1()
             .border_color(p.line);
         body = body.child(label(n.name.clone(), p));
+        if matches!(n.kind, NodeKind::Raster { .. }) {
+            body = body.child(
+                chip("smart", "Convert to Smart Object", false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.convert_smart(cx))),
+            );
+        }
+        if let Some(rotation) = self.rotation_controls(p, cx) {
+            body = body.child(rotation);
+        }
         if let Some(raw) = self.raw_panel(id, p, cx) {
             body = body.child(raw);
         }
@@ -2796,6 +2807,7 @@ impl Render for EditorView {
         let p = theme::palette(cx);
         self.sync_trees(cx);
         self.sync_transform_fields(window, cx);
+        self.sync_rotation_fields(window, cx);
         self.ensure_gen_prompt(window, cx);
         let doc_bar = self.doc_bar(&p, cx);
         if self.history.open {
@@ -2855,5 +2867,171 @@ impl Render for EditorView {
                     .children(picker),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod rendering_tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    fn view(cx: &mut TestAppContext) -> Entity<EditorView> {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            theme::install(cx);
+            cx.set_global(crate::app_state::AppSettings(Default::default()));
+            let mut doc = Document::new(64, 64);
+            Command::AddNode {
+                node: Box::new(Node::new(
+                    0,
+                    "Shape",
+                    NodeKind::Fill {
+                        rgba: [255, 0, 0, 255],
+                    },
+                )),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            cx.new(|cx| EditorView::new(doc, None, None, None, "test".into(), cx))
+        })
+    }
+
+    #[gpui_kit::test]
+    fn completed_tree_shows_progress_and_keeps_later_changes_dirty(cx: &mut TestAppContext) {
+        let view = view(cx);
+        view.update(cx, |this, _| {
+            let generation = this.render_gen;
+            let displayed_tree = this.tree.clone();
+            let revision = this.editor.revision;
+            let snapshot = this.editor.doc.composite_tree();
+            this.editor
+                .execute(Command::SetOpacity {
+                    id: 1,
+                    opacity: 0.5,
+                })
+                .unwrap();
+            this.tree_dirty = this.editor.take_dirty();
+            this.install_completed_tree(snapshot, revision, this.tree_request, &displayed_tree);
+            assert!(
+                this.render_gen > generation,
+                "progress must appear during continued editing"
+            );
+            assert_eq!(this.tree.nodes[0].opacity, 1.0);
+            assert_eq!(
+                this.tree_dirty,
+                emulsion_core::Dirty::All,
+                "the next tree still invalidates changed pixels"
+            );
+
+            let displayed_tree = this.tree.clone();
+            this.install_completed_tree(
+                this.editor.doc.composite_tree(),
+                this.editor.revision,
+                this.tree_request,
+                &displayed_tree,
+            );
+            assert_eq!(this.tree.nodes[0].opacity, 0.5);
+            assert_eq!(this.tree_dirty, emulsion_core::Dirty::Nothing);
+
+            let displayed_tree = this.tree.clone();
+            let request = this.tree_request;
+            this.tree_request += 1; // animation preview changed without an edit
+            this.install_completed_tree(
+                this.editor.doc.composite_tree(),
+                this.editor.revision,
+                request,
+                &displayed_tree,
+            );
+            assert_eq!(this.tree_dirty, emulsion_core::Dirty::All);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn completed_tree_cannot_overwrite_a_newer_synchronous_view(cx: &mut TestAppContext) {
+        let view = view(cx);
+        view.update(cx, |this, _| {
+            let displayed_tree = this.tree.clone();
+            let revision = this.editor.revision;
+            let snapshot = this.editor.doc.composite_tree();
+            this.editor
+                .execute(Command::SetOpacity {
+                    id: 1,
+                    opacity: 0.25,
+                })
+                .unwrap();
+            this.tree_dirty = this.editor.take_dirty();
+            this.install_tree(this.editor.doc.composite_tree());
+            let latest = this.render_gen;
+            this.install_completed_tree(snapshot, revision, this.tree_request, &displayed_tree);
+            assert_eq!(this.render_gen, latest);
+            assert_eq!(this.tree.nodes[0].opacity, 0.25);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn checker_cache_change_does_not_drop_a_completed_content_tree(cx: &mut TestAppContext) {
+        let view = view(cx);
+        view.update(cx, |this, _| {
+            this.editor
+                .execute(Command::SetOpacity {
+                    id: 1,
+                    opacity: 0.5,
+                })
+                .unwrap();
+            let revision = this.editor.revision;
+            let snapshot = this.editor.doc.composite_tree();
+            let displayed_tree = this.tree.clone();
+            // Theme/checker changes invalidate tiles but do not install a new
+            // content tree. The in-flight content must still reach the screen.
+            this.gen_counter += 1;
+            this.render_gen = this.gen_counter;
+            this.cache.borrow_mut().clear();
+            this.install_completed_tree(snapshot, revision, this.tree_request, &displayed_tree);
+            assert_eq!(this.tree.nodes[0].opacity, 0.5);
+            assert!(!Arc::ptr_eq(&this.tree, &displayed_tree));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn selected_object_rotation_is_undoable_without_switching_tools(cx: &mut TestAppContext) {
+        let view = view(cx);
+        view.update(cx, |this, cx| {
+            let path = Arc::new(
+                emulsion_raster::vector::Path::from_svg("M 12 12 L 44 12 L 12 28 Z").unwrap(),
+            );
+            let id = this
+                .editor
+                .execute(Command::AddNode {
+                    node: Box::new(Node::path(0, "Drawing", path, Default::default(), 64, 64)),
+                    slot: Slot::TOP,
+                })
+                .unwrap()
+                .unwrap();
+            this.selected = Some(id);
+            let before = this.editor.doc.clone();
+            let steps = this.editor.history.len();
+            assert!(this.tool == Tool::Hand);
+            this.rotate_selected_node(90.0, cx);
+            assert!(matches!(
+                this.editor.doc.node(id).unwrap().kind,
+                NodeKind::Path { .. }
+            ));
+            assert_ne!(this.editor.doc.node(id), before.node(id));
+            assert_eq!(
+                this.editor.doc.node(1),
+                before.node(1),
+                "other nodes are untouched"
+            );
+            assert_eq!(this.editor.history.len(), steps + 1);
+            this.undo(cx);
+            assert_eq!(this.editor.doc, before);
+            this.assistant.running = true;
+            this.rotate_selected_node(90.0, cx);
+            assert_eq!(
+                this.editor.doc, before,
+                "active assistant drawing keeps a stable target"
+            );
+        });
     }
 }

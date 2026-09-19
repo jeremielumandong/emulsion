@@ -9,7 +9,7 @@ use emulsion_core::{Command, Document, Node, NodeKind};
 use emulsion_io::recent::{self, Recent};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -25,8 +25,9 @@ pub struct Workspace {
     pub screen: Screen,
     pub editor: Option<Entity<EditorView>>,
     pub recents: Vec<Recent>,
-    pub thumbs: HashMap<PathBuf, Arc<RenderImage>>,
-    pub thumbs_loading: HashSet<PathBuf>,
+    pub(crate) thumbs: HashMap<PathBuf, crate::home::GalleryThumbnail>,
+    pub(crate) thumbs_loading: HashMap<PathBuf, u64>,
+    pub(crate) thumb_generation: u64,
     pub busy: Option<SharedString>,
     pub error: Option<SharedString>,
     focus: FocusHandle,
@@ -138,7 +139,8 @@ impl Workspace {
             recents: recent::load(),
             recovered: find_recovered(),
             thumbs: HashMap::new(),
-            thumbs_loading: HashSet::new(),
+            thumbs_loading: HashMap::new(),
+            thumb_generation: 0,
             busy: None,
             error: None,
             focus,
@@ -503,8 +505,9 @@ impl Workspace {
             this.update(cx, |this, cx| match result {
                 Ok(()) => {
                     this.recents = recent::push(&path, summary(&doc));
-                    this.thumbs
-                        .remove(&std::fs::canonicalize(&path).unwrap_or(path.clone()));
+                    this.invalidate_thumbnail(
+                        &std::fs::canonicalize(&path).unwrap_or(path.clone()),
+                    );
                     ed.update(cx, |e, cx| {
                         e.editor.mark_saved(path.clone(), rev);
                         e.discard_recovery();

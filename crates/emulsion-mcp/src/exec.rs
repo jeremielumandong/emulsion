@@ -47,6 +47,8 @@ pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
 pub struct Planned {
     pub commands: Vec<Command>,
     pub message: String,
+    /// A preview computed with the planned pixels, delivered only after apply succeeds.
+    feedback: Option<ToolResult>,
 }
 
 /// Apply planned commands on the thread that owns the document.
@@ -56,7 +58,7 @@ pub fn apply(editor: &mut Editor, p: Planned) -> ToolResult {
             return err(e.to_string());
         }
     }
-    ToolResult::text(p.message)
+    p.feedback.unwrap_or_else(|| ToolResult::text(p.message))
 }
 
 fn combine_arg(args: &Value) -> Combine {
@@ -703,6 +705,7 @@ fn plan_liquify(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
         return Err(err("the path missed the layer"));
     }
     Ok(Planned {
+        feedback: None,
         commands: vec![Command::ReplacePixels {
             id,
             raster: Arc::new(current),
@@ -724,36 +727,39 @@ fn plan_from_script(doc: &Document, script: PaintScript) -> Result<Planned, Tool
         unreachable!()
     };
     let (current, dirty) = script.render(raster);
-    // A quick look at the result, so the model corrects course.
+    // Render feedback on the same background thread as the paint computation.
     let mut after = doc.clone();
     if let Some(NodeKind::Raster { raster: r, .. }) = after.node_mut(script.id).map(|n| &mut n.kind)
     {
         *r = Arc::new(current.clone());
     }
-    let note = critique_note(&after, std::env::var("TYPESAFE_API_KEY").ok().as_deref());
+    let feedback = paint_feedback(&after, script.message.clone());
     Ok(Planned {
+        feedback: Some(feedback),
         commands: vec![Command::ReplacePixels {
             id: script.id,
             raster: Arc::new(current),
             dirty,
             label: script.label,
         }],
-        message: format!("{}{note}", script.message),
+        message: script.message,
     })
 }
 
-/// "\nCritique: …" for the top two issues, ranked by Jev when a key is given.
-pub fn critique_note(doc: &Document, jev_key: Option<&str>) -> String {
-    let mut c = emulsion_ai::critique::analyze(doc);
-    if let Some(k) = jev_key.filter(|k| !k.is_empty()) {
-        let _ = emulsion_ai::critique::rank_with_jev(&emulsion_ai::jev::Jev::new(k), &mut c);
+/// Show the actual composite after a completed paint/hatch call. A missing
+/// preview must not turn an already-applied edit into a retryable tool error.
+/// Call on a background thread when used from the UI.
+pub fn paint_feedback(doc: &Document, message: impl Into<String>) -> ToolResult {
+    let mut result = ToolResult::text(message);
+    match crate::preview::view(doc, &json!({"max_size": 800})) {
+        Ok(preview) => result.content.extend(preview.content),
+        Err(error) => result.content.push(json!({
+            "type": "text",
+            "text": format!("The paint was applied, but its preview is unavailable: {}. Inspect with get_view before making visual judgments; do not repeat the paint call.",
+                error.content.first().and_then(|b| b["text"].as_str()).unwrap_or("preview failed"))
+        })),
     }
-    let lines = c.lines(2);
-    if lines.is_empty() {
-        String::new()
-    } else {
-        format!("\nCritique ({}): {}", c.ranked_by, lines.join(" "))
-    }
+    result
 }
 
 fn hex(c: [u8; 4]) -> String {
@@ -892,6 +898,7 @@ fn doc_raster(doc: &Document) -> Raster {
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
     let (w, h) = (doc.width, doc.height);
     match name {
+        "get_reference_image" => Err(crate::reference::missing_reference()),
         "generative_fill" | "generate_image" => {
             let settings = emulsion_io::settings::Settings::load();
             let provider = emulsion_ai::generate::Provider::parse(&settings.image_provider)
@@ -924,6 +931,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                         format!("Generated: {}", prompt.chars().take(40).collect::<String>())
                     });
                 return Ok(Planned {
+                    feedback: None,
                     commands: vec![Command::AddNode {
                         node: Box::new(
                             Node::raster(0, label.clone(), Arc::new(layer), Placement::default())
@@ -961,6 +969,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                     .map_err(|e| err(e.to_string()))?;
             let label = format!("Generated: {}", prompt.chars().take(40).collect::<String>());
             Ok(Planned {
+                feedback: None,
                 commands: vec![Command::AddNode {
                     node: Box::new(
                         Node::raster(
@@ -1011,6 +1020,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let (layer, reg) =
                 emulsion_ai::inpaint::fill(&img, &hole, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                feedback: None,
                 commands: vec![Command::AddNode {
                     node: Box::new(
                         Node::raster(
@@ -1048,6 +1058,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 .unwrap_or("Depth (AI)")
                 .to_string();
             Ok(Planned {
+                feedback: None,
                 commands: vec![Command::AddNode {
                     node: Box::new(
                         Node::raster(
@@ -1081,6 +1092,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let (restored, n) =
                 emulsion_ai::face::restore(&img, strength, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                feedback: None,
                 commands: vec![Command::AddNode {
                     node: Box::new(
                         Node::raster(
@@ -1116,6 +1128,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let job = emulsion_ai::jobs::Job::new();
             let big = emulsion_ai::upscale::upscale(&img, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                feedback: None,
                 commands: vec![
                     Command::ImageSize {
                         width: w * f,
@@ -1198,6 +1211,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             skipped.sort();
             skipped.dedup();
             Ok(Planned {
+                feedback: None,
                 commands: vec![],
                 message: format!(
                     "Saved {} recipe(s): {}{}",
@@ -1305,6 +1319,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 }
             }
             Ok(Planned {
+                feedback: None,
                 commands: vec![],
                 message: format!(
                     "Exported {} of {} to {}{}",
@@ -1383,6 +1398,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             }
             commands.push(Command::SetFilters { id, filters });
             Ok(Planned {
+                feedback: None,
                 commands,
                 message: format!(
                     "Applied the {} profile ({}{}) to {}",
@@ -1415,6 +1431,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 emulsion_io::lensfun::install(&|_, _| {}, &cancel)
                     .map_err(|e| err(e.to_string()))?;
                 return Ok(Planned {
+                    feedback: None,
                     commands: vec![],
                     message: "Installed the lensfun lens database".into(),
                 });
@@ -1425,6 +1442,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             emulsion_ai::models::download(spec, &|_, _| {}, &cancel)
                 .map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                feedback: None,
                 commands: vec![],
                 message: format!(
                     "Installed {} ({})",
@@ -1446,6 +1464,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let m = emulsion_ai::matte::harden(&m, 20, 235);
             let (c, msg) = selection_command(doc, m, combine_arg(args), 0.0);
             Ok(Planned {
+                feedback: None,
                 commands: vec![c],
                 message: msg,
             })
@@ -1498,6 +1517,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let m = emulsion_ai::matte::harden(&m, 96, 160);
             let (c, msg) = selection_command(doc, m, combine_arg(args), 0.0);
             Ok(Planned {
+                feedback: None,
                 commands: vec![c],
                 message: format!("{msg} (confidence {:.0} %)", score * 100.0),
             })
@@ -1562,6 +1582,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 commands.push(Command::SetVisible { id, visible: false });
             }
             Ok(Planned {
+                feedback: None,
                 commands,
                 message: format!(
                     "Cut the subject out into {name:?}{}",
@@ -1602,6 +1623,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let m = select::by_color(&img, w, h, x as u32, y as u32, tol, contiguous);
             let (c, message) = selection_command(doc, m, combine_arg(args), 0.0);
             Ok(Planned {
+                feedback: None,
                 commands: vec![c],
                 message,
             })
@@ -1668,6 +1690,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             }
             let n = filters.len();
             Ok(Planned {
+                feedback: None,
                 commands: vec![Command::SetFilters { id, filters }],
                 message: format!(
                     "{} now has {n} filter{}",
@@ -1690,6 +1713,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 Placement::at(reg.x as f64, reg.y as f64),
             );
             Ok(Planned {
+                feedback: None,
                 commands: vec![Command::AddNode { node: Box::new(node), slot: Slot::TOP }],
                 message: "Filled the selection into a new node \"Content-aware fill\" at the top of the stack".into(),
             })
@@ -1708,6 +1732,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             serde_json::to_string_pretty(&describe(editor)).unwrap_or_default(),
         )),
         "get_view" => view(&editor.doc, args),
+        "get_reference_image" => Err(crate::reference::missing_reference()),
         "set_visibility" => {
             let id = id_arg(args, "node")?;
             let visible = args
@@ -1925,6 +1950,18 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             exec(editor, Command::SetAdjustment { id, adjustment: a })?;
             Ok(ToolResult::text(format!(
                 "Updated {}",
+                node_label(&editor.doc, id)
+            )))
+        }
+        "rotate_node" => {
+            let id = id_arg(args, "node")?;
+            let degrees = args
+                .get("degrees")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| err("missing number 'degrees'"))?;
+            exec(editor, Command::RotateNode { id, degrees })?;
+            Ok(ToolResult::text(format!(
+                "Rotated {} by {degrees} degrees clockwise",
                 node_label(&editor.doc, id)
             )))
         }
@@ -3206,6 +3243,7 @@ pub fn describe(editor: &Editor) -> Value {
                 }
                 NodeKind::Text { spec, .. } => {
                     o.insert("text".into(), json!(spec.text));
+                    o.insert("rotation".into(), json!(spec.rotation));
                     o.insert("x".into(), json!(spec.x));
                     o.insert("y".into(), json!(spec.y));
                     o.insert("size".into(), json!(spec.size));
@@ -3255,6 +3293,7 @@ pub fn view(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> {
 pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, ToolResult> {
     match name {
         "get_view" => view(doc, args),
+        "get_reference_image" => Err(crate::reference::missing_reference()),
         "critique" => crate::review::critique(doc, args),
         "list_brushes" => crate::brush_discovery::list(args),
         _ => Err(err(format!("not an inspection tool: {name}"))),
@@ -3290,6 +3329,113 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .to_string()
+    }
+
+    #[test]
+    fn paint_and_hatch_return_the_completed_composite_and_preserve_layers() {
+        for (name, args) in [
+            (
+                "paint",
+                json!({"node": 3, "brush": "Maru pen", "color": "#ff0000",
+                "settings": {"size": 12}, "strokes": [{"points": [[20,50],[180,50]]}]}),
+            ),
+            (
+                "hatch",
+                json!({"node": 3, "brush": "Maru pen", "color": "#ff0000",
+                "rect": [20,20,160,60], "spacing": 12}),
+            ),
+        ] {
+            let mut e = editor();
+            let before = e.doc.clone();
+            // Exercise both entry points used by the headless server and UI.
+            let result = if name == "paint" {
+                execute(&mut e, name, &args)
+            } else {
+                let planned = plan_heavy(&e.doc, name, &args)
+                    .unwrap_or_else(|error| panic!("{}", text(&error)));
+                apply(&mut e, planned)
+            };
+            assert!(!result.is_error, "{}", text(&result));
+            assert!(!text(&result).contains("Critique"));
+            let expected = crate::preview::view(&e.doc, &json!({"max_size": 800})).unwrap();
+            assert_eq!(result.content[1..], expected.content);
+            assert_eq!(result.content[1]["type"], "image");
+            let mapping: Value =
+                serde_json::from_str(result.content[2]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(mapping["document_size"], json!([200, 100]));
+            assert_eq!(mapping["image_to_document"]["scale"], json!([1.0, 1.0]));
+            assert_eq!(e.doc.nodes.len(), before.nodes.len());
+            for id in [1, 2] {
+                match (
+                    &before.node(id).unwrap().kind,
+                    &e.doc.node(id).unwrap().kind,
+                ) {
+                    (
+                        NodeKind::Raster { raster: old, .. },
+                        NodeKind::Raster { raster: new, .. },
+                    ) => assert!(Arc::ptr_eq(old, new)),
+                    _ => panic!("lower layer changed kind"),
+                }
+            }
+            let previous_view = crate::preview::view(&before, &json!({"max_size": 800})).unwrap();
+            assert_ne!(
+                result.content[1], previous_view.content[0],
+                "painting must visibly change the result"
+            );
+            assert_eq!(e.history.len(), 1, "feedback must not add document edits");
+        }
+    }
+
+    #[test]
+    fn paint_feedback_is_bounded_and_preview_failure_is_not_a_paint_failure() {
+        let doc = Document::new(1600, 1000);
+        let result = paint_feedback(&doc, "Painted");
+        assert!(!result.is_error);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(result.content[1]["data"].as_str().unwrap())
+            .unwrap();
+        let image = image::load_from_memory(&bytes).unwrap();
+        assert_eq!((image.width(), image.height()), (800, 500));
+        let mapping: Value =
+            serde_json::from_str(result.content[2]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(mapping["image_to_document"]["scale"], json!([2.0, 2.0]));
+
+        let unavailable = paint_feedback(&Document::new(0, 0), "Painted");
+        assert!(!unavailable.is_error);
+        assert_eq!(text(&unavailable), "Painted");
+        assert!(
+            unavailable.content[1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("do not repeat")
+        );
+    }
+
+    #[test]
+    fn failed_paint_does_not_return_a_success_preview() {
+        let mut e = editor();
+        let args = json!({"node": 3, "brush": "Maru pen", "color": "#ff0000",
+            "strokes": [{"points": [[20,50],[180,50]]}]});
+        let planned =
+            plan_heavy(&e.doc, "paint", &args).unwrap_or_else(|error| panic!("{}", text(&error)));
+        e.doc.nodes.retain(|node| node.id != 3);
+        let failed_apply = apply(&mut e, planned);
+        assert!(failed_apply.is_error);
+        assert!(
+            failed_apply
+                .content
+                .iter()
+                .all(|block| block["type"] != "image")
+        );
+        let failed_plan = execute(&mut e, "paint", &args);
+        assert!(failed_plan.is_error);
+        assert!(
+            failed_plan
+                .content
+                .iter()
+                .all(|block| block["type"] != "image")
+        );
+        assert!(e.history.is_empty());
     }
 
     #[test]
@@ -3845,6 +3991,149 @@ mod tests {
             &json!({ "d": "M 0 0 A 5 5 0 0 1 1 1" }),
         );
         assert!(r.is_error);
+    }
+
+    #[test]
+    fn rotate_node_rotates_editable_paths_incrementally_with_one_undo_step() {
+        let mut e = Editor::new(Document::new(128, 128), None);
+        let result = execute(
+            &mut e,
+            "draw_path",
+            &json!({
+                "name": "Rectangle", "d": "M 20 20 L 40 20 L 40 60 L 20 60 Z",
+                "stroke": "none", "fill": "#000000"
+            }),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        let id = e.doc.nodes[0].id;
+        let before = e.doc.clone();
+        let steps = e.history.len();
+        let point = |doc: &Document| {
+            let NodeKind::Path { path, .. } = &doc.node(id).unwrap().kind else {
+                panic!("rotation must preserve editable path geometry");
+            };
+            path.subpaths[0].anchors[0].p
+        };
+        for expected in [(50.0, 30.0), (40.0, 60.0)] {
+            let result = execute(&mut e, "rotate_node", &json!({"node": id, "degrees": 90}));
+            assert!(!result.is_error, "{}", text(&result));
+            let actual = point(&e.doc);
+            assert!(
+                (actual.0 - expected.0).abs() < 1e-5 && (actual.1 - expected.1).abs() < 1e-5,
+                "clockwise incremental rotation: {actual:?} vs {expected:?}"
+            );
+        }
+        assert_eq!(e.history.len(), steps + 2);
+        assert_eq!((e.doc.width, e.doc.height), (128, 128));
+        assert!(e.undo());
+        assert!(e.undo());
+        assert_eq!(e.doc, before);
+    }
+
+    #[test]
+    fn rotate_node_rotates_groups_together_and_rejects_invalid_input_atomically() {
+        let mut e = Editor::new(Document::new(128, 128), None);
+        let mut ids = Vec::new();
+        for d in [
+            "M 10 40 L 30 40 L 30 60 L 10 60 Z",
+            "M 90 40 L 110 40 L 110 60 L 90 60 Z",
+        ] {
+            let result = execute(
+                &mut e,
+                "draw_path",
+                &json!({"d": d, "stroke": "none", "fill": "#000000"}),
+            );
+            assert!(!result.is_error, "{}", text(&result));
+            ids.push(e.doc.nodes.last().unwrap().id);
+        }
+        let result = execute(
+            &mut e,
+            "group_nodes",
+            &json!({"nodes": ids, "name": "Pair"}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        let group = e
+            .doc
+            .nodes
+            .iter()
+            .find(|node| node.name == "Pair")
+            .unwrap()
+            .id;
+        let before = e.doc.clone();
+        let steps = e.history.len();
+        let result = execute(
+            &mut e,
+            "rotate_node",
+            &json!({"node": group, "degrees": 90}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        for (id, expected) in ids.iter().zip([(70.0, 0.0), (70.0, 80.0)]) {
+            let node = e.doc.node(*id).unwrap();
+            assert_eq!(node.parent, Some(group));
+            let NodeKind::Path { path, .. } = &node.kind else {
+                panic!("path flattened")
+            };
+            let actual = path.subpaths[0].anchors[0].p;
+            assert!(
+                (actual.0 - expected.0).abs() < 1e-5 && (actual.1 - expected.1).abs() < 1e-5,
+                "children rotate around one group pivot: {actual:?} vs {expected:?}"
+            );
+        }
+        assert_eq!(e.history.len(), steps + 1);
+        assert!(e.undo());
+        assert_eq!(e.doc, before);
+        for args in [
+            json!({"node": group}),
+            json!({"node": group, "degrees": "90"}),
+            json!({"node": 9999, "degrees": 90}),
+        ] {
+            let revision = e.revision;
+            let result = execute(&mut e, "rotate_node", &args);
+            assert!(result.is_error, "{args}: {}", text(&result));
+            assert_eq!(e.doc, before);
+            assert_eq!(e.revision, revision);
+        }
+        e.execute(Command::SetLocked {
+            id: ids[0],
+            locked: true,
+        })
+        .unwrap();
+        let locked = e.doc.clone();
+        let revision = e.revision;
+        let result = execute(
+            &mut e,
+            "rotate_node",
+            &json!({"node": group, "degrees": -15}),
+        );
+        assert!(result.is_error);
+        assert_eq!(e.doc, locked);
+        assert_eq!(e.revision, revision);
+    }
+
+    #[test]
+    fn rotate_node_keeps_text_rotation_when_content_changes() {
+        let mut e = Editor::new(Document::new(200, 160), None);
+        let result = execute(
+            &mut e,
+            "add_text",
+            &json!({"text": "Hello", "x": 60, "y": 60, "size": 24}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        let id = e.doc.nodes[0].id;
+        for (tool, args) in [
+            ("rotate_node", json!({"node": id, "degrees": 25})),
+            ("set_text", json!({"node": id, "text": "Changed"})),
+        ] {
+            let result = execute(&mut e, tool, &args);
+            assert!(!result.is_error, "{}", text(&result));
+        }
+        let NodeKind::Text { spec, .. } = &e.doc.node(id).unwrap().kind else {
+            panic!("text flattened")
+        };
+        assert_eq!(spec.text, "Changed");
+        assert!((spec.rotation - 25.0).abs() < 1e-5);
+        let described = describe(&e);
+        assert_eq!(described["nodes"][0]["rotation"], json!(25.0));
     }
 
     #[test]

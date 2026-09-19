@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 pub const READ_ONLY: &[&str] = &[
     "describe_document",
     "get_view",
+    "get_reference_image",
     "list_history",
     "compare",
     "list_brushes",
@@ -150,6 +151,12 @@ pub fn definitions() -> Vec<ToolDef> {
             &[],
         ),
         def(
+            "get_reference_image",
+            "Inspect the image attached by the person as a drawing or painting reference. Returns a bounded PNG and original reference dimensions with image-to-reference coordinate mapping. Reference coordinates are independent of the drawing canvas. This does not import pixels into the document or accept a file path. Returns an error when no reference is attached.",
+            json!({}),
+            &[],
+        ),
+        def(
             "set_visibility",
             "Show or hide a node.",
             json!({ "node": node(), "visible": { "type": "boolean" } }),
@@ -249,6 +256,12 @@ pub fn definitions() -> Vec<ToolDef> {
                 "flip_x": { "type": "boolean" }, "flip_y": { "type": "boolean" }
             }),
             &["node"],
+        ),
+        def(
+            "rotate_node",
+            "Rotate a node or group by an additional number of degrees clockwise about the centre of its content. Negative degrees rotate counterclockwise. Groups rotate their contents together; paths and text remain editable and pixel source data is retained. The canvas size and selection stay unchanged. Locked content cannot be rotated.",
+            json!({"node": node(), "degrees": {"type": "number", "description": "Incremental clockwise angle in degrees, for example 90, -90, or 15."}}),
+            &["node", "degrees"],
         ),
         def(
             "select_rect",

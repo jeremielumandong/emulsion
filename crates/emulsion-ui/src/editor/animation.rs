@@ -112,6 +112,14 @@ impl EditorView {
 
     pub(crate) fn toggle_animation(&mut self, cx: &mut Context<Self>) {
         self.anim.open = !self.anim.open;
+        self.select_sidebar(
+            if self.anim.open {
+                SidebarTab::Timeline
+            } else {
+                SidebarTab::Properties
+            },
+            cx,
+        );
         self.anim.playing = false;
         if self.anim.fps == 0 {
             self.anim.fps = 8;

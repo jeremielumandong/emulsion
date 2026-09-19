@@ -8,6 +8,17 @@ use emulsion_io::recent;
 use gpui_kit::*;
 use std::sync::Arc;
 
+pub(crate) struct GalleryThumbnail {
+    requested_width: u32,
+    image: Option<Arc<RenderImage>>,
+}
+
+fn thumbnail_width(viewport_width: f32, scale_factor: f32) -> u32 {
+    let pixels = (viewport_width / 4.0 * scale_factor).ceil() as u32;
+    // Bucket resize requests to avoid rebuilding on every single-pixel drag.
+    pixels.div_ceil(128).saturating_mul(128).clamp(128, 2048)
+}
+
 const FACTS: [(&str, &str); 3] = [
     (
         "Nodes, not layers",
@@ -27,33 +38,66 @@ impl Workspace {
     /// Drop a file from the recent list without touching the file.
     pub fn remove_recent(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
         self.recents = emulsion_io::recent::remove(path);
-        self.thumbs.remove(path);
+        self.invalidate_thumbnail(path);
         cx.notify();
     }
 
-    fn load_thumbs(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn invalidate_thumbnail(&mut self, path: &std::path::Path) {
+        self.thumbs.remove(path);
+        // An earlier read must not overwrite a newly saved document's preview.
+        self.thumbs_loading.remove(path);
+    }
+
+    fn load_thumbs(&mut self, width: u32, cx: &mut Context<Self>) {
         for r in self.recents.clone() {
-            if self.thumbs.contains_key(&r.path) || !self.thumbs_loading.insert(r.path.clone()) {
+            if self
+                .thumbs
+                .get(&r.path)
+                .is_some_and(|thumb| thumb.requested_width >= width)
+                || self.thumbs_loading.contains_key(&r.path)
+            {
                 continue;
             }
+            // Full saved composites can be large. Limit simultaneous decodes.
+            if self.thumbs_loading.len() >= 2 {
+                break;
+            }
+            self.thumb_generation = self.thumb_generation.wrapping_add(1);
+            let generation = self.thumb_generation;
+            self.thumbs_loading.insert(r.path.clone(), generation);
             let path = r.path.clone();
             cx.spawn(async move |this, cx| {
                 let p = path.clone();
                 let result = cx
                     .background_spawn(async move {
-                        emulsion_io::thumb::thumbnail(&p, 480).map(|(w, h, mut rgba)| {
-                            for px in rgba.as_chunks_mut::<4>().0 {
-                                px.swap(0, 2);
-                            }
-                            (w, h, rgba)
-                        })
+                        emulsion_io::thumb::thumbnail_cover(&p, width, width * 3 / 4).map(
+                            |(w, h, mut rgba)| {
+                                for px in rgba.as_chunks_mut::<4>().0 {
+                                    px.swap(0, 2);
+                                }
+                                (w, h, rgba)
+                            },
+                        )
                     })
                     .await;
                 this.update(cx, |this, cx| {
-                    if let Ok((w, h, bgra)) = result {
-                        this.thumbs.insert(path, Arc::new(bgra_image(w, h, bgra)));
-                        cx.notify();
+                    if this.thumbs_loading.get(&path) != Some(&generation) {
+                        return;
                     }
+                    this.thumbs_loading.remove(&path);
+                    let previous = this.thumbs.remove(&path).and_then(|thumb| thumb.image);
+                    let image = result
+                        .ok()
+                        .map(|(w, h, bgra)| Arc::new(bgra_image(w, h, bgra)))
+                        .or(previous);
+                    this.thumbs.insert(
+                        path,
+                        GalleryThumbnail {
+                            requested_width: width,
+                            image,
+                        },
+                    );
+                    cx.notify();
                 })
                 .ok();
             })
@@ -63,11 +107,17 @@ impl Workspace {
 
     pub(crate) fn home(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
-        self.load_thumbs(cx);
+        self.load_thumbs(
+            thumbnail_width(
+                f32::from(window.viewport_size().width),
+                window.scale_factor(),
+            ),
+            cx,
+        );
         let date = {
             let n = self.recents.len();
             format!("{n} recent file{}", if n == 1 { "" } else { "s" })
@@ -282,7 +332,11 @@ impl Workspace {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let meta = format!("{} · {}", recent::ago(r.opened), r.summary);
-        let thumb: AnyElement = match self.thumbs.get(&r.path) {
+        let thumb: AnyElement = match self
+            .thumbs
+            .get(&r.path)
+            .and_then(|thumb| thumb.image.as_ref())
+        {
             Some(t) => img(ImageSource::Render(t.clone()))
                 .size_full()
                 .object_fit(ObjectFit::Cover)
