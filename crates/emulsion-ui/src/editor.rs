@@ -64,7 +64,7 @@ const TOOLS: [(Tool, &str, &str, bool); 12] = [
     (Tool::Hand, "Hand", "✋", true),
     (Tool::Move, "Move", "✥", true),
     (Tool::Select, "Select", "▢", true),
-    (Tool::Mask, "Mask", "◐", false),
+    (Tool::Mask, "Mask", "◐", true),
     (Tool::Brush, "Brush", "✎", true),
     (Tool::Heal, "Heal", "✚", true),
     (Tool::Clone, "Clone", "◎", true),
@@ -2215,16 +2215,12 @@ impl EditorView {
                     this.execute(Command::SetMaskEnabled { id, enabled: !en }, cx);
                 },
             )));
-            let editing = self.tools.mask_edit;
+            let editing = self.tool == Tool::Mask;
             toggles = toggles
                 .child(
                     chip("mask-edit", "edit mask", editing, p).on_click(cx.listener(
                         move |this, _, _, cx| {
-                            this.tools.mask_edit = !editing;
-                            if !editing {
-                                this.tool = Tool::Brush;
-                            }
-                            cx.notify();
+                            this.set_tool(if editing { Tool::Brush } else { Tool::Mask }, cx);
                         },
                     )),
                 )

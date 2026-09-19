@@ -1268,10 +1268,10 @@ impl EditorView {
         } else {
             String::new()
         };
-        let who = if turn.local.is_some() {
-            "PALETTE"
+        let who: SharedString = if turn.local.is_some() {
+            "PALETTE".into()
         } else {
-            "CLAUDE CODE"
+            provider(cx).label.to_uppercase().into()
         };
         // Finished cards fold into a count once there are many, so the dock
         // stays a strip above the canvas instead of covering it.

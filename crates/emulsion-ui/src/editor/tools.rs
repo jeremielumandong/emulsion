@@ -25,7 +25,7 @@ pub enum SelectShape {
     Magnetic,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PaintKind {
     Brush,
     Eraser,
@@ -35,6 +35,57 @@ pub enum PaintKind {
     Gradient,
     /// Push, twirl, pinch and expand the pixels themselves.
     Liquify,
+}
+
+/// Which tool a brush setting belongs to. Each keeps its own size,
+/// hardness and the rest, so changing the eraser never changes the brush.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum BrushSlot {
+    Paint(PaintKind),
+    Heal,
+    Clone,
+    Mask,
+}
+
+impl BrushSlot {
+    pub fn of(tool: Tool, paint: PaintKind) -> Option<BrushSlot> {
+        match tool {
+            Tool::Brush => Some(BrushSlot::Paint(paint)),
+            Tool::Heal => Some(BrushSlot::Heal),
+            Tool::Clone => Some(BrushSlot::Clone),
+            Tool::Mask => Some(BrushSlot::Mask),
+            _ => None,
+        }
+    }
+
+    /// A sensible starting brush for the slot.
+    pub fn default_brush(self) -> Brush {
+        let mut b = Brush::default();
+        match self {
+            BrushSlot::Paint(PaintKind::Eraser) => {
+                b.size = 40.0;
+                b.hardness = 0.9;
+            }
+            BrushSlot::Paint(PaintKind::Smudge) => {
+                b.size = 60.0;
+                b.hardness = 0.3;
+            }
+            BrushSlot::Paint(PaintKind::Liquify) => {
+                b.size = 80.0;
+                b.flow = 0.6;
+            }
+            BrushSlot::Mask => {
+                b.size = 60.0;
+                b.hardness = 0.5;
+            }
+            BrushSlot::Heal | BrushSlot::Clone => {
+                b.size = 30.0;
+                b.hardness = 0.6;
+            }
+            _ => {}
+        }
+        b
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -77,6 +128,10 @@ pub struct ToolState {
     pub guide: super::guides::GuideState,
     /// What the Liquify brush does.
     pub liquify: emulsion_raster::liquify::Mode,
+    /// Saved brush settings (and preset name) for the slots not in use.
+    pub kits: std::collections::HashMap<BrushSlot, (Brush, Option<String>)>,
+    /// Mask tool: painting reveals (white) or hides (black).
+    pub mask_reveal: bool,
     /// Show every brush setting, not just the four usual ones.
     pub brush_more: bool,
     /// When the current stroke started, for speed dynamics.
@@ -128,6 +183,8 @@ impl Default for ToolState {
             alpha_lock: false,
             guide: Default::default(),
             liquify: emulsion_raster::liquify::Mode::Push,
+            kits: Default::default(),
+            mask_reveal: true,
             brush_more: false,
             stroke_started: None,
             quick_shape: true,
@@ -314,9 +371,43 @@ impl EditorView {
         if tool != Tool::Type {
             self.close_text_field(cx);
         }
+        let from = BrushSlot::of(self.tool, self.tools.paint);
         self.tool = tool;
         self.tools.polygon.clear();
+        self.switch_slot(from, BrushSlot::of(tool, self.tools.paint));
+        self.tools.mask_edit = tool == Tool::Mask;
+        if tool == Tool::Mask {
+            // The tool needs a mask to paint; a node without one gets a
+            // fully revealing mask now.
+            if self.mask_target(cx).is_none() {
+                self.tool = Tool::Brush;
+                self.tools.mask_edit = false;
+            }
+        }
         cx.notify();
+    }
+
+    /// Put the current brush away under `from` and take out the one saved
+    /// for `to` (or its default). Nothing happens when they are the same.
+    fn switch_slot(&mut self, from: Option<BrushSlot>, to: Option<BrushSlot>) {
+        if from == to {
+            return;
+        }
+        if let Some(f) = from {
+            self.tools
+                .kits
+                .insert(f, (self.tools.brush, self.presets.current.clone()));
+        }
+        if let Some(t) = to {
+            let (b, name) = self
+                .tools
+                .kits
+                .get(&t)
+                .cloned()
+                .unwrap_or_else(|| (t.default_brush(), None));
+            self.tools.brush = b;
+            self.presets.current = name;
+        }
     }
 
     pub fn paint_kind(&self) -> PaintKind {
@@ -341,8 +432,10 @@ impl EditorView {
     }
 
     pub fn set_paint(&mut self, kind: PaintKind, cx: &mut Context<Self>) {
+        let from = BrushSlot::of(self.tool, self.tools.paint);
         self.tool = Tool::Brush;
         self.tools.paint = kind;
+        self.switch_slot(from, Some(BrushSlot::Paint(kind)));
         cx.notify();
     }
 
@@ -592,6 +685,15 @@ impl EditorView {
                     }
                     PaintKind::Liquify => self.start_liquify(d, cx),
                 }
+            }
+            Tool::Mask => {
+                self.tools.mask_edit = true;
+                let ink = if self.tools.mask_reveal {
+                    Ink::Color([1.0, 1.0, 1.0, 1.0])
+                } else {
+                    Ink::Erase
+                };
+                self.start_stroke(d, ink, false, "Paint mask", cx);
             }
             Tool::Heal => self.start_stroke(
                 d,
@@ -2249,6 +2351,59 @@ impl EditorView {
             .into_any_element()
     }
 
+    /// A labelled divider between groups of options.
+    fn group(&self, label: &'static str, p: &Palette) -> AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .flex_none()
+            .child(div().w(px(1.)).h(px(14.)).bg(p.line))
+            .child(mono(label, 9.5, p.muted))
+            .into_any_element()
+    }
+
+    /// Size, hardness, opacity and flow for the current brush slot.
+    fn brush_sliders(&mut self, v: &mut Vec<AnyElement>, p: &Palette, cx: &mut Context<Self>) {
+        let b = self.tools.brush;
+        v.push(self.opt_slider(
+            SliderKey::ToolSize,
+            "size",
+            format!("{:.0}px", b.size),
+            ((b.size - 1.0) / 499.0).sqrt(),
+            (1.0, 500.0, 1.0),
+            p,
+            cx,
+        ));
+        v.push(self.opt_slider(
+            SliderKey::ToolHardness,
+            "hard",
+            format!("{:.0}%", b.hardness * 100.0),
+            b.hardness,
+            (0.0, 100.0, 1.0),
+            p,
+            cx,
+        ));
+        v.push(self.opt_slider(
+            SliderKey::ToolOpacity,
+            "opacity",
+            format!("{:.0}%", b.opacity * 100.0),
+            b.opacity,
+            (1.0, 100.0, 1.0),
+            p,
+            cx,
+        ));
+        v.push(self.opt_slider(
+            SliderKey::ToolFlow,
+            "flow",
+            format!("{:.0}%", b.flow * 100.0),
+            b.flow,
+            (1.0, 100.0, 1.0),
+            p,
+            cx,
+        ));
+    }
+
     #[allow(clippy::too_many_arguments)] // a UI row: each argument is one visible property
     fn mode_chip<T: PartialEq + Copy + 'static>(
         &self,
@@ -2269,6 +2424,64 @@ impl EditorView {
         let mut v: Vec<AnyElement> = Vec::new();
         let b = self.tools.brush;
         match self.tool {
+            Tool::Mask => {
+                let reveal = self.tools.mask_reveal;
+                for (id, t, r) in [("mk-reveal", "reveal", true), ("mk-hide", "hide", false)] {
+                    v.push(self.mode_chip(id, t, r, reveal, p, cx, |e, r, cx| {
+                        e.tools.mask_reveal = r;
+                        cx.notify();
+                    }));
+                }
+                v.push(self.group("brush", p));
+                self.brush_sliders(&mut v, p, cx);
+                v.push(self.group("mask", p));
+                let has_sel = self.editor.doc.selection.is_some();
+                v.push(
+                    chip("mk-inv", "invert", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.invert_mask(cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("mk-feather", "feather 6", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.feather_mask(6.0, cx)))
+                        .into_any_element(),
+                );
+                if has_sel {
+                    v.push(
+                        chip("mk-from", "from selection", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.remove_mask(cx);
+                                this.add_mask(cx);
+                                this.tools.mask_edit = true;
+                                this.tool = Tool::Mask;
+                            }))
+                            .into_any_element(),
+                    );
+                }
+                v.push(
+                    chip("mk-sel", "to selection", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.mask_to_selection(cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("mk-del", "− mask", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.remove_mask(cx);
+                            this.set_tool(Tool::Brush, cx);
+                        }))
+                        .into_any_element(),
+                );
+                v.push(
+                    div()
+                        .flex_none()
+                        .child(if reveal {
+                            "painting reveals the layer; hide paints it away"
+                        } else {
+                            "painting hides the layer; reveal brings it back"
+                        })
+                        .into_any_element(),
+                );
+            }
             Tool::Select => {
                 let cur = self.tools.select;
                 for (id, t, s) in [
@@ -2553,6 +2766,7 @@ impl EditorView {
                         PaintKind::Brush | PaintKind::Eraser | PaintKind::Smudge
                     );
                 if brushy {
+                    v.push(self.group("brush", p));
                     if let Some(name) = &self.presets.current {
                         v.push(
                             mono(name.clone(), 10.5, p.ink)
@@ -2598,6 +2812,7 @@ impl EditorView {
                             cx,
                         ));
                     }
+                    v.push(self.group("symmetry", p));
                     let (mx, my) = (self.tools.mirror_x, self.tools.mirror_y);
                     v.push(
                         chip("mirror-x", "mirror ↔", mx, p)
@@ -2636,6 +2851,7 @@ impl EditorView {
                             }))
                             .into_any_element(),
                     );
+                    v.push(self.group("guide", p));
                     let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
                     let gk = self.tools.guide.kind.clone();
                     let g_on = gk != super::guides::GuideKind::Off;
@@ -2668,6 +2884,7 @@ impl EditorView {
                                 .into_any_element(),
                         );
                     }
+                    v.push(self.group("options", p));
                     let al = self.tools.alpha_lock;
                     v.push(
                         chip("alpha-lock", "alpha lock", al, p)
