@@ -56,11 +56,15 @@ mod tests {
 
     #[test]
     fn bundle_round_trips_and_is_told_from_a_recipe() {
-        let mut a = Recipe::default();
-        a.name = "Warm Street".into();
-        a.tags = vec!["warm".into()];
-        let mut b = Recipe::default();
-        b.name = "Cool Night".into();
+        let a = Recipe {
+            name: "Warm Street".into(),
+            tags: vec!["warm".into()],
+            ..Default::default()
+        };
+        let b = Recipe {
+            name: "Cool Night".into(),
+            ..Default::default()
+        };
         let bundle = Bundle::new("Test set", vec![a.clone(), b.clone()]);
         let text = bundle.to_toml();
         assert!(is_bundle(&text));
