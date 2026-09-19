@@ -49,6 +49,14 @@ pub(crate) struct TransformFields {
     _subs: Vec<Subscription>,
 }
 
+/// A Warp in progress: the lattice's current document-space positions.
+pub(crate) struct WarpState {
+    pub id: NodeId,
+    pub cols: usize,
+    pub rows: usize,
+    pub grid: Vec<(f64, f64)>,
+}
+
 fn local_corners(w: f64, h: f64) -> [(f64, f64); 4] {
     [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
 }
@@ -90,6 +98,9 @@ impl EditorView {
 
     /// The node's corners in document space, for the overlay.
     pub(crate) fn transform_box(&self) -> Option<[(f64, f64); 4]> {
+        if self.warp.is_some() {
+            return None;
+        }
         if let Some(Drag::Distort { quad, .. }) = &self.drag {
             return Some(*quad);
         }
@@ -131,8 +142,121 @@ impl EditorView {
         None
     }
 
+    /// Begin warping the selected node: a regular 3×3 lattice over it.
+    pub(crate) fn start_warp(&mut self, cx: &mut Context<Self>) {
+        let Some((id, w, h, p)) = self.transformable() else {
+            self.set_status("Select a pixel layer to warp.", true, cx);
+            return;
+        };
+        let m = p.to_doc(w, h);
+        let (cols, rows) = (3usize, 3usize);
+        let mut grid = Vec::with_capacity((cols + 1) * (rows + 1));
+        for r in 0..=rows {
+            for c in 0..=cols {
+                let q = m.transform_point2(dvec2(
+                    c as f64 * w as f64 / cols as f64,
+                    r as f64 * h as f64 / rows as f64,
+                ));
+                grid.push((q.x, q.y));
+            }
+        }
+        self.warp = Some(WarpState {
+            id,
+            cols,
+            rows,
+            grid,
+        });
+        self.set_status("Warp: drag the grid points, then apply.", false, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn cancel_warp(&mut self, cx: &mut Context<Self>) {
+        self.warp = None;
+        cx.notify();
+    }
+
+    /// Resample the node through the warped lattice.
+    pub(crate) fn finish_warp(&mut self, cx: &mut Context<Self>) {
+        let Some(wst) = self.warp.take() else {
+            return;
+        };
+        let Some(n) = self.editor.doc.node(wst.id) else {
+            return;
+        };
+        let NodeKind::Raster { raster, .. } = &n.kind else {
+            return;
+        };
+        let (raster, mask, id) = (raster.clone(), n.mask.clone(), wst.id);
+        self.set_status("Warping…", false, cx);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let (r, b) = warp::warp_mesh(&raster, &wst.grid, wst.cols, wst.rows, [0; 4])?;
+                    let m = match mask {
+                        Some(m) => Some(Arc::new(
+                            warp::warp_mesh(&m, &wst.grid, wst.cols, wst.rows, 0)?.0,
+                        )),
+                        None => None,
+                    };
+                    Some((r, m, b))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.status = None;
+                let Some((raster, mask, b)) = result else {
+                    this.set_status("That warp folds the image over itself.", true, cx);
+                    return;
+                };
+                this.execute(
+                    Command::ReplaceContent {
+                        id,
+                        raster: Arc::new(raster),
+                        mask,
+                        placement: Placement::at(b.x as f64, b.y as f64),
+                        label: "Warp".into(),
+                    },
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Lattice lines and points for the overlay, in document pixels.
+    pub(crate) fn warp_overlay(&self) -> (Vec<Vec<(f64, f64)>>, Vec<(f64, f64)>) {
+        let Some(w) = &self.warp else {
+            return (Vec::new(), Vec::new());
+        };
+        let mut lines = Vec::new();
+        for r in 0..=w.rows {
+            lines.push((0..=w.cols).map(|c| w.grid[r * (w.cols + 1) + c]).collect());
+        }
+        for c in 0..=w.cols {
+            lines.push((0..=w.rows).map(|r| w.grid[r * (w.cols + 1) + c]).collect());
+        }
+        (lines, w.grid.clone())
+    }
+
     /// Start a transform or distort if the press is on a handle.
     pub(crate) fn transform_down(&mut self, e: &MouseDownEvent) -> bool {
+        if let Some(w) = &self.warp {
+            let Some(b) = self.canvas_bounds() else {
+                return true;
+            };
+            let (sx, sy) = (
+                f32::from(e.position.x) as f64,
+                f32::from(e.position.y) as f64,
+            );
+            if let Some(i) = w.grid.iter().position(|g| {
+                let s = self.view.doc_to_screen(*g, &b);
+                (s.0 - sx).hypot(s.1 - sy) <= GRAB_PX * 1.5
+            }) {
+                self.drag = Some(Drag::Warp(i));
+            }
+            // While warping, the node itself does not move.
+            return true;
+        }
         let Some(handle) = self.handle_hit(e.position) else {
             return false;
         };

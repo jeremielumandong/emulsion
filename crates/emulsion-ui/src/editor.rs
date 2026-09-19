@@ -203,6 +203,8 @@ enum Drag {
         corner: usize,
         quad: [(f64, f64); 4],
     },
+    /// Dragging one point of the Warp lattice.
+    Warp(usize),
     /// Dragging in the navigator pans the view.
     Navigator,
     /// A guide dragged from a ruler (new) or grabbed on the canvas.
@@ -263,6 +265,8 @@ pub struct EditorView {
     /// Where it came from, for Save As suggestions.
     pub source: Option<PathBuf>,
     pub(crate) view: View,
+    /// Warp mesh in progress on a node (Move tool).
+    pub(crate) warp: Option<transform::WarpState>,
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
@@ -344,6 +348,7 @@ impl EditorView {
             name,
             source,
             view: View::default(),
+            warp: None,
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
@@ -1053,6 +1058,16 @@ impl EditorView {
                     self.distort_move(corner, d, cx);
                 }
             }
+            Drag::Warp(i) => {
+                let i = *i;
+                if let Some(d) = self.doc_point(pos)
+                    && let Some(w) = &mut self.warp
+                    && let Some(g) = w.grid.get_mut(i)
+                {
+                    *g = d;
+                    cx.notify();
+                }
+            }
             Drag::Vanishing(i) => {
                 let i = *i;
                 if let Some(d) = self.doc_point(pos) {
@@ -1104,7 +1119,10 @@ impl EditorView {
                     self.editor.end();
                 }
             }
-            Some(Drag::Pan { .. }) | Some(Drag::Navigator) | Some(Drag::Vanishing(_)) => {}
+            Some(Drag::Pan { .. })
+            | Some(Drag::Navigator)
+            | Some(Drag::Vanishing(_))
+            | Some(Drag::Warp(_)) => {}
             Some(Drag::Tool(t)) => self.tool_up(t, cx),
             Some(Drag::Guide {
                 vertical,

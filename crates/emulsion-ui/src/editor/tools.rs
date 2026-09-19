@@ -1974,7 +1974,10 @@ impl EditorView {
     pub(crate) fn overlay(&mut self, scale_factor: f32) -> Overlay {
         let level = self.view.level(scale_factor, 12);
         let (guides, snaps) = self.guide_lines();
-        let (assist, vanishing) = self.guide_overlay();
+        let (mut assist, mut vanishing) = self.guide_overlay();
+        let (wl, wp) = self.warp_overlay();
+        assist.extend(wl);
+        vanishing.extend(wp);
         let mut o = Overlay {
             ants: self.ants(level),
             phase: self.tools.ants_phase,
@@ -3178,8 +3181,34 @@ impl EditorView {
                             .child("select a pixel node to move or transform it · H to pan")
                             .into_any_element(),
                     );
+                } else if self.warp.is_some() {
+                    v.push(self.group("warp", p));
+                    v.push(
+                        chip("warp-apply", "apply", true, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.finish_warp(cx)))
+                            .into_any_element(),
+                    );
+                    v.push(
+                        chip("warp-cancel", "cancel", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.cancel_warp(cx)))
+                            .into_any_element(),
+                    );
+                    v.push(
+                        div()
+                            .flex_none()
+                            .child("drag the grid points to bend the layer, then apply")
+                            .into_any_element(),
+                    );
                 } else {
                     v.extend(fields);
+                    v.push(
+                        tip(
+                            chip("warp-start", "warp", false, p)
+                                .on_click(cx.listener(|this, _, _, cx| this.start_warp(cx))),
+                            "Bend the layer with a 3×3 grid of points",
+                        )
+                        .into_any_element(),
+                    );
                     v.push(
                         div()
                             .flex_none()
