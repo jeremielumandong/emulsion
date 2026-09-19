@@ -29,6 +29,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 pub use history::recovery_dir;
 use rayon::prelude::*;
+pub use recipes::recipes_dir;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;

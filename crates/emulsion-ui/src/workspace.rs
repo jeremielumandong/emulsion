@@ -18,6 +18,7 @@ pub enum Screen {
     Home,
     Editor,
     Settings,
+    Batch,
 }
 
 pub struct Workspace {
@@ -37,6 +38,7 @@ pub struct Workspace {
     )>,
     pub(crate) jev_test: Option<(SharedString, bool)>,
     pub(crate) model_jobs: crate::settings_models::ModelJobs,
+    pub(crate) batch: crate::batch::BatchState,
     /// The landing image, decoded once in the background.
     pub(crate) landing: Option<Arc<RenderImage>>,
     /// Recovery copies left by an earlier session that did not close cleanly.
@@ -131,6 +133,7 @@ impl Workspace {
             settings_inputs: None,
             jev_test: None,
             model_jobs: Default::default(),
+            batch: Default::default(),
             landing,
             splash: true,
         }
@@ -650,6 +653,14 @@ impl Workspace {
                 )),
             )
             .child(
+                tab("tab-batch", "BATCH", self.screen == Screen::Batch, true).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.screen = Screen::Batch;
+                        cx.notify();
+                    }),
+                ),
+            )
+            .child(
                 tab(
                     "tab-settings",
                     "SETTINGS",
@@ -753,6 +764,7 @@ impl Render for Workspace {
         let body: AnyElement = match (self.screen, &self.editor) {
             (Screen::Editor, Some(e)) => e.clone().into_any_element(),
             (Screen::Settings, _) => self.settings_screen(window, cx).into_any_element(),
+            (Screen::Batch, _) => self.batch_screen(cx).into_any_element(),
             _ => self.home(window, cx).into_any_element(),
         };
         div()

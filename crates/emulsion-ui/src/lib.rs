@@ -4,6 +4,7 @@
 pub mod actions;
 pub mod app_state;
 mod assistant;
+mod batch;
 pub mod editor;
 mod home;
 pub mod landing;
