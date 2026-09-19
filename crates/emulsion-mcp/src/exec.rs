@@ -147,8 +147,66 @@ fn resolve_brush(
     Ok((brush, category))
 }
 
-/// Paint strokes onto a copy of a layer; runs off the UI thread.
-fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
+/// One resolved stroke of a `paint` call, in layer pixels.
+pub struct ScriptStroke {
+    pub brush: Brush,
+    pub ink: Ink,
+    /// (x, y, pressure).
+    pub points: Vec<(f32, f32, Option<f32>)>,
+}
+
+/// A `paint` call resolved against a document: everything needed to lay
+/// the strokes down, at once or one point at a time.
+pub struct PaintScript {
+    pub id: NodeId,
+    pub strokes: Vec<ScriptStroke>,
+    pub clip: Option<emulsion_raster::paint::Clip>,
+    /// Layer pixels → document pixels.
+    pub to_doc: glam::DAffine2,
+    pub label: String,
+    pub message: String,
+}
+
+impl PaintScript {
+    /// Total path length in layer pixels, for pacing a playback.
+    pub fn length(&self) -> f32 {
+        self.strokes
+            .iter()
+            .map(|s| {
+                s.points
+                    .windows(2)
+                    .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+                    .sum::<f32>()
+            })
+            .sum()
+    }
+
+    /// Lay every stroke down on `base`. Returns the new layer and what changed.
+    pub fn render(&self, base: &Raster) -> (Raster, IRect) {
+        let mut current = base.clone();
+        let mut dirty = IRect::default();
+        for s in &self.strokes {
+            let mut stroke = Stroke::new(
+                Arc::new(current.clone()),
+                s.brush,
+                s.ink.clone(),
+                self.clip.clone(),
+            );
+            for (x, y, p) in &s.points {
+                stroke.point_at(*x, *y, *p, None);
+            }
+            stroke.finish();
+            let (r, d) = stroke.render(&current);
+            current = r;
+            dirty = dirty.union(&d);
+        }
+        let dirty = dirty.intersect(&current.bounds());
+        (current, dirty)
+    }
+}
+
+/// Resolve a `paint` call against `doc` without painting anything.
+pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolResult> {
     let id = id_arg(args, "node")?;
     let node = doc.node(id).ok_or_else(|| err(format!("no node {id}")))?;
     let NodeKind::Raster { raster, placement } = &node.kind else {
@@ -191,9 +249,7 @@ fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
                 }
             })
         });
-    let mut current: Raster = (**raster).clone();
-    let mut dirty = IRect::default();
-    let mut count = 0usize;
+    let mut out = Vec::with_capacity(strokes.len());
     for (i, s) in strokes.iter().enumerate() {
         let settings = s.get("settings").or(args.get("settings"));
         let (mut brush, cat) = if s.get("brush").is_some() {
@@ -229,8 +285,7 @@ fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
         if pts.len() > 2000 {
             return Err(err(format!("stroke {i} has more than 2000 points")));
         }
-        let base = Arc::new(current.clone());
-        let mut stroke = Stroke::new(base, brush, ink, clip.clone());
+        let mut points = Vec::with_capacity(pts.len());
         for (j, p) in pts.iter().enumerate() {
             let a = p.as_array().filter(|a| a.len() >= 2).ok_or_else(|| {
                 err(format!(
@@ -249,23 +304,18 @@ fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
                 .and_then(Value::as_f64)
                 .map(|p| p.clamp(0.0, 1.0) as f32);
             let l = to_local.transform_point2(glam::dvec2(x, y));
-            stroke.point_at(l.x as f32, l.y as f32, pressure, None);
+            points.push((l.x as f32, l.y as f32, pressure));
         }
-        stroke.finish();
-        let (r, d) = stroke.render(&current);
-        current = r;
-        dirty = dirty.union(&d);
-        count += 1;
+        out.push(ScriptStroke { brush, ink, points });
     }
-    let dirty = dirty.intersect(&current.bounds());
+    let count = out.len();
     let plural = if count == 1 { "" } else { "s" };
-    Ok(Planned {
-        commands: vec![Command::ReplacePixels {
-            id,
-            raster: Arc::new(current),
-            dirty,
-            label: format!("Paint ({count} stroke{plural})"),
-        }],
+    Ok(PaintScript {
+        id,
+        strokes: out,
+        clip,
+        to_doc,
+        label: format!("Paint ({count} stroke{plural})"),
         message: format!(
             "Painted {count} stroke{plural} on {} with {}",
             node_label(doc, id),
@@ -274,6 +324,40 @@ fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
                 .unwrap_or("the given settings")
         ),
     })
+}
+
+/// Paint strokes onto a copy of a layer; runs off the UI thread.
+fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
+    let script = paint_script(doc, args)?;
+    let NodeKind::Raster { raster, .. } = &doc.node(script.id).expect("checked").kind else {
+        unreachable!()
+    };
+    let (current, dirty) = script.render(raster);
+    Ok(Planned {
+        commands: vec![Command::ReplacePixels {
+            id: script.id,
+            raster: Arc::new(current),
+            dirty,
+            label: script.label,
+        }],
+        message: script.message,
+    })
+}
+
+fn hex(c: [u8; 4]) -> String {
+    format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])
+}
+
+/// Colour argument as straight sRGB, or None for "none"/null.
+fn rgba_arg(v: Option<&Value>) -> Result<Option<[u8; 4]>, ToolResult> {
+    match v {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.eq_ignore_ascii_case("none") => Ok(None),
+        Some(v) => {
+            let p = hex_color(v)?;
+            Ok(Some(color::premul_to_srgba8(p)))
+        }
+    }
 }
 
 /// Compute a heavy tool against a document snapshot, on any thread.
@@ -657,6 +741,115 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 * glam::DAffine2::from_translation(-c);
             let m = select::transform(&sel, a);
             let (c, msg) = selection_command(&editor.doc, m, Combine::Replace, 0.0);
+            exec(editor, c)?;
+            Ok(ToolResult::text(msg))
+        }
+        "draw_path" => {
+            let d = args
+                .get("d")
+                .and_then(Value::as_str)
+                .ok_or_else(|| err("missing string 'd' (SVG path data)"))?;
+            let path = emulsion_raster::vector::Path::from_svg(d)
+                .map_err(|e| err(format!("bad path data: {e}")))?;
+            let style = emulsion_raster::vector::PathStyle {
+                stroke: if args.get("stroke").is_some() {
+                    rgba_arg(args.get("stroke"))?
+                } else {
+                    Some([10, 10, 11, 255])
+                },
+                width: args.get("width").and_then(Value::as_f64).unwrap_or(3.0) as f32,
+                fill: rgba_arg(args.get("fill"))?,
+            }
+            .sanitized();
+            let (w, h) = (editor.doc.width, editor.doc.height);
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("Path");
+            let node = Node::path(0, name, Arc::new(path), style, w, h);
+            let slot = match args.get("above").and_then(Value::as_u64) {
+                Some(a) => {
+                    let t = editor
+                        .doc
+                        .node(a)
+                        .ok_or_else(|| err(format!("no node {a}")))?;
+                    let sib = editor.doc.children(t.parent);
+                    Slot {
+                        parent: t.parent,
+                        index: sib.iter().position(|s| *s == a).unwrap_or(0) + 1,
+                    }
+                }
+                None => Slot::TOP,
+            };
+            let id = exec(
+                editor,
+                Command::AddNode {
+                    node: Box::new(node),
+                    slot,
+                },
+            )?
+            .ok_or_else(|| err("no node was created"))?;
+            Ok(ToolResult::text(format!(
+                "Added path {name:?} as node {id}"
+            )))
+        }
+        "set_path" => {
+            let id = id_arg(args, "node")?;
+            let (path, mut style) = match &editor
+                .doc
+                .node(id)
+                .ok_or_else(|| err(format!("no node {id}")))?
+                .kind
+            {
+                NodeKind::Path { path, style, .. } => (path.clone(), *style),
+                _ => {
+                    return Err(err(format!(
+                        "{} is not a path",
+                        node_label(&editor.doc, id)
+                    )));
+                }
+            };
+            let path = match args.get("d").and_then(Value::as_str) {
+                Some(d) => Arc::new(
+                    emulsion_raster::vector::Path::from_svg(d)
+                        .map_err(|e| err(format!("bad path data: {e}")))?,
+                ),
+                None => path,
+            };
+            if args.get("stroke").is_some() {
+                style.stroke = rgba_arg(args.get("stroke"))?;
+            }
+            if args.get("fill").is_some() {
+                style.fill = rgba_arg(args.get("fill"))?;
+            }
+            if let Some(w) = args.get("width").and_then(Value::as_f64) {
+                style.width = w as f32;
+            }
+            exec(
+                editor,
+                Command::SetPath {
+                    id,
+                    path,
+                    style: style.sanitized(),
+                },
+            )?;
+            Ok(ToolResult::text(format!(
+                "Updated path {}",
+                node_label(&editor.doc, id)
+            )))
+        }
+        "path_to_selection" => {
+            let id = id_arg(args, "node")?;
+            let NodeKind::Path { path, .. } = &editor
+                .doc
+                .node(id)
+                .ok_or_else(|| err(format!("no node {id}")))?
+                .kind
+            else {
+                return Err(err(format!(
+                    "{} is not a path",
+                    node_label(&editor.doc, id)
+                )));
+            };
+            let m = path.fill_mask(editor.doc.width, editor.doc.height);
+            let (c, msg) = selection_command(&editor.doc, m, combine_arg(args), 0.0);
             exec(editor, c)?;
             Ok(ToolResult::text(msg))
         }
@@ -1107,6 +1300,7 @@ pub fn describe(editor: &Editor) -> Value {
                     NodeKind::Group { .. } => "group",
                     NodeKind::Adjust(_) => "adjustment",
                     NodeKind::Fill { .. } => "fill",
+                    NodeKind::Path { .. } => "path",
                 },
                 "visible": n.visible,
                 "opacity": (n.opacity * 100.0).round(),
@@ -1140,6 +1334,13 @@ pub fn describe(editor: &Editor) -> Value {
                 }
                 NodeKind::Fill { rgba } => {
                     o.insert("color".into(), json!(format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])));
+                }
+                NodeKind::Path { path, style, .. } => {
+                    o.insert("d".into(), json!(path.to_svg()));
+                    o.insert("anchors".into(), json!(path.anchor_count()));
+                    o.insert("stroke".into(), json!(style.stroke.map(hex)));
+                    o.insert("stroke_width".into(), json!(style.width));
+                    o.insert("fill".into(), json!(style.fill.map(hex)));
                 }
                 NodeKind::Group { .. } => {}
             }
@@ -1488,6 +1689,54 @@ mod tests {
             &json!({ "node": id, "settings": { "sizes": 3 }, "color": "#000000", "strokes": [{ "points": [[0, 0]] }] }),
         );
         assert!(r.is_error && text(&r).contains("unknown brush setting"));
+    }
+
+    #[test]
+    fn path_tools_draw_edit_and_select() {
+        let mut e = editor();
+        let r = execute(
+            &mut e,
+            "draw_path",
+            &json!({ "name": "Leaf", "d": "M 20 20 C 60 0 100 40 80 80 Z", "fill": "#00ff00", "stroke": "none" }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let id = e.doc.nodes.last().unwrap().id;
+        let d = describe(&e);
+        let me = d["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == id)
+            .unwrap()
+            .clone();
+        assert_eq!(me["kind"], "path");
+        assert!(me["d"].as_str().unwrap().starts_with("M 20 20 C"));
+        let NodeKind::Path { cache, .. } = &e.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert!(cache.get(60, 40)[1] > 60000, "filled green inside");
+        let r = execute(
+            &mut e,
+            "set_path",
+            &json!({ "node": id, "stroke": "#ff0000", "width": 6, "fill": "none" }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let NodeKind::Path { cache, .. } = &e.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(cache.get(60, 40), [0; 4], "no fill now");
+        let r = execute(&mut e, "path_to_selection", &json!({ "node": id }));
+        assert!(
+            !r.is_error && describe(&e)["selection"]["width"].as_i64().unwrap() > 40,
+            "{}",
+            text(&r)
+        );
+        let r = execute(
+            &mut e,
+            "draw_path",
+            &json!({ "d": "M 0 0 A 5 5 0 0 1 1 1" }),
+        );
+        assert!(r.is_error);
     }
 
     #[test]

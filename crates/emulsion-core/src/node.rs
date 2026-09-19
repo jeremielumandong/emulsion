@@ -1,5 +1,6 @@
 //! Nodes: every operation in a document is a node with named parameters.
 
+use emulsion_raster::vector::{Path, PathStyle};
 use emulsion_raster::{Adjustment, BlendMode, Mask, Placement, Raster};
 use std::sync::Arc;
 
@@ -18,6 +19,13 @@ pub enum NodeKind {
     Adjust(Adjustment),
     /// A solid colour, straight sRGB 8-bit plus alpha.
     Fill { rgba: [u8; 4] },
+    /// A vector path in document space, rasterized into `cache` whenever it
+    /// or its style changes.
+    Path {
+        path: Arc<Path>,
+        style: PathStyle,
+        cache: Arc<Raster>,
+    },
 }
 
 impl NodeKind {
@@ -32,6 +40,7 @@ impl NodeKind {
             NodeKind::Group { .. } => "grp",
             NodeKind::Adjust(_) => "adj",
             NodeKind::Fill { .. } => "fill",
+            NodeKind::Path { .. } => "path",
         }
     }
 }
@@ -54,6 +63,14 @@ impl PartialEq for NodeKind {
             (NodeKind::Group { collapsed: a }, NodeKind::Group { collapsed: b }) => a == b,
             (NodeKind::Adjust(a), NodeKind::Adjust(b)) => a == b,
             (NodeKind::Fill { rgba: a }, NodeKind::Fill { rgba: b }) => a == b,
+            (
+                NodeKind::Path {
+                    path: a, style: sa, ..
+                },
+                NodeKind::Path {
+                    path: b, style: sb, ..
+                },
+            ) => sa == sb && (Arc::ptr_eq(a, b) || a == b),
             _ => false,
         }
     }
@@ -126,6 +143,20 @@ impl Node {
         placement: Placement,
     ) -> Self {
         Self::new(id, name, NodeKind::Raster { raster, placement })
+    }
+
+    /// A vector path node, rasterized for a `w × h` document.
+    pub fn path(
+        id: NodeId,
+        name: impl Into<String>,
+        path: Arc<Path>,
+        style: PathStyle,
+        w: u32,
+        h: u32,
+    ) -> Self {
+        let style = style.sanitized();
+        let cache = Arc::new(path.rasterize(&style, w, h));
+        Self::new(id, name, NodeKind::Path { path, style, cache })
     }
 
     pub fn group(id: NodeId, name: impl Into<String>) -> Self {

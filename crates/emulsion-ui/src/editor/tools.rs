@@ -71,6 +71,7 @@ pub struct ToolState {
     pub brush_more: bool,
     /// When the current stroke started, for speed dynamics.
     pub stroke_started: Option<Instant>,
+    pub pen: super::pen::PenState,
     pub pointer: Option<Point<Pixels>>,
     pub ants_phase: bool,
     pub picker: bool,
@@ -110,6 +111,7 @@ impl Default for ToolState {
             mirror_y: false,
             brush_more: false,
             stroke_started: None,
+            pen: super::pen::PenState::fresh(),
             pointer: None,
             ants_phase: false,
             picker: false,
@@ -167,6 +169,7 @@ pub enum ToolDrag {
         pts: Vec<(f64, f64)>,
         combine: Combine,
     },
+    Pen(super::pen::PenDrag),
     PickHue {
         track: TrackBounds,
     },
@@ -199,12 +202,12 @@ fn norm(a: (f64, f64), b: (f64, f64)) -> (f64, f64, f64, f64) {
     )
 }
 
-fn premul(c: [u8; 4]) -> [f32; 4] {
+pub(crate) fn premul(c: [u8; 4]) -> [f32; 4] {
     color::srgba8_to_premul(c)
 }
 
 /// Selection coverage for a layer pixel, through the layer's placement.
-fn local_clip(mask: Arc<Mask>, to_doc: DAffine2) -> Clip {
+pub(crate) fn local_clip(mask: Arc<Mask>, to_doc: DAffine2) -> Clip {
     Arc::new(move |x, y| {
         let p = to_doc.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
         if p.x < 0.0 || p.y < 0.0 || p.x >= mask.width() as f64 || p.y >= mask.height() as f64 {
@@ -256,7 +259,6 @@ impl EditorView {
     }
 
     /// Window position of a document point, used by the headless tests.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn doc_to_window(&self, d: (f64, f64)) -> Option<Point<Pixels>> {
         let b = self.canvas_bounds()?;
         let s = self.view.doc_to_screen(d, &b);
@@ -335,7 +337,7 @@ impl EditorView {
 
     /// The pixel node strokes go into: the selected one, or a new empty
     /// layer above the selection when that is not a pixel node.
-    fn paint_target(&mut self, cx: &mut Context<Self>) -> Option<NodeId> {
+    pub(crate) fn paint_target(&mut self, cx: &mut Context<Self>) -> Option<NodeId> {
         if let Some(id) = self.selected
             && let Some(n) = self.editor.doc.node(id)
         {
@@ -374,7 +376,7 @@ impl EditorView {
         Some(id)
     }
 
-    fn target_raster(&self, id: NodeId) -> Option<(Arc<Raster>, DAffine2)> {
+    pub(crate) fn target_raster(&self, id: NodeId) -> Option<(Arc<Raster>, DAffine2)> {
         match &self.editor.doc.node(id)?.kind {
             NodeKind::Raster { raster, placement } => Some((
                 raster.clone(),
@@ -384,7 +386,7 @@ impl EditorView {
         }
     }
 
-    fn apply_selection(&mut self, new: Mask, combine: Combine, cx: &mut Context<Self>) {
+    pub(crate) fn apply_selection(&mut self, new: Mask, combine: Combine, cx: &mut Context<Self>) {
         let new = if self.tools.feather > 0.5 {
             select::feather(&new, self.tools.feather)
         } else {
@@ -573,6 +575,7 @@ impl EditorView {
                     symmetric,
                 }))
             }
+            Tool::Pen => self.pen_down(d, e, cx),
             Tool::Shape => {
                 let ellipse = self.tools.shape == ShapeKind::Ellipse;
                 self.drag = Some(Drag::Tool(ToolDrag::Shape {
@@ -610,7 +613,21 @@ impl EditorView {
             .selection
             .clone()
             .map(|m| local_clip(m, to_doc));
+        let wet = brush.wetness > 0.0 || matches!(ink, Ink::Smudge);
         let mut stroke = Stroke::new(raster.clone(), brush, ink, clip);
+        if wet {
+            // Wet media mix with what shows under this layer, not only with it.
+            let tree = self.tree.clone();
+            let td = to_doc;
+            stroke.set_backdrop(Arc::new(move |x: i32, y: i32| {
+                let p = td.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
+                let (dx, dy) = (p.x.floor() as i32, p.y.floor() as i32);
+                if dx < 0 || dy < 0 || dx >= tree.width as i32 || dy >= tree.height as i32 {
+                    return [0.0; 4];
+                }
+                region(&tree, IRect::new(dx, dy, 1, 1))[0]
+            }));
+        }
         let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
         let axis = |x: f64, y: f64| to_local.transform_point2(dvec2(x, y));
         stroke.set_mirror(
@@ -704,6 +721,10 @@ impl EditorView {
                 let moved = select::transform(orig, DAffine2::from_translation(dvec2(dx, dy)));
                 let selection = (!select::bounds(&moved).is_empty()).then(|| Arc::new(moved));
                 self.execute(Command::SetSelection { selection }, cx);
+            }
+            ToolDrag::Pen(pd) => {
+                let pd = pd.clone();
+                self.pen_move(d, pd, cx);
             }
             ToolDrag::Quick { pts, .. } => {
                 let last = *pts.last().unwrap_or(&d);
@@ -833,6 +854,7 @@ impl EditorView {
                 }
             }
             ToolDrag::Quick { pts, combine } => self.quick_select(pts, combine, cx),
+            ToolDrag::Pen(pd) => self.pen_up(pd),
         }
         cx.notify();
     }
@@ -851,7 +873,9 @@ impl EditorView {
 
     /// Enter: commit whatever the tool has pending.
     pub fn tool_commit(&mut self, cx: &mut Context<Self>) {
-        if !self.tools.polygon.is_empty() {
+        if self.tools.pen.building.is_some() {
+            self.pen_finish(cx);
+        } else if !self.tools.polygon.is_empty() {
             self.commit_polygon(cx);
         } else if let Some((x, y, w, h)) = self.tools.crop.take() {
             let rect = IRect::new(
@@ -868,7 +892,10 @@ impl EditorView {
 
     /// Escape: cancel what is pending; returns whether anything was.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
-        let had = !self.tools.polygon.is_empty() || self.tools.crop.is_some() || self.tools.picker;
+        let had = !self.tools.polygon.is_empty()
+            || self.tools.crop.is_some()
+            || self.tools.picker
+            || self.pen_cancel();
         self.tools.polygon.clear();
         self.tools.magnetic_live.clear();
         self.tools.crop = None;
@@ -1370,6 +1397,9 @@ pub struct Overlay {
     pub marker: Option<(f64, f64)>,
     /// Free Transform box of the selected node.
     pub transform: Option<[(f64, f64); 4]>,
+    /// The assistant's brush while it paints: screen position and radius.
+    pub ghost: Option<(Point<Pixels>, f32)>,
+    pub pen: Option<super::pen::PenOverlay>,
     /// Guides and snap lines: (vertical, position in document pixels).
     pub guides: Vec<(bool, f64)>,
     pub snaps: Vec<(bool, f64)>,
@@ -1385,6 +1415,11 @@ impl EditorView {
             guides,
             snaps,
             transform: self.transform_box(),
+            pen: self.pen_overlay(),
+            ghost: self.ghost_brush().and_then(|(d, size)| {
+                let p = self.doc_to_window(d)?;
+                Some((p, (size as f64 * self.view.zoom / 2.0) as f32))
+            }),
             ..Default::default()
         };
         let ellipse_pts = |x: f64, y: f64, w: f64, h: f64| -> Vec<(f64, f64)> {
@@ -1618,6 +1653,77 @@ pub(crate) fn paint_overlay(
                     window.paint_path(p, color);
                 }
             }
+        }
+        if let Some(pen) = &o.pen {
+            let blue: Hsla = rgb(0x1FB5FF).into();
+            for (pts, closed) in &pen.curves {
+                if pts.len() < 2 {
+                    continue;
+                }
+                let mut pb = PathBuilder::stroke(px(1.5));
+                pb.move_to(to_screen(pts[0]));
+                for q in &pts[1..] {
+                    pb.line_to(to_screen(*q));
+                }
+                if *closed {
+                    pb.line_to(to_screen(pts[0]));
+                }
+                if let Ok(p) = pb.build() {
+                    window.paint_path(p, blue);
+                }
+            }
+            for (a, h) in &pen.handles {
+                let (sa, sh) = (to_screen(*a), to_screen(*h));
+                let mut pb = PathBuilder::stroke(px(1.));
+                pb.move_to(sa);
+                pb.line_to(sh);
+                if let Ok(p) = pb.build() {
+                    window.paint_path(p, blue.opacity(0.8));
+                }
+                window.paint_quad(
+                    fill(
+                        Bounds::new(sh - point(px(3.), px(3.)), size(px(6.), px(6.))),
+                        gpui_kit::white(),
+                    )
+                    .border_widths(px(1.))
+                    .border_color(blue)
+                    .corner_radii(px(3.)),
+                );
+            }
+            for (a, selected, smooth) in &pen.anchors {
+                let s = to_screen(*a);
+                let q = Bounds::new(s - point(px(3.5), px(3.5)), size(px(7.), px(7.)));
+                let bg = if *selected { blue } else { gpui_kit::white() };
+                let quad = fill(q, bg).border_widths(px(1.)).border_color(blue);
+                window.paint_quad(if *smooth {
+                    quad.corner_radii(px(3.5))
+                } else {
+                    quad
+                });
+            }
+        }
+        if let Some((c, r)) = o.ghost {
+            let r = r.max(3.0);
+            let pts: Vec<Point<Pixels>> = (0..48)
+                .map(|i| {
+                    let t = i as f32 / 48.0 * std::f32::consts::TAU;
+                    c + point(px(r * t.cos()), px(r * t.sin()))
+                })
+                .collect();
+            let mut pb = PathBuilder::stroke(px(2.));
+            pb.add_polygon(&pts, true);
+            if let Ok(p) = pb.build() {
+                window.paint_path(p, accent);
+            }
+            window.paint_quad(fill(
+                Bounds::new(c - point(px(2.), px(2.)), size(px(4.), px(4.))),
+                accent,
+            ));
+            // A square tag beside it, so the eye can follow it.
+            window.paint_quad(fill(
+                Bounds::new(c + point(px(r + 4.), px(-8.)), size(px(6.), px(6.))),
+                accent,
+            ));
         }
         if let Some(m) = o.marker {
             let c = to_screen(m);
@@ -2051,6 +2157,98 @@ impl EditorView {
                         }))
                         .into_any_element(),
                 );
+            }
+            Tool::Pen => {
+                let pen_w = self.tools.pen.width;
+                v.push(self.opt_slider(
+                    SliderKey::PenWidth,
+                    "width",
+                    format!("{pen_w:.1}px"),
+                    (pen_w / 60.0).sqrt(),
+                    (0.0, 60.0, 0.5),
+                    p,
+                    cx,
+                ));
+                let (so, fo) = (self.tools.pen.stroke_on, self.tools.pen.fill_on);
+                v.push(
+                    chip("pen-stroke", "stroke", so, p)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.tools.pen.stroke_on = !so;
+                            this.pen_restyle(cx);
+                        }))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("pen-fill", "fill", fo, p)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.tools.pen.fill_on = !fo;
+                            this.pen_restyle(cx);
+                        }))
+                        .into_any_element(),
+                );
+                if self.pen_target().is_some() {
+                    v.push(
+                        chip("pen-colours", "use colours", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.pen_restyle(cx)))
+                            .into_any_element(),
+                    );
+                }
+                let building = self.tools.pen.building.is_some();
+                v.push(
+                    chip(
+                        "pen-finish",
+                        if building { "finish ⏎" } else { "new path" },
+                        building,
+                        p,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.tools.pen.building.is_some() {
+                            this.pen_finish(cx);
+                        } else {
+                            this.selected = None;
+                            this.tools.pen.selected = None;
+                            cx.notify();
+                        }
+                    }))
+                    .into_any_element(),
+                );
+                v.push(
+                    chip("pen-close", "close & finish", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(sp) = &mut this.tools.pen.building {
+                                sp.closed = true;
+                            }
+                            this.pen_finish(cx);
+                        }))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("pen-sel", "to selection", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.pen_to_selection(cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("pen-paint", "paint along path", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.pen_paint_along(cx)))
+                        .into_any_element(),
+                );
+                if self.tools.pen.selected.is_some() || building {
+                    v.push(
+                        chip("pen-del", "delete anchor ⌫", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.pen_delete(cx);
+                            }))
+                            .into_any_element(),
+                    );
+                }
+                let hint = if building {
+                    "click to add corners · drag for curves · click the first anchor or ⏎ to finish"
+                } else if self.pen_target().is_some() {
+                    "drag anchors and handles · alt-click an anchor to toggle corner/curve · click the outline to add one"
+                } else {
+                    "click to start a path · stroke uses the foreground colour, fill the background"
+                };
+                v.push(div().flex_none().child(hint).into_any_element());
             }
             Tool::Shape => {
                 let cur = self.tools.shape;

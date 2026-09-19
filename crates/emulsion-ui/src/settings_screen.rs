@@ -171,6 +171,16 @@ impl Workspace {
                             chip("auto", "auto-apply non-destructive changes", s.auto_apply, &p).on_click(cx.listener(|_, _, _, cx| {
                                 app_state::update_settings(cx, |s| s.auto_apply = !s.auto_apply);
                             })),
+                        )
+                        .child(
+                            chip("auto-all", "apply everything without asking", s.approve_all, &p).on_click(cx.listener(|_, _, _, cx| {
+                                app_state::update_settings(cx, |s| s.approve_all = !s.approve_all);
+                            })),
+                        )
+                        .child(
+                            chip("show-drawing", "show the assistant drawing live", s.show_drawing, &p).on_click(cx.listener(|_, _, _, cx| {
+                                app_state::update_settings(cx, |s| s.show_drawing = !s.show_drawing);
+                            })),
                         ),
                     )
                     .child(mono(

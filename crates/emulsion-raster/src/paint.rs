@@ -39,6 +39,8 @@ pub enum GrainKind {
     Chalk,
     /// Random specks, like a dry brush.
     Speckle,
+    /// Streaks along the stroke, like the hairs of a loaded brush.
+    Bristle,
 }
 
 /// How the stroke composites onto the layer.
@@ -105,6 +107,8 @@ pub struct Brush {
     // ── Medium ──
     /// How much each dab picks up what is under it, 0–1 (oils, watercolour).
     pub wetness: f32,
+    /// Pigment pools at the edge of each dab, 0–1 (watercolour).
+    pub edge_darken: f32,
     pub blend: BrushBlend,
 }
 
@@ -132,6 +136,7 @@ impl Default for Brush {
             scatter: 0.0,
             color_jitter: 0.0,
             wetness: 0.0,
+            edge_darken: 0.0,
             blend: BrushBlend::Normal,
         }
     }
@@ -194,6 +199,7 @@ impl Brush {
         self.scatter = u(self.scatter);
         self.color_jitter = u(self.color_jitter);
         self.wetness = u(self.wetness);
+        self.edge_darken = u(self.edge_darken);
         self
     }
 }
@@ -215,6 +221,9 @@ pub enum Ink {
 
 /// Selection coverage for a layer pixel, 0–1.
 pub type Clip = Arc<dyn Fn(i32, i32) -> f32 + Send + Sync>;
+
+/// The composited image under a layer pixel, premultiplied linear.
+pub type Backdrop = Arc<dyn Fn(i32, i32) -> [f32; 4] + Send + Sync>;
 
 /// One input sample, in layer pixels.
 #[derive(Clone, Copy, Debug)]
@@ -252,6 +261,10 @@ pub struct Stroke {
     seed: u64,
     /// Colour a smudge or wet brush is carrying.
     load: Option<[f32; 4]>,
+    /// The image under this layer, for wet brushes to pick up where the
+    /// layer is transparent. Layer pixel → premultiplied colour.
+    backdrop: Option<Backdrop>,
+    dabs: u32,
     /// Mirror axes in layer pixels.
     mirror_x: Option<f32>,
     mirror_y: Option<f32>,
@@ -329,7 +342,17 @@ pub fn grain(kind: GrainKind, x: f32, y: f32, scale: f32) -> f32 {
             );
             if n > 0.55 { 1.0 } else { n * 0.3 }
         }
+        // Sampled in the dab's own frame; see `Stroke::stamp`.
+        GrainKind::Bristle => 1.0,
     }
+}
+
+/// Bristle streaks: vary across the stroke (`across`, in pixels), stay
+/// nearly constant along it, and shift a little from dab to dab.
+fn bristle(across: f32, along: f32, scale: f32, dab: u32) -> f32 {
+    let n = 0.7 * value_noise(across, dab as f32 * 0.35, scale * 0.5, 7)
+        + 0.3 * value_noise(across, along * 0.15, scale * 1.5, 8);
+    ((n - 0.35) * 2.2).clamp(0.0, 1.0)
 }
 
 fn rotate_hue(p: [f32; 4], amount: f32, light: f32) -> [f32; 4] {
@@ -378,6 +401,8 @@ impl Stroke {
             rng: seed,
             seed,
             load: None,
+            backdrop: None,
+            dabs: 0,
             mirror_x: None,
             mirror_y: None,
             finished: false,
@@ -395,6 +420,12 @@ impl Stroke {
             *a = dx;
             *b = dy;
         }
+    }
+
+    /// Let wet brushes and smudges see the image under this layer, so they
+    /// mix with the photo (or the layers below), not only with this layer.
+    pub fn set_backdrop(&mut self, backdrop: Backdrop) {
+        self.backdrop = Some(backdrop);
     }
 
     /// Also stamp every dab mirrored across x = `x` and/or y = `y`.
@@ -416,7 +447,14 @@ impl Stroke {
         if x < b.x || y < b.y || x >= b.right() || y >= b.bottom() {
             return [0.0; 4];
         }
-        let under = color::px_to_f(self.base.get(x as u32, y as u32));
+        let layer = color::px_to_f(self.base.get(x as u32, y as u32));
+        let under = match &self.backdrop {
+            Some(bd) => {
+                let b = bd(x, y);
+                [0, 1, 2, 3].map(|i| layer[i] + b[i] * (1.0 - layer[3]))
+            }
+            None => layer,
+        };
         let t = TILE as i32;
         let c = TileCoord::new(x.div_euclid(t), y.div_euclid(t));
         match self.paint.get(&c) {
@@ -542,6 +580,9 @@ impl Stroke {
             self.brush.grain_scale,
             self.brush.grain_strength,
         );
+        let edge = self.brush.edge_darken;
+        self.dabs = self.dabs.wrapping_add(1);
+        let dab_no = self.dabs;
         // Tiny tips: spread the dab over the pixel so thin lines stay continuous.
         let aa = if r < 1.0 { r } else { 1.0 };
         for ty in b.y.div_euclid(t)..=(b.bottom() - 1).div_euclid(t) {
@@ -561,8 +602,17 @@ impl Stroke {
                         if a <= 0.0 {
                             continue;
                         }
+                        if edge > 0.0 {
+                            // Thin in the middle, pooled towards the rim.
+                            let pool = 0.35 + 0.65 * d * d;
+                            a *= 1.0 - edge + edge * pool * 1.3;
+                        }
                         if gstr > 0.0 {
-                            let g = grain(gk, x as f32, y as f32, gs);
+                            let g = if gk == GrainKind::Bristle {
+                                bristle(ry, rx, gs, dab_no)
+                            } else {
+                                grain(gk, x as f32, y as f32, gs)
+                            };
                             a *= 1.0 - gstr + gstr * g;
                         }
                         if a <= 0.0005 {

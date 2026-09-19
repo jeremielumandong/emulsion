@@ -319,6 +319,10 @@ impl Document {
                         NodeKind::Fill { rgba } => {
                             NodeContent::Fill(color::srgba8_to_premul(*rgba))
                         }
+                        NodeKind::Path { cache, .. } => NodeContent::Pixels {
+                            raster: cache.clone(),
+                            placement: emulsion_raster::Placement::default(),
+                        },
                     };
                     CompositeNode {
                         id: n.id,
@@ -347,7 +351,10 @@ impl Document {
     /// adjustments and groups. None when the node covers nothing.
     pub fn node_coverage(&self, id: NodeId) -> Option<emulsion_raster::Mask> {
         let n = self.node(id)?;
-        if !matches!(n.kind, NodeKind::Raster { .. } | NodeKind::Fill { .. }) {
+        if !matches!(
+            n.kind,
+            NodeKind::Raster { .. } | NodeKind::Fill { .. } | NodeKind::Path { .. }
+        ) {
             // Mask-only nodes: the mask is already in document space.
             return n.mask.as_ref().map(|m| (**m).clone());
         }
@@ -377,6 +384,12 @@ impl Document {
                 out.push((
                     Arc::as_ptr(raster) as usize,
                     raster.tile_count() * 256 * 256 * 8,
+                ));
+            }
+            if let NodeKind::Path { cache, .. } = &n.kind {
+                out.push((
+                    Arc::as_ptr(cache) as usize,
+                    cache.tile_count() * 256 * 256 * 8,
                 ));
             }
             if let Some(m) = &n.mask {

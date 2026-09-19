@@ -233,6 +233,24 @@ pub fn definitions() -> Vec<ToolDef> {
             &[],
         ),
         def(
+            "draw_path",
+            "Add a vector Path node from SVG path data (M L H V C S Q T Z, absolute or relative; no arcs). It stays editable. stroke and fill are #RRGGBB or \"none\"; width is the stroke width in pixels. Use it for clean outlines, shapes, lettering and anything that should be crisp and adjustable; use paint for painterly marks.",
+            json!({ "d": { "type": "string", "minLength": 3 }, "name": { "type": "string" }, "stroke": { "type": "string" }, "width": { "type": "number", "minimum": 0, "maximum": 500 }, "fill": { "type": "string" }, "above": node() }),
+            &["d"],
+        ),
+        def(
+            "set_path",
+            "Change a Path node: new path data d, and/or stroke, width, fill (#RRGGBB or \"none\"). describe_document shows each path's current d.",
+            json!({ "node": node(), "d": { "type": "string" }, "stroke": { "type": "string" }, "width": { "type": "number", "minimum": 0, "maximum": 500 }, "fill": { "type": "string" } }),
+            &["node"],
+        ),
+        def(
+            "path_to_selection",
+            "Make the selection from the inside of a Path node (non-zero winding).",
+            json!({ "node": node(), "mode": mode() }),
+            &["node"],
+        ),
+        def(
             "add_layer",
             "Add an empty, transparent pixel layer (the canvas size) to paint on, above the given node or at the top. Returns its id.",
             json!({ "name": { "type": "string" }, "above": node() }),

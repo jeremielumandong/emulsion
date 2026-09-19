@@ -139,10 +139,23 @@ struct HNode {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum HKind {
-    Raster { raster: u32, placement: Placement },
-    Group { collapsed: bool },
-    Adjust { adjustment: Adjustment },
-    Fill { rgba: [u8; 4] },
+    Raster {
+        raster: u32,
+        placement: Placement,
+    },
+    Group {
+        collapsed: bool,
+    },
+    Adjust {
+        adjustment: Adjustment,
+    },
+    Fill {
+        rgba: [u8; 4],
+    },
+    Path {
+        path: emulsion_raster::vector::Path,
+        style: emulsion_raster::vector::PathStyle,
+    },
 }
 
 /// Planes and tiles seen so far, keyed by buffer address.
@@ -250,6 +263,10 @@ pub(crate) fn encode(graph: &Graph, live: Option<String>) -> Result<Vec<(String,
                             adjustment: a.clone(),
                         },
                         NodeKind::Fill { rgba } => HKind::Fill { rgba: *rgba },
+                        NodeKind::Path { path, style, .. } => HKind::Path {
+                            path: (**path).clone(),
+                            style: *style,
+                        },
                     },
                 })
                 .collect();
@@ -412,6 +429,18 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 HKind::Group { collapsed } => NodeKind::Group { collapsed },
                 HKind::Adjust { adjustment } => NodeKind::Adjust(adjustment),
                 HKind::Fill { rgba } => NodeKind::Fill { rgba },
+                HKind::Path { path, style } => {
+                    if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
+                        return Err(IoError::Manifest("a path has too many anchors".into()));
+                    }
+                    let style = style.sanitized();
+                    let cache = Arc::new(path.rasterize(&style, h.width, h.height));
+                    NodeKind::Path {
+                        path: Arc::new(path),
+                        style,
+                        cache,
+                    }
+                }
             };
             let (mw, mh) = match &kind {
                 NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),

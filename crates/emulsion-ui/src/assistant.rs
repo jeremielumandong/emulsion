@@ -18,7 +18,7 @@ use emulsion_ai::palette;
 use emulsion_ai::suggest::{self, Suggestion};
 use emulsion_assistant::{Event, ProdLauncher, Session, launch};
 use emulsion_core::command::Slot;
-use emulsion_core::{Command, Document, Node};
+use emulsion_core::{Command, Document, Node, NodeKind};
 use emulsion_mcp::relay::{Relay, RelayCall};
 use emulsion_mcp::{exec, tools};
 use gpui_kit::TestSupportExt;
@@ -27,6 +27,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,6 +83,24 @@ pub struct Assistant {
     pub cost: f64,
     pub show_transcript: bool,
     pub dock_open: bool,
+    /// A `paint` call being played back stroke by stroke.
+    pub(crate) playback: Option<Playback>,
+}
+
+/// The assistant painting live on the canvas.
+pub(crate) struct Playback {
+    call: Option<RelayCall>,
+    script: exec::PaintScript,
+    stroke: usize,
+    point: usize,
+    current: Option<Box<emulsion_raster::paint::Stroke>>,
+    /// Layer pixels advanced per tick.
+    speed: f32,
+    carry: f32,
+    /// Where the brush is within the current segment, in layer pixels.
+    pos: Option<(f32, f32)>,
+    /// Ghost brush position in document pixels and its size.
+    pub cursor: Option<((f64, f64), f32)>,
 }
 
 pub struct AskBar {
@@ -167,6 +186,9 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         "image_size" => format!("resize to {} px wide", input["width"]),
         "canvas_size" => format!("canvas {}×{}", input["width"], input["height"]),
         "add_layer" => format!("add layer {}", input["name"].as_str().unwrap_or("Layer")),
+        "draw_path" => format!("draw path {}", input["name"].as_str().unwrap_or("Path")),
+        "set_path" => format!("edit path {}", n()),
+        "path_to_selection" => format!("select inside {}", n()),
         "list_brushes" => "look at the brushes".into(),
         "paint" => format!(
             "paint {} stroke{} with {}",
@@ -518,8 +540,9 @@ impl EditorView {
                 tool_use_id,
             } => {
                 let tool = strip_prefix(&tool_name);
-                let auto = app_state::settings(cx).auto_apply
-                    && !tools::DESTRUCTIVE.contains(&tool.as_str());
+                let settings = app_state::settings(cx);
+                let auto = settings.approve_all
+                    || (settings.auto_apply && !tools::DESTRUCTIVE.contains(&tool.as_str()));
                 if auto {
                     if let Some(s) = &mut self.assistant.session {
                         let _ = s.allow(&request_id, &tool_use_id, &input);
@@ -585,6 +608,16 @@ impl EditorView {
             .detach();
             return;
         }
+        if call.name == "paint"
+            && app_state::settings(cx).show_drawing
+            && self.assistant.playback.is_none()
+        {
+            match exec::paint_script(&self.editor.doc, &call.arguments) {
+                Ok(script) => self.start_playback(Some(call), script, cx),
+                Err(e) => call.reply(e),
+            }
+            return;
+        }
         if tools::HEAVY.contains(&call.name.as_str()) {
             // Compute off the UI thread against a snapshot, then apply only
             // if nobody edited the document in the meantime.
@@ -613,6 +646,169 @@ impl EditorView {
         let r = exec::execute(&mut self.editor, &call.name, &call.arguments);
         call.reply(r);
         self.after_change(cx);
+    }
+
+    // ── Live playback of the assistant's strokes ────────────────────────
+
+    /// Play the strokes on the canvas over a few seconds, so the person
+    /// sees the drawing happen; the model gets its answer at the end.
+    pub(crate) fn start_playback(
+        &mut self,
+        call: Option<RelayCall>,
+        script: exec::PaintScript,
+        cx: &mut Context<Self>,
+    ) {
+        const TICK_MS: u64 = 16;
+        const MIN_SPEED: f32 = 2400.0; // layer px per second
+        const MAX_SECS: f32 = 6.0;
+        let len = script.length().max(1.0);
+        let speed = (len / MAX_SECS).max(MIN_SPEED) * TICK_MS as f32 / 1000.0;
+        self.editor.begin(script.label.clone());
+        self.assistant.playback = Some(Playback {
+            call,
+            script,
+            stroke: 0,
+            point: 0,
+            current: None,
+            speed,
+            carry: 0.0,
+            pos: None,
+            cursor: None,
+        });
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(TICK_MS))
+                    .await;
+                let more = this.update(cx, |this, cx| this.playback_tick(cx));
+                if !matches!(more, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Advance the playback by one tick. Returns whether it continues.
+    fn playback_tick(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(pb) = &mut self.assistant.playback else {
+            return false;
+        };
+        let id = pb.script.id;
+        let Some(NodeKind::Raster { raster, .. }) = self.editor.doc.node(id).map(|n| &n.kind)
+        else {
+            self.finish_playback(Some("the layer disappeared while painting"), cx);
+            return false;
+        };
+        let mut layer = raster.clone();
+        let mut budget = pb.speed + pb.carry;
+        let mut done = false;
+        let mut dirty_all = emulsion_raster::IRect::default();
+        let mut changed: Option<Arc<emulsion_raster::Raster>> = None;
+        let scale = pb.script.to_doc.matrix2.determinant().abs().sqrt();
+        loop {
+            let Some(s) = pb.script.strokes.get(pb.stroke) else {
+                done = true;
+                break;
+            };
+            if pb.current.is_none() {
+                pb.current = Some(Box::new(emulsion_raster::paint::Stroke::new(
+                    layer.clone(),
+                    s.brush,
+                    s.ink.clone(),
+                    pb.script.clip.clone(),
+                )));
+                pb.point = 0;
+                pb.pos = None;
+            }
+            let stroke = pb.current.as_mut().expect("set above");
+            let size = (s.brush.size as f64 * scale) as f32;
+            let to_doc = pb.script.to_doc;
+            // Feed points until the distance budget runs out, stepping part
+            // way along a long segment so the brush visibly travels.
+            while pb.point < s.points.len() {
+                let (x, y, p) = s.points[pb.point];
+                if let Some((px0, py0)) = pb.pos {
+                    let d = (x - px0).hypot(y - py0);
+                    if d > budget {
+                        let t = budget / d;
+                        let step = (px0 + (x - px0) * t, py0 + (y - py0) * t);
+                        stroke.point_at(step.0, step.1, p, None);
+                        pb.pos = Some(step);
+                        let dp = to_doc.transform_point2(glam::dvec2(step.0 as f64, step.1 as f64));
+                        pb.cursor = Some(((dp.x, dp.y), size));
+                        budget = 0.0;
+                        break;
+                    }
+                    budget -= d;
+                }
+                stroke.point_at(x, y, p, None);
+                pb.pos = Some((x, y));
+                pb.point += 1;
+                let dp = to_doc.transform_point2(glam::dvec2(x as f64, y as f64));
+                pb.cursor = Some(((dp.x, dp.y), size));
+            }
+            let finished = pb.point >= s.points.len();
+            if finished {
+                stroke.finish();
+            }
+            let (r, d) = stroke.render(&layer);
+            if !d.is_empty() {
+                layer = Arc::new(r);
+                changed = Some(layer.clone());
+                dirty_all = dirty_all.union(&d);
+            }
+            if finished {
+                pb.current = None;
+                pb.pos = None;
+                pb.stroke += 1;
+                if budget <= 0.0 {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        pb.carry = if done { 0.0 } else { budget.min(pb.speed) };
+        let label = pb.script.label.clone();
+        if let Some(r) = changed {
+            self.execute(
+                Command::ReplacePixels {
+                    id,
+                    raster: r,
+                    dirty: dirty_all,
+                    label,
+                },
+                cx,
+            );
+        }
+        if done {
+            self.finish_playback(None, cx);
+            return false;
+        }
+        cx.notify();
+        true
+    }
+
+    fn finish_playback(&mut self, error: Option<&str>, cx: &mut Context<Self>) {
+        let Some(pb) = self.assistant.playback.take() else {
+            return;
+        };
+        if self.editor.in_transaction() {
+            self.editor.end();
+        }
+        if let Some(call) = pb.call {
+            call.reply(match error {
+                Some(e) => emulsion_mcp::server::ToolResult::error(e),
+                None => emulsion_mcp::server::ToolResult::text(pb.script.message),
+            });
+        }
+        self.after_change(cx);
+    }
+
+    /// Ghost brush for the canvas overlay while the assistant paints.
+    pub(crate) fn ghost_brush(&self) -> Option<((f64, f64), f32)> {
+        self.assistant.playback.as_ref().and_then(|p| p.cursor)
     }
 
     /// Answer the confirmation at `i` (or all of them).
@@ -981,6 +1177,19 @@ impl EditorView {
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.answer(None, true, cx)),
                                     ),
+                            )
+                            .child(
+                                button("always-apply", "Always apply", false, p)
+                                    .py(px(4.))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        app_state::update_settings(cx, |s| s.approve_all = true);
+                                        this.answer(None, true, cx);
+                                        this.set_status(
+                                            "Assistant changes now apply without asking. Change it in Settings.",
+                                            false,
+                                            cx,
+                                        );
+                                    })),
                             )
                             .child(
                                 button("skip-all", "Skip all", false, p)

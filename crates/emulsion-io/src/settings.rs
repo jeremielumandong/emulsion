@@ -19,6 +19,10 @@ pub struct Settings {
     pub suggestions: bool,
     /// Light theme instead of the default dark one.
     pub light_mode: bool,
+    /// Apply every assistant change without asking, deletes and merges too.
+    pub approve_all: bool,
+    /// Play the assistant's brush strokes on the canvas as it paints.
+    pub show_drawing: bool,
 }
 
 impl Default for Settings {
@@ -30,6 +34,8 @@ impl Default for Settings {
             auto_apply: false,
             suggestions: true,
             light_mode: false,
+            approve_all: false,
+            show_drawing: true,
         }
     }
 }

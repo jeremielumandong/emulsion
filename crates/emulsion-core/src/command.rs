@@ -4,6 +4,7 @@
 
 use crate::document::Document;
 use crate::node::{Node, NodeId, NodeKind};
+use emulsion_raster::vector::{Path, PathStyle};
 use emulsion_raster::{Adjustment, BlendMode, IRect, Mask, Placement, Raster};
 use std::sync::Arc;
 
@@ -156,6 +157,12 @@ pub enum Command {
         placement: Placement,
         label: String,
     },
+    /// Replace a Path node's path and style; it is rasterized again.
+    SetPath {
+        id: NodeId,
+        path: Arc<Path>,
+        style: PathStyle,
+    },
     /// Replace the ruler guides.
     SetGuides {
         guides: Vec<crate::document::Guide>,
@@ -228,6 +235,7 @@ impl Command {
             Command::ImageSize { .. } => "Image size".into(),
             Command::SetGuides { .. } => "Guides".into(),
             Command::ReplaceContent { label, .. } => label.clone(),
+            Command::SetPath { .. } => "Edit path".into(),
         }
     }
 
@@ -239,6 +247,15 @@ impl Command {
             | Command::SetCollapsed { .. }
             | Command::SetLocked { .. }
             | Command::Rename { .. } => Dirty::Nothing,
+            Command::SetPath { id, path, style } => match before.node(*id).map(|n| &n.kind) {
+                Some(NodeKind::Path { cache, .. }) => Dirty::Rect(
+                    cache
+                        .tile_bounds()
+                        .union(&path.bounds(style))
+                        .intersect(&IRect::new(0, 0, before.width as i32, before.height as i32)),
+                ),
+                _ => Dirty::All,
+            },
             Command::ReplacePixels { id, dirty, .. } => match before.node(*id).map(|n| &n.kind) {
                 Some(NodeKind::Raster { placement, .. }) if !dirty.is_empty() => {
                     let m = placement.to_doc(1, 1);
@@ -566,6 +583,29 @@ impl Command {
             Command::SetGuides { guides } => {
                 doc.guides = guides.clone();
                 Ok(None)
+            }
+            Command::SetPath { id, path, style } => {
+                if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
+                    return Err(CommandError::Invalid(
+                        crate::document::DocumentError::BadValue(*id, "too many anchors"),
+                    ));
+                }
+                let (w, h) = (doc.width, doc.height);
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                match &mut n.kind {
+                    NodeKind::Path {
+                        path: p,
+                        style: s,
+                        cache,
+                    } => {
+                        let style = style.sanitized();
+                        *cache = Arc::new(path.rasterize(&style, w, h));
+                        *p = path.clone();
+                        *s = style;
+                        Ok(None)
+                    }
+                    _ => Err(CommandError::NoSuchParam(*id, "path".into())),
+                }
             }
             Command::ReplaceContent {
                 id,

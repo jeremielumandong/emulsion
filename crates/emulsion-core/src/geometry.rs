@@ -68,6 +68,16 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 placement.x = c2.x - rw * placement.scale_x / 2.0;
                 placement.y = c2.y - rh * placement.scale_y / 2.0;
             }
+            NodeKind::Path { path, style, cache } => {
+                let mut p = (**path).clone();
+                p.transform(to_new);
+                style.width = (style.width as f64 * scale) as f32;
+                *cache = Arc::new(p.rasterize(style, w, h));
+                *path = Arc::new(p);
+                if let Some(m) = &n.mask {
+                    n.mask = Some(Arc::new(remap(m, w, h, inv)));
+                }
+            }
             _ => {
                 if let Some(m) = &n.mask {
                     n.mask = Some(Arc::new(remap(m, w, h, inv)));

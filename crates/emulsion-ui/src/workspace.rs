@@ -813,7 +813,11 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.toggle_rulers(cx))
             }))
             .on_action(cx.listener(|this, _: &DeleteNode, _, cx| {
-                this.with_editor(cx, |e, cx| e.delete_selected(cx))
+                this.with_editor(cx, |e, cx| {
+                    if !(e.tool == crate::editor::Tool::Pen && e.pen_delete(cx)) {
+                        e.delete_selected(cx)
+                    }
+                })
             }))
             .on_action(cx.listener(|this, _: &DuplicateNode, _, cx| {
                 this.with_editor(cx, |e, cx| e.duplicate_selected(cx))
@@ -839,6 +843,9 @@ impl Render for Workspace {
                     e.update(cx, |e, cx| e.open_ask(window, cx));
                     cx.notify();
                 }
+            }))
+            .on_action(cx.listener(|this, _: &ToolPen, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Pen, cx))
             }))
             .on_action(cx.listener(|this, _: &ToolHand, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Hand, cx))

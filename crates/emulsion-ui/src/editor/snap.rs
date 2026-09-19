@@ -174,6 +174,61 @@ impl EditorView {
         (dx, dy)
     }
 
+    /// Snap a path move by its bounding box, like `snap_move`.
+    pub(crate) fn snap_path_move(
+        &mut self,
+        path: &emulsion_raster::vector::Path,
+        style: &emulsion_raster::vector::PathStyle,
+        dx: f64,
+        dy: f64,
+    ) -> (f64, f64) {
+        self.snap_lines.clear();
+        if !self.snap || self.snap_bypass {
+            return (dx, dy);
+        }
+        let b = path.bounds(style);
+        if b.is_empty() {
+            return (dx, dy);
+        }
+        let doc = &self.editor.doc;
+        let (mut tx, mut ty) = (
+            vec![0.0, doc.width as f64 / 2.0, doc.width as f64],
+            vec![0.0, doc.height as f64 / 2.0, doc.height as f64],
+        );
+        for g in &doc.guides {
+            if g.vertical {
+                tx.push(g.pos)
+            } else {
+                ty.push(g.pos)
+            }
+        }
+        let limit = SNAP_PX / self.view.zoom;
+        let best = |edges: [f64; 3], targets: &[f64], d: f64| -> Option<(f64, f64)> {
+            let mut best: Option<(f64, f64)> = None;
+            for e in edges {
+                for t in targets {
+                    let diff = t - (e + d);
+                    if diff.abs() <= limit && best.is_none_or(|(b, _)| diff.abs() < b.abs()) {
+                        best = Some((diff, *t));
+                    }
+                }
+            }
+            best
+        };
+        let xs = [b.x as f64, b.x as f64 + b.w as f64 / 2.0, b.right() as f64];
+        let ys = [b.y as f64, b.y as f64 + b.h as f64 / 2.0, b.bottom() as f64];
+        let (mut dx, mut dy) = (dx, dy);
+        if let Some((diff, t)) = best(xs, &tx, dx) {
+            dx += diff;
+            self.snap_lines.push((true, t));
+        }
+        if let Some((diff, t)) = best(ys, &ty, dy) {
+            dy += diff;
+            self.snap_lines.push((false, t));
+        }
+        (dx, dy)
+    }
+
     /// Guides and snap lines for the overlay, including one being dragged.
     pub(crate) fn guide_lines(&self) -> (Vec<Line>, Vec<Line>) {
         let mut guides: Vec<Line> = self

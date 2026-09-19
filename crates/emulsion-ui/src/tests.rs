@@ -792,6 +792,126 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn pen_draws_edits_and_paints_along_a_path(cx: &mut TestAppContext) {
+        use emulsion_core::NodeKind;
+        let (_, e, cx) = setup(cx, Tool::Pen);
+        let click = |cx: &mut VisualTestContext, d: (f64, f64)| {
+            let p = at(&e, cx, d);
+            cx.simulate_click(p, gpui_kit::Modifiers::none());
+            cx.run_until_parked();
+        };
+        // Corner, curve (drag), corner, then click the first anchor to close.
+        click(cx, (40.0, 40.0));
+        drag(&e, cx, (200.0, 40.0), (230.0, 90.0));
+        click(cx, (200.0, 150.0));
+        click(cx, (40.0, 150.0));
+        assert!(
+            cx.update(|_, cx| e.read(cx).editor.doc.nodes.len()) == 1,
+            "still building"
+        );
+        click(cx, (40.0, 40.0));
+        let (id, anchors, closed, smooth) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            let n = e.editor.doc.nodes.last().unwrap();
+            match &n.kind {
+                NodeKind::Path { path, .. } => (
+                    n.id,
+                    path.anchor_count(),
+                    path.subpaths[0].closed,
+                    path.subpaths[0].anchors[1].smooth,
+                ),
+                _ => panic!("expected a path node, got {:?}", n.kind.tag()),
+            }
+        });
+        assert_eq!((anchors, closed, smooth), (4, true, true));
+        // The stroke shows up in the composite along the bottom edge.
+        let px = cx.update(|_, cx| {
+            emulsion_raster::composite::flatten(&e.read(cx).editor.doc.composite_tree(), 0)
+                .get(120, 150)
+        });
+        assert!(px[3] > 30000, "stroked edge is visible: {px:?}");
+
+        // Drag the bottom-right anchor; the path follows and it is one undo step.
+        let steps = cx.update(|_, cx| e.read(cx).editor.history.len());
+        drag(&e, cx, (200.0, 150.0), (220.0, 170.0));
+        let (p, steps2) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            let NodeKind::Path { path, .. } = &e.editor.doc.node(id).unwrap().kind else {
+                panic!()
+            };
+            (path.subpaths[0].anchors[2].p, e.editor.history.len())
+        });
+        assert!(
+            (p.0 - 220.0).abs() < 1.0 && (p.1 - 170.0).abs() < 1.0,
+            "{p:?}"
+        );
+        assert_eq!(steps2, steps + 1);
+
+        // Paint along the path onto the photo with the current brush.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.set_fg([0, 255, 0, 255], cx);
+                e.pen_paint_along(cx);
+            })
+        });
+        cx.run_until_parked();
+        // It paints on a new layer above the path (the path itself is not pixels);
+        // the curved top edge bows up to y ≈ 21.
+        let px = cx.update(|_, cx| {
+            emulsion_raster::composite::flatten(&e.read(cx).editor.doc.composite_tree(), 0)
+                .get(120, 22)
+        });
+        assert!(px[1] > 40000, "green paint along the top edge: {px:?}");
+    }
+
+    #[gpui_kit::test]
+    fn assistant_strokes_play_back_live(cx: &mut TestAppContext) {
+        use emulsion_core::NodeKind;
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        let id = cx.update(|_, cx| e.read(cx).editor.doc.nodes[0].id);
+        let script = cx.update(|_, cx| {
+            emulsion_mcp::exec::paint_script(
+                &e.read(cx).editor.doc,
+                &serde_json::json!({ "node": id, "brush": "Fine liner", "color": "#ff0000", "strokes": [{ "points": [[10, 96], [246, 96]] }] }),
+            )
+            .unwrap()
+        });
+        let steps = cx.update(|_, cx| e.read(cx).editor.history.len());
+        cx.update(|_, cx| e.update(cx, |e, cx| e.start_playback(None, script, cx)));
+        let mut saw_ghost = false;
+        for _ in 0..600 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(16));
+            cx.run_until_parked();
+            let (ghost, done) = cx.update(|_, cx| {
+                let e = e.read(cx);
+                (e.ghost_brush().is_some(), e.assistant.playback.is_none())
+            });
+            saw_ghost |= ghost;
+            eprintln!();
+            if done {
+                break;
+            }
+        }
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            assert!(e.assistant.playback.is_none(), "playback finished");
+            assert!(saw_ghost, "the ghost brush was visible while painting");
+            assert_eq!(
+                e.editor.history.len(),
+                steps + 1,
+                "one undo step for the whole call"
+            );
+            let NodeKind::Raster { raster, .. } = &e.editor.doc.node(id).unwrap().kind else {
+                panic!()
+            };
+            assert!(raster.get(128, 96)[0] > 60000, "the line is on the layer");
+        });
+    }
+
+    #[gpui_kit::test]
     fn the_default_hand_tool_pans_without_moving_pixels(cx: &mut TestAppContext) {
         let (ws, cx) = open(cx, doc(&["Photo"], None));
         cx.run_until_parked();

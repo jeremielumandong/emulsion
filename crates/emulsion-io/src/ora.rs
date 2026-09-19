@@ -94,6 +94,12 @@ enum MKind {
     Fill {
         rgba: [u8; 4],
     },
+    Path {
+        path: emulsion_raster::vector::Path,
+        style: emulsion_raster::vector::PathStyle,
+        /// The rasterized path, for readers that only know layers.
+        src: String,
+    },
 }
 
 fn esc(s: &str) -> String {
@@ -234,6 +240,19 @@ fn encode(doc: &Document) -> Result<Encoded> {
                 adjustment: a.clone(),
             },
             NodeKind::Fill { rgba } => MKind::Fill { rgba: *rgba },
+            NodeKind::Path { path, style, cache } => {
+                let data = format!("data/node-{}.png", n.id);
+                jobs.push(Job::Png {
+                    path: data.clone(),
+                    raster: cache,
+                });
+                ora_layers.insert(n.id, (data.clone(), 0, 0));
+                MKind::Path {
+                    path: (**path).clone(),
+                    style: *style,
+                    src: data,
+                }
+            }
         };
         nodes.push(MNode {
             id: n.id,
@@ -349,7 +368,7 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
             let pad = "  ".repeat(indent);
             let vis = if n.visible { "visible" } else { "hidden" };
             match &n.kind {
-                NodeKind::Raster { .. } => {
+                NodeKind::Raster { .. } | NodeKind::Path { .. } => {
                     let Some((src, x, y)) = layers.get(&id) else {
                         continue;
                     };
@@ -633,6 +652,18 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             MKind::Group { collapsed } => NodeKind::Group { collapsed },
             MKind::Adjust { adjustment } => NodeKind::Adjust(adjustment),
             MKind::Fill { rgba } => NodeKind::Fill { rgba },
+            MKind::Path { path, style, .. } => {
+                if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
+                    return Err(IoError::Manifest("a path has too many anchors".into()));
+                }
+                let style = style.sanitized();
+                let cache = Arc::new(path.rasterize(&style, m.width, m.height));
+                NodeKind::Path {
+                    path: Arc::new(path),
+                    style,
+                    cache,
+                }
+            }
         };
         let mask = match &n.mask {
             None => None,

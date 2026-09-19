@@ -309,6 +309,7 @@ pub fn node_infos(doc: &Document) -> Vec<NodeInfo> {
                     NodeKind::Group { .. } => "group",
                     NodeKind::Adjust(_) => "adjustment",
                     NodeKind::Fill { .. } => "fill",
+                    NodeKind::Path { .. } => "path",
                 },
             });
             walk(doc, Some(id), out);

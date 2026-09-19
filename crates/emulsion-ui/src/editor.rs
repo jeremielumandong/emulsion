@@ -7,6 +7,7 @@ use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fract
 
 mod canvas_size;
 mod history;
+mod pen;
 mod presets;
 mod snap;
 mod tools;
@@ -43,10 +44,12 @@ pub enum Tool {
     Type,
     Crop,
     Shape,
+    /// Vector paths.
+    Pen,
 }
 
 /// Rail order, glyphs, and whether the tool works yet.
-const TOOLS: [(Tool, &str, &str, bool); 11] = [
+const TOOLS: [(Tool, &str, &str, bool); 12] = [
     (Tool::Hand, "Hand", "✋", true),
     (Tool::Move, "Move", "✥", true),
     (Tool::Select, "Select", "▢", true),
@@ -58,6 +61,7 @@ const TOOLS: [(Tool, &str, &str, bool); 11] = [
     (Tool::Type, "Type", "T", false),
     (Tool::Crop, "Crop", "⌗", true),
     (Tool::Shape, "Shape", "◇", true),
+    (Tool::Pen, "Pen", "✒", true),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -85,6 +89,7 @@ enum SliderKey {
     ToolScatter,
     ToolSizeJitter,
     ToolColorJitter,
+    PenWidth,
     Tolerance,
     Feather,
     Straighten,
@@ -101,6 +106,7 @@ impl SliderKey {
                 | SliderKey::Param(..)
                 | SliderKey::Scale(_)
                 | SliderKey::Rotation(_)
+                | SliderKey::PenWidth
         )
     }
 }
@@ -121,6 +127,13 @@ enum Drag {
         min: f32,
         max: f32,
         step: f32,
+    },
+    /// Dragging a Path node with the Move tool.
+    MovePath {
+        id: NodeId,
+        start_doc: (f64, f64),
+        path: Arc<emulsion_raster::vector::Path>,
+        style: emulsion_raster::vector::PathStyle,
     },
     /// Free Transform: a handle of the selected pixel node.
     Transform(transform::Grab),
@@ -739,15 +752,32 @@ impl EditorView {
                 start_doc: d,
                 start,
             });
+        } else if let NodeKind::Path { path, style, .. } = &n.kind {
+            let d = self.view.screen_to_doc(
+                (
+                    f32::from(e.position.x) as f64,
+                    f32::from(e.position.y) as f64,
+                ),
+                &b,
+            );
+            let (path, style) = (path.clone(), *style);
+            self.editor.begin("Move path");
+            self.drag = Some(Drag::MovePath {
+                id,
+                start_doc: d,
+                path,
+                style,
+            });
         } else {
-            self.set_status("Select a pixel node to move it.", false, cx);
+            self.set_status("Select a pixel node or a path to move it.", false, cx);
         }
     }
 
     fn drag_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
         let inside = self.canvas_bounds().is_some_and(|b| b.contains(&pos));
         let wants_pointer = matches!(self.tool, Tool::Brush | Tool::Heal | Tool::Clone)
-            || !self.tools.polygon.is_empty();
+            || !self.tools.polygon.is_empty()
+            || (self.tool == Tool::Pen && self.tools.pen.building.is_some());
         let pointer = inside.then_some(pos);
         if wants_pointer && pointer != self.tools.pointer {
             self.tools.pointer = pointer;
@@ -785,6 +815,32 @@ impl EditorView {
                 p.x = (start.x + dx).round();
                 p.y = (start.y + dy).round();
                 self.execute(Command::SetPlacement { id, placement: p }, cx);
+            }
+            Drag::MovePath {
+                id,
+                start_doc,
+                path,
+                style,
+            } => {
+                let Some(b) = self.canvas_bounds() else {
+                    return;
+                };
+                let d = self
+                    .view
+                    .screen_to_doc((f32::from(pos.x) as f64, f32::from(pos.y) as f64), &b);
+                let (dx, dy) = ((d.0 - start_doc.0).round(), (d.1 - start_doc.1).round());
+                let (id, style, path) = (*id, *style, path.clone());
+                let (dx, dy) = self.snap_path_move(&path, &style, dx, dy);
+                let mut p = (*path).clone();
+                p.translate(dx, dy);
+                self.execute(
+                    Command::SetPath {
+                        id,
+                        path: Arc::new(p),
+                        style,
+                    },
+                    cx,
+                );
             }
             Drag::Transform(g) => {
                 let g = *g;
@@ -831,7 +887,10 @@ impl EditorView {
         match self.drag.take() {
             None => return,
             Some(Drag::Distort { id, quad, .. }) => self.finish_distort(id, quad, cx),
-            Some(Drag::Move { .. }) | Some(Drag::Slider { .. }) | Some(Drag::Transform(_)) => {
+            Some(Drag::Move { .. })
+            | Some(Drag::MovePath { .. })
+            | Some(Drag::Slider { .. })
+            | Some(Drag::Transform(_)) => {
                 if self.editor.in_transaction() {
                     self.editor.end();
                 }
@@ -885,6 +944,7 @@ impl EditorView {
                 SliderKey::Opacity(_) => "Opacity".to_string(),
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
+                SliderKey::PenWidth => "Stroke width".into(),
                 _ => "Rotate".into(),
             };
             self.editor.begin(name);
@@ -980,6 +1040,11 @@ impl EditorView {
             }
             SliderKey::ToolColorJitter => {
                 self.tools.brush.color_jitter = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::PenWidth => {
+                self.tools.pen.width = v;
+                self.pen_restyle(cx);
                 cx.notify();
             }
             SliderKey::Tolerance => {
@@ -1668,6 +1733,17 @@ impl EditorView {
                 .text_size(px(12.))
                 .child("◑")
                 .into_any_element(),
+            NodeKind::Path { .. } => div()
+                .size(px(20.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(p.line)
+                .text_size(px(12.))
+                .child("✒")
+                .into_any_element(),
             NodeKind::Fill { rgba } => div()
                 .size(px(20.))
                 .flex_none()
@@ -1951,6 +2027,27 @@ impl EditorView {
                         }),
                     ));
                 }
+            }
+            NodeKind::Path { path, style, .. } => {
+                let stroke = match style.stroke {
+                    Some(c) => format!(
+                        "stroke #{:02X}{:02X}{:02X} {:.0}px",
+                        c[0], c[1], c[2], style.width
+                    ),
+                    None => "no stroke".into(),
+                };
+                let fill = match style.fill {
+                    Some(c) => format!("fill #{:02X}{:02X}{:02X}", c[0], c[1], c[2]),
+                    None => "no fill".into(),
+                };
+                body = body.child(mono(
+                    format!(
+                        "{} anchors · {stroke} · {fill} · edit with the Pen (P)",
+                        path.anchor_count()
+                    ),
+                    10.5,
+                    p.muted,
+                ));
             }
             NodeKind::Fill { rgba } => {
                 body = body.child(mono(
