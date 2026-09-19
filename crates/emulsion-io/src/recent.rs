@@ -67,6 +67,18 @@ pub fn push(path: &Path, summary: String) -> Vec<Recent> {
     list
 }
 
+/// Forget `path` (the file itself is untouched) and save.
+pub fn remove(path: &Path) -> Vec<Recent> {
+    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut list = load();
+    list.retain(|r| r.path != canon && r.path != path);
+    let _ = std::fs::create_dir_all(data_dir());
+    if let Ok(bytes) = serde_json::to_vec_pretty(&list) {
+        let _ = std::fs::write(file(), bytes);
+    }
+    list
+}
+
 /// "2m ago", "yesterday", "3 days", "2 wks".
 pub fn ago(opened: u64) -> String {
     let d = now().saturating_sub(opened);

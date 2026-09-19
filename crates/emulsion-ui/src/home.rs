@@ -24,6 +24,13 @@ const FACTS: [(&str, &str); 3] = [
 ];
 
 impl Workspace {
+    /// Drop a file from the recent list without touching the file.
+    pub fn remove_recent(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.recents = emulsion_io::recent::remove(path);
+        self.thumbs.remove(path);
+        cx.notify();
+    }
+
     fn load_thumbs(&mut self, cx: &mut Context<Self>) {
         for r in self.recents.clone() {
             if self.thumbs.contains_key(&r.path) || !self.thumbs_loading.insert(r.path.clone()) {
@@ -283,6 +290,7 @@ impl Workspace {
             None => div().size_full().bg(p.line).into_any_element(),
         };
         let path = r.path.clone();
+        let forget = r.path.clone();
         let accent = p.accent;
         div()
             .id(("recent", i))
@@ -310,6 +318,28 @@ impl Workspace {
                             .py(px(2.))
                             .bg(p.ink.opacity(0.8))
                             .child(mono(kind, 9.5, gpui_kit::white())),
+                    )
+                    .child(
+                        // Forget this entry (the file stays where it is).
+                        div()
+                            .id(("recent-forget", i))
+                            .absolute()
+                            .top(px(7.))
+                            .right(px(7.))
+                            .size(px(20.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(p.ink.opacity(0.75))
+                            .text_color(gpui_kit::white())
+                            .text_size(px(12.))
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(accent))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.remove_recent(&forget, cx);
+                            }))
+                            .child("×"),
                     ),
             )
             .child(
