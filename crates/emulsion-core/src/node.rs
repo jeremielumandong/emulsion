@@ -26,6 +26,11 @@ pub enum NodeKind {
         style: PathStyle,
         cache: Arc<Raster>,
     },
+    /// A text layer, shaped and rasterized into `cache` (see `text`).
+    Text {
+        spec: Arc<crate::text::TextSpec>,
+        cache: Arc<Raster>,
+    },
     /// Source pixels with an editable filter stack, rendered into `cache`,
     /// whose top-left sits at `offset` in source pixels (see `smart`).
     Smart {
@@ -50,6 +55,7 @@ impl NodeKind {
             NodeKind::Adjust(_) => "adj",
             NodeKind::Fill { .. } => "fill",
             NodeKind::Path { .. } => "path",
+            NodeKind::Text { .. } => "text",
             NodeKind::Smart { .. } => "smart",
         }
     }
@@ -81,6 +87,9 @@ impl PartialEq for NodeKind {
                     path: b, style: sb, ..
                 },
             ) => sa == sb && (Arc::ptr_eq(a, b) || a == b),
+            (NodeKind::Text { spec: a, .. }, NodeKind::Text { spec: b, .. }) => {
+                Arc::ptr_eq(a, b) || a == b
+            }
             (
                 NodeKind::Smart {
                     source: a,
@@ -185,6 +194,26 @@ impl Node {
         let style = style.sanitized();
         let cache = Arc::new(path.rasterize(&style, w, h));
         Self::new(id, name, NodeKind::Path { path, style, cache })
+    }
+
+    /// A text layer rasterized for a `w × h` document.
+    pub fn text(
+        id: NodeId,
+        name: impl Into<String>,
+        spec: crate::text::TextSpec,
+        w: u32,
+        h: u32,
+    ) -> Self {
+        let spec = spec.sanitized();
+        let cache = Arc::new(crate::text::rasterize(&spec, w, h));
+        Self::new(
+            id,
+            name,
+            NodeKind::Text {
+                spec: Arc::new(spec),
+                cache,
+            },
+        )
     }
 
     /// A smart layer over `source` with `filters` applied.

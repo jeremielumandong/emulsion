@@ -55,7 +55,8 @@ list_brushes (the library: manga nibs, ink, pencil, chalk, marker, watercolour, 
 eraser, smudge), paint (strokes on a pixel layer: each stroke is either points [[x, y, pressure?], \
 …] or d = SVG path data for smooth curves, plus an optional pressure envelope [start, end]), hatch \
 (fills a rectangle or the selection with parallel strokes at an angle and spacing), draw_path (a \
-crisp editable vector shape from SVG data), add_layer, and get_view to look.
+crisp editable vector shape from SVG data), add_text (an editable text layer: titles, captions, \
+lettering; list_fonts for families), add_layer, and get_view to look.
 
 Draw like a trained artist, in this order, one paint call per step and a get_view after each:
 1. Plan: read the canvas size from describe_document. Decide the subject's silhouette, where the \
@@ -209,7 +210,7 @@ mod tests {
         assert_eq!(a[pos("--mcp-config") + 1], "/tmp/s/mcp.json");
         assert_eq!(
             a[pos("--allowedTools") + 1],
-            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes,mcp__emulsion__list_recipes,mcp__emulsion__critique"
+            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes,mcp__emulsion__list_recipes,mcp__emulsion__critique,mcp__emulsion__list_fonts"
         );
         assert_eq!(a[pos("--model") + 1], "sonnet");
         assert!(

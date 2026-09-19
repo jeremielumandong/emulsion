@@ -310,6 +310,7 @@ pub fn node_infos(doc: &Document) -> Vec<NodeInfo> {
                     NodeKind::Adjust(_) => "adjustment",
                     NodeKind::Fill { .. } => "fill",
                     NodeKind::Path { .. } => "path",
+                    NodeKind::Text { .. } => "text",
                     NodeKind::Smart { .. } => "smart",
                 },
             });

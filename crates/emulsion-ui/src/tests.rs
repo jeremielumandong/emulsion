@@ -792,6 +792,69 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn type_tool_places_text_and_move_drags_it(cx: &mut TestAppContext) {
+        use emulsion_core::NodeKind;
+        let (_, e, cx) = setup(cx, Tool::Type);
+        let p = at(&e, cx, (30.0, 20.0));
+        cx.simulate_click(p, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+        let (id, spec) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            let n = e.editor.doc.nodes.last().unwrap();
+            match &n.kind {
+                NodeKind::Text { spec, .. } => (n.id, (**spec).clone()),
+                _ => panic!("expected a text node, got {:?}", n.kind.tag()),
+            }
+        });
+        assert_eq!((spec.x, spec.y), (30.0, 20.0));
+        assert_eq!(spec.text, "Text");
+        // The field is open and focused: typing re-shapes the layer.
+        cx.simulate_keystrokes("H i");
+        cx.run_until_parked();
+        let (text, name) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            let n = e.editor.doc.node(id).unwrap();
+            match &n.kind {
+                NodeKind::Text { spec, .. } => (spec.text.clone(), n.name.clone()),
+                _ => unreachable!(),
+            }
+        });
+        assert_eq!(text, "Hi");
+        assert_eq!(name, "Hi", "layer named after its first line");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        // Bold via the options bar applies to the selected layer.
+        cx.update(|_, cx| e.update(cx, |e, cx| e.restyle_text(|s| s.bold = true, cx)));
+        // Move drags the text box.
+        cx.update(|_, cx| e.update(cx, |e, cx| e.set_tool(Tool::Move, cx)));
+        cx.run_until_parked();
+        drag(&e, cx, (35.0, 30.0), (85.0, 60.0));
+        let spec = cx.update(|_, cx| {
+            let e = e.read(cx);
+            match &e.editor.doc.node(id).unwrap().kind {
+                NodeKind::Text { spec, .. } => (**spec).clone(),
+                _ => unreachable!(),
+            }
+        });
+        assert!(spec.bold);
+        assert_eq!((spec.x, spec.y), (80.0, 50.0), "{spec:?}");
+        // One undo per gesture: move, bold, then the typing session.
+        cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
+        cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
+        let spec = cx.update(|_, cx| {
+            let e = e.read(cx);
+            match &e.editor.doc.node(id).unwrap().kind {
+                NodeKind::Text { spec, .. } => (**spec).clone(),
+                _ => unreachable!(),
+            }
+        });
+        assert!(
+            !spec.bold && spec.x == 30.0 && spec.text == "Hi",
+            "{spec:?}"
+        );
+    }
+
+    #[gpui_kit::test]
     fn pen_draws_edits_and_paints_along_a_path(cx: &mut TestAppContext) {
         use emulsion_core::NodeKind;
         let (_, e, cx) = setup(cx, Tool::Pen);

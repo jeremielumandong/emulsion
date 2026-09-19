@@ -158,6 +158,9 @@ enum HKind {
         path: emulsion_raster::vector::Path,
         style: emulsion_raster::vector::PathStyle,
     },
+    Text {
+        spec: emulsion_core::text::TextSpec,
+    },
     Smart {
         source: u32,
         cache: u32,
@@ -289,6 +292,9 @@ pub(crate) fn encode(graph: &Graph, live: Option<String>) -> Result<Vec<(String,
                         NodeKind::Path { path, style, .. } => HKind::Path {
                             path: (**path).clone(),
                             style: *style,
+                        },
+                        NodeKind::Text { spec, .. } => HKind::Text {
+                            spec: (**spec).clone(),
                         },
                     },
                 })
@@ -465,6 +471,14 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     filters,
                     placement,
                 },
+                HKind::Text { spec } => {
+                    let spec = spec.sanitized();
+                    let cache = Arc::new(emulsion_core::text::rasterize(&spec, h.width, h.height));
+                    NodeKind::Text {
+                        spec: Arc::new(spec),
+                        cache,
+                    }
+                }
                 HKind::Path { path, style } => {
                     if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
                         return Err(IoError::Manifest("a path has too many anchors".into()));

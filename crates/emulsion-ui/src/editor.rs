@@ -17,6 +17,7 @@ mod snap;
 mod styles_ui;
 mod tools;
 mod transform;
+mod type_tool;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
 use emulsion_raster::adjust::ParamSpec;
@@ -63,19 +64,20 @@ const TOOLS: [(Tool, &str, &str, bool); 12] = [
     (Tool::Heal, "Heal", "✚", true),
     (Tool::Clone, "Clone", "◎", true),
     (Tool::Grade, "Grade", "◑", false),
-    (Tool::Type, "Type", "T", false),
+    (Tool::Type, "Type", "T", true),
     (Tool::Crop, "Crop", "⌗", true),
     (Tool::Shape, "Shape", "◇", true),
     (Tool::Pen, "Pen", "✒", true),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum SliderKey {
+pub(crate) enum SliderKey {
     Opacity(NodeId),
     Param(NodeId, &'static str),
     Scale(NodeId),
     Rotation(NodeId),
     Compare,
+    TextSize,
     ToolSize,
     ToolHardness,
     ToolOpacity,
@@ -118,6 +120,7 @@ impl SliderKey {
                 | SliderKey::Scale(_)
                 | SliderKey::Rotation(_)
                 | SliderKey::PenWidth
+                | SliderKey::TextSize
                 | SliderKey::Filter(..)
                 | SliderKey::Style(..)
         )
@@ -149,6 +152,11 @@ enum Drag {
         start_doc: (f64, f64),
         path: Arc<emulsion_raster::vector::Path>,
         style: emulsion_raster::vector::PathStyle,
+    },
+    MoveText {
+        id: NodeId,
+        start_doc: (f64, f64),
+        spec: Arc<emulsion_core::text::TextSpec>,
     },
     /// Free Transform: a handle of the selected pixel node.
     Transform(transform::Grab),
@@ -247,6 +255,7 @@ pub struct EditorView {
     pub(crate) smart: smart::SmartUi,
     pub(crate) panels: panels::PanelState,
     pub(crate) styles_ui: styles_ui::StylesUi,
+    pub(crate) type_tool: type_tool::TypeState,
     /// Shift held during a drag: free aspect, or 15° rotation steps.
     pub(crate) drag_shift: bool,
 }
@@ -318,6 +327,7 @@ impl EditorView {
             smart: Default::default(),
             panels: Default::default(),
             styles_ui: Default::default(),
+            type_tool: Default::default(),
             drag_shift: false,
         }
     }
@@ -746,7 +756,7 @@ impl EditorView {
             return;
         }
         if self.tool != Tool::Move {
-            self.tool_down(e, cx);
+            self.tool_down(e, window, cx);
             return;
         }
         if self.transform_down(e) {
@@ -795,8 +805,23 @@ impl EditorView {
                 path,
                 style,
             });
+        } else if let NodeKind::Text { spec, .. } = &n.kind {
+            let d = self.view.screen_to_doc(
+                (
+                    f32::from(e.position.x) as f64,
+                    f32::from(e.position.y) as f64,
+                ),
+                &b,
+            );
+            let spec = spec.clone();
+            self.editor.begin("Move text");
+            self.drag = Some(Drag::MoveText {
+                id,
+                start_doc: d,
+                spec,
+            });
         } else {
-            self.set_status("Select a pixel node or a path to move it.", false, cx);
+            self.set_status("Select a pixel node, a path or text to move it.", false, cx);
         }
     }
 
@@ -845,6 +870,30 @@ impl EditorView {
                 p.x = (start.x + dx).round();
                 p.y = (start.y + dy).round();
                 self.execute(Command::SetPlacement { id, placement: p }, cx);
+            }
+            Drag::MoveText {
+                id,
+                start_doc,
+                spec,
+            } => {
+                let Some(b) = self.canvas_bounds() else {
+                    return;
+                };
+                let d = self
+                    .view
+                    .screen_to_doc((f32::from(pos.x) as f64, f32::from(pos.y) as f64), &b);
+                let (dx, dy) = ((d.0 - start_doc.0).round(), (d.1 - start_doc.1).round());
+                let mut s = (**spec).clone();
+                s.x += dx as f32;
+                s.y += dy as f32;
+                let id = *id;
+                self.execute(
+                    Command::SetText {
+                        id,
+                        spec: Box::new(s),
+                    },
+                    cx,
+                );
             }
             Drag::Curve(d) => {
                 let d = d.clone();
@@ -924,6 +973,7 @@ impl EditorView {
             Some(Drag::Distort { id, quad, .. }) => self.finish_distort(id, quad, cx),
             Some(Drag::Move { .. })
             | Some(Drag::MovePath { .. })
+            | Some(Drag::MoveText { .. })
             | Some(Drag::Slider { .. })
             | Some(Drag::Transform(_))
             | Some(Drag::Curve(_)) => {
@@ -982,6 +1032,7 @@ impl EditorView {
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
                 SliderKey::PenWidth => "Stroke width".into(),
+                SliderKey::TextSize => "Text size".into(),
                 SliderKey::Filter(_, _, k) => k.replace('_', " "),
                 SliderKey::Style(_, _, k) => k.replace('_', " "),
                 _ => "Rotate".into(),
@@ -1085,6 +1136,12 @@ impl EditorView {
                 self.tools.pen.width = v;
                 self.pen_restyle(cx);
                 cx.notify();
+            }
+            SliderKey::TextSize => {
+                // Square-root track, like the brush size.
+                let f = ((v - 4.0) / 396.0).clamp(0.0, 1.0);
+                let size = (4.0 + f * f * 396.0).round();
+                self.restyle_text(move |s| s.size = size, cx);
             }
             SliderKey::Curve(_) => {}
             SliderKey::Filter(id, idx, key) => self.set_filter_param(id, idx, key, v, false, cx),
@@ -1823,6 +1880,19 @@ impl EditorView {
                 .text_size(px(12.))
                 .child("✒")
                 .into_any_element(),
+            NodeKind::Text { .. } => div()
+                .size(px(20.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(p.line)
+                .text_color(p.ink)
+                .font_family(MONO_FONT)
+                .text_size(px(12.))
+                .child("T")
+                .into_any_element(),
             NodeKind::Fill { rgba } => div()
                 .size(px(20.))
                 .flex_none()
@@ -2080,7 +2150,10 @@ impl EditorView {
 
         if matches!(
             n.kind,
-            NodeKind::Raster { .. } | NodeKind::Smart { .. } | NodeKind::Path { .. }
+            NodeKind::Raster { .. }
+                | NodeKind::Smart { .. }
+                | NodeKind::Path { .. }
+                | NodeKind::Text { .. }
         ) {
             let styles = n.styles.clone();
             for el in self.styles_panel(id, &styles, p, cx) {
@@ -2202,6 +2275,25 @@ impl EditorView {
                     format!(
                         "{} anchors · {stroke} · {fill} · edit with the Pen (P)",
                         path.anchor_count()
+                    ),
+                    10.5,
+                    p.muted,
+                ));
+            }
+            NodeKind::Text { spec, .. } => {
+                let font = if spec.font.is_empty() {
+                    "default font".to_string()
+                } else {
+                    spec.font.clone()
+                };
+                body = body.child(mono(
+                    format!(
+                        "{:?} · {} · {:.0}px{}{} · edit with Type (T)",
+                        spec.label(),
+                        font,
+                        spec.size,
+                        if spec.bold { " bold" } else { "" },
+                        if spec.italic { " italic" } else { "" },
                     ),
                     10.5,
                     p.muted,

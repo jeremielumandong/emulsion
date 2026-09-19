@@ -102,6 +102,11 @@ enum MKind {
         /// The rasterized path, for readers that only know layers.
         src: String,
     },
+    Text {
+        spec: emulsion_core::text::TextSpec,
+        /// The rasterized text, for readers that only know layers.
+        src: String,
+    },
     Smart {
         /// Source pixels.
         src: String,
@@ -305,6 +310,18 @@ fn encode(doc: &Document) -> Result<Encoded> {
                     src: data,
                 }
             }
+            NodeKind::Text { spec, cache } => {
+                let data = format!("data/node-{}.png", n.id);
+                jobs.push(Job::Png {
+                    path: data.clone(),
+                    raster: cache,
+                });
+                ora_layers.insert(n.id, (data.clone(), 0, 0));
+                MKind::Text {
+                    spec: (**spec).clone(),
+                    src: data,
+                }
+            }
         };
         nodes.push(MNode {
             id: n.id,
@@ -421,7 +438,10 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
             let pad = "  ".repeat(indent);
             let vis = if n.visible { "visible" } else { "hidden" };
             match &n.kind {
-                NodeKind::Raster { .. } | NodeKind::Path { .. } | NodeKind::Smart { .. } => {
+                NodeKind::Raster { .. }
+                | NodeKind::Path { .. }
+                | NodeKind::Text { .. }
+                | NodeKind::Smart { .. } => {
                     let Some((src, x, y)) = layers.get(&id) else {
                         continue;
                     };
@@ -753,6 +773,14 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 NodeKind::Path {
                     path: Arc::new(path),
                     style,
+                    cache,
+                }
+            }
+            MKind::Text { spec, .. } => {
+                let spec = spec.sanitized();
+                let cache = Arc::new(emulsion_core::text::rasterize(&spec, m.width, m.height));
+                NodeKind::Text {
+                    spec: Arc::new(spec),
                     cache,
                 }
             }

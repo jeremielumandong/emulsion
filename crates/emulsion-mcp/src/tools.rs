@@ -12,6 +12,7 @@ pub const READ_ONLY: &[&str] = &[
     "list_brushes",
     "list_recipes",
     "critique",
+    "list_fonts",
 ];
 
 /// Tools whose effect is hard to see or undo at a glance; always confirmed.
@@ -331,6 +332,24 @@ pub fn definitions() -> Vec<ToolDef> {
             "Shade an area with parallel strokes: fill rect [x, y, width, height] (or the selection's bounds) with lines at angle (degrees, default 45) every spacing pixels (default 8), with a little jitter (0-1) so they look hand-made; cross=true adds a second direction. Uses a brush and color like paint. One undo step.",
             json!({ "node": node(), "brush": { "type": "string" }, "color": { "type": "string" }, "settings": { "type": "object" }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "angle": { "type": "number" }, "spacing": { "type": "number", "minimum": 1 }, "jitter": { "type": "number", "minimum": 0, "maximum": 1 }, "cross": { "type": "boolean" } }),
             &["node"],
+        ),
+        def(
+            "add_text",
+            "Add an editable text layer. text may contain newlines for paragraphs; x, y is the top-left of the text box in pixels; size is the font size in pixels; color is #RRGGBB; font is a family name from list_fonts (empty for the default sans). width wraps lines. Use it for titles, captions, speech-bubble lettering and any text that must stay editable. Returns the node id.",
+            json!({ "text": { "type": "string" }, "x": { "type": "number" }, "y": { "type": "number" }, "size": { "type": "number", "minimum": 1, "maximum": 4000 }, "color": { "type": "string" }, "font": { "type": "string" }, "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "align": { "type": "string", "enum": ["left", "center", "right", "justify"] }, "width": { "type": ["number", "null"], "description": "Wrap width in pixels; null for a single line per paragraph." }, "line_height": { "type": "number", "minimum": 0.5, "maximum": 4 }, "letter_spacing": { "type": "number" }, "name": { "type": "string" }, "above": node() }),
+            &["text"],
+        ),
+        def(
+            "set_text",
+            "Change a text layer: any of text, x, y, size, color, font, bold, italic, align, width, line_height, letter_spacing. Unmentioned settings stay as they are.",
+            json!({ "node": node(), "text": { "type": "string" }, "x": { "type": "number" }, "y": { "type": "number" }, "size": { "type": "number", "minimum": 1, "maximum": 4000 }, "color": { "type": "string" }, "font": { "type": "string" }, "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "align": { "type": "string", "enum": ["left", "center", "right", "justify"] }, "width": { "type": ["number", "null"], "description": "Wrap width in pixels; null for a single line per paragraph." }, "line_height": { "type": "number", "minimum": 0.5, "maximum": 4 }, "letter_spacing": { "type": "number" } }),
+            &["node"],
+        ),
+        def(
+            "list_fonts",
+            "Font families installed on this machine, usable as `font` in add_text and set_text.",
+            json!({}),
+            &[],
         ),
         def(
             "add_layer",

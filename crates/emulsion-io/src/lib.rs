@@ -14,6 +14,7 @@ pub mod import;
 pub mod ora;
 pub mod recent;
 pub mod settings;
+pub mod svg;
 pub mod thumb;
 
 use emulsion_core::Document;
@@ -49,8 +50,13 @@ pub type Result<T> = std::result::Result<T, IoError>;
 
 /// Extensions `open` understands, for file dialogs.
 pub const OPEN_EXTENSIONS: &[&str] = &[
-    "ora", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif",
+    "ora", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif", "svg",
 ];
+
+pub fn is_svg(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+}
 
 pub fn is_native(path: &Path) -> bool {
     path.extension()
@@ -61,6 +67,9 @@ pub fn is_native(path: &Path) -> bool {
 pub fn open(path: &Path) -> Result<Document> {
     if is_native(path) {
         ora::read(path)
+    } else if is_svg(path) {
+        let text = std::fs::read_to_string(path)?;
+        Ok(svg::import(&text)?.doc)
     } else {
         import::import(path)
     }
@@ -77,6 +86,14 @@ pub use ora::Opened;
 pub fn open_full(path: &Path) -> Result<Opened> {
     if is_native(path) {
         ora::read_full(path)
+    } else if is_svg(path) {
+        let text = std::fs::read_to_string(path)?;
+        let imp = svg::import(&text)?;
+        Ok(Opened {
+            doc: imp.doc,
+            graph: None,
+            history_error: None,
+        })
     } else {
         Ok(Opened {
             doc: import::import(path)?,

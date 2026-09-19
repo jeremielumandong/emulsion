@@ -93,6 +93,21 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                     n.mask = Some(Arc::new(remap(m, w, h, inv)));
                 }
             }
+            NodeKind::Text { spec, cache } => {
+                let mut s = (**spec).clone();
+                let p = to_new.transform_point2(glam::dvec2(s.x as f64, s.y as f64));
+                s.x = p.x as f32;
+                s.y = p.y as f32;
+                s.size = (s.size as f64 * scale) as f32;
+                s.width = s.width.map(|w| (w as f64 * scale) as f32);
+                s.letter_spacing = (s.letter_spacing as f64 * scale) as f32;
+                let s = s.sanitized();
+                *cache = Arc::new(crate::text::rasterize(&s, w, h));
+                *spec = Arc::new(s);
+                if let Some(m) = &n.mask {
+                    n.mask = Some(Arc::new(remap(m, w, h, inv)));
+                }
+            }
             _ => {
                 if let Some(m) = &n.mask {
                     n.mask = Some(Arc::new(remap(m, w, h, inv)));

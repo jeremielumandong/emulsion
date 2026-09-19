@@ -489,6 +489,13 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
                 out.push(("parameters", "before".into(), "changed".into()));
             }
         }
+        (NodeKind::Text { spec: a, .. }, NodeKind::Text { spec: b, .. }) => {
+            if a.text != b.text {
+                out.push(("text", a.label(), b.label()));
+            } else if a != b {
+                out.push(("text style", "before".into(), "changed".into()));
+            }
+        }
         (
             NodeKind::Path {
                 path: a, style: sa, ..

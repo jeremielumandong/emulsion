@@ -286,7 +286,9 @@ fn key_for(n: &Node) -> Option<Key> {
         NodeKind::Smart {
             cache, placement, ..
         } => (Arc::as_ptr(cache) as usize, *placement),
-        NodeKind::Path { cache, .. } => (Arc::as_ptr(cache) as usize, Placement::default()),
+        NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
+            (Arc::as_ptr(cache) as usize, Placement::default())
+        }
         _ => return None,
     };
     let mask = n.mask.as_ref().map_or(0, |m| Arc::as_ptr(m) as usize);

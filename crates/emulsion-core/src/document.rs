@@ -319,10 +319,12 @@ impl Document {
                         NodeKind::Fill { rgba } => {
                             NodeContent::Fill(color::srgba8_to_premul(*rgba))
                         }
-                        NodeKind::Path { cache, .. } => NodeContent::Pixels {
-                            raster: cache.clone(),
-                            placement: emulsion_raster::Placement::default(),
-                        },
+                        NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
+                            NodeContent::Pixels {
+                                raster: cache.clone(),
+                                placement: emulsion_raster::Placement::default(),
+                            }
+                        }
                         NodeKind::Smart {
                             source,
                             placement,
@@ -447,6 +449,7 @@ impl Document {
             NodeKind::Raster { .. }
                 | NodeKind::Fill { .. }
                 | NodeKind::Path { .. }
+                | NodeKind::Text { .. }
                 | NodeKind::Smart { .. }
         ) {
             // Mask-only nodes: the mask is already in document space.
@@ -480,7 +483,7 @@ impl Document {
                     raster.tile_count() * 256 * 256 * 8,
                 ));
             }
-            if let NodeKind::Path { cache, .. } = &n.kind {
+            if let NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } = &n.kind {
                 out.push((
                     Arc::as_ptr(cache) as usize,
                     cache.tile_count() * 256 * 256 * 8,

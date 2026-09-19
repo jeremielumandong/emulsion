@@ -1643,6 +1643,7 @@ name = "emulsion-core"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "cosmic-text",
  "emulsion-filters",
  "emulsion-raster",
  "glam",
@@ -1685,6 +1686,7 @@ dependencies = [
  "emulsion-core",
  "emulsion-filters",
  "emulsion-raster",
+ "glam",
  "image",
  "quick-xml 0.42.0",
  "rayon",

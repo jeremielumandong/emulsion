@@ -847,6 +847,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToolPen, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Pen, cx))
             }))
+            .on_action(cx.listener(|this, _: &ToolType, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Type, cx))
+            }))
             .on_action(cx.listener(|this, _: &ToolHand, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Hand, cx))
             }))

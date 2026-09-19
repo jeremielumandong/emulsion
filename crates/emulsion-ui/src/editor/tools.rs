@@ -285,6 +285,9 @@ impl EditorView {
     }
 
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        if tool != Tool::Type {
+            self.close_text_field(cx);
+        }
         self.tool = tool;
         self.tools.polygon.clear();
         cx.notify();
@@ -463,7 +466,12 @@ impl EditorView {
 
     // ── Pointer ─────────────────────────────────────────────────────────
 
-    pub(crate) fn tool_down(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
+    pub(crate) fn tool_down(
+        &mut self,
+        e: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(d) = self.doc_point(e.position) else {
             return;
         };
@@ -600,6 +608,7 @@ impl EditorView {
                 }))
             }
             Tool::Pen => self.pen_down(d, e, cx),
+            Tool::Type => self.type_down(d, window, cx),
             Tool::Shape => {
                 let ellipse = self.tools.shape == ShapeKind::Ellipse;
                 self.drag = Some(Drag::Tool(ToolDrag::Shape {
@@ -1951,7 +1960,7 @@ pub(crate) fn paint_overlay(
 
 impl EditorView {
     #[allow(clippy::too_many_arguments)] // a UI row: each argument is one visible property
-    fn opt_slider(
+    pub(crate) fn opt_slider(
         &mut self,
         key: SliderKey,
         name: &str,
@@ -2367,6 +2376,7 @@ impl EditorView {
                         .into_any_element(),
                 );
             }
+            Tool::Type => self.type_options(&mut v, p, cx),
             Tool::Pen => {
                 let pen_w = self.tools.pen.width;
                 v.push(self.opt_slider(

@@ -163,6 +163,11 @@ pub enum Command {
         path: Arc<Path>,
         style: PathStyle,
     },
+    /// Replace a text layer's content and style.
+    SetText {
+        id: NodeId,
+        spec: Box<crate::text::TextSpec>,
+    },
     /// Turn a pixel node into a smart layer with an empty filter stack.
     ConvertToSmart {
         id: NodeId,
@@ -254,6 +259,7 @@ impl Command {
             Command::SetGuides { .. } => "Guides".into(),
             Command::ReplaceContent { label, .. } => label.clone(),
             Command::SetPath { .. } => "Edit path".into(),
+            Command::SetText { .. } => "Edit text".into(),
             Command::SetStyles { styles, .. } => match styles.last() {
                 Some(s) => s.label().to_string(),
                 None => "Layer styles".into(),
@@ -282,6 +288,11 @@ impl Command {
                         .union(&path.bounds(style))
                         .intersect(&IRect::new(0, 0, before.width as i32, before.height as i32)),
                 ),
+                _ => Dirty::All,
+            },
+            Command::SetText { id, .. } => match before.node(*id).map(|n| &n.kind) {
+                // The new extent is only known after shaping; old + whole is safe.
+                Some(NodeKind::Text { .. }) => Dirty::All,
                 _ => Dirty::All,
             },
             Command::ReplacePixels { id, dirty, .. } => match before.node(*id).map(|n| &n.kind) {
@@ -622,7 +633,10 @@ impl Command {
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 if !matches!(
                     n.kind,
-                    NodeKind::Raster { .. } | NodeKind::Smart { .. } | NodeKind::Path { .. }
+                    NodeKind::Raster { .. }
+                        | NodeKind::Smart { .. }
+                        | NodeKind::Path { .. }
+                        | NodeKind::Text { .. }
                 ) {
                     return Err(CommandError::NoSuchParam(*id, "styles".into()));
                 }
@@ -711,6 +725,19 @@ impl Command {
                         Ok(None)
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "path".into())),
+                }
+            }
+            Command::SetText { id, spec } => {
+                let (w, h) = (doc.width, doc.height);
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                match &mut n.kind {
+                    NodeKind::Text { spec: s, cache } => {
+                        let spec = (**spec).clone().sanitized();
+                        *cache = Arc::new(crate::text::rasterize(&spec, w, h));
+                        *s = Arc::new(spec);
+                        Ok(None)
+                    }
+                    _ => Err(CommandError::NoSuchParam(*id, "text".into())),
                 }
             }
             Command::ReplaceContent {

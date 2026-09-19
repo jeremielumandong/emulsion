@@ -568,6 +568,55 @@ fn rgba_arg(v: Option<&Value>) -> Result<Option<[u8; 4]>, ToolResult> {
     }
 }
 
+/// Apply text/x/y/size/color/font/bold/italic/align/width/line_height/
+/// letter_spacing from `args` onto `spec`; absent keys leave it alone.
+fn text_args(spec: &mut emulsion_core::text::TextSpec, args: &Value) -> Result<(), ToolResult> {
+    if let Some(t) = args.get("text").and_then(Value::as_str) {
+        spec.text = t.to_string();
+    }
+    let num = |k: &str| args.get(k).and_then(Value::as_f64).map(|v| v as f32);
+    if let Some(v) = num("x") {
+        spec.x = v;
+    }
+    if let Some(v) = num("y") {
+        spec.y = v;
+    }
+    if let Some(v) = num("size") {
+        spec.size = v;
+    }
+    if let Some(v) = num("line_height") {
+        spec.line_height = v;
+    }
+    if let Some(v) = num("letter_spacing") {
+        spec.letter_spacing = v;
+    }
+    if let Some(c) = args.get("color") {
+        spec.color = rgba_arg(Some(c))?.unwrap_or([0, 0, 0, 255]);
+    }
+    if let Some(f) = args.get("font").and_then(Value::as_str) {
+        spec.font = f.trim().to_string();
+    }
+    if let Some(b) = args.get("bold").and_then(Value::as_bool) {
+        spec.bold = b;
+    }
+    if let Some(b) = args.get("italic").and_then(Value::as_bool) {
+        spec.italic = b;
+    }
+    if let Some(a) = args.get("align").and_then(Value::as_str) {
+        spec.align = emulsion_core::text::Align::parse(a).ok_or_else(|| {
+            err(format!(
+                "unknown align {a:?}: left, center, right or justify"
+            ))
+        })?;
+    }
+    match args.get("width") {
+        None => {}
+        Some(Value::Null) => spec.width = None,
+        Some(v) => spec.width = v.as_f64().map(|w| w as f32),
+    }
+    Ok(())
+}
+
 fn filter_by_kind(kind: &str) -> Option<emulsion_filters::Filter> {
     let k = kind.trim().to_lowercase().replace(['-', ' '], "_");
     let k = match k.as_str() {
@@ -1375,6 +1424,88 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 ))),
             }
         }
+        "add_text" => {
+            let (w, h) = (editor.doc.width, editor.doc.height);
+            let mut spec = emulsion_core::text::TextSpec {
+                color: [10, 10, 11, 255],
+                ..Default::default()
+            };
+            text_args(&mut spec, args)?;
+            if spec.text.trim().is_empty() {
+                return Err(err("missing string 'text'"));
+            }
+            let name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| spec.label());
+            let node = Node::text(0, name.clone(), spec, w, h);
+            let slot = match args.get("above").and_then(Value::as_u64) {
+                Some(a) => {
+                    let t = editor
+                        .doc
+                        .node(a)
+                        .ok_or_else(|| err(format!("no node {a}")))?;
+                    let sib = editor.doc.children(t.parent);
+                    Slot {
+                        parent: t.parent,
+                        index: sib.iter().position(|s| *s == a).unwrap_or(0) + 1,
+                    }
+                }
+                None => Slot::TOP,
+            };
+            let id = exec(
+                editor,
+                Command::AddNode {
+                    node: Box::new(node),
+                    slot,
+                },
+            )?
+            .ok_or_else(|| err("no node was created"))?;
+            Ok(ToolResult::text(format!(
+                "Added text {name:?} as node {id}"
+            )))
+        }
+        "set_text" => {
+            let id = id_arg(args, "node")?;
+            let spec = match &editor
+                .doc
+                .node(id)
+                .ok_or_else(|| err(format!("no node {id}")))?
+                .kind
+            {
+                NodeKind::Text { spec, .. } => (**spec).clone(),
+                _ => {
+                    return Err(err(format!(
+                        "{} is not a text layer",
+                        node_label(&editor.doc, id)
+                    )));
+                }
+            };
+            let mut new = spec.clone();
+            text_args(&mut new, args)?;
+            if new == spec {
+                return Ok(ToolResult::text("Nothing to change"));
+            }
+            exec(
+                editor,
+                Command::SetText {
+                    id,
+                    spec: Box::new(new),
+                },
+            )?;
+            Ok(ToolResult::text(format!(
+                "Updated text {}",
+                node_label(&editor.doc, id)
+            )))
+        }
+        "list_fonts" => {
+            let fonts = emulsion_core::text::font_families();
+            Ok(ToolResult::text(
+                serde_json::to_string_pretty(&json!({ "count": fonts.len(), "fonts": fonts }))
+                    .unwrap_or_default(),
+            ))
+        }
         "add_layer" => {
             let (w, h) = (editor.doc.width, editor.doc.height);
             let name = args.get("name").and_then(Value::as_str).unwrap_or("Layer");
@@ -1952,6 +2083,7 @@ pub fn describe(editor: &Editor) -> Value {
                     NodeKind::Adjust(_) => "adjustment",
                     NodeKind::Fill { .. } => "fill",
                     NodeKind::Path { .. } => "path",
+                    NodeKind::Text { .. } => "text",
                     NodeKind::Smart { .. } => "smart",
                 },
                 "visible": n.visible,
@@ -2018,6 +2150,18 @@ pub fn describe(editor: &Editor) -> Value {
                     o.insert("stroke".into(), json!(style.stroke.map(hex)));
                     o.insert("stroke_width".into(), json!(style.width));
                     o.insert("fill".into(), json!(style.fill.map(hex)));
+                }
+                NodeKind::Text { spec, .. } => {
+                    o.insert("text".into(), json!(spec.text));
+                    o.insert("x".into(), json!(spec.x));
+                    o.insert("y".into(), json!(spec.y));
+                    o.insert("size".into(), json!(spec.size));
+                    o.insert("color".into(), json!(hex(spec.color)));
+                    o.insert("font".into(), json!(spec.font));
+                    o.insert("bold".into(), json!(spec.bold));
+                    o.insert("italic".into(), json!(spec.italic));
+                    o.insert("align".into(), json!(spec.align.key()));
+                    o.insert("width".into(), json!(spec.width));
                 }
                 NodeKind::Group { .. } => {}
             }
@@ -2184,6 +2328,51 @@ mod tests {
             &json!({ "node": id, "params": { "nope": 1 } }),
         );
         assert!(r.is_error && text(&r).contains("valid: temperature, tint"));
+    }
+
+    #[test]
+    fn text_layers_add_edit_and_describe() {
+        let mut e = editor();
+        let r = execute(
+            &mut e,
+            "add_text",
+            &json!({ "text": "Hello", "x": 10, "y": 5, "size": 30, "color": "#ff0000", "bold": true }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let id = e.doc.nodes.last().unwrap().id;
+        assert_eq!(e.doc.nodes.last().unwrap().name, "Hello");
+        let NodeKind::Text { spec, cache } = &e.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert!(spec.bold && spec.size == 30.0 && spec.color == [255, 0, 0, 255]);
+        let inked = (0..64)
+            .flat_map(|y| (0..200).map(move |x| (x, y)))
+            .filter(|&(x, y)| cache.get(x, y)[3] > 0)
+            .count();
+        assert!(inked > 50, "{inked}");
+        let d = describe(&e).to_string();
+        assert!(d.contains("\"text\":\"Hello\""), "{d}");
+        let r = execute(
+            &mut e,
+            "set_text",
+            &json!({ "node": id, "text": "Hello\nworld", "align": "center", "width": 120 }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let NodeKind::Text { spec, .. } = &e.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(spec.text, "Hello\nworld");
+        assert_eq!(spec.width, Some(120.0));
+        let r = execute(
+            &mut e,
+            "set_text",
+            &json!({ "node": id, "align": "sideways" }),
+        );
+        assert!(r.is_error);
+        let r = execute(&mut e, "set_text", &json!({ "node": 1, "text": "x" }));
+        assert!(r.is_error && text(&r).contains("not a text layer"));
+        let r = execute(&mut e, "list_fonts", &json!({}));
+        assert!(!r.is_error && text(&r).contains("fonts"));
     }
 
     #[test]
