@@ -201,16 +201,19 @@ pub fn transform(m: &Mask, to_new: glam::DAffine2) -> Mask {
         let bot = at(ix, iy + 1) * (1.0 - ax) + at(ix + 1, iy + 1) * ax;
         top * (1.0 - ay) + bot * ay
     };
+    use rayon::prelude::*;
     let mut out = vec![0u8; (out_rect.w * out_rect.h) as usize];
-    for y in 0..out_rect.h {
-        for x in 0..out_rect.w {
-            let p = inv.transform_point2(glam::dvec2(
-                (out_rect.x + x) as f64 + 0.5,
-                (out_rect.y + y) as f64 + 0.5,
-            ));
-            out[(y * out_rect.w + x) as usize] = sample(p.x, p.y).round().clamp(0.0, 255.0) as u8;
-        }
-    }
+    out.par_chunks_mut(out_rect.w as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for (x, o) in row.iter_mut().enumerate() {
+                let p = inv.transform_point2(glam::dvec2(
+                    (out_rect.x + x as i32) as f64 + 0.5,
+                    (out_rect.y + y as i32) as f64 + 0.5,
+                ));
+                *o = sample(p.x, p.y).round().clamp(0.0, 255.0) as u8;
+            }
+        });
     blank.write_rect(out_rect, &out)
 }
 
@@ -451,6 +454,18 @@ fn box_blur_rows(src: &[f32], dst: &mut [f32], w: usize, r: usize) {
         .for_each(|(d, s)| box_blur_line(s, d, r));
 }
 
+/// `w`×`h` → `h`×`w` for bytes, output rows in parallel.
+fn transpose_u8(src: &[u8], w: usize, h: usize) -> Vec<u8> {
+    use rayon::prelude::*;
+    let mut out = vec![0u8; w * h];
+    out.par_chunks_mut(h).enumerate().for_each(|(x, col)| {
+        for (y, v) in col.iter_mut().enumerate() {
+            *v = src[y * w + x];
+        }
+    });
+    out
+}
+
 /// `w`×`h` → `h`×`w`, output rows in parallel.
 fn transpose(src: &[f32], w: usize, h: usize) -> Vec<f32> {
     use rayon::prelude::*;
@@ -512,37 +527,32 @@ pub fn grow(m: &Mask, r: i32) -> Mask {
     }
     let (w, h) = (region.w as usize, region.h as usize);
     let src = m.read_rect(region);
-    let pick = |a: u8, b: u8| if r > 0 { a.max(b) } else { a.min(b) };
-    let mut tmp = src.clone();
-    for y in 0..h {
-        for x in 0..w {
-            let mut v = src[y * w + x];
-            for d in 1..=k as usize {
-                if x >= d {
-                    v = pick(v, src[y * w + x - d]);
+    let grow_max = r > 0;
+    let k = k as usize;
+    // Separable max/min: rows in parallel, then columns via a transpose.
+    let pass = |src: &[u8], n: usize| -> Vec<u8> {
+        use rayon::prelude::*;
+        let mut dst = vec![0u8; src.len()];
+        dst.par_chunks_mut(n)
+            .zip(src.par_chunks(n))
+            .for_each(|(d, s)| {
+                for (x, o) in d.iter_mut().enumerate() {
+                    let lo = x.saturating_sub(k);
+                    let hi = (x + k).min(n - 1);
+                    let win = &s[lo..=hi];
+                    *o = if grow_max {
+                        *win.iter().max().unwrap()
+                    } else {
+                        *win.iter().min().unwrap()
+                    };
                 }
-                if x + d < w {
-                    v = pick(v, src[y * w + x + d]);
-                }
-            }
-            tmp[y * w + x] = v;
-        }
-    }
-    let mut out = tmp.clone();
-    for y in 0..h {
-        for x in 0..w {
-            let mut v = tmp[y * w + x];
-            for d in 1..=k as usize {
-                if y >= d {
-                    v = pick(v, tmp[(y - d) * w + x]);
-                }
-                if y + d < h {
-                    v = pick(v, tmp[(y + d) * w + x]);
-                }
-            }
-            out[y * w + x] = v;
-        }
-    }
+            });
+        dst
+    };
+    let tmp = pass(&src, w);
+    let tt = transpose_u8(&tmp, w, h);
+    let tv = pass(&tt, h);
+    let out = transpose_u8(&tv, h, w);
     m.write_rect(region, &out)
 }
 

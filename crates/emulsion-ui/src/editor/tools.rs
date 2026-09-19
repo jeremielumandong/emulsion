@@ -147,6 +147,11 @@ pub struct ToolState {
     /// Hue kept separately so greys do not lose it.
     pub hue: f32,
     ants: Option<(usize, u32, Segments)>,
+    /// Selection bounds by selection identity, for the Info panel.
+    pub(crate) sel_bounds: Option<(usize, IRect)>,
+    /// Whether the SAM model is installed, checked at most every 2 s (it
+    /// is a filesystem stat and the options bar asks every frame).
+    sam_ok: Option<(Instant, bool)>,
     /// Magnetic lasso: the edge-following path from the last anchor to the pointer.
     pub magnetic_live: Vec<(f64, f64)>,
     /// Edge map of the composite for the magnetic lasso, by revision.
@@ -193,6 +198,8 @@ impl Default for ToolState {
             picker: false,
             hue: 0.0,
             ants: None,
+            sel_bounds: None,
+            sam_ok: None,
             magnetic_live: Vec::new(),
             edges: None,
             edges_loading: None,
@@ -209,6 +216,9 @@ pub enum ToolDrag {
         label: &'static str,
         /// The stroke paints the node's mask; the raster is a grey view of it.
         mask: bool,
+        /// That grey view, kept up to date as the stroke renders, so the
+        /// whole mask is not re-converted on every pointer move.
+        mask_raster: Option<Arc<Raster>>,
     },
     /// Liquify: the layer as it was when the tool went down (for Restore)
     /// and the last dab position in layer pixels.
@@ -481,6 +491,32 @@ impl EditorView {
 
     /// The pixel node strokes go into: the selected one, or a new empty
     /// layer above the selection when that is not a pixel node.
+    /// Is the SAM quick-select model installed? Cached briefly.
+    pub(crate) fn sam_available(&mut self) -> bool {
+        if let Some((t, ok)) = self.tools.sam_ok
+            && t.elapsed().as_secs_f32() < 2.0
+        {
+            return ok;
+        }
+        let ok = emulsion_ai::sam::available().is_some();
+        self.tools.sam_ok = Some((Instant::now(), ok));
+        ok
+    }
+
+    /// Bounds of the current selection, cached by its identity.
+    pub(crate) fn selection_bounds(&mut self) -> Option<IRect> {
+        let s = self.editor.doc.selection.as_ref()?;
+        let key = Arc::as_ptr(s) as usize;
+        if let Some((k, b)) = self.tools.sel_bounds
+            && k == key
+        {
+            return Some(b);
+        }
+        let b = select::bounds(s);
+        self.tools.sel_bounds = Some((key, b));
+        Some(b)
+    }
+
     pub(crate) fn paint_target(&mut self, cx: &mut Context<Self>) -> Option<NodeId> {
         if let Some(id) = self.selected
             && let Some(n) = self.editor.doc.node(id)
@@ -531,11 +567,26 @@ impl EditorView {
     }
 
     pub(crate) fn apply_selection(&mut self, new: Mask, combine: Combine, cx: &mut Context<Self>) {
-        let new = if self.tools.feather > 0.5 {
-            select::feather(&new, self.tools.feather)
-        } else {
-            new
-        };
+        let feather = self.tools.feather;
+        if feather > 0.5 {
+            // Feathering a big selection takes a moment: off the UI thread.
+            let existing = self.editor.doc.selection.clone();
+            cx.spawn(async move |this, cx| {
+                let selection = cx
+                    .background_spawn(async move {
+                        let soft = select::feather(&new, feather);
+                        let combined = select::combine(existing.as_deref(), &soft, combine);
+                        (!select::bounds(&combined).is_empty()).then(|| Arc::new(combined))
+                    })
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.execute(Command::SetSelection { selection }, cx);
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         let combined = select::combine(self.editor.doc.selection.as_deref(), &new, combine);
         let selection = (!select::bounds(&combined).is_empty()).then(|| Arc::new(combined));
         self.execute(Command::SetSelection { selection }, cx);
@@ -570,15 +621,27 @@ impl EditorView {
             self.set_status("Nothing is selected.", false, cx);
             return;
         };
-        let mut m = (*s).clone();
-        if grow != 0 {
-            m = select::grow(&m, grow);
-        }
-        if feather > 0.0 {
-            m = select::feather(&m, feather);
-        }
-        let selection = (!select::bounds(&m).is_empty()).then(|| Arc::new(m));
-        self.execute(Command::SetSelection { selection }, cx);
+        self.set_status("Modifying the selection…", false, cx);
+        cx.spawn(async move |this, cx| {
+            let selection = cx
+                .background_spawn(async move {
+                    let mut m = (*s).clone();
+                    if grow != 0 {
+                        m = select::grow(&m, grow);
+                    }
+                    if feather > 0.0 {
+                        m = select::feather(&m, feather);
+                    }
+                    (!select::bounds(&m).is_empty()).then(|| Arc::new(m))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.status = None;
+                this.execute(Command::SetSelection { selection }, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // ── Pointer ─────────────────────────────────────────────────────────
@@ -839,6 +902,7 @@ impl EditorView {
         let label = if mask_mode { "Paint mask" } else { label };
         self.editor.begin(label);
         let (r, dirty) = stroke.render(&raster);
+        let mask_raster = mask_mode.then(|| Arc::new(r.clone()));
         self.commit_stroke(id, r, dirty, label, mask_mode, cx);
         self.drag = Some(Drag::Tool(ToolDrag::Stroke {
             id,
@@ -847,6 +911,7 @@ impl EditorView {
             heal,
             label,
             mask: mask_mode,
+            mask_raster,
         }));
         if self.tools.quick_shape && !heal {
             self.watch_quick_shape(cx);
@@ -942,11 +1007,13 @@ impl EditorView {
             heal: false,
             label,
             mask,
+            mask_raster,
             ..
         })) = &mut self.drag
         else {
             return false;
         };
+        let mask_current = mask_raster.clone();
         if stroke.is_finished() {
             return false;
         }
@@ -965,8 +1032,8 @@ impl EditorView {
         stroke.replay(&path, pressure);
         let (id, label, mask) = (*id, *label, *mask);
         let current = if mask {
-            match self.editor.doc.node(id).and_then(|n| n.mask.clone()) {
-                Some(m) => Arc::new(mask_to_raster(&m)),
+            match mask_current {
+                Some(m) => m,
                 None => return false,
             }
         } else {
@@ -1189,9 +1256,11 @@ impl EditorView {
                 to_local,
                 label,
                 mask,
+                mask_raster,
                 ..
             } => {
                 let mask = *mask;
+                let mask_current = mask_raster.clone();
                 let p = to_local.transform_point2(dvec2(d.0, d.1));
                 let t = self
                     .tools
@@ -1206,8 +1275,8 @@ impl EditorView {
                 );
                 let (id, label) = (*id, *label);
                 let current = if mask {
-                    match self.editor.doc.node(id).and_then(|n| n.mask.clone()) {
-                        Some(m) => Arc::new(mask_to_raster(&m)),
+                    match mask_current {
+                        Some(m) => m,
                         None => return,
                     }
                 } else {
@@ -1216,10 +1285,18 @@ impl EditorView {
                         _ => return,
                     }
                 };
-                let Some(Drag::Tool(ToolDrag::Stroke { stroke, .. })) = &mut self.drag else {
+                let Some(Drag::Tool(ToolDrag::Stroke {
+                    stroke,
+                    mask_raster,
+                    ..
+                })) = &mut self.drag
+                else {
                     return;
                 };
                 let (r, dirty) = stroke.render(&current);
+                if mask {
+                    *mask_raster = Some(Arc::new(r.clone()));
+                }
                 self.commit_stroke(id, r, dirty, label, mask, cx);
             }
             ToolDrag::Liquify { .. } => self.liquify_to(d, cx),
@@ -1274,16 +1351,13 @@ impl EditorView {
                 heal,
                 label,
                 mask,
+                mask_raster,
                 ..
             } => {
                 // Catch the stabilizer up and taper the end.
                 if stroke.finish() {
                     let current = if mask {
-                        self.editor
-                            .doc
-                            .node(id)
-                            .and_then(|n| n.mask.clone())
-                            .map(|m| Arc::new(mask_to_raster(&m)))
+                        mask_raster
                     } else {
                         match self.editor.doc.node(id).map(|n| &n.kind) {
                             Some(NodeKind::Raster { raster, .. }) => Some(raster.clone()),
@@ -1386,7 +1460,7 @@ impl EditorView {
                 }
             }
             ToolDrag::Quick { pts, combine } => {
-                if self.ai.ai_select && emulsion_ai::sam::available().is_some() {
+                if self.ai.ai_select && self.sam_available() {
                     self.sam_select(pts, combine, cx)
                 } else {
                     self.quick_select(pts, combine, cx)
@@ -1748,22 +1822,33 @@ impl EditorView {
             return;
         };
         let color = premul(self.tools.fg);
-        let (r, dirty) = match self.editor.doc.selection.clone() {
-            Some(s) => {
-                let clip = local_clip(s, to_doc);
-                fill_color(&raster, raster.bounds(), &|x, y| clip(x, y), color)
-            }
-            None => fill_color(&raster, raster.bounds(), &|_, _| 1.0, color),
-        };
-        self.execute(
-            Command::ReplacePixels {
-                id,
-                raster: Arc::new(r),
-                dirty,
-                label: "Fill".into(),
-            },
-            cx,
-        );
+        let sel = self.editor.doc.selection.clone();
+        cx.spawn(async move |this, cx| {
+            let (r, dirty) = cx
+                .background_spawn(async move {
+                    match sel {
+                        Some(s) => {
+                            let clip = local_clip(s, to_doc);
+                            fill_color(&raster, raster.bounds(), &|x, y| clip(x, y), color)
+                        }
+                        None => fill_color(&raster, raster.bounds(), &|_, _| 1.0, color),
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.execute(
+                    Command::ReplacePixels {
+                        id,
+                        raster: Arc::new(r),
+                        dirty,
+                        label: "Fill".into(),
+                    },
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Fill the selection from its surroundings into a new node.
@@ -2557,7 +2642,7 @@ impl EditorView {
                     }));
                 }
                 if cur == SelectShape::Quick {
-                    let sam_ok = emulsion_ai::sam::available().is_some();
+                    let sam_ok = self.sam_available();
                     let ai_on = self.ai.ai_select && sam_ok;
                     v.push(
                         chip(
@@ -2635,9 +2720,7 @@ impl EditorView {
                             .into_any_element(),
                     );
                 }
-                if cur == SelectShape::Quick
-                    && !(self.ai.ai_select && emulsion_ai::sam::available().is_some())
-                {
+                if cur == SelectShape::Quick && !(self.ai.ai_select && self.sam_available()) {
                     let t = self.tools.tolerance as f32;
                     v.push(self.opt_slider(
                         SliderKey::Tolerance,

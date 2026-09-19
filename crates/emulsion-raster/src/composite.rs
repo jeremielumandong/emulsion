@@ -200,8 +200,42 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
         .collect();
     let mut alphas: Vec<Option<Vec<f32>>> = (0..nodes.len()).map(|_| None).collect();
 
+    // A plain adjustment: full opacity, normal blend, no mask, not a clip
+    // base. Runs of these fuse into one pass over the tile.
+    let plain_adjust = |k: usize| -> bool {
+        let n = &nodes[k];
+        n.visible
+            && matches!(n.content, NodeContent::Adjust(_))
+            && n.opacity >= 1.0
+            && n.mask.is_none()
+            && n.clip_to.is_none()
+            && matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)
+            && !is_source[k]
+    };
+    let mut fused_until = 0usize;
+
     for (i, node) in nodes.iter().enumerate() {
+        if i < fused_until {
+            continue;
+        }
         if !node.visible {
+            continue;
+        }
+        if plain_adjust(i) && i + 1 < nodes.len() && plain_adjust(i + 1) {
+            let mut end = i + 1;
+            while end < nodes.len() && plain_adjust(end) {
+                end += 1;
+            }
+            let ops: Vec<Arc<Prepared>> = nodes[i..end]
+                .iter()
+                .filter_map(|n| match &n.content {
+                    NodeContent::Adjust(op) => Some(op.clone()),
+                    _ => None,
+                })
+                .collect();
+            let chain = Prepared::Chain(ops);
+            apply_adjust(acc, &chain, None, BlendMode::Normal, ctx.space, ctx);
+            fused_until = end;
             continue;
         }
         let clip: Option<Vec<f32>> = match node.clip_to {

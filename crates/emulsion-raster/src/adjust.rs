@@ -1109,6 +1109,9 @@ fn grain_noise(x: i32, y: i32, seed: u32) -> f32 {
 
 /// Render-time operator.
 pub enum Prepared {
+    /// Several adjustments applied in order in one pass over the pixels
+    /// (the compositor fuses adjacent plain adjustment nodes).
+    Chain(Vec<std::sync::Arc<Prepared>>),
     Lut(Box<[Vec<f32>; 3]>),
     HueSat {
         hue: f32,
@@ -1157,7 +1160,10 @@ pub enum Prepared {
 impl Prepared {
     /// Whether the result depends on the pixel position (grain, vignette).
     pub fn positional(&self) -> bool {
-        matches!(self, Prepared::Grain { .. } | Prepared::Vignette { .. })
+        match self {
+            Prepared::Chain(ops) => ops.iter().any(|o| o.positional()),
+            _ => matches!(self, Prepared::Grain { .. } | Prepared::Vignette { .. }),
+        }
     }
 
     /// Apply to unpremultiplied linear RGB.
@@ -1169,6 +1175,9 @@ impl Prepared {
     /// Apply to unpremultiplied linear RGB at document pixel (x, y).
     pub fn apply_at(&self, c: [f32; 3], x: i32, y: i32, width: u32, height: u32) -> [f32; 3] {
         match self {
+            Prepared::Chain(ops) => ops
+                .iter()
+                .fold(c, |c, op| op.apply_at(c, x, y, width, height)),
             Prepared::Vignette {
                 amount,
                 midpoint,

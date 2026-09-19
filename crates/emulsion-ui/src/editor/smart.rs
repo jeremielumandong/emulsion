@@ -10,6 +10,8 @@ pub(crate) struct SmartUi {
     /// Filter slider edits apply at most this often while dragging.
     last_apply: Option<Instant>,
     pending: Option<(NodeId, usize, &'static str, f32)>,
+    /// Bumped per request so stale renders are dropped.
+    render_gen: u64,
 }
 
 impl EditorView {
@@ -43,7 +45,7 @@ impl EditorView {
         };
         let mut filters = filters.clone();
         filters.push(f);
-        self.execute(Command::SetFilters { id, filters }, cx);
+        self.set_filters_async(id, filters, cx);
         self.smart.menu_for = None;
     }
 
@@ -55,7 +57,7 @@ impl EditorView {
         let mut filters = filters.clone();
         if idx < filters.len() {
             filters.remove(idx);
-            self.execute(Command::SetFilters { id, filters }, cx);
+            self.set_filters_async(id, filters, cx);
         }
     }
 
@@ -88,8 +90,41 @@ impl EditorView {
             && f.set_param(key, v)
         {
             self.smart.last_apply = Some(Instant::now());
-            self.execute(Command::SetFilters { id, filters }, cx);
+            self.set_filters_async(id, filters, cx);
         }
+    }
+
+    /// Render the stack off the UI thread, then set filters and cache in
+    /// one undoable step. A newer request supersedes an older one.
+    fn set_filters_async(&mut self, id: NodeId, filters: Vec<Filter>, cx: &mut Context<Self>) {
+        let Some(NodeKind::Smart { source, .. }) = self.editor.doc.node(id).map(|n| &n.kind) else {
+            return;
+        };
+        let source = source.clone();
+        self.smart.render_gen += 1;
+        let generation = self.smart.render_gen;
+        cx.spawn(async move |this, cx| {
+            let f2 = filters.clone();
+            let (cache, offset) = cx
+                .background_spawn(async move { emulsion_core::smart::render(&source, &f2) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.smart.render_gen != generation {
+                    return;
+                }
+                this.execute(
+                    Command::SetSmartCache {
+                        id,
+                        filters,
+                        cache,
+                        offset,
+                    },
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Apply a throttled value that was still pending when the drag ended.

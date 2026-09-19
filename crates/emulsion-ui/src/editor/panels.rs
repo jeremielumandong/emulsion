@@ -186,7 +186,7 @@ impl EditorView {
         )
     }
 
-    pub(crate) fn info_view(&self, p: &Palette) -> Option<AnyElement> {
+    pub(crate) fn info_view(&mut self, p: &Palette) -> Option<AnyElement> {
         if !self.panels.info {
             return None;
         }
@@ -209,11 +209,8 @@ impl EditorView {
             }
             None => ("—".into(), "—".into()),
         };
-        let selection = match &self.editor.doc.selection {
-            Some(s) => {
-                let b = emulsion_raster::select::bounds(s);
-                format!("{}×{} at {}, {}", b.w, b.h, b.x, b.y)
-            }
+        let selection = match self.selection_bounds() {
+            Some(b) => format!("{}×{} at {}, {}", b.w, b.h, b.x, b.y),
             None => "none".into(),
         };
         let row = |k: &str, v: String| {

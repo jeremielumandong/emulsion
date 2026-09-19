@@ -347,26 +347,59 @@ fn encode(doc: &Document) -> Result<Encoded> {
 
     let depth = doc.source_depth;
     type Encoded1 = (String, Vec<u8>, Option<(NodeId, i64, i64)>);
-    let results: Vec<Result<Encoded1>> = jobs
-        .into_par_iter()
-        .map(|job| match job {
-            Job::Png { path, raster } => Ok((path, raster_png(raster, depth)?, None)),
-            Job::Mask { path, mask } => Ok((
-                path,
-                png_gray(mask.width(), mask.height(), &mask.to_gray8())?,
-                None,
-            )),
-            Job::Baked {
-                path,
-                id,
-                raster,
-                placement,
-            } => {
-                let (r, x, y) = bake(doc, raster, &placement);
-                Ok((path, raster_png(&r, depth)?, Some((id, x, y))))
+    // The layer PNGs and the merged composite are independent; encode
+    // them side by side.
+    type Extras = Result<Vec<(String, Vec<u8>)>>;
+    let (results, merged): (Vec<Result<Encoded1>>, Extras) = rayon::join(
+        || {
+            jobs.into_par_iter()
+                .map(|job| match job {
+                    Job::Png { path, raster } => Ok((path, raster_png(raster, depth)?, None)),
+                    Job::Mask { path, mask } => Ok((
+                        path,
+                        png_gray(mask.width(), mask.height(), &mask.to_gray8())?,
+                        None,
+                    )),
+                    Job::Baked {
+                        path,
+                        id,
+                        raster,
+                        placement,
+                    } => {
+                        let (r, x, y) = bake(doc, raster, &placement);
+                        Ok((path, raster_png(&r, depth)?, Some((id, x, y))))
+                    }
+                })
+                .collect()
+        },
+        || {
+            // Composite and thumbnail.
+            let tree = doc.composite_tree();
+            let merged = flatten(&tree, 0);
+            let mut out = vec![(
+                "mergedimage.png".to_string(),
+                png8(doc.width, doc.height, &merged.to_srgba8())?,
+            )];
+            let mut level = 0;
+            while level_size(doc.width, doc.height, level)
+                .0
+                .max(level_size(doc.width, doc.height, level).1)
+                > 512
+            {
+                level += 1;
             }
-        })
-        .collect();
+            let small = flatten(&tree, level);
+            let img = image::RgbaImage::from_raw(small.width(), small.height(), small.to_srgba8())
+                .expect("sized buffer");
+            let (tw, th) = fit(small.width(), small.height(), 256);
+            let thumb = image::imageops::thumbnail(&img, tw, th);
+            out.push((
+                "Thumbnails/thumbnail.png".to_string(),
+                png8(tw, th, thumb.as_raw())?,
+            ));
+            Ok(out)
+        },
+    );
     let mut entries = Vec::new();
     for r in results {
         let (path, bytes, baked) = r?;
@@ -375,31 +408,7 @@ fn encode(doc: &Document) -> Result<Encoded> {
         }
         entries.push((path, bytes));
     }
-
-    // Composite and thumbnail.
-    let tree = doc.composite_tree();
-    let merged = flatten(&tree, 0);
-    entries.push((
-        "mergedimage.png".into(),
-        png8(doc.width, doc.height, &merged.to_srgba8())?,
-    ));
-    let mut level = 0;
-    while level_size(doc.width, doc.height, level)
-        .0
-        .max(level_size(doc.width, doc.height, level).1)
-        > 512
-    {
-        level += 1;
-    }
-    let small = flatten(&tree, level);
-    let img = image::RgbaImage::from_raw(small.width(), small.height(), small.to_srgba8())
-        .expect("sized buffer");
-    let (tw, th) = fit(small.width(), small.height(), 256);
-    let thumb = image::imageops::thumbnail(&img, tw, th);
-    entries.push((
-        "Thumbnails/thumbnail.png".into(),
-        png8(tw, th, thumb.as_raw())?,
-    ));
+    entries.extend(merged?);
 
     let manifest = Manifest {
         format: "emulsion".into(),

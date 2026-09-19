@@ -181,6 +181,13 @@ pub enum Command {
         id: NodeId,
         filters: Vec<emulsion_filters::Filter>,
     },
+    /// `SetFilters` with the stack already rendered (off the UI thread).
+    SetSmartCache {
+        id: NodeId,
+        filters: Vec<emulsion_filters::Filter>,
+        cache: Arc<emulsion_raster::Raster>,
+        offset: (i32, i32),
+    },
     /// Replace a node's layer styles.
     SetStyles {
         id: NodeId,
@@ -266,10 +273,12 @@ impl Command {
             },
             Command::ConvertToSmart { .. } => "Smart layer".into(),
             Command::Rasterize { .. } => "Rasterize".into(),
-            Command::SetFilters { filters, .. } => match filters.last() {
-                Some(f) => f.label().to_string(),
-                None => "Filters".into(),
-            },
+            Command::SetFilters { filters, .. } | Command::SetSmartCache { filters, .. } => {
+                match filters.last() {
+                    Some(f) => f.label().to_string(),
+                    None => "Filters".into(),
+                }
+            }
         }
     }
 
@@ -701,6 +710,27 @@ impl Command {
                 let (c, o) = crate::smart::render(source, filters);
                 *cache = c;
                 *offset = o;
+                *f = filters.clone();
+                Ok(None)
+            }
+            Command::SetSmartCache {
+                id,
+                filters,
+                cache: rendered,
+                offset: off,
+            } => {
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let NodeKind::Smart {
+                    filters: f,
+                    cache,
+                    offset,
+                    ..
+                } = &mut n.kind
+                else {
+                    return Err(CommandError::NoSuchParam(*id, "filters".into()));
+                };
+                *cache = rendered.clone();
+                *offset = *off;
                 *f = filters.clone();
                 Ok(None)
             }
