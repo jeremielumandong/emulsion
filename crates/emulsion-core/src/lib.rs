@@ -1,4 +1,16 @@
-//! `emulsion-core` — Document model: node stack, masks, selections, the Command API, and the branchable history graph. No GPU and no UI.
+//! `emulsion-core` — the document model: a stack of nodes, the Command API
+//! that is the only way to change it, and snapshot history.
+//!
+//! No GPU, no UI. Everything here runs headless and is tested headless.
 
-/// Crate name, used in diagnostics.
-pub const CRATE: &str = "emulsion-core";
+pub mod command;
+pub mod document;
+pub mod history;
+pub mod node;
+
+pub use command::{Command, CommandError};
+pub use document::{Document, DocumentError, PanelRow};
+pub use history::{Editor, History};
+pub use node::{Node, NodeId, NodeKind};
+
+pub use emulsion_raster as raster;

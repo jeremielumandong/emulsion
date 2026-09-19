@@ -10,6 +10,12 @@ description = "GPUI views and design tokens for Emulsion"
 workspace = true
 
 [dependencies]
+emulsion-io = { workspace = true }
+emulsion-raster = { workspace = true }
+rayon = { workspace = true }
+smallvec = { workspace = true }
+image = { workspace = true }
+parking_lot = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 gpui-kit = { workspace = true }

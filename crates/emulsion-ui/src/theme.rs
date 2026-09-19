@@ -1,14 +1,12 @@
-//! Emulsion's design tokens.
-//!
-//! Light and dark palettes, plus the type sizes the mock uses. Kept as plain
-//! values so the same tokens can drive gpui-component's `Theme` and our own
-//! elements.
+//! Emulsion's design tokens: two palettes, the type system, and layout
+//! constants. Geometry is square: 1 px hairlines and no rounded corners
+//! except avatars and status dots.
 
 use gpui_kit::*;
 
-/// One palette.
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
+    pub dark: bool,
     pub paper: Hsla,
     pub panel: Hsla,
     pub ink: Hsla,
@@ -21,6 +19,8 @@ pub struct Palette {
     pub nav_fg: Hsla,
     pub soft_bg: Hsla,
     pub accent: Hsla,
+    /// Transparency checkerboard, sRGB grey levels.
+    pub checker: (u8, u8),
 }
 
 fn c(hex: u32) -> Hsla {
@@ -31,6 +31,7 @@ pub const ACCENT: u32 = 0xD93A1E;
 
 pub fn light() -> Palette {
     Palette {
+        dark: false,
         paper: c(0xEFEEEA),
         panel: c(0xFFFFFF),
         ink: c(0x0A0A0B),
@@ -43,11 +44,13 @@ pub fn light() -> Palette {
         nav_fg: c(0x9B9A95),
         soft_bg: c(0xFFFFFF),
         accent: c(ACCENT),
+        checker: (0xFF, 0xE9),
     }
 }
 
 pub fn dark() -> Palette {
     Palette {
+        dark: true,
         paper: c(0x0C0C0D),
         panel: c(0x151517),
         ink: c(0xEDECE8),
@@ -60,16 +63,15 @@ pub fn dark() -> Palette {
         nav_fg: c(0x7C7B77),
         soft_bg: c(0x1C1C1F),
         accent: c(ACCENT),
+        checker: (0x3A, 0x30),
     }
 }
 
-/// Type system: Instrument Sans for UI, JetBrains Mono for metadata.
-/// Fonts are not bundled yet (Phase 0); GPUI falls back to the system font.
+/// Instrument Sans for UI and headings, JetBrains Mono for metadata, values,
+/// labels and state. Both fall back to system fonts when not installed.
 pub const UI_FONT: &str = "Instrument Sans";
 pub const MONO_FONT: &str = "JetBrains Mono";
 
-/// Layout constants. Kept as constants so later web and tablet layouts can
-/// derive their breakpoints from them.
 pub mod dim {
     use gpui_kit::{Pixels, px};
     pub const TOP_BAR_H: Pixels = px(54.);
@@ -80,8 +82,6 @@ pub mod dim {
     pub const COMPARE_SLIDER_W: Pixels = px(110.);
 }
 
-/// Global palette handle. Phase 0: light only; dark comes with the theme
-/// switch in the top bar.
 pub struct ActivePalette(pub Palette);
 impl Global for ActivePalette {}
 
@@ -91,4 +91,9 @@ pub fn install(cx: &mut App) {
 
 pub fn palette(cx: &App) -> Palette {
     cx.global::<ActivePalette>().0
+}
+
+pub fn toggle(cx: &mut App) {
+    let next = if palette(cx).dark { light() } else { dark() };
+    cx.set_global(ActivePalette(next));
 }

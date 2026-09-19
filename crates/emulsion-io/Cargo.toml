@@ -10,6 +10,7 @@ description = "Import and export"
 workspace = true
 
 [dependencies]
+rayon = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
@@ -21,3 +22,6 @@ tracing = { workspace = true }
 emulsion-core = { workspace = true }
 emulsion-raster = { workspace = true }
 emulsion-color = { workspace = true }
+
+[dev-dependencies]
+emulsion-raster = { workspace = true }
