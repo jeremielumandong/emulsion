@@ -7,6 +7,8 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
+    /// Which coding CLI drives the assistant: "claude", "codex", "opencode", "kimi".
+    pub provider: String,
     /// Explicit path to the coding CLI; otherwise it is searched for.
     pub cli_path: Option<PathBuf>,
     /// Model alias passed to the CLI ("sonnet", "opus", …); `None` = CLI default.
@@ -28,6 +30,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            provider: "claude".into(),
             cli_path: None,
             model: None,
             jev_api_key: None,

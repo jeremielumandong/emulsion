@@ -30,6 +30,232 @@ pub struct Options {
     pub resume: Option<String>,
 }
 
+/// The relay's address and token as an env map for MCP config files.
+fn env_map(relay_env: &[(String, String)]) -> serde_json::Map<String, serde_json::Value> {
+    relay_env
+        .iter()
+        .map(|(k, v)| (k.clone(), json!(v)))
+        .collect()
+}
+
+fn common_env() -> Vec<(String, String)> {
+    vec![
+        ("NO_COLOR".into(), "1".into()),
+        ("FORCE_COLOR".into(), "0".into()),
+        (
+            "PATH".into(),
+            crate::provider::child_path().to_string_lossy().into_owned(),
+        ),
+    ]
+}
+
+/// A TOML string literal.
+fn toml_str(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Codex: a scoped `CODEX_HOME` next to the session with the person's
+/// sign-in copied in, their config kept, and Emulsion's MCP server added.
+/// Approvals are off (Emulsion gates tool calls itself) and the shell
+/// sandbox is read-only, so the only way Codex changes anything is through
+/// Emulsion's tools.
+pub fn write_codex_home(
+    session_dir: &Path,
+    exe: &Path,
+    relay_env: &[(String, String)],
+) -> std::io::Result<PathBuf> {
+    let home = session_dir.join("codex-home");
+    std::fs::create_dir_all(&home)?;
+    let user_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")));
+    let mut config = String::new();
+    if let Some(u) = &user_home {
+        for f in ["auth.json", "version.json", "instructions.md"] {
+            let _ = std::fs::copy(u.join(f), home.join(f));
+        }
+        if let Ok(existing) = std::fs::read_to_string(u.join("config.toml")) {
+            // Keep everything except an earlier emulsion server block.
+            let mut skipping = false;
+            for line in existing.lines() {
+                if line.trim_start().starts_with('[') {
+                    skipping = line.contains("mcp_servers.emulsion");
+                }
+                if !skipping
+                    && !line.trim_start().starts_with("approval_policy")
+                    && !line.trim_start().starts_with("sandbox_mode")
+                {
+                    config.push_str(line);
+                    config.push('\n');
+                }
+            }
+        }
+    }
+    config.push_str("\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\n");
+    config.push_str(&format!(
+        "\n[mcp_servers.{}]\ncommand = {}\nargs = [\"mcp-serve\"]\n",
+        emulsion_mcp::SERVER_NAME,
+        toml_str(&exe.to_string_lossy())
+    ));
+    let env: Vec<String> = relay_env
+        .iter()
+        .map(|(k, v)| format!("{k} = {}", toml_str(v)))
+        .collect();
+    config.push_str(&format!("env = {{ {} }}\n", env.join(", ")));
+    std::fs::write(home.join("config.toml"), config)?;
+    std::fs::write(home.join("AGENTS.md"), SYSTEM_PROMPT)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            home.join("config.toml"),
+            std::fs::Permissions::from_mode(0o600),
+        )?;
+    }
+    Ok(home)
+}
+
+/// OpenCode: a per-session `opencode.json` with Emulsion's server as the
+/// only MCP, built-in file and shell tools off, and the system prompt as
+/// its instructions.
+pub fn write_opencode_config(
+    session_dir: &Path,
+    exe: &Path,
+    relay_env: &[(String, String)],
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(session_dir)?;
+    std::fs::write(session_dir.join("AGENTS.md"), SYSTEM_PROMPT)?;
+    let config = json!({
+        "$schema": "https://opencode.ai/config.json",
+        "instructions": ["AGENTS.md"],
+        "mcp": {
+            emulsion_mcp::SERVER_NAME: {
+                "type": "local",
+                "command": [exe.to_string_lossy(), "mcp-serve"],
+                "environment": env_map(relay_env),
+                "enabled": true,
+            }
+        },
+        "tools": {
+            "bash": false, "edit": false, "write": false, "read": false, "glob": false,
+            "grep": false, "list": false, "patch": false, "webfetch": false, "todowrite": false,
+            "todoread": false, "task": false,
+        },
+        "permission": { "edit": "deny", "bash": "deny", "webfetch": "deny" },
+    });
+    let path = session_dir.join("opencode.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(path)
+}
+
+/// Kimi Code reads `.kimi-code/mcp.json` from its working directory.
+pub fn write_kimi_config(
+    session_dir: &Path,
+    exe: &Path,
+    relay_env: &[(String, String)],
+) -> std::io::Result<PathBuf> {
+    let dir = session_dir.join(".kimi-code");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(session_dir.join("AGENTS.md"), SYSTEM_PROMPT)?;
+    let config = json!({
+        "mcpServers": {
+            emulsion_mcp::SERVER_NAME: {
+                "command": exe.to_string_lossy(),
+                "args": ["mcp-serve"],
+                "env": env_map(relay_env),
+            }
+        }
+    });
+    let path = dir.join("mcp.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
+    Ok(path)
+}
+
+/// Argv for one Codex turn.
+pub fn codex_args(opts: &Options, prompt: &str) -> Vec<String> {
+    let mut a: Vec<String> = vec!["exec".into()];
+    if let Some(r) = opts.resume.as_ref().filter(|r| !r.is_empty()) {
+        a.extend(["resume".into(), r.clone()]);
+    }
+    a.extend(["--json".into(), "--skip-git-repo-check".into()]);
+    if let Some(m) = opts.model.as_ref().filter(|m| !m.is_empty()) {
+        a.extend(["-m".into(), m.clone()]);
+    }
+    a.push(prompt.to_string());
+    a
+}
+
+/// Argv for one OpenCode turn.
+pub fn opencode_args(opts: &Options, prompt: &str) -> Vec<String> {
+    let mut a: Vec<String> = vec!["run".into(), "--format".into(), "json".into()];
+    if let Some(m) = opts.model.as_ref().filter(|m| !m.is_empty()) {
+        a.extend(["--model".into(), m.clone()]);
+    }
+    if let Some(r) = opts.resume.as_ref().filter(|r| !r.is_empty()) {
+        a.extend(["--session".into(), r.clone()]);
+    }
+    a.push(prompt.to_string());
+    a
+}
+
+/// Argv for one Kimi turn.
+pub fn kimi_args(opts: &Options, prompt: &str) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "-p".into(),
+        prompt.to_string(),
+        "--output-format".into(),
+        "stream-json".into(),
+    ];
+    if let Some(m) = opts.model.as_ref().filter(|m| !m.is_empty()) {
+        a.extend(["--model".into(), m.clone()]);
+    }
+    a
+}
+
+/// Everything needed to run `provider` for one document. Persistent CLIs
+/// ignore `prompt` (turns go over stdin); one-shot CLIs need it.
+pub fn spec_for(
+    provider: &crate::provider::Provider,
+    program: PathBuf,
+    session_dir: &Path,
+    exe: &Path,
+    relay_env: &[(String, String)],
+    opts: &Options,
+    prompt: Option<&str>,
+) -> std::io::Result<LaunchSpec> {
+    use crate::provider::McpConfig;
+    let prompt = prompt.unwrap_or_default();
+    let mut env = common_env();
+    let args = match provider.mcp {
+        McpConfig::ClaudeJson => return claude(program, session_dir, exe, relay_env, opts),
+        McpConfig::CodexHome => {
+            let home = write_codex_home(session_dir, exe, relay_env)?;
+            env.push(("CODEX_HOME".into(), home.to_string_lossy().into_owned()));
+            codex_args(opts, prompt)
+        }
+        McpConfig::OpenCodeJson => {
+            let cfg = write_opencode_config(session_dir, exe, relay_env)?;
+            env.push(("OPENCODE_CONFIG".into(), cfg.to_string_lossy().into_owned()));
+            opencode_args(opts, prompt)
+        }
+        McpConfig::KimiJson => {
+            write_kimi_config(session_dir, exe, relay_env)?;
+            kimi_args(opts, prompt)
+        }
+    };
+    Ok(LaunchSpec {
+        program,
+        args,
+        env,
+        cwd: session_dir.to_path_buf(),
+    })
+}
+
 pub const SYSTEM_PROMPT: &str = "\
 You are the assistant inside Emulsion, a non-destructive image editor. The person has a document \
 open and talks to you instead of clicking. You change the document only through the emulsion \
@@ -175,14 +401,7 @@ pub fn claude(
     Ok(LaunchSpec {
         program,
         args: claude_args(&config, opts),
-        env: vec![
-            ("NO_COLOR".into(), "1".into()),
-            ("FORCE_COLOR".into(), "0".into()),
-            (
-                "PATH".into(),
-                crate::provider::child_path().to_string_lossy().into_owned(),
-            ),
-        ],
+        env: common_env(),
         cwd: session_dir.to_path_buf(),
     })
 }
@@ -248,5 +467,93 @@ mod tests {
                 0o600
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    use crate::provider;
+
+    #[test]
+    fn one_shot_argv_and_configs() {
+        let opts = Options {
+            model: Some("gpt-5.5".into()),
+            resume: Some("t1".into()),
+        };
+        let a = codex_args(&opts, "hello");
+        assert_eq!(a[..3], ["exec", "resume", "t1"]);
+        assert!(a.contains(&"--json".to_string()) && a.last().unwrap() == "hello");
+        let a = opencode_args(&opts, "hi");
+        assert_eq!(a[..3], ["run", "--format", "json"]);
+        assert!(a.contains(&"--session".to_string()) && a.contains(&"gpt-5.5".to_string()));
+        let a = kimi_args(&Options::default(), "yo");
+        assert_eq!(a, ["-p", "yo", "--output-format", "stream-json"]);
+
+        let dir = std::env::temp_dir().join(format!("emulsion-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env = vec![("EMULSION_RELAY_TOKEN".to_string(), "se\"cret".to_string())];
+        let exe = Path::new("/opt/emulsion/emulsion");
+        let spec = spec_for(
+            provider::by_id("codex"),
+            PathBuf::from("/usr/bin/codex"),
+            &dir,
+            exe,
+            &env,
+            &Options::default(),
+            Some("do it"),
+        )
+        .unwrap();
+        let home = spec
+            .env
+            .iter()
+            .find(|(k, _)| k == "CODEX_HOME")
+            .map(|(_, v)| PathBuf::from(v))
+            .unwrap();
+        let toml = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        assert!(
+            toml.contains("[mcp_servers.emulsion]") && toml.contains("approval_policy = \"never\"")
+        );
+        assert!(
+            toml.contains(r#"EMULSION_RELAY_TOKEN = "se\"cret""#),
+            "{toml}"
+        );
+        assert!(home.join("AGENTS.md").exists());
+        assert_eq!(spec.args[0], "exec");
+
+        let spec = spec_for(
+            provider::by_id("opencode"),
+            PathBuf::from("/usr/bin/opencode"),
+            &dir,
+            exe,
+            &env,
+            &Options::default(),
+            Some("do it"),
+        )
+        .unwrap();
+        let cfg = spec
+            .env
+            .iter()
+            .find(|(k, _)| k == "OPENCODE_CONFIG")
+            .map(|(_, v)| PathBuf::from(v))
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&cfg).unwrap()).unwrap();
+        assert_eq!(v["mcp"]["emulsion"]["type"], "local");
+        assert_eq!(v["mcp"]["emulsion"]["command"][1], "mcp-serve");
+        assert_eq!(v["tools"]["bash"], false);
+
+        let spec = spec_for(
+            provider::by_id("kimi"),
+            PathBuf::from("/usr/bin/kimi"),
+            &dir,
+            exe,
+            &env,
+            &Options::default(),
+            Some("do it"),
+        )
+        .unwrap();
+        assert!(dir.join(".kimi-code/mcp.json").exists());
+        assert_eq!(spec.args[0], "-p");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

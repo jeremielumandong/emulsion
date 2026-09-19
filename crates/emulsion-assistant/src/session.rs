@@ -129,20 +129,59 @@ impl Launcher for ProdLauncher {
     }
 }
 
+/// Builds the launch for one turn of a one-shot CLI: (prompt, session id
+/// to resume) → spec.
+pub type Respawn = Box<dyn Fn(&str, Option<String>) -> std::io::Result<LaunchSpec> + Send>;
+
 /// A running assistant conversation.
 pub struct Session {
-    process: Box<dyn CliProcess>,
+    process: Option<Box<dyn CliProcess>>,
     pub events: async_channel::Receiver<Event>,
+    tx: async_channel::Sender<Event>,
     parser: Arc<Mutex<Parser>>,
     initialized: bool,
+    /// One process per turn (Codex, OpenCode, Kimi); `None` is a
+    /// persistent stream-json process (Claude Code).
+    respawn: Option<Respawn>,
 }
 
 impl Session {
+    /// A persistent Claude Code session.
     pub fn start(launcher: &dyn Launcher, spec: &LaunchSpec) -> std::io::Result<Self> {
         let (tx, rx) = async_channel::unbounded();
         let parser = Arc::new(Mutex::new(Parser::default()));
+        let process = launcher.spawn(spec, Self::sink(&parser, &tx))?;
+        Ok(Self {
+            process: Some(process),
+            events: rx,
+            tx,
+            parser,
+            initialized: false,
+            respawn: None,
+        })
+    }
+
+    /// A one-shot session: nothing runs until the first `send`.
+    pub fn one_shot(flavor: protocol::Flavor, respawn: Respawn) -> Self {
+        let (tx, rx) = async_channel::unbounded();
+        Self {
+            process: None,
+            events: rx,
+            tx,
+            parser: Arc::new(Mutex::new(Parser::with_flavor(flavor))),
+            initialized: true,
+            respawn: Some(respawn),
+        }
+    }
+
+    pub fn is_one_shot(&self) -> bool {
+        self.respawn.is_some()
+    }
+
+    fn sink(parser: &Arc<Mutex<Parser>>, tx: &async_channel::Sender<Event>) -> LineSink {
         let p = parser.clone();
-        let sink: LineSink = Box::new(move |line| {
+        let tx = tx.clone();
+        Box::new(move |line| {
             let events = match line {
                 Line::Stdout(l) => p.lock().feed(&l),
                 Line::Stderr(l) => {
@@ -153,18 +192,32 @@ impl Session {
                         vec![Event::Stderr(t.to_string())]
                     }
                 }
-                Line::Exit(code) => vec![Event::Exited(code)],
+                Line::Exit(code) => {
+                    // One-shot CLIs end a turn by exiting; if nothing said
+                    // "done", a clean exit is a result and a failure an error.
+                    let mut out = Vec::new();
+                    let mut parser = p.lock();
+                    if parser.flavor != protocol::Flavor::Claude && !parser.saw_result {
+                        parser.saw_result = true;
+                        out.push(match code {
+                            Some(0) | None => Event::Result {
+                                text: String::new(),
+                                cost_usd: 0.0,
+                                duration_ms: 0,
+                                turns: 1,
+                                input_tokens: 0,
+                                output_tokens: 0,
+                            },
+                            Some(c) => Event::Error(format!("the CLI exited with status {c}")),
+                        });
+                    }
+                    out.push(Event::Exited(code));
+                    out
+                }
             };
             for e in events {
                 let _ = tx.send_blocking(e);
             }
-        });
-        let process = launcher.spawn(spec, sink)?;
-        Ok(Self {
-            process,
-            events: rx,
-            parser,
-            initialized: false,
         })
     }
 
@@ -173,11 +226,31 @@ impl Session {
     }
 
     fn write(&mut self, v: &Value) -> std::io::Result<()> {
-        self.process.write_line(&v.to_string())
+        match self.process.as_mut() {
+            Some(p) => p.write_line(&v.to_string()),
+            None => Err(std::io::Error::other("no process")),
+        }
     }
 
-    /// Send a user turn. The initialize request goes first, once.
-    pub fn send(&mut self, text: &str, images: &[(String, String)]) -> std::io::Result<()> {
+    /// Send a user turn. For a persistent CLI the initialize request goes
+    /// first, once; a one-shot CLI starts a fresh process for the turn,
+    /// resuming its previous conversation when it has an id for it.
+    pub fn send_with(
+        &mut self,
+        launcher: &dyn Launcher,
+        text: &str,
+        images: &[(String, String)],
+    ) -> std::io::Result<()> {
+        if let Some(respawn) = &self.respawn {
+            if let Some(mut old) = self.process.take() {
+                old.kill();
+            }
+            self.parser.lock().begin_turn();
+            let spec = respawn(text, self.session_id())?;
+            let process = launcher.spawn(&spec, Self::sink(&self.parser, &self.tx))?;
+            self.process = Some(process);
+            return Ok(());
+        }
         if !self.initialized {
             self.write(&protocol::initialize())?;
             self.initialized = true;
@@ -186,12 +259,20 @@ impl Session {
         self.write(&protocol::user_message(&sid, text, images))
     }
 
+    /// `send_with` using the production launcher.
+    pub fn send(&mut self, text: &str, images: &[(String, String)]) -> std::io::Result<()> {
+        self.send_with(&ProdLauncher, text, images)
+    }
+
     pub fn allow(
         &mut self,
         request_id: &str,
         tool_use_id: &str,
         input: &Value,
     ) -> std::io::Result<()> {
+        if self.respawn.is_some() {
+            return Ok(());
+        }
         self.write(&protocol::allow(request_id, tool_use_id, input))
     }
 
@@ -201,21 +282,32 @@ impl Session {
         tool_use_id: &str,
         message: &str,
     ) -> std::io::Result<()> {
+        if self.respawn.is_some() {
+            return Ok(());
+        }
         self.write(&protocol::deny(request_id, tool_use_id, message))
     }
 
     pub fn interrupt(&mut self) -> std::io::Result<()> {
+        if self.respawn.is_some() {
+            if let Some(p) = self.process.as_mut() {
+                p.kill();
+            }
+            return Ok(());
+        }
         self.write(&protocol::interrupt())
     }
 
     pub fn kill(&mut self) {
-        self.process.kill();
+        if let Some(p) = self.process.as_mut() {
+            p.kill();
+        }
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.process.kill();
+        self.kill();
     }
 }
 

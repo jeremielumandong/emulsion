@@ -85,6 +85,15 @@ pub struct Assistant {
     pub dock_open: bool,
     /// A `paint` call being played back stroke by stroke.
     pub(crate) playback: Option<Playback>,
+    /// Relayed tool calls waiting for the person's Apply/Skip, for CLIs
+    /// that do not ask before running tools; keyed by card id.
+    held: Vec<(String, RelayCall)>,
+    held_counter: u64,
+}
+
+/// The CLI chosen in Settings.
+fn provider(cx: &App) -> &'static emulsion_assistant::provider::Provider {
+    emulsion_assistant::provider::by_id(&app_state::settings(cx).provider)
 }
 
 /// The assistant painting live on the canvas.
@@ -395,16 +404,20 @@ impl EditorView {
         if self.assistant.session.is_some() {
             return Ok(());
         }
+        let prov = provider(cx);
         let cli = match app_state::cli(cx) {
             CliStatus::Found { path, .. } => path,
             CliStatus::Checking => {
-                return Err("Still looking for Claude Code; try again in a moment.".into());
+                return Err(format!(
+                    "Still looking for {}; try again in a moment.",
+                    prov.label
+                ));
             }
             CliStatus::Missing => {
-                return Err(
-                    "That needs the assistant, and Claude Code is not installed. See Settings."
-                        .into(),
-                );
+                return Err(format!(
+                    "That needs the assistant, and {} is not installed. See Settings.",
+                    prov.label
+                ));
             }
         };
         if self.assistant.relay.is_none() {
@@ -447,9 +460,40 @@ impl EditorView {
             .as_ref()
             .map(|r| r.env())
             .unwrap_or_default();
-        let spec = launch::claude(cli, dir, &exe, &relay_env, &opts).map_err(|e| e.to_string())?;
-        let session = Session::start(&ProdLauncher, &spec)
-            .map_err(|e| format!("Could not start Claude Code: {e}"))?;
+        let session = match prov.mode {
+            emulsion_assistant::provider::Mode::Persistent => {
+                let spec = launch::spec_for(prov, cli, dir, &exe, &relay_env, &opts, None)
+                    .map_err(|e| e.to_string())?;
+                Session::start(&ProdLauncher, &spec)
+                    .map_err(|e| format!("Could not start {}: {e}", prov.label))?
+            }
+            emulsion_assistant::provider::Mode::OneShot => {
+                let flavor = match prov.id {
+                    "codex" => emulsion_assistant::protocol::Flavor::Codex,
+                    "opencode" => emulsion_assistant::protocol::Flavor::OpenCode,
+                    _ => emulsion_assistant::protocol::Flavor::Kimi,
+                };
+                let (dir, model) = (dir.clone(), opts.model.clone());
+                Session::one_shot(
+                    flavor,
+                    Box::new(move |prompt: &str, resume: Option<String>| {
+                        let opts = launch::Options {
+                            model: model.clone(),
+                            resume,
+                        };
+                        launch::spec_for(
+                            prov,
+                            cli.clone(),
+                            &dir,
+                            &exe,
+                            &relay_env,
+                            &opts,
+                            Some(prompt),
+                        )
+                    }),
+                )
+            }
+        };
         let events = session.events.clone();
         cx.spawn(async move |this, cx| {
             while let Ok(ev) = events.recv().await {
@@ -473,7 +517,7 @@ impl EditorView {
         if let Some(Err(e)) = sent {
             self.editor.end();
             self.assistant.session = None;
-            return Err(format!("Could not reach Claude Code: {e}"));
+            return Err(format!("Could not reach {}: {e}", provider(cx).label));
         }
         self.assistant.running = true;
         self.assistant.dock_open = true;
@@ -608,11 +652,23 @@ impl EditorView {
             Event::Result { cost_usd, .. } => self.end_turn(cost_usd, None, cx),
             Event::Error(e) => self.end_turn(0.0, Some(format!("Assistant: {e}")), cx),
             Event::Exited(code) => {
-                self.assistant.session = None;
-                if self.assistant.running {
+                // One-shot CLIs exit after every turn; their Result or Error
+                // came first. A persistent CLI leaving mid-turn is a failure.
+                let one_shot = self
+                    .assistant
+                    .session
+                    .as_ref()
+                    .is_some_and(|s| s.is_one_shot());
+                if !one_shot {
+                    self.assistant.session = None;
+                }
+                if self.assistant.running && !one_shot {
                     self.end_turn(
                         0.0,
-                        Some(format!("Claude Code stopped unexpectedly (exit {code:?}).")),
+                        Some(format!(
+                            "{} stopped unexpectedly (exit {code:?}).",
+                            provider(cx).label
+                        )),
                         cx,
                     );
                 }
@@ -622,8 +678,54 @@ impl EditorView {
         cx.notify();
     }
 
-    /// Run a relayed tool call against this document.
+    /// Run a relayed tool call against this document, or hold it for the
+    /// person's Apply/Skip when the CLI does not ask first itself.
     fn run_tool(&mut self, call: RelayCall, cx: &mut Context<Self>) {
+        let settings = app_state::settings(cx);
+        let auto = settings.approve_all
+            || (settings.auto_apply && !tools::DESTRUCTIVE.contains(&call.name.as_str()));
+        let asks_itself = provider(cx).permission_prompts;
+        if !asks_itself && !auto && !tools::READ_ONLY.contains(&call.name.as_str()) {
+            let doc = self.editor.doc.clone();
+            self.assistant.held_counter += 1;
+            let id = format!("relay-{}", self.assistant.held_counter);
+            if let Some(turn) = &mut self.assistant.turn {
+                // Reuse the CLI's own card for this call when it made one.
+                let existing = turn
+                    .cards
+                    .iter_mut()
+                    .rev()
+                    .find(|c| c.status == CardStatus::Running && c.tool == call.name);
+                let card_id = match existing {
+                    Some(c) => {
+                        c.status = CardStatus::Waiting;
+                        c.id.clone()
+                    }
+                    None => {
+                        turn.cards.push(ToolCard {
+                            id: id.clone(),
+                            summary: summarize(&doc, &call.name, &call.arguments),
+                            tool: call.name.clone(),
+                            status: CardStatus::Waiting,
+                        });
+                        id.clone()
+                    }
+                };
+                turn.pending.push(Pending {
+                    request_id: card_id.clone(),
+                    tool_use_id: card_id.clone(),
+                    input: call.arguments.clone(),
+                });
+                self.assistant.held.push((card_id, call));
+                self.assistant.dock_open = true;
+                cx.notify();
+                return;
+            }
+        }
+        self.run_tool_now(call, cx);
+    }
+
+    fn run_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
         if call.name == "get_view" {
             let doc = self.editor.doc.clone();
             let args = call.arguments.clone();
@@ -875,12 +977,24 @@ impl EditorView {
             Some(_) => return,
             None => std::mem::take(&mut turn.pending),
         };
+        let mut release: Vec<(bool, RelayCall)> = Vec::new();
         for p in picked {
             if !allow && let Some(c) = turn.cards.iter_mut().find(|c| c.id == p.tool_use_id) {
                 c.status = CardStatus::Skipped;
             }
             if allow && let Some(c) = turn.cards.iter_mut().find(|c| c.id == p.tool_use_id) {
                 c.status = CardStatus::Running;
+            }
+            // A call held at the relay runs (or is refused) here.
+            if let Some(i) = self
+                .assistant
+                .held
+                .iter()
+                .position(|(id, _)| *id == p.tool_use_id)
+            {
+                let (_, call) = self.assistant.held.remove(i);
+                release.push((allow, call));
+                continue;
             }
             if let Some(s) = &mut self.assistant.session {
                 let r = if allow {
@@ -893,8 +1007,18 @@ impl EditorView {
                     )
                 };
                 if let Err(e) = r {
-                    self.status = Some((format!("Could not reach Claude Code: {e}").into(), true));
+                    self.status =
+                        Some((format!("Could not reach the assistant: {e}").into(), true));
                 }
+            }
+        }
+        for (allow, call) in release {
+            if allow {
+                self.run_tool_now(call, cx);
+            } else {
+                call.reply(emulsion_mcp::server::ToolResult::error(
+                    "The person skipped this change. Do not retry it.",
+                ));
             }
         }
         cx.notify();
@@ -966,11 +1090,12 @@ impl EditorView {
         let bar = self.ask.as_ref()?;
         let jev = app_state::settings(cx).jev_key().is_some();
         let cli = matches!(app_state::cli(cx), CliStatus::Found { .. });
-        let route = match (jev, cli) {
-            (true, true) => "Jev plans simple requests · Claude Code takes the rest",
-            (true, false) => "Jev plans requests · no assistant for the rest",
-            (false, true) => "simple requests resolve offline · Claude Code takes the rest",
-            (false, false) => "simple requests resolve offline",
+        let label = provider(cx).label;
+        let route: String = match (jev, cli) {
+            (true, true) => format!("Jev plans simple requests · {label} takes the rest"),
+            (true, false) => "Jev plans requests · no assistant for the rest".into(),
+            (false, true) => format!("simple requests resolve offline · {label} takes the rest"),
+            (false, false) => "simple requests resolve offline".into(),
         };
         Some(
             div()

@@ -17,8 +17,10 @@ fn is_identity_8(t: &dyn TransformExecutor<u8>) -> bool {
     let mut out = [0u8; 24];
     t.transform(&probe, &mut out).is_ok()
         && probe
-            .chunks_exact(4)
-            .zip(out.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(out.as_chunks::<4>().0)
             .all(|(a, b)| (0..3).all(|i| (a[i] as i32 - b[i] as i32).abs() <= 1))
 }
 
@@ -45,7 +47,12 @@ pub fn to_srgb_8(icc: &[u8], rgba: &mut [u8]) -> bool {
         return false;
     }
     // Alpha is not part of the colour transform; keep the original.
-    for (o, i) in out.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+    for (o, i) in out
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(rgba.as_chunks::<4>().0)
+    {
         o[3] = i[3];
     }
     rgba.copy_from_slice(&out);
@@ -79,7 +86,12 @@ pub fn to_srgb_16(icc: &[u8], rgba: &mut [u16]) -> bool {
     if t.transform(rgba, &mut out).is_err() {
         return false;
     }
-    for (o, i) in out.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+    for (o, i) in out
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(rgba.as_chunks::<4>().0)
+    {
         o[3] = i[3];
     }
     rgba.copy_from_slice(&out);

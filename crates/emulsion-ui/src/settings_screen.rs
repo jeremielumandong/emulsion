@@ -9,13 +9,6 @@ use gpui_kit::component::input::Input;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-const MODELS: [(&str, Option<&str>); 4] = [
-    ("CLI default", None),
-    ("sonnet", Some("sonnet")),
-    ("opus", Some("opus")),
-    ("haiku", Some("haiku")),
-];
-
 fn tier(n: u8, title: &str, on: bool, state: &str, p: &Palette) -> Div {
     div()
         .flex()
@@ -80,8 +73,9 @@ impl Workspace {
                 .child(t.to_string())
         };
 
+        let prov = emulsion_assistant::provider::by_id(&s.provider);
         let (cli_on, cli_state, cli_line) = match &cli {
-            CliStatus::Checking => (false, "checking", "Looking for Claude Code…".to_string()),
+            CliStatus::Checking => (false, "checking", format!("Looking for {}…", prov.label)),
             CliStatus::Found { path, version } => {
                 (true, "on", format!("{} · {}", version, path.display()))
             }
@@ -89,11 +83,15 @@ impl Workspace {
                 false,
                 "not found",
                 format!(
-                    "Claude Code was not found. Install it with: {}",
-                    emulsion_assistant::provider::default_provider().install_hint
+                    "{} was not found. Install it with: {}",
+                    prov.label, prov.install_hint
                 ),
             ),
         };
+        let installed: Vec<&'static str> = emulsion_assistant::provider::installed()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
 
         let cli_path = self.settings_inputs.as_ref().map(|i| i.0.clone());
         let jev_input = self.settings_inputs.as_ref().map(|i| i.1.clone());
@@ -138,7 +136,34 @@ impl Workspace {
             .child(
                 section(&p)
                     .child(tier(2, "Coding CLI assistant", cli_on, cli_state, &p))
-                    .child(body("Multi-step requests from Ctrl+K go to Claude Code, which can only use Emulsion's tools. Every change it proposes is shown as an Apply / Skip card unless you turn on auto-apply.", &p))
+                    .child(body("Multi-step requests from Ctrl+K go to a coding CLI that can only use Emulsion's tools. Every change it proposes is shown as an Apply / Skip card unless you turn on auto-apply. Claude Code asks before each tool; Codex, OpenCode and Kimi run one process per request and Emulsion holds their changes for you instead.", &p))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(mono("assistant", 10., p.muted))
+                            .children(emulsion_assistant::provider::PROVIDERS.iter().map(|pr| {
+                                let on = s.provider == pr.id;
+                                let here = installed.contains(&pr.id);
+                                let id = pr.id;
+                                chip(
+                                    SharedString::from(format!("prov-{}", pr.id)),
+                                    if here { pr.label.to_string() } else { format!("{} (not installed)", pr.label) },
+                                    on,
+                                    &p,
+                                )
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    app_state::update_settings(cx, |s| {
+                                        s.provider = id.into();
+                                        s.model = None;
+                                        s.cli_path = None;
+                                    });
+                                    app_state::detect_cli(cx);
+                                }))
+                            })),
+                    )
                     .child(mono(cli_line, 10.5, if cli_on { p.ink } else { p.accent }))
                     .child(
                         div()
@@ -161,7 +186,7 @@ impl Workspace {
                             .items_center()
                             .gap(px(8.))
                             .child(mono("model", 10., p.muted))
-                            .children(MODELS.iter().map(|(label, value)| {
+                            .children(prov.models.iter().map(|(label, value)| {
                                 let on = s.model.as_deref() == *value;
                                 let v = value.map(str::to_string);
                                 chip(SharedString::from(format!("model-{label}")), *label, on, &p).on_click(cx.listener(move |_, _, _, cx| {

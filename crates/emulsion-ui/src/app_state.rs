@@ -49,7 +49,7 @@ pub fn cli(cx: &App) -> CliStatus {
 pub fn detect_cli(cx: &mut App) {
     cx.global_mut::<Capabilities>().cli = CliStatus::Checking;
     let explicit = settings(cx).cli_path.clone();
-    let binary = emulsion_assistant::provider::default_provider().binary;
+    let binary = emulsion_assistant::provider::by_id(&settings(cx).provider).binary;
     cx.spawn(async move |cx| {
         let found = cx
             .background_spawn(async move {
