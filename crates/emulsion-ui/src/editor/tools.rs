@@ -33,6 +33,8 @@ pub enum PaintKind {
     Smudge,
     Bucket,
     Gradient,
+    /// Push, twirl, pinch and expand the pixels themselves.
+    Liquify,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -73,6 +75,8 @@ pub struct ToolState {
     pub alpha_lock: bool,
     /// Drawing guide and assist.
     pub guide: super::guides::GuideState,
+    /// What the Liquify brush does.
+    pub liquify: emulsion_raster::liquify::Mode,
     /// Show every brush setting, not just the four usual ones.
     pub brush_more: bool,
     /// When the current stroke started, for speed dynamics.
@@ -123,6 +127,7 @@ impl Default for ToolState {
             symmetry: 0,
             alpha_lock: false,
             guide: Default::default(),
+            liquify: emulsion_raster::liquify::Mode::Push,
             brush_more: false,
             stroke_started: None,
             quick_shape: true,
@@ -149,6 +154,14 @@ pub enum ToolDrag {
         label: &'static str,
         /// The stroke paints the node's mask; the raster is a grey view of it.
         mask: bool,
+    },
+    /// Liquify: the layer as it was when the tool went down (for Restore)
+    /// and the last dab position in layer pixels.
+    Liquify {
+        id: NodeId,
+        original: Arc<Raster>,
+        to_local: DAffine2,
+        last: (f32, f32),
     },
     Marquee {
         start: (f64, f64),
@@ -577,6 +590,7 @@ impl EditorView {
                     PaintKind::Gradient => {
                         self.drag = Some(Drag::Tool(ToolDrag::Gradient { start: d, end: d }))
                     }
+                    PaintKind::Liquify => self.start_liquify(d, cx),
                 }
             }
             Tool::Heal => self.start_stroke(
@@ -737,6 +751,62 @@ impl EditorView {
         if self.tools.quick_shape && !heal {
             self.watch_quick_shape(cx);
         }
+    }
+
+    fn start_liquify(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
+        let Some(id) = self.paint_target(cx) else {
+            return;
+        };
+        let Some((raster, to_doc)) = self.target_raster(id) else {
+            return;
+        };
+        let to_local = to_doc.inverse();
+        let p = to_local.transform_point2(dvec2(d.0, d.1));
+        self.editor.begin("Liquify");
+        self.drag = Some(Drag::Tool(ToolDrag::Liquify {
+            id,
+            original: raster,
+            to_local,
+            last: (p.x as f32, p.y as f32),
+        }));
+        // Twirl, pinch, expand and restore act on the press too.
+        if self.tools.liquify != emulsion_raster::liquify::Mode::Push {
+            self.liquify_to(d, cx);
+        }
+    }
+
+    /// One Liquify dab at document point `d`.
+    fn liquify_to(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
+        let Some(Drag::Tool(ToolDrag::Liquify {
+            id,
+            original,
+            to_local,
+            last,
+        })) = &mut self.drag
+        else {
+            return;
+        };
+        let (id, original) = (*id, original.clone());
+        let p = to_local.transform_point2(dvec2(d.0, d.1));
+        let p = (p.x as f32, p.y as f32);
+        let delta = (p.0 - last.0, p.1 - last.1);
+        *last = p;
+        let scale = to_local.matrix2.determinant().abs().sqrt().max(1e-6);
+        let Some(NodeKind::Raster { raster, .. }) = self.editor.doc.node(id).map(|n| &n.kind)
+        else {
+            return;
+        };
+        let radius = self.tools.brush.size * scale as f32 / 2.0;
+        let (r, dirty) = emulsion_raster::liquify::dab(
+            raster,
+            &original,
+            self.tools.liquify,
+            p,
+            radius,
+            self.tools.brush.flow,
+            delta,
+        );
+        self.commit_stroke(id, r, dirty, "Liquify", false, cx);
     }
 
     /// Poll the live stroke for a rest at its end; snap it when found.
@@ -1052,6 +1122,7 @@ impl EditorView {
                 let (r, dirty) = stroke.render(&current);
                 self.commit_stroke(id, r, dirty, label, mask, cx);
             }
+            ToolDrag::Liquify { .. } => self.liquify_to(d, cx),
             ToolDrag::Marquee { end, .. }
             | ToolDrag::Gradient { end, .. }
             | ToolDrag::Crop { end, .. }
@@ -1129,6 +1200,11 @@ impl EditorView {
                 if heal {
                     self.finish_heal(id, *stroke, cx);
                 } else if self.editor.in_transaction() {
+                    self.editor.end();
+                }
+            }
+            ToolDrag::Liquify { .. } => {
+                if self.editor.in_transaction() {
                     self.editor.end();
                 }
             }
@@ -2426,8 +2502,49 @@ impl EditorView {
                         ("pk-smudge", "smudge", PaintKind::Smudge),
                         ("pk-bucket", "bucket", PaintKind::Bucket),
                         ("pk-grad", "gradient", PaintKind::Gradient),
+                        ("pk-liquify", "liquify", PaintKind::Liquify),
                     ] {
                         v.push(self.mode_chip(id, t, k, cur, p, cx, |e, k, cx| e.set_paint(k, cx)));
+                    }
+                    if cur == PaintKind::Liquify {
+                        use emulsion_raster::liquify::Mode;
+                        let m = self.tools.liquify;
+                        for (id, k) in [
+                            ("lq-push", Mode::Push),
+                            ("lq-cw", Mode::Twirl { cw: true }),
+                            ("lq-ccw", Mode::Twirl { cw: false }),
+                            ("lq-pinch", Mode::Pinch),
+                            ("lq-expand", Mode::Expand),
+                            ("lq-restore", Mode::Restore),
+                        ] {
+                            v.push(
+                                chip(id, k.label(), m == k, p)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.tools.liquify = k;
+                                        cx.notify();
+                                    }))
+                                    .into_any_element(),
+                            );
+                        }
+                        let b = self.tools.brush;
+                        v.push(self.opt_slider(
+                            SliderKey::ToolSize,
+                            "size",
+                            format!("{:.0}px", b.size),
+                            ((b.size - 1.0) / 499.0).sqrt(),
+                            (1.0, 500.0, 1.0),
+                            p,
+                            cx,
+                        ));
+                        v.push(self.opt_slider(
+                            SliderKey::ToolFlow,
+                            "strength",
+                            format!("{:.0}%", b.flow * 100.0),
+                            b.flow,
+                            (1.0, 100.0, 1.0),
+                            p,
+                            cx,
+                        ));
                     }
                 }
                 let brushy = self.tool != Tool::Brush
@@ -2627,6 +2744,9 @@ impl EditorView {
                     Tool::Heal => "paint over a blemish",
                     _ if self.tools.paint == PaintKind::Smudge => {
                         "drag to smear the colour under the brush"
+                    }
+                    _ if self.tools.paint == PaintKind::Liquify => {
+                        "drag to move the pixels; restore paints them back"
                     }
                     _ if self.tools.mask_edit => "painting the mask: brush reveals, eraser hides",
                     _ => "alt-click picks a colour",

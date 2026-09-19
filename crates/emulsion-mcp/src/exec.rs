@@ -632,6 +632,93 @@ fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
     plan_from_script(doc, script)
 }
 
+/// The `liquify` tool: dabs along a document-space path.
+fn plan_liquify(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
+    use emulsion_raster::liquify::{Mode, dab};
+    let id = id_arg(args, "node")?;
+    let node = doc.node(id).ok_or_else(|| err(format!("no node {id}")))?;
+    let NodeKind::Raster { raster, placement } = &node.kind else {
+        return Err(err(format!("{} is not a pixel layer", node_label(doc, id))));
+    };
+    if node.locked {
+        return Err(err(format!("{} is locked", node_label(doc, id))));
+    }
+    let mode = match args.get("mode") {
+        None | Some(Value::Null) => Mode::Push,
+        Some(Value::String(m)) => Mode::parse(m).ok_or_else(|| {
+            err("mode must be push, twirl_cw, twirl_ccw, pinch, expand or restore")
+        })?,
+        _ => return Err(err("mode must be a string")),
+    };
+    let size = args.get("size").and_then(Value::as_f64).unwrap_or(80.0);
+    let strength = args.get("strength").and_then(Value::as_f64).unwrap_or(0.6);
+    if !(2.0..=2000.0).contains(&size) || !(0.0..=1.0).contains(&strength) {
+        return Err(err("size must be 2–2000 and strength 0–1"));
+    }
+    let pts = args
+        .get("points")
+        .and_then(Value::as_array)
+        .filter(|p| !p.is_empty() && p.len() <= 2000)
+        .ok_or_else(|| err("points must be 1–2000 [x, y] pairs"))?;
+    let to_doc = placement.to_doc(raster.width(), raster.height());
+    let to_local = to_doc.inverse();
+    let scale = to_local.matrix2.determinant().abs().sqrt().max(1e-6) as f32;
+    let mut path: Vec<(f32, f32)> = Vec::with_capacity(pts.len());
+    for p in pts {
+        let (Some(x), Some(y)) = (
+            p.get(0).and_then(Value::as_f64),
+            p.get(1).and_then(Value::as_f64),
+        ) else {
+            return Err(err("each point is [x, y]"));
+        };
+        let l = to_local.transform_point2(glam::dvec2(x, y));
+        path.push((l.x as f32, l.y as f32));
+    }
+    let radius = size as f32 * scale / 2.0;
+    // Dab every quarter radius along the path so pushes stay smooth.
+    let step = (radius * 0.25).max(1.0);
+    let mut dabs: Vec<((f32, f32), (f32, f32))> = vec![(path[0], (0.0, 0.0))];
+    for w in path.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let len = (b.0 - a.0).hypot(b.1 - a.1);
+        let n = (len / step).ceil().max(1.0) as usize;
+        for i in 1..=n {
+            let f = i as f32 / n as f32;
+            let p = (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
+            let prev = dabs.last().unwrap().0;
+            dabs.push((p, (p.0 - prev.0, p.1 - prev.1)));
+        }
+    }
+    if dabs.len() > 20_000 {
+        return Err(err("path too long for one call; split it"));
+    }
+    let mut current = (**raster).clone();
+    let mut dirty = emulsion_raster::IRect::default();
+    for (c, delta) in dabs {
+        let (r, d) = dab(&current, raster, mode, c, radius, strength as f32, delta);
+        current = r;
+        dirty = dirty.union(&d);
+    }
+    if dirty.is_empty() {
+        return Err(err("the path missed the layer"));
+    }
+    Ok(Planned {
+        commands: vec![Command::ReplacePixels {
+            id,
+            raster: Arc::new(current),
+            dirty,
+            label: "Liquify".into(),
+        }],
+        message: format!(
+            "Liquified ({}) {} along {} point{}",
+            mode.label(),
+            node_label(doc, id),
+            pts.len(),
+            if pts.len() == 1 { "" } else { "s" }
+        ),
+    })
+}
+
 fn plan_from_script(doc: &Document, script: PaintScript) -> Result<Planned, ToolResult> {
     let NodeKind::Raster { raster, .. } = &doc.node(script.id).expect("checked").kind else {
         unreachable!()
@@ -1432,6 +1519,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             })
         }
         "paint" => plan_paint(doc, args),
+        "liquify" => plan_liquify(doc, args),
         "hatch" => {
             let script = paint_script_for(doc, "hatch", args)?;
             plan_from_script(doc, script)
@@ -3114,6 +3202,44 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .to_string()
+    }
+
+    #[test]
+    fn liquify_tool_moves_pixels() {
+        let mut d = Document::new(100, 100);
+        let mut px = vec![[0u16, 0, 0, 65535]; 100 * 100];
+        for (i, p) in px.iter_mut().enumerate() {
+            if i % 100 >= 50 {
+                *p = [65535, 65535, 65535, 65535];
+            }
+        }
+        let r = Raster::transparent(100, 100)
+            .write_rect(emulsion_raster::IRect::new(0, 0, 100, 100), &px);
+        Command::AddNode {
+            node: Box::new(Node::raster(0, "pic", Arc::new(r), Placement::default())),
+            slot: Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap();
+        let mut e = Editor::new(d, None);
+        let r = execute(
+            &mut e,
+            "liquify",
+            &json!({ "node": 1, "mode": "push", "size": 40, "strength": 1.0,
+                     "points": [[40, 50], [70, 50]] }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let px = match &e.doc.node(1).unwrap().kind {
+            NodeKind::Raster { raster, .. } => raster.get(58, 50)[0],
+            _ => 65535,
+        };
+        assert!(px < 30000, "edge pushed right: {px}");
+        let r = execute(
+            &mut e,
+            "liquify",
+            &json!({ "node": 1, "mode": "melt", "points": [[1, 1]] }),
+        );
+        assert!(r.is_error);
     }
 
     #[test]

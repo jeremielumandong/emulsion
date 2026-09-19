@@ -12,6 +12,7 @@ pub mod fill;
 pub mod geom;
 pub mod image;
 pub mod library;
+pub mod liquify;
 pub mod paint;
 pub mod quickshape;
 pub mod select;

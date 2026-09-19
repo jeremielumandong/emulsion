@@ -47,6 +47,9 @@ impl Default for GuideState {
     }
 }
 
+/// A document-space polyline.
+pub(crate) type Polyline = Vec<(f64, f64)>;
+
 /// Screen pixels within which a vanishing point can be grabbed.
 const HANDLE_PX: f64 = 10.0;
 /// How far (screen px) the hand moves before a stroke's direction is chosen.
@@ -298,7 +301,7 @@ impl EditorView {
     }
 
     /// Guide geometry for the overlay: lines and vanishing-point handles.
-    pub(crate) fn guide_overlay(&self) -> (Vec<Vec<(f64, f64)>>, Vec<(f64, f64)>) {
+    pub(crate) fn guide_overlay(&self) -> (Vec<Polyline>, Vec<(f64, f64)>) {
         let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
         let mut lines = self.tools.guide.kind.lines(w, h);
         // Symmetry axes show while mirroring or radial symmetry is on.

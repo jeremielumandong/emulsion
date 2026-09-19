@@ -34,6 +34,7 @@ pub const HEAVY: &[&str] = &[
     "content_aware_fill",
     "paint",
     "hatch",
+    "liquify",
     "add_filter",
     "set_filter",
     "remove_filter",
@@ -552,6 +553,22 @@ pub fn definitions() -> Vec<ToolDef> {
                 }
             }),
             &["node", "strokes"],
+        ),
+        def(
+            "liquify",
+            concat!(
+                "Liquify a pixel layer along a path (document pixels): push drags the pixels under the brush with it; ",
+                "twirl_cw / twirl_ccw rotate, pinch pulls in, expand pushes out, restore paints the original pixels back. ",
+                "size is the brush diameter, strength 0-1. One undo step per call."
+            ),
+            json!({
+                "node": node(),
+                "mode": { "type": "string", "enum": ["push", "twirl_cw", "twirl_ccw", "pinch", "expand", "restore"], "default": "push" },
+                "points": { "type": "array", "minItems": 1, "maxItems": 2000, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } },
+                "size": { "type": "number", "minimum": 2, "maximum": 2000, "default": 80 },
+                "strength": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.6 }
+            }),
+            &["node", "points"],
         ),
         def("select_all", "Select the whole canvas.", json!({}), &[]),
         def("deselect", "Clear the selection.", json!({}), &[]),
