@@ -8,8 +8,11 @@ pub mod adjust;
 pub mod blend;
 pub mod color;
 pub mod composite;
+pub mod fill;
 pub mod geom;
 pub mod image;
+pub mod paint;
+pub mod select;
 pub mod tile;
 
 pub use adjust::Adjustment;

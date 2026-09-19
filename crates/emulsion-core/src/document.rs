@@ -51,6 +51,8 @@ pub struct Document {
     /// Bottom to top.
     pub nodes: Vec<Node>,
     pub next_id: NodeId,
+    /// Document-space coverage; `None` means no selection (everything).
+    pub selection: Option<Arc<emulsion_raster::Mask>>,
 }
 
 impl PartialEq for Document {
@@ -60,6 +62,11 @@ impl PartialEq for Document {
             && self.resolution == o.resolution
             && self.blend_space == o.blend_space
             && self.nodes == o.nodes
+            && match (&self.selection, &o.selection) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
     }
 }
 
@@ -80,6 +87,7 @@ impl Document {
             blend_space: BlendSpace::Linear,
             nodes: Vec::new(),
             next_id: 1,
+            selection: None,
         }
     }
 

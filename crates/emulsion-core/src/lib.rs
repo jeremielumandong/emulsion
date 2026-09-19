@@ -5,10 +5,11 @@
 
 pub mod command;
 pub mod document;
+pub mod geometry;
 pub mod history;
 pub mod node;
 
-pub use command::{Command, CommandError};
+pub use command::{Command, CommandError, Dirty};
 pub use document::{Document, DocumentError, PanelRow};
 pub use history::{Editor, History};
 pub use node::{Node, NodeId, NodeKind};

@@ -5,7 +5,7 @@
 //! kilobytes unless it replaced pixels. Undo swaps snapshots; there are no
 //! inverse commands to get wrong.
 
-use crate::command::{Command, CommandError};
+use crate::command::{Command, CommandError, Dirty};
 use crate::document::Document;
 use crate::node::NodeId;
 use std::collections::HashSet;
@@ -60,6 +60,8 @@ pub struct Editor {
     pub committed: Document,
     pub committed_revision: u64,
     txn: Option<(String, Document, u64, u32)>,
+    /// What changed on screen since the last `take_dirty`.
+    dirty: Dirty,
 }
 
 impl Editor {
@@ -74,6 +76,7 @@ impl Editor {
             path,
             committed_revision: 1,
             txn: None,
+            dirty: Dirty::All,
         }
     }
 
@@ -97,7 +100,21 @@ impl Editor {
     /// Run one command as its own history step (or inside the open
     /// transaction). View-only commands change the document without
     /// recording a step.
+    /// Region changed since the last call (renderers re-render only this).
+    pub fn take_dirty(&mut self) -> Dirty {
+        std::mem::replace(&mut self.dirty, Dirty::Nothing)
+    }
+
     pub fn execute(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
+        let d = cmd.dirty(&self.doc);
+        let r = self.execute_inner(cmd);
+        if r.is_ok() {
+            self.dirty = self.dirty.union(d);
+        }
+        r
+    }
+
+    fn execute_inner(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
         if self.txn.is_some() || cmd.is_view_only() {
             let before = self.doc.clone();
             let out = cmd.apply(&mut self.doc)?;
@@ -162,6 +179,7 @@ impl Editor {
         let Some(step) = self.history.undo.pop() else {
             return false;
         };
+        self.dirty = Dirty::All;
         let current = std::mem::replace(&mut self.doc, step.before);
         let rev = self.revision;
         self.revision = step.revision_before;
@@ -178,6 +196,7 @@ impl Editor {
         let Some(step) = self.history.redo.pop() else {
             return false;
         };
+        self.dirty = Dirty::All;
         let current = std::mem::replace(&mut self.doc, step.before);
         let rev = self.revision;
         self.revision = step.revision_before;
@@ -295,6 +314,33 @@ mod tests {
         assert_eq!(e.history.len(), 1, "no-op is not a step");
         e.undo();
         assert_eq!(e.doc.node(id).unwrap().opacity, 1.0);
+    }
+
+    #[test]
+    fn dirty_regions_accumulate_and_undo_is_everything() {
+        let (mut e, id) = editor();
+        let _ = e.take_dirty();
+        e.execute(Command::Rename {
+            id,
+            name: "x".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            e.take_dirty(),
+            Dirty::Nothing,
+            "renaming changes nothing on screen"
+        );
+        let r = std::sync::Arc::new(Raster::transparent(32, 32));
+        e.execute(Command::ReplacePixels {
+            id,
+            raster: r,
+            dirty: emulsion_raster::IRect::new(2, 3, 4, 5),
+            label: "Paint".into(),
+        })
+        .unwrap();
+        assert!(matches!(e.take_dirty(), Dirty::Rect(r) if r.x <= 2 && r.right() >= 6));
+        e.undo();
+        assert_eq!(e.take_dirty(), Dirty::All);
     }
 
     #[test]

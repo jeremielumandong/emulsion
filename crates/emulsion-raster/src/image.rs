@@ -148,6 +148,106 @@ impl<P: Pix> Plane<P> {
         self.mips.get_mut().clear();
     }
 
+    /// A copy with some level-0 tiles replaced (`None` = all fill). Cached
+    /// mip tiles that do not cover a changed tile are kept, so an edit costs
+    /// only the reductions above the tiles it touched.
+    pub fn with_changes(&self, changes: Vec<(TileCoord, Option<Vec<P>>)>) -> Self {
+        let mut tiles = self.tiles.clone();
+        let mut stale = std::collections::HashSet::new();
+        let top = self.max_level() + 1;
+        for (c, px) in changes {
+            for k in 1..=top {
+                stale.insert((k, TileCoord::new(c.x >> k, c.y >> k)));
+            }
+            match px {
+                Some(px) if px.iter().any(|p| *p != self.fill) => {
+                    tiles.insert(c, px.into());
+                }
+                _ => {
+                    tiles.remove(&c);
+                }
+            }
+        }
+        let mips = self
+            .mips
+            .lock()
+            .iter()
+            .filter(|(k, _)| !stale.contains(k))
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        Self {
+            width: self.width,
+            height: self.height,
+            fill: self.fill,
+            tiles,
+            mips: Mutex::new(mips),
+        }
+    }
+
+    /// A dense copy of `rect` (clipped to the plane), row-major, with the
+    /// rect's size; pixels outside the plane read as `fill`.
+    pub fn read_rect(&self, rect: IRect) -> Vec<P> {
+        let mut out = vec![self.fill; (rect.w.max(0) * rect.h.max(0)) as usize];
+        let clip = rect.intersect(&self.bounds());
+        if clip.is_empty() {
+            return out;
+        }
+        let t = TILE as i32;
+        for ty in clip.y.div_euclid(t)..=(clip.bottom() - 1).div_euclid(t) {
+            for tx in clip.x.div_euclid(t)..=(clip.right() - 1).div_euclid(t) {
+                let Some(tile) = self.tiles.get(&TileCoord::new(tx, ty)) else {
+                    continue;
+                };
+                let tr = IRect::new(tx * t, ty * t, t, t).intersect(&clip);
+                for y in tr.y..tr.bottom() {
+                    let src = ((y - ty * t) * t + (tr.x - tx * t)) as usize;
+                    let dst = ((y - rect.y) * rect.w + (tr.x - rect.x)) as usize;
+                    out[dst..dst + tr.w as usize].copy_from_slice(&tile[src..src + tr.w as usize]);
+                }
+            }
+        }
+        out
+    }
+
+    /// A copy with a dense `rect` written in (clipped to the plane).
+    pub fn write_rect(&self, rect: IRect, px: &[P]) -> Self {
+        assert_eq!(px.len(), (rect.w * rect.h) as usize);
+        let clip = rect.intersect(&self.bounds());
+        if clip.is_empty() {
+            return self.clone();
+        }
+        let t = TILE as i32;
+        let mut changes = Vec::new();
+        for ty in clip.y.div_euclid(t)..=(clip.bottom() - 1).div_euclid(t) {
+            for tx in clip.x.div_euclid(t)..=(clip.right() - 1).div_euclid(t) {
+                let c = TileCoord::new(tx, ty);
+                let mut tile: Vec<P> = match self.tiles.get(&c) {
+                    Some(t) => t.to_vec(),
+                    None => vec![self.fill; TILE_PX],
+                };
+                let tr = IRect::new(tx * t, ty * t, t, t).intersect(&clip);
+                for y in tr.y..tr.bottom() {
+                    let dst = ((y - ty * t) * t + (tr.x - tx * t)) as usize;
+                    let src = ((y - rect.y) * rect.w + (tr.x - rect.x)) as usize;
+                    tile[dst..dst + tr.w as usize].copy_from_slice(&px[src..src + tr.w as usize]);
+                }
+                changes.push((c, Some(tile)));
+            }
+        }
+        self.with_changes(changes)
+    }
+
+    /// Bounding box of stored (non-fill) tiles, in pixels.
+    pub fn tile_bounds(&self) -> IRect {
+        let t = TILE as i32;
+        self.tiles
+            .keys()
+            .fold(IRect::default(), |acc, c| {
+                acc.union(&IRect::new(c.x * t, c.y * t, t, t))
+            })
+            .intersect(&self.bounds())
+    }
+
     /// Tile at any mip level. `None` means every pixel is `fill`.
     pub fn tile(&self, level: u32, c: TileCoord) -> Option<Tile<P>> {
         if level == 0 {
@@ -383,6 +483,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn edits_keep_unaffected_mips() {
+        // Level-2 tile (0,0) covers pixels 0..1024; the edit lands at 1900.
+        let r = Raster::from_fn(2048, 1024, [0; 4], |x, _| {
+            [(x % 1000) as u16 * 60, 0, 0, 65535]
+        });
+        let far = r.tile(2, TileCoord::new(0, 0)).unwrap();
+        let near = r.tile(2, TileCoord::new(0, 0)).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&far, &near));
+        let edited = r.write_rect(
+            IRect::new(1900, 900, 10, 10),
+            &vec![[65535, 65535, 65535, 65535]; 100],
+        );
+        let kept = edited.tile(2, TileCoord::new(0, 0)).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&far, &kept),
+            "untouched region reuses its mip"
+        );
+        assert!(!std::sync::Arc::ptr_eq(
+            &r.tile(2, TileCoord::new(1, 0)).unwrap(),
+            &edited.tile(2, TileCoord::new(1, 0)).unwrap()
+        ));
+        assert_eq!(edited.get(1905, 905), [65535; 4]);
+        assert_eq!(edited.read_rect(IRect::new(1899, 899, 2, 2))[3], [65535; 4]);
+        assert_eq!(r.get(1905, 905)[1], 0, "the original is unchanged");
     }
 
     #[test]

@@ -4,7 +4,8 @@
 
 use crate::document::Document;
 use crate::node::{Node, NodeId, NodeKind};
-use emulsion_raster::{Adjustment, BlendMode, Placement};
+use emulsion_raster::{Adjustment, BlendMode, IRect, Mask, Placement, Raster};
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CommandError {
@@ -115,6 +116,57 @@ pub enum Command {
     Ungroup {
         id: NodeId,
     },
+    /// Set or clear the selection (document-space coverage).
+    SetSelection {
+        selection: Option<Arc<Mask>>,
+    },
+    /// Replace a pixel node's pixels. `dirty` is the changed area in the
+    /// node's own pixel space, for re-rendering only what changed.
+    ReplacePixels {
+        id: NodeId,
+        raster: Arc<Raster>,
+        dirty: IRect,
+        label: String,
+    },
+    /// Set or clear a node's mask.
+    SetMask {
+        id: NodeId,
+        mask: Option<Arc<Mask>>,
+    },
+    /// Rotate everything by `rotation` degrees clockwise about the canvas
+    /// centre, then crop to `rect` (which may extend past the canvas).
+    /// Pixel nodes are moved, never resampled.
+    Crop {
+        rect: IRect,
+        rotation: f64,
+    },
+    /// Scale the canvas and every placement. Pixel nodes keep their source
+    /// pixels, so this is lossless and reversible.
+    ImageSize {
+        width: u32,
+        height: u32,
+    },
+}
+
+/// What a command changed, for re-rendering.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Dirty {
+    /// Nothing visible.
+    Nothing,
+    /// Only this document-space rectangle.
+    Rect(IRect),
+    /// Everything.
+    All,
+}
+
+impl Dirty {
+    pub fn union(self, o: Dirty) -> Dirty {
+        match (self, o) {
+            (Dirty::Nothing, x) | (x, Dirty::Nothing) => x,
+            (Dirty::Rect(a), Dirty::Rect(b)) => Dirty::Rect(a.union(&b)),
+            _ => Dirty::All,
+        }
+    }
 }
 
 impl Command {
@@ -140,6 +192,62 @@ impl Command {
             Command::SetCollapsed { .. } => "Collapse".into(),
             Command::Group { .. } => "Group".into(),
             Command::Ungroup { .. } => "Ungroup".into(),
+            Command::SetSelection { selection } => if selection.is_some() {
+                "Select"
+            } else {
+                "Deselect"
+            }
+            .into(),
+            Command::ReplacePixels { label, .. } => label.clone(),
+            Command::SetMask { mask, .. } => if mask.is_some() {
+                "Mask"
+            } else {
+                "Remove mask"
+            }
+            .into(),
+            Command::Crop { rotation, .. } => if *rotation != 0.0 {
+                "Straighten and crop"
+            } else {
+                "Crop"
+            }
+            .into(),
+            Command::ImageSize { .. } => "Image size".into(),
+        }
+    }
+
+    /// The region this command changes on screen, given the document before.
+    pub fn dirty(&self, before: &Document) -> Dirty {
+        match self {
+            Command::SetSelection { .. }
+            | Command::SetCollapsed { .. }
+            | Command::SetLocked { .. }
+            | Command::Rename { .. } => Dirty::Nothing,
+            Command::ReplacePixels { id, dirty, .. } => match before.node(*id).map(|n| &n.kind) {
+                Some(NodeKind::Raster { placement, .. }) if !dirty.is_empty() => {
+                    let m = placement.to_doc(1, 1);
+                    let corners = [
+                        (dirty.x, dirty.y),
+                        (dirty.right(), dirty.y),
+                        (dirty.x, dirty.bottom()),
+                        (dirty.right(), dirty.bottom()),
+                    ]
+                    .map(|(x, y)| m.transform_point2(glam::dvec2(x as f64, y as f64)));
+                    let (mut lo, mut hi) = (corners[0], corners[0]);
+                    for c in &corners[1..] {
+                        lo = lo.min(*c);
+                        hi = hi.max(*c);
+                    }
+                    let (x0, y0) = (lo.x.floor() as i32 - 1, lo.y.floor() as i32 - 1);
+                    Dirty::Rect(IRect::new(
+                        x0,
+                        y0,
+                        hi.x.ceil() as i32 + 1 - x0,
+                        hi.y.ceil() as i32 + 1 - y0,
+                    ))
+                }
+                _ => Dirty::All,
+            },
+            _ => Dirty::All,
         }
     }
 
@@ -393,6 +501,50 @@ impl Command {
                 }
                 fix_clips(doc);
                 Ok(Some(gid))
+            }
+            Command::SetSelection { selection } => {
+                if let Some(m) = selection
+                    && (m.width() != doc.width || m.height() != doc.height)
+                {
+                    return Err(CommandError::Invalid(
+                        crate::document::DocumentError::BadValue(0, "selection size"),
+                    ));
+                }
+                doc.selection = selection.clone();
+                Ok(None)
+            }
+            Command::ReplacePixels { id, raster, .. } => {
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                match &mut n.kind {
+                    NodeKind::Raster { raster: r, .. } => {
+                        *r = raster.clone();
+                        Ok(None)
+                    }
+                    _ => Err(CommandError::NoSuchParam(*id, "pixels".into())),
+                }
+            }
+            Command::SetMask { id, mask } => {
+                let n = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let (w, h) = match &n.kind {
+                    NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
+                    _ => (doc.width, doc.height),
+                };
+                if let Some(m) = mask
+                    && (m.width() != w || m.height() != h)
+                {
+                    return Err(CommandError::Invalid(
+                        crate::document::DocumentError::BadValue(*id, "mask size"),
+                    ));
+                }
+                set(doc, *id, |n| n.mask = mask.clone())
+            }
+            Command::Crop { rect, rotation } => {
+                crate::geometry::crop(doc, *rect, *rotation);
+                Ok(None)
+            }
+            Command::ImageSize { width, height } => {
+                crate::geometry::resize(doc, *width, *height);
+                Ok(None)
             }
             Command::Ungroup { id } => {
                 let g = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?.clone();
