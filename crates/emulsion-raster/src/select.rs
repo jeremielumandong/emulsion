@@ -432,10 +432,7 @@ pub fn bounds(m: &Mask) -> IRect {
 /// One row of a running box blur, edges clamped.
 fn box_blur_line(src: &[f32], dst: &mut [f32], r: usize) {
     let n = src.len();
-    let mut sum = 0.0;
-    for i in 0..=r.min(n - 1) {
-        sum += src[i];
-    }
+    let mut sum: f32 = src[..=r.min(n - 1)].iter().sum();
     sum += src[0] * r as f32;
     let inv = 1.0 / (2 * r + 1) as f32;
     for i in 0..n {

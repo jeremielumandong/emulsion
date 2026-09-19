@@ -69,16 +69,30 @@ fn main() {
     timed("Document::clone", || doc.clone());
     let mut b = Brush::default();
     b.size = 80.0;
-    let stroke_r = timed("brush stroke 300 pts size 80 (render)", || {
+    let mut s = timed("brush stroke 300 pts size 80 (stamp)", || {
         let mut s = Stroke::new(base.clone(), b, Ink::Color([0.8, 0.2, 0.1, 1.0]), None);
         for i in 0..300 {
             let t = i as f32 / 299.0;
             s.point(200.0 + t * 5000.0, 2000.0 + (t * 20.0).sin() * 800.0);
         }
         s.finish();
-        s.render(&base).0
+        s
     });
-    let _ = stroke_r;
+    timed("brush stroke (render into layer)", || s.render(&base).0);
+    let mut soft = Brush::default();
+    soft.size = 80.0;
+    soft.hardness = 0.2;
+    soft.grain_strength = 0.6;
+    let mut s2 = timed("textured soft stroke 300 pts (stamp)", || {
+        let mut s = Stroke::new(base.clone(), soft, Ink::Color([0.1, 0.2, 0.8, 1.0]), None);
+        for i in 0..300 {
+            let t = i as f32 / 299.0;
+            s.point(200.0 + t * 5000.0, 1000.0 + (t * 20.0).cos() * 600.0);
+        }
+        s.finish();
+        s
+    });
+    timed("textured soft stroke (render)", || s2.render(&base).0);
     let sel = timed("select::rect + feather 12 px (full)", || {
         let m = select::rect(w, h, 1000.0, 1000.0, 3000.0, 2000.0);
         select::feather(&m, 12.0)
