@@ -104,6 +104,7 @@ pub(crate) enum SliderKey {
     ToolScatter,
     ToolSizeJitter,
     ToolColorJitter,
+    ToolTilt,
     PenWidth,
     /// Bounds slot for a node's curves editor.
     Curve(NodeId),
@@ -1203,6 +1204,10 @@ impl EditorView {
             }
             SliderKey::ToolColorJitter => {
                 self.tools.brush.color_jitter = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolTilt => {
+                self.tools.brush.tilt = v / 100.0;
                 cx.notify();
             }
             SliderKey::PenWidth => {

@@ -172,6 +172,10 @@ pub struct PaintScript {
     pub backdrop: Option<emulsion_raster::paint::Backdrop>,
     /// Layer pixels → document pixels.
     pub to_doc: glam::DAffine2,
+    /// Mirror axes through the canvas centre, in layer pixels.
+    pub mirror: (Option<f32>, Option<f32>),
+    /// Rotational symmetry about the canvas centre (layer pixels), copies.
+    pub radial: Option<((f32, f32), u32)>,
     pub label: String,
     pub message: String,
 }
@@ -182,6 +186,10 @@ impl PaintScript {
         let mut stroke = Stroke::new(base, s.brush, s.ink.clone(), self.clip.clone());
         if let Some(backdrop) = &self.backdrop {
             stroke.set_backdrop(backdrop.clone());
+        }
+        stroke.set_mirror(self.mirror.0, self.mirror.1);
+        if let Some((c, n)) = self.radial {
+            stroke.set_radial(c, n);
         }
         stroke
     }
@@ -357,6 +365,29 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
         Some(Value::Bool(value)) => *value,
         _ => return Err(err("sample_merged must be a boolean")),
     };
+    let alpha_lock = match args.get("alpha_lock") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        _ => return Err(err("alpha_lock must be a boolean")),
+    };
+    let (mirror_x, mirror_y) = match args.get("mirror") {
+        None | Some(Value::Null) => (false, false),
+        Some(Value::String(m)) => match m.as_str() {
+            "x" => (true, false),
+            "y" => (false, true),
+            "xy" | "both" => (true, true),
+            "none" | "" => (false, false),
+            _ => return Err(err("mirror must be \"x\", \"y\" or \"xy\"")),
+        },
+        _ => return Err(err("mirror must be \"x\", \"y\" or \"xy\"")),
+    };
+    let symmetry = match args.get("symmetry") {
+        None | Some(Value::Null) => 0,
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (2..=64).contains(n) || *n == 0 || *n == 1)
+            .ok_or_else(|| err("symmetry must be an integer 2–64"))? as u32,
+    };
     let id = id_arg(args, "node")?;
     let node = doc.node(id).ok_or_else(|| err(format!("no node {id}")))?;
     let NodeKind::Raster { raster, placement } = &node.kind else {
@@ -399,6 +430,23 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
                 }
             })
         });
+    let clip = if alpha_lock {
+        // Paint only where the layer already has pixels, at their coverage.
+        let base = raster.clone();
+        let sel = clip;
+        Some(Arc::new(move |x: i32, y: i32| {
+            if x < 0 || y < 0 || x >= base.width() as i32 || y >= base.height() as i32 {
+                return 0.0;
+            }
+            let a = base.get(x as u32, y as u32)[3] as f32 / 65535.0;
+            a * sel.as_ref().map_or(1.0, |c| c(x, y))
+        }) as emulsion_raster::paint::Clip)
+    } else {
+        clip
+    };
+    let centre =
+        to_local.transform_point2(glam::dvec2(doc.width as f64 / 2.0, doc.height as f64 / 2.0));
+    let centre = (centre.x as f32, centre.y as f32);
     let mut out = Vec::with_capacity(strokes.len());
     for (i, s) in strokes.iter().enumerate() {
         let settings = s.get("settings").or(args.get("settings"));
@@ -527,6 +575,8 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
         clip,
         backdrop: sample_merged.then(|| lower_layer_backdrop(doc, id, to_doc)),
         to_doc,
+        mirror: (mirror_x.then_some(centre.0), mirror_y.then_some(centre.1)),
+        radial: (symmetry >= 2).then_some((centre, symmetry)),
         label: format!("Paint ({count} stroke{plural})"),
         message: format!(
             "Painted {count} stroke{plural} on {} with {}",
@@ -3064,6 +3114,56 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .to_string()
+    }
+
+    #[test]
+    fn paint_symmetry_and_alpha_lock() {
+        let mut d = Document::new(200, 200);
+        Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "paint",
+                Arc::new(Raster::transparent(200, 200)),
+                Placement::default(),
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap();
+        let mut e = Editor::new(d, None);
+        let r = execute(
+            &mut e,
+            "paint",
+            &json!({ "node": 1, "brush": "Maru pen", "color": "#ff0000", "symmetry": 4,
+                     "settings": {"size": 8, "hardness": 1.0},
+                     "strokes": [{ "points": [[100, 40], [100, 60]] }] }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let px = |e: &Editor, x: u32, y: u32| match &e.doc.node(1).unwrap().kind {
+            NodeKind::Raster { raster, .. } => raster.get(x, y)[3],
+            _ => 0,
+        };
+        assert!(px(&e, 100, 50) > 0);
+        assert!(px(&e, 150, 100) > 0, "rotated copy");
+        assert!(px(&e, 50, 100) > 0);
+        assert_eq!(px(&e, 140, 140), 0);
+        // Alpha lock: a blue wash over the whole canvas only lands on the red.
+        let r = execute(
+            &mut e,
+            "paint",
+            &json!({ "node": 1, "brush": "Maru pen", "color": "#0000ff", "alpha_lock": true,
+                     "settings": {"size": 400, "hardness": 1.0},
+                     "strokes": [{ "points": [[100, 100], [101, 100]] }] }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        assert_eq!(px(&e, 140, 140), 0, "empty stays empty");
+        assert!(px(&e, 100, 50) > 0);
+        let r = execute(
+            &mut e,
+            "paint",
+            &json!({ "node": 1, "brush": "Maru pen", "color": "#0000ff", "mirror": "z", "strokes": [{ "points": [[1, 1]] }] }),
+        );
+        assert!(r.is_error);
     }
 
     #[test]

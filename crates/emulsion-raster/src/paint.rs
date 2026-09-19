@@ -103,6 +103,9 @@ pub struct Brush {
     pub taper_end: f32,
     /// Path smoothing, 0–1.
     pub stabilizer: f32,
+    /// How much pen tilt shapes the tip, 0–1: a tilted pen widens and
+    /// flattens the dab along the tilt, like the side of a pencil.
+    pub tilt: f32,
 
     // ── Jitter ──
     /// Random size variation, 0–1.
@@ -145,6 +148,7 @@ impl Default for Brush {
             speed_thins: 0.0,
             taper_start: 0.0,
             taper_end: 0.0,
+            tilt: 0.0,
             stabilizer: 0.0,
             size_jitter: 0.0,
             scatter: 0.0,
@@ -199,6 +203,7 @@ impl Brush {
         };
         self.grain_strength = u(self.grain_strength);
         self.relief = u(self.relief);
+        self.tilt = u(self.tilt);
         self.size_pressure = u(self.size_pressure);
         self.flow_pressure = u(self.flow_pressure);
         self.speed_thins = u(self.speed_thins);
@@ -249,6 +254,8 @@ struct Sample {
     x: f32,
     y: f32,
     pressure: f32,
+    /// Pen tilt in degrees from vertical, x and y.
+    tilt: (f32, f32),
 }
 
 /// Accumulated paint: premultiplied colour, alpha = coverage.
@@ -289,6 +296,8 @@ pub struct Stroke {
     /// Mirror axes in layer pixels.
     mirror_x: Option<f32>,
     mirror_y: Option<f32>,
+    /// Rotational symmetry: centre and number of copies.
+    radial: Option<((f32, f32), u32)>,
     finished: bool,
 }
 
@@ -453,6 +462,7 @@ impl Stroke {
             dabs: 0,
             mirror_x: None,
             mirror_y: None,
+            radial: None,
             finished: false,
         }
     }
@@ -480,6 +490,12 @@ impl Stroke {
     pub fn set_mirror(&mut self, x: Option<f32>, y: Option<f32>) {
         self.mirror_x = x;
         self.mirror_y = y;
+    }
+
+    /// Also stamp every dab rotated `n` ways around `center` (mandalas).
+    /// `n < 2` turns it off.
+    pub fn set_radial(&mut self, center: (f32, f32), n: u32) {
+        self.radial = (n >= 2).then_some((center, n.min(64)));
     }
 
     fn rand(&mut self) -> f32 {
@@ -533,11 +549,11 @@ impl Stroke {
         acc
     }
 
-    /// Stamp one dab and its mirrors.
-    fn dab(&mut self, cx: f32, cy: f32, pressure: f32, taper: f32) {
+    /// Stamp one dab and its mirrors and rotations.
+    fn dab(&mut self, cx: f32, cy: f32, pressure: f32, tilt: (f32, f32), taper: f32) {
         let b = self.brush;
         let jitter = 1.0 - b.size_jitter * self.rand();
-        let size = b.size * (1.0 - b.size_pressure * (1.0 - pressure)) * taper * jitter;
+        let mut size = b.size * (1.0 - b.size_pressure * (1.0 - pressure)) * taper * jitter;
         let flow = b.flow * (1.0 - b.flow_pressure * (1.0 - pressure));
         let (sx, sy) = if b.scatter > 0.0 {
             let a = self.rand() * std::f32::consts::TAU;
@@ -546,25 +562,52 @@ impl Stroke {
         } else {
             (cx, cy)
         };
-        let angle = if b.follow_path {
+        let mut angle = if b.follow_path {
             b.angle + self.dir
         } else {
             b.angle
         };
+        // Tilt: 60° from vertical counts as fully laid down. The dab widens
+        // along the tilt and flattens across it.
+        let lean = (tilt.0.hypot(tilt.1) / 60.0).clamp(0.0, 1.0) * b.tilt;
+        let saved_round = self.brush.roundness;
+        if lean > 0.0 {
+            size *= 1.0 + lean * 1.5;
+            angle = tilt.1.atan2(tilt.0).to_degrees();
+            self.brush.roundness = (saved_round * (1.0 - lean * 0.7)).max(0.05);
+        }
         let colour = self.dab_colour(sx, sy, size / 2.0);
-        self.stamp(sx, sy, size, angle, flow, colour);
+        let mut stamps: Vec<(f32, f32, f32)> = vec![(sx, sy, angle)];
         if let Some(mx) = self.mirror_x {
-            self.stamp(2.0 * mx - sx, sy, size, -angle, flow, colour);
+            stamps.push((2.0 * mx - sx, sy, -angle));
         }
         if let Some(my) = self.mirror_y {
-            self.stamp(sx, 2.0 * my - sy, size, -angle, flow, colour);
+            stamps.push((sx, 2.0 * my - sy, -angle));
             if let Some(mx) = self.mirror_x {
-                self.stamp(2.0 * mx - sx, 2.0 * my - sy, size, angle, flow, colour);
+                stamps.push((2.0 * mx - sx, 2.0 * my - sy, angle));
             }
         }
+        if let Some(((ox, oy), n)) = self.radial {
+            let base = stamps.clone();
+            for k in 1..n {
+                let a = k as f32 / n as f32 * std::f32::consts::TAU;
+                let (sa, ca) = a.sin_cos();
+                for &(x, y, ang) in &base {
+                    let (dx, dy) = (x - ox, y - oy);
+                    stamps.push((
+                        ox + dx * ca - dy * sa,
+                        oy + dx * sa + dy * ca,
+                        ang + a.to_degrees(),
+                    ));
+                }
+            }
+        }
+        for (x, y, ang) in stamps {
+            self.stamp(x, y, size, ang, flow, colour);
+        }
+        self.brush.roundness = saved_round;
     }
 
-    /// The premultiplied colour this dab lays down.
     fn dab_colour(&mut self, cx: f32, cy: f32, r: f32) -> [f32; 4] {
         match self.ink.clone() {
             Ink::Erase | Ink::Clone { .. } => [0.0, 0.0, 0.0, 1.0],
@@ -718,6 +761,18 @@ impl Stroke {
     /// when the input device reports it; `time_ms` lets speed stand in for
     /// pressure when it does not.
     pub fn point_at(&mut self, x: f32, y: f32, pressure: Option<f32>, time_ms: Option<f64>) {
+        self.point_full(x, y, pressure, None, time_ms);
+    }
+
+    /// `point_at` with the pen's tilt (degrees from vertical, x and y).
+    pub fn point_full(
+        &mut self,
+        x: f32,
+        y: f32,
+        pressure: Option<f32>,
+        tilt: Option<(f32, f32)>,
+        time_ms: Option<f64>,
+    ) {
         if self.finished {
             return;
         }
@@ -745,6 +800,7 @@ impl Stroke {
             x: sx,
             y: sy,
             pressure,
+            tilt: tilt.unwrap_or((0.0, 0.0)),
         });
     }
 
@@ -800,7 +856,12 @@ impl Stroke {
         self.brush.taper_start = 0.0;
         self.brush.taper_end = 0.0;
         for &(x, y) in pts {
-            self.advance(Sample { x, y, pressure });
+            self.advance(Sample {
+                x,
+                y,
+                pressure,
+                tilt: (0.0, 0.0),
+            });
         }
         self.brush = saved;
         self.finished = true;
@@ -829,7 +890,7 @@ impl Stroke {
         match self.last {
             None => {
                 let t = taper(0.0, &self.brush);
-                self.dab(s.x, s.y, s.pressure, t);
+                self.dab(s.x, s.y, s.pressure, s.tilt, t);
                 self.carry = 0.0;
             }
             Some((lx, ly)) => {
@@ -842,7 +903,7 @@ impl Stroke {
                 while d <= len {
                     let f = d / len;
                     let t = taper(self.distance + d, &self.brush);
-                    self.dab(lx + dx * f, ly + dy * f, s.pressure, t);
+                    self.dab(lx + dx * f, ly + dy * f, s.pressure, s.tilt, t);
                     d += step;
                 }
                 self.carry = len - (d - step);
@@ -873,6 +934,7 @@ impl Stroke {
                     x: sx + (rx - sx) * f,
                     y: sy + (ry - sy) * f,
                     pressure: p,
+                    tilt: (0.0, 0.0),
                 });
             }
             changed = true;
@@ -1433,6 +1495,43 @@ mod tests {
         s.point_at(0.0, 0.0, None, None);
         let (_, d2) = s.render(&after);
         assert!(d2.is_empty(), "locked after replay");
+    }
+
+    #[test]
+    fn radial_symmetry_and_tilt() {
+        let base = Arc::new(Raster::transparent(200, 200));
+        let mut s = Stroke::new(base.clone(), hard(6.0), opaque_red(), None);
+        s.set_radial((100.0, 100.0), 4);
+        s.point(100.0, 40.0);
+        s.point(100.0, 60.0);
+        let (r, _) = s.render(&base);
+        // The stroke above centre appears right, below and left of it too.
+        assert!(r.get(100, 50)[3] > 0);
+        assert!(r.get(150, 100)[3] > 0, "rotated 90°");
+        assert!(r.get(100, 150)[3] > 0, "rotated 180°");
+        assert!(r.get(50, 100)[3] > 0, "rotated 270°");
+        assert_eq!(r.get(140, 140)[3], 0);
+
+        let mut b = hard(10.0);
+        b.tilt = 1.0;
+        let mut upright = Stroke::new(base.clone(), b, opaque_red(), None);
+        upright.point_full(100.0, 100.0, Some(1.0), Some((0.0, 0.0)), None);
+        let (u, _) = upright.render(&base);
+        let mut leaning = Stroke::new(base.clone(), b, opaque_red(), None);
+        leaning.point_full(100.0, 100.0, Some(1.0), Some((60.0, 0.0)), None);
+        let (l, _) = leaning.render(&base);
+        let width = |r: &Raster, y: u32| (0..200).filter(|x| r.get(*x, y)[3] > 32000).count();
+        let height = |r: &Raster, x: u32| (0..200).filter(|y| r.get(x, *y)[3] > 32000).count();
+        assert!(
+            width(&l, 100) > width(&u, 100) + 4,
+            "{} vs {}",
+            width(&l, 100),
+            width(&u, 100)
+        );
+        assert!(
+            height(&l, 100) < height(&u, 100),
+            "flattened across the tilt"
+        );
     }
 
     #[test]

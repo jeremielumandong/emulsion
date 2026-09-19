@@ -67,6 +67,10 @@ pub struct ToolState {
     /// Mirror strokes across the canvas centre.
     pub mirror_x: bool,
     pub mirror_y: bool,
+    /// Rotational symmetry around the canvas centre (0 or 1 = off).
+    pub symmetry: u32,
+    /// Alpha lock: paint only where the layer already has pixels.
+    pub alpha_lock: bool,
     /// Show every brush setting, not just the four usual ones.
     pub brush_more: bool,
     /// When the current stroke started, for speed dynamics.
@@ -114,6 +118,8 @@ impl Default for ToolState {
             fill_edges: false,
             mirror_x: false,
             mirror_y: false,
+            symmetry: 0,
+            alpha_lock: false,
             brush_more: false,
             stroke_started: None,
             quick_shape: true,
@@ -658,12 +664,25 @@ impl EditorView {
         let scale = to_doc.matrix2.determinant().abs().sqrt().max(1e-6);
         let mut brush = self.tools.brush;
         brush.size = (brush.size as f64 / scale) as f32;
-        let clip = self
+        let mut clip = self
             .editor
             .doc
             .selection
             .clone()
             .map(|m| local_clip(m, to_doc));
+        if self.tools.alpha_lock && !mask_mode {
+            // Paint only where the layer already has pixels, at their
+            // coverage, and inside the selection when there is one.
+            let base = raster.clone();
+            let sel = clip.take();
+            clip = Some(Arc::new(move |x: i32, y: i32| {
+                if x < 0 || y < 0 || x >= base.width() as i32 || y >= base.height() as i32 {
+                    return 0.0;
+                }
+                let a = base.get(x as u32, y as u32)[3] as f32 / 65535.0;
+                a * sel.as_ref().map_or(1.0, |c| c(x, y))
+            }));
+        }
         let wet = brush.wetness > 0.0 || matches!(ink, Ink::Smudge);
         let mut stroke = Stroke::new(raster.clone(), brush, ink, clip);
         if wet {
@@ -685,10 +704,20 @@ impl EditorView {
             self.tools.mirror_x.then(|| axis(w / 2.0, h / 2.0).x as f32),
             self.tools.mirror_y.then(|| axis(w / 2.0, h / 2.0).y as f32),
         );
+        if self.tools.symmetry >= 2 {
+            let c = axis(w / 2.0, h / 2.0);
+            stroke.set_radial((c.x as f32, c.y as f32), self.tools.symmetry);
+        }
         crate::tablet::start();
         self.tools.stroke_started = Some(Instant::now());
         let p = to_local.transform_point2(dvec2(d.0, d.1));
-        stroke.point_at(p.x as f32, p.y as f32, crate::tablet::pressure(), Some(0.0));
+        stroke.point_full(
+            p.x as f32,
+            p.y as f32,
+            crate::tablet::pressure(),
+            crate::tablet::tilt(),
+            Some(0.0),
+        );
         let label = if mask_mode { "Paint mask" } else { label };
         self.editor.begin(label);
         let (r, dirty) = stroke.render(&raster);
@@ -989,7 +1018,13 @@ impl EditorView {
                     .tools
                     .stroke_started
                     .map(|s| s.elapsed().as_secs_f64() * 1000.0);
-                stroke.point_at(p.x as f32, p.y as f32, crate::tablet::pressure(), t);
+                stroke.point_full(
+                    p.x as f32,
+                    p.y as f32,
+                    crate::tablet::pressure(),
+                    crate::tablet::tilt(),
+                    t,
+                );
                 let (id, label) = (*id, *label);
                 let current = if mask {
                     match self.editor.doc.node(id).and_then(|n| n.mask.clone()) {
@@ -2415,6 +2450,36 @@ impl EditorView {
                             }))
                             .into_any_element(),
                     );
+                    let sym = self.tools.symmetry;
+                    let sym_label = if sym >= 2 {
+                        format!("radial ×{sym}")
+                    } else {
+                        "radial".to_string()
+                    };
+                    v.push(
+                        chip("radial-sym", sym_label, sym >= 2, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                // Off → 4 → 6 → 8 → 12 → off.
+                                this.tools.symmetry = match sym {
+                                    0 | 1 => 4,
+                                    4 => 6,
+                                    6 => 8,
+                                    8 => 12,
+                                    _ => 0,
+                                };
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                    let al = self.tools.alpha_lock;
+                    v.push(
+                        chip("alpha-lock", "alpha lock", al, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.tools.alpha_lock = !al;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
                     let qs = self.tools.quick_shape;
                     v.push(
                         chip("quick-shape", "QuickShape", qs, p)
@@ -2872,6 +2937,13 @@ impl EditorView {
             "colour jitter",
             format!("{:.0}%", b.color_jitter * 100.0),
             b.color_jitter,
+            (0.0, 100.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolTilt,
+            "tilt",
+            format!("{:.0}%", b.tilt * 100.0),
+            b.tilt,
             (0.0, 100.0, 1.0)
         );
         for (id, t, k) in [

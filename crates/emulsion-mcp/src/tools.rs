@@ -521,7 +521,8 @@ pub fn definitions() -> Vec<ToolDef> {
                 "Paint strokes on a pixel layer with a brush from list_brushes. Each stroke is a polyline in document pixels; ",
                 "a stroke gives either points ([x, y] or [x, y, pressure 0-1]) or d (SVG path data: M L C Q Z, absolute or relative) for smooth curves. SVG subpaths preserve pen lifts; the optional pressure envelope [start, end] restarts for each subpath. ",
                 "color is #RRGGBB (ignored by Eraser and Smudge brushes). settings overrides brush fields for the whole call, e.g. ",
-                "{\"size\": 6, \"opacity\": 0.5, \"hardness\": 1, \"flow\": 0.3, \"wetness\": 0.5, \"taper_end\": 20}. ",
+                "{\"size\": 6, \"opacity\": 0.5, \"hardness\": 1, \"flow\": 0.3, \"wetness\": 0.5, \"taper_end\": 20, \"tilt\": 0.5}. ",
+                "mirror / symmetry repeat every stroke across or around the canvas centre; alpha_lock keeps paint on existing pixels. ",
                 "Everything in one call is a single undo step. Group marks by the chosen medium's current stage and inspection checkpoints; no fixed number of calls or universal paint order is required. ",
                 "Work on your own layer (add_layer) so the person can hide or mask it."
             ),
@@ -531,6 +532,9 @@ pub fn definitions() -> Vec<ToolDef> {
                 "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
                 "settings": { "type": "object" },
                 "sample_merged": {"type": "boolean", "default": false, "description": "Opt into frozen lower-layer colour pickup for wet/smudge brushes. Current and higher layers are excluded from the backdrop; current layer still supplies its own paint."},
+                "alpha_lock": {"type": "boolean", "default": false, "description": "Paint only where the layer already has pixels (shading inside an existing shape)."},
+                "mirror": {"type": "string", "enum": ["x", "y", "xy"], "description": "Also paint each stroke mirrored across the canvas centre: x = left/right, y = top/bottom, xy = both (quadrant symmetry)."},
+                "symmetry": {"type": "integer", "minimum": 2, "maximum": 64, "description": "Radial symmetry: also paint each stroke rotated this many ways around the canvas centre (mandalas)."},
                 "strokes": {
                     "type": "array", "minItems": 1, "maxItems": 400,
                     "items": {
