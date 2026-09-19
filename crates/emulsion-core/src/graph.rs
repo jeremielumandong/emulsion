@@ -448,6 +448,9 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
     if !mask_same || x.mask_enabled != y.mask_enabled {
         out.push(("mask", "before".into(), "edited".into()));
     }
+    if x.styles != y.styles {
+        out.push(("styles", "before".into(), "changed".into()));
+    }
     if x.clip_to != y.clip_to {
         out.push(("clipping", "before".into(), "changed".into()));
     }
@@ -617,6 +620,7 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
         clip_to: pick(&b.clip_to, &o.clip_to, &t.clip_to, |x, y| x == y)?,
         mask,
         mask_enabled,
+        styles: pick(&b.styles, &o.styles, &t.styles, |x, y| x == y)?,
         kind: pick(&b.kind, &o.kind, &t.kind, |x, y| x == y)?,
     })
 }

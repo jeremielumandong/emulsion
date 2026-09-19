@@ -72,6 +72,8 @@ pub struct ToolState {
     /// When the current stroke started, for speed dynamics.
     pub stroke_started: Option<Instant>,
     pub pen: super::pen::PenState,
+    /// Brush and eraser paint the selected node's mask instead of pixels.
+    pub mask_edit: bool,
     pub pointer: Option<Point<Pixels>>,
     pub ants_phase: bool,
     pub picker: bool,
@@ -112,6 +114,7 @@ impl Default for ToolState {
             brush_more: false,
             stroke_started: None,
             pen: super::pen::PenState::fresh(),
+            mask_edit: false,
             pointer: None,
             ants_phase: false,
             picker: false,
@@ -131,6 +134,8 @@ pub enum ToolDrag {
         to_local: DAffine2,
         heal: bool,
         label: &'static str,
+        /// The stroke paints the node's mask; the raster is a grey view of it.
+        mask: bool,
     },
     Marquee {
         start: (f64, f64),
@@ -173,6 +178,20 @@ pub enum ToolDrag {
     PickHue {
         track: TrackBounds,
     },
+}
+
+/// A mask as grey pixels, so the brush engine can paint it.
+pub(crate) fn mask_to_raster(m: &Mask) -> Raster {
+    let b = m.bounds();
+    let px: Vec<[u16; 4]> = m
+        .read_rect(b)
+        .into_iter()
+        .map(|v| {
+            let l = color::f_to_u16(color::srgb_to_linear(v as f32 / 255.0));
+            [l, l, l, 65535]
+        })
+        .collect();
+    Raster::from_pixels(m.width(), m.height(), [0; 4], &px)
 }
 
 fn combine_for(m: &Modifiers, default: Combine) -> Combine {
@@ -273,6 +292,11 @@ impl EditorView {
 
     pub fn paint_kind(&self) -> PaintKind {
         self.tools.paint
+    }
+
+    pub fn set_mask_edit(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.tools.mask_edit = on;
+        cx.notify();
     }
 
     pub fn set_mirror(&mut self, x: bool, y: bool, cx: &mut Context<Self>) {
@@ -597,11 +621,25 @@ impl EditorView {
         label: &'static str,
         cx: &mut Context<Self>,
     ) {
-        let Some(id) = self.paint_target(cx) else {
-            return;
-        };
-        let Some((raster, to_doc)) = self.target_raster(id) else {
-            return;
+        let mask_mode = self.tools.mask_edit && !heal && matches!(ink, Ink::Color(_) | Ink::Erase);
+        let (id, raster, to_doc, ink) = if mask_mode {
+            let Some((id, m, to_doc)) = self.mask_target(cx) else {
+                return;
+            };
+            // White reveals, black hides; the eraser hides.
+            let ink = match ink {
+                Ink::Erase => Ink::Color([0.0, 0.0, 0.0, 1.0]),
+                _ => Ink::Color([1.0, 1.0, 1.0, 1.0]),
+            };
+            (id, Arc::new(mask_to_raster(&m)), to_doc, ink)
+        } else {
+            let Some(id) = self.paint_target(cx) else {
+                return;
+            };
+            let Some((raster, to_doc)) = self.target_raster(id) else {
+                return;
+            };
+            (id, raster, to_doc, ink)
         };
         let to_local = to_doc.inverse();
         let scale = to_doc.matrix2.determinant().abs().sqrt().max(1e-6);
@@ -638,24 +676,194 @@ impl EditorView {
         self.tools.stroke_started = Some(Instant::now());
         let p = to_local.transform_point2(dvec2(d.0, d.1));
         stroke.point_at(p.x as f32, p.y as f32, crate::tablet::pressure(), Some(0.0));
+        let label = if mask_mode { "Paint mask" } else { label };
         self.editor.begin(label);
         let (r, dirty) = stroke.render(&raster);
-        self.execute(
-            Command::ReplacePixels {
-                id,
-                raster: Arc::new(r),
-                dirty,
-                label: label.into(),
-            },
-            cx,
-        );
+        self.commit_stroke(id, r, dirty, label, mask_mode, cx);
         self.drag = Some(Drag::Tool(ToolDrag::Stroke {
             id,
             stroke: Box::new(stroke),
             to_local,
             heal,
             label,
+            mask: mask_mode,
         }));
+    }
+
+    /// Put a rendered stroke into the document: pixels, or the mask it
+    /// stands for.
+    pub(crate) fn commit_stroke(
+        &mut self,
+        id: NodeId,
+        r: Raster,
+        dirty: IRect,
+        label: &str,
+        mask: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if dirty.is_empty() {
+            return;
+        }
+        if mask {
+            let Some(old) = self.editor.doc.node(id).and_then(|n| n.mask.clone()) else {
+                return;
+            };
+            let px: Vec<u8> = r
+                .read_rect(dirty)
+                .into_iter()
+                .map(|p| (color::linear_to_srgb(color::u16_to_f(p[0])) * 255.0).round() as u8)
+                .collect();
+            let m = old.write_rect(dirty, &px);
+            self.execute(
+                Command::SetMask {
+                    id,
+                    mask: Some(Arc::new(m)),
+                },
+                cx,
+            );
+        } else {
+            self.execute(
+                Command::ReplacePixels {
+                    id,
+                    raster: Arc::new(r),
+                    dirty,
+                    label: label.into(),
+                },
+                cx,
+            );
+        }
+    }
+
+    /// The selected node's mask and the mask-space → document transform.
+    /// A node without a mask gets a fully revealing one first.
+    fn mask_target(&mut self, cx: &mut Context<Self>) -> Option<(NodeId, Arc<Mask>, DAffine2)> {
+        let id = self.selected?;
+        let n = self.editor.doc.node(id)?;
+        if n.locked {
+            self.set_status("That node is locked.", true, cx);
+            return None;
+        }
+        let (w, h, to_doc) = match &n.kind {
+            NodeKind::Raster { raster, placement } => (
+                raster.width(),
+                raster.height(),
+                placement.to_doc(raster.width(), raster.height()),
+            ),
+            _ => (
+                self.editor.doc.width,
+                self.editor.doc.height,
+                DAffine2::IDENTITY,
+            ),
+        };
+        let mask = match &n.mask {
+            Some(m) => m.clone(),
+            None => {
+                let m = Arc::new(Mask::white(w, h));
+                self.execute(
+                    Command::SetMask {
+                        id,
+                        mask: Some(m.clone()),
+                    },
+                    cx,
+                );
+                m
+            }
+        };
+        Some((id, mask, to_doc))
+    }
+
+    // ── Mask operations ─────────────────────────────────────────────────
+
+    /// Add a mask from the selection (or one that reveals everything).
+    pub fn add_mask(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected else { return };
+        let Some(n) = self.editor.doc.node(id) else {
+            return;
+        };
+        let (w, h, to_doc) = match &n.kind {
+            NodeKind::Raster { raster, placement } => (
+                raster.width(),
+                raster.height(),
+                Some(placement.to_doc(raster.width(), raster.height())),
+            ),
+            _ => (self.editor.doc.width, self.editor.doc.height, None),
+        };
+        let m = match self.editor.doc.selection.clone() {
+            Some(sel) => match to_doc {
+                // Raster masks live in the node's pixel space.
+                Some(td) => Mask::from_fn(w, h, 0, |x, y| {
+                    let p = td.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
+                    if p.x < 0.0
+                        || p.y < 0.0
+                        || p.x >= sel.width() as f64
+                        || p.y >= sel.height() as f64
+                    {
+                        0
+                    } else {
+                        sel.get(p.x as u32, p.y as u32)
+                    }
+                }),
+                None => (*sel).clone(),
+            },
+            None => Mask::white(w, h),
+        };
+        self.execute(
+            Command::SetMask {
+                id,
+                mask: Some(Arc::new(m)),
+            },
+            cx,
+        );
+        self.set_status(
+            "Mask added. Turn on \"edit mask\" to paint it: white reveals, black hides.",
+            false,
+            cx,
+        );
+    }
+
+    pub fn remove_mask(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected {
+            self.execute(Command::SetMask { id, mask: None }, cx);
+            self.tools.mask_edit = false;
+        }
+    }
+
+    pub fn invert_mask(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected
+            && let Some(m) = self.editor.doc.node(id).and_then(|n| n.mask.clone())
+        {
+            self.execute(
+                Command::SetMask {
+                    id,
+                    mask: Some(Arc::new(select::invert(&m))),
+                },
+                cx,
+            );
+        }
+    }
+
+    pub fn feather_mask(&mut self, radius: f32, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected
+            && let Some(m) = self.editor.doc.node(id).and_then(|n| n.mask.clone())
+        {
+            self.execute(
+                Command::SetMask {
+                    id,
+                    mask: Some(Arc::new(select::feather(&m, radius))),
+                },
+                cx,
+            );
+        }
+    }
+
+    /// Load the mask as the selection.
+    pub fn mask_to_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected else { return };
+        let Some(m) = self.editor.doc.node_coverage(id) else {
+            return;
+        };
+        let combine = self.tools.combine;
+        self.apply_selection(m, combine, cx);
     }
 
     pub(crate) fn tool_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
@@ -669,8 +877,10 @@ impl EditorView {
                 stroke,
                 to_local,
                 label,
+                mask,
                 ..
             } => {
+                let mask = *mask;
                 let p = to_local.transform_point2(dvec2(d.0, d.1));
                 let t = self
                     .tools
@@ -678,25 +888,22 @@ impl EditorView {
                     .map(|s| s.elapsed().as_secs_f64() * 1000.0);
                 stroke.point_at(p.x as f32, p.y as f32, crate::tablet::pressure(), t);
                 let (id, label) = (*id, *label);
-                let current = match self.editor.doc.node(id).map(|n| &n.kind) {
-                    Some(NodeKind::Raster { raster, .. }) => raster.clone(),
-                    _ => return,
+                let current = if mask {
+                    match self.editor.doc.node(id).and_then(|n| n.mask.clone()) {
+                        Some(m) => Arc::new(mask_to_raster(&m)),
+                        None => return,
+                    }
+                } else {
+                    match self.editor.doc.node(id).map(|n| &n.kind) {
+                        Some(NodeKind::Raster { raster, .. }) => raster.clone(),
+                        _ => return,
+                    }
                 };
                 let Some(Drag::Tool(ToolDrag::Stroke { stroke, .. })) = &mut self.drag else {
                     return;
                 };
                 let (r, dirty) = stroke.render(&current);
-                if !dirty.is_empty() {
-                    self.execute(
-                        Command::ReplacePixels {
-                            id,
-                            raster: Arc::new(r),
-                            dirty,
-                            label: label.into(),
-                        },
-                        cx,
-                    );
-                }
+                self.commit_stroke(id, r, dirty, label, mask, cx);
             }
             ToolDrag::Marquee { end, .. }
             | ToolDrag::Gradient { end, .. }
@@ -748,25 +955,26 @@ impl EditorView {
                 mut stroke,
                 heal,
                 label,
+                mask,
                 ..
             } => {
                 // Catch the stabilizer up and taper the end.
-                if stroke.finish()
-                    && let Some(NodeKind::Raster { raster, .. }) =
-                        self.editor.doc.node(id).map(|n| &n.kind)
-                {
-                    let current = raster.clone();
-                    let (r, dirty) = stroke.render(&current);
-                    if !dirty.is_empty() {
-                        self.execute(
-                            Command::ReplacePixels {
-                                id,
-                                raster: Arc::new(r),
-                                dirty,
-                                label: label.into(),
-                            },
-                            cx,
-                        );
+                if stroke.finish() {
+                    let current = if mask {
+                        self.editor
+                            .doc
+                            .node(id)
+                            .and_then(|n| n.mask.clone())
+                            .map(|m| Arc::new(mask_to_raster(&m)))
+                    } else {
+                        match self.editor.doc.node(id).map(|n| &n.kind) {
+                            Some(NodeKind::Raster { raster, .. }) => Some(raster.clone()),
+                            _ => None,
+                        }
+                    };
+                    if let Some(current) = current {
+                        let (r, dirty) = stroke.render(&current);
+                        self.commit_stroke(id, r, dirty, label, mask, cx);
                     }
                 }
                 self.tools.stroke_started = None;
@@ -2061,6 +2269,7 @@ impl EditorView {
                     _ if self.tools.paint == PaintKind::Smudge => {
                         "drag to smear the colour under the brush"
                     }
+                    _ if self.tools.mask_edit => "painting the mask: brush reveals, eraser hides",
                     _ => "alt-click picks a colour",
                 };
                 v.push(div().flex_none().child(hint).into_any_element());

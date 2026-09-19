@@ -176,6 +176,11 @@ pub enum Command {
         id: NodeId,
         filters: Vec<emulsion_filters::Filter>,
     },
+    /// Replace a node's layer styles.
+    SetStyles {
+        id: NodeId,
+        styles: Vec<crate::styles::LayerStyle>,
+    },
     /// Replace the ruler guides.
     SetGuides {
         guides: Vec<crate::document::Guide>,
@@ -249,6 +254,10 @@ impl Command {
             Command::SetGuides { .. } => "Guides".into(),
             Command::ReplaceContent { label, .. } => label.clone(),
             Command::SetPath { .. } => "Edit path".into(),
+            Command::SetStyles { styles, .. } => match styles.last() {
+                Some(s) => s.label().to_string(),
+                None => "Layer styles".into(),
+            },
             Command::ConvertToSmart { .. } => "Smart layer".into(),
             Command::Rasterize { .. } => "Rasterize".into(),
             Command::SetFilters { filters, .. } => match filters.last() {
@@ -602,6 +611,22 @@ impl Command {
             }
             Command::SetGuides { guides } => {
                 doc.guides = guides.clone();
+                Ok(None)
+            }
+            Command::SetStyles { id, styles } => {
+                if styles.len() > crate::styles::MAX_STYLES {
+                    return Err(CommandError::Invalid(
+                        crate::document::DocumentError::BadValue(*id, "too many styles"),
+                    ));
+                }
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                if !matches!(
+                    n.kind,
+                    NodeKind::Raster { .. } | NodeKind::Smart { .. } | NodeKind::Path { .. }
+                ) {
+                    return Err(CommandError::NoSuchParam(*id, "styles".into()));
+                }
+                n.styles = styles.clone();
                 Ok(None)
             }
             Command::ConvertToSmart { id } => {

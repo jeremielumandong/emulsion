@@ -8,11 +8,13 @@ use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fract
 mod adjust_ui;
 mod canvas_size;
 mod history;
+mod panels;
 mod pen;
 mod presets;
 mod recipes;
 mod smart;
 mod snap;
+mod styles_ui;
 mod tools;
 mod transform;
 use emulsion_core::command::Slot;
@@ -97,6 +99,8 @@ enum SliderKey {
     Curve(NodeId),
     /// A smart layer's filter parameter: node, filter index, key.
     Filter(NodeId, usize, &'static str),
+    /// A layer style parameter: node, style index, key.
+    Style(NodeId, usize, &'static str),
     Tolerance,
     Feather,
     Straighten,
@@ -115,6 +119,7 @@ impl SliderKey {
                 | SliderKey::Rotation(_)
                 | SliderKey::PenWidth
                 | SliderKey::Filter(..)
+                | SliderKey::Style(..)
         )
     }
 }
@@ -153,6 +158,8 @@ enum Drag {
         corner: usize,
         quad: [(f64, f64); 4],
     },
+    /// Dragging in the navigator pans the view.
+    Navigator,
     /// A guide dragged from a ruler (new) or grabbed on the canvas.
     Guide {
         vertical: bool,
@@ -238,6 +245,8 @@ pub struct EditorView {
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
     pub(crate) recipes: recipes::RecipeState,
     pub(crate) smart: smart::SmartUi,
+    pub(crate) panels: panels::PanelState,
+    pub(crate) styles_ui: styles_ui::StylesUi,
     /// Shift held during a drag: free aspect, or 15° rotation steps.
     pub(crate) drag_shift: bool,
 }
@@ -307,6 +316,8 @@ impl EditorView {
             adjust_ui: Default::default(),
             recipes: Default::default(),
             smart: Default::default(),
+            panels: Default::default(),
+            styles_ui: Default::default(),
             drag_shift: false,
         }
     }
@@ -795,6 +806,9 @@ impl EditorView {
             || !self.tools.polygon.is_empty()
             || (self.tool == Tool::Pen && self.tools.pen.building.is_some());
         let pointer = inside.then_some(pos);
+        if inside {
+            self.note_pointer(pos, cx);
+        }
         if wants_pointer && pointer != self.tools.pointer {
             self.tools.pointer = pointer;
             if self.drag.is_none()
@@ -836,6 +850,7 @@ impl EditorView {
                 let d = d.clone();
                 self.curve_move(&d, pos, cx);
             }
+            Drag::Navigator => self.nav_click(pos, cx),
             Drag::MovePath {
                 id,
                 start_doc,
@@ -917,7 +932,7 @@ impl EditorView {
                     self.editor.end();
                 }
             }
-            Some(Drag::Pan { .. }) => {}
+            Some(Drag::Pan { .. }) | Some(Drag::Navigator) => {}
             Some(Drag::Tool(t)) => self.tool_up(t, cx),
             Some(Drag::Guide {
                 vertical,
@@ -968,6 +983,7 @@ impl EditorView {
                 SliderKey::Scale(_) => "Scale".into(),
                 SliderKey::PenWidth => "Stroke width".into(),
                 SliderKey::Filter(_, _, k) => k.replace('_', " "),
+                SliderKey::Style(_, _, k) => k.replace('_', " "),
                 _ => "Rotate".into(),
             };
             self.editor.begin(name);
@@ -1072,6 +1088,7 @@ impl EditorView {
             }
             SliderKey::Curve(_) => {}
             SliderKey::Filter(id, idx, key) => self.set_filter_param(id, idx, key, v, false, cx),
+            SliderKey::Style(id, idx, key) => self.set_style_param(id, idx, key, v, cx),
             SliderKey::Tolerance => {
                 self.tools.tolerance = v as u8;
                 cx.notify();
@@ -1612,6 +1629,8 @@ impl EditorView {
                 div()
                     .px(px(15.))
                     .pt(px(10.))
+                    .children(self.navigator_view(p, cx))
+                    .children(self.info_view(p))
                     .children(self.recipes_view(p, cx))
                     .child(self.histogram_view(p, cx)),
             )
@@ -1634,6 +1653,14 @@ impl EditorView {
             .child(
                 chip("smart", "smart", false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.convert_smart(cx))),
+            )
+            .child(
+                chip("nav", "nav", self.panels.navigator, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_navigator(cx))),
+            )
+            .child(
+                chip("info", "info", self.panels.info, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_info(cx))),
             )
             .child(
                 chip("recipes", "recipes", self.recipes.open, p)
@@ -1992,6 +2019,50 @@ impl EditorView {
                     this.execute(Command::SetMaskEnabled { id, enabled: !en }, cx);
                 },
             )));
+            let editing = self.tools.mask_edit;
+            toggles = toggles
+                .child(
+                    chip("mask-edit", "edit mask", editing, p).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.tools.mask_edit = !editing;
+                            if !editing {
+                                this.tool = Tool::Brush;
+                            }
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(
+                    chip("mask-inv", "invert", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.invert_mask(cx))),
+                )
+                .child(
+                    chip("mask-feather", "feather 6", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.feather_mask(6.0, cx))),
+                )
+                .child(
+                    chip("mask-sel", "to selection", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.mask_to_selection(cx))),
+                )
+                .child(
+                    chip("mask-del", "− mask", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.remove_mask(cx))),
+                );
+        } else if !matches!(n.kind, NodeKind::Fill { .. }) || self.editor.doc.selection.is_some() {
+            let from_sel = self.editor.doc.selection.is_some();
+            toggles = toggles.child(
+                chip(
+                    "mask-add",
+                    if from_sel {
+                        "+ mask from selection"
+                    } else {
+                        "+ mask"
+                    },
+                    false,
+                    p,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.add_mask(cx))),
+            );
         }
         let locked = n.locked;
         toggles = toggles.child(chip("lock", "locked", locked, p).on_click(cx.listener(
@@ -2007,6 +2078,15 @@ impl EditorView {
         )));
         body = body.child(toggles);
 
+        if matches!(
+            n.kind,
+            NodeKind::Raster { .. } | NodeKind::Smart { .. } | NodeKind::Path { .. }
+        ) {
+            let styles = n.styles.clone();
+            for el in self.styles_panel(id, &styles, p, cx) {
+                body = body.child(el);
+            }
+        }
         match &n.kind {
             NodeKind::Adjust(a) => {
                 let a = a.clone();

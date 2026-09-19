@@ -277,6 +277,24 @@ pub fn definitions() -> Vec<ToolDef> {
             &[],
         ),
         def(
+            "add_style",
+            "Add a layer style (an effect drawn from the node's shape) to a pixel, smart or path node. Kinds: drop_shadow {opacity 0..100, angle, distance 0..100, size 0..60}, inner_shadow {same}, outer_glow {opacity, size 0..80}, stroke {opacity, size 1..40}, color_overlay {opacity}, gradient_overlay {angle, opacity; color and color2 are its ends}. color is #RRGGBB.",
+            json!({ "node": node(), "kind": { "type": "string" }, "params": { "type": "object" }, "color": { "type": "string" }, "color2": { "type": "string" } }),
+            &["node", "kind"],
+        ),
+        def(
+            "set_style",
+            "Change a layer style at index (params, color, color2).",
+            json!({ "node": node(), "index": { "type": "integer", "minimum": 0 }, "params": { "type": "object" }, "color": { "type": "string" }, "color2": { "type": "string" } }),
+            &["node", "index"],
+        ),
+        def(
+            "remove_style",
+            "Remove the layer style at index.",
+            json!({ "node": node(), "index": { "type": "integer", "minimum": 0 } }),
+            &["node", "index"],
+        ),
+        def(
             "convert_to_smart",
             "Make a pixel layer a smart layer (filters stay editable; painting on it is not possible), or rasterize a smart layer back to pixels.",
             json!({ "node": node() }),

@@ -133,6 +133,8 @@ struct HNode {
     clip_to: Option<NodeId>,
     mask: Option<u32>,
     mask_enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    styles: Vec<emulsion_core::styles::LayerStyle>,
     kind: HKind,
 }
 
@@ -258,6 +260,7 @@ pub(crate) fn encode(graph: &Graph, live: Option<String>) -> Result<Vec<(String,
                     clip_to: n.clip_to,
                     mask: n.mask.as_ref().map(|m| masks.add(m)),
                     mask_enabled: n.mask_enabled,
+                    styles: n.styles.clone(),
                     kind: match &n.kind {
                         NodeKind::Raster { raster, placement } => HKind::Raster {
                             raster: rasters.add(raster),
@@ -490,6 +493,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 clip_to: n.clip_to,
                 mask: n.mask.map(|i| mask(i, mw, mh)).transpose()?,
                 mask_enabled: n.mask_enabled,
+                styles: n.styles,
                 kind,
             });
         }

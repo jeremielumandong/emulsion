@@ -339,17 +339,93 @@ impl Document {
                             ),
                         },
                     };
-                    CompositeNode {
-                        id: n.id,
-                        visible: n.visible,
-                        opacity: n.opacity,
-                        blend: n.blend,
-                        mask: if n.mask_enabled { n.mask.clone() } else { None },
-                        clip_to: n.clip_to.and_then(|c| ids.iter().position(|s| *s == c)),
-                        content,
+                    (
+                        n,
+                        CompositeNode {
+                            id: n.id,
+                            visible: n.visible,
+                            opacity: n.opacity,
+                            blend: n.blend,
+                            mask: if n.mask_enabled { n.mask.clone() } else { None },
+                            clip_to: None,
+                            content,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flat_map(|(n, node)| {
+                    // Layer styles become pixel layers beside the node.
+                    let mut out: Vec<(Option<NodeId>, CompositeNode)> = Vec::with_capacity(3);
+                    let fx = if n.visible {
+                        crate::styles::render(doc, n)
+                    } else {
+                        None
+                    };
+                    if let Some(r) = &fx
+                        && let Some((raster, rect)) = &r.below
+                    {
+                        out.push((
+                            None,
+                            crate::styles::effect_node(n.id ^ (1 << 62), raster.clone(), *rect, n),
+                        ));
                     }
+                    out.push((Some(n.id), node));
+                    if let Some(r) = &fx
+                        && let Some((raster, rect)) = &r.above
+                    {
+                        out.push((
+                            None,
+                            crate::styles::effect_node(n.id ^ (1 << 63), raster.clone(), *rect, n),
+                        ));
+                    }
+                    out
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .enumerate()
+                .map(|(i, (owner, mut node))| {
+                    // Clip targets are positions in this list, which effects shifted.
+                    (i, owner, node.clip_to.take(), node)
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|(_, owner, _, mut node)| {
+                    if let Some(id) = owner
+                        && let Some(c) = doc.node(id).and_then(|n| n.clip_to)
+                    {
+                        node.clip_to = positions_of(doc, parent, c);
+                    }
+                    node
                 })
                 .collect()
+        }
+        /// Position of node `c`'s own entry in the composite list of `parent`.
+        fn positions_of(doc: &Document, parent: Option<NodeId>, c: NodeId) -> Option<usize> {
+            let mut i = 0;
+            for id in doc.children(parent) {
+                let n = doc.node(id).expect("child exists");
+                let fx = if n.visible {
+                    crate::styles::render(doc, n)
+                } else {
+                    None
+                };
+                if let Some(r) = &fx
+                    && r.below.is_some()
+                {
+                    i += 1;
+                }
+                if id == c {
+                    return Some(i);
+                }
+                i += 1;
+                if let Some(r) = &fx
+                    && r.above.is_some()
+                {
+                    i += 1;
+                }
+            }
+            None
         }
         CompositeTree {
             width: self.width,

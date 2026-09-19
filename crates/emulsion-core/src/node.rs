@@ -115,6 +115,8 @@ pub struct Node {
     /// moves with it; otherwise it is in document space.
     pub mask: Option<Arc<Mask>>,
     pub mask_enabled: bool,
+    /// Effects drawn from the node's alpha (shadows, glow, stroke, overlays).
+    pub styles: Vec<crate::styles::LayerStyle>,
     pub kind: NodeKind,
 }
 
@@ -134,6 +136,7 @@ impl PartialEq for Node {
                 _ => false,
             }
             && self.mask_enabled == o.mask_enabled
+            && self.styles == o.styles
             && self.kind == o.kind
     }
 }
@@ -156,6 +159,7 @@ impl Node {
             clip_to: None,
             mask: None,
             mask_enabled: true,
+            styles: Vec::new(),
             kind,
         }
     }

@@ -10,6 +10,7 @@ pub mod graph;
 pub mod history;
 pub mod node;
 pub mod smart;
+pub mod styles;
 
 pub use command::{Command, CommandError, Dirty};
 pub use document::{Document, DocumentError, PanelRow};

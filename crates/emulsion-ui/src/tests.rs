@@ -1056,6 +1056,58 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn mask_painting_hides_pixels_and_mask_ops_work(cx: &mut TestAppContext) {
+        use crate::editor::PaintKind;
+        let (_, e, cx) = setup(cx, Tool::Brush);
+        let id = cx.update(|_, cx| e.read(cx).editor.doc.nodes[0].id);
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.selected = Some(id);
+                e.add_mask(cx);
+                e.set_mask_edit(true, cx);
+                e.set_paint(PaintKind::Eraser, cx);
+                e.apply_preset_named("Hard eraser", cx);
+            })
+        });
+        cx.run_until_parked();
+        drag(&e, cx, (60.0, 96.0), (200.0, 96.0));
+        let (hidden, shown, steps) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            let m = e.editor.doc.node(id).unwrap().mask.as_ref().expect("mask");
+            (m.get(128, 96), m.get(128, 20), e.editor.history.len())
+        });
+        assert!(
+            hidden < 30 && shown == 255,
+            "eraser painted the mask black along the stroke: {hidden} {shown}"
+        );
+        assert_eq!(steps, 2, "add mask, then one stroke");
+        let px = cx.update(|_, cx| {
+            emulsion_raster::composite::flatten(&e.read(cx).editor.doc.composite_tree(), 0)
+                .get(128, 96)
+        });
+        assert!(
+            px[3] < 5000,
+            "the masked pixels vanish from the composite: {px:?}"
+        );
+        cx.update(|_, cx| e.update(cx, |e, cx| e.invert_mask(cx)));
+        assert_eq!(
+            cx.update(|_, cx| e
+                .read(cx)
+                .editor
+                .doc
+                .node(id)
+                .unwrap()
+                .mask
+                .as_ref()
+                .unwrap()
+                .get(128, 20)),
+            0
+        );
+        cx.update(|_, cx| e.update(cx, |e, cx| e.remove_mask(cx)));
+        assert!(cx.update(|_, cx| e.read(cx).editor.doc.node(id).unwrap().mask.is_none()));
+    }
+
+    #[gpui_kit::test]
     fn the_default_hand_tool_pans_without_moving_pixels(cx: &mut TestAppContext) {
         let (ws, cx) = open(cx, doc(&["Photo"], None));
         cx.run_until_parked();

@@ -188,6 +188,13 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         "add_layer" => format!("add layer {}", input["name"].as_str().unwrap_or("Layer")),
         "list_recipes" => "look at the recipes".into(),
         "convert_to_smart" => format!("smart layer {}", n()),
+        "add_style" => format!(
+            "add {} to {}",
+            input["kind"].as_str().unwrap_or("style").replace('_', " "),
+            n()
+        ),
+        "set_style" => format!("tune style {} on {}", input["index"], n()),
+        "remove_style" => format!("remove style {} from {}", input["index"], n()),
         "add_filter" => format!(
             "add {} to {}",
             input["kind"].as_str().unwrap_or("filter").replace('_', " "),

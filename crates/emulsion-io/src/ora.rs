@@ -73,6 +73,8 @@ struct MNode {
     clip_to: Option<NodeId>,
     mask: Option<String>,
     mask_enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    styles: Vec<emulsion_core::styles::LayerStyle>,
     kind: MKind,
 }
 
@@ -315,6 +317,7 @@ fn encode(doc: &Document) -> Result<Encoded> {
             clip_to: n.clip_to,
             mask,
             mask_enabled: n.mask_enabled,
+            styles: n.styles.clone(),
             kind,
         });
     }
@@ -783,6 +786,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             clip_to: n.clip_to,
             mask,
             mask_enabled: n.mask_enabled,
+            styles: n.styles,
             kind,
         });
         doc.next_id = doc.next_id.max(n.id + 1);

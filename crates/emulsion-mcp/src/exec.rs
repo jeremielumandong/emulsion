@@ -1061,6 +1061,80 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 recipe.name
             )))
         }
+        "add_style" | "set_style" | "remove_style" => {
+            use emulsion_core::styles::LayerStyle;
+            let id = id_arg(args, "node")?;
+            let node = editor
+                .doc
+                .node(id)
+                .ok_or_else(|| err(format!("no node {id}")))?;
+            let mut styles = node.styles.clone();
+            let apply = |s: &mut LayerStyle, args: &Value| -> Result<(), ToolResult> {
+                if let Some(p) = args.get("params").and_then(Value::as_object) {
+                    for (k, v) in p {
+                        let v = v
+                            .as_f64()
+                            .ok_or_else(|| err(format!("parameter '{k}' must be a number")))?;
+                        if !s.set_param(k, v as f32) {
+                            return Err(err(format!("{} has no parameter '{k}'", s.label())));
+                        }
+                    }
+                }
+                if let Some(c) = args.get("color") {
+                    let c = color::premul_to_srgba8(hex_color(c)?);
+                    s.set_color([c[0], c[1], c[2]], false);
+                }
+                if let Some(c) = args.get("color2") {
+                    let c = color::premul_to_srgba8(hex_color(c)?);
+                    s.set_color([c[0], c[1], c[2]], true);
+                }
+                Ok(())
+            };
+            match name {
+                "add_style" => {
+                    let kind = args
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| err("missing 'kind'"))?;
+                    let k = kind.trim().to_lowercase().replace(['-', ' '], "_");
+                    let mut s = LayerStyle::catalogue()
+                        .into_iter()
+                        .find(|s| s.key() == k)
+                        .ok_or_else(|| err(format!("unknown style {kind:?}; one of drop_shadow, inner_shadow, outer_glow, stroke, color_overlay, gradient_overlay")))?;
+                    apply(&mut s, args)?;
+                    styles.push(s);
+                }
+                "set_style" => {
+                    let i = args
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| err("missing integer 'index'"))?
+                        as usize;
+                    let s = styles
+                        .get_mut(i)
+                        .ok_or_else(|| err(format!("no style at index {i}")))?;
+                    apply(s, args)?;
+                }
+                _ => {
+                    let i = args
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| err("missing integer 'index'"))?
+                        as usize;
+                    if i >= styles.len() {
+                        return Err(err(format!("no style at index {i}")));
+                    }
+                    styles.remove(i);
+                }
+            }
+            let n = styles.len();
+            exec(editor, Command::SetStyles { id, styles })?;
+            Ok(ToolResult::text(format!(
+                "{} now has {n} style{}",
+                node_label(&editor.doc, id),
+                if n == 1 { "" } else { "s" }
+            )))
+        }
         "convert_to_smart" => {
             let id = id_arg(args, "node")?;
             let kind = editor
@@ -1663,6 +1737,18 @@ pub fn describe(editor: &Editor) -> Value {
             if n.locked {
                 o.insert("locked".into(), json!(true));
             }
+            if !n.styles.is_empty() {
+                let st: Vec<Value> = n
+                    .styles
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| {
+                        let params: Map<String, Value> = s.params().into_iter().map(|p| (p.key.to_string(), json!(p.value))).collect();
+                        json!({ "index": i, "kind": s.key(), "colors": s.colors().iter().map(|c| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])).collect::<Vec<_>>(), "params": params })
+                    })
+                    .collect();
+                o.insert("styles".into(), Value::Array(st));
+            }
             match &n.kind {
                 NodeKind::Adjust(a) => {
                     o.insert("adjustment".into(), json!(a.label()));
@@ -2235,6 +2321,39 @@ mod tests {
             !r.is_error && e.doc.node(1).unwrap().kind.tag() == "px",
             "rasterize back"
         );
+    }
+
+    #[test]
+    fn layer_styles_tools() {
+        let mut e = editor();
+        let r = execute(
+            &mut e,
+            "add_style",
+            &json!({ "node": 3, "kind": "drop shadow", "params": { "distance": 20, "size": 4 }, "color": "#0000ff" }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let r = execute(&mut e, "add_style", &json!({ "node": 3, "kind": "stroke" }));
+        assert!(!r.is_error);
+        let d = describe(&e);
+        let me = d["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == 3)
+            .unwrap()
+            .clone();
+        assert_eq!(me["styles"].as_array().unwrap().len(), 2);
+        assert_eq!(me["styles"][0]["colors"][0], "#0000FF");
+        let r = execute(
+            &mut e,
+            "set_style",
+            &json!({ "node": 3, "index": 1, "params": { "size": 9 } }),
+        );
+        assert!(!r.is_error);
+        let r = execute(&mut e, "remove_style", &json!({ "node": 3, "index": 0 }));
+        assert!(!r.is_error && e.doc.node(3).unwrap().styles.len() == 1);
+        let r = execute(&mut e, "add_style", &json!({ "node": 3, "kind": "bevel" }));
+        assert!(r.is_error);
     }
 
     #[test]

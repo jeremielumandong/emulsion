@@ -53,7 +53,7 @@ pub fn recovery_dir() -> PathBuf {
 }
 
 /// Straight sRGBA8 → BGRA thumbnail of `doc`, at most `max` px a side.
-fn doc_thumb(doc: &Document, max: u32) -> (u32, u32, Vec<u8>) {
+pub(crate) fn doc_thumb(doc: &Document, max: u32) -> (u32, u32, Vec<u8>) {
     let tree = doc.composite_tree();
     let mut level = 0;
     while {
