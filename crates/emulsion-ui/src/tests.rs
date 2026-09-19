@@ -964,6 +964,38 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn recipes_panel_applies_a_recipe_as_one_step(cx: &mut TestAppContext) {
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        let recipe = emulsion_recipes::starter_set()
+            .into_iter()
+            .find(|r| r.name == "Slide Punch")
+            .unwrap();
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.toggle_recipes(cx);
+                e.apply_recipe(&recipe, cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            let g = e
+                .editor
+                .doc
+                .nodes
+                .iter()
+                .find(|n| n.is_group())
+                .expect("recipe group");
+            assert!(g.name.contains("Slide Punch"));
+            assert!(e.editor.doc.children(Some(g.id)).len() >= 4);
+            assert_eq!(e.editor.history.len(), 1, "one undo step");
+            assert_eq!(e.selected, Some(g.id));
+        });
+    }
+
+    #[gpui_kit::test]
     fn the_default_hand_tool_pans_without_moving_pixels(cx: &mut TestAppContext) {
         let (ws, cx) = open(cx, doc(&["Photo"], None));
         cx.run_until_parked();

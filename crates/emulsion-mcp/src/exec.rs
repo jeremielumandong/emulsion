@@ -861,6 +861,93 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             exec(editor, c)?;
             Ok(ToolResult::text(msg))
         }
+        "list_recipes" => {
+            let dir = emulsion_io::recent::data_dir().join("recipes");
+            let list: Vec<Value> = emulsion_recipes::store::list(&dir)
+                .into_iter()
+                .map(|(r, origin)| {
+                    json!({
+                        "name": r.name,
+                        "author": r.author,
+                        "film_simulation": r.film_simulation,
+                        "tags": r.tags,
+                        "saved": matches!(origin, emulsion_recipes::store::Origin::Saved(_)),
+                        "settings": {
+                            "dynamic_range": format!("{:?}", r.dynamic_range),
+                            "grain": format!("{:?} {:?}", r.grain.strength, r.grain.size),
+                            "color_chrome_effect": format!("{:?}", r.color_chrome_effect),
+                            "white_balance": format!("{} R{:+} B{:+}", r.white_balance.preset, r.white_balance.red, r.white_balance.blue),
+                            "highlight": r.highlight, "shadow": r.shadow, "color": r.color,
+                            "exposure_compensation": r.exposure_compensation,
+                        }
+                    })
+                })
+                .collect();
+            let looks: Vec<Value> = emulsion_recipes::looks::LOOKS
+                .iter()
+                .map(|l| json!({ "key": l.key, "label": l.label }))
+                .collect();
+            Ok(ToolResult::text(
+                serde_json::to_string_pretty(&json!({ "recipes": list, "looks": looks }))
+                    .unwrap_or_default(),
+            ))
+        }
+        "apply_recipe" => {
+            let dir = emulsion_io::recent::data_dir().join("recipes");
+            let (recipe, from_text) = if let Some(name) = args.get("name").and_then(Value::as_str) {
+                (
+                    emulsion_recipes::store::find(&dir, name).ok_or_else(|| {
+                        err(format!("no recipe named {name:?}; call list_recipes"))
+                    })?,
+                    false,
+                )
+            } else if let Some(t) = args.get("toml").and_then(Value::as_str) {
+                (
+                    emulsion_recipes::Recipe::from_toml(t).map_err(|e| err(e.to_string()))?,
+                    true,
+                )
+            } else if let Some(t) = args.get("text").and_then(Value::as_str) {
+                let (r, unknown) = emulsion_recipes::import::parse_text(t);
+                r.validate().map_err(|e| {
+                    err(format!(
+                        "{e}{}",
+                        if unknown.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" (lines not understood: {unknown:?})")
+                        }
+                    ))
+                })?;
+                (r, true)
+            } else {
+                return Err(err("give name, text or toml"));
+            };
+            if from_text && args.get("save").and_then(Value::as_bool).unwrap_or(false) {
+                emulsion_recipes::store::save(&dir, &recipe).map_err(|e| err(e.to_string()))?;
+            }
+            let compiled = emulsion_recipes::compile(&recipe).map_err(|e| err(e.to_string()))?;
+            let slot = match args.get("above").and_then(Value::as_u64) {
+                Some(a) => {
+                    let t = editor
+                        .doc
+                        .node(a)
+                        .ok_or_else(|| err(format!("no node {a}")))?;
+                    let sib = editor.doc.children(t.parent);
+                    Slot {
+                        parent: t.parent,
+                        index: sib.iter().position(|s| *s == a).unwrap_or(0) + 1,
+                    }
+                }
+                None => Slot::TOP,
+            };
+            let n = compiled.1.len();
+            let gid = emulsion_recipes::store::add_to(editor, compiled, slot)
+                .map_err(|e| err(e.to_string()))?;
+            Ok(ToolResult::text(format!(
+                "Applied recipe {:?} as group {gid} with {n} adjustment stages",
+                recipe.name
+            )))
+        }
         "add_layer" => {
             let (w, h) = (editor.doc.width, editor.doc.height);
             let name = args.get("name").and_then(Value::as_str).unwrap_or("Layer");
@@ -1906,6 +1993,35 @@ mod tests {
             &mut e,
             "add_adjustment",
             &json!({ "kind": "curves", "params": { "points": [[0, 0]] } }),
+        );
+        assert!(r.is_error);
+    }
+
+    #[test]
+    fn recipes_list_and_apply_from_name_and_text() {
+        let mut e = editor();
+        let r = execute(&mut e, "list_recipes", &json!({}));
+        assert!(
+            !r.is_error && text(&r).contains("Chrome Street"),
+            "{}",
+            text(&r)
+        );
+        let before = e.doc.nodes.len();
+        let r = execute(&mut e, "apply_recipe", &json!({ "name": "chrome street" }));
+        assert!(!r.is_error, "{}", text(&r));
+        let group = e.doc.nodes.iter().find(|n| n.is_group()).unwrap();
+        assert!(group.name.contains("Chrome Street"));
+        assert!(e.doc.nodes.len() > before + 5);
+        let r = execute(
+            &mut e,
+            "apply_recipe",
+            &json!({ "text": "Film Simulation: Acros+R\nGrain Effect: Strong, Large\nHighlight: +1" }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let r = execute(
+            &mut e,
+            "apply_recipe",
+            &json!({ "text": "Film Simulation: Kodachrome" }),
         );
         assert!(r.is_error);
     }

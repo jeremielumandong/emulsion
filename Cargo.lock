@@ -1702,6 +1702,7 @@ dependencies = [
  "emulsion-core",
  "emulsion-io",
  "emulsion-raster",
+ "emulsion-recipes",
  "glam",
  "image",
  "serde",
@@ -1728,8 +1729,8 @@ name = "emulsion-recipes"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "emulsion-color",
- "emulsion-filters",
+ "emulsion-core",
+ "emulsion-raster",
  "serde",
  "thiserror 2.0.20",
  "toml 1.1.6+spec-1.1.0",
@@ -1758,6 +1759,7 @@ dependencies = [
  "emulsion-io",
  "emulsion-mcp",
  "emulsion-raster",
+ "emulsion-recipes",
  "evdev",
  "glam",
  "gpui-kit",

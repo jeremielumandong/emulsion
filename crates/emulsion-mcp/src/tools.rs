@@ -10,6 +10,7 @@ pub const READ_ONLY: &[&str] = &[
     "list_history",
     "compare",
     "list_brushes",
+    "list_recipes",
 ];
 
 /// Tools whose effect is hard to see or undo at a glance; always confirmed.
@@ -255,6 +256,18 @@ pub fn definitions() -> Vec<ToolDef> {
             "Make the selection from the inside of a Path node (non-zero winding).",
             json!({ "node": node(), "mode": mode() }),
             &["node"],
+        ),
+        def(
+            "list_recipes",
+            "Film recipes available: the starter set and the person's saved ones, with their film simulation, tags and settings. Base looks that a recipe can name: see `looks`.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "apply_recipe",
+            "Apply a film recipe as a group of adjustment nodes above the given node (or at the top). Give one of: name (from list_recipes), text (a pasted settings block like Fuji X Weekly's: 'Film Simulation: Classic Chrome', 'Grain Effect: Weak, Small', 'White Balance: Daylight, +2 Red & -4 Blue', 'Highlight: -1' …), or toml (a .recipe.toml). save=true also keeps a text or toml recipe for later.",
+            json!({ "name": { "type": "string" }, "text": { "type": "string" }, "toml": { "type": "string" }, "save": { "type": "boolean" }, "above": node() }),
+            &[],
         ),
         def(
             "add_layer",

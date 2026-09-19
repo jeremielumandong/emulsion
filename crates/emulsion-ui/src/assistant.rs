@@ -186,6 +186,11 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         "image_size" => format!("resize to {} px wide", input["width"]),
         "canvas_size" => format!("canvas {}×{}", input["width"], input["height"]),
         "add_layer" => format!("add layer {}", input["name"].as_str().unwrap_or("Layer")),
+        "list_recipes" => "look at the recipes".into(),
+        "apply_recipe" => format!(
+            "apply recipe {}",
+            input["name"].as_str().unwrap_or("from text")
+        ),
         "draw_path" => format!("draw path {}", input["name"].as_str().unwrap_or("Path")),
         "set_path" => format!("edit path {}", n()),
         "path_to_selection" => format!("select inside {}", n()),

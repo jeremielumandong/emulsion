@@ -10,6 +10,7 @@ mod canvas_size;
 mod history;
 mod pen;
 mod presets;
+mod recipes;
 mod snap;
 mod tools;
 mod transform;
@@ -231,6 +232,7 @@ pub struct EditorView {
     pub(crate) transform_fields: Option<transform::TransformFields>,
     pub(crate) presets: presets::PresetState,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
+    pub(crate) recipes: recipes::RecipeState,
     /// Shift held during a drag: free aspect, or 15° rotation steps.
     pub(crate) drag_shift: bool,
 }
@@ -298,6 +300,7 @@ impl EditorView {
             transform_fields: None,
             presets: Default::default(),
             adjust_ui: Default::default(),
+            recipes: Default::default(),
             drag_shift: false,
         }
     }
@@ -1600,6 +1603,7 @@ impl EditorView {
                 div()
                     .px(px(15.))
                     .pt(px(10.))
+                    .children(self.recipes_view(p, cx))
                     .child(self.histogram_view(p, cx)),
             )
             .child(self.history_list(p, cx))
@@ -1618,6 +1622,10 @@ impl EditorView {
             .on_drop(cx.listener(|this, d: &DraggedNode, _, cx| this.drop_on(d.id, None, cx)))
             .child(label("Scene graph", p))
             .child(div().flex_1())
+            .child(
+                chip("recipes", "recipes", self.recipes.open, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_recipes(cx))),
+            )
             .child(
                 chip("add", "+ node", self.menu == Some(Menu::Add), p).on_click(cx.listener(
                     |this, _, _, cx| {
