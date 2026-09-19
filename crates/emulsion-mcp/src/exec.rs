@@ -1169,8 +1169,9 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 };
                 keep(r, unknown)?;
             } else if let Some(p) = args.get("path").and_then(Value::as_str) {
-                let (r, unknown) = import::from_file(std::path::Path::new(p)).map_err(err)?;
-                keep(r, unknown)?;
+                for (r, unknown) in import::from_file_many(std::path::Path::new(p)).map_err(err)? {
+                    keep(r, unknown)?;
+                }
             } else if let Some(url) = args.get("url").and_then(Value::as_str) {
                 let html = import::fetch(url).map_err(err)?;
                 let (single, unknown) = import::from_html(&html, url);

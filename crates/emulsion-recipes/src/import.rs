@@ -878,6 +878,22 @@ pub fn from_fp1(xml: &str) -> (Recipe, Vec<String>) {
 
 /// Import any supported file by its extension: `.recipe.toml`/`.toml`,
 /// `.xmp`, `.fp1`, or a text block.
+/// Every recipe in `path`: one for an ordinary recipe file, several for
+/// a bundle (`[[recipes]]` TOML).
+pub fn from_file_many(path: &std::path::Path) -> Result<Vec<(Recipe, Vec<String>)>, String> {
+    let is_toml = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("toml"));
+    if is_toml {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        if crate::bundle::is_bundle(&text) {
+            let b = crate::bundle::Bundle::from_toml(&text).map_err(|e| e.to_string())?;
+            return Ok(b.recipes.into_iter().map(|r| (r, Vec::new())).collect());
+        }
+    }
+    from_file(path).map(|r| vec![r])
+}
+
 pub fn from_file(path: &std::path::Path) -> Result<(Recipe, Vec<String>), String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let ext = path

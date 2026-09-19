@@ -6,6 +6,7 @@
 //! approximations, named descriptively; a recipe can name a `.cube` LUT as
 //! its base look instead.
 
+pub mod bundle;
 pub mod cameras;
 pub mod effects;
 pub mod import;

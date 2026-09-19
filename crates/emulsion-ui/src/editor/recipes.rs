@@ -12,6 +12,7 @@ use emulsion_recipes::store::{self, Origin};
 use emulsion_recipes::{Recipe, import};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Thumbnail long side in pixels.
 const THUMB: u32 = 150;
@@ -257,6 +258,51 @@ impl EditorView {
     }
 
     /// Pick .recipe.toml, .xmp, .FP1 or text files and save each.
+    /// Write the saved recipes (or, with none saved, every recipe shown)
+    /// as one shareable bundle file.
+    pub fn export_recipe_bundle(&mut self, cx: &mut Context<Self>) {
+        let all = self.recipe_list();
+        let mut recipes: Vec<Recipe> = all
+            .iter()
+            .filter(|(_, o)| matches!(o, Origin::Saved(_)))
+            .map(|(r, _)| r.clone())
+            .collect();
+        if recipes.is_empty() {
+            recipes = all.iter().map(|(r, _)| r.clone()).collect();
+        }
+        if recipes.is_empty() {
+            self.set_status("No recipes to export.", false, cx);
+            return;
+        }
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let rx = cx.prompt_for_new_path(&home, Some("my-recipes.toml"));
+        let count = recipes.len();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut path))) = rx.await else {
+                return;
+            };
+            path.set_extension("toml");
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Recipes".into());
+            let text = emulsion_recipes::bundle::Bundle::new(name, recipes).to_toml();
+            let result = std::fs::write(&path, text);
+            this.update(cx, |this, cx| match result {
+                Ok(()) => this.set_status(
+                    format!("Exported {count} recipes to {}", path.display()),
+                    false,
+                    cx,
+                ),
+                Err(e) => this.set_status(format!("Export failed: {e}"), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub fn import_recipe_files(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -272,7 +318,10 @@ impl EditorView {
                 .background_spawn(async move {
                     paths
                         .into_iter()
-                        .map(|p| import::from_file(&p))
+                        .flat_map(|p| match import::from_file_many(&p) {
+                            Ok(v) => v.into_iter().map(Ok).collect::<Vec<_>>(),
+                            Err(e) => vec![Err(e)],
+                        })
                         .collect::<Vec<_>>()
                 })
                 .await;
@@ -651,6 +700,10 @@ impl EditorView {
             .child(
                 chip("rc-files", "from files…", false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.import_recipe_files(cx))),
+            )
+            .child(
+                chip("rc-bundle", "export bundle…", false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.export_recipe_bundle(cx))),
             );
         if let Some((done, total)) = self.recipes.importing {
             import_row = import_row.child(mono(format!("importing {done}/{total}"), 9.5, p.accent));
