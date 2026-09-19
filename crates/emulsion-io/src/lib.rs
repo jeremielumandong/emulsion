@@ -12,6 +12,7 @@ pub mod export;
 pub mod history;
 pub mod import;
 pub mod ora;
+pub mod raw;
 pub mod recent;
 pub mod settings;
 pub mod svg;
@@ -50,7 +51,8 @@ pub type Result<T> = std::result::Result<T, IoError>;
 
 /// Extensions `open` understands, for file dialogs.
 pub const OPEN_EXTENSIONS: &[&str] = &[
-    "ora", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif", "svg",
+    "ora", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif", "svg", "arw", "cr2", "cr3",
+    "nef", "dng", "raf", "orf", "rw2", "pef",
 ];
 
 pub fn is_svg(path: &Path) -> bool {
@@ -70,6 +72,8 @@ pub fn open(path: &Path) -> Result<Document> {
     } else if is_svg(path) {
         let text = std::fs::read_to_string(path)?;
         Ok(svg::import(&text)?.doc)
+    } else if raw::is_raw(path) {
+        raw::open(path)
     } else {
         import::import(path)
     }
@@ -91,6 +95,12 @@ pub fn open_full(path: &Path) -> Result<Opened> {
         let imp = svg::import(&text)?;
         Ok(Opened {
             doc: imp.doc,
+            graph: None,
+            history_error: None,
+        })
+    } else if raw::is_raw(path) {
+        Ok(Opened {
+            doc: raw::open(path)?,
             graph: None,
             history_error: None,
         })

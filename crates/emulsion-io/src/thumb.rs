@@ -13,6 +13,13 @@ pub fn thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
             .take(16 << 20)
             .read_to_end(&mut bytes)?;
         image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)?
+    } else if crate::raw::is_raw(path) {
+        // Develop small: RAW files carry no cheap preview we read yet.
+        let (r, _) = crate::raw::develop(path)?;
+        image::DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(r.width(), r.height(), r.to_srgba8())
+                .ok_or_else(|| crate::IoError::Unsupported("RAW thumbnail".into()))?,
+        )
     } else {
         let reader = image::ImageReader::open(path)?.with_guessed_format()?;
         let img = reader.decode()?;
