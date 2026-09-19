@@ -97,6 +97,19 @@ fn mode() -> Value {
     json!({ "type": "string", "enum": ["replace", "add", "subtract", "intersect"] })
 }
 
+fn view_region() -> Value {
+    json!({"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 4, "maxItems": 4,
+        "description": "[x, y, width, height] in document pixels. Positive size, entirely inside the canvas. Returned mapping converts preview coordinates to document coordinates."})
+}
+
+fn critique_context() -> Value {
+    json!({"type": "object", "additionalProperties": false, "properties": {
+        "medium": {"type": "string"}, "stage": {"type": "string"},
+        "composition_intent": {"type": "string", "description": "Intended layout, focal placement and symmetry, including deliberate centring."},
+        "user_constraints": {"type": "array", "items": {"type": "string"}}
+    }})
+}
+
 fn def(name: &str, description: &str, properties: Value, required: &[&str]) -> ToolDef {
     ToolDef {
         name: name.into(),
@@ -123,9 +136,10 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "get_view",
             "Render the current composite (or one node on its own) as a PNG so you can see the \
-             image. Use it to ground decisions in what the picture actually shows.",
+             image, optionally a document-space region for close inspection. Returns image-to-document coordinate mapping. Use full views for composition and region views for details.",
             json!({
                 "node": { "type": "integer", "description": "Render only this node (and its children)." },
+                "region": view_region(),
                 "max_size": { "type": "integer", "minimum": 64, "maximum": 1568, "description": "Longest side in pixels, default 1024." }
             }),
             &[],
@@ -335,14 +349,17 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "critique",
-            "A fast, measured critique of the picture as it stands: value range and grouping, where the detail sits, balance, edge character, colour temperature, symmetry, empty space, ranked by what to fix first (Jev ranks when configured). Free and instant; every paint and hatch result also carries its top two lines.",
-            json!({ "count": { "type": "integer", "minimum": 1, "maximum": 8 } }),
+            "Intent-aware metric observations with conditional suggestions, plus images for your visual review. Pass medium, stage, composition intent and constraints in context. Inspect the returned full view and optional detail region for anatomy, perspective and subject fidelity; metrics cannot establish those qualities. Jev optionally ranks measurements only.",
+            json!({ "count": { "type": "integer", "minimum": 1, "maximum": 8 },
+                "context": critique_context(), "region": view_region(),
+                "include_images": {"type": "boolean", "default": true, "description": "Return full composition and optional region images for the calling assistant to review."} }),
             &[],
         ),
         def(
             "hatch",
             "Shade an area with parallel strokes: fill rect [x, y, width, height] (or the selection's bounds) with lines at angle (degrees, default 45) every spacing pixels (default 8), with a little jitter (0-1) so they look hand-made; cross=true adds a second direction. Uses a brush and color like paint. One undo step.",
-            json!({ "node": node(), "brush": { "type": "string" }, "color": { "type": "string" }, "settings": { "type": "object" }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "angle": { "type": "number" }, "spacing": { "type": "number", "minimum": 1 }, "jitter": { "type": "number", "minimum": 0, "maximum": 1 }, "cross": { "type": "boolean" } }),
+            json!({ "node": node(), "brush": { "type": "string" }, "color": { "type": "string" }, "settings": { "type": "object" }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "angle": { "type": "number" }, "spacing": { "type": "number", "minimum": 1 }, "jitter": { "type": "number", "minimum": 0, "maximum": 1 }, "cross": { "type": "boolean" },
+                "sample_merged": {"type": "boolean", "default": false, "description": "Opt into lower-layer colour pickup for wet/smudge brushes."} }),
             &["node"],
         ),
         def(
@@ -485,18 +502,19 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "list_brushes",
-            "The brush library: every brush with its category (Ink, Pencil, Chalk, Marker, Watercolour, Oil, Airbrush, Eraser, Smudge) and what it is for. Use the names with paint.",
-            json!({}),
+            "Discover brushes by name or category, intended uses, actual preset settings and supported ranges. Returns a rendered swatch sheet of up to 12 rows; use offset for further swatches. Preset names are approximations, not proof of material simulation. Use names with paint.",
+            json!({"query": {"type": "string", "description": "Case-insensitive name/category substring; default all."},
+                "swatches": {"type": "boolean", "default": true}, "offset": {"type": "integer", "minimum": 0, "description": "First swatch row in the filtered list; metadata includes all matches."}}),
             &[],
         ),
         def(
             "paint",
             concat!(
                 "Paint strokes on a pixel layer with a brush from list_brushes. Each stroke is a polyline in document pixels; ",
-                "a stroke gives either points ([x, y] or [x, y, pressure 0-1]) or d (SVG path data: M L C Q Z, absolute or relative) for smooth curves, plus an optional pressure envelope [start, end] applied along the stroke. ",
+                "a stroke gives either points ([x, y] or [x, y, pressure 0-1]) or d (SVG path data: M L C Q Z, absolute or relative) for smooth curves. SVG subpaths preserve pen lifts; the optional pressure envelope [start, end] restarts for each subpath. ",
                 "color is #RRGGBB (ignored by Eraser and Smudge brushes). settings overrides brush fields for the whole call, e.g. ",
                 "{\"size\": 6, \"opacity\": 0.5, \"hardness\": 1, \"flow\": 0.3, \"wetness\": 0.5, \"taper_end\": 20}. ",
-                "Everything in one call is a single undo step, so plan a drawing as a few calls: block-in, then lines, then shading. ",
+                "Everything in one call is a single undo step. Group marks by the chosen medium's current stage and inspection checkpoints; no fixed number of calls or universal paint order is required. ",
                 "Work on your own layer (add_layer) so the person can hide or mask it."
             ),
             json!({
@@ -504,6 +522,7 @@ pub fn definitions() -> Vec<ToolDef> {
                 "brush": { "type": "string" },
                 "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
                 "settings": { "type": "object" },
+                "sample_merged": {"type": "boolean", "default": false, "description": "Opt into frozen lower-layer colour pickup for wet/smudge brushes. Current and higher layers are excluded from the backdrop; current layer still supplies its own paint."},
                 "strokes": {
                     "type": "array", "minItems": 1, "maxItems": 400,
                     "items": {

@@ -72,6 +72,8 @@ pub struct Parser {
     /// A Result was emitted for the current turn (one-shot CLIs report
     /// nothing at exit otherwise).
     pub saw_result: bool,
+    /// Usage gathered along a one-shot turn: input tokens, output tokens, cost.
+    pub usage: (u64, u64, f64),
     pub session_id: Option<String>,
 }
 
@@ -275,6 +277,7 @@ impl Parser {
         self.reset_turn();
         self.part_text.clear();
         self.saw_result = false;
+        self.usage = (0, 0, 0.0);
     }
 
     fn tool_use(&mut self, id: String, name: String, input: Value) -> Option<Event> {
@@ -336,12 +339,21 @@ impl Parser {
                         }
                         if kind == "item.completed" {
                             let status = s(&item["status"]);
-                            let is_error = status.contains("fail") || item.get("error").is_some();
-                            let text = item
-                                .get("error")
-                                .map(|e| s(e).trim_matches('"').to_string())
+                            let err = item.get("error").filter(|e| !e.is_null());
+                            let is_error = status.contains("fail") || err.is_some();
+                            let text = err
+                                .map(|e| {
+                                    e.pointer("/message")
+                                        .map(s)
+                                        .unwrap_or_else(|| s(e).trim_matches('"').to_string())
+                                })
                                 .filter(|e| !e.is_empty())
-                                .or_else(|| item.get("result").map(result_text))
+                                .or_else(|| {
+                                    item.get("result").map(|r| match r.get("content") {
+                                        Some(c) => result_text(c),
+                                        None => result_text(r),
+                                    })
+                                })
                                 .unwrap_or_default();
                             if let Some(e) = self.tool_result(id, text, is_error) {
                                 out.push(e);
@@ -468,20 +480,12 @@ impl Parser {
                 }
             }
             "step-finish" => {
-                // The last step of a run carries the totals; the process
-                // exiting afterwards ends the turn.
+                // One per step; the totals accumulate and the process
+                // exiting ends the turn.
                 let t = &part["tokens"];
-                if t.is_object() {
-                    self.saw_result = true;
-                    out.push(Event::Result {
-                        text: String::new(),
-                        cost_usd: part["cost"].as_f64().unwrap_or(0.0),
-                        duration_ms: 0,
-                        turns: 1,
-                        input_tokens: t["input"].as_u64().unwrap_or(0),
-                        output_tokens: t["output"].as_u64().unwrap_or(0),
-                    });
-                }
+                self.usage.0 += t["input"].as_u64().unwrap_or(0);
+                self.usage.1 += t["output"].as_u64().unwrap_or(0);
+                self.usage.2 += part["cost"].as_f64().unwrap_or(0.0);
             }
             _ => {}
         }
@@ -755,13 +759,10 @@ mod flavor_tests {
             matches!(&e[0], Event::ToolResult { id, text, is_error: false } if id == "call1" && text == "fine")
         );
         let e = p.feed(r#"{"part":{"id":"s1","type":"step-finish","tokens":{"input":5,"output":2},"cost":0.01}}"#);
-        assert!(matches!(
-            &e[0],
-            Event::Result {
-                input_tokens: 5,
-                ..
-            }
-        ));
+        assert!(
+            e.is_empty() && p.usage == (5, 2, 0.01),
+            "steps accumulate; exit ends the turn"
+        );
         let e = p.feed(r#"{"type":"error","error":{"data":{"message":"boom"}}}"#);
         assert_eq!(e, vec![Event::Error("boom".into())]);
     }

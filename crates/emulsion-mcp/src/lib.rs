@@ -8,8 +8,11 @@
 //! * [`relay`] carries tool calls from the `mcp-serve` process to the running
 //!   app over loopback TCP, authenticated with a per-session token.
 
+mod brush_discovery;
 pub mod exec;
+mod preview;
 pub mod relay;
+mod review;
 pub mod server;
 pub mod tools;
 

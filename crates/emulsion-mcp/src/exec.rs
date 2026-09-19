@@ -1,10 +1,11 @@
 //! Run tools against an open document.
 
 use crate::server::ToolResult;
+#[cfg(test)]
 use base64::Engine as _;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
-use emulsion_raster::composite::{flatten, level_size, region};
+use emulsion_raster::composite::region;
 use emulsion_raster::paint::{Brush, Ink, Stroke};
 use emulsion_raster::select::{self, Combine};
 use emulsion_raster::{Adjustment, BlendMode, Placement};
@@ -161,6 +162,8 @@ pub struct PaintScript {
     pub id: NodeId,
     pub strokes: Vec<ScriptStroke>,
     pub clip: Option<emulsion_raster::paint::Clip>,
+    /// Optional snapshot of visible lower layers, sampled in layer coordinates.
+    pub backdrop: Option<emulsion_raster::paint::Backdrop>,
     /// Layer pixels → document pixels.
     pub to_doc: glam::DAffine2,
     pub label: String,
@@ -168,6 +171,15 @@ pub struct PaintScript {
 }
 
 impl PaintScript {
+    /// Shared stroke setup for immediate rendering and animated UI playback.
+    pub fn start_stroke(&self, base: Arc<Raster>, s: &ScriptStroke) -> Stroke {
+        let mut stroke = Stroke::new(base, s.brush, s.ink.clone(), self.clip.clone());
+        if let Some(backdrop) = &self.backdrop {
+            stroke.set_backdrop(backdrop.clone());
+        }
+        stroke
+    }
+
     /// Total path length in layer pixels, for pacing a playback.
     pub fn length(&self) -> f32 {
         self.strokes
@@ -186,12 +198,7 @@ impl PaintScript {
         let mut current = base.clone();
         let mut dirty = IRect::default();
         for s in &self.strokes {
-            let mut stroke = Stroke::new(
-                Arc::new(current.clone()),
-                s.brush,
-                s.ink.clone(),
-                self.clip.clone(),
-            );
+            let mut stroke = self.start_stroke(Arc::new(current.clone()), s);
             for (x, y, p) in &s.points {
                 stroke.point_at(*x, *y, *p, None);
             }
@@ -308,7 +315,7 @@ pub fn hatch_to_paint(doc: &Document, args: &Value) -> Result<Value, ToolResult>
     }
     let mut paint =
         json!({ "node": args.get("node").cloned().unwrap_or(Value::Null), "strokes": strokes });
-    for k in ["brush", "color", "settings"] {
+    for k in ["brush", "color", "settings", "sample_merged"] {
         if let Some(v) = args.get(k) {
             paint[k] = v.clone();
         }
@@ -339,6 +346,11 @@ pub fn paint_script_for(
 
 /// Resolve a `paint` call against `doc` without painting anything.
 pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolResult> {
+    let sample_merged = match args.get("sample_merged") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        _ => return Err(err("sample_merged must be a boolean")),
+    };
     let id = id_arg(args, "node")?;
     let node = doc.node(id).ok_or_else(|| err(format!("no node {id}")))?;
     let NodeKind::Raster { raster, placement } = &node.kind else {
@@ -411,7 +423,7 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
             }
         };
         // Points come as [x, y, pressure?] lists or as SVG path data.
-        let mut doc_pts: Vec<(f64, f64, Option<f32>)> = Vec::new();
+        let mut subpaths: Vec<Vec<(f64, f64, Option<f32>)>> = Vec::new();
         if let Some(d) = s.get("d").and_then(Value::as_str) {
             let path = emulsion_raster::vector::Path::from_svg(d)
                 .map_err(|e| err(format!("stroke {i}: bad path data: {e}")))?;
@@ -421,13 +433,14 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
                 if closed && let Some(f) = pts.first().copied() {
                     pts.push(f);
                 }
-                doc_pts.extend(pts);
+                subpaths.push(pts);
             }
         } else {
             let pts = s
                 .get("points")
                 .and_then(Value::as_array)
                 .ok_or_else(|| err(format!("stroke {i} has neither points nor d")))?;
+            let mut doc_pts = Vec::with_capacity(pts.len());
             for (j, p) in pts.iter().enumerate() {
                 let a = p.as_array().filter(|a| a.len() >= 2).ok_or_else(|| {
                     err(format!(
@@ -449,47 +462,56 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
                         .map(|p| p.clamp(0.0, 1.0) as f32),
                 ));
             }
+            subpaths.push(doc_pts);
         }
-        if doc_pts.len() > 4000 {
+        if subpaths.iter().map(Vec::len).sum::<usize>() > 4000 {
             return Err(err(format!("stroke {i} has more than 4000 points")));
         }
-        // A pressure envelope [start, end] fills in points without their own.
-        if let Some(env) = s
-            .get("pressure")
-            .and_then(Value::as_array)
-            .filter(|e| e.len() == 2)
-        {
-            let (p0, p1) = (
-                env[0].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32,
-                env[1].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32,
-            );
-            let total: f64 = doc_pts
-                .windows(2)
-                .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
-                .sum();
-            let mut run = 0.0;
-            for k in 0..doc_pts.len() {
-                if k > 0 {
-                    run += (doc_pts[k].0 - doc_pts[k - 1].0).hypot(doc_pts[k].1 - doc_pts[k - 1].1);
-                }
-                if doc_pts[k].2.is_none() {
-                    let t = if total > 0.0 {
-                        (run / total) as f32
-                    } else {
-                        0.0
-                    };
-                    doc_pts[k].2 = Some(p0 + (p1 - p0) * t);
+        // SVG moveto lifts the pen: pressure and taper restart independently.
+        for mut doc_pts in subpaths {
+            // A pressure envelope [start, end] fills in points without their own.
+            if let Some(env) = s
+                .get("pressure")
+                .and_then(Value::as_array)
+                .filter(|e| e.len() == 2)
+            {
+                let (p0, p1) = (
+                    env[0].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32,
+                    env[1].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32,
+                );
+                let total: f64 = doc_pts
+                    .windows(2)
+                    .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+                    .sum();
+                let mut run = 0.0;
+                for k in 0..doc_pts.len() {
+                    if k > 0 {
+                        run += (doc_pts[k].0 - doc_pts[k - 1].0)
+                            .hypot(doc_pts[k].1 - doc_pts[k - 1].1);
+                    }
+                    if doc_pts[k].2.is_none() {
+                        let t = if total > 0.0 {
+                            (run / total) as f32
+                        } else {
+                            0.0
+                        };
+                        doc_pts[k].2 = Some(p0 + (p1 - p0) * t);
+                    }
                 }
             }
+            let points: Vec<(f32, f32, Option<f32>)> = doc_pts
+                .into_iter()
+                .map(|(x, y, p)| {
+                    let l = to_local.transform_point2(glam::dvec2(x, y));
+                    (l.x as f32, l.y as f32, p)
+                })
+                .collect();
+            out.push(ScriptStroke {
+                brush,
+                ink: ink.clone(),
+                points,
+            });
         }
-        let points: Vec<(f32, f32, Option<f32>)> = doc_pts
-            .into_iter()
-            .map(|(x, y, p)| {
-                let l = to_local.transform_point2(glam::dvec2(x, y));
-                (l.x as f32, l.y as f32, p)
-            })
-            .collect();
-        out.push(ScriptStroke { brush, ink, points });
     }
     let count = out.len();
     let plural = if count == 1 { "" } else { "s" };
@@ -497,6 +519,7 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
         id,
         strokes: out,
         clip,
+        backdrop: sample_merged.then(|| lower_layer_backdrop(doc, id, to_doc)),
         to_doc,
         label: format!("Paint ({count} stroke{plural})"),
         message: format!(
@@ -506,6 +529,44 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
                 .and_then(Value::as_str)
                 .unwrap_or("the given settings")
         ),
+    })
+}
+
+/// Keep the document hierarchy, visibility, masks and blending, but omit the
+/// target and all higher content. Ancestors remain to composite lower siblings.
+fn lower_layer_backdrop(
+    doc: &Document,
+    id: NodeId,
+    to_doc: glam::DAffine2,
+) -> emulsion_raster::paint::Backdrop {
+    use emulsion_raster::TileCoord;
+    use emulsion_raster::composite::render_tile;
+    use emulsion_raster::tile::{FTile, TILE};
+    let mut lower = doc.clone();
+    let index = doc.nodes.iter().position(|n| n.id == id).expect("checked");
+    for node in &mut lower.nodes[index..] {
+        if !doc.is_ancestor(node.id, id) {
+            node.visible = false;
+        }
+    }
+    let tree = lower.composite_tree();
+    // A small bounded cache avoids recompositing a tile for every brush sample.
+    let cache = std::sync::Mutex::new(std::collections::HashMap::<TileCoord, FTile>::new());
+    Arc::new(move |x, y| {
+        let p = to_doc.transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
+        if p.x < 0.0 || p.y < 0.0 || p.x >= tree.width as f64 || p.y >= tree.height as f64 {
+            return [0.0; 4];
+        }
+        let (dx, dy) = (p.x.floor() as u32, p.y.floor() as u32);
+        let coord = TileCoord::new((dx / TILE) as i32, (dy / TILE) as i32);
+        let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= 16 && !cache.contains_key(&coord) {
+            cache.clear();
+        }
+        let tile = cache
+            .entry(coord)
+            .or_insert_with(|| render_tile(&tree, 0, coord));
+        tile[((dy % TILE) * TILE + dx % TILE) as usize]
     })
 }
 
@@ -2208,17 +2269,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 "Added layer {name:?} as node {id}"
             )))
         }
-        "list_brushes" => {
-            let list: Vec<Value> = library::library()
-                .into_iter()
-                .map(|b| json!({ "name": b.name, "category": b.category, "for": b.note, "size": b.brush.size }))
-                .collect();
-            Ok(ToolResult::text(serde_json::to_string_pretty(&json!({
-                "brushes": list,
-                "settings": "any Brush field: size, hardness, opacity, flow, spacing, roundness, angle, follow_path, grain (None|Paper|Canvas|Chalk|Speckle|Bristle|Halftone|Hatch|CrossHatch), grain_scale (dot or line pitch for tones), grain_strength (dot size for Halftone), edge_darken, size_pressure, flow_pressure, speed_thins, taper_start, taper_end, size_jitter, scatter, color_jitter, wetness, blend (Normal|Multiply|Behind)",
-                "tips": "Manga: Maru/Kabura/Fude nibs for line work, Milli pens for borders, Screentone brushes lay dot tone fixed to the page (paint an area with one), Hatching/Cross hatch for shade, Speed lines flick from thick to hairline, Blue pencil for roughs (color #A4C8FF), White ink for highlights. Ink for lines (G-pen tapers), Pencil and Chalk show paper grain, Markers darken where they overlap, Watercolour and Oil mix with what is under them, Smudge drags colour, Eraser removes. Give pressure per point for thick-to-thin lines."
-            })).unwrap_or_default()))
-        }
+        "list_brushes" => crate::brush_discovery::list(args),
         "select_all" => {
             let (w, h) = (editor.doc.width, editor.doc.height);
             exec(
@@ -2382,28 +2433,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             exec(editor, Command::ImageSize { width, height })?;
             Ok(ToolResult::text(format!("Image is now {width}×{height}")))
         }
-        "critique" => {
-            let mut c = emulsion_ai::critique::analyze(&editor.doc);
-            if let Ok(k) = std::env::var("TYPESAFE_API_KEY")
-                && !k.is_empty()
-            {
-                let _ =
-                    emulsion_ai::critique::rank_with_jev(&emulsion_ai::jev::Jev::new(k), &mut c);
-            }
-            let n = args
-                .get("count")
-                .and_then(Value::as_u64)
-                .unwrap_or(3)
-                .clamp(1, 8) as usize;
-            Ok(ToolResult::text(
-                serde_json::to_string_pretty(&json!({
-                    "ranked_by": c.ranked_by,
-                    "issues": c.issues.iter().take(n).map(|i| json!({ "key": i.key, "severity": i.severity, "note": i.text })).collect::<Vec<_>>(),
-                    "metrics": c.metrics,
-                }))
-                .unwrap_or_default(),
-            ))
-        }
+        "critique" => crate::review::critique(&editor.doc, args),
         "list_history" => Ok(ToolResult::text(
             serde_json::to_string_pretty(&history_json(editor)).unwrap_or_default(),
         )),
@@ -2877,54 +2907,17 @@ pub fn describe(editor: &Editor) -> Value {
 
 /// Render the composite (or one node) as a base64 PNG image block.
 pub fn view(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> {
-    let max = args
-        .get("max_size")
-        .and_then(Value::as_u64)
-        .unwrap_or(1024)
-        .clamp(64, 1568) as u32;
-    let mut d = doc.clone();
-    if let Some(id) = args.get("node").and_then(Value::as_u64) {
-        if d.node(id).is_none() {
-            return Err(err(format!("no node {id}")));
-        }
-        let keep = d.subtree(id);
-        let snapshot = d.clone();
-        for n in &mut d.nodes {
-            if !(keep.contains(&n.id) || snapshot.is_ancestor(n.id, id)) {
-                n.visible = false;
-            }
-        }
+    crate::preview::view(doc, args)
+}
+
+/// Image-bearing read tools can run against a snapshot off the UI thread.
+pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, ToolResult> {
+    match name {
+        "get_view" => view(doc, args),
+        "critique" => crate::review::critique(doc, args),
+        "list_brushes" => crate::brush_discovery::list(args),
+        _ => Err(err(format!("not an inspection tool: {name}"))),
     }
-    let tree = d.composite_tree();
-    let mut level = 0;
-    while {
-        let (w, h) = level_size(d.width, d.height, level);
-        w.max(h) > max * 2
-    } {
-        level += 1;
-    }
-    let flat = flatten(&tree, level);
-    let img = image::RgbaImage::from_raw(flat.width(), flat.height(), flat.to_srgba8())
-        .ok_or_else(|| err("render failed"))?;
-    let s = (max as f64 / img.width().max(img.height()) as f64).min(1.0);
-    let (w, h) = (
-        ((img.width() as f64 * s).round() as u32).max(1),
-        ((img.height() as f64 * s).round() as u32).max(1),
-    );
-    let img = if (w, h) == img.dimensions() {
-        img
-    } else {
-        image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle)
-    };
-    let png = emulsion_io::export::png8(w, h, img.as_raw()).map_err(|e| err(e.to_string()))?;
-    let data = base64::engine::general_purpose::STANDARD.encode(png);
-    Ok(ToolResult {
-        content: vec![
-            json!({ "type": "image", "data": data, "mimeType": "image/png" }),
-            json!({ "type": "text", "text": format!("{w}×{h} view of a {}×{} document", doc.width, doc.height) }),
-        ],
-        is_error: false,
-    })
 }
 
 #[cfg(test)]
@@ -3653,6 +3646,221 @@ mod tests {
         assert_eq!(raster.get(150, 95)[3], 0, "nothing outside it");
         let r = execute(&mut e, "hatch", &json!({ "node": id, "color": "#000000" }));
         assert!(r.is_error, "no rect and no selection");
+    }
+
+    #[test]
+    fn paint_regression_svg_pen_lifts() {
+        let mut doc = Document::new(100, 60);
+        doc.nodes.push(Node::raster(
+            1,
+            "Ink",
+            Arc::new(Raster::solid(100, 60, [0.0; 4])),
+            Placement::default(),
+        ));
+        let args = json!({"node": 1, "color": "#000000", "settings": {"size": 4},
+            "strokes": [{"d": "M 10 20 L 30 20 M 70 20 L 90 20", "pressure": [0.2, 1.0]}]});
+        let script = paint_script(&doc, &args).unwrap_or_else(|e| panic!("{}", text(&e)));
+        let (raster, _) = script.render(&Raster::solid(100, 60, [0.0; 4]));
+        assert_eq!(
+            raster.get(50, 20)[3],
+            0,
+            "a pen lift must not paint a connecting line"
+        );
+        assert!(raster.get(20, 20)[3] > 0 && raster.get(80, 20)[3] > 0);
+        assert_eq!(script.strokes.len(), 2);
+        assert_eq!(
+            script.length(),
+            40.0,
+            "playback distance excludes the pen lift"
+        );
+        for stroke in &script.strokes {
+            assert_eq!(stroke.points.first().unwrap().2, Some(0.2));
+            assert_eq!(stroke.points.last().unwrap().2, Some(1.0));
+        }
+    }
+
+    #[test]
+    fn paint_regression_sample_merged_is_opt_in_and_excludes_upper_layers() {
+        let mut doc = Document::new(80, 60);
+        doc.nodes = vec![
+            Node::raster(
+                1,
+                "Red below",
+                Arc::new(Raster::solid(80, 60, [1.0, 0.0, 0.0, 1.0])),
+                Placement::default(),
+            ),
+            Node::raster(
+                2,
+                "Paint",
+                Arc::new(Raster::solid(80, 60, [0.0; 4])),
+                Placement::default(),
+            ),
+            Node::raster(
+                3,
+                "Green above",
+                Arc::new(Raster::solid(80, 60, [0.0, 1.0, 0.0, 1.0])),
+                Placement::default(),
+            ),
+        ];
+        let mut args = json!({"node": 2, "color": "#0000ff", "settings": {"size": 8, "wetness": 1.0},
+            "strokes": [{"points": [[20, 30], [60, 30]]}]});
+        let render = |args: &Value| {
+            let script = paint_script(&doc, args).unwrap_or_else(|e| panic!("{}", text(&e)));
+            script
+                .render(&Raster::solid(80, 60, [0.0; 4]))
+                .0
+                .get(40, 30)
+        };
+        let local = render(&args);
+        assert!(
+            local[2] > 50000 && local[0] == 0,
+            "default samples the target layer only: {local:?}"
+        );
+        args["sample_merged"] = json!(true);
+        let merged = render(&args);
+        assert!(
+            merged[0] > 50000 && merged[1] == 0 && merged[2] == 0,
+            "wet paint must sample red below, not green above: {merged:?}"
+        );
+    }
+
+    #[test]
+    fn paint_regression_closed_subpaths_keep_closure_and_lifts() {
+        let mut doc = Document::new(100, 80);
+        doc.nodes.push(Node::raster(
+            1,
+            "Ink",
+            Arc::new(Raster::solid(100, 80, [0.0; 4])),
+            Placement::default(),
+        ));
+        let script = paint_script(
+            &doc,
+            &json!({"node": 1, "color": "#000000", "settings": {"size": 3},
+            "strokes": [{"d": "M 10 10 L 30 10 L 30 30 Z M 70 50 L 90 50 L 90 70 Z"}]}),
+        )
+        .unwrap_or_else(|e| panic!("{}", text(&e)));
+        assert_eq!(script.strokes.len(), 2);
+        for stroke in &script.strokes {
+            assert_eq!(
+                stroke.points.first(),
+                stroke.points.last(),
+                "each closed subpath closes itself"
+            );
+        }
+        let (raster, _) = script.render(&Raster::solid(100, 80, [0.0; 4]));
+        assert_eq!(
+            raster.get(50, 37)[3],
+            0,
+            "no segment from the first closed contour to the second"
+        );
+        assert!(raster.get(20, 20)[3] > 0 && raster.get(80, 60)[3] > 0);
+    }
+
+    #[test]
+    fn paint_regression_backdrop_hierarchy_masks_and_target_exclusion() {
+        let mut doc = Document::new(80, 60);
+        let mut red = Node::raster(
+            1,
+            "Lower red",
+            Arc::new(Raster::solid(80, 60, [1.0, 0.0, 0.0, 1.0])),
+            Placement::default(),
+        );
+        red.parent = Some(5);
+        red.opacity = 0.5;
+        red.mask = Some(Arc::new(select::rect(80, 60, 0.0, 0.0, 40.0, 60.0)));
+        let mut hidden = Node::raster(
+            2,
+            "Hidden blue",
+            Arc::new(Raster::solid(80, 60, [0.0, 0.0, 1.0, 1.0])),
+            Placement::default(),
+        );
+        hidden.parent = Some(5);
+        hidden.visible = false;
+        let mut target = Node::raster(
+            3,
+            "Current yellow",
+            Arc::new(Raster::solid(80, 60, [0.5, 0.5, 0.0, 0.5])),
+            Placement::default(),
+        );
+        target.parent = Some(5);
+        let mut upper = Node::raster(
+            4,
+            "Upper green",
+            Arc::new(Raster::solid(80, 60, [0.0, 1.0, 0.0, 1.0])),
+            Placement::default(),
+        );
+        upper.parent = Some(5);
+        let mut group = Node::new(5, "Group", NodeKind::Group { collapsed: false });
+        group.opacity = 0.5;
+        doc.nodes = vec![red, hidden, target, upper, group];
+        let backdrop = lower_layer_backdrop(&doc, 3, glam::DAffine2::IDENTITY);
+        let pixel = backdrop(20, 20);
+        assert!(
+            (pixel[0] - 0.25).abs() < 0.001 && pixel[1] == 0.0 && pixel[2] == 0.0,
+            "only masked lower red through its group: {pixel:?}"
+        );
+        assert_eq!(backdrop(60, 20), [0.0; 4], "lower layer mask is respected");
+        assert_eq!(backdrop(-1, 20), [0.0; 4]);
+    }
+
+    #[test]
+    fn paint_regression_sampling_and_selection_use_document_coordinates() {
+        let mut doc = Document::new(100, 80);
+        doc.nodes.push(Node::raster(
+            1,
+            "Red below",
+            Arc::new(Raster::solid(100, 80, [1.0, 0.0, 0.0, 1.0])),
+            Placement::default(),
+        ));
+        let placement = Placement {
+            x: 10.0,
+            y: 10.0,
+            scale_x: 2.0,
+            scale_y: 2.0,
+            ..Placement::default()
+        };
+        doc.nodes.push(Node::raster(
+            2,
+            "Scaled paint",
+            Arc::new(Raster::solid(40, 30, [0.0; 4])),
+            placement,
+        ));
+        doc.selection = Some(Arc::new(select::rect(100, 80, 10.0, 10.0, 40.0, 60.0)));
+        let args = json!({"node": 2, "color": "#0000ff", "sample_merged": true,
+            "settings": {"size": 8, "wetness": 1.0}, "strokes": [{"points": [[20, 30], [80, 30]]}]});
+        let script = paint_script(&doc, &args).unwrap_or_else(|e| panic!("{}", text(&e)));
+        let (raster, _) = script.render(&Raster::solid(40, 30, [0.0; 4]));
+        assert!(
+            raster.get(10, 10)[0] > 50000,
+            "layer (10,10) maps to selected document (30,30)"
+        );
+        assert_eq!(
+            raster.get(30, 10)[3],
+            0,
+            "layer (30,10) maps outside selection"
+        );
+        let mapped = lower_layer_backdrop(
+            &doc,
+            2,
+            Placement {
+                x: -30.0,
+                ..placement
+            }
+            .to_doc(40, 30),
+        );
+        assert_eq!(
+            mapped(5, 10),
+            [0.0; 4],
+            "negative mapped document point is outside the canvas"
+        );
+        assert_eq!(mapped(20, 10), [1.0, 0.0, 0.0, 1.0]);
+        let hatch = hatch_to_paint(
+            &doc,
+            &json!({"node": 2, "sample_merged": true, "rect": [10, 10, 40, 40]}),
+        )
+        .unwrap_or_else(|e| panic!("{}", text(&e)));
+        assert_eq!(hatch["sample_merged"], true);
+        assert!(paint_script(&doc, &json!({"sample_merged": "true"})).is_err());
     }
 
     #[test]

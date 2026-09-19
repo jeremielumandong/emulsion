@@ -25,6 +25,9 @@ pub type LineSink = Box<dyn Fn(Line) + Send + Sync>;
 
 pub trait CliProcess: Send {
     fn write_line(&mut self, line: &str) -> std::io::Result<()>;
+    /// Close stdin so a CLI that reads "additional input" from a pipe
+    /// sees end-of-file at once.
+    fn close_stdin(&mut self) {}
     fn kill(&mut self);
 }
 
@@ -42,6 +45,10 @@ struct ProdProcess {
 }
 
 impl CliProcess for ProdProcess {
+    fn close_stdin(&mut self) {
+        self.stdin.take();
+    }
+
     fn write_line(&mut self, line: &str) -> std::io::Result<()> {
         let s = self
             .stdin
@@ -199,14 +206,15 @@ impl Session {
                     let mut parser = p.lock();
                     if parser.flavor != protocol::Flavor::Claude && !parser.saw_result {
                         parser.saw_result = true;
+                        let (input_tokens, output_tokens, cost_usd) = parser.usage;
                         out.push(match code {
                             Some(0) | None => Event::Result {
                                 text: String::new(),
-                                cost_usd: 0.0,
+                                cost_usd,
                                 duration_ms: 0,
                                 turns: 1,
-                                input_tokens: 0,
-                                output_tokens: 0,
+                                input_tokens,
+                                output_tokens,
                             },
                             Some(c) => Event::Error(format!("the CLI exited with status {c}")),
                         });
@@ -247,7 +255,9 @@ impl Session {
             }
             self.parser.lock().begin_turn();
             let spec = respawn(text, self.session_id())?;
-            let process = launcher.spawn(&spec, Self::sink(&self.parser, &self.tx))?;
+            let mut process = launcher.spawn(&spec, Self::sink(&self.parser, &self.tx))?;
+            // The prompt travels in argv; nothing more is coming on stdin.
+            process.close_stdin();
             self.process = Some(process);
             return Ok(());
         }

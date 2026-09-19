@@ -1,30 +1,42 @@
-//! Fast critique of a drawing in progress.
+//! Low-resolution, intent-aware observations about a drawing in progress.
 //!
-//! Instant, rule-based measurements of the composite — value grouping and
-//! range, where the detail sits, weight and balance, edge character,
-//! colour temperature, symmetry, empty space — turned into the sentences
-//! a drawing teacher would say. When a Jev key is available, Jev ranks
-//! which issue matters most for the picture; without one the rules rank.
-//! Every paint the assistant makes gets the top lines appended to its
-//! result, so it corrects course without another look.
+//! Measurements describe value, detail distribution, edges, colour and balance.
+//! They do not establish artistic quality, anatomy, perspective or subject fidelity.
+//! Suggested changes are conditional on the brief, medium and current stage.
+//! Optional Jev ranking prioritizes observations without turning them into defects.
 
 use crate::jev::{Jev, JevError};
 use emulsion_core::Document;
 use emulsion_raster::color;
 use emulsion_raster::composite::{flatten, level_size};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+
+/// The artistic brief supplied by the caller; empty fields mean unknown intent.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CritiqueContext {
+    pub medium: String,
+    pub stage: String,
+    pub composition_intent: String,
+    pub user_constraints: Vec<String>,
+}
+
+/// Applies equally to rule-based observations and optional model ranking.
+pub const REVIEW_POLICY: &str = "Measurements are observations, not artistic defects or a quality score. Respect the medium, current stage, composition intent and every user constraint. Unknown intent is not permission to impose a style. Centred composition, symmetry, limited values, hard edges and reserved paper may be intentional. Only suggest a correction if it serves the stated brief at this stage. These roughly 192-pixel measurements cannot establish anatomy, perspective or subject fidelity: inspect full-composition and document-space detail images against the brief to review those qualities.";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Issue {
     pub key: &'static str,
-    /// What is wrong and what to do, in one sentence.
+    /// A measured observation, with advice conditional on artistic intent.
     pub text: String,
-    /// 0–1, how much it hurts the picture.
+    /// Review priority, not a measure of artistic quality.
     pub severity: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Critique {
+    pub context: CritiqueContext,
     pub issues: Vec<Issue>,
     /// The measurements behind the issues, for Jev and for the curious.
     pub metrics: Map<String, Value>,
@@ -40,8 +52,13 @@ impl Critique {
 
 const SIZE: u32 = 192;
 
-/// Measure the composite and list what a teacher would point at.
+/// Analyze without a supplied brief. Unknown intent must remain unknown.
 pub fn analyze(doc: &Document) -> Critique {
+    analyze_with_context(doc, &CritiqueContext::default())
+}
+
+/// Measure the composite while retaining the artistic brief for review and ranking.
+pub fn analyze_with_context(doc: &Document, context: &CritiqueContext) -> Critique {
     let tree = doc.composite_tree();
     let mut level = 0;
     while level_size(tree.width, tree.height, level)
@@ -60,7 +77,11 @@ pub fn analyze(doc: &Document) -> Critique {
         .map(color::px_to_f)
         .collect();
     if w < 4 || h < 4 {
-        return Critique::default();
+        return Critique {
+            context: context.clone(),
+            ranked_by: "rules",
+            ..Default::default()
+        };
     }
     // Encoded luma per pixel, alpha-aware; transparent counts as empty.
     let mut luma = vec![0.0f32; w * h];
@@ -89,6 +110,7 @@ pub fn analyze(doc: &Document) -> Critique {
     }
     let painted: Vec<usize> = (0..w * h).filter(|i| alpha[*i] > 0.02).collect();
     let mut c = Critique {
+        context: context.clone(),
         ranked_by: "rules",
         ..Default::default()
     };
@@ -97,7 +119,7 @@ pub fn analyze(doc: &Document) -> Critique {
     if painted.len() < 16 {
         c.issues.push(Issue {
             key: "empty",
-            text: "The canvas is still empty; block in the big shapes before anything else.".into(),
+            text: "The canvas has very few opaque pixels; establish the first marks for the selected technique while preserving any intended blank paper.".into(),
             severity: 1.0,
         });
         return c;
@@ -172,7 +194,7 @@ pub fn analyze(doc: &Document) -> Critique {
             "flat_values",
             0.6 + (0.45 - range),
             format!(
-                "Values are compressed (range {:.0} %): push the darkest darks and lightest lights apart, or the piece reads as grey.",
+                "Measured value range is {:.0} %; widen it only if the brief and current stage call for stronger contrast. A limited range may be intentional.",
                 range * 100.0
             ),
         );
@@ -181,7 +203,7 @@ pub fn analyze(doc: &Document) -> Critique {
         issue(
             "no_darks",
             0.5,
-            "There are no real darks; put a full dark accent in the shadow side of the focal form."
+            "The lower value percentile is relatively light; add a dark accent only if needed for the intended value design at this stage."
                 .into(),
         );
     }
@@ -189,7 +211,7 @@ pub fn analyze(doc: &Document) -> Critique {
         issue(
             "no_lights",
             0.45,
-            "There are no clean lights; leave or add a light shape where the light hits first."
+            "The upper value percentile is relatively dark; reserve or add a light shape only if it serves the brief and medium."
                 .into(),
         );
     }
@@ -198,7 +220,7 @@ pub fn analyze(doc: &Document) -> Critique {
             "value_grouping",
             0.5,
             format!(
-                "Values scatter into {peaks} groups; squint and merge them into three or four so the design reads from across the room."
+                "The value histogram has {peaks} peaks; simplify groups only if the intended design needs a clearer value hierarchy."
             ),
         );
     }
@@ -245,10 +267,10 @@ pub fn analyze(doc: &Document) -> Critique {
         let top5: f32 = cells[..5].iter().sum::<f32>() / (esum as f32).max(1e-6);
         c.metrics.insert("detail_concentration".into(), json!(top5));
         if off_centre < 0.06 && top5 > 0.45 {
-            issue("dead_centre", 0.55, "The detail sits dead centre; shift the focal point toward a third, or let the negative space breathe on one side.".into());
+            issue("dead_centre", 0.55, "Detail energy is concentrated near the centre. This may support an intentionally centred composition; compare it with the stated composition intent before changing placement.".into());
         }
         if top5 < 0.32 {
-            issue("no_focus", 0.5, "Detail is spread evenly, so nothing leads the eye; sharpen and darken one area and soften the rest.".into());
+            issue("no_focus", 0.5, "Detail energy is distributed broadly; emphasize one area only if the brief calls for a single focal hierarchy.".into());
         }
         let edge_frac = edge_px as f32 / painted.len().max(1) as f32;
         let hard_frac = if edge_px > 0 {
@@ -259,13 +281,13 @@ pub fn analyze(doc: &Document) -> Critique {
         c.metrics
             .insert("hard_edge_fraction".into(), json!(hard_frac));
         if hard_frac > 0.7 && edge_frac > 0.08 {
-            issue("all_hard", 0.4, "Every edge is hard; soften the edges that turn away from the light or sit behind the focal form.".into());
+            issue("all_hard", 0.4, "Most measured edges are hard; retain them for graphic line work, or soften selected edges if the medium and intended form require it.".into());
         }
         if hard_frac < 0.08 && edge_frac > 0.05 {
             issue(
                 "all_soft",
                 0.35,
-                "Every edge is soft; give the focal form a few crisp edges so it comes forward."
+                "Few measured edges are hard; add crisp accents only if the intended medium and stage call for them."
                     .into(),
             );
         }
@@ -289,7 +311,7 @@ pub fn analyze(doc: &Document) -> Critique {
             "unbalanced",
             0.4,
             format!(
-                "The weight leans {}; add a counterweight (a dark accent or a shape) on the other side.",
+                "Measured dark weight leans {}; add a counterweight only if this conflicts with the intended balance.",
                 if lr > 0.0 { "left" } else { "right" }
             ),
         );
@@ -298,7 +320,7 @@ pub fn analyze(doc: &Document) -> Critique {
         issue(
             "top_heavy",
             0.3,
-            "The picture is top-heavy; ground it with darker values low in the frame.".into(),
+            "Measured dark weight is concentrated high in the frame; add lower weight only if the intended composition needs it.".into(),
         );
     }
 
@@ -310,11 +332,11 @@ pub fn analyze(doc: &Document) -> Critique {
         let wl = warm_light.0 / warm_light.1 as f32;
         c.metrics.insert("temperature_split".into(), json!(wl - wd));
         if (wl - wd).abs() < 0.02 && sat > 0.08 {
-            issue("one_temperature", 0.3, "Lights and shadows share one colour temperature; make the light warmer and the shadow cooler (or the reverse) for depth.".into());
+            issue("one_temperature", 0.3, "Measured lights and darks have similar colour temperatures; separate them only if the palette and lighting intent call for it.".into());
         }
     }
     if sat > 0.55 {
-        issue("oversaturated", 0.35, "Everything is at full saturation; reserve the purest colour for the focal point and grey the rest down.".into());
+        issue("oversaturated", 0.35, "Average measured saturation is high; reduce it selectively only if the intended palette needs quieter areas.".into());
     }
 
     // ── Symmetry ──
@@ -333,7 +355,7 @@ pub fn analyze(doc: &Document) -> Critique {
         let sym = 1.0 - (diff / n as f32) * 4.0;
         c.metrics.insert("symmetry".into(), json!(sym));
         if sym > 0.92 && painted.len() > w * h / 10 {
-            issue("symmetry", 0.3, "The composition is almost perfectly symmetrical, which reads as static; break it with an asymmetric element.".into());
+            issue("symmetry", 0.3, "Measured values are nearly mirror-symmetric. Symmetry may be intentional; preserve it when it supports the brief.".into());
         }
     }
     if empty > 0.85 {
@@ -341,17 +363,35 @@ pub fn analyze(doc: &Document) -> Critique {
             "mostly_empty",
             0.3,
             format!(
-                "{:.0} % of the canvas is empty; decide whether that space is designed or just unfinished.",
+                "{:.0} % of the canvas is transparent; this can be reserved paper or intentional negative space. Add marks only if the brief and current stage require them.",
                 empty * 100.0
             ),
         );
     }
 
+    // Sketches and first washes are deliberately incomplete. Keep measurements,
+    // but lower the priority of observations about value range and finish.
+    let preliminary = context.stage.to_lowercase().split_whitespace().any(|word| {
+        matches!(
+            word,
+            "sketch" | "gesture" | "construction" | "thumbnail" | "underpainting" | "wash"
+        )
+    });
+    if preliminary {
+        for observation in &mut c.issues {
+            if matches!(
+                observation.key,
+                "flat_values" | "no_darks" | "no_lights" | "all_soft" | "mostly_empty"
+            ) {
+                observation.severity *= 0.5;
+            }
+        }
+    }
     c.issues.sort_by(|a, b| b.severity.total_cmp(&a.severity));
     c
 }
 
-/// Ask Jev which issue matters most for this picture and move it first.
+/// Ask Jev which observation merits review against the brief and move it first.
 pub fn rank_with_jev(jev: &Jev, c: &mut Critique) -> Result<(), JevError> {
     if c.issues.len() < 2 {
         return Ok(());
@@ -366,11 +406,11 @@ pub fn rank_with_jev(jev: &Jev, c: &mut Critique) -> Result<(), JevError> {
         "top_issue".into(),
         json!({
             "type": "Choice",
-            "question": "Given these measurements of a drawing in progress, which single problem should the artist fix first for the biggest improvement?",
+            "question": "Which observation most warrants image-based review against this brief at the current stage? Follow review_policy. Do not infer anatomy, perspective or subject fidelity from metrics; do not treat intentional composition or medium characteristics as defects.",
             "options": options
         }),
     );
-    let state = json!({ "metrics": c.metrics, "issues": c.issues.iter().map(|i| i.key).collect::<Vec<_>>() });
+    let state = json!({ "context": c.context, "review_policy": REVIEW_POLICY, "metrics": c.metrics, "observations": c.issues.iter().map(|i| i.key).collect::<Vec<_>>() });
     let answers = jev.evaluate(&state, q)?;
     let pick = answers
         .get("top_issue")
@@ -451,5 +491,77 @@ mod tests {
             "{:?}",
             g.issues
         );
+    }
+
+    #[test]
+    fn intentional_centred_symmetry_is_observed_without_requiring_change() {
+        let doc = doc_with(Raster::from_fn(192, 192, [65535; 4], |x, y| {
+            if (76..116).contains(&x) && (76..116).contains(&y) {
+                [0, 0, 0, 65535]
+            } else {
+                [65535; 4]
+            }
+        }));
+        let context = CritiqueContext {
+            medium: "manga".into(),
+            stage: "inking".into(),
+            composition_intent: "centred, mirror-symmetric emblem".into(),
+            user_constraints: vec!["Preserve symmetry and the hard black silhouette".into()],
+        };
+        let c = analyze_with_context(&doc, &context);
+        assert_eq!(c.context, context);
+        assert!(c.metrics["symmetry"].as_f64().unwrap() > 0.92);
+        let centre = c.issues.iter().find(|i| i.key == "dead_centre").unwrap();
+        assert!(centre.text.contains("intentionally centred"));
+        assert!(!centre.text.contains("shift"));
+        let symmetry = c.issues.iter().find(|i| i.key == "symmetry").unwrap();
+        assert!(symmetry.text.contains("preserve"));
+        assert!(!symmetry.text.contains("break"));
+        // Measurements remain identical: intent changes their interpretation.
+        assert_eq!(c.metrics, analyze(&doc).metrics);
+    }
+
+    #[test]
+    fn unknown_intent_defaults_and_partial_context_are_backward_compatible() {
+        let context: CritiqueContext =
+            serde_json::from_value(json!({"medium": "watercolour"})).unwrap();
+        assert!(context.stage.is_empty());
+        assert!(context.composition_intent.is_empty());
+        assert!(context.user_constraints.is_empty());
+        let doc = doc_with(Raster::solid(64, 64, [0.4, 0.4, 0.4, 1.0]));
+        assert_eq!(
+            analyze(&doc),
+            analyze_with_context(&doc, &CritiqueContext::default())
+        );
+        assert!(
+            serde_json::from_value::<CritiqueContext>(json!({"user_constraints": "bad type"}))
+                .is_err()
+        );
+        assert!(
+            serde_json::from_value::<CritiqueContext>(json!({"compositon_intent": "typo"}))
+                .is_err()
+        );
+        let tiny = analyze_with_context(&Document::new(1, 1), &context);
+        assert_eq!(tiny.context, context);
+    }
+
+    #[test]
+    fn preliminary_wash_keeps_measurements_without_prioritizing_finished_contrast() {
+        let doc = doc_with(Raster::solid(64, 64, [0.4, 0.4, 0.4, 1.0]));
+        let context = CritiqueContext {
+            medium: "watercolour".into(),
+            stage: "first wash".into(),
+            user_constraints: vec!["Keep the painting high-key".into()],
+            ..Default::default()
+        };
+        let initial = analyze_with_context(&doc, &context);
+        let unknown = analyze(&doc);
+        assert_eq!(initial.metrics, unknown.metrics);
+        for key in ["flat_values", "no_darks"] {
+            let provisional = initial.issues.iter().find(|i| i.key == key).unwrap();
+            let default = unknown.issues.iter().find(|i| i.key == key).unwrap();
+            assert_eq!(provisional.severity, default.severity * 0.5);
+            assert!(provisional.text.contains("only if"));
+        }
     }
 }

@@ -726,11 +726,11 @@ impl EditorView {
     }
 
     fn run_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
-        if call.name == "get_view" {
+        if matches!(call.name.as_str(), "get_view" | "critique" | "list_brushes") {
             let doc = self.editor.doc.clone();
             let args = call.arguments.clone();
             cx.background_spawn(async move {
-                let r = exec::view(&doc, &args).unwrap_or_else(|e| e);
+                let r = exec::inspect(&doc, &call.name, &args).unwrap_or_else(|e| e);
                 call.reply(r);
             })
             .detach();
@@ -840,12 +840,7 @@ impl EditorView {
                 break;
             };
             if pb.current.is_none() {
-                pb.current = Some(Box::new(emulsion_raster::paint::Stroke::new(
-                    layer.clone(),
-                    s.brush,
-                    s.ink.clone(),
-                    pb.script.clip.clone(),
-                )));
+                pb.current = Some(Box::new(pb.script.start_stroke(layer.clone(), s)));
                 pb.point = 0;
                 pb.pos = None;
             }
