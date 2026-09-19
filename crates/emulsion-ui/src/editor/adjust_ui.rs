@@ -651,3 +651,149 @@ impl EditorView {
         );
     }
 }
+
+// ── The Adjust strip: the usual tools, one click each ───────────────────
+
+/// Adjustments grouped the way an editor's menu would show them.
+const QUICK_ADJUST: &[(&str, &[&str])] = &[
+    (
+        "Light",
+        &["exposure", "brightness_contrast", "levels", "curves"],
+    ),
+    (
+        "Colour",
+        &[
+            "white_balance",
+            "hue_saturation",
+            "color_balance",
+            "vibrance",
+            "photo_filter",
+            "black_and_white",
+            "gradient_map",
+        ],
+    ),
+    ("Effects", &["grain", "vignette", "posterize", "threshold"]),
+];
+
+/// Filters offered in the strip, by catalogue label.
+const QUICK_FILTERS: &[&str] = &[
+    "Gaussian blur",
+    "Lens blur",
+    "Motion blur",
+    "Unsharp mask",
+    "Smart sharpen",
+    "Reduce noise",
+    "Add noise",
+    "High pass",
+    "Lens correction",
+];
+
+impl EditorView {
+    /// Add an adjustment above the selection and show its sliders.
+    pub fn quick_adjust(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(a) = Adjustment::catalogue().into_iter().find(|a| a.key() == key) else {
+            return;
+        };
+        let node = Node::adjust(0, a);
+        let slot = self.insertion_slot();
+        if let Some(id) = self.execute(
+            Command::AddNode {
+                node: Box::new(node),
+                slot,
+            },
+            cx,
+        ) {
+            self.selected = Some(id);
+            self.set_status(
+                "Added — drag its sliders below; hide or delete the node to undo the look.",
+                false,
+                cx,
+            );
+        }
+    }
+
+    /// Add a filter to the selected pixel node, making it a smart layer
+    /// first if it is plain pixels.
+    pub fn quick_filter(&mut self, label: &str, cx: &mut Context<Self>) {
+        let Some(f) = emulsion_filters::Filter::catalogue()
+            .into_iter()
+            .find(|f| f.label() == label)
+        else {
+            return;
+        };
+        let Some(id) = self.selected else {
+            self.set_status("Select a pixel node to filter first.", false, cx);
+            return;
+        };
+        let kind = self.editor.doc.node(id).map(|n| n.kind.tag());
+        match kind {
+            Some("pixels") => {
+                self.editor.begin(format!("{} filter", f.label()));
+                self.convert_smart(cx);
+                self.add_filter(id, f, cx);
+                self.editor.end();
+            }
+            Some("smart") => self.add_filter(id, f, cx),
+            _ => self.set_status("Filters apply to pixel nodes; select one first.", false, cx),
+        }
+    }
+
+    pub(crate) fn quick_adjust_view(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(5.))
+            .px(px(15.))
+            .py(px(9.))
+            .border_b_1()
+            .border_color(p.line)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(label("Adjust", p))
+                    .child(div().flex_1())
+                    .child(
+                        chip("qa-lut", "LUT…", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.import_lut(None, cx))),
+                    ),
+            );
+        let catalogue = Adjustment::catalogue();
+        for (group, keys) in QUICK_ADJUST {
+            let mut row = div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(4.))
+                .child(mono(group.to_string(), 9., p.muted).w(px(44.)).flex_none());
+            for (i, key) in keys.iter().enumerate() {
+                let Some(a) = catalogue.iter().find(|a| a.key() == *key) else {
+                    continue;
+                };
+                let text = a.label();
+                let k: &'static str = key;
+                let id = group.len() * 100 + i;
+                row = row.child(
+                    chip(("qa", id), text, false, p)
+                        .on_click(cx.listener(move |this, _, _, cx| this.quick_adjust(k, cx))),
+                );
+            }
+            body = body.child(row);
+        }
+        let mut frow = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(4.))
+            .child(mono("Filters", 9., p.muted).w(px(44.)).flex_none());
+        for (i, name) in QUICK_FILTERS.iter().enumerate() {
+            let n: &'static str = name;
+            frow = frow.child(
+                chip(("qf", i), n, false, p)
+                    .on_click(cx.listener(move |this, _, _, cx| this.quick_filter(n, cx))),
+            );
+        }
+        body.child(frow).into_any_element()
+    }
+}

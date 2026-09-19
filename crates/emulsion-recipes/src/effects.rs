@@ -79,12 +79,12 @@ pub fn light_leak(
             LeakSide::Top => (py / fh, px / fw),
             LeakSide::Bottom => ((fh - py) / fh, px / fw),
         };
-        let reach = 0.18 + 0.42 * s;
+        let reach = 0.10 + 0.28 * s;
         // Wobble the edge and vary the intensity along it.
         let wobble = (noise(along * fh, 0.0, fh * 0.35, seed) - 0.5) * 0.25;
         let band = ((reach + wobble - d) / reach).clamp(0.0, 1.0);
         let streak = 0.6 + 0.4 * noise(along * fh, d * fh, fh * 0.12, seed + 1);
-        let a = band * band * streak * (0.35 + 0.55 * s);
+        let a = band * band * streak * (0.22 + 0.4 * s);
         // Leaks go orange at the edge and redder as they fade.
         let fade = 1.0 - band;
         let rgb = [
@@ -102,13 +102,14 @@ pub fn dust(w: u32, h: u32, amount: f32, seed: u32) -> Raster {
     let a = amount.clamp(0.0, 1.0);
     let (fw, fh) = (w as f32, h as f32);
     let cell = (fw.min(fh) / 18.0).max(8.0);
-    // A few vertical scratches at deterministic positions.
-    let scratches: Vec<(f32, f32, f32)> = (0..(2.0 + a * 6.0) as u32)
+    // A few fine scratches at deterministic positions: (x, start, length, width).
+    let scratches: Vec<(f32, f32, f32, f32)> = (0..(1.0 + a * 3.0) as u32)
         .map(|i| {
             (
                 hash(i, 7, seed) * fw,
-                0.6 + 0.4 * hash(i, 8, seed),
-                0.6 + 1.6 * hash(i, 9, seed),
+                hash(i, 10, seed) * 0.5,
+                0.15 + 0.45 * hash(i, 8, seed),
+                0.35 + 0.6 * hash(i, 9, seed),
             )
         })
         .collect();
@@ -132,11 +133,12 @@ pub fn dust(w: u32, h: u32, amount: f32, seed: u32) -> Raster {
                 }
             }
         }
-        for &(sx, len, width) in &scratches {
-            let drift = (noise(0.0, py, fh * 0.2, seed + 11) - 0.5) * 12.0;
+        for &(sx, start, len, width) in &scratches {
+            let drift = (noise(0.0, py, fh * 0.12, seed + 11) - 0.5) * fw * 0.06;
             let d = (px - sx - drift).abs();
-            if py < fh * len {
-                let along = 0.5 + 0.5 * noise(py, 0.0, 9.0, seed + 12);
+            let t = py / fh;
+            if t > start && t < start + len {
+                let along = (0.3 + 0.7 * noise(py, 0.0, 6.0, seed + 12)).powi(2);
                 v = v.max(((1.0 - d / width) * along).clamp(0.0, 1.0));
             }
         }
@@ -286,7 +288,7 @@ pub fn date_stamp(w: u32, h: u32, date: Option<&str>) -> TextSpec {
         _ => today_stamp(),
     };
     let short = w.min(h) as f32;
-    let size = (short * 0.045).clamp(12.0, 200.0);
+    let size = (short * 0.062).clamp(12.0, 260.0);
     TextSpec {
         text,
         font: String::new(),
@@ -296,9 +298,9 @@ pub fn date_stamp(w: u32, h: u32, date: Option<&str>) -> TextSpec {
         bold: true,
         italic: false,
         align: Align::Right,
-        x: w as f32 * 0.58,
-        y: h as f32 - size * 1.9,
-        width: Some(w as f32 * 0.38),
+        x: w as f32 * 0.04,
+        y: h as f32 - size * 2.1,
+        width: Some(w as f32 * 0.92),
         letter_spacing: size * 0.08,
     }
 }

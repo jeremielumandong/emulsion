@@ -1684,6 +1684,7 @@ impl EditorView {
             .track_focus(&self.panel_focus)
             .key_context("NodePanel")
             .child(self.scene_graph(p, cx))
+            .child(self.quick_adjust_view(p, cx))
             .child(self.inspector(p, window, cx))
             .child(
                 div()
@@ -1691,7 +1692,7 @@ impl EditorView {
                     .pt(px(10.))
                     .children(self.navigator_view(p, cx))
                     .children(self.info_view(p))
-                    .children(self.recipes_view(p, cx))
+                    .children(self.recipes_view(p, window, cx))
                     .child(self.histogram_view(p, cx)),
             )
             .child(self.history_list(p, cx))
