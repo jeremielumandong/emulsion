@@ -15,6 +15,7 @@ pub(crate) fn list(args: &Value) -> Result<ToolResult, ToolResult> {
         .to_lowercase();
     let presets: Vec<_> = library::library()
         .into_iter()
+        .chain(crate::exec::saved_brushes())
         .filter(|b| {
             b.name.to_lowercase().contains(&query) || b.category.to_lowercase().contains(&query)
         })

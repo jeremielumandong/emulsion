@@ -120,6 +120,10 @@ pub struct Brush {
     /// Paint thickness lit from the top-left, 0–1 (oils, impasto).
     pub relief: f32,
     pub blend: BrushBlend,
+    /// Image tip from the texture registry (0 = the round procedural tip).
+    pub tip: u32,
+    /// Image grain from the registry, tiled over the canvas (0 = `grain`).
+    pub grain_tex: u32,
 }
 
 impl Default for Brush {
@@ -149,6 +153,8 @@ impl Default for Brush {
             edge_darken: 0.0,
             relief: 0.0,
             blend: BrushBlend::Normal,
+            tip: 0,
+            grain_tex: 0,
         }
     }
 }
@@ -620,6 +626,7 @@ impl Stroke {
             self.brush.grain_strength,
         );
         let seed = self.seed as u32;
+        let tip = textures::get(self.brush.tip);
         self.dabs = self.dabs.wrapping_add(1);
         let dab_no = self.dabs;
         // Tiny tips: spread the dab over the pixel so thin lines stay continuous.
@@ -637,7 +644,22 @@ impl Stroke {
                         let (ox, oy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
                         let (rx, ry) = (ox * c - oy * s, (ox * s + oy * c) / round);
                         let d = (rx * rx + ry * ry).sqrt() / r.max(0.5);
-                        let mut a = falloff(d, hard) * flow * aa;
+                        let shape = match &tip {
+                            // Image tips: sample the alpha in the dab's frame.
+                            Some(t) => {
+                                let u = rx / r.max(0.5) * 0.5 + 0.5;
+                                let v = ry / r.max(0.5) * 0.5 + 0.5;
+                                if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+                                    0.0
+                                } else {
+                                    // Hardness sharpens the tip's own edges.
+                                    let s = t.sample(u, v);
+                                    ((s - 0.5) * (1.0 + hard * 3.0) + 0.5).clamp(0.0, 1.0)
+                                }
+                            }
+                            None => falloff(d, hard),
+                        };
+                        let mut a = shape * flow * aa;
                         if a <= 0.0 {
                             continue;
                         }
@@ -836,11 +858,13 @@ impl Stroke {
             self.brush.grain_scale,
             self.brush.grain_strength,
         );
+        let grain_tex = textures::get(self.brush.grain_tex);
         let textured = gstr > 0.0
-            && matches!(
-                gk,
-                GrainKind::Paper | GrainKind::Canvas | GrainKind::Chalk | GrainKind::Speckle
-            );
+            && (grain_tex.is_some()
+                || matches!(
+                    gk,
+                    GrainKind::Paper | GrainKind::Canvas | GrainKind::Chalk | GrainKind::Speckle
+                ));
         let edge = self.brush.edge_darken;
         let relief = self.brush.relief;
         let base_fill = self.base.fill();
@@ -874,7 +898,12 @@ impl Stroke {
                     // The paper's tooth as a height the paint must reach: one
                     // light pass catches only the peaks, and scrubbing or
                     // pressing (more thickness) fills the valleys.
-                    let g = grain(gk, x as f32, y as f32, gs);
+                    let g = match &grain_tex {
+                        // Image grain tiles across the canvas at `grain_scale`
+                        // pixels per texture pixel.
+                        Some(t) => t.tiled(x as f32 / gs.max(0.1), y as f32 / gs.max(0.1)),
+                        None => grain(gk, x as f32, y as f32, gs),
+                    };
                     let depth = gstr * (1.0 - g);
                     let fill = (((1.0 + p[5]).ln() - 1.2 * depth) / 0.4).clamp(0.0, 1.0);
                     k = raw * fill;
@@ -1324,5 +1353,110 @@ mod tests {
             r.get(195, 50)[3] > 0,
             "and reaches it when the pointer lifts"
         );
+    }
+}
+
+/// Grey images used as brush tips and grains, shared by id so a `Brush`
+/// stays a small `Copy` value. Ids are assigned by whoever imports them
+/// (a hash of the image), and persist as PNGs in the brush library.
+pub mod textures {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    /// A grey texture, 0–1 per pixel.
+    pub struct Texture {
+        pub width: u32,
+        pub height: u32,
+        pub data: Vec<f32>,
+    }
+
+    impl Texture {
+        /// From 8-bit grey or alpha; `data.len() == w * h`.
+        pub fn from_gray8(width: u32, height: u32, data: &[u8]) -> Texture {
+            Texture {
+                width,
+                height,
+                data: data.iter().map(|v| *v as f32 / 255.0).collect(),
+            }
+        }
+
+        /// Bilinear sample at `u, v` in 0–1.
+        pub fn sample(&self, u: f32, v: f32) -> f32 {
+            let x = u * self.width as f32 - 0.5;
+            let y = v * self.height as f32 - 0.5;
+            let (x0, y0) = (x.floor(), y.floor());
+            let (fx, fy) = (x - x0, y - y0);
+            let px = |xi: i32, yi: i32| -> f32 {
+                let xi = xi.clamp(0, self.width as i32 - 1) as usize;
+                let yi = yi.clamp(0, self.height as i32 - 1) as usize;
+                self.data[yi * self.width as usize + xi]
+            };
+            let (x0, y0) = (x0 as i32, y0 as i32);
+            let top = px(x0, y0) + (px(x0 + 1, y0) - px(x0, y0)) * fx;
+            let bot = px(x0, y0 + 1) + (px(x0 + 1, y0 + 1) - px(x0, y0 + 1)) * fx;
+            top + (bot - top) * fy
+        }
+
+        /// Sample with wrap-around, `x, y` in texture pixels.
+        pub fn tiled(&self, x: f32, y: f32) -> f32 {
+            let u = (x / self.width as f32).rem_euclid(1.0);
+            let v = (y / self.height as f32).rem_euclid(1.0);
+            self.sample(u, v)
+        }
+    }
+
+    fn registry() -> &'static Mutex<HashMap<u32, Arc<Texture>>> {
+        static R: OnceLock<Mutex<HashMap<u32, Arc<Texture>>>> = OnceLock::new();
+        R.get_or_init(Default::default)
+    }
+
+    /// Register a texture under `id` (0 is reserved for "none").
+    pub fn register(id: u32, t: Texture) {
+        if id != 0 {
+            registry()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id, Arc::new(t));
+        }
+    }
+
+    pub fn get(id: u32) -> Option<Arc<Texture>> {
+        if id == 0 {
+            return None;
+        }
+        registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&id)
+            .cloned()
+    }
+
+    /// A stable id for image bytes.
+    pub fn id_for(bytes: &[u8]) -> u32 {
+        let mut h: u32 = 0x811c_9dc5;
+        for b in bytes {
+            h ^= *b as u32;
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        h.max(1)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn textures_sample_and_tile() {
+            let t = Texture::from_gray8(2, 1, &[0, 255]);
+            assert!((t.sample(0.25, 0.5) - 0.0).abs() < 1e-6);
+            assert!((t.sample(0.75, 0.5) - 1.0).abs() < 1e-6);
+            assert!((t.sample(0.5, 0.5) - 0.5).abs() < 1e-6);
+            assert!(
+                (t.tiled(2.5, 0.5) - 0.0).abs() < 1e-6 && (t.tiled(3.5, 0.5) - 1.0).abs() < 1e-6
+            );
+            let id = id_for(b"abc");
+            register(id, t);
+            assert!(get(id).is_some() && get(0).is_none());
+        }
     }
 }

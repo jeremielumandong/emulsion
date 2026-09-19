@@ -124,6 +124,12 @@ fn resolve_brush(
     let (mut brush, category) = match name.and_then(Value::as_str) {
         Some(n) => {
             let p = library::find(n)
+                .or_else(|| {
+                    let want = n.trim().to_lowercase();
+                    saved_brushes()
+                        .into_iter()
+                        .find(|p| p.name.to_lowercase() == want)
+                })
                 .ok_or_else(|| err(format!("no brush named {n:?}; call list_brushes")))?;
             (p.brush, p.category)
         }
@@ -728,6 +734,14 @@ fn smart_filters(doc: &Document, id: NodeId) -> Result<Vec<emulsion_filters::Fil
 }
 
 /// Compute a heavy tool against a document snapshot, on any thread.
+/// Brushes the person saved or imported (`<data dir>/brush-presets.json`).
+pub fn saved_brushes() -> Vec<library::BrushPreset> {
+    std::fs::read(emulsion_io::recent::data_dir().join("brush-presets.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
 /// The flattened document as a raster.
 fn doc_raster(doc: &Document) -> Raster {
     let (w, h) = (doc.width, doc.height);

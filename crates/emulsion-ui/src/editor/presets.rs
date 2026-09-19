@@ -5,7 +5,7 @@ use super::*;
 use emulsion_raster::library::{self, BrushPreset, CATEGORIES};
 use emulsion_raster::paint::{Brush, BrushBlend, GrainKind};
 
-pub const MAX_PRESETS: usize = 96;
+pub const MAX_PRESETS: usize = 400;
 
 fn file() -> PathBuf {
     emulsion_io::recent::data_dir().join("brush-presets.json")
@@ -117,6 +117,81 @@ impl EditorView {
         }
     }
 
+    /// Import Procreate `.brushset` / `.brush` files into the saved brushes,
+    /// keeping their tip and grain images.
+    pub fn import_brushes(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Import brushes".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let imported = cx
+                .background_spawn(async move {
+                    let mut out: Vec<Result<Vec<emulsion_io::brushset::Imported>, String>> =
+                        Vec::new();
+                    for p in paths {
+                        let r = emulsion_io::brushset::import(&p)
+                            .map_err(|e| format!("{}: {e}", p.display()));
+                        if let Ok(list) = &r {
+                            for b in list {
+                                for png in [&b.shape_png, &b.grain_png].into_iter().flatten() {
+                                    let _ = emulsion_io::brushset::store_texture(png);
+                                }
+                            }
+                        }
+                        out.push(r);
+                    }
+                    out
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let saved = this.presets.saved.get_or_insert_with(load);
+                let (mut added, mut errors) = (0usize, Vec::new());
+                for r in imported {
+                    match r {
+                        Ok(list) => {
+                            for b in list {
+                                if saved.len() >= MAX_PRESETS {
+                                    break;
+                                }
+                                if !saved.iter().any(|q| {
+                                    q.name == b.preset.name && q.category == b.preset.category
+                                }) {
+                                    saved.push(b.preset);
+                                    added += 1;
+                                }
+                            }
+                        }
+                        Err(e) => errors.push(e),
+                    }
+                }
+                let _ = save(saved);
+                this.presets.category = None;
+                this.presets.open = true;
+                if errors.is_empty() {
+                    this.set_status(
+                        format!(
+                            "Imported {added} brush{}.",
+                            if added == 1 { "" } else { "es" }
+                        ),
+                        false,
+                        cx,
+                    );
+                } else {
+                    this.set_status(format!("Imported {added}; {}", errors.join("; ")), true, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Save the current brush under a name describing it.
     pub fn save_preset(&mut self, cx: &mut Context<Self>) {
         let b = self.tools.brush;
@@ -213,6 +288,10 @@ impl EditorView {
                 },
             )));
         }
+        tabs = tabs.child(
+            chip("bcat-import", "Import…", false, p)
+                .on_click(cx.listener(|this, _, _, cx| this.import_brushes(cx))),
+        );
         tabs = tabs.child(
             chip(
                 "bcat-mine",

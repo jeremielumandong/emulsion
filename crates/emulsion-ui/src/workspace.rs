@@ -60,6 +60,8 @@ fn summary(doc: &Document) -> String {
 
 impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Imported brush tips and grains, so saved brushes render at once.
+        emulsion_io::brushset::load_textures();
         let weak = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             let Some(this) = weak.upgrade() else {

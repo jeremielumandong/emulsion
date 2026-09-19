@@ -23,6 +23,7 @@ rawler = { workspace = true }
 moxcms = { workspace = true }
 kamadak-exif = { workspace = true }
 ureq = { workspace = true }
+plist = { workspace = true }
 tracing = { workspace = true }
 emulsion-core = { workspace = true }
 emulsion-raster = { workspace = true }
