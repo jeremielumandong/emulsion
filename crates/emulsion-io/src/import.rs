@@ -63,9 +63,14 @@ pub fn decode(path: &Path) -> Result<Decoded> {
     let (w, h) = decoder.dimensions();
     check_size(w, h)?;
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let icc = decoder.icc_profile().ok().flatten();
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
-    from_dynamic(img)
+    let mut decoded = from_dynamic(img)?;
+    if let Some(icc) = icc {
+        decoded.raster = crate::icc::to_srgb_raster(&icc, decoded.raster, decoded.depth);
+    }
+    Ok(decoded)
 }
 
 /// Import `path` as a new document with one raster node.

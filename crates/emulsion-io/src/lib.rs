@@ -10,6 +10,7 @@
 
 pub mod export;
 pub mod history;
+pub mod icc;
 pub mod import;
 pub mod ora;
 pub mod raw;

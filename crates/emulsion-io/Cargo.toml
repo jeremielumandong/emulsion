@@ -20,6 +20,7 @@ zip = { workspace = true }
 quick-xml = { workspace = true }
 glam = { workspace = true }
 rawler = { workspace = true }
+moxcms = { workspace = true }
 tracing = { workspace = true }
 emulsion-core = { workspace = true }
 emulsion-raster = { workspace = true }
