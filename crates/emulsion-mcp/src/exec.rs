@@ -5,9 +5,10 @@ use base64::Engine as _;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
 use emulsion_raster::composite::{flatten, level_size, region};
+use emulsion_raster::paint::{Brush, Ink, Stroke};
 use emulsion_raster::select::{self, Combine};
 use emulsion_raster::{Adjustment, BlendMode, Placement};
-use emulsion_raster::{IRect, color, fill};
+use emulsion_raster::{IRect, Raster, color, fill, library};
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
@@ -95,6 +96,186 @@ fn selection_command(
     }
 }
 
+fn hex_color(v: &Value) -> Result<[f32; 4], ToolResult> {
+    let hex = v
+        .as_str()
+        .ok_or_else(|| err("color must be a string like #RRGGBB"))?;
+    let n = hex
+        .strip_prefix('#')
+        .filter(|h| h.len() == 6)
+        .and_then(|h| u32::from_str_radix(h, 16).ok())
+        .ok_or_else(|| err(format!("bad color {hex:?}; use #RRGGBB")))?;
+    Ok(color::srgba8_to_premul([
+        (n >> 16) as u8,
+        (n >> 8) as u8,
+        n as u8,
+        255,
+    ]))
+}
+
+/// A brush by name with `settings` laid over it. Returns the brush and
+/// its library category ("" when built from settings alone).
+fn resolve_brush(
+    name: Option<&Value>,
+    settings: Option<&Value>,
+    fallback: &Brush,
+) -> Result<(Brush, String), ToolResult> {
+    let (mut brush, category) = match name.and_then(Value::as_str) {
+        Some(n) => {
+            let p = library::find(n)
+                .ok_or_else(|| err(format!("no brush named {n:?}; call list_brushes")))?;
+            (p.brush, p.category)
+        }
+        None => (*fallback, String::new()),
+    };
+    if let Some(s) = settings {
+        let obj = s
+            .as_object()
+            .ok_or_else(|| err("settings must be an object"))?;
+        // Merge over the brush's JSON so any field can be set.
+        let mut base = serde_json::to_value(brush).map_err(|e| err(e.to_string()))?;
+        for (k, v) in obj {
+            if base.get(k).is_none() {
+                return Err(err(format!("unknown brush setting {k:?}")));
+            }
+            base[k] = v.clone();
+        }
+        brush = serde_json::from_value::<Brush>(base)
+            .map_err(|e| err(format!("bad settings: {e}")))?
+            .sanitized();
+    }
+    Ok((brush, category))
+}
+
+/// Paint strokes onto a copy of a layer; runs off the UI thread.
+fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
+    let id = id_arg(args, "node")?;
+    let node = doc.node(id).ok_or_else(|| err(format!("no node {id}")))?;
+    let NodeKind::Raster { raster, placement } = &node.kind else {
+        return Err(err(format!(
+            "{} is not a pixel layer; add_layer makes one",
+            node_label(doc, id)
+        )));
+    };
+    if node.locked {
+        return Err(err(format!("{} is locked", node_label(doc, id))));
+    }
+    let strokes = args
+        .get("strokes")
+        .and_then(Value::as_array)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| err("strokes must be a non-empty array"))?;
+    if strokes.len() > 400 {
+        return Err(err("at most 400 strokes per call"));
+    }
+    let (default_brush, default_cat) =
+        resolve_brush(args.get("brush"), args.get("settings"), &Brush::default())?;
+    let default_color = match args.get("color") {
+        Some(c) => Some(hex_color(c)?),
+        None => None,
+    };
+    let to_doc = placement.to_doc(raster.width(), raster.height());
+    let to_local = to_doc.inverse();
+    let scale = to_doc.matrix2.determinant().abs().sqrt().max(1e-6);
+    let clip = doc
+        .selection
+        .clone()
+        .map(|sel| -> emulsion_raster::paint::Clip {
+            Arc::new(move |x: i32, y: i32| {
+                let p = to_doc.transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
+                if p.x < 0.0 || p.y < 0.0 || p.x >= sel.width() as f64 || p.y >= sel.height() as f64
+                {
+                    0.0
+                } else {
+                    sel.get(p.x as u32, p.y as u32) as f32 / 255.0
+                }
+            })
+        });
+    let mut current: Raster = (**raster).clone();
+    let mut dirty = IRect::default();
+    let mut count = 0usize;
+    for (i, s) in strokes.iter().enumerate() {
+        let settings = s.get("settings").or(args.get("settings"));
+        let (mut brush, cat) = if s.get("brush").is_some() {
+            resolve_brush(s.get("brush"), settings, &default_brush)?
+        } else {
+            (
+                resolve_brush(None, s.get("settings"), &default_brush)?.0,
+                default_cat.clone(),
+            )
+        };
+        brush.size = (brush.size as f64 / scale) as f32;
+        // Stabilizing suits a hand, not computed points.
+        brush.stabilizer = 0.0;
+        let ink = match cat.as_str() {
+            "Eraser" => Ink::Erase,
+            "Smudge" => Ink::Smudge,
+            _ => {
+                let c = match s.get("color") {
+                    Some(c) => hex_color(c)?,
+                    None => default_color.ok_or_else(|| {
+                        err(format!(
+                            "stroke {i} has no color and no color was given for the call"
+                        ))
+                    })?,
+                };
+                Ink::Color(c)
+            }
+        };
+        let pts = s
+            .get("points")
+            .and_then(Value::as_array)
+            .ok_or_else(|| err(format!("stroke {i} has no points")))?;
+        if pts.len() > 2000 {
+            return Err(err(format!("stroke {i} has more than 2000 points")));
+        }
+        let base = Arc::new(current.clone());
+        let mut stroke = Stroke::new(base, brush, ink, clip.clone());
+        for (j, p) in pts.iter().enumerate() {
+            let a = p.as_array().filter(|a| a.len() >= 2).ok_or_else(|| {
+                err(format!(
+                    "stroke {i} point {j} must be [x, y] or [x, y, pressure]"
+                ))
+            })?;
+            let (x, y) = (
+                a[0].as_f64().unwrap_or(f64::NAN),
+                a[1].as_f64().unwrap_or(f64::NAN),
+            );
+            if !x.is_finite() || !y.is_finite() {
+                return Err(err(format!("stroke {i} point {j} is not a number")));
+            }
+            let pressure = a
+                .get(2)
+                .and_then(Value::as_f64)
+                .map(|p| p.clamp(0.0, 1.0) as f32);
+            let l = to_local.transform_point2(glam::dvec2(x, y));
+            stroke.point_at(l.x as f32, l.y as f32, pressure, None);
+        }
+        stroke.finish();
+        let (r, d) = stroke.render(&current);
+        current = r;
+        dirty = dirty.union(&d);
+        count += 1;
+    }
+    let dirty = dirty.intersect(&current.bounds());
+    let plural = if count == 1 { "" } else { "s" };
+    Ok(Planned {
+        commands: vec![Command::ReplacePixels {
+            id,
+            raster: Arc::new(current),
+            dirty,
+            label: format!("Paint ({count} stroke{plural})"),
+        }],
+        message: format!(
+            "Painted {count} stroke{plural} on {} with {}",
+            node_label(doc, id),
+            args.get("brush")
+                .and_then(Value::as_str)
+                .unwrap_or("the given settings")
+        ),
+    })
+}
+
 /// Compute a heavy tool against a document snapshot, on any thread.
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
     let (w, h) = (doc.width, doc.height);
@@ -131,6 +312,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 message,
             })
         }
+        "paint" => plan_paint(doc, args),
         "content_aware_fill" => {
             let sel = doc
                 .selection
@@ -477,6 +659,52 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             let (c, msg) = selection_command(&editor.doc, m, Combine::Replace, 0.0);
             exec(editor, c)?;
             Ok(ToolResult::text(msg))
+        }
+        "add_layer" => {
+            let (w, h) = (editor.doc.width, editor.doc.height);
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("Layer");
+            let node = Node::raster(
+                0,
+                name,
+                Arc::new(Raster::transparent(w, h)),
+                Placement::default(),
+            );
+            let slot = match args.get("above").and_then(Value::as_u64) {
+                Some(a) => {
+                    let t = editor
+                        .doc
+                        .node(a)
+                        .ok_or_else(|| err(format!("no node {a}")))?;
+                    let sib = editor.doc.children(t.parent);
+                    Slot {
+                        parent: t.parent,
+                        index: sib.iter().position(|s| *s == a).unwrap_or(0) + 1,
+                    }
+                }
+                None => Slot::TOP,
+            };
+            let id = exec(
+                editor,
+                Command::AddNode {
+                    node: Box::new(node),
+                    slot,
+                },
+            )?
+            .ok_or_else(|| err("no node was created"))?;
+            Ok(ToolResult::text(format!(
+                "Added layer {name:?} as node {id}"
+            )))
+        }
+        "list_brushes" => {
+            let list: Vec<Value> = library::library()
+                .into_iter()
+                .map(|b| json!({ "name": b.name, "category": b.category, "for": b.note, "size": b.brush.size }))
+                .collect();
+            Ok(ToolResult::text(serde_json::to_string_pretty(&json!({
+                "brushes": list,
+                "settings": "any Brush field: size, hardness, opacity, flow, spacing, roundness, angle, follow_path, grain (None|Paper|Canvas|Chalk|Speckle), grain_scale, grain_strength, size_pressure, flow_pressure, speed_thins, taper_start, taper_end, size_jitter, scatter, color_jitter, wetness, blend (Normal|Multiply|Behind)",
+                "tips": "Ink for lines (G-pen tapers), Pencil and Chalk show paper grain, Markers darken where they overlap, Watercolour and Oil mix with what is under them, Smudge drags colour, Eraser removes. Give pressure per point for thick-to-thin lines."
+            })).unwrap_or_default()))
         }
         "select_all" => {
             let (w, h) = (editor.doc.width, editor.doc.height);
@@ -1215,6 +1443,51 @@ mod tests {
         let h: Value =
             serde_json::from_str(&ok(execute(&mut e, "list_history", &json!({})))).unwrap();
         assert_eq!(h["branches"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn paint_tool_draws_with_library_brushes() {
+        let mut e = editor();
+        let r = execute(&mut e, "add_layer", &json!({ "name": "Sketch" }));
+        assert!(!r.is_error, "{}", text(&r));
+        let id = e.doc.nodes.last().unwrap().id;
+        assert_eq!(e.doc.nodes.last().unwrap().name, "Sketch");
+        let r = execute(&mut e, "list_brushes", &json!({}));
+        assert!(text(&r).contains("G-pen"));
+        let r = execute(
+            &mut e,
+            "paint",
+            &json!({
+                "node": id, "brush": "G-pen", "color": "#ff0000",
+                "strokes": [
+                    { "points": [[10, 50, 1.0], [190, 50, 0.2]] },
+                    { "brush": "Chisel marker", "color": "#00ff00", "points": [[100, 10], [100, 90]] }
+                ]
+            }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let NodeKind::Raster { raster, .. } = &e.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert!(raster.get(50, 50)[0] > 60000, "red ink at the start");
+        let g = raster.get(100, 30);
+        assert!(
+            g[1] > 30000 && g[0] < 2000,
+            "green marker at 60% down the middle: {g:?}"
+        );
+        assert_eq!(e.history.len(), 2, "add_layer and one paint step");
+        let r = execute(
+            &mut e,
+            "paint",
+            &json!({ "node": id, "brush": "nope", "strokes": [{ "points": [[0, 0]] }] }),
+        );
+        assert!(r.is_error && text(&r).contains("list_brushes"));
+        let r = execute(
+            &mut e,
+            "paint",
+            &json!({ "node": id, "settings": { "sizes": 3 }, "color": "#000000", "strokes": [{ "points": [[0, 0]] }] }),
+        );
+        assert!(r.is_error && text(&r).contains("unknown brush setting"));
     }
 
     #[test]

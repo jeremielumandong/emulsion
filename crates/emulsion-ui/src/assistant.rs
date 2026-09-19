@@ -166,6 +166,18 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         "crop" => format!("crop to {}×{}", input["width"], input["height"]),
         "image_size" => format!("resize to {} px wide", input["width"]),
         "canvas_size" => format!("canvas {}×{}", input["width"], input["height"]),
+        "add_layer" => format!("add layer {}", input["name"].as_str().unwrap_or("Layer")),
+        "list_brushes" => "look at the brushes".into(),
+        "paint" => format!(
+            "paint {} stroke{} with {}",
+            input["strokes"].as_array().map_or(0, |a| a.len()),
+            if input["strokes"].as_array().is_some_and(|a| a.len() == 1) {
+                ""
+            } else {
+                "s"
+            },
+            input["brush"].as_str().unwrap_or("custom settings")
+        ),
         "select_node" => format!("select {}", n()),
         "transform_selection" => "move or resize the selection".into(),
         "list_history" => "read the history".into(),

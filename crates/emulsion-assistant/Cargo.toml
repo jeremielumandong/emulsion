@@ -21,5 +21,6 @@ tracing = { workspace = true }
 emulsion-mcp = { workspace = true }
 
 [dev-dependencies]
+emulsion-io = { workspace = true }
 emulsion-core = { workspace = true }
 emulsion-raster = { workspace = true }

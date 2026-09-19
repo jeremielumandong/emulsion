@@ -20,7 +20,6 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 pub use history::recovery_dir;
-pub use presets::builtin as presets_builtin;
 use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -72,6 +71,20 @@ enum SliderKey {
     ToolHardness,
     ToolOpacity,
     ToolFlow,
+    ToolSpacing,
+    ToolRoundness,
+    ToolAngle,
+    ToolGrainScale,
+    ToolGrainStrength,
+    ToolWetness,
+    ToolStabilizer,
+    ToolTaper,
+    ToolPressureSize,
+    ToolPressureFlow,
+    ToolSpeed,
+    ToolScatter,
+    ToolSizeJitter,
+    ToolColorJitter,
     Tolerance,
     Feather,
     Straighten,
@@ -906,6 +919,67 @@ impl EditorView {
             }
             SliderKey::ToolFlow => {
                 self.tools.brush.flow = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolSpacing => {
+                let f = ((v - 2.0) / 198.0).clamp(0.0, 1.0);
+                self.tools.brush.spacing = 0.02 + f * f * 1.98;
+                cx.notify();
+            }
+            SliderKey::ToolRoundness => {
+                self.tools.brush.roundness = (v / 100.0).clamp(0.05, 1.0);
+                cx.notify();
+            }
+            SliderKey::ToolAngle => {
+                self.tools.brush.angle = v.rem_euclid(360.0);
+                cx.notify();
+            }
+            SliderKey::ToolGrainScale => {
+                let f = ((v - 1.0) / 63.0).clamp(0.0, 1.0);
+                self.tools.brush.grain_scale = 1.0 + f * f * 63.0;
+                cx.notify();
+            }
+            SliderKey::ToolGrainStrength => {
+                self.tools.brush.grain_strength = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolWetness => {
+                self.tools.brush.wetness = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolStabilizer => {
+                self.tools.brush.stabilizer = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolTaper => {
+                let f = (v / 300.0).clamp(0.0, 1.0);
+                let t = (f * f * 300.0).round();
+                self.tools.brush.taper_end = t;
+                self.tools.brush.taper_start = (t * 0.7).round();
+                cx.notify();
+            }
+            SliderKey::ToolPressureSize => {
+                self.tools.brush.size_pressure = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolPressureFlow => {
+                self.tools.brush.flow_pressure = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolSpeed => {
+                self.tools.brush.speed_thins = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolScatter => {
+                self.tools.brush.scatter = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolSizeJitter => {
+                self.tools.brush.size_jitter = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolColorJitter => {
+                self.tools.brush.color_jitter = v / 100.0;
                 cx.notify();
             }
             SliderKey::Tolerance => {

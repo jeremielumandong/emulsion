@@ -16,6 +16,7 @@ emulsion-assistant = { workspace = true }
 emulsion-mcp = { workspace = true }
 async-channel = { workspace = true }
 serde = { workspace = true }
+evdev = "0.13"
 serde_json = { workspace = true }
 emulsion-io = { workspace = true }
 emulsion-raster = { workspace = true }

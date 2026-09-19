@@ -1,91 +1,32 @@
-//! Brush presets: a few built-in brushes plus ones the person saves.
-//!
-//! Saved presets live in `<data dir>/brush-presets.json` and apply to the
-//! Brush, Eraser, Heal and Clone tools alike.
+//! The brush panel: the built-in library by medium, plus brushes the
+//! person saves. Saved brushes live in `<data dir>/brush-presets.json`.
 
 use super::*;
-use emulsion_raster::paint::Brush;
-use serde::{Deserialize, Serialize};
+use emulsion_raster::library::{self, BrushPreset, CATEGORIES};
+use emulsion_raster::paint::{Brush, BrushBlend, GrainKind};
 
-pub const MAX_PRESETS: usize = 48;
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Preset {
-    pub name: String,
-    pub size: f32,
-    pub hardness: f32,
-    pub opacity: f32,
-    pub flow: f32,
-    pub spacing: f32,
-}
-
-impl Preset {
-    fn builtin(name: &str, size: f32, hardness: f32, opacity: f32, flow: f32) -> Self {
-        Self {
-            name: name.into(),
-            size,
-            hardness,
-            opacity,
-            flow,
-            spacing: 0.12,
-        }
-    }
-
-    pub fn from_brush(name: String, b: &Brush) -> Self {
-        Self {
-            name,
-            size: b.size,
-            hardness: b.hardness,
-            opacity: b.opacity,
-            flow: b.flow,
-            spacing: b.spacing,
-        }
-    }
-
-    pub fn apply(&self, b: &mut Brush) {
-        b.size = self.size.clamp(1.0, 500.0);
-        b.hardness = self.hardness.clamp(0.0, 1.0);
-        b.opacity = self.opacity.clamp(0.01, 1.0);
-        b.flow = self.flow.clamp(0.01, 1.0);
-        b.spacing = self.spacing.clamp(0.02, 1.0);
-    }
-
-    fn matches(&self, b: &Brush) -> bool {
-        (self.size - b.size).abs() < 0.5
-            && (self.hardness - b.hardness).abs() < 0.01
-            && (self.opacity - b.opacity).abs() < 0.01
-            && (self.flow - b.flow).abs() < 0.01
-    }
-}
-
-pub fn builtin() -> Vec<Preset> {
-    vec![
-        Preset::builtin("Hard round 12", 12.0, 1.0, 1.0, 1.0),
-        Preset::builtin("Round 40", 40.0, 0.8, 1.0, 1.0),
-        Preset::builtin("Soft round 80", 80.0, 0.0, 1.0, 1.0),
-        Preset::builtin("Airbrush 200", 200.0, 0.0, 1.0, 0.1),
-        Preset::builtin("Glaze 120", 120.0, 0.3, 0.3, 1.0),
-        Preset::builtin("Detail 3", 3.0, 1.0, 1.0, 1.0),
-    ]
-}
+pub const MAX_PRESETS: usize = 96;
 
 fn file() -> PathBuf {
     emulsion_io::recent::data_dir().join("brush-presets.json")
 }
 
-/// Saved presets; an unreadable file reads as none.
-pub fn load() -> Vec<Preset> {
+/// Saved brushes; an unreadable file reads as none.
+pub fn load() -> Vec<BrushPreset> {
     std::fs::read(file())
         .ok()
-        .and_then(|b| serde_json::from_slice::<Vec<Preset>>(&b).ok())
+        .and_then(|b| serde_json::from_slice::<Vec<BrushPreset>>(&b).ok())
         .map(|mut v| {
             v.truncate(MAX_PRESETS);
+            for p in &mut v {
+                p.brush = p.brush.sanitized();
+            }
             v
         })
         .unwrap_or_default()
 }
 
-fn save(presets: &[Preset]) -> std::io::Result<()> {
+fn save(presets: &[BrushPreset]) -> std::io::Result<()> {
     std::fs::create_dir_all(emulsion_io::recent::data_dir())?;
     let bytes = serde_json::to_vec_pretty(presets).map_err(std::io::Error::other)?;
     let tmp = file().with_extension("json.tmp");
@@ -93,11 +34,27 @@ fn save(presets: &[Preset]) -> std::io::Result<()> {
     std::fs::rename(tmp, file())
 }
 
+/// Close enough to be the same brush in the panel.
+pub(crate) fn matches(a: &Brush, b: &Brush) -> bool {
+    (a.size - b.size).abs() < 0.5
+        && (a.hardness - b.hardness).abs() < 0.01
+        && (a.opacity - b.opacity).abs() < 0.01
+        && (a.flow - b.flow).abs() < 0.01
+        && a.grain == b.grain
+        && (a.wetness - b.wetness).abs() < 0.01
+        && a.blend == b.blend
+        && (a.roundness - b.roundness).abs() < 0.01
+}
+
 #[derive(Default)]
 pub(crate) struct PresetState {
     pub open: bool,
+    /// Category shown; None = the person's saved brushes.
+    pub category: Option<String>,
     /// Loaded on first open.
-    saved: Option<Vec<Preset>>,
+    saved: Option<Vec<BrushPreset>>,
+    /// Name of the brush last picked, for the context bar.
+    pub current: Option<String>,
 }
 
 impl EditorView {
@@ -105,6 +62,10 @@ impl EditorView {
         self.presets.open = !self.presets.open;
         if self.presets.saved.is_none() {
             self.presets.saved = Some(load());
+        }
+        if self.presets.category.is_none() && self.presets.saved.as_ref().is_none_or(Vec::is_empty)
+        {
+            self.presets.category = Some(CATEGORIES[0].into());
         }
         cx.notify();
     }
@@ -114,26 +75,78 @@ impl EditorView {
         self.tools.brush
     }
 
-    pub fn apply_preset(&mut self, p: &Preset, cx: &mut Context<Self>) {
-        p.apply(&mut self.tools.brush);
+    /// Switch to a brush. Erasers and smudges also switch the paint kind,
+    /// so picking "Soft eraser" erases without another click.
+    pub fn apply_preset(&mut self, p: &BrushPreset, cx: &mut Context<Self>) {
+        self.tools.brush = p.brush.sanitized();
+        self.presets.current = Some(p.name.clone());
+        if self.tool == Tool::Brush {
+            self.tools.paint = match p.category.as_str() {
+                "Eraser" => PaintKind::Eraser,
+                "Smudge" => PaintKind::Smudge,
+                _ if matches!(
+                    self.tools.paint,
+                    PaintKind::Bucket | PaintKind::Gradient | PaintKind::Eraser | PaintKind::Smudge
+                ) =>
+                {
+                    PaintKind::Brush
+                }
+                _ => self.tools.paint,
+            };
+        }
         cx.notify();
+    }
+
+    /// Pick a brush by name, built-in or saved.
+    pub fn apply_preset_named(&mut self, name: &str, cx: &mut Context<Self>) -> bool {
+        let found = library::find(name).or_else(|| {
+            let n = name.trim().to_lowercase();
+            self.presets
+                .saved
+                .get_or_insert_with(load)
+                .iter()
+                .find(|p| p.name.to_lowercase() == n)
+                .cloned()
+        });
+        match found {
+            Some(p) => {
+                self.apply_preset(&p, cx);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Save the current brush under a name describing it.
     pub fn save_preset(&mut self, cx: &mut Context<Self>) {
         let b = self.tools.brush;
         let saved = self.presets.saved.get_or_insert_with(load);
-        if saved.iter().chain(&builtin()).any(|p| p.matches(&b)) {
-            self.set_status("That brush is already a preset.", false, cx);
+        if saved
+            .iter()
+            .chain(&library::library())
+            .any(|p| matches(&p.brush, &b))
+        {
+            self.set_status("That brush is already in the panel.", false, cx);
             return;
         }
         if saved.len() >= MAX_PRESETS {
-            self.set_status("Remove a preset first; 48 is the limit.", true, cx);
+            self.set_status(
+                format!("Remove a brush first; {MAX_PRESETS} is the limit."),
+                true,
+                cx,
+            );
             return;
         }
+        let medium = match (b.grain, b.wetness > 0.3, b.blend) {
+            (_, _, BrushBlend::Multiply) => "Marker",
+            (_, true, _) => "Wet",
+            (GrainKind::Chalk, _, _) => "Chalk",
+            (GrainKind::None, _, _) if b.hardness >= 0.5 => "Round",
+            (GrainKind::None, _, _) => "Soft",
+            _ => "Textured",
+        };
         let name = format!(
-            "{} {:.0} · {:.0}%{}",
-            if b.hardness >= 0.5 { "Round" } else { "Soft" },
+            "{medium} {:.0} · {:.0}%{}",
             b.size,
             b.hardness * 100.0,
             if b.flow < 0.99 {
@@ -142,11 +155,18 @@ impl EditorView {
                 String::new()
             }
         );
-        saved.push(Preset::from_brush(name, &b));
+        saved.push(BrushPreset {
+            name: name.clone(),
+            category: "Mine".into(),
+            note: "Saved from the current settings".into(),
+            brush: b,
+        });
         let r = save(saved);
+        self.presets.category = None;
+        self.presets.current = Some(name);
         match r {
-            Ok(()) => self.set_status("Saved as a preset.", false, cx),
-            Err(e) => self.set_status(format!("Could not save the preset: {e}"), true, cx),
+            Ok(()) => self.set_status("Saved to My brushes.", false, cx),
+            Err(e) => self.set_status(format!("Could not save the brush: {e}"), true, cx),
         }
     }
 
@@ -157,7 +177,7 @@ impl EditorView {
         if i < saved.len() {
             saved.remove(i);
             if let Err(e) = save(saved) {
-                self.set_status(format!("Could not save presets: {e}"), true, cx);
+                self.set_status(format!("Could not save brushes: {e}"), true, cx);
             }
             cx.notify();
         }
@@ -176,66 +196,123 @@ impl EditorView {
         }
         let b = self.tools.brush;
         let saved = self.presets.saved.clone().unwrap_or_default();
-        let mut row = div()
+        let cat = self.presets.category.clone();
+        let mut tabs = div()
             .flex()
             .flex_wrap()
             .items_center()
             .gap(px(6.))
-            .px(px(16.))
-            .py(px(8.))
-            .border_b_1()
-            .border_color(p.line)
-            .bg(p.panel)
-            .child(label("Brush presets", p));
-        for (i, preset) in builtin().into_iter().enumerate() {
-            let on = preset.matches(&b);
-            let text = preset.name.clone();
-            row = row.child(
-                chip(("preset-b", i), text, on, p)
-                    .on_click(cx.listener(move |this, _, _, cx| this.apply_preset(&preset, cx))),
-            );
+            .child(label("Brushes", p));
+        for (ci, c) in CATEGORIES.iter().enumerate() {
+            let on = cat.as_deref() == Some(c);
+            let name: String = (*c).into();
+            tabs = tabs.child(chip(("bcat", ci), *c, on, p).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.presets.category = Some(name.clone());
+                    cx.notify();
+                },
+            )));
         }
-        for (i, preset) in saved.into_iter().enumerate() {
-            let on = preset.matches(&b);
+        tabs = tabs.child(
+            chip(
+                "bcat-mine",
+                format!("Mine ({})", saved.len()),
+                cat.is_none(),
+                p,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.presets.category = None;
+                cx.notify();
+            })),
+        );
+        let mut row = div().flex().flex_wrap().items_center().gap(px(6.));
+        let shown: Vec<(usize, BrushPreset, bool)> = match &cat {
+            Some(c) => library::library()
+                .into_iter()
+                .filter(|q| q.category == *c)
+                .enumerate()
+                .map(|(i, q)| (i, q, false))
+                .collect(),
+            None => saved
+                .into_iter()
+                .enumerate()
+                .map(|(i, q)| (i, q, true))
+                .collect(),
+        };
+        if shown.is_empty() {
+            row = row.child(mono(
+                "No saved brushes yet. Adjust one and press Save current.",
+                10.5,
+                p.muted,
+            ));
+        }
+        let mut note = None;
+        for (i, preset, mine) in shown {
+            let on = matches(&preset.brush, &b);
+            if on {
+                note = Some(preset.note.clone());
+            }
             let text = preset.name.clone();
-            row = row
-                .child(
-                    chip(("preset-u", i), text, on, p).on_click(
-                        cx.listener(move |this, _, _, cx| this.apply_preset(&preset, cx)),
-                    ),
-                )
-                .child(
+            let apply = preset.clone();
+            row = row.child(
+                chip((if mine { "preset-u" } else { "preset-b" }, i), text, on, p)
+                    .on_click(cx.listener(move |this, _, _, cx| this.apply_preset(&apply, cx))),
+            );
+            if mine {
+                row = row.child(
                     chip(("preset-del", i), "×", false, p)
                         .on_click(cx.listener(move |this, _, _, cx| this.delete_preset(i, cx))),
                 );
+            }
         }
         Some(
-            row.child(div().flex_1()).child(
-                button("preset-save", "Save current", false, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
-            ),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(16.))
+                .py(px(8.))
+                .border_b_1()
+                .border_color(p.line)
+                .bg(p.panel)
+                .child(tabs)
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(10.))
+                        .child(row.flex_1())
+                        .child(
+                            button("preset-save", "Save current", false, p)
+                                .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
+                        ),
+                )
+                .children(note.map(|n| mono(n, 10., p.muted))),
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Brush, builtin};
-    use serde_json;
-    type Preset = super::Preset;
+    use super::{Brush, library, matches};
 
     #[test]
-    fn presets_apply_and_match() {
-        let mut b = Brush::default();
-        let air = builtin()
-            .into_iter()
-            .find(|p| p.name.starts_with("Airbrush"))
-            .unwrap();
-        air.apply(&mut b);
-        assert_eq!((b.size, b.hardness, b.flow), (200.0, 0.0, 0.1));
-        assert!(air.matches(&b));
-        let json = serde_json::to_string(&vec![air.clone()]).unwrap();
-        let back: Vec<Preset> = serde_json::from_str(&json).unwrap();
-        assert_eq!(back[0], air);
+    fn library_brushes_round_trip_through_json() {
+        let lib = library::library();
+        let json = serde_json::to_string(&lib).unwrap();
+        let back: Vec<library::BrushPreset> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, lib);
+        // Files from before the engine grew still load: old fields, new defaults.
+        let old = r#"[{"name":"x","category":"Mine","note":"","brush":{"size":12.0,"hardness":1.0,"opacity":1.0,"flow":1.0,"spacing":0.1}}]"#;
+        let v: Vec<library::BrushPreset> = serde_json::from_str(old).unwrap();
+        assert!(matches(
+            &v[0].brush,
+            &Brush {
+                size: 12.0,
+                hardness: 1.0,
+                spacing: 0.1,
+                ..Default::default()
+            }
+        ));
     }
 }

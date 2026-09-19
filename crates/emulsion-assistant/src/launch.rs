@@ -48,7 +48,19 @@ Working rules:
 - Do exactly what was asked, with the fewest changes. Each change is shown to the person, who \
   can apply or skip it. If a change is skipped, do not retry it.
 - If the request is ambiguous, ask one short question instead of guessing.
-- Finish with one or two plain sentences saying what you changed.";
+- Finish with one or two plain sentences saying what you changed.
+
+Drawing and painting: you can paint with real brushes. list_brushes gives the library (ink, \
+pencil, chalk, marker, watercolour, oil, airbrush, eraser, smudge) and paint lays strokes on a \
+pixel layer as polylines in document pixels, with optional pressure per point. Work like an \
+artist: add_layer for each stage (sketch, lines, colour, shading) so stages stay separable; \
+block in big shapes first with large soft or wet brushes, then structure with mid brushes, then \
+line work with an ink brush using many close points for smooth curves and pressure that swells \
+in the middle of a stroke; shade with hatching (many short parallel strokes) or with airbrush \
+and smudge. A stroke is a polyline, so a circle needs 24 or more points and a curve needs \
+points every few pixels. Keep every paint call to one stage of the drawing and call get_view \
+after each stage to look at the result and correct it before moving on. Use the canvas size \
+from describe_document to place things; never paint outside it.";
 
 /// Qualified names of the tools that never need confirmation.
 pub fn read_only_tools() -> Vec<String> {
@@ -174,7 +186,7 @@ mod tests {
         assert_eq!(a[pos("--mcp-config") + 1], "/tmp/s/mcp.json");
         assert_eq!(
             a[pos("--allowedTools") + 1],
-            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__list_history,mcp__emulsion__compare"
+            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes"
         );
         assert_eq!(a[pos("--model") + 1], "sonnet");
         assert!(

@@ -727,14 +727,68 @@ mod tools {
         let (_, e, cx) = setup(cx, Tool::Brush);
         cx.update(|_, cx| e.update(cx, |e, cx| e.toggle_presets(cx)));
         cx.run_until_parked();
-        let soft = crate::editor::presets_builtin()
-            .into_iter()
-            .find(|p| p.name.starts_with("Soft"))
-            .unwrap();
-        cx.update(|_, cx| e.update(cx, |e, cx| e.apply_preset(&soft, cx)));
+        let chalk = emulsion_raster::library::find("Chalk").unwrap();
+        cx.update(|_, cx| e.update(cx, |e, cx| e.apply_preset(&chalk, cx)));
         cx.run_until_parked();
         let b = cx.update(|_, cx| e.read(cx).brush());
-        assert_eq!((b.size, b.hardness), (80.0, 0.0));
+        assert_eq!(
+            (b.size, b.grain),
+            (24.0, emulsion_raster::paint::GrainKind::Chalk)
+        );
+        // Picking an eraser switches the paint kind too.
+        assert!(cx.update(|_, cx| e.update(cx, |e, cx| e.apply_preset_named("soft eraser", cx))));
+        assert_eq!(
+            cx.update(|_, cx| e.read(cx).paint_kind()),
+            crate::editor::PaintKind::Eraser
+        );
+    }
+
+    #[gpui_kit::test]
+    fn smudge_drags_colour_and_mirror_paints_both_sides(cx: &mut TestAppContext) {
+        use crate::editor::PaintKind;
+        // Left half red, right half blue.
+        let (w, h) = (256u32, 192u32);
+        let data: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                if i % w < 128 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 255, 255]
+                }
+            })
+            .collect();
+        let raster = emulsion_raster::Raster::from_srgba8(w, h, &data);
+        let (ws, cx) = open(cx, doc(&["Photo"], Some(raster)));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.set_paint(PaintKind::Smudge, cx);
+                assert!(e.apply_preset_named("Smear", cx));
+            })
+        });
+        drag(&e, cx, (120.0, 96.0), (170.0, 96.0));
+        let px = cx.update(|_, cx| match &e.read(cx).editor.doc.nodes[0].kind {
+            NodeKind::Raster { raster, .. } => raster.get(140, 96),
+            _ => unreachable!(),
+        });
+        assert!(px[0] > 8000, "red smeared into the blue: {px:?}");
+
+        // Mirrored ink lands on both halves.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.set_paint(PaintKind::Brush, cx);
+                e.apply_preset_named("Fine liner", cx);
+                e.set_mirror(true, false, cx);
+                e.set_fg([0, 255, 0, 255], cx);
+            })
+        });
+        drag(&e, cx, (30.0, 20.0), (30.0, 170.0));
+        let (a, b) = cx.update(|_, cx| match &e.read(cx).editor.doc.nodes[0].kind {
+            NodeKind::Raster { raster, .. } => (raster.get(30, 100), raster.get(w - 30, 100)),
+            _ => unreachable!(),
+        });
+        assert!(a[1] > 60000 && b[1] > 60000, "{a:?} {b:?}");
     }
 
     #[gpui_kit::test]

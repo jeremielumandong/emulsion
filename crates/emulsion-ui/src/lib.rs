@@ -8,6 +8,7 @@ pub mod editor;
 mod home;
 pub mod landing;
 mod settings_screen;
+pub mod tablet;
 pub mod theme;
 pub mod viewport;
 pub mod widgets;

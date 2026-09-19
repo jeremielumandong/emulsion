@@ -4,7 +4,13 @@ use crate::server::ToolDef;
 use serde_json::{Value, json};
 
 /// Tools that only read; the CLI may run them without asking.
-pub const READ_ONLY: &[&str] = &["describe_document", "get_view", "list_history", "compare"];
+pub const READ_ONLY: &[&str] = &[
+    "describe_document",
+    "get_view",
+    "list_history",
+    "compare",
+    "list_brushes",
+];
 
 /// Tools whose effect is hard to see or undo at a glance; always confirmed.
 pub const DESTRUCTIVE: &[&str] = &[
@@ -18,7 +24,7 @@ pub const DESTRUCTIVE: &[&str] = &[
 ];
 
 /// Tools that compute for a while; hosts run them off the UI thread.
-pub const HEAVY: &[&str] = &["select_color", "content_aware_fill"];
+pub const HEAVY: &[&str] = &["select_color", "content_aware_fill", "paint"];
 
 const BLEND_MODES: &[&str] = &[
     "normal",
@@ -225,6 +231,49 @@ pub fn definitions() -> Vec<ToolDef> {
             "Move the selection by dx/dy pixels, scale it about its centre (1 = unchanged) and rotate it clockwise in degrees.",
             json!({ "dx": { "type": "number" }, "dy": { "type": "number" }, "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 20 }, "rotation": { "type": "number", "minimum": -360, "maximum": 360 } }),
             &[],
+        ),
+        def(
+            "add_layer",
+            "Add an empty, transparent pixel layer (the canvas size) to paint on, above the given node or at the top. Returns its id.",
+            json!({ "name": { "type": "string" }, "above": node() }),
+            &[],
+        ),
+        def(
+            "list_brushes",
+            "The brush library: every brush with its category (Ink, Pencil, Chalk, Marker, Watercolour, Oil, Airbrush, Eraser, Smudge) and what it is for. Use the names with paint.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "paint",
+            concat!(
+                "Paint strokes on a pixel layer with a brush from list_brushes. Each stroke is a polyline in document pixels; ",
+                "points are [x, y] or [x, y, pressure 0-1]; smooth curves come from many close points (a stroke can hold hundreds). ",
+                "color is #RRGGBB (ignored by Eraser and Smudge brushes). settings overrides brush fields for the whole call, e.g. ",
+                "{\"size\": 6, \"opacity\": 0.5, \"hardness\": 1, \"flow\": 0.3, \"wetness\": 0.5, \"taper_end\": 20}. ",
+                "Everything in one call is a single undo step, so plan a drawing as a few calls: block-in, then lines, then shading. ",
+                "Work on your own layer (add_layer) so the person can hide or mask it."
+            ),
+            json!({
+                "node": node(),
+                "brush": { "type": "string" },
+                "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+                "settings": { "type": "object" },
+                "strokes": {
+                    "type": "array", "minItems": 1, "maxItems": 400,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "points": { "type": "array", "minItems": 1, "maxItems": 2000, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 } },
+                            "brush": { "type": "string" },
+                            "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+                            "settings": { "type": "object" }
+                        },
+                        "required": ["points"]
+                    }
+                }
+            }),
+            &["node", "strokes"],
         ),
         def("select_all", "Select the whole canvas.", json!({}), &[]),
         def("deselect", "Clear the selection.", json!({}), &[]),

@@ -4,7 +4,7 @@
 
 use super::*;
 use emulsion_raster::composite::region;
-use emulsion_raster::paint::{Brush, Clip, Ink, Stroke, fill_color};
+use emulsion_raster::paint::{Brush, BrushBlend, Clip, GrainKind, Ink, Stroke, fill_color};
 use emulsion_raster::select::{self, Combine};
 use emulsion_raster::{IRect, Mask, fill};
 use glam::{DAffine2, dvec2};
@@ -29,6 +29,8 @@ pub enum SelectShape {
 pub enum PaintKind {
     Brush,
     Eraser,
+    /// Drag the colour already on the layer.
+    Smudge,
     Bucket,
     Gradient,
 }
@@ -62,6 +64,13 @@ pub struct ToolState {
     pub crop_centered: bool,
     /// Fill canvas that a crop or canvas-size change adds, from the image.
     pub fill_edges: bool,
+    /// Mirror strokes across the canvas centre.
+    pub mirror_x: bool,
+    pub mirror_y: bool,
+    /// Show every brush setting, not just the four usual ones.
+    pub brush_more: bool,
+    /// When the current stroke started, for speed dynamics.
+    pub stroke_started: Option<Instant>,
     pub pointer: Option<Point<Pixels>>,
     pub ants_phase: bool,
     pub picker: bool,
@@ -97,6 +106,10 @@ impl Default for ToolState {
             straighten: 0.0,
             crop_centered: false,
             fill_edges: false,
+            mirror_x: false,
+            mirror_y: false,
+            brush_more: false,
+            stroke_started: None,
             pointer: None,
             ants_phase: false,
             picker: false,
@@ -253,6 +266,22 @@ impl EditorView {
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = tool;
         self.tools.polygon.clear();
+        cx.notify();
+    }
+
+    pub fn paint_kind(&self) -> PaintKind {
+        self.tools.paint
+    }
+
+    pub fn set_mirror(&mut self, x: bool, y: bool, cx: &mut Context<Self>) {
+        self.tools.mirror_x = x;
+        self.tools.mirror_y = y;
+        cx.notify();
+    }
+
+    pub fn set_fg(&mut self, rgba: [u8; 4], cx: &mut Context<Self>) {
+        self.tools.fg = rgba;
+        self.tools.hue = rgb_to_hsv(rgba).0;
         cx.notify();
     }
 
@@ -496,6 +525,7 @@ impl EditorView {
                         cx,
                     ),
                     PaintKind::Eraser => self.start_stroke(d, Ink::Erase, false, "Erase", cx),
+                    PaintKind::Smudge => self.start_stroke(d, Ink::Smudge, false, "Smudge", cx),
                     PaintKind::Bucket => self.bucket(d, cx),
                     PaintKind::Gradient => {
                         self.drag = Some(Drag::Tool(ToolDrag::Gradient { start: d, end: d }))
@@ -581,8 +611,16 @@ impl EditorView {
             .clone()
             .map(|m| local_clip(m, to_doc));
         let mut stroke = Stroke::new(raster.clone(), brush, ink, clip);
+        let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
+        let axis = |x: f64, y: f64| to_local.transform_point2(dvec2(x, y));
+        stroke.set_mirror(
+            self.tools.mirror_x.then(|| axis(w / 2.0, h / 2.0).x as f32),
+            self.tools.mirror_y.then(|| axis(w / 2.0, h / 2.0).y as f32),
+        );
+        crate::tablet::start();
+        self.tools.stroke_started = Some(Instant::now());
         let p = to_local.transform_point2(dvec2(d.0, d.1));
-        stroke.point(p.x as f32, p.y as f32);
+        stroke.point_at(p.x as f32, p.y as f32, crate::tablet::pressure(), Some(0.0));
         self.editor.begin(label);
         let (r, dirty) = stroke.render(&raster);
         self.execute(
@@ -617,7 +655,11 @@ impl EditorView {
                 ..
             } => {
                 let p = to_local.transform_point2(dvec2(d.0, d.1));
-                stroke.point(p.x as f32, p.y as f32);
+                let t = self
+                    .tools
+                    .stroke_started
+                    .map(|s| s.elapsed().as_secs_f64() * 1000.0);
+                stroke.point_at(p.x as f32, p.y as f32, crate::tablet::pressure(), t);
                 let (id, label) = (*id, *label);
                 let current = match self.editor.doc.node(id).map(|n| &n.kind) {
                     Some(NodeKind::Raster { raster, .. }) => raster.clone(),
@@ -681,8 +723,32 @@ impl EditorView {
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         match t {
             ToolDrag::Stroke {
-                id, stroke, heal, ..
+                id,
+                mut stroke,
+                heal,
+                label,
+                ..
             } => {
+                // Catch the stabilizer up and taper the end.
+                if stroke.finish()
+                    && let Some(NodeKind::Raster { raster, .. }) =
+                        self.editor.doc.node(id).map(|n| &n.kind)
+                {
+                    let current = raster.clone();
+                    let (r, dirty) = stroke.render(&current);
+                    if !dirty.is_empty() {
+                        self.execute(
+                            Command::ReplacePixels {
+                                id,
+                                raster: Arc::new(r),
+                                dirty,
+                                label: label.into(),
+                            },
+                            cx,
+                        );
+                    }
+                }
+                self.tools.stroke_started = None;
                 if heal {
                     self.finish_heal(id, *stroke, cx);
                 } else if self.editor.in_transaction() {
@@ -1765,6 +1831,7 @@ impl EditorView {
                     for (id, t, k) in [
                         ("pk-brush", "brush", PaintKind::Brush),
                         ("pk-eraser", "eraser", PaintKind::Eraser),
+                        ("pk-smudge", "smudge", PaintKind::Smudge),
                         ("pk-bucket", "bucket", PaintKind::Bucket),
                         ("pk-grad", "gradient", PaintKind::Gradient),
                     ] {
@@ -1772,8 +1839,18 @@ impl EditorView {
                     }
                 }
                 let brushy = self.tool != Tool::Brush
-                    || matches!(self.tools.paint, PaintKind::Brush | PaintKind::Eraser);
+                    || matches!(
+                        self.tools.paint,
+                        PaintKind::Brush | PaintKind::Eraser | PaintKind::Smudge
+                    );
                 if brushy {
+                    if let Some(name) = &self.presets.current {
+                        v.push(
+                            mono(name.clone(), 10.5, p.ink)
+                                .flex_none()
+                                .into_any_element(),
+                        );
+                    }
                     v.push(self.opt_slider(
                         SliderKey::ToolSize,
                         "size",
@@ -1812,6 +1889,35 @@ impl EditorView {
                             cx,
                         ));
                     }
+                    let (mx, my) = (self.tools.mirror_x, self.tools.mirror_y);
+                    v.push(
+                        chip("mirror-x", "mirror ↔", mx, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.tools.mirror_x = !mx;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                    v.push(
+                        chip("mirror-y", "mirror ↕", my, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.tools.mirror_y = !my;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                    let more = self.tools.brush_more;
+                    v.push(
+                        chip("brush-more", if more { "less" } else { "more…" }, more, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.tools.brush_more = !more;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                    if more {
+                        v.extend(self.brush_more_options(p, cx));
+                    }
                 } else if self.tools.paint == PaintKind::Bucket {
                     let t = self.tools.tolerance as f32;
                     v.push(self.opt_slider(
@@ -1846,6 +1952,9 @@ impl EditorView {
                     Tool::Clone if self.tools.clone_source.is_none() => "alt-click sets the source",
                     Tool::Clone => "alt-click to move the source",
                     Tool::Heal => "paint over a blemish",
+                    _ if self.tools.paint == PaintKind::Smudge => {
+                        "drag to smear the colour under the brush"
+                    }
                     _ => "alt-click picks a colour",
                 };
                 v.push(div().flex_none().child(hint).into_any_element());
@@ -2003,6 +2112,157 @@ impl EditorView {
             ),
             _ => {}
         }
+        v
+    }
+
+    /// Every remaining brush setting, as sliders and chips.
+    fn brush_more_options(&mut self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let b = self.tools.brush;
+        let mut v = Vec::new();
+        macro_rules! sl {
+            ($key:expr, $name:expr, $display:expr, $norm:expr, $spec:expr) => {
+                v.push(self.opt_slider($key, $name, $display, $norm, $spec, p, cx));
+            };
+        }
+        sl!(
+            SliderKey::ToolSpacing,
+            "spacing",
+            format!("{:.0}%", b.spacing * 100.0),
+            ((b.spacing - 0.02) / 1.98).sqrt(),
+            (2.0, 200.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolRoundness,
+            "round",
+            format!("{:.0}%", b.roundness * 100.0),
+            (b.roundness - 0.05) / 0.95,
+            (5.0, 100.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolAngle,
+            "angle",
+            format!("{:.0}°", b.angle),
+            b.angle / 360.0,
+            (0.0, 360.0, 1.0)
+        );
+        let fp = b.follow_path;
+        v.push(
+            chip("follow-path", "follow path", fp, p)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.tools.brush.follow_path = !fp;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        );
+        for (id, t, k) in [
+            ("gr-none", "no grain", GrainKind::None),
+            ("gr-paper", "paper", GrainKind::Paper),
+            ("gr-canvas", "canvas", GrainKind::Canvas),
+            ("gr-chalk", "chalk", GrainKind::Chalk),
+            ("gr-speck", "speckle", GrainKind::Speckle),
+        ] {
+            v.push(self.mode_chip(id, t, k, b.grain, p, cx, |e, k, cx| {
+                e.tools.brush.grain = k;
+                if k != GrainKind::None && e.tools.brush.grain_strength == 0.0 {
+                    e.tools.brush.grain_strength = 0.7;
+                }
+                cx.notify();
+            }));
+        }
+        if b.grain != GrainKind::None {
+            sl!(
+                SliderKey::ToolGrainScale,
+                "grain size",
+                format!("{:.0}px", b.grain_scale),
+                ((b.grain_scale - 1.0) / 63.0).sqrt(),
+                (1.0, 64.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolGrainStrength,
+                "grain",
+                format!("{:.0}%", b.grain_strength * 100.0),
+                b.grain_strength,
+                (0.0, 100.0, 1.0)
+            );
+        }
+        sl!(
+            SliderKey::ToolWetness,
+            "wet",
+            format!("{:.0}%", b.wetness * 100.0),
+            b.wetness,
+            (0.0, 100.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolStabilizer,
+            "steady",
+            format!("{:.0}%", b.stabilizer * 100.0),
+            b.stabilizer,
+            (0.0, 100.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolTaper,
+            "taper",
+            format!("{:.0}px", b.taper_end),
+            (b.taper_end / 300.0).sqrt(),
+            (0.0, 300.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolPressureSize,
+            "pressure→size",
+            format!("{:.0}%", b.size_pressure * 100.0),
+            b.size_pressure,
+            (0.0, 100.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolPressureFlow,
+            "pressure→flow",
+            format!("{:.0}%", b.flow_pressure * 100.0),
+            b.flow_pressure,
+            (0.0, 100.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolSpeed,
+            "speed thins",
+            format!("{:.0}%", b.speed_thins * 100.0),
+            b.speed_thins,
+            (0.0, 100.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolScatter,
+            "scatter",
+            format!("{:.0}%", b.scatter * 100.0),
+            b.scatter,
+            (0.0, 100.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolSizeJitter,
+            "size jitter",
+            format!("{:.0}%", b.size_jitter * 100.0),
+            b.size_jitter,
+            (0.0, 100.0, 1.0)
+        );
+        sl!(
+            SliderKey::ToolColorJitter,
+            "colour jitter",
+            format!("{:.0}%", b.color_jitter * 100.0),
+            b.color_jitter,
+            (0.0, 100.0, 1.0)
+        );
+        for (id, t, k) in [
+            ("bl-normal", "normal", BrushBlend::Normal),
+            ("bl-mult", "multiply", BrushBlend::Multiply),
+            ("bl-behind", "behind", BrushBlend::Behind),
+        ] {
+            v.push(self.mode_chip(id, t, k, b.blend, p, cx, |e, k, cx| {
+                e.tools.brush.blend = k;
+                cx.notify();
+            }));
+        }
+        v.push(
+            mono(crate::tablet::status(), 10., p.muted)
+                .flex_none()
+                .into_any_element(),
+        );
         v
     }
 
