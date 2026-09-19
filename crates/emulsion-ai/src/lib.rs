@@ -20,6 +20,7 @@ pub mod face;
 pub mod inpaint;
 pub mod jev;
 pub mod jobs;
+pub mod kind;
 pub mod matte;
 pub mod models;
 pub mod palette;

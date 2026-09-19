@@ -254,6 +254,22 @@ impl EditorView {
                         self.editor.doc.nodes.len()
                     ),
                 ))
+                .children(
+                    self.doc_kind
+                        .as_ref()
+                        .filter(|k| k.confidence > 0.0)
+                        .map(|k| {
+                            row(
+                                "looks like",
+                                format!(
+                                    "{} · {:.0} % ({})",
+                                    k.kind.label(),
+                                    k.confidence * 100.0,
+                                    k.by
+                                ),
+                            )
+                        }),
+                )
                 .children(self.editor.doc.info.as_ref().map(|i| {
                     div()
                         .flex()

@@ -254,6 +254,8 @@ pub struct EditorView {
     pub(crate) assistant: crate::assistant::Assistant,
     pub(crate) ask: Option<crate::assistant::AskBar>,
     pub(crate) suggestions: Vec<emulsion_ai::suggest::Suggestion>,
+    /// What kind of picture this is, from the last suggestion pass.
+    pub(crate) doc_kind: Option<emulsion_ai::kind::Classification>,
     pub(crate) suggest_rev: u64,
     pub(crate) suggest_busy: bool,
     tools: tools::ToolState,
@@ -331,6 +333,7 @@ impl EditorView {
             assistant: Default::default(),
             ask: None,
             suggestions: Vec::new(),
+            doc_kind: None,
             suggest_rev: 0,
             suggest_busy: false,
             tools: tools::ToolState::default(),

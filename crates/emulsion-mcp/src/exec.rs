@@ -2991,9 +2991,14 @@ pub fn describe(editor: &Editor) -> Value {
         let b = select::bounds(s);
         json!({ "x": b.x, "y": b.y, "width": b.w, "height": b.h })
     });
+    let looks_like = {
+        let k = emulsion_ai::kind::classify(doc);
+        json!({ "kind": k.kind.label(), "confidence": k.confidence, "evidence": k.evidence })
+    };
     json!({
         "canvas": { "width": doc.width, "height": doc.height },
         "camera": doc.info.as_ref().map(|i| i.summary()),
+        "looks_like": looks_like,
         "selection": selection,
         "rows": "row 1 is the top of the stack; depth > 0 means inside the group listed above it",
         "nodes": nodes,

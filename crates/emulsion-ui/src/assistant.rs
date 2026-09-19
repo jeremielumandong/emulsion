@@ -1056,9 +1056,21 @@ impl EditorView {
         let faces_possible = emulsion_ai::face::detector_available().is_some()
             && emulsion_ai::face::available().is_some();
         let lens_possible = doc.info.is_some() && emulsion_io::lensfun::installed();
+        let jev_key = app_state::settings(cx).jev_key().map(|(k, _)| k);
         cx.spawn(async move |this, cx| {
-            let s = cx
+            let (s, kind) = cx
                 .background_spawn(async move {
+                    let kind = match &jev_key {
+                        Some(k) => emulsion_ai::kind::classify_with_jev(
+                            &doc,
+                            &emulsion_ai::jev::Jev::new(k.clone()),
+                        ),
+                        None => emulsion_ai::kind::classify(&doc),
+                    };
+                    // Photographic proposals only for photographs (or when unsure).
+                    let photographic = kind.kind.is_photographic() || kind.confidence < 0.5;
+                    let lens_possible = lens_possible && photographic;
+                    let faces_possible = faces_possible && photographic;
                     let mut out = suggest::suggest(&doc);
                     if lens_possible
                         && let Some(info) = &doc.info
@@ -1119,13 +1131,14 @@ impl EditorView {
                             }
                         }
                     }
-                    out
+                    (out, kind)
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.suggest_busy = false;
                 this.suggest_rev = rev;
                 this.suggestions = s;
+                this.doc_kind = Some(kind);
                 cx.notify();
             })
             .ok();
