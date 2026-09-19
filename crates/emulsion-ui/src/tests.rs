@@ -477,6 +477,131 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn drag_inside_a_selection_moves_it(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Select);
+        drag(&e, cx, (20.0, 20.0), (60.0, 50.0));
+        drag(&e, cx, (40.0, 30.0), (70.0, 40.0));
+        let b = cx.update(|_, cx| {
+            let e = e.read(cx);
+            emulsion_raster::select::bounds(e.editor.doc.selection.as_ref().unwrap())
+        });
+        assert!((b.x - 50).abs() <= 1 && (b.y - 30).abs() <= 1, "{b:?}");
+        assert!((b.w - 40).abs() <= 1, "size unchanged: {b:?}");
+    }
+
+    #[gpui_kit::test]
+    fn quick_select_and_magnetic_lasso(cx: &mut TestAppContext) {
+        use crate::editor::SelectShape;
+        // Left half dark, right half light.
+        let (w, h) = (200u32, 120u32);
+        let data: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                if i % w < 100 {
+                    [30, 30, 40, 255]
+                } else {
+                    [230, 225, 210, 255]
+                }
+            })
+            .collect();
+        let raster = emulsion_raster::Raster::from_srgba8(w, h, &data);
+        let mut d = emulsion_core::Document::new(w, h);
+        emulsion_core::Command::AddNode {
+            node: Box::new(emulsion_core::Node::raster(
+                0,
+                "Photo",
+                std::sync::Arc::new(raster),
+                Default::default(),
+            )),
+            slot: emulsion_core::command::Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap();
+        let (ws, cx) = open(cx, d);
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        cx.update(|_, cx| e.update(cx, |e, cx| e.set_select(SelectShape::Quick, cx)));
+        drag(&e, cx, (20.0, 20.0), (40.0, 90.0));
+        cx.run_until_parked();
+        let b = cx.update(|_, cx| {
+            emulsion_raster::select::bounds(e.read(cx).editor.doc.selection.as_ref().unwrap())
+        });
+        assert_eq!(
+            (b.x, b.w),
+            (0, 100),
+            "quick select fills the dark half only: {b:?}"
+        );
+
+        // Magnetic: anchors near the edge, the outline hugs x = 100.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.deselect(cx);
+                e.set_select(SelectShape::Magnetic, cx);
+            })
+        });
+        cx.run_until_parked();
+        for p in [(99.0, 5.0), (99.0, 110.0), (5.0, 110.0), (5.0, 5.0)] {
+            let at_p = at(&e, cx, p);
+            cx.simulate_mouse_move(at_p, None, gpui_kit::Modifiers::none());
+            cx.run_until_parked();
+            cx.simulate_click(at_p, gpui_kit::Modifiers::none());
+            cx.run_until_parked();
+        }
+        let first = at(&e, cx, (99.0, 5.0));
+        cx.simulate_mouse_move(first, None, gpui_kit::Modifiers::none());
+        cx.simulate_click(first, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+        let b = cx.update(|_, cx| {
+            emulsion_raster::select::bounds(
+                e.read(cx).editor.doc.selection.as_ref().expect("closed"),
+            )
+        });
+        assert!(
+            (b.right() - 100).abs() <= 2,
+            "right edge snapped to the colour edge: {b:?}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn guides_from_the_ruler_and_snapping(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Move);
+        let id = cx.update(|_, cx| e.read(cx).editor.doc.nodes.last().unwrap().id);
+        cx.update(|_, cx| e.update(cx, |e, _| e.selected = Some(id)));
+        // Drag from the top ruler down to y = 50: a horizontal guide.
+        let origin = cx.update(|_, cx| e.read(cx).canvas_origin().unwrap());
+        let target = at(&e, cx, (100.0, 50.0));
+        let ruler = gpui_kit::point(target.x, origin.y + gpui_kit::px(8.));
+        cx.update(|window, cx| window.drag(ruler, target, cx));
+        cx.run_until_parked();
+        let guides = cx.update(|_, cx| e.read(cx).editor.doc.guides.clone());
+        assert_eq!(guides.len(), 1);
+        assert!(
+            !guides[0].vertical && (guides[0].pos - 50.0).abs() <= 1.0,
+            "{guides:?}"
+        );
+        // Move the node so its top edge stops two screen pixels short: it snaps.
+        let zoom = cx.update(|_, cx| e.read(cx).view.zoom);
+        let short = 50.0 - 2.0 / zoom;
+        drag(&e, cx, (120.0, 60.0), (120.0, 60.0 + short));
+        let y = cx.update(
+            |_, cx| match &e.read(cx).editor.doc.node(id).unwrap().kind {
+                NodeKind::Raster { placement, .. } => placement.y,
+                _ => unreachable!(),
+            },
+        );
+        assert_eq!(
+            y,
+            guides[0].pos.round(),
+            "the top edge snapped to the guide"
+        );
+        // Dragging the guide back onto the ruler removes it.
+        let on_guide = at(&e, cx, (300.0, guides[0].pos));
+        let back = gpui_kit::point(on_guide.x, origin.y + gpui_kit::px(8.));
+        cx.update(|window, cx| window.drag(on_guide, back, cx));
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| e.read(cx).editor.doc.guides.is_empty()));
+    }
+
+    #[gpui_kit::test]
     fn the_default_hand_tool_pans_without_moving_pixels(cx: &mut TestAppContext) {
         let (ws, cx) = open(cx, doc(&["Photo"], None));
         cx.run_until_parked();

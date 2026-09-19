@@ -29,6 +29,8 @@ pub enum DocumentError {
     BadClip(NodeId, NodeId),
     #[error("node {0} has a non-finite or out-of-range value: {1}")]
     BadValue(NodeId, &'static str),
+    #[error("guides must be finite and at most 500")]
+    BadGuides,
     #[error("more than {0} nodes")]
     TooManyNodes(usize),
 }
@@ -37,6 +39,15 @@ pub const MAX_SIDE: u32 = 30_000;
 pub const MAX_PIXELS: u64 = 400_000_000;
 pub const MAX_DEPTH: usize = 64;
 pub const MAX_NODES: usize = 10_000;
+
+/// A ruler guide: a vertical line at x = pos, or a horizontal one at y = pos.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Guide {
+    pub vertical: bool,
+    pub pos: f64,
+}
+
+pub const MAX_GUIDES: usize = 500;
 
 #[derive(Clone, Debug)]
 pub struct Document {
@@ -53,6 +64,8 @@ pub struct Document {
     pub next_id: NodeId,
     /// Document-space coverage; `None` means no selection (everything).
     pub selection: Option<Arc<emulsion_raster::Mask>>,
+    /// Ruler guides, for snapping and alignment. Not rendered into pixels.
+    pub guides: Vec<Guide>,
 }
 
 impl PartialEq for Document {
@@ -62,6 +75,7 @@ impl PartialEq for Document {
             && self.resolution == o.resolution
             && self.blend_space == o.blend_space
             && self.nodes == o.nodes
+            && self.guides == o.guides
             && match (&self.selection, &o.selection) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -88,6 +102,7 @@ impl Document {
             nodes: Vec::new(),
             next_id: 1,
             selection: None,
+            guides: Vec::new(),
         }
     }
 
@@ -186,6 +201,14 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<(), DocumentError> {
+        if self.guides.len() > MAX_GUIDES
+            || self
+                .guides
+                .iter()
+                .any(|g| !g.pos.is_finite() || g.pos.abs() > 1e6)
+        {
+            return Err(DocumentError::BadGuides);
+        }
         if self.width == 0
             || self.height == 0
             || self.width > MAX_SIDE
@@ -319,6 +342,34 @@ impl Document {
 
     /// Distinct pixel buffers referenced by this document, for memory
     /// accounting.
+    /// A node's visible coverage as a document-space selection: its pixels'
+    /// alpha (through its mask) for pixel and fill nodes, or its mask for
+    /// adjustments and groups. None when the node covers nothing.
+    pub fn node_coverage(&self, id: NodeId) -> Option<emulsion_raster::Mask> {
+        let n = self.node(id)?;
+        if !matches!(n.kind, NodeKind::Raster { .. } | NodeKind::Fill { .. }) {
+            // Mask-only nodes: the mask is already in document space.
+            return n.mask.as_ref().map(|m| (**m).clone());
+        }
+        let mut solo = Document::new(self.width, self.height);
+        let mut node = n.clone();
+        node.parent = None;
+        node.clip_to = None;
+        node.visible = true;
+        node.opacity = 1.0;
+        node.blend = emulsion_raster::BlendMode::Normal;
+        solo.nodes.push(node);
+        let full = emulsion_raster::composite::flatten(&solo.composite_tree(), 0);
+        let region = full.tile_bounds();
+        let px = full.read_rect(region);
+        let alpha: Vec<u8> = px
+            .iter()
+            .map(|p| (color::u16_to_f(p[3]) * 255.0).round() as u8)
+            .collect();
+        let m = emulsion_raster::Mask::empty(self.width, self.height, 0).write_rect(region, &alpha);
+        (!emulsion_raster::select::bounds(&m).is_empty()).then_some(m)
+    }
+
     pub fn buffers(&self) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
         for n in &self.nodes {

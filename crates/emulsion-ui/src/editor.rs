@@ -6,6 +6,7 @@ use crate::viewport::{self, CanvasBounds, Scene, TileCache, View, Which};
 use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fraction};
 
 mod history;
+mod snap;
 mod tools;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
@@ -104,6 +105,13 @@ enum Drag {
         max: f32,
         step: f32,
     },
+    /// A guide dragged from a ruler (new) or grabbed on the canvas.
+    Guide {
+        vertical: bool,
+        /// None while over a ruler or off the canvas: dropping removes it.
+        pos: Option<f64>,
+        existing: Option<usize>,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -171,6 +179,11 @@ pub struct EditorView {
     pub(crate) suggest_busy: bool,
     tools: tools::ToolState,
     pub(crate) history: history::HistoryState,
+    /// Snap moves to guides, edges and centres.
+    pub(crate) snap: bool,
+    /// Ctrl held during a drag: move freely.
+    pub(crate) snap_bypass: bool,
+    pub(crate) snap_lines: Vec<(bool, f64)>,
 }
 
 impl EditorView {
@@ -229,6 +242,9 @@ impl EditorView {
             suggest_busy: false,
             tools: tools::ToolState::default(),
             history: Default::default(),
+            snap: true,
+            snap_bypass: false,
+            snap_lines: Vec::new(),
         }
     }
 
@@ -622,6 +638,29 @@ impl EditorView {
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.canvas_focus, cx);
         self.menu = None;
+        if e.button == MouseButton::Left && !self.space_held {
+            if let Some(vertical) = self.ruler_hit(e.position) {
+                self.drag = Some(Drag::Guide {
+                    vertical,
+                    pos: None,
+                    existing: None,
+                });
+                cx.notify();
+                return;
+            }
+            if matches!(self.tool, Tool::Move | Tool::Hand)
+                && let Some(i) = self.guide_hit(e.position)
+            {
+                let g = self.editor.doc.guides[i];
+                self.drag = Some(Drag::Guide {
+                    vertical: g.vertical,
+                    pos: Some(g.pos),
+                    existing: Some(i),
+                });
+                cx.notify();
+                return;
+            }
+        }
         let pan = e.button == MouseButton::Middle
             || (e.button == MouseButton::Left && (self.space_held || self.tool == Tool::Hand));
         if pan {
@@ -674,6 +713,12 @@ impl EditorView {
         let pointer = inside.then_some(pos);
         if wants_pointer && pointer != self.tools.pointer {
             self.tools.pointer = pointer;
+            if self.drag.is_none()
+                && !self.tools.polygon.is_empty()
+                && let Some(d) = pointer.and_then(|p| self.doc_point(p))
+            {
+                self.magnetic_track(d, cx);
+            }
             cx.notify();
         }
         let Some(drag) = &self.drag else { return };
@@ -696,11 +741,24 @@ impl EditorView {
                 let d = self
                     .view
                     .screen_to_doc((f32::from(pos.x) as f64, f32::from(pos.y) as f64), &b);
-                let mut p = *start;
-                p.x = (start.x + d.0 - start_doc.0).round();
-                p.y = (start.y + d.1 - start_doc.1).round();
-                let id = *id;
+                let (id, start) = (*id, *start);
+                let (dx, dy) = self.snap_move(id, &start, d.0 - start_doc.0, d.1 - start_doc.1);
+                let mut p = start;
+                p.x = (start.x + dx).round();
+                p.y = (start.y + dy).round();
                 self.execute(Command::SetPlacement { id, placement: p }, cx);
+            }
+            Drag::Guide {
+                vertical, existing, ..
+            } => {
+                let (vertical, existing) = (*vertical, *existing);
+                let pos = self.guide_position(vertical, pos);
+                self.drag = Some(Drag::Guide {
+                    vertical,
+                    pos,
+                    existing,
+                });
+                cx.notify();
             }
             Drag::Slider {
                 key,
@@ -719,6 +777,7 @@ impl EditorView {
     }
 
     fn drag_end(&mut self, cx: &mut Context<Self>) {
+        self.snap_lines.clear();
         match self.drag.take() {
             None => return,
             Some(Drag::Move { .. }) | Some(Drag::Slider { .. }) => {
@@ -728,6 +787,11 @@ impl EditorView {
             }
             Some(Drag::Pan { .. }) => {}
             Some(Drag::Tool(t)) => self.tool_up(t, cx),
+            Some(Drag::Guide {
+                vertical,
+                pos,
+                existing,
+            }) => self.drop_guide(vertical, pos, existing, cx),
         }
         cx.notify();
     }
@@ -789,7 +853,9 @@ impl EditorView {
     fn apply_slider(&mut self, key: SliderKey, v: f32, cx: &mut Context<Self>) {
         match key {
             SliderKey::ToolSize => {
-                self.tools.brush.size = v.max(1.0);
+                // The track is square-root scaled so small sizes get room.
+                let f = ((v - 1.0) / 499.0).clamp(0.0, 1.0);
+                self.tools.brush.size = (1.0 + f * f * 499.0).round().max(1.0);
                 cx.notify();
             }
             SliderKey::ToolHardness => {
@@ -1096,6 +1162,18 @@ impl EditorView {
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_rulers(cx))),
             )
             .child(
+                chip("snap", "snap", self.snap, p).on_click(cx.listener(|this, _, _, cx| {
+                    this.snap = !this.snap;
+                    cx.notify();
+                })),
+            )
+            .when(!self.editor.doc.guides.is_empty(), |d| {
+                d.child(
+                    chip("clear-guides", "clear guides", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.clear_guides(cx))),
+                )
+            })
+            .child(
                 div()
                     .whitespace_nowrap()
                     .text_color(if can_compare {
@@ -1161,6 +1239,13 @@ impl EditorView {
         let (w1, w2, w3) = (weak.clone(), weak.clone(), weak.clone());
         let cursor = match (&self.drag, self.space_held) {
             (Some(Drag::Pan { .. }), _) => CursorStyle::ClosedHand,
+            (Some(Drag::Guide { vertical: true, .. }), _) => CursorStyle::ResizeLeftRight,
+            (
+                Some(Drag::Guide {
+                    vertical: false, ..
+                }),
+                _,
+            ) => CursorStyle::ResizeUpDown,
             (_, true) => CursorStyle::OpenHand,
             _ if self.tool == Tool::Hand => CursorStyle::OpenHand,
             _ if self.tool == Tool::Move => CursorStyle::Arrow,
@@ -1240,8 +1325,11 @@ impl EditorView {
                         // Drags continue outside the canvas, so listen window-wide.
                         window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
                             if phase == DispatchPhase::Bubble {
-                                w2.update(cx, |this, cx| this.drag_move(e.position, cx))
-                                    .ok();
+                                w2.update(cx, |this, cx| {
+                                    this.snap_bypass = e.modifiers.control;
+                                    this.drag_move(e.position, cx)
+                                })
+                                .ok();
                             }
                         });
                         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {

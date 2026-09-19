@@ -437,6 +437,47 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             exec(editor, c)?;
             Ok(ToolResult::text(msg))
         }
+        "select_node" => {
+            let id = id_arg(args, "node")?;
+            editor
+                .doc
+                .node(id)
+                .ok_or_else(|| err(format!("no node {id}")))?;
+            let m = editor
+                .doc
+                .node_coverage(id)
+                .ok_or_else(|| err(format!("{} covers nothing", node_label(&editor.doc, id))))?;
+            let (c, msg) = selection_command(&editor.doc, m, combine_arg(args), 0.0);
+            exec(editor, c)?;
+            Ok(ToolResult::text(msg))
+        }
+        "transform_selection" => {
+            let sel = editor
+                .doc
+                .selection
+                .clone()
+                .ok_or_else(|| err("nothing is selected"))?;
+            let num = |k: &str, d: f64| args.get(k).and_then(Value::as_f64).unwrap_or(d);
+            let (dx, dy, scale, rot) = (
+                num("dx", 0.0),
+                num("dy", 0.0),
+                num("scale", 1.0),
+                num("rotation", 0.0),
+            );
+            if !(scale > 0.0 && scale <= 20.0) {
+                return Err(err("scale must be above 0 and at most 20"));
+            }
+            let b = select::bounds(&sel);
+            let c = glam::dvec2(b.x as f64 + b.w as f64 / 2.0, b.y as f64 + b.h as f64 / 2.0);
+            let a = glam::DAffine2::from_translation(c + glam::dvec2(dx, dy))
+                * glam::DAffine2::from_angle(rot.to_radians())
+                * glam::DAffine2::from_scale(glam::dvec2(scale, scale))
+                * glam::DAffine2::from_translation(-c);
+            let m = select::transform(&sel, a);
+            let (c, msg) = selection_command(&editor.doc, m, Combine::Replace, 0.0);
+            exec(editor, c)?;
+            Ok(ToolResult::text(msg))
+        }
         "select_all" => {
             let (w, h) = (editor.doc.width, editor.doc.height);
             exec(
@@ -1043,6 +1084,30 @@ mod tests {
             &json!({ "node": 1, "color": "red" }),
         );
         assert!(r.is_error);
+        let r = execute(&mut e, "select_node", &json!({ "node": 1 }));
+        assert!(
+            !r.is_error && describe(&e)["selection"]["width"] == 200,
+            "{}",
+            text(&r)
+        );
+        let r = execute(
+            &mut e,
+            "select_rect",
+            &json!({ "x": 10, "y": 10, "width": 20, "height": 20 }),
+        );
+        assert!(!r.is_error);
+        let r = execute(
+            &mut e,
+            "transform_selection",
+            &json!({ "dx": 30, "scale": 2 }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let s = describe(&e)["selection"].clone();
+        assert!(
+            (s["width"].as_i64().unwrap() - 40).abs() <= 2
+                && (s["x"].as_i64().unwrap() - 30).abs() <= 2,
+            "{s}"
+        );
         let r = execute(&mut e, "deselect", &json!({}));
         assert!(!r.is_error && describe(&e)["selection"].is_null());
         let r = execute(

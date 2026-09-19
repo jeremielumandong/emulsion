@@ -213,6 +213,18 @@ pub fn definitions() -> Vec<ToolDef> {
             json!({ "x": { "type": "number" }, "y": { "type": "number" }, "tolerance": { "type": "integer", "minimum": 0, "maximum": 255 }, "contiguous": { "type": "boolean" }, "mode": mode() }),
             &["x", "y"],
         ),
+        def(
+            "select_node",
+            "Select what a node covers: a pixel node's visible pixels (through its mask), or an adjustment's mask.",
+            json!({ "node": node(), "mode": mode() }),
+            &["node"],
+        ),
+        def(
+            "transform_selection",
+            "Move the selection by dx/dy pixels, scale it about its centre (1 = unchanged) and rotate it clockwise in degrees.",
+            json!({ "dx": { "type": "number" }, "dy": { "type": "number" }, "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 20 }, "rotation": { "type": "number", "minimum": -360, "maximum": 360 } }),
+            &[],
+        ),
         def("select_all", "Select the whole canvas.", json!({}), &[]),
         def("deselect", "Clear the selection.", json!({}), &[]),
         def("invert_selection", "Invert the selection.", json!({}), &[]),

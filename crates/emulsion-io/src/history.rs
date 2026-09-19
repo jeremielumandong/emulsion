@@ -117,6 +117,8 @@ struct HDoc {
     next_id: NodeId,
     selection: Option<u32>,
     nodes: Vec<HNode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    guides: Vec<emulsion_core::document::Guide>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -267,6 +269,7 @@ pub(crate) fn encode(graph: &Graph, live: Option<String>) -> Result<Vec<(String,
                     next_id: d.next_id,
                     selection: d.selection.as_ref().map(|s| masks.add(s)),
                     nodes,
+                    guides: d.guides.clone(),
                 },
             }
         })
@@ -392,6 +395,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         doc.resolution = h.resolution;
         doc.source_depth = if h.source_depth == 16 { 16 } else { 8 };
         doc.blend_space = h.blend_space;
+        doc.guides = h.guides;
         doc.selection = h
             .selection
             .map(|i| mask(i, h.width, h.height))

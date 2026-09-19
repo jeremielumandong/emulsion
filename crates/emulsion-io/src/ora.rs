@@ -56,6 +56,9 @@ struct Manifest {
     blend_space: BlendSpace,
     /// Bottom to top.
     nodes: Vec<MNode>,
+    /// Ruler guides. Absent in files from before guides existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    guides: Vec<emulsion_core::document::Guide>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -312,6 +315,7 @@ fn encode(doc: &Document) -> Result<Encoded> {
         source_depth: doc.source_depth,
         blend_space: doc.blend_space,
         nodes,
+        guides: doc.guides.clone(),
     };
     Ok(Encoded {
         entries,
@@ -593,6 +597,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     doc.resolution = m.resolution;
     doc.source_depth = if m.source_depth == 16 { 16 } else { 8 };
     doc.blend_space = m.blend_space;
+    doc.guides = m.guides.clone();
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     for n in m.nodes {
         let kind = match n.kind {
@@ -963,10 +968,21 @@ mod tests {
 
     #[test]
     fn native_roundtrip_preserves_everything() {
-        let d = sample_doc();
+        let mut d = sample_doc();
+        d.guides = vec![
+            emulsion_core::document::Guide {
+                vertical: true,
+                pos: 150.5,
+            },
+            emulsion_core::document::Guide {
+                vertical: false,
+                pos: 40.0,
+            },
+        ];
         let p = tmp("roundtrip.ora");
         write(&d, &p).unwrap();
         let back = read(&p).unwrap();
+        assert_eq!(back.guides, d.guides);
         assert_eq!(back.nodes.len(), d.nodes.len());
         for (a, b) in d.nodes.iter().zip(&back.nodes) {
             assert_eq!(a.id, b.id);

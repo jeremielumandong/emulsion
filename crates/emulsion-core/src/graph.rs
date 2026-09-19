@@ -665,6 +665,10 @@ pub fn merge(
     if sel_eq(ours, base) && !sel_eq(&theirs, base) {
         out.selection = theirs.selection.clone();
     }
+    // Guides: like the selection, a helper rather than content.
+    if ours.guides == base.guides && theirs.guides != base.guides {
+        out.guides = theirs.guides.clone();
+    }
 
     // Nodes.
     let ids: BTreeSet<NodeId> = base

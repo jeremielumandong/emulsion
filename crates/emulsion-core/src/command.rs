@@ -146,6 +146,10 @@ pub enum Command {
         width: u32,
         height: u32,
     },
+    /// Replace the ruler guides.
+    SetGuides {
+        guides: Vec<crate::document::Guide>,
+    },
 }
 
 /// What a command changed, for re-rendering.
@@ -212,6 +216,7 @@ impl Command {
             }
             .into(),
             Command::ImageSize { .. } => "Image size".into(),
+            Command::SetGuides { .. } => "Guides".into(),
         }
     }
 
@@ -219,6 +224,7 @@ impl Command {
     pub fn dirty(&self, before: &Document) -> Dirty {
         match self {
             Command::SetSelection { .. }
+            | Command::SetGuides { .. }
             | Command::SetCollapsed { .. }
             | Command::SetLocked { .. }
             | Command::Rename { .. } => Dirty::Nothing,
@@ -544,6 +550,10 @@ impl Command {
             }
             Command::ImageSize { width, height } => {
                 crate::geometry::resize(doc, *width, *height);
+                Ok(None)
+            }
+            Command::SetGuides { guides } => {
+                doc.guides = guides.clone();
                 Ok(None)
             }
             Command::Ungroup { id } => {

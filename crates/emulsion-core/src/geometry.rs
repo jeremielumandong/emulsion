@@ -75,6 +75,20 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
             }
         }
     }
+    // Guides stay straight only when nothing rotates; otherwise they go.
+    if angle.abs() < 1e-9 {
+        for g in &mut doc.guides {
+            let p = if g.vertical {
+                dvec2(g.pos, 0.0)
+            } else {
+                dvec2(0.0, g.pos)
+            };
+            let q = to_new.transform_point2(p);
+            g.pos = if g.vertical { q.x } else { q.y };
+        }
+    } else {
+        doc.guides.clear();
+    }
     if let Some(sel) = &doc.selection {
         doc.selection = Some(Arc::new(remap(sel, w, h, inv)));
     }

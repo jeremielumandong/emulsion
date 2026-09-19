@@ -165,6 +165,13 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         ),
         "crop" => format!("crop to {}×{}", input["width"], input["height"]),
         "image_size" => format!("resize to {} px wide", input["width"]),
+        "select_node" => format!("select {}", n()),
+        "transform_selection" => "move or resize the selection".into(),
+        "list_history" => "read the history".into(),
+        "create_branch" => format!("start branch {}", input["name"].as_str().unwrap_or("?")),
+        "switch_branch" => format!("switch to {}", input["name"].as_str().unwrap_or("?")),
+        "compare" => "compare two versions".into(),
+        "merge_branch" => format!("merge {}", input["branch"].as_str().unwrap_or("?")),
         other => other.replace('_', " "),
     }
 }

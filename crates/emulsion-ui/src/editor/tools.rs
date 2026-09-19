@@ -19,6 +19,10 @@ pub enum SelectShape {
     Lasso,
     Polygon,
     Wand,
+    /// Brush over an area; the selection grows through similar colour.
+    Quick,
+    /// Click anchors; the outline snaps to edges between them.
+    Magnetic,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +64,11 @@ pub struct ToolState {
     /// Hue kept separately so greys do not lose it.
     pub hue: f32,
     ants: Option<(usize, u32, Segments)>,
+    /// Magnetic lasso: the edge-following path from the last anchor to the pointer.
+    pub magnetic_live: Vec<(f64, f64)>,
+    /// Edge map of the composite for the magnetic lasso, by revision.
+    edges: Option<(u64, Arc<Vec<f32>>)>,
+    edges_loading: Option<u64>,
 }
 
 impl Default for ToolState {
@@ -87,6 +96,9 @@ impl Default for ToolState {
             picker: false,
             hue: 0.0,
             ants: None,
+            magnetic_live: Vec::new(),
+            edges: None,
+            edges_loading: None,
         }
     }
 }
@@ -124,6 +136,15 @@ pub enum ToolDrag {
     },
     PickSv {
         track: TrackBounds,
+    },
+    /// Dragging inside the selection moves it.
+    MoveSelection {
+        start: (f64, f64),
+        orig: Arc<Mask>,
+    },
+    Quick {
+        pts: Vec<(f64, f64)>,
+        combine: Combine,
     },
     PickHue {
         track: TrackBounds,
@@ -232,6 +253,10 @@ impl EditorView {
         self.tool = Tool::Select;
         self.tools.select = shape;
         self.tools.polygon.clear();
+        self.tools.magnetic_live.clear();
+        if shape == SelectShape::Magnetic {
+            self.ensure_edges(cx);
+        }
         cx.notify();
     }
 
@@ -373,7 +398,40 @@ impl EditorView {
         match self.tool {
             Tool::Select => {
                 let combine = combine_for(&e.modifiers, self.tools.combine);
+                let plain = combine == Combine::Replace
+                    && matches!(
+                        self.tools.select,
+                        SelectShape::Rect | SelectShape::Ellipse | SelectShape::Lasso
+                    );
+                if plain
+                    && let Some(sel) = self.editor.doc.selection.clone()
+                    && d.0 >= 0.0
+                    && d.1 >= 0.0
+                    && d.0 < sel.width() as f64
+                    && d.1 < sel.height() as f64
+                    && sel.get(d.0 as u32, d.1 as u32) > 127
+                {
+                    self.editor.begin("Move selection");
+                    self.drag = Some(Drag::Tool(ToolDrag::MoveSelection {
+                        start: d,
+                        orig: sel,
+                    }));
+                    return;
+                }
                 match self.tools.select {
+                    SelectShape::Quick => {
+                        let combine =
+                            if combine == Combine::Replace && self.editor.doc.selection.is_some() {
+                                Combine::Add
+                            } else {
+                                combine
+                            };
+                        self.drag = Some(Drag::Tool(ToolDrag::Quick {
+                            pts: vec![d],
+                            combine,
+                        }));
+                    }
+                    SelectShape::Magnetic => self.magnetic_click(d, combine, e.click_count, cx),
                     SelectShape::Rect | SelectShape::Ellipse => {
                         let ellipse = self.tools.select == SelectShape::Ellipse;
                         self.drag = Some(Drag::Tool(ToolDrag::Marquee {
@@ -575,6 +633,19 @@ impl EditorView {
                 let track = track.clone();
                 self.pick_sv(&track, pos, cx);
             }
+            ToolDrag::MoveSelection { start, orig } => {
+                let (dx, dy) = ((d.0 - start.0).round(), (d.1 - start.1).round());
+                let moved = select::transform(orig, DAffine2::from_translation(dvec2(dx, dy)));
+                let selection = (!select::bounds(&moved).is_empty()).then(|| Arc::new(moved));
+                self.execute(Command::SetSelection { selection }, cx);
+            }
+            ToolDrag::Quick { pts, .. } => {
+                let last = *pts.last().unwrap_or(&d);
+                if ((last.0 - d.0) * self.view.zoom).hypot((last.1 - d.1) * self.view.zoom) >= 2.0 {
+                    pts.push(d);
+                    cx.notify();
+                }
+            }
             ToolDrag::PickHue { track } => {
                 let track = track.clone();
                 self.pick_hue(&track, pos, cx);
@@ -662,12 +733,19 @@ impl EditorView {
                 }
             }
             ToolDrag::PickSv { .. } | ToolDrag::PickHue { .. } => {}
+            ToolDrag::MoveSelection { .. } => {
+                if self.editor.in_transaction() {
+                    self.editor.end();
+                }
+            }
+            ToolDrag::Quick { pts, combine } => self.quick_select(pts, combine, cx),
         }
         cx.notify();
     }
 
     pub fn commit_polygon(&mut self, cx: &mut Context<Self>) {
-        let pts = std::mem::take(&mut self.tools.polygon);
+        let mut pts = std::mem::take(&mut self.tools.polygon);
+        pts.append(&mut self.tools.magnetic_live);
         if pts.len() >= 3 {
             let (w, h) = (self.editor.doc.width, self.editor.doc.height);
             let p: Vec<(f32, f32)> = pts.iter().map(|(x, y)| (*x as f32, *y as f32)).collect();
@@ -700,6 +778,7 @@ impl EditorView {
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
         let had = !self.tools.polygon.is_empty() || self.tools.crop.is_some() || self.tools.picker;
         self.tools.polygon.clear();
+        self.tools.magnetic_live.clear();
         self.tools.crop = None;
         self.tools.picker = false;
         cx.notify();
@@ -731,6 +810,178 @@ impl EditorView {
             );
             full.into_iter().flat_map(color::premul_to_srgba8).collect()
         }
+    }
+
+    /// Load the selected node's pixels (or its mask) as the selection.
+    pub fn select_from_node(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected else {
+            self.set_status("Select a node first.", false, cx);
+            return;
+        };
+        match self.editor.doc.node_coverage(id) {
+            Some(m) => {
+                let combine = self.tools.combine;
+                self.apply_selection(m, combine, cx);
+            }
+            None => self.set_status("That node covers nothing to select.", false, cx),
+        }
+    }
+
+    /// Move, scale (about the centre) and rotate the selection.
+    pub fn transform_selection(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        scale: f64,
+        degrees: f64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(sel) = self.editor.doc.selection.clone() else {
+            self.set_status("Nothing is selected.", false, cx);
+            return;
+        };
+        let b = select::bounds(&sel);
+        let c = dvec2(b.x as f64 + b.w as f64 / 2.0, b.y as f64 + b.h as f64 / 2.0);
+        let a = DAffine2::from_translation(c + dvec2(dx, dy))
+            * DAffine2::from_angle(degrees.to_radians())
+            * DAffine2::from_scale(dvec2(scale, scale))
+            * DAffine2::from_translation(-c);
+        let m = select::transform(&sel, a);
+        let selection = (!select::bounds(&m).is_empty()).then(|| Arc::new(m));
+        self.execute(Command::SetSelection { selection }, cx);
+    }
+
+    fn quick_select(&mut self, pts: Vec<(f64, f64)>, combine: Combine, cx: &mut Context<Self>) {
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        let r = (self.tools.brush.size / 2.0).max(2.0) as f64;
+        let mut seeds = Vec::new();
+        for (x, y) in &pts {
+            let step = (r / 3.0).max(1.0);
+            let mut oy = -r;
+            while oy <= r {
+                let mut ox = -r;
+                while ox <= r {
+                    let (sx, sy) = (x + ox, y + oy);
+                    if ox * ox + oy * oy <= r * r
+                        && sx >= 0.0
+                        && sy >= 0.0
+                        && sx < w as f64
+                        && sy < h as f64
+                    {
+                        seeds.push((sx as u32, sy as u32));
+                    }
+                    ox += step;
+                }
+                oy += step;
+            }
+        }
+        if seeds.is_empty() {
+            return;
+        }
+        let strength = (self.tools.tolerance as f32 / 255.0 * 100.0).max(1.0);
+        let img = self.composite_srgb8();
+        self.set_status("Selecting…", false, cx);
+        cx.spawn(async move |this, cx| {
+            let m = cx
+                .background_spawn(async move {
+                    let img = img.await;
+                    select::quick_select(&img, w, h, &seeds, strength)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.status = None;
+                this.apply_selection(m, combine, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Compute the edge map the magnetic lasso follows, once per revision.
+    fn ensure_edges(&mut self, cx: &mut Context<Self>) {
+        let rev = self.editor.revision;
+        if self.tools.edges.as_ref().is_some_and(|(r, _)| *r == rev)
+            || self.tools.edges_loading == Some(rev)
+        {
+            return;
+        }
+        self.tools.edges_loading = Some(rev);
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        let img = self.composite_srgb8();
+        cx.spawn(async move |this, cx| {
+            let e = cx
+                .background_spawn(async move { Arc::new(select::edges(&img.await, w, h)) })
+                .await;
+            this.update(cx, |this, _| {
+                this.tools.edges = Some((rev, e));
+                this.tools.edges_loading = None;
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn magnetic_click(
+        &mut self,
+        d: (f64, f64),
+        combine: Combine,
+        clicks: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.ensure_edges(cx);
+        let pts = &self.tools.polygon;
+        let near_start = pts.first().is_some_and(|p0| {
+            let z = self.view.zoom;
+            ((p0.0 - d.0) * z).hypot((p0.1 - d.1) * z) < 8.0
+        });
+        if pts.len() >= 3 && (near_start || clicks >= 2) {
+            self.commit_polygon(cx);
+            return;
+        }
+        if pts.is_empty() {
+            self.tools.polygon_combine = combine;
+        }
+        let live = std::mem::take(&mut self.tools.magnetic_live);
+        self.tools.polygon.extend(live);
+        self.tools.polygon.push(d);
+        cx.notify();
+    }
+
+    /// Pointer moved with the magnetic lasso open: snap the live segment to
+    /// edges, and drop an anchor when it grows long.
+    pub(crate) fn magnetic_track(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
+        if self.tool != Tool::Select || self.tools.select != SelectShape::Magnetic {
+            return;
+        }
+        let Some(&last) = self.tools.polygon.last() else {
+            return;
+        };
+        let Some((_, edges)) = self.tools.edges.clone() else {
+            self.ensure_edges(cx);
+            return;
+        };
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        let clamp = |p: (f64, f64)| {
+            (
+                p.0.clamp(0.0, w as f64 - 1.0) as u32,
+                p.1.clamp(0.0, h as f64 - 1.0) as u32,
+            )
+        };
+        let margin = (12.0 / self.view.zoom).clamp(4.0, 40.0) as u32;
+        let path = select::live_wire(&edges, w, h, clamp(last), clamp(d), margin);
+        let mut live: Vec<(f64, f64)> = path
+            .iter()
+            .skip(1)
+            .map(|(x, y)| (*x as f64 + 0.5, *y as f64 + 0.5))
+            .collect();
+        // Fix the older half as the segment grows, so it stays stable.
+        let anchor_every = (60.0 / self.view.zoom).max(8.0) as usize;
+        if live.len() > anchor_every * 2 {
+            let fixed: Vec<_> = live.drain(..anchor_every).collect();
+            self.tools.polygon.extend(fixed);
+        }
+        self.tools.magnetic_live = live;
+        cx.notify();
     }
 
     fn wand(&mut self, d: (f64, f64), combine: Combine, cx: &mut Context<Self>) {
@@ -1025,14 +1276,20 @@ pub struct Overlay {
     pub crop: Option<(f64, f64, f64, f64)>,
     pub cursor: Option<(Point<Pixels>, f32)>,
     pub marker: Option<(f64, f64)>,
+    /// Guides and snap lines: (vertical, position in document pixels).
+    pub guides: Vec<(bool, f64)>,
+    pub snaps: Vec<(bool, f64)>,
 }
 
 impl EditorView {
     pub(crate) fn overlay(&mut self, scale_factor: f32) -> Overlay {
         let level = self.view.level(scale_factor, 12);
+        let (guides, snaps) = self.guide_lines();
         let mut o = Overlay {
             ants: self.ants(level),
             phase: self.tools.ants_phase,
+            guides,
+            snaps,
             ..Default::default()
         };
         let ellipse_pts = |x: f64, y: f64, w: f64, h: f64| -> Vec<(f64, f64)> {
@@ -1077,9 +1334,14 @@ impl EditorView {
                 _ => {}
             }
         }
+        if let Some(Drag::Tool(ToolDrag::Quick { pts, .. })) = &self.drag {
+            o.lines.push((pts.clone(), false));
+        }
         if !self.tools.polygon.is_empty() {
             let mut pts = self.tools.polygon.clone();
-            if let Some(p) = self.tools.pointer.and_then(|p| self.doc_point(p)) {
+            if self.tools.select == SelectShape::Magnetic && !self.tools.magnetic_live.is_empty() {
+                pts.extend(self.tools.magnetic_live.iter().copied());
+            } else if let Some(p) = self.tools.pointer.and_then(|p| self.doc_point(p)) {
                 pts.push(p);
             }
             o.lines.push((pts, false));
@@ -1115,6 +1377,28 @@ pub(crate) fn paint_overlay(
         point(px(s.0 as f32), px(s.1 as f32))
     };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        let full_line = |vertical: bool, pos: f64, color: Hsla, window: &mut Window| {
+            let s = to_screen(if vertical { (pos, 0.0) } else { (0.0, pos) });
+            let q = if vertical {
+                Bounds::new(
+                    point(s.x.floor(), bounds.origin.y),
+                    size(px(1.), bounds.size.height),
+                )
+            } else {
+                Bounds::new(
+                    point(bounds.origin.x, s.y.floor()),
+                    size(bounds.size.width, px(1.)),
+                )
+            };
+            window.paint_quad(fill(q, color));
+        };
+        let guide: Hsla = rgb(0x1FB5FF).into();
+        for (v, p) in &o.guides {
+            full_line(*v, *p, guide, window);
+        }
+        for (v, p) in &o.snaps {
+            full_line(*v, *p, accent, window);
+        }
         if let Some(segs) = &o.ants
             && !segs.is_empty()
         {
@@ -1283,7 +1567,9 @@ impl EditorView {
                     ("sel-ell", "ellipse", SelectShape::Ellipse),
                     ("sel-lasso", "lasso", SelectShape::Lasso),
                     ("sel-poly", "polygon", SelectShape::Polygon),
+                    ("sel-mag", "magnetic", SelectShape::Magnetic),
                     ("sel-wand", "wand", SelectShape::Wand),
+                    ("sel-quick", "quick", SelectShape::Quick),
                 ] {
                     v.push(self.mode_chip(id, t, s, cur, p, cx, |e, s, cx| e.set_select(s, cx)));
                 }
@@ -1299,7 +1585,28 @@ impl EditorView {
                         cx.notify();
                     }));
                 }
-                if cur == SelectShape::Wand {
+                if cur == SelectShape::Quick {
+                    let t = self.tools.tolerance as f32;
+                    v.push(self.opt_slider(
+                        SliderKey::Tolerance,
+                        "spread",
+                        format!("{:.0}", t / 255.0 * 100.0),
+                        t / 255.0,
+                        (0.0, 255.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                    let s = self.tools.brush.size;
+                    v.push(self.opt_slider(
+                        SliderKey::ToolSize,
+                        "brush",
+                        format!("{s:.0}px"),
+                        ((s - 1.0) / 499.0).sqrt(),
+                        (1.0, 500.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                } else if cur == SelectShape::Wand {
                     let t = self.tools.tolerance as f32;
                     v.push(self.opt_slider(
                         SliderKey::Tolerance,
@@ -1362,6 +1669,24 @@ impl EditorView {
                         .into_any_element(),
                 );
                 v.push(
+                    chip("sel-node", "from node", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.select_from_node(cx)))
+                        .into_any_element(),
+                );
+                for (id, t, scale, turn) in [
+                    ("sel-smaller", "−10%", 0.9, 0.0),
+                    ("sel-larger", "+10%", 1.1, 0.0),
+                    ("sel-rotate", "↻15°", 1.0, 15.0),
+                ] {
+                    v.push(
+                        chip(id, t, false, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.transform_selection(0.0, 0.0, scale, turn, cx)
+                            }))
+                            .into_any_element(),
+                    );
+                }
+                v.push(
                     chip("sel-caf", "content-aware fill", false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.content_aware_fill(cx)))
                         .into_any_element(),
@@ -1386,7 +1711,7 @@ impl EditorView {
                         SliderKey::ToolSize,
                         "size",
                         format!("{:.0}", b.size),
-                        (b.size / 500.0).sqrt(),
+                        ((b.size - 1.0) / 499.0).sqrt(),
                         (1.0, 500.0, 1.0),
                         p,
                         cx,
