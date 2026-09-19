@@ -14,6 +14,7 @@ pub mod image;
 pub mod paint;
 pub mod select;
 pub mod tile;
+pub mod warp;
 
 pub use adjust::Adjustment;
 pub use blend::BlendMode;

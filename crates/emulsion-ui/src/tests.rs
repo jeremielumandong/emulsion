@@ -648,6 +648,96 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn free_transform_scale_rotate_and_distort(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Move);
+        let id = cx.update(|_, cx| e.read(cx).editor.doc.nodes.last().unwrap().id);
+        cx.update(|_, cx| e.update(cx, |e, _| e.selected = Some(id)));
+        cx.run_until_parked();
+        let placement = |cx: &mut VisualTestContext| {
+            cx.update(
+                |_, cx| match &e.read(cx).editor.doc.node(id).unwrap().kind {
+                    NodeKind::Raster { placement, raster } => {
+                        (*placement, raster.width(), raster.height())
+                    }
+                    _ => unreachable!(),
+                },
+            )
+        };
+        // Bottom-right corner to the centre: half size, top-left fixed.
+        drag(&e, cx, (256.0, 192.0), (128.0, 96.0));
+        let (p, _, _) = placement(cx);
+        assert!(
+            (p.scale_x - 0.5).abs() < 0.02 && (p.scale_y - 0.5).abs() < 0.02,
+            "{p:?}"
+        );
+        assert!(
+            p.x.abs() < 0.5 && p.y.abs() < 0.5,
+            "the opposite corner stays: {p:?}"
+        );
+        let steps = cx.update(|_, cx| e.read(cx).editor.history.len());
+
+        // Just outside the top-right corner, swing a quarter turn about the centre.
+        let zoom = cx.update(|_, cx| e.read(cx).view.zoom);
+        let off = 12.0 / zoom;
+        let (c, r) = ((64.0, 48.0), (128.0 + off, -off));
+        let a0 = (r.1 - c.1).atan2(r.0 - c.0);
+        let rad = (r.0 - c.0).hypot(r.1 - c.1);
+        let to = (
+            c.0 + rad * (a0 + std::f64::consts::FRAC_PI_2).cos(),
+            c.1 + rad * (a0 + std::f64::consts::FRAC_PI_2).sin(),
+        );
+        drag(&e, cx, r, to);
+        let (p, _, _) = placement(cx);
+        assert!((p.rotation - 90.0).abs() < 2.0, "{p:?}");
+        assert_eq!(
+            cx.update(|_, cx| e.read(cx).editor.history.len()),
+            steps + 1,
+            "one step per drag"
+        );
+
+        // Ctrl-drag a corner: the pixels are re-projected into a new buffer.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.execute(
+                    emulsion_core::Command::SetPlacement {
+                        id,
+                        placement: Default::default(),
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        let (a, b) = (at(&e, cx, (256.0, 192.0)), at(&e, cx, (300.0, 230.0)));
+        let ctrl = gpui_kit::Modifiers {
+            control: true,
+            ..Default::default()
+        };
+        cx.simulate_mouse_down(a, gpui_kit::MouseButton::Left, ctrl);
+        cx.simulate_mouse_move(b, Some(gpui_kit::MouseButton::Left), ctrl);
+        cx.simulate_mouse_up(b, gpui_kit::MouseButton::Left, ctrl);
+        cx.run_until_parked();
+        let (p, w, h) = placement(cx);
+        assert_eq!((w, h), (300, 230), "the buffer grew to the distorted shape");
+        assert!(p.x == 0.0 && p.y == 0.0 && p.rotation == 0.0);
+    }
+
+    #[gpui_kit::test]
+    fn brush_presets_panel_applies_a_preset(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Brush);
+        cx.update(|_, cx| e.update(cx, |e, cx| e.toggle_presets(cx)));
+        cx.run_until_parked();
+        let soft = crate::editor::presets_builtin()
+            .into_iter()
+            .find(|p| p.name.starts_with("Soft"))
+            .unwrap();
+        cx.update(|_, cx| e.update(cx, |e, cx| e.apply_preset(&soft, cx)));
+        cx.run_until_parked();
+        let b = cx.update(|_, cx| e.read(cx).brush());
+        assert_eq!((b.size, b.hardness), (80.0, 0.0));
+    }
+
+    #[gpui_kit::test]
     fn the_default_hand_tool_pans_without_moving_pixels(cx: &mut TestAppContext) {
         let (ws, cx) = open(cx, doc(&["Photo"], None));
         cx.run_until_parked();

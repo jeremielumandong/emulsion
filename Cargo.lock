@@ -1750,6 +1750,7 @@ dependencies = [
  "image",
  "parking_lot",
  "rayon",
+ "serde",
  "serde_json",
  "smallvec",
  "tracing",

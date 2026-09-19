@@ -146,6 +146,16 @@ pub enum Command {
         width: u32,
         height: u32,
     },
+    /// Replace a pixel node's pixels, mask and placement together, for
+    /// operations that change its size (Distort). The mask, if any, must
+    /// match the new pixels.
+    ReplaceContent {
+        id: NodeId,
+        raster: Arc<Raster>,
+        mask: Option<Arc<Mask>>,
+        placement: Placement,
+        label: String,
+    },
     /// Replace the ruler guides.
     SetGuides {
         guides: Vec<crate::document::Guide>,
@@ -217,6 +227,7 @@ impl Command {
             .into(),
             Command::ImageSize { .. } => "Image size".into(),
             Command::SetGuides { .. } => "Guides".into(),
+            Command::ReplaceContent { label, .. } => label.clone(),
         }
     }
 
@@ -555,6 +566,34 @@ impl Command {
             Command::SetGuides { guides } => {
                 doc.guides = guides.clone();
                 Ok(None)
+            }
+            Command::ReplaceContent {
+                id,
+                raster,
+                mask,
+                placement,
+                ..
+            } => {
+                if let Some(m) = mask
+                    && (m.width() != raster.width() || m.height() != raster.height())
+                {
+                    return Err(CommandError::Invalid(
+                        crate::document::DocumentError::BadValue(*id, "mask size"),
+                    ));
+                }
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                match &mut n.kind {
+                    NodeKind::Raster {
+                        raster: r,
+                        placement: p,
+                    } => {
+                        *r = raster.clone();
+                        *p = *placement;
+                        n.mask = mask.clone();
+                        Ok(None)
+                    }
+                    _ => Err(CommandError::NoSuchParam(*id, "pixels".into())),
+                }
             }
             Command::Ungroup { id } => {
                 let g = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?.clone();

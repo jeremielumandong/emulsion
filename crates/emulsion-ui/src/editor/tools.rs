@@ -1302,6 +1302,8 @@ pub struct Overlay {
     pub crop: Option<(f64, f64, f64, f64)>,
     pub cursor: Option<(Point<Pixels>, f32)>,
     pub marker: Option<(f64, f64)>,
+    /// Free Transform box of the selected node.
+    pub transform: Option<[(f64, f64); 4]>,
     /// Guides and snap lines: (vertical, position in document pixels).
     pub guides: Vec<(bool, f64)>,
     pub snaps: Vec<(bool, f64)>,
@@ -1316,6 +1318,7 @@ impl EditorView {
             phase: self.tools.ants_phase,
             guides,
             snaps,
+            transform: self.transform_box(),
             ..Default::default()
         };
         let ellipse_pts = |x: f64, y: f64, w: f64, h: f64| -> Vec<(f64, f64)> {
@@ -1453,6 +1456,9 @@ pub(crate) fn paint_overlay(
         }
         for (v, p) in &o.snaps {
             full_line(*v, *p, accent, window);
+        }
+        if let Some(q) = o.transform {
+            super::transform::paint_box(q, view, bounds, rgb(0x1FB5FF).into(), window);
         }
         if let Some(segs) = &o.ants
             && !segs.is_empty()
@@ -1748,6 +1754,12 @@ impl EditorView {
                 );
             }
             Tool::Brush | Tool::Heal | Tool::Clone => {
+                let open = self.presets.open;
+                v.push(
+                    chip("presets", "presets", open, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_presets(cx)))
+                        .into_any_element(),
+                );
                 if self.tool == Tool::Brush {
                     let cur = self.tools.paint;
                     for (id, t, k) in [
@@ -1964,12 +1976,25 @@ impl EditorView {
                         .into_any_element(),
                 );
             }
-            Tool::Move => v.push(
-                div()
-                    .flex_none()
-                    .child("drag to move the selected pixel node · H to pan instead")
-                    .into_any_element(),
-            ),
+            Tool::Move => {
+                let fields = self.transform_field_views(p);
+                if fields.is_empty() {
+                    v.push(
+                        div()
+                            .flex_none()
+                            .child("select a pixel node to move or transform it · H to pan")
+                            .into_any_element(),
+                    );
+                } else {
+                    v.extend(fields);
+                    v.push(
+                        div()
+                            .flex_none()
+                            .child("drag handles to scale · outside a corner to rotate · ctrl+corner to distort")
+                            .into_any_element(),
+                    );
+                }
+            }
             Tool::Hand => v.push(
                 div()
                     .flex_none()

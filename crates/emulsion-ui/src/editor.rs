@@ -7,8 +7,10 @@ use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fract
 
 mod canvas_size;
 mod history;
+mod presets;
 mod snap;
 mod tools;
+mod transform;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
 use emulsion_raster::adjust::ParamSpec;
@@ -18,6 +20,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 pub use history::recovery_dir;
+pub use presets::builtin as presets_builtin;
 use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -106,6 +109,14 @@ enum Drag {
         max: f32,
         step: f32,
     },
+    /// Free Transform: a handle of the selected pixel node.
+    Transform(transform::Grab),
+    /// Distort: one corner moves freely; pixels re-project on release.
+    Distort {
+        id: NodeId,
+        corner: usize,
+        quad: [(f64, f64); 4],
+    },
     /// A guide dragged from a ruler (new) or grabbed on the canvas.
     Guide {
         vertical: bool,
@@ -186,6 +197,10 @@ pub struct EditorView {
     pub(crate) snap_bypass: bool,
     pub(crate) snap_lines: Vec<(bool, f64)>,
     pub(crate) size_panel: Option<canvas_size::SizePanel>,
+    pub(crate) transform_fields: Option<transform::TransformFields>,
+    pub(crate) presets: presets::PresetState,
+    /// Shift held during a drag: free aspect, or 15° rotation steps.
+    pub(crate) drag_shift: bool,
 }
 
 impl EditorView {
@@ -248,6 +263,9 @@ impl EditorView {
             snap_bypass: false,
             snap_lines: Vec::new(),
             size_panel: None,
+            transform_fields: None,
+            presets: Default::default(),
+            drag_shift: false,
         }
     }
 
@@ -678,6 +696,10 @@ impl EditorView {
             self.tool_down(e, cx);
             return;
         }
+        if self.transform_down(e) {
+            cx.notify();
+            return;
+        }
         let Some(b) = self.canvas_bounds() else {
             return;
         };
@@ -751,6 +773,18 @@ impl EditorView {
                 p.y = (start.y + dy).round();
                 self.execute(Command::SetPlacement { id, placement: p }, cx);
             }
+            Drag::Transform(g) => {
+                let g = *g;
+                if let Some(d) = self.doc_point(pos) {
+                    self.transform_move(g, d, cx);
+                }
+            }
+            Drag::Distort { corner, .. } => {
+                let corner = *corner;
+                if let Some(d) = self.doc_point(pos) {
+                    self.distort_move(corner, d, cx);
+                }
+            }
             Drag::Guide {
                 vertical, existing, ..
             } => {
@@ -783,7 +817,8 @@ impl EditorView {
         self.snap_lines.clear();
         match self.drag.take() {
             None => return,
-            Some(Drag::Move { .. }) | Some(Drag::Slider { .. }) => {
+            Some(Drag::Distort { id, quad, .. }) => self.finish_distort(id, quad, cx),
+            Some(Drag::Move { .. }) | Some(Drag::Slider { .. }) | Some(Drag::Transform(_)) => {
                 if self.editor.in_transaction() {
                     self.editor.end();
                 }
@@ -1330,6 +1365,7 @@ impl EditorView {
                             if phase == DispatchPhase::Bubble {
                                 w2.update(cx, |this, cx| {
                                     this.snap_bypass = e.modifiers.control;
+                                    this.drag_shift = e.modifiers.shift;
                                     this.drag_move(e.position, cx)
                                 })
                                 .ok();
@@ -2057,6 +2093,7 @@ impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::palette(cx);
         self.sync_trees(cx);
+        self.sync_transform_fields(window, cx);
         let doc_bar = self.doc_bar(&p, cx);
         if self.history.open {
             let page = self.history_page(&p, cx);
@@ -2078,6 +2115,7 @@ impl Render for EditorView {
         let strip = self.status_strip(&p, cx);
         let ask = self.ask_bar(&p, cx);
         let size_panel = self.size_panel_view(&p, cx);
+        let presets = self.presets_view(&p, cx);
         let dock = self.assistant_dock(&p, cx);
         let panel = self.node_panel(&p, window, cx);
         div()
@@ -2104,6 +2142,7 @@ impl Render for EditorView {
                             .overflow_hidden()
                             .child(context)
                             .children(size_panel)
+                            .children(presets)
                             .children(ask)
                             .child(canvas)
                             .children(dock)
