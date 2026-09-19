@@ -45,6 +45,7 @@ pub const HEAVY: &[&str] = &[
     "depth_map",
     "upscale",
     "restore_faces",
+    "lens_profile",
     "import_recipe",
     "batch_export",
 ];
@@ -105,6 +106,7 @@ fn view_region() -> Value {
 fn critique_context() -> Value {
     json!({"type": "object", "additionalProperties": false, "properties": {
         "medium": {"type": "string"}, "stage": {"type": "string"},
+        "style": {"type": "string", "description": "Requested visual style, independently of medium. Free text accepts any named, custom or hybrid style; omitted means unknown."},
         "composition_intent": {"type": "string", "description": "Intended layout, focal placement and symmetry, including deliberate centring."},
         "user_constraints": {"type": "array", "items": {"type": "string"}}
     }})
@@ -420,6 +422,12 @@ pub fn definitions() -> Vec<ToolDef> {
             "depth_map",
             "Add a grey depth-map node of the picture (near is bright) with Depth Anything; use it as a mask for depth of field, fog or depth-aware grading. Needs the depth model.",
             json!({ "name": { "type": "string" } }),
+            &[],
+        ),
+        def(
+            "lens_profile",
+            "Correct the lens of a pixel node from the picture's camera data: looks the camera and lens up in the lensfun database and adds an editable Lens profile filter (distortion and vignetting). Needs the database (download_model lensfun) and EXIF in the file; strength 0–150 percent.",
+            json!({ "node": node(), "strength": { "type": "number", "minimum": 0, "maximum": 150 } }),
             &[],
         ),
         def(

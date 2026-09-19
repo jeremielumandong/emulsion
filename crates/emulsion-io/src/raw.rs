@@ -95,6 +95,7 @@ pub fn open(path: &Path) -> Result<Document> {
     let (raster, info) = develop(path)?;
     let mut doc = Document::new(raster.width(), raster.height());
     doc.source_depth = 16;
+    doc.info = crate::exif::read(path);
     let name = if info.model.is_empty() {
         path.file_stem()
             .map(|s| s.to_string_lossy().to_string())

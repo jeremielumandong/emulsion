@@ -82,6 +82,7 @@ pub fn import(path: &Path) -> Result<Document> {
         .unwrap_or_else(|| "Image".into());
     let mut doc = Document::new(decoded.raster.width(), decoded.raster.height());
     doc.source_depth = decoded.depth;
+    doc.info = crate::exif::read(path);
     let node = Node::raster(0, name, Arc::new(decoded.raster), Placement::default());
     Command::AddNode {
         node: Box::new(node),

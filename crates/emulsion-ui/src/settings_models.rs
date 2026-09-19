@@ -56,6 +56,35 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Fetch the lensfun database with the same progress plumbing as a model.
+    pub fn install_lensfun(&mut self, cx: &mut Context<Self>) {
+        let key: &'static str = "lensfun";
+        if self.model_jobs.running.contains_key(key) {
+            return;
+        }
+        let job = Job::new();
+        job.set_stage("downloading");
+        self.model_jobs.errors.remove(key);
+        self.model_jobs.running.insert(key, job.clone());
+        std::thread::Builder::new()
+            .name("lensfun".into())
+            .spawn(move || {
+                let j = job.clone();
+                let r = emulsion_io::lensfun::install(
+                    &move |done, total| j.progress(done as f32 / total.max(1) as f32),
+                    job.cancel_flag(),
+                );
+                match r {
+                    Ok(()) => job.set_stage("installed"),
+                    Err(e) => job.set_stage(format!("failed: {e}")),
+                }
+                job.finish();
+            })
+            .ok();
+        self.poll_models(cx);
+        cx.notify();
+    }
+
     pub fn cancel_model(&mut self, id: &'static str, cx: &mut Context<Self>) {
         if let Some(j) = self.model_jobs.running.get(id) {
             j.cancel();
@@ -187,6 +216,60 @@ impl Workspace {
                 block = block.child(mono(e, 10., p.accent));
             }
             list = list.child(block);
+        }
+        // Lens profiles: the lensfun database, fetched like a model.
+        let lens_key: &'static str = "lensfun";
+        let lens_job = self.model_jobs.running.get(lens_key).cloned();
+        let lens_on = emulsion_io::lensfun::installed();
+        let lens_state = match (&lens_job, lens_on) {
+            (Some(j), _) => j.summary(),
+            (None, true) => "installed".into(),
+            (None, false) => "5 MB".into(),
+        };
+        let mut lens_row = div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                div()
+                    .w(px(260.))
+                    .flex_none()
+                    .text_size(px(13.))
+                    .child("lensfun lens profiles"),
+            )
+            .child(
+                mono(lens_state, 10.5, if lens_on { p.accent } else { p.ink })
+                    .w(px(150.))
+                    .flex_none(),
+            )
+            .child(mono("CC-BY-SA 3.0", 9.5, p.muted).w(px(200.)).flex_none());
+        lens_row = match (&lens_job, lens_on) {
+            (Some(_), _) => lens_row.child(
+                chip("lens-cancel", "cancel", false, p)
+                    .on_click(cx.listener(move |this, _, _, cx| this.cancel_model(lens_key, cx))),
+            ),
+            (None, true) => lens_row.child(chip("lens-remove", "remove", false, p).on_click(
+                cx.listener(|_, _, _, cx| {
+                    let _ = std::fs::remove_dir_all(emulsion_io::lensfun::db_dir());
+                    cx.notify();
+                }),
+            )),
+            (None, false) => lens_row.child(
+                chip("lens-install", "install", true, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.install_lensfun(cx))),
+            ),
+        };
+        list = list
+            .child(mono("LENS PROFILES", 9.5, p.muted).pt(px(6.)))
+            .child(
+                div().flex().flex_col().gap(px(3.)).child(lens_row).child(mono(
+                    "Measured distortion and vignetting for thousands of lenses; \"Lens profile (auto)\" in the Adjust strip reads the photo's camera data and corrects it.",
+                    10.,
+                    p.muted,
+                ).max_w(px(640.))),
+            );
+        if let Some(e) = self.model_jobs.errors.get(lens_key) {
+            list = list.child(mono(e.clone(), 10., p.accent));
         }
         list.child(
             mono(

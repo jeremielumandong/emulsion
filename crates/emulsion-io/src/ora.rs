@@ -59,6 +59,9 @@ struct Manifest {
     /// Ruler guides. Absent in files from before guides existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     guides: Vec<emulsion_core::document::Guide>,
+    /// Camera metadata from the source photograph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    info: Option<emulsion_core::document::ImageInfo>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -408,6 +411,7 @@ fn encode(doc: &Document) -> Result<Encoded> {
         blend_space: doc.blend_space,
         nodes,
         guides: doc.guides.clone(),
+        info: doc.info.clone(),
     };
     Ok(Encoded {
         entries,
@@ -695,6 +699,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     doc.source_depth = if m.source_depth == 16 { 16 } else { 8 };
     doc.blend_space = m.blend_space;
     doc.guides = m.guides.clone();
+    doc.info = m.info.clone();
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     for n in m.nodes {
         let kind = match n.kind {

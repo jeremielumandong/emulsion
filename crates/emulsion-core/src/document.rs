@@ -66,6 +66,59 @@ pub struct Document {
     pub selection: Option<Arc<emulsion_raster::Mask>>,
     /// Ruler guides, for snapping and alignment. Not rendered into pixels.
     pub guides: Vec<Guide>,
+    /// What the camera recorded, when the document came from a photograph.
+    pub info: Option<ImageInfo>,
+}
+
+/// Camera metadata carried from the source file (EXIF), for the Info
+/// panel, lens profiles and the assistant.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ImageInfo {
+    pub make: String,
+    pub model: String,
+    pub lens: String,
+    /// Focal length in mm, as shot.
+    pub focal_mm: f32,
+    /// Full-frame equivalent focal length, when the file says.
+    pub focal_35mm: f32,
+    pub f_number: f32,
+    /// Seconds.
+    pub exposure_s: f32,
+    pub iso: u32,
+    pub taken: String,
+    pub software: String,
+}
+
+impl ImageInfo {
+    /// "Sony ILCE-7M3 · FE 24-70mm F2.8 GM · 47 mm · f/2.8 · 1/250 s · ISO 400".
+    pub fn summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let cam = format!("{} {}", self.make, self.model).trim().to_string();
+        if !cam.is_empty() {
+            parts.push(cam);
+        }
+        if !self.lens.is_empty() {
+            parts.push(self.lens.clone());
+        }
+        if self.focal_mm > 0.0 {
+            parts.push(format!("{:.0} mm", self.focal_mm));
+        }
+        if self.f_number > 0.0 {
+            parts.push(format!("f/{:.1}", self.f_number));
+        }
+        if self.exposure_s > 0.0 {
+            parts.push(if self.exposure_s < 1.0 {
+                format!("1/{:.0} s", 1.0 / self.exposure_s)
+            } else {
+                format!("{:.1} s", self.exposure_s)
+            });
+        }
+        if self.iso > 0 {
+            parts.push(format!("ISO {}", self.iso));
+        }
+        parts.join(" · ")
+    }
 }
 
 impl PartialEq for Document {
@@ -103,6 +156,7 @@ impl Document {
             next_id: 1,
             selection: None,
             guides: Vec::new(),
+            info: None,
         }
     }
 

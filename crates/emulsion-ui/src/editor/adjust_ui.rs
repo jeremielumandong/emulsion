@@ -794,6 +794,10 @@ impl EditorView {
                     .on_click(cx.listener(move |this, _, _, cx| this.quick_filter(n, cx))),
             );
         }
+        frow = frow.child(
+            chip("qf-lens", "Lens profile (auto)", false, p)
+                .on_click(cx.listener(|this, _, _, cx| this.lens_profile_auto(cx))),
+        );
         body.child(frow).into_any_element()
     }
 }

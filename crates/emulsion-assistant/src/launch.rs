@@ -303,6 +303,8 @@ pub const SYSTEM_PROMPT: &str = concat!(
     include_str!("prompts/manga.md"),
     include_str!("prompts/renaissance.md"),
     include_str!("prompts/watercolour.md"),
+    include_str!("prompts/media.md"),
+    include_str!("prompts/styles.md"),
 );
 
 /// Qualified names of the tools that never need confirmation.
@@ -401,29 +403,26 @@ mod tests {
     #[test]
     fn playbook_examples_execute_with_current_tools() {
         let definitions = emulsion_mcp::tools::definitions();
-        for (medium, playbook) in [
-            ("manga", include_str!("prompts/manga.md")),
-            ("renaissance", include_str!("prompts/renaissance.md")),
-            ("watercolour", include_str!("prompts/watercolour.md")),
-        ] {
+        let mut example_count = 0;
+        let mut call_count = 0;
+        // Exercise every example actually delivered to providers, including
+        // multiple studies per file, so new catalogue entries cannot be missed.
+        for (index, block) in SYSTEM_PROMPT.split("```json\n").skip(1).enumerate() {
+            example_count += 1;
             let mut editor =
                 emulsion_core::Editor::new(emulsion_core::Document::new(800, 600), None);
-            let example = playbook
-                .split_once("```json\n")
-                .expect("worked tool calls")
-                .1
-                .split_once("\n```")
-                .unwrap()
-                .0;
+            let example = block.split_once("\n```").expect("closed JSON example").0;
             let calls: Vec<serde_json::Value> = serde_json::from_str(example).unwrap();
+            assert!(!calls.is_empty(), "example {index}: empty study");
             for call in calls {
+                call_count += 1;
                 let name = call["name"].as_str().unwrap();
                 let args = &call["arguments"];
                 let definition = definitions.iter().find(|d| d.name == name).unwrap();
                 for key in args.as_object().unwrap().keys() {
                     assert!(
                         definition.input_schema["properties"].get(key).is_some(),
-                        "{medium}: {name} has unknown argument {key}"
+                        "example {index}: {name} has unknown argument {key}"
                     );
                 }
                 for key in definition.input_schema["required"].as_array().unwrap() {
@@ -432,7 +431,7 @@ mod tests {
                 let result = emulsion_mcp::exec::execute(&mut editor, name, args);
                 assert!(
                     !result.is_error,
-                    "{medium}: {name} failed: {:?}",
+                    "example {index}: {name} failed: {:?}",
                     result.content
                 );
                 if name == "get_view" {
@@ -448,13 +447,30 @@ mod tests {
                         assert_eq!(&mapping["region"], region);
                     }
                 }
+                if name == "critique" {
+                    let review = result
+                        .content
+                        .iter()
+                        .filter_map(|c| c["text"].as_str())
+                        .filter_map(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                        .find(|value| value.get("context").is_some())
+                        .expect("critique returns the artistic brief");
+                    for (key, value) in args["context"].as_object().unwrap() {
+                        assert_eq!(&review["context"][key], value);
+                    }
+                }
             }
-            assert_eq!(editor.doc.nodes.len(), 3, "{medium}: layers stay separate");
+            assert!(
+                editor.doc.nodes.len() >= 2,
+                "example {index}: study keeps independently editable layers/nodes"
+            );
             assert!(
                 editor.doc.selection.is_none(),
-                "{medium}: selection restored"
+                "example {index}: selection restored"
             );
         }
+        assert!(example_count > 0, "provider prompt includes worked studies");
+        eprintln!("Executed {call_count} tool calls across {example_count} worked studies");
     }
 
     #[test]

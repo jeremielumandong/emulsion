@@ -254,6 +254,44 @@ impl EditorView {
                         self.editor.doc.nodes.len()
                     ),
                 ))
+                .children(self.editor.doc.info.as_ref().map(|i| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .child(row(
+                            "camera",
+                            format!("{} {}", i.make, i.model).trim().to_string(),
+                        ))
+                        .when(!i.lens.is_empty(), |d| d.child(row("lens", i.lens.clone())))
+                        .child(row("exposure", {
+                            let mut s = Vec::new();
+                            if i.focal_mm > 0.0 {
+                                s.push(format!("{:.0} mm", i.focal_mm));
+                            }
+                            if i.f_number > 0.0 {
+                                s.push(format!("f/{:.1}", i.f_number));
+                            }
+                            if i.exposure_s > 0.0 {
+                                s.push(if i.exposure_s < 1.0 {
+                                    format!("1/{:.0} s", 1.0 / i.exposure_s)
+                                } else {
+                                    format!("{:.1} s", i.exposure_s)
+                                });
+                            }
+                            if i.iso > 0 {
+                                s.push(format!("ISO {}", i.iso));
+                            }
+                            if s.is_empty() {
+                                "—".into()
+                            } else {
+                                s.join(" · ")
+                            }
+                        }))
+                        .when(!i.taken.is_empty(), |d| {
+                            d.child(row("taken", i.taken.clone()))
+                        })
+                }))
                 .into_any_element(),
         )
     }

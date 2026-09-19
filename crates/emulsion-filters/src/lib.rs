@@ -59,6 +59,21 @@ pub enum Filter {
         distortion: f32,
         vignette: f32,
     },
+    /// A measured lens profile (lensfun): PanoTools distortion a, b, c;
+    /// vignetting k1..k3; `scale` rescales the radius between the sensor
+    /// the lens was calibrated on and this picture's. Radius 1 is half the
+    /// shorter side. Each part has its own strength in percent.
+    LensProfile {
+        a: f32,
+        b: f32,
+        c: f32,
+        k1: f32,
+        k2: f32,
+        k3: f32,
+        scale: f32,
+        distortion: f32,
+        vignette: f32,
+    },
     Emboss {
         angle: f32,
         height: f32,
@@ -135,6 +150,17 @@ impl Filter {
                 distortion: 0.0,
                 vignette: 0.0,
             },
+            Filter::LensProfile {
+                a: 0.0,
+                b: 0.0,
+                c: 0.0,
+                k1: 0.0,
+                k2: 0.0,
+                k3: 0.0,
+                scale: 1.0,
+                distortion: 100.0,
+                vignette: 100.0,
+            },
             Filter::Emboss {
                 angle: 135.0,
                 height: 3.0,
@@ -162,6 +188,7 @@ impl Filter {
             Filter::ReduceNoise { .. } => "Reduce noise",
             Filter::HighPass { .. } => "High pass",
             Filter::LensCorrection { .. } => "Lens correction",
+            Filter::LensProfile { .. } => "Lens profile",
             Filter::Emboss { .. } => "Emboss",
             Filter::FindEdges => "Find edges",
             Filter::Pinch { .. } => "Pinch",
@@ -182,6 +209,7 @@ impl Filter {
             Filter::ReduceNoise { .. } => "reduce_noise",
             Filter::HighPass { .. } => "high_pass",
             Filter::LensCorrection { .. } => "lens_correction",
+            Filter::LensProfile { .. } => "lens_profile",
             Filter::Emboss { .. } => "emboss",
             Filter::FindEdges => "find_edges",
             Filter::Pinch { .. } => "pinch",
@@ -243,6 +271,22 @@ impl Filter {
             Filter::HighPass { radius } => {
                 vec![p("radius", "radius", 0.1, 100.0, 0.1, *radius, "px")]
             }
+            Filter::LensProfile {
+                distortion,
+                vignette,
+                ..
+            } => vec![
+                p(
+                    "distortion",
+                    "distortion",
+                    0.0,
+                    150.0,
+                    1.0,
+                    *distortion,
+                    "%",
+                ),
+                p("vignette", "vignette", 0.0, 150.0, 1.0, *vignette, "%"),
+            ],
             Filter::LensCorrection {
                 distortion,
                 vignette,
@@ -323,6 +367,15 @@ impl Filter {
             (Filter::ReduceNoise { detail, .. }, "detail") => detail,
             (Filter::LensCorrection { distortion, .. }, "distortion") => distortion,
             (Filter::LensCorrection { vignette, .. }, "vignette") => vignette,
+            (Filter::LensProfile { distortion, .. }, "distortion") => distortion,
+            (Filter::LensProfile { vignette, .. }, "vignette") => vignette,
+            (Filter::LensProfile { a, .. }, "a") => a,
+            (Filter::LensProfile { b, .. }, "b") => b,
+            (Filter::LensProfile { c, .. }, "c") => c,
+            (Filter::LensProfile { k1, .. }, "k1") => k1,
+            (Filter::LensProfile { k2, .. }, "k2") => k2,
+            (Filter::LensProfile { k3, .. }, "k3") => k3,
+            (Filter::LensProfile { scale, .. }, "scale") => scale,
             (Filter::Emboss { angle, .. }, "angle") => angle,
             (Filter::Emboss { height, .. }, "height") => height,
             (Filter::Emboss { amount, .. }, "amount") => amount,
@@ -347,7 +400,10 @@ impl Filter {
             }
             Filter::Emboss { height, .. } => *height,
             Filter::Wave { amplitude, .. } => *amplitude,
-            Filter::Pinch { .. } | Filter::Twirl { .. } | Filter::LensCorrection { .. } => 0.0,
+            Filter::Pinch { .. }
+            | Filter::Twirl { .. }
+            | Filter::LensCorrection { .. }
+            | Filter::LensProfile { .. } => 0.0,
             _ => 0.0,
         };
         (s.ceil() as i32).clamp(0, MAX_SPREAD)
@@ -685,6 +741,54 @@ fn apply_one(f: &Filter, img: &Image) -> Image {
                 h: img.h,
                 px,
             }
+        }
+        Filter::LensProfile {
+            a,
+            b,
+            c,
+            k1,
+            k2,
+            k3,
+            scale,
+            distortion,
+            vignette,
+        } => {
+            // PanoTools/lensfun: radius 1 is half the shorter side of the
+            // calibration sensor; `scale` converts this picture's radius.
+            let (cx, cy) = (img.w as f32 / 2.0, img.h as f32 / 2.0);
+            let unit = (img.w.min(img.h) as f32 / 2.0).max(1.0);
+            let q = if *scale > 0.0 { *scale } else { 1.0 };
+            let kd = distortion / 100.0;
+            let (a, b, c) = (a * kd, b * kd, c * kd);
+            let d = 1.0 - a - b - c;
+            let warped = if kd == 0.0 || (a == 0.0 && b == 0.0 && c == 0.0) {
+                img.map(|_, _, p| p)
+            } else {
+                // Undistort: the corrected pixel at r_u shows the source at r_d.
+                img.warp(|x, y| {
+                    let (dx, dy) = (x - cx, y - cy);
+                    let ru = (dx * dx + dy * dy).sqrt() / unit * q;
+                    if ru <= 1e-6 {
+                        return (x, y);
+                    }
+                    let rd = ru * (a * ru * ru * ru + b * ru * ru + c * ru + d);
+                    let f = rd / ru;
+                    (cx + dx * f, cy + dy * f)
+                })
+            };
+            let kv = vignette / 100.0;
+            if kv == 0.0 || (*k1 == 0.0 && *k2 == 0.0 && *k3 == 0.0) {
+                return warped;
+            }
+            let (k1, k2, k3) = (k1 * kv, k2 * kv, k3 * kv);
+            warped.map(|x, y, p| {
+                let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                let r2 = (dx * dx + dy * dy) / (unit * unit) * q * q;
+                // pa model: measured = clean / (1 + k1 r² + k2 r⁴ + k3 r⁶); undo it.
+                let cd = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2;
+                let g = (1.0 / cd.max(0.05)).clamp(0.2, 4.0);
+                on_color(p, |c| c.map(|ch| ch * g))
+            })
         }
         Filter::LensCorrection {
             distortion,

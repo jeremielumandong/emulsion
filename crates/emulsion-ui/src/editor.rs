@@ -9,6 +9,7 @@ mod adjust_ui;
 mod ai_tools;
 mod canvas_size;
 mod history;
+mod lens;
 mod panels;
 mod pen;
 mod presets;

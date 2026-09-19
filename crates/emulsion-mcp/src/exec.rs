@@ -1080,11 +1080,106 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 ),
             })
         }
+        "lens_profile" => {
+            let id = match args.get("node").and_then(Value::as_u64) {
+                Some(id) => id,
+                None => doc
+                    .nodes
+                    .iter()
+                    .rev()
+                    .find(|n| matches!(n.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. }))
+                    .map(|n| n.id)
+                    .ok_or_else(|| err("no pixel node to correct"))?,
+            };
+            let n = doc.node(id).ok_or_else(|| err(format!("no node {id}")))?;
+            let (is_pixels, mut filters) = match &n.kind {
+                NodeKind::Raster { .. } => (true, Vec::new()),
+                NodeKind::Smart { filters, .. } => (false, filters.clone()),
+                _ => return Err(err(format!("{} is not a pixel node", node_label(doc, id)))),
+            };
+            let info = doc
+                .info
+                .clone()
+                .ok_or_else(|| err("this picture carries no camera data (EXIF)"))?;
+            if !emulsion_io::lensfun::installed() {
+                return Err(err(
+                    "the lens database is not installed; download_model lensfun (5 MB) first",
+                ));
+            }
+            let db = emulsion_io::lensfun::Database::load().map_err(|e| err(e.to_string()))?;
+            let p = emulsion_io::lensfun::profile_for(
+                &db,
+                &info.make,
+                &info.model,
+                &info.lens,
+                info.focal_mm,
+                info.f_number,
+            )
+            .ok_or_else(|| {
+                err(format!(
+                    "no profile for {:?} on {} {}",
+                    info.lens, info.make, info.model
+                ))
+            })?;
+            let strength = args
+                .get("strength")
+                .and_then(Value::as_f64)
+                .unwrap_or(100.0) as f32;
+            let [a, b, c] = p.distortion.unwrap_or([0.0; 3]);
+            let [k1, k2, k3] = p.vignetting.unwrap_or([0.0; 3]);
+            filters.push(emulsion_filters::Filter::LensProfile {
+                a,
+                b,
+                c,
+                k1,
+                k2,
+                k3,
+                scale: p.scale,
+                distortion: strength,
+                vignette: strength,
+            });
+            let mut commands = Vec::new();
+            if is_pixels {
+                commands.push(Command::ConvertToSmart { id });
+            }
+            commands.push(Command::SetFilters { id, filters });
+            Ok(Planned {
+                commands,
+                message: format!(
+                    "Applied the {} profile ({}{}) to {}",
+                    p.lens,
+                    if p.distortion.is_some() {
+                        "distortion"
+                    } else {
+                        ""
+                    },
+                    if p.vignetting.is_some() {
+                        if p.distortion.is_some() {
+                            " + vignetting"
+                        } else {
+                            "vignetting"
+                        }
+                    } else {
+                        ""
+                    },
+                    node_label(doc, id)
+                ),
+            })
+        }
         "download_model" => {
             let id = args
                 .get("id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| err("missing string 'id'"))?;
+            if id == "lensfun" {
+                let cancel = std::sync::atomic::AtomicBool::new(false);
+                emulsion_io::lensfun::install(&|_, _| {}, &cancel)
+                    .map_err(|e| err(e.to_string()))?;
+                return Ok(Planned {
+                    commands: vec![],
+                    message: "Installed the lensfun lens database".into(),
+                });
+            }
             let spec = emulsion_ai::models::spec(id)
                 .ok_or_else(|| err(format!("unknown model {id:?}; see list_models")))?;
             let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -2898,6 +2993,7 @@ pub fn describe(editor: &Editor) -> Value {
     });
     json!({
         "canvas": { "width": doc.width, "height": doc.height },
+        "camera": doc.info.as_ref().map(|i| i.summary()),
         "selection": selection,
         "rows": "row 1 is the top of the stack; depth > 0 means inside the group listed above it",
         "nodes": nodes,
@@ -3044,6 +3140,7 @@ mod tests {
             "depth_map",
             "upscale",
             "restore_faces",
+            "lens_profile",
             "download_model",
         ] {
             assert!(crate::tools::HEAVY.contains(&t), "{t} is heavy");

@@ -89,6 +89,9 @@ pub struct Assistant {
     /// that do not ask before running tools; keyed by card id.
     held: Vec<(String, RelayCall)>,
     held_counter: u64,
+    /// Which provider the running session belongs to; a different choice
+    /// in Settings ends it so the next request starts the chosen CLI.
+    session_provider: Option<&'static str>,
 }
 
 /// The CLI chosen in Settings.
@@ -401,10 +404,17 @@ impl EditorView {
     // ── CLI session ─────────────────────────────────────────────────────
 
     fn ensure_session(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
-        if self.assistant.session.is_some() {
-            return Ok(());
-        }
         let prov = provider(cx);
+        if self.assistant.session.is_some() {
+            if self.assistant.session_provider == Some(prov.id) {
+                return Ok(());
+            }
+            // The person picked another CLI since this session started.
+            if let Some(mut s) = self.assistant.session.take() {
+                s.kill();
+            }
+            self.assistant.session_id = None;
+        }
         let cli = match app_state::cli(cx) {
             CliStatus::Found { path, .. } => path,
             CliStatus::Checking => {
@@ -504,6 +514,7 @@ impl EditorView {
         })
         .detach();
         self.assistant.session = Some(session);
+        self.assistant.session_provider = Some(prov.id);
         Ok(())
     }
 

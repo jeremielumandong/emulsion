@@ -8,10 +8,12 @@
 //! Every reader validates fully before returning, so a bad file can never
 //! replace an open document.
 
+pub mod exif;
 pub mod export;
 pub mod history;
 pub mod icc;
 pub mod import;
+pub mod lensfun;
 pub mod ora;
 pub mod raw;
 pub mod recent;

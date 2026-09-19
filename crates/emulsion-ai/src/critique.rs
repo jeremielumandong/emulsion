@@ -2,7 +2,7 @@
 //!
 //! Measurements describe value, detail distribution, edges, colour and balance.
 //! They do not establish artistic quality, anatomy, perspective or subject fidelity.
-//! Suggested changes are conditional on the brief, medium and current stage.
+//! Suggested changes are conditional on the brief, medium, style and current stage.
 //! Optional Jev ranking prioritizes observations without turning them into defects.
 
 use crate::jev::{Jev, JevError};
@@ -17,13 +17,15 @@ use serde_json::{Map, Value, json};
 #[serde(default, deny_unknown_fields)]
 pub struct CritiqueContext {
     pub medium: String,
+    /// Free-text visual intent, including custom or hybrid styles; not a medium preset.
+    pub style: String,
     pub stage: String,
     pub composition_intent: String,
     pub user_constraints: Vec<String>,
 }
 
 /// Applies equally to rule-based observations and optional model ranking.
-pub const REVIEW_POLICY: &str = "Measurements are observations, not artistic defects or a quality score. Respect the medium, current stage, composition intent and every user constraint. Unknown intent is not permission to impose a style. Centred composition, symmetry, limited values, hard edges and reserved paper may be intentional. Only suggest a correction if it serves the stated brief at this stage. These roughly 192-pixel measurements cannot establish anatomy, perspective or subject fidelity: inspect full-composition and document-space detail images against the brief to review those qualities.";
+pub const REVIEW_POLICY: &str = "Measurements are observations, not artistic defects or a quality score. Respect the medium, requested style (including custom or hybrid styles), current stage, composition intent and every user constraint. Style is distinct from medium; do not impose naturalism on deliberate abstraction, stylization or flattened space. Unknown intent is not permission to impose a style. Centred composition, symmetry, limited values, hard edges and reserved paper may be intentional. Only suggest a correction if it serves the stated brief at this stage. These roughly 192-pixel measurements cannot establish anatomy, perspective or subject fidelity: inspect full-composition and document-space detail images against the brief to review those qualities.";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Issue {
@@ -504,6 +506,7 @@ mod tests {
         }));
         let context = CritiqueContext {
             medium: "manga".into(),
+            style: "graphic emblem".into(),
             stage: "inking".into(),
             composition_intent: "centred, mirror-symmetric emblem".into(),
             user_constraints: vec!["Preserve symmetry and the hard black silhouette".into()],
@@ -525,6 +528,7 @@ mod tests {
     fn unknown_intent_defaults_and_partial_context_are_backward_compatible() {
         let context: CritiqueContext =
             serde_json::from_value(json!({"medium": "watercolour"})).unwrap();
+        assert!(context.style.is_empty());
         assert!(context.stage.is_empty());
         assert!(context.composition_intent.is_empty());
         assert!(context.user_constraints.is_empty());
