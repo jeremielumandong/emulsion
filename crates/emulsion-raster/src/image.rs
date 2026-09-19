@@ -82,7 +82,13 @@ impl<P: Pix> std::fmt::Debug for Plane<P> {
 
 impl<P: Pix> Plane<P> {
     pub fn empty(width: u32, height: u32, fill: P) -> Self {
-        Self { width, height, fill, tiles: HashMap::new(), mips: Mutex::new(HashMap::new()) }
+        Self {
+            width,
+            height,
+            fill,
+            tiles: HashMap::new(),
+            mips: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn width(&self) -> u32 {
@@ -104,7 +110,10 @@ impl<P: Pix> Plane<P> {
     /// Size of mip level `level`, rounding up.
     pub fn level_size(&self, level: u32) -> (u32, u32) {
         let d = 1u32 << level;
-        (self.width.div_ceil(d).max(1), self.height.div_ceil(d).max(1))
+        (
+            self.width.div_ceil(d).max(1),
+            self.height.div_ceil(d).max(1),
+        )
     }
 
     /// Highest level that is still larger than one pixel in some dimension.
@@ -178,7 +187,9 @@ impl<P: Pix> Plane<P> {
     /// Build from a row-major pixel buffer of exactly `width × height`.
     pub fn from_pixels(width: u32, height: u32, fill: P, px: &[P]) -> Self {
         assert_eq!(px.len(), width as usize * height as usize);
-        Self::from_fn(width, height, fill, |x, y| px[y as usize * width as usize + x as usize])
+        Self::from_fn(width, height, fill, |x, y| {
+            px[y as usize * width as usize + x as usize]
+        })
     }
 
     /// Build by evaluating `f` for every pixel inside `width × height`.
@@ -186,8 +197,9 @@ impl<P: Pix> Plane<P> {
         use rayon::prelude::*;
         let mut plane = Self::empty(width, height, fill);
         let (tx, ty) = plane.tiles_at(0);
-        let coords: Vec<TileCoord> =
-            (0..ty).flat_map(|y| (0..tx).map(move |x| TileCoord::new(x, y))).collect();
+        let coords: Vec<TileCoord> = (0..ty)
+            .flat_map(|y| (0..tx).map(move |x| TileCoord::new(x, y)))
+            .collect();
         let built: Vec<(TileCoord, Vec<P>)> = coords
             .into_par_iter()
             .map(|c| {
@@ -260,7 +272,12 @@ impl Raster {
         assert_eq!(data.len(), width as usize * height as usize * 4);
         Self::from_fn(width, height, [0; 4], |x, y| {
             let i = (y as usize * width as usize + x as usize) * 4;
-            color::f_to_px(color::srgba8_to_premul([data[i], data[i + 1], data[i + 2], data[i + 3]]))
+            color::f_to_px(color::srgba8_to_premul([
+                data[i],
+                data[i + 1],
+                data[i + 2],
+                data[i + 3],
+            ]))
         })
     }
 
@@ -269,7 +286,12 @@ impl Raster {
         assert_eq!(data.len(), width as usize * height as usize * 4);
         Self::from_fn(width, height, [0; 4], |x, y| {
             let i = (y as usize * width as usize + x as usize) * 4;
-            color::f_to_px(color::srgba16_to_premul([data[i], data[i + 1], data[i + 2], data[i + 3]]))
+            color::f_to_px(color::srgba16_to_premul([
+                data[i],
+                data[i + 1],
+                data[i + 2],
+                data[i + 3],
+            ]))
         })
     }
 
@@ -280,11 +302,17 @@ impl Raster {
     }
 
     pub fn to_srgba8(&self) -> Vec<u8> {
-        self.to_pixels().into_iter().flat_map(|p| color::premul_to_srgba8(color::px_to_f(p))).collect()
+        self.to_pixels()
+            .into_iter()
+            .flat_map(|p| color::premul_to_srgba8(color::px_to_f(p)))
+            .collect()
     }
 
     pub fn to_srgba16(&self) -> Vec<u16> {
-        self.to_pixels().into_iter().flat_map(|p| color::premul_to_srgba16(color::px_to_f(p))).collect()
+        self.to_pixels()
+            .into_iter()
+            .flat_map(|p| color::premul_to_srgba16(color::px_to_f(p)))
+            .collect()
     }
 }
 
@@ -348,7 +376,10 @@ mod tests {
                 let got = t[(py * TILE + px) as usize];
                 for i in 0..4 {
                     let want = acc[i] as f64 / (s * s) as f64;
-                    assert!((got[i] as f64 - want).abs() <= level as f64, "level {level} ch {i}");
+                    assert!(
+                        (got[i] as f64 - want).abs() <= level as f64,
+                        "level {level} ch {i}"
+                    );
                 }
             }
         }

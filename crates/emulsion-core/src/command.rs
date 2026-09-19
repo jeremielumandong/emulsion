@@ -31,35 +31,90 @@ pub struct Slot {
 }
 
 impl Slot {
-    pub const TOP: Slot = Slot { parent: None, index: usize::MAX };
+    pub const TOP: Slot = Slot {
+        parent: None,
+        index: usize::MAX,
+    };
     pub fn top_of(parent: Option<NodeId>) -> Self {
-        Slot { parent, index: usize::MAX }
+        Slot {
+            parent,
+            index: usize::MAX,
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub enum Command {
     /// Insert a node. Its `id` is ignored and a fresh one allocated.
-    AddNode { node: Box<Node>, slot: Slot },
-    RemoveNode { id: NodeId },
-    MoveNode { id: NodeId, slot: Slot },
-    DuplicateNode { id: NodeId },
-    SetVisible { id: NodeId, visible: bool },
-    SetLocked { id: NodeId, locked: bool },
-    SetOpacity { id: NodeId, opacity: f32 },
-    SetBlend { id: NodeId, blend: BlendMode },
-    Rename { id: NodeId, name: String },
-    SetParam { id: NodeId, key: String, value: f32 },
-    SetAdjustment { id: NodeId, adjustment: Adjustment },
-    SetPlacement { id: NodeId, placement: Placement },
-    SetClip { id: NodeId, clip_to: Option<NodeId> },
-    SetMaskEnabled { id: NodeId, enabled: bool },
-    SetCollapsed { id: NodeId, collapsed: bool },
+    AddNode {
+        node: Box<Node>,
+        slot: Slot,
+    },
+    RemoveNode {
+        id: NodeId,
+    },
+    MoveNode {
+        id: NodeId,
+        slot: Slot,
+    },
+    DuplicateNode {
+        id: NodeId,
+    },
+    SetVisible {
+        id: NodeId,
+        visible: bool,
+    },
+    SetLocked {
+        id: NodeId,
+        locked: bool,
+    },
+    SetOpacity {
+        id: NodeId,
+        opacity: f32,
+    },
+    SetBlend {
+        id: NodeId,
+        blend: BlendMode,
+    },
+    Rename {
+        id: NodeId,
+        name: String,
+    },
+    SetParam {
+        id: NodeId,
+        key: String,
+        value: f32,
+    },
+    SetAdjustment {
+        id: NodeId,
+        adjustment: Adjustment,
+    },
+    SetPlacement {
+        id: NodeId,
+        placement: Placement,
+    },
+    SetClip {
+        id: NodeId,
+        clip_to: Option<NodeId>,
+    },
+    SetMaskEnabled {
+        id: NodeId,
+        enabled: bool,
+    },
+    SetCollapsed {
+        id: NodeId,
+        collapsed: bool,
+    },
     /// Wrap `ids` (siblings or not) in a new group placed where the topmost
     /// of them was.
-    Group { ids: Vec<NodeId>, name: String },
+    Group {
+        ids: Vec<NodeId>,
+        name: String,
+    },
     /// Replace a group by its children.
-    Ungroup { id: NodeId },
+    Ungroup {
+        id: NodeId,
+    },
 }
 
 impl Command {
@@ -78,7 +133,9 @@ impl Command {
             Command::SetParam { key, .. } => key.replace('_', " "),
             Command::SetAdjustment { .. } => "Adjustment".into(),
             Command::SetPlacement { .. } => "Transform".into(),
-            Command::SetClip { clip_to, .. } => if clip_to.is_some() { "Clip" } else { "Unclip" }.into(),
+            Command::SetClip { clip_to, .. } => {
+                if clip_to.is_some() { "Clip" } else { "Unclip" }.into()
+            }
             Command::SetMaskEnabled { .. } => "Toggle mask".into(),
             Command::SetCollapsed { .. } => "Collapse".into(),
             Command::Group { .. } => "Group".into(),
@@ -104,7 +161,9 @@ impl Command {
     }
 
     fn apply_inner(&self, doc: &mut Document) -> Result<Option<NodeId>, CommandError> {
-        let need = |doc: &Document, id: NodeId| doc.node(id).map(|_| ()).ok_or(CommandError::NoSuchNode(id));
+        let need = |doc: &Document, id: NodeId| {
+            doc.node(id).map(|_| ()).ok_or(CommandError::NoSuchNode(id))
+        };
         match self {
             Command::AddNode { node, slot } => {
                 if let Some(p) = slot.parent {
@@ -144,7 +203,12 @@ impl Command {
                     }
                 }
                 let moving = doc.subtree(*id);
-                let block: Vec<Node> = doc.nodes.iter().filter(|n| moving.contains(&n.id)).cloned().collect();
+                let block: Vec<Node> = doc
+                    .nodes
+                    .iter()
+                    .filter(|n| moving.contains(&n.id))
+                    .cloned()
+                    .collect();
                 doc.nodes.retain(|n| !moving.contains(&n.id));
                 let old_parent = block.iter().find(|n| n.id == *id).unwrap().parent;
                 // Clipping only holds between siblings; moving breaks it.
@@ -172,8 +236,18 @@ impl Command {
                     map.insert(*old, doc.alloc_id());
                 }
                 let src = doc.node(*id).unwrap().clone();
-                let pos = doc.children(src.parent).iter().position(|s| s == id).unwrap() + 1;
-                let mut copies: Vec<Node> = doc.nodes.iter().filter(|n| ids.contains(&n.id)).cloned().collect();
+                let pos = doc
+                    .children(src.parent)
+                    .iter()
+                    .position(|s| s == id)
+                    .unwrap()
+                    + 1;
+                let mut copies: Vec<Node> = doc
+                    .nodes
+                    .iter()
+                    .filter(|n| ids.contains(&n.id))
+                    .cloned()
+                    .collect();
                 for n in &mut copies {
                     n.id = map[&n.id];
                     if n.id == map[id] {
@@ -186,16 +260,32 @@ impl Command {
                 }
                 let root = copies.iter().position(|n| n.id == map[id]).unwrap();
                 let root = copies.remove(root);
-                insert_at(doc, root, Slot { parent: src.parent, index: pos });
+                insert_at(
+                    doc,
+                    root,
+                    Slot {
+                        parent: src.parent,
+                        index: pos,
+                    },
+                );
                 doc.nodes.extend(copies);
                 Ok(Some(map[id]))
             }
             Command::SetVisible { id, visible } => set(doc, *id, |n| n.visible = *visible),
             Command::SetLocked { id, locked } => set(doc, *id, |n| n.locked = *locked),
-            Command::SetOpacity { id, opacity } => set(doc, *id, |n| n.opacity = opacity.clamp(0.0, 1.0)),
+            Command::SetOpacity { id, opacity } => {
+                set(doc, *id, |n| n.opacity = opacity.clamp(0.0, 1.0))
+            }
             Command::SetBlend { id, blend } => {
-                let is_group = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?.is_group();
-                let b = if *blend == BlendMode::PassThrough && !is_group { BlendMode::Normal } else { *blend };
+                let is_group = doc
+                    .node(*id)
+                    .ok_or(CommandError::NoSuchNode(*id))?
+                    .is_group();
+                let b = if *blend == BlendMode::PassThrough && !is_group {
+                    BlendMode::Normal
+                } else {
+                    *blend
+                };
                 set(doc, *id, |n| n.blend = b)
             }
             Command::Rename { id, name } => {
@@ -211,7 +301,11 @@ impl Command {
                     NodeKind::Adjust(a) => a.set_param(key, *value),
                     _ => false,
                 };
-                if ok { Ok(None) } else { Err(CommandError::NoSuchParam(*id, key.clone())) }
+                if ok {
+                    Ok(None)
+                } else {
+                    Err(CommandError::NoSuchParam(*id, key.clone()))
+                }
             }
             Command::SetAdjustment { id, adjustment } => {
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
@@ -250,7 +344,11 @@ impl Command {
                 }
             }
             Command::Group { ids, name } => {
-                let mut ids: Vec<NodeId> = ids.iter().copied().filter(|i| doc.node(*i).is_some()).collect();
+                let mut ids: Vec<NodeId> = ids
+                    .iter()
+                    .copied()
+                    .filter(|i| doc.node(*i).is_some())
+                    .collect();
                 // Drop ids already covered by a selected ancestor.
                 let all = ids.clone();
                 ids.retain(|i| !all.iter().any(|a| a != i && doc.is_ancestor(*a, *i)));
@@ -265,7 +363,14 @@ impl Command {
                 let gid = doc.alloc_id();
                 let mut g = Node::group(gid, name.clone());
                 g.parent = parent;
-                insert_at(doc, g, Slot { parent, index: pos + 1 });
+                insert_at(
+                    doc,
+                    g,
+                    Slot {
+                        parent,
+                        index: pos + 1,
+                    },
+                );
                 for id in &ids {
                     let n = doc.node_mut(*id).unwrap();
                     n.parent = Some(gid);
@@ -310,7 +415,11 @@ impl Command {
     }
 }
 
-fn set(doc: &mut Document, id: NodeId, f: impl FnOnce(&mut Node)) -> Result<Option<NodeId>, CommandError> {
+fn set(
+    doc: &mut Document,
+    id: NodeId,
+    f: impl FnOnce(&mut Node),
+) -> Result<Option<NodeId>, CommandError> {
     let n = doc.node_mut(id).ok_or(CommandError::NoSuchNode(id))?;
     f(n);
     Ok(None)
@@ -361,8 +470,19 @@ mod tests {
         let mut d = Document::new(64, 64);
         let mut ids = [0; 3];
         for (i, name) in ["bottom", "middle", "top"].iter().enumerate() {
-            let n = Node::raster(0, *name, Arc::new(Raster::transparent(64, 64)), Placement::default());
-            ids[i] = Command::AddNode { node: Box::new(n), slot: Slot::TOP }.apply(&mut d).unwrap().unwrap();
+            let n = Node::raster(
+                0,
+                *name,
+                Arc::new(Raster::transparent(64, 64)),
+                Placement::default(),
+            );
+            ids[i] = Command::AddNode {
+                node: Box::new(n),
+                slot: Slot::TOP,
+            }
+            .apply(&mut d)
+            .unwrap()
+            .unwrap();
         }
         (d, ids)
     }
@@ -375,21 +495,48 @@ mod tests {
     fn add_and_move() {
         let (mut d, [b, _, t]) = doc3();
         assert_eq!(names(&d), ["bottom", "middle", "top"]);
-        Command::MoveNode { id: t, slot: Slot { parent: None, index: 0 } }.apply(&mut d).unwrap();
+        Command::MoveNode {
+            id: t,
+            slot: Slot {
+                parent: None,
+                index: 0,
+            },
+        }
+        .apply(&mut d)
+        .unwrap();
         assert_eq!(names(&d), ["top", "bottom", "middle"]);
-        Command::MoveNode { id: b, slot: Slot::TOP }.apply(&mut d).unwrap();
+        Command::MoveNode {
+            id: b,
+            slot: Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap();
         assert_eq!(names(&d), ["top", "middle", "bottom"]);
     }
 
     #[test]
     fn group_keeps_order_and_contiguity() {
         let (mut d, [b, m, t]) = doc3();
-        let g = Command::Group { ids: vec![t, b], name: "g".into() }.apply(&mut d).unwrap().unwrap();
+        let g = Command::Group {
+            ids: vec![t, b],
+            name: "g".into(),
+        }
+        .apply(&mut d)
+        .unwrap()
+        .unwrap();
         assert_eq!(names(&d), ["middle", "bottom", "top", "g"]);
         assert_eq!(d.children(Some(g)), vec![b, t]);
         d.validate().unwrap();
         // Moving the group moves its block.
-        Command::MoveNode { id: g, slot: Slot { parent: None, index: 0 } }.apply(&mut d).unwrap();
+        Command::MoveNode {
+            id: g,
+            slot: Slot {
+                parent: None,
+                index: 0,
+            },
+        }
+        .apply(&mut d)
+        .unwrap();
         assert_eq!(names(&d), ["bottom", "top", "g", "middle"]);
         Command::Ungroup { id: g }.apply(&mut d).unwrap();
         assert_eq!(names(&d), ["bottom", "top", "middle"]);
@@ -399,26 +546,70 @@ mod tests {
     #[test]
     fn cannot_move_group_into_itself() {
         let (mut d, [b, _, t]) = doc3();
-        let g = Command::Group { ids: vec![b, t], name: "g".into() }.apply(&mut d).unwrap().unwrap();
-        let inner = Command::Group { ids: vec![t], name: "inner".into() }.apply(&mut d).unwrap().unwrap();
-        let err = Command::MoveNode { id: g, slot: Slot::top_of(Some(inner)) }.apply(&mut d).unwrap_err();
+        let g = Command::Group {
+            ids: vec![b, t],
+            name: "g".into(),
+        }
+        .apply(&mut d)
+        .unwrap()
+        .unwrap();
+        let inner = Command::Group {
+            ids: vec![t],
+            name: "inner".into(),
+        }
+        .apply(&mut d)
+        .unwrap()
+        .unwrap();
+        let err = Command::MoveNode {
+            id: g,
+            slot: Slot::top_of(Some(inner)),
+        }
+        .apply(&mut d)
+        .unwrap_err();
         assert_eq!(err, CommandError::IntoItself);
     }
 
     #[test]
     fn clip_is_validated_and_dropped_on_move() {
         let (mut d, [b, m, _]) = doc3();
-        Command::SetClip { id: m, clip_to: Some(b) }.apply(&mut d).unwrap();
-        assert!(Command::SetClip { id: b, clip_to: Some(m) }.apply(&mut d).is_err(), "base must be below");
-        Command::MoveNode { id: b, slot: Slot::TOP }.apply(&mut d).unwrap();
+        Command::SetClip {
+            id: m,
+            clip_to: Some(b),
+        }
+        .apply(&mut d)
+        .unwrap();
+        assert!(
+            Command::SetClip {
+                id: b,
+                clip_to: Some(m)
+            }
+            .apply(&mut d)
+            .is_err(),
+            "base must be below"
+        );
+        Command::MoveNode {
+            id: b,
+            slot: Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap();
         assert_eq!(d.node(m).unwrap().clip_to, None);
     }
 
     #[test]
     fn remove_and_duplicate_subtree() {
         let (mut d, [b, m, t]) = doc3();
-        let g = Command::Group { ids: vec![b, m], name: "g".into() }.apply(&mut d).unwrap().unwrap();
-        let copy = Command::DuplicateNode { id: g }.apply(&mut d).unwrap().unwrap();
+        let g = Command::Group {
+            ids: vec![b, m],
+            name: "g".into(),
+        }
+        .apply(&mut d)
+        .unwrap()
+        .unwrap();
+        let copy = Command::DuplicateNode { id: g }
+            .apply(&mut d)
+            .unwrap()
+            .unwrap();
         assert_eq!(d.nodes.len(), 7);
         assert_eq!(d.children(Some(copy)).len(), 2);
         d.validate().unwrap();
@@ -431,16 +622,37 @@ mod tests {
     fn param_edits_and_errors_leave_doc_unchanged() {
         let (mut d, _) = doc3();
         let a = Command::AddNode {
-            node: Box::new(Node::adjust(0, Adjustment::Exposure { exposure: 0.0, offset: 0.0, gamma: 1.0 })),
+            node: Box::new(Node::adjust(
+                0,
+                Adjustment::Exposure {
+                    exposure: 0.0,
+                    offset: 0.0,
+                    gamma: 1.0,
+                },
+            )),
             slot: Slot::TOP,
         }
         .apply(&mut d)
         .unwrap()
         .unwrap();
-        Command::SetParam { id: a, key: "exposure".into(), value: 1.5 }.apply(&mut d).unwrap();
+        Command::SetParam {
+            id: a,
+            key: "exposure".into(),
+            value: 1.5,
+        }
+        .apply(&mut d)
+        .unwrap();
         assert_eq!(d.node(a).unwrap().params()[0].value, 1.5);
         let before = d.clone();
-        assert!(Command::SetParam { id: a, key: "nope".into(), value: 1.0 }.apply(&mut d).is_err());
+        assert!(
+            Command::SetParam {
+                id: a,
+                key: "nope".into(),
+                value: 1.0
+            }
+            .apply(&mut d)
+            .is_err()
+        );
         assert_eq!(d, before);
     }
 }

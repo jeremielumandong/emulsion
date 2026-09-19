@@ -23,7 +23,9 @@ fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
             "--help" | "-h" => {
-                println!("usage: emulsion [FILE]\n       emulsion mcp-serve\n       emulsion --version");
+                println!(
+                    "usage: emulsion [FILE]\n       emulsion mcp-serve\n       emulsion --version"
+                );
                 return Ok(());
             }
             other if other.starts_with('-') => anyhow::bail!("unknown option: {other}"),
@@ -55,7 +57,10 @@ fn run_editor(file: Option<PathBuf>) {
             let bounds = cx.update(|cx| Bounds::centered(None, size(px(1440.), px(900.)), cx));
             let opts = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions { title: Some("Emulsion".into()), ..Default::default() }),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Emulsion".into()),
+                    ..Default::default()
+                }),
                 app_id: Some("app.emulsion.Emulsion".into()),
                 ..Default::default()
             };

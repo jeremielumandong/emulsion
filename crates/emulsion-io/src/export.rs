@@ -46,7 +46,10 @@ pub struct ExportOptions {
 
 impl ExportOptions {
     pub fn for_doc(doc: &Document) -> Self {
-        Self { depth: doc.source_depth, jpeg_quality: 92 }
+        Self {
+            depth: doc.source_depth,
+            jpeg_quality: 92,
+        }
     }
 }
 
@@ -87,7 +90,11 @@ pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> {
         let mut out = BufWriter::new(f);
         match format {
             ExportFormat::Png => {
-                let bytes = if wide { png16(w, h, &flat.to_srgba16())? } else { png8(w, h, &flat.to_srgba8())? };
+                let bytes = if wide {
+                    png16(w, h, &flat.to_srgba16())?
+                } else {
+                    png8(w, h, &flat.to_srgba8())?
+                };
                 out.write_all(&bytes)?;
             }
             ExportFormat::Jpeg => {
@@ -106,16 +113,31 @@ pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> {
                     .write_image(&rgb, w, h, ExtendedColorType::Rgb8)?;
             }
             ExportFormat::Webp => {
-                WebPEncoder::new_lossless(&mut out).write_image(&flat.to_srgba8(), w, h, ExtendedColorType::Rgba8)?;
+                WebPEncoder::new_lossless(&mut out).write_image(
+                    &flat.to_srgba8(),
+                    w,
+                    h,
+                    ExtendedColorType::Rgba8,
+                )?;
             }
             ExportFormat::Tiff => {
                 let mut buf = std::io::Cursor::new(Vec::new());
                 if wide {
                     let px = flat.to_srgba16();
                     let bytes: Vec<u8> = px.iter().flat_map(|v| v.to_ne_bytes()).collect();
-                    TiffEncoder::new(&mut buf).write_image(&bytes, w, h, ExtendedColorType::Rgba16)?;
+                    TiffEncoder::new(&mut buf).write_image(
+                        &bytes,
+                        w,
+                        h,
+                        ExtendedColorType::Rgba16,
+                    )?;
                 } else {
-                    TiffEncoder::new(&mut buf).write_image(&flat.to_srgba8(), w, h, ExtendedColorType::Rgba8)?;
+                    TiffEncoder::new(&mut buf).write_image(
+                        &flat.to_srgba8(),
+                        w,
+                        h,
+                        ExtendedColorType::Rgba8,
+                    )?;
                 }
                 out.write_all(buf.get_ref())?;
             }

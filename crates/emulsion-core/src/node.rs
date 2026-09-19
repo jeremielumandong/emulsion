@@ -8,7 +8,10 @@ pub type NodeId = u64;
 #[derive(Clone, Debug)]
 pub enum NodeKind {
     /// Pixels, placed non-destructively.
-    Raster { raster: Arc<Raster>, placement: Placement },
+    Raster {
+        raster: Arc<Raster>,
+        placement: Placement,
+    },
     /// A container. Its descendants sit directly below it in the stack.
     Group { collapsed: bool },
     /// An adjustment applied to everything below it in its parent.
@@ -38,9 +41,16 @@ impl PartialEq for NodeKind {
     /// share the same buffer. This keeps equality checks O(1).
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (NodeKind::Raster { raster: a, placement: pa }, NodeKind::Raster { raster: b, placement: pb }) => {
-                Arc::ptr_eq(a, b) && pa == pb
-            }
+            (
+                NodeKind::Raster {
+                    raster: a,
+                    placement: pa,
+                },
+                NodeKind::Raster {
+                    raster: b,
+                    placement: pb,
+                },
+            ) => Arc::ptr_eq(a, b) && pa == pb,
             (NodeKind::Group { collapsed: a }, NodeKind::Group { collapsed: b }) => a == b,
             (NodeKind::Adjust(a), NodeKind::Adjust(b)) => a == b,
             (NodeKind::Fill { rgba: a }, NodeKind::Fill { rgba: b }) => a == b,
@@ -89,7 +99,11 @@ impl PartialEq for Node {
 
 impl Node {
     pub fn new(id: NodeId, name: impl Into<String>, kind: NodeKind) -> Self {
-        let blend = if kind.is_group() { BlendMode::PassThrough } else { BlendMode::Normal };
+        let blend = if kind.is_group() {
+            BlendMode::PassThrough
+        } else {
+            BlendMode::Normal
+        };
         Self {
             id,
             name: name.into(),
@@ -105,7 +119,12 @@ impl Node {
         }
     }
 
-    pub fn raster(id: NodeId, name: impl Into<String>, raster: Arc<Raster>, placement: Placement) -> Self {
+    pub fn raster(
+        id: NodeId,
+        name: impl Into<String>,
+        raster: Arc<Raster>,
+        placement: Placement,
+    ) -> Self {
         Self::new(id, name, NodeKind::Raster { raster, placement })
     }
 

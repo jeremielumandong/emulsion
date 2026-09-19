@@ -31,7 +31,9 @@ pub enum IoError {
     Xml(String),
     #[error("invalid manifest: {0}")]
     Manifest(String),
-    #[error("this file was made by a newer version of Emulsion (format {0}); update Emulsion to open it")]
+    #[error(
+        "this file was made by a newer version of Emulsion (format {0}); update Emulsion to open it"
+    )]
     TooNew(u32),
     #[error("{0}")]
     Invalid(#[from] emulsion_core::DocumentError),
@@ -44,15 +46,22 @@ pub enum IoError {
 pub type Result<T> = std::result::Result<T, IoError>;
 
 /// Extensions `open` understands, for file dialogs.
-pub const OPEN_EXTENSIONS: &[&str] = &["ora", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif"];
+pub const OPEN_EXTENSIONS: &[&str] = &[
+    "ora", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif",
+];
 
 pub fn is_native(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ora"))
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("ora"))
 }
 
 /// Open a native document or import an image.
 pub fn open(path: &Path) -> Result<Document> {
-    if is_native(path) { ora::read(path) } else { import::import(path) }
+    if is_native(path) {
+        ora::read(path)
+    } else {
+        import::import(path)
+    }
 }
 
 /// Save in the native format.
@@ -62,9 +71,18 @@ pub fn save(doc: &Document, path: &Path) -> Result<()> {
 
 /// Write `bytes` to `path` via a temporary file in the same directory, so a
 /// crash or full disk never leaves a half-written file in place.
-pub(crate) fn write_atomic(path: &Path, write: impl FnOnce(&mut std::fs::File) -> Result<()>) -> Result<()> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+pub(crate) fn write_atomic(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> Result<()>,
+) -> Result<()> {
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let tmp = dir.join(format!(".{name}.emulsion-tmp-{}", std::process::id()));
     let result = (|| {
         let mut f = std::fs::File::create(&tmp)?;

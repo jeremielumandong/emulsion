@@ -51,6 +51,11 @@ impl IRect {
         }
         let x = self.x.min(o.x);
         let y = self.y.min(o.y);
-        IRect::new(x, y, self.right().max(o.right()) - x, self.bottom().max(o.bottom()) - y)
+        IRect::new(
+            x,
+            y,
+            self.right().max(o.right()) - x,
+            self.bottom().max(o.bottom()) - y,
+        )
     }
 }

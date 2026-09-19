@@ -8,7 +8,7 @@ provider here; the GPU paths get measured on other hardware.
 
 | # | Spike | Status | Result | Decision |
 |---|---|---|---|---|
-| 1 | Tiled `paint_image` viewport at 60 fps | pending | | |
+| 1 | Tiled `paint_image` viewport at 60 fps | partial | Pan and zoom repaint from cached tiles. Re-rendering a full 1440×900 view of a 6000×4000, 7-node document on the CPU compositor takes 52–75 ms for 24 tiles (8 threads, Iris Plus G7), about 15 fps during slider drags. Frame time of the GPUI present itself not yet instrumented. | Plan A (tiles + `paint_image`) with the CPU compositor (Plan C) for Phase 1. GPU compositor next. |
 | 2 | gpui-kit widgets: gaps for color picker, curves | pending | | |
 | 3 | Tablet pressure on Wayland via GPUI | pending | | |
 | 4 | `ort` execution provider on this machine | pending | | |
@@ -20,6 +20,30 @@ provider here; the GPU paths get measured on other hardware.
 | 10 | Film-simulation base look fidelity | pending | | |
 | 11 | Import analysis latency | pending | | |
 | 12 | Two-stack before/after cost | pending | | |
+
+## Findings
+
+- GPUI 0.3.5 samples every image with linear filtering (`gpui-pre-wgpu`, `FilterMode::Linear`).
+  Crisp pixels at 200 % and above, and view rotation, therefore use a CPU screen-space path:
+  one device-sized image built from cached tiles with nearest sampling.
+- Tiles replaced in the atlas must be evicted with `Window::drop_image`, or GPU memory grows
+  with every edit. The tile cache queues replaced images and drops them during paint.
+- Document revisions are not monotonic under undo, so render caches key on a separate,
+  always-increasing generation counter.
+- Pixels created inside Emulsion in an 8-bit document must be stored at 16 bits when saved;
+  8-bit storage re-quantises them and the composite drifts by one code value.
+
+## Headless timings (release, 6000×4000, 7 nodes)
+
+| Operation | Time |
+|---|---|
+| Fit view, 24 tiles at level 2 | 58 ms |
+| 100 % view, 24 tiles at level 0 | 52 ms |
+| Full flatten, 24 MP | 0.9 s |
+| Save ORA (121 MB) | 2.5 s |
+| Open ORA | 0.46 s |
+
+Reproduce: `cargo run --release -p emulsion-io --example sample -- spikes/out/sample.ora`
 
 ## Log
 

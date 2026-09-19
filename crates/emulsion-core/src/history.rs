@@ -112,7 +112,11 @@ impl Editor {
         let out = cmd.apply(&mut self.doc)?;
         if self.doc != before {
             self.bump();
-            self.push(Step { name, before, revision_before: rev });
+            self.push(Step {
+                name,
+                before,
+                revision_before: rev,
+            });
         }
         Ok(out)
     }
@@ -127,13 +131,19 @@ impl Editor {
     }
 
     pub fn end(&mut self) {
-        let Some((name, before, rev, depth)) = self.txn.take() else { return };
+        let Some((name, before, rev, depth)) = self.txn.take() else {
+            return;
+        };
         if depth > 1 {
             self.txn = Some((name, before, rev, depth - 1));
             return;
         }
         if self.doc != before {
-            self.push(Step { name, before, revision_before: rev });
+            self.push(Step {
+                name,
+                before,
+                revision_before: rev,
+            });
         }
     }
 
@@ -149,21 +159,33 @@ impl Editor {
 
     pub fn undo(&mut self) -> bool {
         self.end_all();
-        let Some(step) = self.history.undo.pop() else { return false };
+        let Some(step) = self.history.undo.pop() else {
+            return false;
+        };
         let current = std::mem::replace(&mut self.doc, step.before);
         let rev = self.revision;
         self.revision = step.revision_before;
-        self.history.redo.push(Step { name: step.name, before: current, revision_before: rev });
+        self.history.redo.push(Step {
+            name: step.name,
+            before: current,
+            revision_before: rev,
+        });
         true
     }
 
     pub fn redo(&mut self) -> bool {
         self.end_all();
-        let Some(step) = self.history.redo.pop() else { return false };
+        let Some(step) = self.history.redo.pop() else {
+            return false;
+        };
         let current = std::mem::replace(&mut self.doc, step.before);
         let rev = self.revision;
         self.revision = step.revision_before;
-        self.history.undo.push(Step { name: step.name, before: current, revision_before: rev });
+        self.history.undo.push(Step {
+            name: step.name,
+            before: current,
+            revision_before: rev,
+        });
         true
     }
 
@@ -229,7 +251,12 @@ mod tests {
     fn editor() -> (Editor, NodeId) {
         let mut d = Document::new(32, 32);
         let id = Command::AddNode {
-            node: Box::new(Node::raster(0, "a", Arc::new(Raster::transparent(32, 32)), Placement::default())),
+            node: Box::new(Node::raster(
+                0,
+                "a",
+                Arc::new(Raster::transparent(32, 32)),
+                Placement::default(),
+            )),
             slot: Slot::TOP,
         }
         .apply(&mut d)
@@ -273,10 +300,15 @@ mod tests {
     #[test]
     fn new_edit_clears_redo() {
         let (mut e, id) = editor();
-        e.execute(Command::SetVisible { id, visible: false }).unwrap();
+        e.execute(Command::SetVisible { id, visible: false })
+            .unwrap();
         e.undo();
         assert!(e.history.can_redo());
-        e.execute(Command::Rename { id, name: "b".into() }).unwrap();
+        e.execute(Command::Rename {
+            id,
+            name: "b".into(),
+        })
+        .unwrap();
         assert!(!e.history.can_redo());
     }
 }

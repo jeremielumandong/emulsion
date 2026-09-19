@@ -6,8 +6,8 @@
 
 use crate::node::{Node, NodeId, NodeKind};
 use emulsion_raster::blend::BlendSpace;
-use emulsion_raster::composite::{CompositeNode, CompositeTree, NodeContent};
 use emulsion_raster::color;
+use emulsion_raster::composite::{CompositeNode, CompositeTree, NodeContent};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -103,7 +103,11 @@ impl Document {
 
     /// Direct children of `parent` (`None` = roots), bottom to top.
     pub fn children(&self, parent: Option<NodeId>) -> Vec<NodeId> {
-        self.nodes.iter().filter(|n| n.parent == parent).map(|n| n.id).collect()
+        self.nodes
+            .iter()
+            .filter(|n| n.parent == parent)
+            .map(|n| n.id)
+            .collect()
     }
 
     /// `id` and everything under it.
@@ -112,7 +116,12 @@ impl Document {
         let mut i = 0;
         while i < out.len() {
             let p = out[i];
-            out.extend(self.nodes.iter().filter(|n| n.parent == Some(p)).map(|n| n.id));
+            out.extend(
+                self.nodes
+                    .iter()
+                    .filter(|n| n.parent == Some(p))
+                    .map(|n| n.id),
+            );
             i += 1;
         }
         out
@@ -147,7 +156,12 @@ impl Document {
             kids.entry(n.parent).or_default().push(n.id);
         }
         let mut out = Vec::with_capacity(self.nodes.len());
-        fn emit(id: NodeId, kids: &HashMap<Option<NodeId>, Vec<NodeId>>, by_id: &HashMap<NodeId, Node>, out: &mut Vec<Node>) {
+        fn emit(
+            id: NodeId,
+            kids: &HashMap<Option<NodeId>, Vec<NodeId>>,
+            by_id: &HashMap<NodeId, Node>,
+            out: &mut Vec<Node>,
+        ) {
             if let Some(ch) = kids.get(&Some(id)) {
                 for c in ch {
                     emit(*c, kids, by_id, out);
@@ -185,7 +199,9 @@ impl Document {
             if let Some(p) = n.parent {
                 match self.node(p) {
                     None => return Err(DocumentError::MissingParent(n.id, p)),
-                    Some(pn) if !pn.is_group() => return Err(DocumentError::ParentNotGroup(n.id, p)),
+                    Some(pn) if !pn.is_group() => {
+                        return Err(DocumentError::ParentNotGroup(n.id, p));
+                    }
                     _ => {}
                 }
             }
@@ -194,7 +210,9 @@ impl Document {
             }
             if let NodeKind::Raster { placement, .. } = &n.kind {
                 let p = placement;
-                let finite = [p.x, p.y, p.scale_x, p.scale_y, p.rotation].iter().all(|v| v.is_finite());
+                let finite = [p.x, p.y, p.scale_x, p.scale_y, p.rotation]
+                    .iter()
+                    .all(|v| v.is_finite());
                 if !finite || p.scale_x.abs() < 1e-6 || p.scale_y.abs() < 1e-6 {
                     return Err(DocumentError::BadValue(n.id, "placement"));
                 }
@@ -261,12 +279,15 @@ impl Document {
                 .map(|id| {
                     let n = doc.node(*id).expect("child exists");
                     let content = match &n.kind {
-                        NodeKind::Raster { raster, placement } => {
-                            NodeContent::Pixels { raster: raster.clone(), placement: *placement }
-                        }
+                        NodeKind::Raster { raster, placement } => NodeContent::Pixels {
+                            raster: raster.clone(),
+                            placement: *placement,
+                        },
                         NodeKind::Group { .. } => NodeContent::Group(build(doc, Some(n.id))),
                         NodeKind::Adjust(a) => NodeContent::Adjust(Arc::new(a.prepare())),
-                        NodeKind::Fill { rgba } => NodeContent::Fill(color::srgba8_to_premul(*rgba)),
+                        NodeKind::Fill { rgba } => {
+                            NodeContent::Fill(color::srgba8_to_premul(*rgba))
+                        }
                     };
                     CompositeNode {
                         id: n.id,
@@ -280,7 +301,12 @@ impl Document {
                 })
                 .collect()
         }
-        CompositeTree { width: self.width, height: self.height, space: self.blend_space, nodes: build(self, None) }
+        CompositeTree {
+            width: self.width,
+            height: self.height,
+            space: self.blend_space,
+            nodes: build(self, None),
+        }
     }
 
     /// Distinct pixel buffers referenced by this document, for memory
@@ -289,7 +315,10 @@ impl Document {
         let mut out = Vec::new();
         for n in &self.nodes {
             if let NodeKind::Raster { raster, .. } = &n.kind {
-                out.push((Arc::as_ptr(raster) as usize, raster.tile_count() * 256 * 256 * 8));
+                out.push((
+                    Arc::as_ptr(raster) as usize,
+                    raster.tile_count() * 256 * 256 * 8,
+                ));
             }
             if let Some(m) = &n.mask {
                 out.push((Arc::as_ptr(m) as usize, m.tile_count() * 256 * 256));

@@ -36,13 +36,25 @@ pub struct Placement {
 
 impl Default for Placement {
     fn default() -> Self {
-        Self { x: 0.0, y: 0.0, scale_x: 1.0, scale_y: 1.0, rotation: 0.0, flip_x: false, flip_y: false }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            rotation: 0.0,
+            flip_x: false,
+            flip_y: false,
+        }
     }
 }
 
 impl Placement {
     pub fn at(x: f64, y: f64) -> Self {
-        Self { x, y, ..Default::default() }
+        Self {
+            x,
+            y,
+            ..Default::default()
+        }
     }
 
     pub fn is_identity(&self) -> bool {
@@ -71,8 +83,13 @@ impl Placement {
     /// Document-space bounding box of content of size `w × h`, rounded out.
     pub fn doc_bounds(&self, w: u32, h: u32) -> IRect {
         let m = self.to_doc(w, h);
-        let pts = [dvec2(0.0, 0.0), dvec2(w as f64, 0.0), dvec2(0.0, h as f64), dvec2(w as f64, h as f64)]
-            .map(|p| m.transform_point2(p));
+        let pts = [
+            dvec2(0.0, 0.0),
+            dvec2(w as f64, 0.0),
+            dvec2(0.0, h as f64),
+            dvec2(w as f64, h as f64),
+        ]
+        .map(|p| m.transform_point2(p));
         let (mut lo, mut hi) = (pts[0], pts[0]);
         for p in &pts[1..] {
             lo = lo.min(*p);
@@ -107,7 +124,10 @@ pub struct CompositeNode {
 }
 
 pub enum NodeContent {
-    Pixels { raster: Arc<Raster>, placement: Placement },
+    Pixels {
+        raster: Arc<Raster>,
+        placement: Placement,
+    },
     /// Solid premultiplied linear colour over the whole document.
     Fill([f32; 4]),
     Group(Vec<CompositeNode>),
@@ -146,7 +166,13 @@ pub fn render_tile(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTile {
     if ox >= lw as i64 || oy >= lh as i64 || tile.x < 0 || tile.y < 0 {
         return acc;
     }
-    let ctx = Ctx { level, scale: (1u64 << level) as f64, ox, oy, space: tree.space };
+    let ctx = Ctx {
+        level,
+        scale: (1u64 << level) as f64,
+        ox,
+        oy,
+        space: tree.space,
+    };
     render_list(&tree.nodes, &mut acc, ctx);
     // Clip to the canvas.
     let vw = (lw as i64 - ox).min(TILE as i64) as usize;
@@ -183,7 +209,10 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
             _ => None,
         };
         let clip = clip.as_ref();
-        let mask_doc = |m: &Option<Arc<Mask>>| m.as_ref().map(|m| sample_mask(m, &Placement::default(), ctx));
+        let mask_doc = |m: &Option<Arc<Mask>>| {
+            m.as_ref()
+                .map(|m| sample_mask(m, &Placement::default(), ctx))
+        };
 
         // Coverage = opacity × mask × clip, per pixel.
         let coverage = |mask: Option<&Vec<f32>>| -> Option<Vec<f32>> {
@@ -211,7 +240,9 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                 }
                 let mask = node.mask.as_ref().map(|m| sample_mask(m, placement, ctx));
                 if let Some(m) = &mask {
-                    src.iter_mut().zip(m).for_each(|(p, m)| p.iter_mut().for_each(|v| *v *= m));
+                    src.iter_mut()
+                        .zip(m)
+                        .for_each(|(p, m)| p.iter_mut().for_each(|v| *v *= m));
                 }
                 if is_source[i] {
                     alphas[i] = Some(src.iter().map(|p| p[3]).collect());
@@ -223,7 +254,9 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                 let mut src = vec![*c; TILE_PX];
                 let mask = mask_doc(&node.mask);
                 if let Some(m) = &mask {
-                    src.iter_mut().zip(m).for_each(|(p, m)| p.iter_mut().for_each(|v| *v *= m));
+                    src.iter_mut()
+                        .zip(m)
+                        .for_each(|(p, m)| p.iter_mut().for_each(|v| *v *= m));
                 }
                 if is_source[i] {
                     alphas[i] = Some(src.iter().map(|p| p[3]).collect());
@@ -250,7 +283,9 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                     let mut sub = ftile();
                     render_list(children, &mut sub, ctx);
                     if let Some(m) = &mask {
-                        sub.iter_mut().zip(m).for_each(|(p, m)| p.iter_mut().for_each(|v| *v *= m));
+                        sub.iter_mut()
+                            .zip(m)
+                            .for_each(|(p, m)| p.iter_mut().for_each(|v| *v *= m));
                     }
                     if is_source[i] {
                         alphas[i] = Some(sub.iter().map(|p| p[3]).collect());
@@ -269,8 +304,18 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
 }
 
 /// Scale `src` by coverage and blend it into `acc` with the node's mode.
-fn composite_into(acc: &mut FTile, src: &mut FTile, cov: Option<&[f32]>, node: &CompositeNode, ctx: Ctx) {
-    let mode = if node.blend == BlendMode::PassThrough { BlendMode::Normal } else { node.blend };
+fn composite_into(
+    acc: &mut FTile,
+    src: &mut FTile,
+    cov: Option<&[f32]>,
+    node: &CompositeNode,
+    ctx: Ctx,
+) {
+    let mode = if node.blend == BlendMode::PassThrough {
+        BlendMode::Normal
+    } else {
+        node.blend
+    };
     for (idx, (a, s)) in acc.iter_mut().zip(src.iter_mut()).enumerate() {
         if let Some(c) = cov {
             let k = c[idx];
@@ -293,7 +338,13 @@ fn composite_into(acc: &mut FTile, src: &mut FTile, cov: Option<&[f32]>, node: &
     }
 }
 
-fn apply_adjust(acc: &mut FTile, op: &Prepared, cov: Option<&[f32]>, mode: BlendMode, space: BlendSpace) {
+fn apply_adjust(
+    acc: &mut FTile,
+    op: &Prepared,
+    cov: Option<&[f32]>,
+    mode: BlendMode,
+    space: BlendSpace,
+) {
     for (idx, p) in acc.iter_mut().enumerate() {
         let a = p[3];
         if a <= 0.0 {
@@ -309,8 +360,18 @@ fn apply_adjust(acc: &mut FTile, op: &Prepared, cov: Option<&[f32]>, mode: Blend
         let target = match mode {
             BlendMode::Normal | BlendMode::PassThrough | BlendMode::Dissolve => adj,
             m => {
-                let src = [adj[0].clamp(0.0, 1.0), adj[1].clamp(0.0, 1.0), adj[2].clamp(0.0, 1.0), 1.0];
-                let dst = [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0), 1.0];
+                let src = [
+                    adj[0].clamp(0.0, 1.0),
+                    adj[1].clamp(0.0, 1.0),
+                    adj[2].clamp(0.0, 1.0),
+                    1.0,
+                ];
+                let dst = [
+                    rgb[0].clamp(0.0, 1.0),
+                    rgb[1].clamp(0.0, 1.0),
+                    rgb[2].clamp(0.0, 1.0),
+                    1.0,
+                ];
                 let o = blend_px(m, space, dst, src, 0.0);
                 [o[0], o[1], o[2]]
             }
@@ -345,9 +406,16 @@ fn grid(to_doc: &DAffine2, max_level: u32, ctx: Ctx) -> Grid {
     let level = source_level(to_doc, ctx.scale, max_level);
     let inv = to_doc.inverse();
     let ls = (1u64 << level) as f64;
-    let f = |lx: f64, ly: f64| inv.transform_point2(dvec2((lx + 0.5) * ctx.scale, (ly + 0.5) * ctx.scale)) / ls;
+    let f = |lx: f64, ly: f64| {
+        inv.transform_point2(dvec2((lx + 0.5) * ctx.scale, (ly + 0.5) * ctx.scale)) / ls
+    };
     let p0 = f(ctx.ox as f64, ctx.oy as f64);
-    Grid { level, p0, ex: f(ctx.ox as f64 + 1.0, ctx.oy as f64) - p0, ey: f(ctx.ox as f64, ctx.oy as f64 + 1.0) - p0 }
+    Grid {
+        level,
+        p0,
+        ex: f(ctx.ox as f64 + 1.0, ctx.oy as f64) - p0,
+        ey: f(ctx.ox as f64, ctx.oy as f64 + 1.0) - p0,
+    }
 }
 
 /// Source tiles covering one output tile, fetched once.
@@ -365,7 +433,12 @@ struct Window<P: Pix> {
 impl<P: Pix> Window<P> {
     fn new(plane: &Plane<P>, g: &Grid) -> Option<Self> {
         let n = TILE as f64 - 1.0;
-        let corners = [g.p0, g.p0 + g.ex * n, g.p0 + g.ey * n, g.p0 + g.ex * n + g.ey * n];
+        let corners = [
+            g.p0,
+            g.p0 + g.ex * n,
+            g.p0 + g.ey * n,
+            g.p0 + g.ex * n + g.ey * n,
+        ];
         let (mut lo, mut hi) = (corners[0], corners[0]);
         for c in &corners[1..] {
             lo = lo.min(*c);
@@ -389,7 +462,16 @@ impl<P: Pix> Window<P> {
                 tiles.push(plane.tile(g.level, TileCoord::new(tx, ty)));
             }
         }
-        Some(Self { tx0, ty0, cols, rows, tiles, fill: plane.fill(), lw: lw as i64, lh: lh as i64 })
+        Some(Self {
+            tx0,
+            ty0,
+            cols,
+            rows,
+            tiles,
+            fill: plane.fill(),
+            lw: lw as i64,
+            lh: lh as i64,
+        })
     }
 
     /// Pixel at level coordinates; `outside` beyond the image.
@@ -421,11 +503,16 @@ fn is_integral(v: f64) -> bool {
 fn sample_raster(dst: &mut FTile, raster: &Raster, placement: &Placement, ctx: Ctx) -> bool {
     let to_doc = placement.to_doc(raster.width(), raster.height());
     let g = grid(&to_doc, raster.max_level(), ctx);
-    let Some(win) = Window::new(raster, &g) else { return false };
+    let Some(win) = Window::new(raster, &g) else {
+        return false;
+    };
     if win.tiles.iter().all(Option::is_none) && win.fill == [0; 4] {
         return false;
     }
-    let exact = g.ex == dvec2(1.0, 0.0) && g.ey == dvec2(0.0, 1.0) && is_integral(g.p0.x - 0.5) && is_integral(g.p0.y - 0.5);
+    let exact = g.ex == dvec2(1.0, 0.0)
+        && g.ey == dvec2(0.0, 1.0)
+        && is_integral(g.p0.x - 0.5)
+        && is_integral(g.p0.y - 0.5);
     let t = TILE as usize;
     if exact {
         let sx = (g.p0.x - 0.5).round() as i64;
@@ -465,7 +552,9 @@ fn sample_mask(mask: &Mask, placement: &Placement, ctx: Ctx) -> Vec<f32> {
     let to_doc = placement.to_doc(mask.width(), mask.height());
     let g = grid(&to_doc, mask.max_level(), ctx);
     let fill = mask.fill() as f32 / 255.0;
-    let Some(win) = Window::new(mask, &g) else { return vec![fill; TILE_PX] };
+    let Some(win) = Window::new(mask, &g) else {
+        return vec![fill; TILE_PX];
+    };
     let t = TILE as usize;
     let mut out = vec![0.0; TILE_PX];
     let f = mask.fill();
@@ -489,10 +578,20 @@ fn sample_mask(mask: &Mask, placement: &Placement, ctx: Ctx) -> Vec<f32> {
 pub fn flatten(tree: &CompositeTree, level: u32) -> Raster {
     let (lw, lh) = level_size(tree.width, tree.height, level);
     let (tx, ty) = tiles_at(tree.width, tree.height, level);
-    let coords: Vec<TileCoord> = (0..ty).flat_map(|y| (0..tx).map(move |x| TileCoord::new(x, y))).collect();
+    let coords: Vec<TileCoord> = (0..ty)
+        .flat_map(|y| (0..tx).map(move |x| TileCoord::new(x, y)))
+        .collect();
     let tiles: Vec<(TileCoord, Vec<[u16; 4]>)> = coords
         .into_par_iter()
-        .map(|c| (c, render_tile(tree, level, c).into_iter().map(color::f_to_px).collect()))
+        .map(|c| {
+            (
+                c,
+                render_tile(tree, level, c)
+                    .into_iter()
+                    .map(color::f_to_px)
+                    .collect(),
+            )
+        })
         .collect();
     let mut out = Raster::transparent(lw, lh);
     for (c, t) in tiles {
@@ -504,7 +603,14 @@ pub fn flatten(tree: &CompositeTree, level: u32) -> Raster {
 /// Encode a rendered tile as BGRA8 for display, composited over a
 /// checkerboard. `origin` is the tile's level-pixel origin; pixels outside
 /// `valid` (level size) become fully transparent.
-pub fn tile_to_bgra8(tile: &FTile, origin: (i64, i64), valid: (u32, u32), cell: u32, light: u8, dark: u8) -> Vec<u8> {
+pub fn tile_to_bgra8(
+    tile: &FTile,
+    origin: (i64, i64),
+    valid: (u32, u32),
+    cell: u32,
+    light: u8,
+    dark: u8,
+) -> Vec<u8> {
     let t = TILE as usize;
     let ll = color::SRGB8_TO_LINEAR[light as usize];
     let ld = color::SRGB8_TO_LINEAR[dark as usize];
@@ -518,7 +624,11 @@ pub fn tile_to_bgra8(tile: &FTile, origin: (i64, i64), valid: (u32, u32), cell: 
             }
             let p = tile[y * t + x];
             let a = p[3].clamp(0.0, 1.0);
-            let bg = if ((gx / cell as i64) + (gy / cell as i64)) % 2 == 0 { ll } else { ld };
+            let bg = if ((gx / cell as i64) + (gy / cell as i64)) % 2 == 0 {
+                ll
+            } else {
+                ld
+            };
             let k = 1.0 - a;
             let i = (y * t + x) * 4;
             out[i] = color::linear_to_srgb8(p[2] + bg * k);
@@ -536,10 +646,21 @@ mod tests {
     use crate::adjust::Adjustment;
 
     fn px(n: &CompositeNode) -> CompositeNode {
-        CompositeNode { id: n.id, visible: n.visible, opacity: n.opacity, blend: n.blend, mask: n.mask.clone(), clip_to: n.clip_to, content: match &n.content {
-            NodeContent::Pixels { raster, placement } => NodeContent::Pixels { raster: raster.clone(), placement: *placement },
-            _ => unreachable!(),
-        } }
+        CompositeNode {
+            id: n.id,
+            visible: n.visible,
+            opacity: n.opacity,
+            blend: n.blend,
+            mask: n.mask.clone(),
+            clip_to: n.clip_to,
+            content: match &n.content {
+                NodeContent::Pixels { raster, placement } => NodeContent::Pixels {
+                    raster: raster.clone(),
+                    placement: *placement,
+                },
+                _ => unreachable!(),
+            },
+        }
     }
 
     fn layer(id: u64, raster: Raster) -> CompositeNode {
@@ -550,12 +671,20 @@ mod tests {
             blend: BlendMode::Normal,
             mask: None,
             clip_to: None,
-            content: NodeContent::Pixels { raster: Arc::new(raster), placement: Placement::default() },
+            content: NodeContent::Pixels {
+                raster: Arc::new(raster),
+                placement: Placement::default(),
+            },
         }
     }
 
     fn tree(nodes: Vec<CompositeNode>) -> CompositeTree {
-        CompositeTree { width: 300, height: 300, space: BlendSpace::Linear, nodes }
+        CompositeTree {
+            width: 300,
+            height: 300,
+            space: BlendSpace::Linear,
+            nodes,
+        }
     }
 
     fn at(t: &FTile, x: usize, y: usize) -> [f32; 4] {
@@ -600,10 +729,19 @@ mod tests {
     #[test]
     fn mip_render_matches_downsampled_full_render() {
         let r = Raster::from_fn(512, 512, [0; 4], |x, y| {
-            let v = if (x / 8 + y / 8) % 2 == 0 { 60000 } else { 5000 };
+            let v = if (x / 8 + y / 8) % 2 == 0 {
+                60000
+            } else {
+                5000
+            };
             [v, v, v, 65535]
         });
-        let t = CompositeTree { width: 512, height: 512, space: BlendSpace::Linear, nodes: vec![layer(1, r)] };
+        let t = CompositeTree {
+            width: 512,
+            height: 512,
+            space: BlendSpace::Linear,
+            nodes: vec![layer(1, r)],
+        };
         let full = flatten(&t, 0);
         let half = render_tile(&t, 1, TileCoord::new(0, 0));
         for (x, y) in [(0u32, 0u32), (13, 77), (200, 100)] {
@@ -625,7 +763,14 @@ mod tests {
             blend: BlendMode::Normal,
             mask: None,
             clip_to: None,
-            content: NodeContent::Adjust(Arc::new(Adjustment::Exposure { exposure: 1.0, offset: 0.0, gamma: 1.0 }.prepare())),
+            content: NodeContent::Adjust(Arc::new(
+                Adjustment::Exposure {
+                    exposure: 1.0,
+                    offset: 0.0,
+                    gamma: 1.0,
+                }
+                .prepare(),
+            )),
         };
         let out = render_tile(&tree(vec![grey, adj]), 0, TileCoord::new(0, 0));
         assert!((at(&out, 5, 5)[0] - 0.4).abs() < 2e-3);
@@ -634,7 +779,16 @@ mod tests {
     #[test]
     fn clipping_limits_to_base_alpha() {
         // Base covers only the left half; clipped red covers everything.
-        let base = layer(1, Raster::from_fn(300, 300, [0; 4], |x, _| if x < 150 { [0, 0, 65535, 65535] } else { [0; 4] }));
+        let base = layer(
+            1,
+            Raster::from_fn(300, 300, [0; 4], |x, _| {
+                if x < 150 {
+                    [0, 0, 65535, 65535]
+                } else {
+                    [0; 4]
+                }
+            }),
+        );
         let mut red = layer(2, Raster::solid(300, 300, [1.0, 0.0, 0.0, 1.0]));
         red.clip_to = Some(0);
         let out = render_tile(&tree(vec![base, red]), 0, TileCoord::new(0, 0));
@@ -657,10 +811,24 @@ mod tests {
             clip_to: None,
             content: NodeContent::Group(vec![px(&mul)]),
         };
-        let pass = render_tile(&tree(vec![px(&bg), group(BlendMode::PassThrough)]), 0, TileCoord::new(0, 0));
-        let iso = render_tile(&tree(vec![px(&bg), group(BlendMode::Normal)]), 0, TileCoord::new(0, 0));
-        assert!((at(&pass, 1, 1)[0] - 0.25).abs() < 2e-3, "multiplied with backdrop");
-        assert!((at(&iso, 1, 1)[0] - 0.5).abs() < 2e-3, "isolated group is plain grey");
+        let pass = render_tile(
+            &tree(vec![px(&bg), group(BlendMode::PassThrough)]),
+            0,
+            TileCoord::new(0, 0),
+        );
+        let iso = render_tile(
+            &tree(vec![px(&bg), group(BlendMode::Normal)]),
+            0,
+            TileCoord::new(0, 0),
+        );
+        assert!(
+            (at(&pass, 1, 1)[0] - 0.25).abs() < 2e-3,
+            "multiplied with backdrop"
+        );
+        assert!(
+            (at(&iso, 1, 1)[0] - 0.5).abs() < 2e-3,
+            "isolated group is plain grey"
+        );
     }
 
     #[test]

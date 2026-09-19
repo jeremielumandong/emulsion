@@ -169,10 +169,33 @@ impl BlendMode {
     pub fn from_ora_op(op: &str) -> Option<BlendMode> {
         use BlendMode::*;
         let all = [
-            Normal, Multiply, Screen, Overlay, Darken, Lighten, ColorDodge, ColorBurn, HardLight,
-            SoftLight, Difference, Exclusion, Hue, Saturation, Color, Luminosity, LinearDodge,
-            Dissolve, LinearBurn, DarkerColor, LighterColor, VividLight, LinearLight, PinLight,
-            HardMix, Subtract, Divide,
+            Normal,
+            Multiply,
+            Screen,
+            Overlay,
+            Darken,
+            Lighten,
+            ColorDodge,
+            ColorBurn,
+            HardLight,
+            SoftLight,
+            Difference,
+            Exclusion,
+            Hue,
+            Saturation,
+            Color,
+            Luminosity,
+            LinearDodge,
+            Dissolve,
+            LinearBurn,
+            DarkerColor,
+            LighterColor,
+            VividLight,
+            LinearLight,
+            PinLight,
+            HardMix,
+            Subtract,
+            Divide,
         ];
         if let Some(m) = all.into_iter().find(|m| m.ora_op() == op) {
             return Some(m);
@@ -267,7 +290,12 @@ fn color_burn(b: f32, s: f32) -> f32 {
 
 #[inline]
 fn hard_light(b: f32, s: f32) -> f32 {
-    if s <= 0.5 { b * 2.0 * s } else { let t = 2.0 * s - 1.0; b + t - b * t }
+    if s <= 0.5 {
+        b * 2.0 * s
+    } else {
+        let t = 2.0 * s - 1.0;
+        b + t - b * t
+    }
 }
 
 #[inline]
@@ -275,7 +303,11 @@ fn soft_light(b: f32, s: f32) -> f32 {
     if s <= 0.5 {
         b - (1.0 - 2.0 * s) * b * (1.0 - b)
     } else {
-        let d = if b <= 0.25 { ((16.0 * b - 12.0) * b + 4.0) * b } else { b.sqrt() };
+        let d = if b <= 0.25 {
+            ((16.0 * b - 12.0) * b + 4.0) * b
+        } else {
+            b.sqrt()
+        };
         b + (2.0 * s - 1.0) * (d - b)
     }
 }
@@ -312,19 +344,45 @@ impl BlendMode {
             SoftLight => sep(&soft_light),
             HardLight => sep(&hard_light),
             VividLight => sep(&|b, s| {
-                if s <= 0.5 { color_burn(b, 2.0 * s) } else { color_dodge(b, 2.0 * s - 1.0) }
+                if s <= 0.5 {
+                    color_burn(b, 2.0 * s)
+                } else {
+                    color_dodge(b, 2.0 * s - 1.0)
+                }
             }),
             LinearLight => sep(&|b, s| (b + 2.0 * s - 1.0).clamp(0.0, 1.0)),
-            PinLight => sep(&|b, s| if s <= 0.5 { b.min(2.0 * s) } else { b.max(2.0 * s - 1.0) }),
+            PinLight => sep(&|b, s| {
+                if s <= 0.5 {
+                    b.min(2.0 * s)
+                } else {
+                    b.max(2.0 * s - 1.0)
+                }
+            }),
             HardMix => sep(&|b, s| if b + s >= 1.0 { 1.0 } else { 0.0 }),
             Difference => sep(&|b, s| (b - s).abs()),
             Exclusion => sep(&|b, s| b + s - 2.0 * b * s),
             Subtract => sep(&|b, s| (b - s).max(0.0)),
             Divide => sep(&|b, s| {
-                if s <= 0.0 { if b > 0.0 { 1.0 } else { 0.0 } } else { (b / s).min(1.0) }
+                if s <= 0.0 {
+                    if b > 0.0 { 1.0 } else { 0.0 }
+                } else {
+                    (b / s).min(1.0)
+                }
             }),
-            DarkerColor => if lum(cs) < lum(cb) { cs } else { cb },
-            LighterColor => if lum(cs) > lum(cb) { cs } else { cb },
+            DarkerColor => {
+                if lum(cs) < lum(cb) {
+                    cs
+                } else {
+                    cb
+                }
+            }
+            LighterColor => {
+                if lum(cs) > lum(cb) {
+                    cs
+                } else {
+                    cb
+                }
+            }
             Hue => set_lum(set_sat(cs, sat(cb)), lum(cb)),
             Saturation => set_lum(set_sat(cb, sat(cs)), lum(cb)),
             Color => set_lum(cs, lum(cb)),
@@ -337,7 +395,13 @@ impl BlendMode {
 ///
 /// `noise` in [0,1) drives Dissolve; pass any value for other modes.
 #[inline]
-pub fn blend_px(mode: BlendMode, space: BlendSpace, dst: [f32; 4], src: [f32; 4], noise: f32) -> [f32; 4] {
+pub fn blend_px(
+    mode: BlendMode,
+    space: BlendSpace,
+    dst: [f32; 4],
+    src: [f32; 4],
+    noise: f32,
+) -> [f32; 4] {
     let a_s = src[3];
     if a_s <= 0.0 {
         return dst;
@@ -345,7 +409,12 @@ pub fn blend_px(mode: BlendMode, space: BlendSpace, dst: [f32; 4], src: [f32; 4]
     match mode {
         BlendMode::Normal | BlendMode::PassThrough => {
             let k = 1.0 - a_s;
-            return [src[0] + dst[0] * k, src[1] + dst[1] * k, src[2] + dst[2] * k, a_s + dst[3] * k];
+            return [
+                src[0] + dst[0] * k,
+                src[1] + dst[1] * k,
+                src[2] + dst[2] * k,
+                a_s + dst[3] * k,
+            ];
         }
         BlendMode::Dissolve => {
             if noise >= a_s {
@@ -376,9 +445,19 @@ pub fn blend_px(mode: BlendMode, space: BlendSpace, dst: [f32; 4], src: [f32; 4]
     let b = match space {
         BlendSpace::Linear => mode.mix(cb, cs),
         BlendSpace::Srgb => {
-            let e = |c: [f32; 3]| [linear_to_srgb(c[0]), linear_to_srgb(c[1]), linear_to_srgb(c[2])];
+            let e = |c: [f32; 3]| {
+                [
+                    linear_to_srgb(c[0]),
+                    linear_to_srgb(c[1]),
+                    linear_to_srgb(c[2]),
+                ]
+            };
             let m = mode.mix(e(cb), e(cs));
-            [srgb_to_linear(m[0]), srgb_to_linear(m[1]), srgb_to_linear(m[2])]
+            [
+                srgb_to_linear(m[0]),
+                srgb_to_linear(m[1]),
+                srgb_to_linear(m[2]),
+            ]
         }
     };
     let mut o = [0.0; 4];
@@ -410,7 +489,13 @@ mod tests {
 
     #[test]
     fn normal_is_src_over() {
-        let o = blend_px(BlendMode::Normal, L, [0.2, 0.2, 0.2, 1.0], [0.25, 0.0, 0.0, 0.5], 0.0);
+        let o = blend_px(
+            BlendMode::Normal,
+            L,
+            [0.2, 0.2, 0.2, 1.0],
+            [0.25, 0.0, 0.0, 0.5],
+            0.0,
+        );
         assert!((o[0] - 0.35).abs() < 1e-6 && (o[3] - 1.0).abs() < 1e-6);
     }
 
@@ -432,7 +517,12 @@ mod tests {
         for (m, want) in cases {
             let o = blend_px(*m, L, [b[0], b[1], b[2], 1.0], [s[0], s[1], s[2], 1.0], 0.0);
             for i in 0..3 {
-                assert!((o[i] - want[i]).abs() < 1e-5, "{m:?} ch{i}: {} vs {}", o[i], want[i]);
+                assert!(
+                    (o[i] - want[i]).abs() < 1e-5,
+                    "{m:?} ch{i}: {} vs {}",
+                    o[i],
+                    want[i]
+                );
             }
         }
     }
@@ -450,7 +540,10 @@ mod tests {
                 continue;
             }
             let o = blend_px(*m, L, [0.0; 4], [0.3, 0.2, 0.1, 1.0], 0.0);
-            assert!((o[0] - 0.3).abs() < 1e-5 && (o[3] - 1.0).abs() < 1e-6, "{m:?}");
+            assert!(
+                (o[0] - 0.3).abs() < 1e-5 && (o[3] - 1.0).abs() < 1e-6,
+                "{m:?}"
+            );
         }
     }
 

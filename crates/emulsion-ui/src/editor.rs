@@ -8,9 +8,9 @@ use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
 use emulsion_raster::adjust::ParamSpec;
 use emulsion_raster::composite::{CompositeTree, level_size, render_tile, tile_to_bgra8};
-use gpui_kit::prelude::FluentBuilder;
 use emulsion_raster::{Adjustment, BlendMode, Placement, Raster, TileCoord, color};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rayon::prelude::*;
 use std::cell::RefCell;
@@ -58,9 +58,21 @@ enum SliderKey {
 }
 
 enum Drag {
-    Pan { last: Point<Pixels> },
-    Move { id: NodeId, start_doc: (f64, f64), start: Placement },
-    Slider { key: SliderKey, track: TrackBounds, min: f32, max: f32, step: f32 },
+    Pan {
+        last: Point<Pixels>,
+    },
+    Move {
+        id: NodeId,
+        start_doc: (f64, f64),
+        start: Placement,
+    },
+    Slider {
+        key: SliderKey,
+        track: TrackBounds,
+        min: f32,
+        max: f32,
+        step: f32,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -124,7 +136,13 @@ pub struct EditorView {
 }
 
 impl EditorView {
-    pub fn new(doc: Document, path: Option<PathBuf>, source: Option<PathBuf>, name: String, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        doc: Document,
+        path: Option<PathBuf>,
+        source: Option<PathBuf>,
+        name: String,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let selected = doc.nodes.last().map(|n| n.id);
         let editor = Editor::new(doc, path);
         let tree = Arc::new(editor.doc.composite_tree());
@@ -163,7 +181,12 @@ impl EditorView {
         }
     }
 
-    pub fn set_status(&mut self, msg: impl Into<SharedString>, error: bool, cx: &mut Context<Self>) {
+    pub fn set_status(
+        &mut self,
+        msg: impl Into<SharedString>,
+        error: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.status = Some((msg.into(), error));
         cx.notify();
     }
@@ -241,7 +264,9 @@ impl EditorView {
     }
 
     fn before_active(&self) -> bool {
-        self.compare > 0.0 && self.editor.revision != self.editor.committed_revision && self.before_tree.is_some()
+        self.compare > 0.0
+            && self.editor.revision != self.editor.committed_revision
+            && self.before_tree.is_some()
     }
 
     fn dispatch_render(&mut self, cx: &mut Context<Self>) {
@@ -273,7 +298,8 @@ impl EditorView {
                                 Which::Current => &cur,
                                 Which::Before => before.as_ref()?,
                             };
-                            let t = render_tile(tree, r.key.level, TileCoord::new(r.key.x, r.key.y));
+                            let t =
+                                render_tile(tree, r.key.level, TileCoord::new(r.key.x, r.key.y));
                             let lsz = level_size(tree.width, tree.height, r.key.level);
                             let origin = (r.key.x as i64 * 256, r.key.y as i64 * 256);
                             Some((r, tile_to_bgra8(&t, origin, lsz, 8, light, dark)))
@@ -286,7 +312,11 @@ impl EditorView {
                 {
                     let mut c = this.cache.borrow_mut();
                     for (r, bytes) in out {
-                        c.insert(r.key, r.rev, Arc::new(viewport::bgra_image(256, 256, bytes)));
+                        c.insert(
+                            r.key,
+                            r.rev,
+                            Arc::new(viewport::bgra_image(256, 256, bytes)),
+                        );
                     }
                     c.in_flight = false;
                     c.last_batch = Some((n, elapsed));
@@ -307,14 +337,16 @@ impl EditorView {
     pub fn zoom_step(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
         if let Some(b) = self.canvas_bounds() {
             let c = b.center();
-            self.view.step(zoom_in, (f32::from(c.x) as f64, f32::from(c.y) as f64), &b);
+            self.view
+                .step(zoom_in, (f32::from(c.x) as f64, f32::from(c.y) as f64), &b);
             cx.notify();
         }
     }
 
     pub fn zoom_fit(&mut self, cx: &mut Context<Self>) {
         if let Some(b) = self.canvas_bounds() {
-            self.view.fit(self.editor.doc.width, self.editor.doc.height, &b);
+            self.view
+                .fit(self.editor.doc.width, self.editor.doc.height, &b);
             cx.notify();
         }
     }
@@ -323,13 +355,18 @@ impl EditorView {
         if let Some(b) = self.canvas_bounds() {
             let c = b.center();
             let f = 1.0 / self.view.zoom;
-            self.view.zoom_at(f, (f32::from(c.x) as f64, f32::from(c.y) as f64), &b);
+            self.view
+                .zoom_at(f, (f32::from(c.x) as f64, f32::from(c.y) as f64), &b);
             cx.notify();
         }
     }
 
     pub fn rotate(&mut self, degrees: f64, cx: &mut Context<Self>) {
-        self.view.rotation = if degrees == 0.0 { 0.0 } else { (self.view.rotation + degrees).rem_euclid(360.0) };
+        self.view.rotation = if degrees == 0.0 {
+            0.0
+        } else {
+            (self.view.rotation + degrees).rem_euclid(360.0)
+        };
         cx.notify();
     }
 
@@ -356,8 +393,21 @@ impl EditorView {
 
     pub fn group_selected(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = self.selected {
-            let n = self.editor.doc.nodes.iter().filter(|n| n.is_group()).count() + 1;
-            if let Some(g) = self.execute(Command::Group { ids: vec![id], name: format!("Group {n}") }, cx) {
+            let n = self
+                .editor
+                .doc
+                .nodes
+                .iter()
+                .filter(|n| n.is_group())
+                .count()
+                + 1;
+            if let Some(g) = self.execute(
+                Command::Group {
+                    ids: vec![id],
+                    name: format!("Group {n}"),
+                },
+                cx,
+            ) {
                 self.selected = Some(g);
             }
         }
@@ -376,7 +426,9 @@ impl EditorView {
     /// Move the selection one step up (`up`) or down among its siblings.
     pub fn shift_selected(&mut self, up: bool, cx: &mut Context<Self>) {
         let Some(id) = self.selected else { return };
-        let Some(n) = self.editor.doc.node(id) else { return };
+        let Some(n) = self.editor.doc.node(id) else {
+            return;
+        };
         let sib = self.editor.doc.children(n.parent);
         let i = sib.iter().position(|s| *s == id).unwrap_or(0);
         let target = if up { i + 1 } else { i.saturating_sub(1) };
@@ -384,7 +436,16 @@ impl EditorView {
             return;
         }
         // Removing first shifts indices above us down by one.
-        self.execute(Command::MoveNode { id, slot: Slot { parent: n.parent, index: target } }, cx);
+        self.execute(
+            Command::MoveNode {
+                id,
+                slot: Slot {
+                    parent: n.parent,
+                    index: target,
+                },
+            },
+            cx,
+        );
     }
 
     pub fn toggle_selected_visible(&mut self, cx: &mut Context<Self>) {
@@ -402,7 +463,10 @@ impl EditorView {
             Some(n) => {
                 let sib = self.editor.doc.children(n.parent);
                 let i = sib.iter().position(|s| *s == n.id).unwrap_or(sib.len());
-                Slot { parent: n.parent, index: i + 1 }
+                Slot {
+                    parent: n.parent,
+                    index: i + 1,
+                }
             }
             None => Slot::TOP,
         }
@@ -410,7 +474,13 @@ impl EditorView {
 
     fn add_node(&mut self, node: Node, cx: &mut Context<Self>) {
         let slot = self.insertion_slot();
-        if let Some(id) = self.execute(Command::AddNode { node: Box::new(node), slot }, cx) {
+        if let Some(id) = self.execute(
+            Command::AddNode {
+                node: Box::new(node),
+                slot,
+            },
+            cx,
+        ) {
             self.selected = Some(id);
         }
         self.menu = None;
@@ -427,9 +497,16 @@ impl EditorView {
             None => Slot::TOP,
             Some(t) if t.is_group() => Slot::top_of(Some(t.id)),
             Some(t) => {
-                let sib: Vec<NodeId> = doc.children(t.parent).into_iter().filter(|s| *s != dragged).collect();
+                let sib: Vec<NodeId> = doc
+                    .children(t.parent)
+                    .into_iter()
+                    .filter(|s| *s != dragged)
+                    .collect();
                 let i = sib.iter().position(|s| *s == t.id).unwrap_or(sib.len());
-                Slot { parent: t.parent, index: i + 1 }
+                Slot {
+                    parent: t.parent,
+                    index: i + 1,
+                }
             }
         };
         self.execute(Command::MoveNode { id: dragged, slot }, cx);
@@ -437,7 +514,9 @@ impl EditorView {
     }
 
     fn start_rename(&mut self, id: NodeId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(n) = self.editor.doc.node(id) else { return };
+        let Some(n) = self.editor.doc.node(id) else {
+            return;
+        };
         let name = n.name.clone();
         let state = cx.new(|cx| InputState::new(window, cx).default_value(name));
         state.update(cx, |s, cx| s.focus(window, cx));
@@ -462,7 +541,8 @@ impl EditorView {
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.canvas_focus, cx);
         self.menu = None;
-        let pan = e.button == MouseButton::Middle || (e.button == MouseButton::Left && self.space_held);
+        let pan =
+            e.button == MouseButton::Middle || (e.button == MouseButton::Left && self.space_held);
         if pan {
             self.drag = Some(Drag::Pan { last: e.position });
             cx.notify();
@@ -471,18 +551,32 @@ impl EditorView {
         if e.button != MouseButton::Left || self.tool != Tool::Move {
             return;
         }
-        let Some(b) = self.canvas_bounds() else { return };
+        let Some(b) = self.canvas_bounds() else {
+            return;
+        };
         let Some(id) = self.selected else { return };
-        let Some(n) = self.editor.doc.node(id) else { return };
+        let Some(n) = self.editor.doc.node(id) else {
+            return;
+        };
         if n.locked {
             self.set_status("That node is locked.", false, cx);
             return;
         }
         if let NodeKind::Raster { placement, .. } = &n.kind {
             let start = *placement;
-            let d = self.view.screen_to_doc((f32::from(e.position.x) as f64, f32::from(e.position.y) as f64), &b);
+            let d = self.view.screen_to_doc(
+                (
+                    f32::from(e.position.x) as f64,
+                    f32::from(e.position.y) as f64,
+                ),
+                &b,
+            );
             self.editor.begin("Move");
-            self.drag = Some(Drag::Move { id, start_doc: d, start });
+            self.drag = Some(Drag::Move {
+                id,
+                start_doc: d,
+                start,
+            });
         } else {
             self.set_status("Select a pixel node to move it.", false, cx);
         }
@@ -497,16 +591,30 @@ impl EditorView {
                 self.drag = Some(Drag::Pan { last: pos });
                 cx.notify();
             }
-            Drag::Move { id, start_doc, start } => {
-                let Some(b) = self.canvas_bounds() else { return };
-                let d = self.view.screen_to_doc((f32::from(pos.x) as f64, f32::from(pos.y) as f64), &b);
+            Drag::Move {
+                id,
+                start_doc,
+                start,
+            } => {
+                let Some(b) = self.canvas_bounds() else {
+                    return;
+                };
+                let d = self
+                    .view
+                    .screen_to_doc((f32::from(pos.x) as f64, f32::from(pos.y) as f64), &b);
                 let mut p = *start;
                 p.x = (start.x + d.0 - start_doc.0).round();
                 p.y = (start.y + d.1 - start_doc.1).round();
                 let id = *id;
                 self.execute(Command::SetPlacement { id, placement: p }, cx);
             }
-            Drag::Slider { key, track, min, max, step } => {
+            Drag::Slider {
+                key,
+                track,
+                min,
+                max,
+                step,
+            } => {
                 if let Some(f) = track_fraction(track, pos.x) {
                     let v = snap(min + f * (max - min), *step);
                     let key = *key;
@@ -530,12 +638,21 @@ impl EditorView {
     }
 
     fn scroll(&mut self, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
-        let Some(b) = self.canvas_bounds() else { return };
+        let Some(b) = self.canvas_bounds() else {
+            return;
+        };
         let d = e.delta.pixel_delta(px(20.));
         let (dx, dy) = (f32::from(d.x) as f64, f32::from(d.y) as f64);
         if e.modifiers.control || e.modifiers.alt || e.modifiers.platform {
             let f = (dy * 0.004).exp();
-            self.view.zoom_at(f, (f32::from(e.position.x) as f64, f32::from(e.position.y) as f64), &b);
+            self.view.zoom_at(
+                f,
+                (
+                    f32::from(e.position.x) as f64,
+                    f32::from(e.position.y) as f64,
+                ),
+                &b,
+            );
         } else if e.modifiers.shift {
             self.view.pan(dy, dx);
         } else {
@@ -544,7 +661,13 @@ impl EditorView {
         cx.notify();
     }
 
-    fn slider_down(&mut self, key: SliderKey, spec: (f32, f32, f32), e: &MouseDownEvent, cx: &mut Context<Self>) {
+    fn slider_down(
+        &mut self,
+        key: SliderKey,
+        spec: (f32, f32, f32),
+        e: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
         let track = self.tracks.entry(key).or_default().clone();
         let (min, max, step) = spec;
         if key != SliderKey::Compare {
@@ -560,7 +683,13 @@ impl EditorView {
         if let Some(f) = track_fraction(&track, e.position.x) {
             self.apply_slider(key, snap(min + f * (max - min), step), cx);
         }
-        self.drag = Some(Drag::Slider { key, track, min, max, step });
+        self.drag = Some(Drag::Slider {
+            key,
+            track,
+            min,
+            max,
+            step,
+        });
     }
 
     fn apply_slider(&mut self, key: SliderKey, v: f32, cx: &mut Context<Self>) {
@@ -570,13 +699,28 @@ impl EditorView {
                 cx.notify();
             }
             SliderKey::Opacity(id) => {
-                self.execute(Command::SetOpacity { id, opacity: v / 100.0 }, cx);
+                self.execute(
+                    Command::SetOpacity {
+                        id,
+                        opacity: v / 100.0,
+                    },
+                    cx,
+                );
             }
             SliderKey::Param(id, k) => {
-                self.execute(Command::SetParam { id, key: k.to_string(), value: v }, cx);
+                self.execute(
+                    Command::SetParam {
+                        id,
+                        key: k.to_string(),
+                        value: v,
+                    },
+                    cx,
+                );
             }
             SliderKey::Scale(id) | SliderKey::Rotation(id) => {
-                let Some(NodeKind::Raster { raster, placement }) = self.editor.doc.node(id).map(|n| &n.kind) else {
+                let Some(NodeKind::Raster { raster, placement }) =
+                    self.editor.doc.node(id).map(|n| &n.kind)
+                else {
                     return;
                 };
                 let mut p = *placement;
@@ -612,23 +756,34 @@ impl EditorView {
         }
         const N: u32 = 40;
         let mut level = 0;
-        while raster.level_size(level).0.max(raster.level_size(level).1) > 256 && level < raster.max_level() {
+        while raster.level_size(level).0.max(raster.level_size(level).1) > 256
+            && level < raster.max_level()
+        {
             level += 1;
         }
         let tile = raster.tile(level, TileCoord::new(0, 0));
         let (lw, lh) = raster.level_size(level);
         let s = lw.max(lh) as f64 / N as f64;
-        let (ox, oy) = ((N as f64 - lw as f64 / s) / 2.0, (N as f64 - lh as f64 / s) / 2.0);
+        let (ox, oy) = (
+            (N as f64 - lw as f64 / s) / 2.0,
+            (N as f64 - lh as f64 / s) / 2.0,
+        );
         let (light, dark) = self.checker;
         let mut out = vec![0u8; (N * N * 4) as usize];
         for y in 0..N {
             for x in 0..N {
-                let bg = if ((x / 5) + (y / 5)) % 2 == 0 { light } else { dark };
+                let bg = if ((x / 5) + (y / 5)) % 2 == 0 {
+                    light
+                } else {
+                    dark
+                };
                 let bgl = color::SRGB8_TO_LINEAR[bg as usize];
                 let sx = ((x as f64 + 0.5 - ox) * s).floor();
                 let sy = ((y as f64 + 0.5 - oy) * s).floor();
                 let p = if sx >= 0.0 && sy >= 0.0 && (sx as u32) < lw && (sy as u32) < lh {
-                    tile.as_ref().map(|t| color::px_to_f(t[(sy as u32 * 256 + sx as u32) as usize])).unwrap_or([0.0; 4])
+                    tile.as_ref()
+                        .map(|t| color::px_to_f(t[(sy as u32 * 256 + sx as u32) as usize]))
+                        .unwrap_or([0.0; 4])
                 } else {
                     [0.0; 4]
                 };
@@ -647,7 +802,11 @@ impl EditorView {
 }
 
 fn snap(v: f32, step: f32) -> f32 {
-    if step <= 0.0 { v } else { (v / step).round() * step }
+    if step <= 0.0 {
+        v
+    } else {
+        (v / step).round() * step
+    }
 }
 
 // ── Render ──────────────────────────────────────────────────────────────
@@ -655,7 +814,11 @@ fn snap(v: f32, step: f32) -> f32 {
 impl EditorView {
     fn doc_bar(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let d = &self.editor.doc;
-        let depth = if d.source_depth == 16 { "16 bit" } else { "8 bit" };
+        let depth = if d.source_depth == 16 {
+            "16 bit"
+        } else {
+            "8 bit"
+        };
         div()
             .flex()
             .flex_none()
@@ -670,8 +833,17 @@ impl EditorView {
                     .flex()
                     .items_baseline()
                     .gap(px(9.))
-                    .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(self.name.clone()))
-                    .child(mono(format!("{}×{} · {depth}", d.width, d.height), 10.5, p.muted)),
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(self.name.clone()),
+                    )
+                    .child(mono(
+                        format!("{}×{} · {depth}", d.width, d.height),
+                        10.5,
+                        p.muted,
+                    )),
             )
             .when(self.editor.is_modified(), |this| {
                 this.child(
@@ -689,12 +861,16 @@ impl EditorView {
                 )
             })
             .child(div().flex_1())
-            .child(button("save", "Save", false, p).on_click(cx.listener(|_, _, window, cx| {
-                window.dispatch_action(Box::new(crate::actions::Save), cx);
-            })))
-            .child(button("export", "Export", true, p).on_click(cx.listener(|_, _, window, cx| {
-                window.dispatch_action(Box::new(crate::actions::Export), cx);
-            })))
+            .child(
+                button("save", "Save", false, p).on_click(cx.listener(|_, _, window, cx| {
+                    window.dispatch_action(Box::new(crate::actions::Save), cx);
+                })),
+            )
+            .child(
+                button("export", "Export", true, p).on_click(cx.listener(|_, _, window, cx| {
+                    window.dispatch_action(Box::new(crate::actions::Export), cx);
+                })),
+            )
     }
 
     fn tool_rail(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -722,11 +898,21 @@ impl EditorView {
                     .border_1()
                     .border_color(if on { p.ink } else { transparent_black() })
                     .bg(if on { p.ink } else { transparent_black() })
-                    .text_color(if on { p.paper } else if enabled { p.ink } else { p.muted.opacity(0.45) })
+                    .text_color(if on {
+                        p.paper
+                    } else if enabled {
+                        p.ink
+                    } else {
+                        p.muted.opacity(0.45)
+                    })
                     .font_family(MONO_FONT)
                     .text_size(px(14.))
                     .when(enabled && !on, |d| d.hover(move |s| s.border_color(ink)))
-                    .cursor(if enabled { CursorStyle::PointingHand } else { CursorStyle::Arrow })
+                    .cursor(if enabled {
+                        CursorStyle::PointingHand
+                    } else {
+                        CursorStyle::Arrow
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if enabled {
                             this.tool = tool;
@@ -738,13 +924,25 @@ impl EditorView {
                     .child(*glyph)
             }))
             .child(div().flex_1())
-            .child(div().size(px(30.)).border_1().border_color(p.ink).bg(p.accent))
+            .child(
+                div()
+                    .size(px(30.))
+                    .border_1()
+                    .border_color(p.ink)
+                    .bg(p.accent),
+            )
     }
 
     fn context_bar(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let tool = TOOLS.iter().find(|t| t.0 == self.tool).map(|t| t.1).unwrap_or("Move");
+        let tool = TOOLS
+            .iter()
+            .find(|t| t.0 == self.tool)
+            .map(|t| t.1)
+            .unwrap_or("Move");
         let hint = match self.tool {
-            Tool::Move => "drag to move the selected pixel node · space-drag or middle-drag to pan · ctrl-wheel to zoom",
+            Tool::Move => {
+                "drag to move the selected pixel node · space-drag or middle-drag to pan · ctrl-wheel to zoom"
+            }
             _ => "",
         };
         let zoom = format!("{:.0}%", self.view.zoom * 100.0);
@@ -766,17 +964,50 @@ impl EditorView {
             .text_size(px(10.5))
             .text_color(p.muted)
             .child(div().text_color(p.ink).child(tool.to_uppercase()))
-            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(hint))
-            .child(chip("zoom", zoom, false, p).on_click(cx.listener(|this, _, _, cx| this.zoom_100(cx))))
-            .child(chip("fit", "fit", false, p).on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx))))
-            .child(chip("rot", rot, self.view.rotation != 0.0, p).on_click(cx.listener(|this, _, _, cx| this.rotate(0.0, cx))))
-            .child(chip("rulers", "rulers", self.rulers, p).on_click(cx.listener(|this, _, _, cx| this.toggle_rulers(cx))))
-            .child(div().whitespace_nowrap().text_color(if can_compare { p.muted } else { p.muted.opacity(0.5) }).child("before / after"))
             .child(
-                div().w(dim::COMPARE_SLIDER_W).flex_none().child(slider("compare", compare, track, p, cx.listener(
-                    |this, e: &MouseDownEvent, _, cx| this.slider_down(SliderKey::Compare, (0.0, 100.0, 1.0), e, cx),
-                ))),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(hint),
             )
+            .child(
+                chip("zoom", zoom, false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.zoom_100(cx))),
+            )
+            .child(
+                chip("fit", "fit", false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx))),
+            )
+            .child(
+                chip("rot", rot, self.view.rotation != 0.0, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.rotate(0.0, cx))),
+            )
+            .child(
+                chip("rulers", "rulers", self.rulers, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_rulers(cx))),
+            )
+            .child(
+                div()
+                    .whitespace_nowrap()
+                    .text_color(if can_compare {
+                        p.muted
+                    } else {
+                        p.muted.opacity(0.5)
+                    })
+                    .child("before / after"),
+            )
+            .child(div().w(dim::COMPARE_SLIDER_W).flex_none().child(slider(
+                "compare",
+                compare,
+                track,
+                p,
+                cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    this.slider_down(SliderKey::Compare, (0.0, 100.0, 1.0), e, cx)
+                }),
+            )))
             .child(div().w(px(34.)).child(format!("{:.0}%", compare * 100.0)))
     }
 
@@ -785,14 +1016,17 @@ impl EditorView {
         if self.fit_pending
             && let Some(b) = self.canvas_bounds()
         {
-            self.view.fit(self.editor.doc.width, self.editor.doc.height, &b);
+            self.view
+                .fit(self.editor.doc.width, self.editor.doc.height, &b);
             self.fit_pending = false;
         }
         let max_level = {
             let m = self.editor.doc.width.max(self.editor.doc.height).max(1);
             31 - m.leading_zeros()
         };
-        let before = self.before_active().then_some((self.before_gen, self.compare));
+        let before = self
+            .before_active()
+            .then_some((self.before_gen, self.compare));
         let scene = Scene {
             view: self.view,
             doc_size: (self.editor.doc.width, self.editor.doc.height),
@@ -826,12 +1060,25 @@ impl EditorView {
             .track_focus(&self.canvas_focus)
             .key_context("Canvas")
             .cursor(cursor)
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)))
-            .on_mouse_down(MouseButton::Middle, cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)),
+            )
             .on_scroll_wheel(cx.listener(|this, e, _, cx| this.scroll(e, cx)))
             .on_pinch(cx.listener(|this, e: &PinchEvent, _, cx| {
                 if let Some(b) = this.canvas_bounds() {
-                    this.view.zoom_at(1.0 + e.delta as f64, (f32::from(e.position.x) as f64, f32::from(e.position.y) as f64), &b);
+                    this.view.zoom_at(
+                        1.0 + e.delta as f64,
+                        (
+                            f32::from(e.position.x) as f64,
+                            f32::from(e.position.y) as f64,
+                        ),
+                        &b,
+                    );
                     cx.notify();
                 }
             }))
@@ -857,7 +1104,12 @@ impl EditorView {
                             });
                             return None;
                         }
-                        let plan = viewport::prepaint(&scene, &mut cache.borrow_mut(), b, window.scale_factor());
+                        let plan = viewport::prepaint(
+                            &scene,
+                            &mut cache.borrow_mut(),
+                            b,
+                            window.scale_factor(),
+                        );
                         if !cache.borrow().queue.is_empty() {
                             cx.defer(move |cx| {
                                 w1.update(cx, |this, cx| this.dispatch_render(cx)).ok();
@@ -872,7 +1124,8 @@ impl EditorView {
                         // Drags continue outside the canvas, so listen window-wide.
                         window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
                             if phase == DispatchPhase::Bubble {
-                                w2.update(cx, |this, cx| this.drag_move(e.position, cx)).ok();
+                                w2.update(cx, |this, cx| this.drag_move(e.position, cx))
+                                    .ok();
                             }
                         });
                         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
@@ -888,14 +1141,21 @@ impl EditorView {
 
     fn status_strip(&self, p: &Palette) -> impl IntoElement + use<> {
         let n = self.editor.doc.nodes.len();
-        let saved = if self.editor.is_modified() { "unsaved" } else { "saved" };
+        let saved = if self.editor.is_modified() {
+            "unsaved"
+        } else {
+            "saved"
+        };
         let render = self
             .cache
             .borrow()
             .last_batch
             .map(|(k, d)| format!(" · {k} tiles in {} ms", d.as_millis()))
             .unwrap_or_default();
-        let right = format!("non-destructive · {n} node{} · {saved}{render}", if n == 1 { "" } else { "s" });
+        let right = format!(
+            "non-destructive · {n} node{} · {saved}{render}",
+            if n == 1 { "" } else { "s" }
+        );
         div()
             .flex()
             .flex_none()
@@ -913,7 +1173,12 @@ impl EditorView {
             .child(mono(right, 10., p.muted).whitespace_nowrap())
     }
 
-    fn node_panel(&mut self, p: &Palette, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn node_panel(
+        &mut self,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         div()
             .id("node-panel")
             .flex()
@@ -944,22 +1209,56 @@ impl EditorView {
             .on_drop(cx.listener(|this, d: &DraggedNode, _, cx| this.drop_on(d.id, None, cx)))
             .child(label("Scene graph", p))
             .child(div().flex_1())
-            .child(chip("add", "+ node", self.menu == Some(Menu::Add), p).on_click(cx.listener(|this, _, _, cx| {
-                this.menu = if this.menu == Some(Menu::Add) { None } else { Some(Menu::Add) };
-                cx.notify();
-            })))
-            .child(chip("grp", "grp", false, p).on_click(cx.listener(|this, _, _, cx| this.group_selected(cx))))
-            .child(chip("dup", "dup", false, p).on_click(cx.listener(|this, _, _, cx| this.duplicate_selected(cx))))
-            .child(chip("del", "del", false, p).on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))));
+            .child(
+                chip("add", "+ node", self.menu == Some(Menu::Add), p).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.menu = if this.menu == Some(Menu::Add) {
+                            None
+                        } else {
+                            Some(Menu::Add)
+                        };
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                chip("grp", "grp", false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.group_selected(cx))),
+            )
+            .child(
+                chip("dup", "dup", false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.duplicate_selected(cx))),
+            )
+            .child(
+                chip("del", "del", false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
+            );
 
         let add_menu = (self.menu == Some(Menu::Add)).then(|| {
             let mut items: Vec<(SharedString, Node)> = Adjustment::catalogue()
                 .into_iter()
                 .map(|a| (SharedString::from(a.label()), Node::adjust(0, a)))
                 .collect();
-            items.push(("Solid fill".into(), Node::new(0, "Fill", NodeKind::Fill { rgba: [255, 255, 255, 255] })));
+            items.push((
+                "Solid fill".into(),
+                Node::new(
+                    0,
+                    "Fill",
+                    NodeKind::Fill {
+                        rgba: [255, 255, 255, 255],
+                    },
+                ),
+            ));
             items.push(("Empty group".into(), Node::group(0, "Group")));
-            self.menu_list("add-menu", items.into_iter().map(|(l, n)| (l, MenuAction::Add(Box::new(n)))).collect(), p, cx)
+            self.menu_list(
+                "add-menu",
+                items
+                    .into_iter()
+                    .map(|(l, n)| (l, MenuAction::Add(Box::new(n))))
+                    .collect(),
+                p,
+                cx,
+            )
         });
 
         let row_els: Vec<AnyElement> = rows
@@ -977,19 +1276,34 @@ impl EditorView {
             .border_color(p.line)
             .child(header)
             .children(add_menu)
-            .when(rows.is_empty(), |d| d.child(mono("empty document", 10., p.muted)))
+            .when(rows.is_empty(), |d| {
+                d.child(mono("empty document", 10., p.muted))
+            })
             .children(row_els)
     }
 
-    fn node_row(&mut self, id: NodeId, depth: usize, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn node_row(
+        &mut self,
+        id: NodeId,
+        depth: usize,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let n = self.editor.doc.node(id).expect("row node").clone();
         let on = self.selected == Some(id);
-        let (fg, bg, border) = if on { (p.paper, p.ink, p.ink) } else { (p.ink, transparent_black(), p.line) };
+        let (fg, bg, border) = if on {
+            (p.paper, p.ink, p.ink)
+        } else {
+            (p.ink, transparent_black(), p.line)
+        };
         let meta_fg = if on { p.paper } else { p.muted };
         let chip_el: AnyElement = match &n.kind {
             NodeKind::Raster { raster, .. } => {
                 let t = self.thumb(raster);
-                img(ImageSource::Render(t)).size(px(20.)).flex_none().into_any_element()
+                img(ImageSource::Render(t))
+                    .size(px(20.))
+                    .flex_none()
+                    .into_any_element()
             }
             NodeKind::Group { collapsed } => {
                 let collapsed = *collapsed;
@@ -1007,7 +1321,13 @@ impl EditorView {
                     .child(if collapsed { "▸" } else { "▾" })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        this.execute(Command::SetCollapsed { id, collapsed: !collapsed }, cx);
+                        this.execute(
+                            Command::SetCollapsed {
+                                id,
+                                collapsed: !collapsed,
+                            },
+                            cx,
+                        );
                     }))
                     .into_any_element()
             }
@@ -1028,7 +1348,9 @@ impl EditorView {
                 .flex_none()
                 .border_1()
                 .border_color(p.line)
-                .bg(rgb(((rgba[0] as u32) << 16) | ((rgba[1] as u32) << 8) | rgba[2] as u32))
+                .bg(rgb(((rgba[0] as u32) << 16)
+                    | ((rgba[1] as u32) << 8)
+                    | rgba[2] as u32))
                 .into_any_element(),
         };
         let mut meta = n.kind.tag().to_string();
@@ -1042,9 +1364,10 @@ impl EditorView {
             meta = format!("{meta} · m");
         }
         let name_el: AnyElement = match &self.renaming {
-            Some((rid, state, _)) if *rid == id => {
-                Input::new(state).appearance(false).bordered(false).into_any_element()
-            }
+            Some((rid, state, _)) if *rid == id => Input::new(state)
+                .appearance(false)
+                .bordered(false)
+                .into_any_element(),
             _ => div()
                 .flex_1()
                 .min_w_0()
@@ -1057,7 +1380,10 @@ impl EditorView {
                 .into_any_element(),
         };
         let accent = p.accent;
-        let dragged = DraggedNode { id, name: n.name.clone().into() };
+        let dragged = DraggedNode {
+            id,
+            name: n.name.clone().into(),
+        };
         div()
             .id(("row", id))
             .flex()
@@ -1082,8 +1408,12 @@ impl EditorView {
                 }
             }))
             .on_drag(dragged, |d, _, _, cx| cx.new(|_| d.clone()))
-            .drag_over::<DraggedNode>(move |s, _, _, _| s.border_color(accent).bg(accent.opacity(0.12)))
-            .on_drop(cx.listener(move |this, d: &DraggedNode, _, cx| this.drop_on(d.id, Some(id), cx)))
+            .drag_over::<DraggedNode>(move |s, _, _, _| {
+                s.border_color(accent).bg(accent.opacity(0.12))
+            })
+            .on_drop(
+                cx.listener(move |this, d: &DraggedNode, _, cx| this.drop_on(d.id, Some(id), cx)),
+            )
             .child(
                 div()
                     .id(("eye", id))
@@ -1104,12 +1434,33 @@ impl EditorView {
             .child(mono(meta, 9.5, meta_fg).flex_none())
     }
 
-    fn inspector(&mut self, p: &Palette, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let Some(n) = self.selected.and_then(|id| self.editor.doc.node(id)).cloned() else {
-            return div().px(px(15.)).py(px(13.)).border_b_1().border_color(p.line).child(mono("select a node", 10., p.muted));
+    fn inspector(
+        &mut self,
+        p: &Palette,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let Some(n) = self
+            .selected
+            .and_then(|id| self.editor.doc.node(id))
+            .cloned()
+        else {
+            return div()
+                .px(px(15.))
+                .py(px(13.))
+                .border_b_1()
+                .border_color(p.line)
+                .child(mono("select a node", 10., p.muted));
         };
         let id = n.id;
-        let mut body = div().flex().flex_col().gap(px(10.)).px(px(15.)).py(px(13.)).border_b_1().border_color(p.line);
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .px(px(15.))
+            .py(px(13.))
+            .border_b_1()
+            .border_color(p.line);
         body = body.child(label(n.name.clone(), p));
 
         // Opacity + blend.
@@ -1124,7 +1475,9 @@ impl EditorView {
         ));
         let blend_open = self.menu == Some(Menu::Blend);
         let modes: Vec<BlendMode> = if n.is_group() {
-            std::iter::once(BlendMode::PassThrough).chain(BlendMode::MENU.iter().flatten().copied()).collect()
+            std::iter::once(BlendMode::PassThrough)
+                .chain(BlendMode::MENU.iter().flatten().copied())
+                .collect()
         } else {
             BlendMode::MENU.iter().flatten().copied().collect()
         };
@@ -1136,10 +1489,18 @@ impl EditorView {
                 .font_family(MONO_FONT)
                 .text_size(px(10.5))
                 .child("blend")
-                .child(chip("blend", format!("{} ▾", n.blend.label()), blend_open, p).on_click(cx.listener(|this, _, _, cx| {
-                    this.menu = if this.menu == Some(Menu::Blend) { None } else { Some(Menu::Blend) };
-                    cx.notify();
-                }))),
+                .child(
+                    chip("blend", format!("{} ▾", n.blend.label()), blend_open, p).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.menu = if this.menu == Some(Menu::Blend) {
+                                None
+                            } else {
+                                Some(Menu::Blend)
+                            };
+                            cx.notify();
+                        }),
+                    ),
+                ),
         );
         if blend_open {
             let items = modes
@@ -1151,32 +1512,70 @@ impl EditorView {
 
         // Clipping and mask toggles.
         let sib = self.editor.doc.children(n.parent);
-        let below = sib.iter().position(|s| *s == id).and_then(|i| i.checked_sub(1)).map(|i| sib[i]);
+        let below = sib
+            .iter()
+            .position(|s| *s == id)
+            .and_then(|i| i.checked_sub(1))
+            .map(|i| sib[i]);
         let mut toggles = div().flex().gap(px(6.)).flex_wrap();
         if let Some(b) = below {
             let clipped = n.clip_to.is_some();
-            toggles = toggles.child(chip("clip", "clip to below", clipped, p).on_click(cx.listener(move |this, _, _, cx| {
-                this.execute(Command::SetClip { id, clip_to: if clipped { None } else { Some(b) } }, cx);
-            })));
+            toggles = toggles.child(chip("clip", "clip to below", clipped, p).on_click(
+                cx.listener(move |this, _, _, cx| {
+                    this.execute(
+                        Command::SetClip {
+                            id,
+                            clip_to: if clipped { None } else { Some(b) },
+                        },
+                        cx,
+                    );
+                }),
+            ));
         }
         if n.mask.is_some() {
             let en = n.mask_enabled;
-            toggles = toggles.child(chip("mask", "mask", en, p).on_click(cx.listener(move |this, _, _, cx| {
-                this.execute(Command::SetMaskEnabled { id, enabled: !en }, cx);
-            })));
+            toggles = toggles.child(chip("mask", "mask", en, p).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.execute(Command::SetMaskEnabled { id, enabled: !en }, cx);
+                },
+            )));
         }
         let locked = n.locked;
-        toggles = toggles.child(chip("lock", "locked", locked, p).on_click(cx.listener(move |this, _, _, cx| {
-            this.execute(Command::SetLocked { id, locked: !locked }, cx);
-        })));
+        toggles = toggles.child(chip("lock", "locked", locked, p).on_click(cx.listener(
+            move |this, _, _, cx| {
+                this.execute(
+                    Command::SetLocked {
+                        id,
+                        locked: !locked,
+                    },
+                    cx,
+                );
+            },
+        )));
         body = body.child(toggles);
 
         match &n.kind {
             NodeKind::Adjust(a) => {
                 for spec in a.params() {
-                    let ParamSpec { key, label: l, min, max, step, value, .. } = spec.clone();
+                    let ParamSpec {
+                        key,
+                        label: l,
+                        min,
+                        max,
+                        step,
+                        value,
+                        ..
+                    } = spec.clone();
                     let norm = (value - min) / (max - min);
-                    body = body.child(self.param_slider(SliderKey::Param(id, key), l, spec.display(), norm, (min, max, step), p, cx));
+                    body = body.child(self.param_slider(
+                        SliderKey::Param(id, key),
+                        l,
+                        spec.display(),
+                        norm,
+                        (min, max, step),
+                        p,
+                        cx,
+                    ));
                 }
                 if a.params().is_empty() {
                     body = body.child(mono("no parameters", 10., p.muted));
@@ -1184,26 +1583,67 @@ impl EditorView {
             }
             NodeKind::Raster { raster, placement } => {
                 body = body.child(mono(
-                    format!("{}×{} px at {:.0}, {:.0}", raster.width(), raster.height(), placement.x, placement.y),
+                    format!(
+                        "{}×{} px at {:.0}, {:.0}",
+                        raster.width(),
+                        raster.height(),
+                        placement.x,
+                        placement.y
+                    ),
                     10.5,
                     p.muted,
                 ));
                 let s = (placement.scale_x.abs() * 100.0) as f32;
-                body = body.child(self.param_slider(SliderKey::Scale(id), "scale", format!("{s:.0}%"), (s - 1.0) / 399.0, (1.0, 400.0, 1.0), p, cx));
+                body = body.child(self.param_slider(
+                    SliderKey::Scale(id),
+                    "scale",
+                    format!("{s:.0}%"),
+                    (s - 1.0) / 399.0,
+                    (1.0, 400.0, 1.0),
+                    p,
+                    cx,
+                ));
                 let r = placement.rotation as f32;
-                body = body.child(self.param_slider(SliderKey::Rotation(id), "rotation", format!("{r:+.0}°"), (r + 180.0) / 360.0, (-180.0, 180.0, 1.0), p, cx));
+                body = body.child(self.param_slider(
+                    SliderKey::Rotation(id),
+                    "rotation",
+                    format!("{r:+.0}°"),
+                    (r + 180.0) / 360.0,
+                    (-180.0, 180.0, 1.0),
+                    p,
+                    cx,
+                ));
                 if !placement.is_identity() {
-                    body = body.child(chip("reset-xf", "reset transform", false, p).on_click(cx.listener(move |this, _, _, cx| {
-                        this.execute(Command::SetPlacement { id, placement: Placement::default() }, cx);
-                    })));
+                    body = body.child(chip("reset-xf", "reset transform", false, p).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.execute(
+                                Command::SetPlacement {
+                                    id,
+                                    placement: Placement::default(),
+                                },
+                                cx,
+                            );
+                        }),
+                    ));
                 }
             }
             NodeKind::Fill { rgba } => {
-                body = body.child(mono(format!("#{:02X}{:02X}{:02X} · alpha {}", rgba[0], rgba[1], rgba[2], rgba[3]), 10.5, p.muted));
+                body = body.child(mono(
+                    format!(
+                        "#{:02X}{:02X}{:02X} · alpha {}",
+                        rgba[0], rgba[1], rgba[2], rgba[3]
+                    ),
+                    10.5,
+                    p.muted,
+                ));
             }
             NodeKind::Group { .. } => {
                 let k = self.editor.doc.subtree(id).len() - 1;
-                body = body.child(mono(format!("{k} node{} inside", if k == 1 { "" } else { "s" }), 10.5, p.muted));
+                body = body.child(mono(
+                    format!("{k} node{} inside", if k == 1 { "" } else { "s" }),
+                    10.5,
+                    p.muted,
+                ));
             }
         }
         body
@@ -1236,13 +1676,25 @@ impl EditorView {
                     .child(name.to_string())
                     .child(div().text_color(p.muted).child(display)),
             )
-            .child(slider(id, norm, track, p, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                this.slider_down(key, spec, e, cx);
-            })))
+            .child(slider(
+                id,
+                norm,
+                track,
+                p,
+                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    this.slider_down(key, spec, e, cx);
+                }),
+            ))
     }
 
     fn history_list(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let steps: Vec<String> = self.editor.history.steps().map(|s| s.name.clone()).take(14).collect();
+        let steps: Vec<String> = self
+            .editor
+            .history
+            .steps()
+            .map(|s| s.name.clone())
+            .take(14)
+            .collect();
         let total = self.editor.history.len();
         let can_redo = self.editor.history.can_redo();
         let mut list = div().flex().flex_col();
@@ -1256,12 +1708,24 @@ impl EditorView {
                     .pb(px(8.))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.undo_to(i, cx)))
-                    .child(div().size(px(7.)).mt(px(5.)).rounded_full().flex_none().bg(dot))
+                    .child(
+                        div()
+                            .size(px(7.))
+                            .mt(px(5.))
+                            .rounded_full()
+                            .flex_none()
+                            .bg(dot),
+                    )
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .child(div().text_size(px(12.5)).text_color(p.ink).child(name.clone()))
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .text_color(p.ink)
+                                    .child(name.clone()),
+                            )
                             .child(mono(format!("step {}", total - i), 9.5, p.muted)),
                     ),
             );
@@ -1273,12 +1737,24 @@ impl EditorView {
                 .gap(px(10.))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| this.undo_to(total, cx)))
-                .child(div().size(px(7.)).mt(px(5.)).rounded_full().flex_none().bg(if total == 0 { p.accent } else { p.muted }))
+                .child(
+                    div()
+                        .size(px(7.))
+                        .mt(px(5.))
+                        .rounded_full()
+                        .flex_none()
+                        .bg(if total == 0 { p.accent } else { p.muted }),
+                )
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .child(div().text_size(px(12.5)).text_color(p.ink).child(format!("Open {}", self.name)))
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .text_color(p.ink)
+                                .child(format!("Open {}", self.name)),
+                        )
                         .child(mono("start", 9.5, p.muted)),
                 ),
         );
@@ -1295,13 +1771,25 @@ impl EditorView {
                     .gap(px(6.))
                     .child(label("History", p))
                     .child(div().flex_1())
-                    .child(chip("undo", "undo", false, p).on_click(cx.listener(|this, _, _, cx| this.undo(cx))))
-                    .child(chip("redo", if can_redo { "redo" } else { "redo –" }, false, p).on_click(cx.listener(|this, _, _, cx| this.redo(cx)))),
+                    .child(
+                        chip("undo", "undo", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
+                    )
+                    .child(
+                        chip("redo", if can_redo { "redo" } else { "redo –" }, false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
+                    ),
             )
             .child(list)
     }
 
-    fn menu_list(&self, id: &'static str, items: Vec<(SharedString, MenuAction)>, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn menu_list(
+        &self,
+        id: &'static str,
+        items: Vec<(SharedString, MenuAction)>,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let accent = p.accent;
         div()
             .id(id)

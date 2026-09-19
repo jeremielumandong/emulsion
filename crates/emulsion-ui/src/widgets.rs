@@ -7,7 +7,11 @@ use std::rc::Rc;
 
 /// Monospace metadata text.
 pub fn mono(text: impl Into<SharedString>, size: f32, color: Hsla) -> Div {
-    div().font_family(MONO_FONT).text_size(px(size)).text_color(color).child(text.into())
+    div()
+        .font_family(MONO_FONT)
+        .text_size(px(size))
+        .text_color(color)
+        .child(text.into())
 }
 
 /// Uppercase section label.
@@ -17,8 +21,17 @@ pub fn label(text: impl Into<SharedString>, p: &Palette) -> Div {
 }
 
 /// A square text button.
-pub fn button(id: impl Into<ElementId>, text: impl Into<SharedString>, primary: bool, p: &Palette) -> Stateful<Div> {
-    let (bg, fg) = if primary { (p.ink, p.paper) } else { (p.soft_bg, p.ink) };
+pub fn button(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+    primary: bool,
+    p: &Palette,
+) -> Stateful<Div> {
+    let (bg, fg) = if primary {
+        (p.ink, p.paper)
+    } else {
+        (p.soft_bg, p.ink)
+    };
     let accent = p.accent;
     div()
         .id(id)
@@ -34,13 +47,26 @@ pub fn button(id: impl Into<ElementId>, text: impl Into<SharedString>, primary: 
         .text_size(px(12.5))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
-        .hover(move |s| s.bg(accent).border_color(accent).text_color(gpui_kit::white()))
+        .hover(move |s| {
+            s.bg(accent)
+                .border_color(accent)
+                .text_color(gpui_kit::white())
+        })
         .child(text.into())
 }
 
 /// A small mono-label chip button.
-pub fn chip(id: impl Into<ElementId>, text: impl Into<SharedString>, on: bool, p: &Palette) -> Stateful<Div> {
-    let (bg, fg, border) = if on { (p.ink, p.paper, p.ink) } else { (p.soft_bg, p.ink, p.line) };
+pub fn chip(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+    on: bool,
+    p: &Palette,
+) -> Stateful<Div> {
+    let (bg, fg, border) = if on {
+        (p.ink, p.paper, p.ink)
+    } else {
+        (p.soft_bg, p.ink, p.line)
+    };
     let ink = p.ink;
     div()
         .id(id)
@@ -84,8 +110,24 @@ pub fn slider(
                 .absolute()
                 .size_full(),
         )
-        .child(div().absolute().top(px(6.)).left_0().right_0().h(px(2.)).bg(p.line))
-        .child(div().absolute().top(px(6.)).left_0().h(px(2.)).w(relative(v)).bg(p.accent))
+        .child(
+            div()
+                .absolute()
+                .top(px(6.))
+                .left_0()
+                .right_0()
+                .h(px(2.))
+                .bg(p.line),
+        )
+        .child(
+            div()
+                .absolute()
+                .top(px(6.))
+                .left_0()
+                .h(px(2.))
+                .w(relative(v))
+                .bg(p.accent),
+        )
         .child(
             div()
                 .absolute()

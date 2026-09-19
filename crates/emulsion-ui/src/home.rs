@@ -9,9 +9,18 @@ use gpui_kit::*;
 use std::sync::Arc;
 
 const FACTS: [(&str, &str); 3] = [
-    ("Nodes, not layers", "Every adjustment is a node with live parameters. Reopen it next month and change one number."),
-    ("Nothing is destroyed", "Layers keep their full resolution however you place them. Every step is undoable."),
-    ("Opens what you have", "OpenRaster, PNG, JPEG, WebP and TIFF, with 16-bit sources kept at 16 bits."),
+    (
+        "Nodes, not layers",
+        "Every adjustment is a node with live parameters. Reopen it next month and change one number.",
+    ),
+    (
+        "Nothing is destroyed",
+        "Layers keep their full resolution however you place them. Every step is undoable.",
+    ),
+    (
+        "Opens what you have",
+        "OpenRaster, PNG, JPEG, WebP and TIFF, with 16-bit sources kept at 16 bits.",
+    ),
 ];
 
 impl Workspace {
@@ -45,7 +54,11 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn home(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn home(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
         self.load_thumbs(cx);
         let date = {
@@ -98,12 +111,22 @@ impl Workspace {
                         div()
                             .flex()
                             .gap(px(10.))
-                            .child(button("new", "New canvas", false, &p).px(px(22.)).py(px(14.)).on_click(cx.listener(
-                                |this, _, window, cx| this.new_document(window, cx),
-                            )))
-                            .child(button("open", "Open a file", true, &p).px(px(22.)).py(px(14.)).on_click(cx.listener(
-                                |_, _, window, cx| window.dispatch_action(Box::new(crate::actions::Open), cx),
-                            ))),
+                            .child(
+                                button("new", "New canvas", false, &p)
+                                    .px(px(22.))
+                                    .py(px(14.))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.new_document(window, cx)
+                                    })),
+                            )
+                            .child(
+                                button("open", "Open a file", true, &p)
+                                    .px(px(22.))
+                                    .py(px(14.))
+                                    .on_click(cx.listener(|_, _, window, cx| {
+                                        window.dispatch_action(Box::new(crate::actions::Open), cx)
+                                    })),
+                            ),
                     ),
             )
             .child(if cells.is_empty() {
@@ -112,7 +135,11 @@ impl Workspace {
                     .py(px(40.))
                     .border_b_1()
                     .border_color(p.line)
-                    .child(mono("No recent files yet. Open an image or start a new canvas.", 11., p.muted))
+                    .child(mono(
+                        "No recent files yet. Open an image or start a new canvas.",
+                        11.,
+                        p.muted,
+                    ))
             } else {
                 div()
                     .grid()
@@ -143,12 +170,29 @@ impl Workspace {
             )
     }
 
-    fn recent_cell(&self, i: usize, r: &recent::Recent, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let kind = r.path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-        let name = r.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    fn recent_cell(
+        &self,
+        i: usize,
+        r: &recent::Recent,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let kind = r
+            .path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let name = r
+            .path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let meta = format!("{} · {}", recent::ago(r.opened), r.summary);
         let thumb: AnyElement = match self.thumbs.get(&r.path) {
-            Some(t) => img(ImageSource::Render(t.clone())).size_full().object_fit(ObjectFit::Cover).into_any_element(),
+            Some(t) => img(ImageSource::Render(t.clone()))
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .into_any_element(),
             None => div().size_full().bg(p.line).into_any_element(),
         };
         let path = r.path.clone();
@@ -160,7 +204,9 @@ impl Workspace {
             .bg(p.paper)
             .cursor_pointer()
             .hover(move |s| s.bg(accent.opacity(0.06)))
-            .on_click(cx.listener(move |this, _, window, cx| this.open_path(path.clone(), window, cx)))
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.open_path(path.clone(), window, cx)),
+            )
             .child(
                 div()
                     .relative()
@@ -187,7 +233,14 @@ impl Workspace {
                     .px(px(13.))
                     .pt(px(12.))
                     .pb(px(15.))
-                    .child(div().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).whitespace_nowrap().text_ellipsis().child(name))
+                    .child(
+                        div()
+                            .text_size(px(13.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(name),
+                    )
                     .child(mono(meta, 10., p.muted)),
             )
     }

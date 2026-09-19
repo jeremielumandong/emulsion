@@ -63,7 +63,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("ctrl-shift-g", Ungroup, ws),
         KeyBinding::new("ctrl-]", MoveNodeUp, ws),
         KeyBinding::new("ctrl-[", MoveNodeDown, ws),
-        KeyBinding::new("ctrl-comma", ToggleNodeVisible, ws),
+        KeyBinding::new("ctrl-,", ToggleNodeVisible, ws),
         KeyBinding::new("ctrl-q", Quit, ws),
         KeyBinding::new("r", RotateCw, canvas),
         KeyBinding::new("shift-r", RotateCcw, canvas),

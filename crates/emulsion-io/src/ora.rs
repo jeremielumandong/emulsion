@@ -21,7 +21,7 @@
 //! Versioning: `version` increments whenever older builds could misread a
 //! file. Builds reject any version above the one they know.
 
-use crate::export::{png8, png16, png_gray};
+use crate::export::{png_gray, png8, png16};
 use crate::import::{check_size, from_dynamic};
 use crate::{IoError, Result, write_atomic};
 use emulsion_core::node::{Node, NodeKind};
@@ -74,18 +74,38 @@ struct MNode {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum MKind {
-    Raster { src: String, width: u32, height: u32, placement: Placement },
-    Group { collapsed: bool },
-    Adjust { adjustment: Adjustment },
-    Fill { rgba: [u8; 4] },
+    Raster {
+        src: String,
+        width: u32,
+        height: u32,
+        placement: Placement,
+    },
+    Group {
+        collapsed: bool,
+    },
+    Adjust {
+        adjustment: Adjustment,
+    },
+    Fill {
+        rgba: [u8; 4],
+    },
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn is_integer_translation(p: &Placement) -> bool {
-    p.scale_x == 1.0 && p.scale_y == 1.0 && p.rotation == 0.0 && !p.flip_x && !p.flip_y && p.x.fract() == 0.0 && p.y.fract() == 0.0
+    p.scale_x == 1.0
+        && p.scale_y == 1.0
+        && p.rotation == 0.0
+        && !p.flip_x
+        && !p.flip_y
+        && p.x.fract() == 0.0
+        && p.y.fract() == 0.0
 }
 
 /// Everything encoded before the zip is written.
@@ -118,28 +138,46 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
             blend: BlendMode::Normal,
             mask: None,
             clip_to: None,
-            content: NodeContent::Pixels { raster: raster.clone(), placement: *placement },
+            content: NodeContent::Pixels {
+                raster: raster.clone(),
+                placement: *placement,
+            },
         }],
     };
     let full = flatten(&tree, 0);
-    let b = placement.doc_bounds(raster.width(), raster.height()).intersect(&emulsion_raster::IRect::new(
-        0,
-        0,
-        doc.width as i32,
-        doc.height as i32,
-    ));
+    let b = placement
+        .doc_bounds(raster.width(), raster.height())
+        .intersect(&emulsion_raster::IRect::new(
+            0,
+            0,
+            doc.width as i32,
+            doc.height as i32,
+        ));
     if b.is_empty() {
         return (Raster::transparent(1, 1), 0, 0);
     }
-    let crop = Raster::from_fn(b.w as u32, b.h as u32, [0; 4], |x, y| full.get(x + b.x as u32, y + b.y as u32));
+    let crop = Raster::from_fn(b.w as u32, b.h as u32, [0; 4], |x, y| {
+        full.get(x + b.x as u32, y + b.y as u32)
+    });
     (crop, b.x as i64, b.y as i64)
 }
 
 fn encode(doc: &Document) -> Result<Encoded> {
     enum Job<'a> {
-        Png { path: String, raster: &'a Raster },
-        Baked { path: String, id: NodeId, raster: &'a Arc<Raster>, placement: Placement },
-        Mask { path: String, mask: &'a Mask },
+        Png {
+            path: String,
+            raster: &'a Raster,
+        },
+        Baked {
+            path: String,
+            id: NodeId,
+            raster: &'a Arc<Raster>,
+            placement: Placement,
+        },
+        Mask {
+            path: String,
+            mask: &'a Mask,
+        },
     }
     let mut jobs = Vec::new();
     let mut nodes = Vec::new();
@@ -147,26 +185,49 @@ fn encode(doc: &Document) -> Result<Encoded> {
     for n in &doc.nodes {
         let mask = n.mask.as_ref().map(|m| {
             let path = format!("emulsion/mask-{}.png", n.id);
-            jobs.push(Job::Mask { path: path.clone(), mask: m });
+            jobs.push(Job::Mask {
+                path: path.clone(),
+                mask: m,
+            });
             path
         });
         let kind = match &n.kind {
             NodeKind::Raster { raster, placement } => {
                 let data = format!("data/node-{}.png", n.id);
                 let src = if is_integer_translation(placement) {
-                    jobs.push(Job::Png { path: data.clone(), raster });
+                    jobs.push(Job::Png {
+                        path: data.clone(),
+                        raster,
+                    });
                     ora_layers.insert(n.id, (data.clone(), placement.x as i64, placement.y as i64));
                     data
                 } else {
                     let src = format!("emulsion/src/node-{}.png", n.id);
-                    jobs.push(Job::Png { path: src.clone(), raster });
-                    jobs.push(Job::Baked { path: data, id: n.id, raster, placement: *placement });
+                    jobs.push(Job::Png {
+                        path: src.clone(),
+                        raster,
+                    });
+                    jobs.push(Job::Baked {
+                        path: data,
+                        id: n.id,
+                        raster,
+                        placement: *placement,
+                    });
                     src
                 };
-                MKind::Raster { src, width: raster.width(), height: raster.height(), placement: *placement }
+                MKind::Raster {
+                    src,
+                    width: raster.width(),
+                    height: raster.height(),
+                    placement: *placement,
+                }
             }
-            NodeKind::Group { collapsed } => MKind::Group { collapsed: *collapsed },
-            NodeKind::Adjust(a) => MKind::Adjust { adjustment: a.clone() },
+            NodeKind::Group { collapsed } => MKind::Group {
+                collapsed: *collapsed,
+            },
+            NodeKind::Adjust(a) => MKind::Adjust {
+                adjustment: a.clone(),
+            },
             NodeKind::Fill { rgba } => MKind::Fill { rgba: *rgba },
         };
         nodes.push(MNode {
@@ -190,8 +251,17 @@ fn encode(doc: &Document) -> Result<Encoded> {
         .into_par_iter()
         .map(|job| match job {
             Job::Png { path, raster } => Ok((path, raster_png(raster, depth)?, None)),
-            Job::Mask { path, mask } => Ok((path, png_gray(mask.width(), mask.height(), &mask.to_gray8())?, None)),
-            Job::Baked { path, id, raster, placement } => {
+            Job::Mask { path, mask } => Ok((
+                path,
+                png_gray(mask.width(), mask.height(), &mask.to_gray8())?,
+                None,
+            )),
+            Job::Baked {
+                path,
+                id,
+                raster,
+                placement,
+            } => {
                 let (r, x, y) = bake(doc, raster, &placement);
                 Ok((path, raster_png(&r, depth)?, Some((id, x, y))))
             }
@@ -209,16 +279,27 @@ fn encode(doc: &Document) -> Result<Encoded> {
     // Composite and thumbnail.
     let tree = doc.composite_tree();
     let merged = flatten(&tree, 0);
-    entries.push(("mergedimage.png".into(), png8(doc.width, doc.height, &merged.to_srgba8())?));
+    entries.push((
+        "mergedimage.png".into(),
+        png8(doc.width, doc.height, &merged.to_srgba8())?,
+    ));
     let mut level = 0;
-    while level_size(doc.width, doc.height, level).0.max(level_size(doc.width, doc.height, level).1) > 512 {
+    while level_size(doc.width, doc.height, level)
+        .0
+        .max(level_size(doc.width, doc.height, level).1)
+        > 512
+    {
         level += 1;
     }
     let small = flatten(&tree, level);
-    let img = image::RgbaImage::from_raw(small.width(), small.height(), small.to_srgba8()).expect("sized buffer");
+    let img = image::RgbaImage::from_raw(small.width(), small.height(), small.to_srgba8())
+        .expect("sized buffer");
     let (tw, th) = fit(small.width(), small.height(), 256);
     let thumb = image::imageops::thumbnail(&img, tw, th);
-    entries.push(("Thumbnails/thumbnail.png".into(), png8(tw, th, thumb.as_raw())?));
+    entries.push((
+        "Thumbnails/thumbnail.png".into(),
+        png8(tw, th, thumb.as_raw())?,
+    ));
 
     let manifest = Manifest {
         format: "emulsion".into(),
@@ -230,7 +311,11 @@ fn encode(doc: &Document) -> Result<Encoded> {
         blend_space: doc.blend_space,
         nodes,
     };
-    Ok(Encoded { entries, ora_layers, manifest })
+    Ok(Encoded {
+        entries,
+        ora_layers,
+        manifest,
+    })
 }
 
 fn fit(w: u32, h: u32, max: u32) -> (u32, u32) {
@@ -238,11 +323,20 @@ fn fit(w: u32, h: u32, max: u32) -> (u32, u32) {
         return (w.max(1), h.max(1));
     }
     let s = max as f64 / w.max(h) as f64;
-    (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1))
+    (
+        ((w as f64 * s).round() as u32).max(1),
+        ((h as f64 * s).round() as u32).max(1),
+    )
 }
 
 fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> String {
-    fn emit(doc: &Document, parent: Option<NodeId>, layers: &HashMap<NodeId, (String, i64, i64)>, out: &mut String, indent: usize) {
+    fn emit(
+        doc: &Document,
+        parent: Option<NodeId>,
+        layers: &HashMap<NodeId, (String, i64, i64)>,
+        out: &mut String,
+        indent: usize,
+    ) {
         // ORA lists the topmost element first.
         for id in doc.children(parent).into_iter().rev() {
             let n = doc.node(id).expect("child");
@@ -250,7 +344,9 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
             let vis = if n.visible { "visible" } else { "hidden" };
             match &n.kind {
                 NodeKind::Raster { .. } => {
-                    let Some((src, x, y)) = layers.get(&id) else { continue };
+                    let Some((src, x, y)) = layers.get(&id) else {
+                        continue;
+                    };
                     out.push_str(&format!(
                         "{pad}<layer name=\"{}\" src=\"{}\" x=\"{x}\" y=\"{y}\" opacity=\"{:.4}\" visibility=\"{vis}\" composite-op=\"{}\"/>\n",
                         esc(&n.name),
@@ -260,7 +356,11 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
                     ));
                 }
                 NodeKind::Group { .. } => {
-                    let isolation = if n.blend == BlendMode::PassThrough { "auto" } else { "isolate" };
+                    let isolation = if n.blend == BlendMode::PassThrough {
+                        "auto"
+                    } else {
+                        "isolate"
+                    };
                     out.push_str(&format!(
                         "{pad}<stack name=\"{}\" opacity=\"{:.4}\" visibility=\"{vis}\" composite-op=\"{}\" isolation=\"{isolation}\">\n",
                         esc(&n.name),
@@ -289,7 +389,8 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
     doc.validate()?;
     let enc = encode(doc)?;
     let xml = stack_xml(doc, &enc.ora_layers);
-    let manifest = serde_json::to_vec_pretty(&enc.manifest).map_err(|e| IoError::Manifest(e.to_string()))?;
+    let manifest =
+        serde_json::to_vec_pretty(&enc.manifest).map_err(|e| IoError::Manifest(e.to_string()))?;
     write_atomic(path, |f| {
         let mut z = ZipWriter::new(std::io::BufWriter::new(f));
         let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
@@ -302,7 +403,10 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
         z.write_all(&manifest)?;
         // PNGs are already compressed.
         for (name, bytes) in &enc.entries {
-            z.start_file(name.as_str(), stored.large_file(bytes.len() as u64 >= u32::MAX as u64))?;
+            z.start_file(
+                name.as_str(),
+                stored.large_file(bytes.len() as u64 >= u32::MAX as u64),
+            )?;
             z.write_all(bytes)?;
         }
         z.finish()?.flush()?;
@@ -311,7 +415,9 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
 }
 
 fn read_entry<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str, max: u64) -> Result<Vec<u8>> {
-    let mut f = zip.by_name(name).map_err(|_| IoError::Manifest(format!("missing entry {name}")))?;
+    let mut f = zip
+        .by_name(name)
+        .map_err(|_| IoError::Manifest(format!("missing entry {name}")))?;
     if f.size() > max {
         return Err(IoError::Manifest(format!("entry {name} is too large")));
     }
@@ -341,7 +447,11 @@ pub fn read(path: &Path) -> Result<Document> {
     {
         return Err(IoError::Unsupported("zip is not an OpenRaster file".into()));
     }
-    let doc = if zip.by_name(MANIFEST).is_ok() { read_manifest(&mut zip)? } else { read_stack(&mut zip)? };
+    let doc = if zip.by_name(MANIFEST).is_ok() {
+        read_manifest(&mut zip)?
+    } else {
+        read_stack(&mut zip)?
+    };
     doc.validate()?;
     Ok(doc)
 }
@@ -349,7 +459,8 @@ pub fn read(path: &Path) -> Result<Document> {
 fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     let bytes = read_entry(zip, MANIFEST, MAX_MANIFEST_BYTES)?;
     // Check the version before trusting the rest of the shape.
-    let probe: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
+    let probe: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
     let version = probe.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     if version > FORMAT_VERSION {
         return Err(IoError::TooNew(version));
@@ -357,7 +468,8 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     if version == 0 {
         return Err(IoError::Manifest("missing version".into()));
     }
-    let m: Manifest = serde_json::from_value(probe).map_err(|e| IoError::Manifest(e.to_string()))?;
+    let m: Manifest =
+        serde_json::from_value(probe).map_err(|e| IoError::Manifest(e.to_string()))?;
     if m.format != "emulsion" {
         return Err(IoError::Manifest(format!("unknown format {:?}", m.format)));
     }
@@ -401,20 +513,34 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     for n in m.nodes {
         let kind = match n.kind {
-            MKind::Raster { src, width, height, placement } => {
+            MKind::Raster {
+                src,
+                width,
+                height,
+                placement,
+            } => {
                 let r = match raster_cache.get(&src) {
                     Some(r) => r.clone(),
                     None => {
-                        let (r, _) = rasters[&src].as_ref().map_err(|e| IoError::Manifest(format!("{src}: {e}")))?;
+                        let (r, _) = rasters[&src]
+                            .as_ref()
+                            .map_err(|e| IoError::Manifest(format!("{src}: {e}")))?;
                         let r = Arc::new(r.clone());
                         raster_cache.insert(src.clone(), r.clone());
                         r
                     }
                 };
                 if r.width() != width || r.height() != height {
-                    return Err(IoError::Manifest(format!("{src} is {}×{}, manifest says {width}×{height}", r.width(), r.height())));
+                    return Err(IoError::Manifest(format!(
+                        "{src} is {}×{}, manifest says {width}×{height}",
+                        r.width(),
+                        r.height()
+                    )));
                 }
-                NodeKind::Raster { raster: r, placement }
+                NodeKind::Raster {
+                    raster: r,
+                    placement,
+                }
             }
             MKind::Group { collapsed } => NodeKind::Group { collapsed },
             MKind::Adjust { adjustment } => NodeKind::Adjust(adjustment),
@@ -423,13 +549,17 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
         let mask = match &n.mask {
             None => None,
             Some(p) => {
-                let mk = masks[p].as_ref().map_err(|e| IoError::Manifest(format!("{p}: {e}")))?;
+                let mk = masks[p]
+                    .as_ref()
+                    .map_err(|e| IoError::Manifest(format!("{p}: {e}")))?;
                 let (ew, eh) = match &kind {
                     NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
                     _ => (m.width, m.height),
                 };
                 if mk.width() != ew || mk.height() != eh {
-                    return Err(IoError::Manifest(format!("mask {p} does not match its node's size")));
+                    return Err(IoError::Manifest(format!(
+                        "mask {p} does not match its node's size"
+                    )));
                 }
                 Some(Arc::new(mk.clone()))
             }
@@ -476,13 +606,19 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
         for a in e.attributes() {
             let a = a.map_err(|e| IoError::Xml(e.to_string()))?;
             let k = a.key.as_ref().to_string();
-            let v = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map_err(|e| IoError::Xml(e.to_string()))?.into_owned();
+            let v = a
+                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                .map_err(|e| IoError::Xml(e.to_string()))?
+                .into_owned();
             m.insert(k, v);
         }
         Ok(m)
     };
     loop {
-        match reader.read_event_into(&mut buf).map_err(|e| IoError::Xml(e.to_string()))? {
+        match reader
+            .read_event_into(&mut buf)
+            .map_err(|e| IoError::Xml(e.to_string()))?
+        {
             Event::Start(e) | Event::Empty(e) if e.name().as_ref() == "image" => {
                 let a = attrs_of(&e)?;
                 let w = a.get("w").and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -491,10 +627,17 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             }
             Event::Start(e) if e.name().as_ref() == "stack" => {
                 let a = attrs_of(&e)?;
-                stack.push(Item { name: a.get("name").cloned().unwrap_or_default(), attrs: a, children: vec![], is_stack: true });
+                stack.push(Item {
+                    name: a.get("name").cloned().unwrap_or_default(),
+                    attrs: a,
+                    children: vec![],
+                    is_stack: true,
+                });
             }
             Event::End(e) if e.name().as_ref() == "stack" => {
-                let done = stack.pop().ok_or_else(|| IoError::Xml("unbalanced stack".into()))?;
+                let done = stack
+                    .pop()
+                    .ok_or_else(|| IoError::Xml("unbalanced stack".into()))?;
                 match stack.last_mut() {
                     Some(parent) => parent.children.push(done),
                     None => root = Some(done),
@@ -502,8 +645,17 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             }
             Event::Empty(e) | Event::Start(e) if e.name().as_ref() == "layer" => {
                 let a = attrs_of(&e)?;
-                let item = Item { name: a.get("name").cloned().unwrap_or_default(), attrs: a, children: vec![], is_stack: false };
-                stack.last_mut().ok_or_else(|| IoError::Xml("layer outside stack".into()))?.children.push(item);
+                let item = Item {
+                    name: a.get("name").cloned().unwrap_or_default(),
+                    attrs: a,
+                    children: vec![],
+                    is_stack: false,
+                };
+                stack
+                    .last_mut()
+                    .ok_or_else(|| IoError::Xml("layer outside stack".into()))?
+                    .children
+                    .push(item);
             }
             Event::Eof => break,
             _ => {}
@@ -532,19 +684,42 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             blobs.insert(p.clone(), read_entry(zip, p, MAX_ENTRY_BYTES)?);
         }
     }
-    let decoded: HashMap<String, Result<(Raster, u8)>> = blobs.par_iter().map(|(k, v)| (k.clone(), decode_png(v))).collect();
+    let decoded: HashMap<String, Result<(Raster, u8)>> = blobs
+        .par_iter()
+        .map(|(k, v)| (k.clone(), decode_png(v)))
+        .collect();
 
     let mut doc = Document::new(w, h);
-    fn build(doc: &mut Document, item: &Item, parent: Option<NodeId>, decoded: &HashMap<String, Result<(Raster, u8)>>) -> Result<()> {
+    fn build(
+        doc: &mut Document,
+        item: &Item,
+        parent: Option<NodeId>,
+        decoded: &HashMap<String, Result<(Raster, u8)>>,
+    ) -> Result<()> {
         // ORA lists top first; the document is bottom first.
         for c in item.children.iter().rev() {
             let id = doc.alloc_id();
-            let opacity = c.attrs.get("opacity").and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0).clamp(0.0, 1.0);
-            let visible = c.attrs.get("visibility").map(|v| v != "hidden").unwrap_or(true);
-            let op = c.attrs.get("composite-op").map(String::as_str).unwrap_or("svg:src-over");
+            let opacity = c
+                .attrs
+                .get("opacity")
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(1.0)
+                .clamp(0.0, 1.0);
+            let visible = c
+                .attrs
+                .get("visibility")
+                .map(|v| v != "hidden")
+                .unwrap_or(true);
+            let op = c
+                .attrs
+                .get("composite-op")
+                .map(String::as_str)
+                .unwrap_or("svg:src-over");
             let mut blend = BlendMode::from_ora_op(op).unwrap_or(BlendMode::Normal);
             let kind = if c.is_stack {
-                if blend == BlendMode::Normal && c.attrs.get("isolation").map(String::as_str) != Some("isolate") {
+                if blend == BlendMode::Normal
+                    && c.attrs.get("isolation").map(String::as_str) != Some("isolate")
+                {
                     blend = BlendMode::PassThrough;
                 }
                 NodeKind::Group { collapsed: false }
@@ -558,11 +733,30 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 if *depth == 16 {
                     doc.source_depth = 16;
                 }
-                let x = c.attrs.get("x").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-                let y = c.attrs.get("y").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-                NodeKind::Raster { raster: Arc::new(r.clone()), placement: Placement::at(x, y) }
+                let x = c
+                    .attrs
+                    .get("x")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                let y = c
+                    .attrs
+                    .get("y")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                NodeKind::Raster {
+                    raster: Arc::new(r.clone()),
+                    placement: Placement::at(x, y),
+                }
             };
-            let mut n = Node::new(id, if c.name.is_empty() { format!("Layer {id}") } else { c.name.clone() }, kind);
+            let mut n = Node::new(
+                id,
+                if c.name.is_empty() {
+                    format!("Layer {id}")
+                } else {
+                    c.name.clone()
+                },
+                kind,
+            );
             n.parent = parent;
             n.opacity = opacity;
             n.visible = visible;
@@ -589,25 +783,91 @@ mod tests {
         let mut d = Document::new(300, 200);
         // Pixels come from an 8-bit source, as every 8-bit import does.
         let rgba: Vec<u8> = (0..200u32)
-            .flat_map(|y| (0..300u32).flat_map(move |x| [(x % 256) as u8, (y + 30) as u8, 150, 255]))
+            .flat_map(|y| {
+                (0..300u32).flat_map(move |x| [(x % 256) as u8, (y + 30) as u8, 150, 255])
+            })
             .collect();
         let bg = Raster::from_srgba8(300, 200, &rgba);
-        let add = |d: &mut Document, n: Node| Command::AddNode { node: Box::new(n), slot: Slot::TOP }.apply(d).unwrap().unwrap();
-        let bg = add(&mut d, Node::raster(0, "background & sky", Arc::new(bg), Placement::default()));
-        let mut spot = Node::raster(0, "spot", Arc::new(Raster::from_srgba8(40, 40, &[255u8, 0, 0, 128].repeat(40 * 40))), Placement::at(20.0, 30.0));
+        let add = |d: &mut Document, n: Node| {
+            Command::AddNode {
+                node: Box::new(n),
+                slot: Slot::TOP,
+            }
+            .apply(d)
+            .unwrap()
+            .unwrap()
+        };
+        let bg = add(
+            &mut d,
+            Node::raster(0, "background & sky", Arc::new(bg), Placement::default()),
+        );
+        let mut spot = Node::raster(
+            0,
+            "spot",
+            Arc::new(Raster::from_srgba8(
+                40,
+                40,
+                &[255u8, 0, 0, 128].repeat(40 * 40),
+            )),
+            Placement::at(20.0, 30.0),
+        );
         spot.blend = BlendMode::Multiply;
         spot.mask = Some(Arc::new(Mask::from_fn(40, 40, 255, |x, _| (x * 6) as u8)));
         let spot = add(&mut d, spot);
-        let mut scaled = Node::raster(0, "scaled", Arc::new(Raster::solid(64, 64, [0.0, 0.0, 1.0, 1.0])), Placement::default());
+        let mut scaled = Node::raster(
+            0,
+            "scaled",
+            Arc::new(Raster::solid(64, 64, [0.0, 0.0, 1.0, 1.0])),
+            Placement::default(),
+        );
         if let NodeKind::Raster { placement, .. } = &mut scaled.kind {
-            *placement = Placement { x: 100.0, y: 50.0, scale_x: 0.5, scale_y: 0.5, rotation: 30.0, flip_x: true, flip_y: false };
+            *placement = Placement {
+                x: 100.0,
+                y: 50.0,
+                scale_x: 0.5,
+                scale_y: 0.5,
+                rotation: 30.0,
+                flip_x: true,
+                flip_y: false,
+            };
         }
         let scaled = add(&mut d, scaled);
-        let g = Command::Group { ids: vec![spot, scaled], name: "group".into() }.apply(&mut d).unwrap().unwrap();
-        Command::SetOpacity { id: g, opacity: 0.8 }.apply(&mut d).unwrap();
-        Command::SetClip { id: scaled, clip_to: Some(spot) }.apply(&mut d).unwrap();
-        let a = add(&mut d, Node::adjust(0, Adjustment::Exposure { exposure: 0.5, offset: 0.0, gamma: 1.0 }));
-        Command::SetVisible { id: a, visible: false }.apply(&mut d).unwrap();
+        let g = Command::Group {
+            ids: vec![spot, scaled],
+            name: "group".into(),
+        }
+        .apply(&mut d)
+        .unwrap()
+        .unwrap();
+        Command::SetOpacity {
+            id: g,
+            opacity: 0.8,
+        }
+        .apply(&mut d)
+        .unwrap();
+        Command::SetClip {
+            id: scaled,
+            clip_to: Some(spot),
+        }
+        .apply(&mut d)
+        .unwrap();
+        let a = add(
+            &mut d,
+            Node::adjust(
+                0,
+                Adjustment::Exposure {
+                    exposure: 0.5,
+                    offset: 0.0,
+                    gamma: 1.0,
+                },
+            ),
+        );
+        Command::SetVisible {
+            id: a,
+            visible: false,
+        }
+        .apply(&mut d)
+        .unwrap();
         let _ = bg;
         d
     }
@@ -635,7 +895,16 @@ mod tests {
             assert_eq!(a.clip_to, b.clip_to);
             assert_eq!(a.mask.is_some(), b.mask.is_some());
             match (&a.kind, &b.kind) {
-                (NodeKind::Raster { raster: ra, placement: pa }, NodeKind::Raster { raster: rb, placement: pb }) => {
+                (
+                    NodeKind::Raster {
+                        raster: ra,
+                        placement: pa,
+                    },
+                    NodeKind::Raster {
+                        raster: rb,
+                        placement: pb,
+                    },
+                ) => {
                     assert_eq!(pa, pb);
                     assert_eq!(ra.to_srgba8(), rb.to_srgba8(), "pixels survive");
                 }
@@ -652,15 +921,27 @@ mod tests {
     fn sixteen_bit_roundtrip_is_within_one_code() {
         let mut d = Document::new(64, 64);
         d.source_depth = 16;
-        let r = Raster::from_fn(64, 64, [0; 4], |x, y| [(x * 1000) as u16, (y * 1000) as u16, 777, 65535]);
-        Command::AddNode { node: Box::new(Node::raster(0, "deep", Arc::new(r.clone()), Placement::default())), slot: Slot::TOP }
-            .apply(&mut d)
-            .unwrap();
+        let r = Raster::from_fn(64, 64, [0; 4], |x, y| {
+            [(x * 1000) as u16, (y * 1000) as u16, 777, 65535]
+        });
+        Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "deep",
+                Arc::new(r.clone()),
+                Placement::default(),
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap();
         let p = tmp("deep.ora");
         write(&d, &p).unwrap();
         let back = read(&p).unwrap();
         assert_eq!(back.source_depth, 16);
-        let NodeKind::Raster { raster, .. } = &back.nodes[0].kind else { panic!() };
+        let NodeKind::Raster { raster, .. } = &back.nodes[0].kind else {
+            panic!()
+        };
         let (a, b) = (r.to_srgba16(), raster.to_srgba16());
         assert!(a.iter().zip(&b).all(|(x, y)| x.abs_diff(*y) <= 1));
     }

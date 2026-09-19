@@ -24,7 +24,12 @@ pub fn check_size(w: u32, h: u32) -> Result<()> {
 fn is_16bit(c: ColorType) -> bool {
     matches!(
         c,
-        ColorType::L16 | ColorType::La16 | ColorType::Rgb16 | ColorType::Rgba16 | ColorType::Rgb32F | ColorType::Rgba32F
+        ColorType::L16
+            | ColorType::La16
+            | ColorType::Rgb16
+            | ColorType::Rgba16
+            | ColorType::Rgb32F
+            | ColorType::Rgba32F
     )
 }
 
@@ -35,10 +40,16 @@ pub fn from_dynamic(img: DynamicImage) -> Result<Decoded> {
     check_size(w, h)?;
     if is_16bit(img.color()) {
         let buf = img.into_rgba16();
-        Ok(Decoded { raster: Raster::from_srgba16(w, h, buf.as_raw()), depth: 16 })
+        Ok(Decoded {
+            raster: Raster::from_srgba16(w, h, buf.as_raw()),
+            depth: 16,
+        })
     } else {
         let buf = img.into_rgba8();
-        Ok(Decoded { raster: Raster::from_srgba8(w, h, buf.as_raw()), depth: 8 })
+        Ok(Decoded {
+            raster: Raster::from_srgba8(w, h, buf.as_raw()),
+            depth: 8,
+        })
     }
 }
 
@@ -60,12 +71,18 @@ pub fn decode(path: &Path) -> Result<Decoded> {
 /// Import `path` as a new document with one raster node.
 pub fn import(path: &Path) -> Result<Document> {
     let decoded = decode(path)?;
-    let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Image".into());
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Image".into());
     let mut doc = Document::new(decoded.raster.width(), decoded.raster.height());
     doc.source_depth = decoded.depth;
     let node = Node::raster(0, name, Arc::new(decoded.raster), Placement::default());
-    Command::AddNode { node: Box::new(node), slot: Slot::TOP }
-        .apply(&mut doc)
-        .map_err(|e| IoError::Manifest(e.to_string()))?;
+    Command::AddNode {
+        node: Box::new(node),
+        slot: Slot::TOP,
+    }
+    .apply(&mut doc)
+    .map_err(|e| IoError::Manifest(e.to_string()))?;
     Ok(doc)
 }

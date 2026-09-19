@@ -4,12 +4,20 @@ use std::sync::LazyLock;
 
 #[inline]
 pub fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 #[inline]
 pub fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
 }
 
 /// 8-bit sRGB → linear f32.
@@ -58,12 +66,22 @@ pub fn f_to_u16(v: f32) -> u16 {
 
 #[inline]
 pub fn px_to_f(p: [u16; 4]) -> [f32; 4] {
-    [u16_to_f(p[0]), u16_to_f(p[1]), u16_to_f(p[2]), u16_to_f(p[3])]
+    [
+        u16_to_f(p[0]),
+        u16_to_f(p[1]),
+        u16_to_f(p[2]),
+        u16_to_f(p[3]),
+    ]
 }
 
 #[inline]
 pub fn f_to_px(p: [f32; 4]) -> [u16; 4] {
-    [f_to_u16(p[0]), f_to_u16(p[1]), f_to_u16(p[2]), f_to_u16(p[3])]
+    [
+        f_to_u16(p[0]),
+        f_to_u16(p[1]),
+        f_to_u16(p[2]),
+        f_to_u16(p[3]),
+    ]
 }
 
 /// Straight 8-bit sRGBA → premultiplied linear f32.
@@ -71,7 +89,12 @@ pub fn f_to_px(p: [f32; 4]) -> [u16; 4] {
 pub fn srgba8_to_premul(p: [u8; 4]) -> [f32; 4] {
     let a = p[3] as f32 / 255.0;
     let t = &*SRGB8_TO_LINEAR;
-    [t[p[0] as usize] * a, t[p[1] as usize] * a, t[p[2] as usize] * a, a]
+    [
+        t[p[0] as usize] * a,
+        t[p[1] as usize] * a,
+        t[p[2] as usize] * a,
+        a,
+    ]
 }
 
 /// Premultiplied linear f32 → straight 8-bit sRGBA.
@@ -138,7 +161,12 @@ mod tests {
 
     #[test]
     fn premul_roundtrip() {
-        for p in [[255, 0, 0, 255], [10, 200, 30, 128], [0, 0, 0, 0], [255, 255, 255, 1]] {
+        for p in [
+            [255, 0, 0, 255],
+            [10, 200, 30, 128],
+            [0, 0, 0, 0],
+            [255, 255, 255, 1],
+        ] {
             let back = premul_to_srgba8(srgba8_to_premul(p));
             if p[3] == 0 {
                 assert_eq!(back, [0, 0, 0, 0]);
@@ -146,7 +174,10 @@ mod tests {
             }
             for c in 0..4 {
                 let tol = if p[3] < 8 { 40 } else { 1 };
-                assert!((back[c] as i32 - p[c] as i32).abs() <= tol, "{p:?} -> {back:?}");
+                assert!(
+                    (back[c] as i32 - p[c] as i32).abs() <= tol,
+                    "{p:?} -> {back:?}"
+                );
             }
         }
     }
