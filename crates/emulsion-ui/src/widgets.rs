@@ -83,6 +83,15 @@ pub fn chip(
         .child(text.into())
 }
 
+/// Attach a plain-text tooltip to an element, for a first-time user who
+/// wants to know what a chip does before clicking it.
+pub fn tip<E: InteractiveElement>(el: E, text: &'static str) -> E {
+    let mut el = el;
+    el.interactivity()
+        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(text).build(w, cx));
+    el
+}
+
 /// Shared slot for a slider's track bounds, filled during layout.
 pub type TrackBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 

@@ -25,6 +25,9 @@ pub struct Settings {
     pub approve_all: bool,
     /// Play the assistant's brush strokes on the canvas as it paints.
     pub show_drawing: bool,
+    /// Show the power-user row of tool options (dynamics, symmetry,
+    /// guides). Off for a beginner-friendly bar.
+    pub advanced_tools: bool,
 }
 
 impl Default for Settings {
@@ -39,6 +42,7 @@ impl Default for Settings {
             light_mode: false,
             approve_all: false,
             show_drawing: true,
+            advanced_tools: false,
         }
     }
 }

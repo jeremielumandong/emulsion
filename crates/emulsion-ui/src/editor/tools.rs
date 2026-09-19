@@ -3,6 +3,7 @@
 //! is one undo step and visible to the assistant.
 
 use super::*;
+use crate::widgets::tip;
 use emulsion_raster::composite::region;
 use emulsion_raster::paint::{Brush, BrushBlend, Clip, GrainKind, Ink, Stroke, fill_color};
 use emulsion_raster::select::{self, Combine};
@@ -132,8 +133,6 @@ pub struct ToolState {
     pub kits: std::collections::HashMap<BrushSlot, (Brush, Option<String>)>,
     /// Mask tool: painting reveals (white) or hides (black).
     pub mask_reveal: bool,
-    /// Show every brush setting, not just the four usual ones.
-    pub brush_more: bool,
     /// When the current stroke started, for speed dynamics.
     pub stroke_started: Option<Instant>,
     /// QuickShape: holding the pointer still at the end of a stroke snaps
@@ -185,7 +184,6 @@ impl Default for ToolState {
             liquify: emulsion_raster::liquify::Mode::Push,
             kits: Default::default(),
             mask_reveal: true,
-            brush_more: false,
             stroke_started: None,
             quick_shape: true,
             pen: super::pen::PenState::fresh(),
@@ -2405,6 +2403,26 @@ impl EditorView {
     }
 
     #[allow(clippy::too_many_arguments)] // a UI row: each argument is one visible property
+    fn mode_chip_tip<T: PartialEq + Copy + 'static>(
+        &self,
+        id: &'static str,
+        text: &'static str,
+        help: &'static str,
+        value: T,
+        current: T,
+        p: &Palette,
+        cx: &mut Context<Self>,
+        set: fn(&mut EditorView, T, &mut Context<EditorView>),
+    ) -> AnyElement {
+        tip(
+            chip(id, text, value == current, p)
+                .on_click(cx.listener(move |this, _, _, cx| set(this, value, cx))),
+            help,
+        )
+        .into_any_element()
+    }
+
+    #[allow(clippy::too_many_arguments)] // a UI row: each argument is one visible property
     fn mode_chip<T: PartialEq + Copy + 'static>(
         &self,
         id: &'static str,
@@ -2426,11 +2444,16 @@ impl EditorView {
         match self.tool {
             Tool::Mask => {
                 let reveal = self.tools.mask_reveal;
-                for (id, t, r) in [("mk-reveal", "reveal", true), ("mk-hide", "hide", false)] {
-                    v.push(self.mode_chip(id, t, r, reveal, p, cx, |e, r, cx| {
-                        e.tools.mask_reveal = r;
-                        cx.notify();
-                    }));
+                for (id, t, help, r) in [
+                    ("mk-reveal", "reveal", "Painting shows the layer here", true),
+                    ("mk-hide", "hide", "Painting hides the layer here", false),
+                ] {
+                    v.push(
+                        self.mode_chip_tip(id, t, help, r, reveal, p, cx, |e, r, cx| {
+                            e.tools.mask_reveal = r;
+                            cx.notify();
+                        }),
+                    );
                 }
                 v.push(self.group("brush", p));
                 self.brush_sliders(&mut v, p, cx);
@@ -2703,25 +2726,61 @@ impl EditorView {
             Tool::Brush | Tool::Heal | Tool::Clone => {
                 let open = self.presets.open;
                 v.push(
-                    chip("presets", "presets", open, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_presets(cx)))
-                        .into_any_element(),
+                    tip(
+                        chip("presets", "presets", open, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_presets(cx))),
+                        "Brush library: pencils, inks, paints, erasers and imported brushes",
+                    )
+                    .into_any_element(),
                 );
                 if self.tool == Tool::Brush {
                     let cur = self.tools.paint;
-                    for (id, t, k) in [
-                        ("pk-brush", "brush", PaintKind::Brush),
-                        ("pk-eraser", "eraser", PaintKind::Eraser),
-                        ("pk-smudge", "smudge", PaintKind::Smudge),
-                        ("pk-bucket", "bucket", PaintKind::Bucket),
-                        ("pk-grad", "gradient", PaintKind::Gradient),
-                        ("pk-liquify", "liquify", PaintKind::Liquify),
+                    for (id, t, help, k) in [
+                        (
+                            "pk-brush",
+                            "brush",
+                            "Paint with the foreground colour",
+                            PaintKind::Brush,
+                        ),
+                        (
+                            "pk-eraser",
+                            "eraser",
+                            "Erase to transparent",
+                            PaintKind::Eraser,
+                        ),
+                        (
+                            "pk-smudge",
+                            "smudge",
+                            "Drag the colour already on the layer",
+                            PaintKind::Smudge,
+                        ),
+                        (
+                            "pk-bucket",
+                            "bucket",
+                            "Fill a similar-coloured area",
+                            PaintKind::Bucket,
+                        ),
+                        (
+                            "pk-grad",
+                            "gradient",
+                            "Drag a gradient from foreground to background colour",
+                            PaintKind::Gradient,
+                        ),
+                        (
+                            "pk-liquify",
+                            "liquify",
+                            "Push, twirl, pinch or expand the pixels",
+                            PaintKind::Liquify,
+                        ),
                     ] {
-                        v.push(self.mode_chip(id, t, k, cur, p, cx, |e, k, cx| e.set_paint(k, cx)));
+                        v.push(self.mode_chip_tip(id, t, help, k, cur, p, cx, |e, k, cx| {
+                            e.set_paint(k, cx)
+                        }));
                     }
                     if cur == PaintKind::Liquify {
                         use emulsion_raster::liquify::Mode;
                         let m = self.tools.liquify;
+                        v.push(self.group("mode", p));
                         for (id, k) in [
                             ("lq-push", Mode::Push),
                             ("lq-cw", Mode::Twirl { cw: true }),
@@ -2760,12 +2819,7 @@ impl EditorView {
                         ));
                     }
                 }
-                let brushy = self.tool != Tool::Brush
-                    || matches!(
-                        self.tools.paint,
-                        PaintKind::Brush | PaintKind::Eraser | PaintKind::Smudge
-                    );
-                if brushy {
+                if self.brushy() {
                     v.push(self.group("brush", p));
                     if let Some(name) = &self.presets.current {
                         v.push(
@@ -2802,128 +2856,27 @@ impl EditorView {
                             p,
                             cx,
                         ));
-                        v.push(self.opt_slider(
-                            SliderKey::ToolFlow,
-                            "flow",
-                            format!("{:.0}%", b.flow * 100.0),
-                            b.flow,
-                            (1.0, 100.0, 1.0),
-                            p,
-                            cx,
-                        ));
                     }
-                    v.push(self.group("symmetry", p));
-                    let (mx, my) = (self.tools.mirror_x, self.tools.mirror_y);
-                    v.push(
-                        chip("mirror-x", "mirror ↔", mx, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.tools.mirror_x = !mx;
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                    );
-                    v.push(
-                        chip("mirror-y", "mirror ↕", my, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.tools.mirror_y = !my;
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                    );
-                    let sym = self.tools.symmetry;
-                    let sym_label = if sym >= 2 {
-                        format!("radial ×{sym}")
-                    } else {
-                        "radial".to_string()
-                    };
-                    v.push(
-                        chip("radial-sym", sym_label, sym >= 2, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                // Off → 4 → 6 → 8 → 12 → off.
-                                this.tools.symmetry = match sym {
-                                    0 | 1 => 4,
-                                    4 => 6,
-                                    6 => 8,
-                                    8 => 12,
-                                    _ => 0,
-                                };
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                    );
-                    v.push(self.group("guide", p));
-                    let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
-                    let gk = self.tools.guide.kind.clone();
-                    let g_on = gk != super::guides::GuideKind::Off;
-                    v.push(
-                        chip("draw-guide", gk.label(), g_on, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                // Off → grid → isometric → 1/2/3-point → off.
-                                this.tools.guide.kind = gk.cycle(w, h);
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                    );
-                    if g_on {
-                        let assist = self.tools.guide.assist;
+                    // What is switched on in the advanced row, at a glance.
+                    let mut on: Vec<&str> = Vec::new();
+                    if self.tools.mirror_x || self.tools.mirror_y {
+                        on.push("mirror");
+                    }
+                    if self.tools.symmetry >= 2 {
+                        on.push("radial");
+                    }
+                    if self.tools.guide.kind != super::guides::GuideKind::Off {
+                        on.push("guide");
+                    }
+                    if self.tools.alpha_lock {
+                        on.push("alpha lock");
+                    }
+                    if !on.is_empty() {
                         v.push(
-                            chip("draw-assist", "assist", assist, p)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.tools.guide.assist = !assist;
-                                    this.set_status(
-                                        if assist {
-                                            "Drawing assist off"
-                                        } else {
-                                            "Drawing assist: strokes follow the guide"
-                                        },
-                                        false,
-                                        cx,
-                                    );
-                                    cx.notify();
-                                }))
+                            mono(format!("on: {}", on.join(", ")), 9.5, p.muted)
+                                .flex_none()
                                 .into_any_element(),
                         );
-                    }
-                    v.push(self.group("options", p));
-                    let al = self.tools.alpha_lock;
-                    v.push(
-                        chip("alpha-lock", "alpha lock", al, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.tools.alpha_lock = !al;
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                    );
-                    let qs = self.tools.quick_shape;
-                    v.push(
-                        chip("quick-shape", "QuickShape", qs, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.tools.quick_shape = !qs;
-                                this.set_status(
-                                    if qs {
-                                        "QuickShape off".to_string()
-                                    } else {
-                                        "QuickShape: hold still at the end of a stroke to snap it to a shape"
-                                            .to_string()
-                                    },
-                                    false,
-                                    cx,
-                                );
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                    );
-                    let more = self.tools.brush_more;
-                    v.push(
-                        chip("brush-more", if more { "less" } else { "more…" }, more, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.tools.brush_more = !more;
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                    );
-                    if more {
-                        v.extend(self.brush_more_options(p, cx));
                     }
                 } else if self.tools.paint == PaintKind::Bucket {
                     let t = self.tools.tolerance as f32;
@@ -2936,7 +2889,7 @@ impl EditorView {
                         p,
                         cx,
                     ));
-                } else {
+                } else if self.tools.paint == PaintKind::Gradient {
                     let r = self.tools.radial;
                     v.push(
                         chip("g-lin", "linear", !r, p)
@@ -2964,6 +2917,10 @@ impl EditorView {
                     }
                     _ if self.tools.paint == PaintKind::Liquify => {
                         "drag to move the pixels; restore paints them back"
+                    }
+                    _ if self.tools.paint == PaintKind::Bucket => "click an area to fill it",
+                    _ if self.tools.paint == PaintKind::Gradient => {
+                        "drag from one colour to the other"
                     }
                     _ if self.tools.mask_edit => "painting the mask: brush reveals, eraser hides",
                     _ => "alt-click picks a colour",
@@ -3216,6 +3173,164 @@ impl EditorView {
             ),
             _ => {}
         }
+        v
+    }
+
+    /// Is a brush being used (as opposed to bucket, gradient or liquify)?
+    fn brushy(&self) -> bool {
+        match self.tool {
+            Tool::Brush => matches!(
+                self.tools.paint,
+                PaintKind::Brush | PaintKind::Eraser | PaintKind::Smudge
+            ),
+            Tool::Heal | Tool::Clone | Tool::Mask => true,
+            _ => false,
+        }
+    }
+
+    /// The power-user row under the tool options: brush dynamics,
+    /// symmetry, guides and stroke options. Empty for tools without any.
+    pub(crate) fn tool_options_advanced(
+        &mut self,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut v: Vec<AnyElement> = Vec::new();
+        if !self.brushy() {
+            return v;
+        }
+        let b = self.tools.brush;
+        v.push(self.group("dynamics", p));
+        if self.tool != Tool::Heal {
+            v.push(self.opt_slider(
+                SliderKey::ToolFlow,
+                "flow",
+                format!("{:.0}%", b.flow * 100.0),
+                b.flow,
+                (1.0, 100.0, 1.0),
+                p,
+                cx,
+            ));
+        }
+        v.extend(self.brush_more_options(p, cx));
+        if self.tool == Tool::Mask {
+            return v;
+        }
+        v.push(self.group("symmetry", p));
+        let (mx, my) = (self.tools.mirror_x, self.tools.mirror_y);
+        v.push(
+            tip(
+                chip("mirror-x", "mirror ↔", mx, p).on_click(cx.listener(move |this, _, _, cx| {
+                    this.tools.mirror_x = !mx;
+                    cx.notify();
+                })),
+                "Also paint each stroke mirrored left to right",
+            )
+            .into_any_element(),
+        );
+        v.push(
+            tip(
+                chip("mirror-y", "mirror ↕", my, p).on_click(cx.listener(move |this, _, _, cx| {
+                    this.tools.mirror_y = !my;
+                    cx.notify();
+                })),
+                "Also paint each stroke mirrored top to bottom",
+            )
+            .into_any_element(),
+        );
+        let sym = self.tools.symmetry;
+        let sym_label = if sym >= 2 {
+            format!("radial ×{sym}")
+        } else {
+            "radial".to_string()
+        };
+        v.push(
+            tip(
+                chip("radial-sym", sym_label, sym >= 2, p).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        // Off → 4 → 6 → 8 → 12 → off.
+                        this.tools.symmetry = match sym {
+                            0 | 1 => 4,
+                            4 => 6,
+                            6 => 8,
+                            8 => 12,
+                            _ => 0,
+                        };
+                        cx.notify();
+                    },
+                )),
+                "Repeat each stroke around the centre (mandalas); click to cycle 4, 6, 8, 12, off",
+            )
+            .into_any_element(),
+        );
+        v.push(self.group("guide", p));
+        let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
+        let gk = self.tools.guide.kind.clone();
+        let g_on = gk != super::guides::GuideKind::Off;
+        v.push(
+            tip(
+                chip("draw-guide", gk.label(), g_on, p).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        // Off → grid → isometric → 1/2/3-point → off.
+                        this.tools.guide.kind = gk.cycle(w, h);
+                        cx.notify();
+                    },
+                )),
+                "Drawing guide over the canvas; click to cycle grid, isometric, 1-, 2-, 3-point perspective, off",
+            )
+            .into_any_element(),
+        );
+        if g_on {
+            let assist = self.tools.guide.assist;
+            v.push(
+                tip(
+                    chip("draw-assist", "assist", assist, p).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.tools.guide.assist = !assist;
+                            this.set_status(
+                                if assist {
+                                    "Drawing assist off"
+                                } else {
+                                    "Drawing assist: strokes follow the guide"
+                                },
+                                false,
+                                cx,
+                            );
+                            cx.notify();
+                        },
+                    )),
+                    "Strokes snap to the guide's lines",
+                )
+                .into_any_element(),
+            );
+        }
+        v.push(self.group("stroke", p));
+        let al = self.tools.alpha_lock;
+        v.push(
+            tip(
+                chip("alpha-lock", "alpha lock", al, p).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.tools.alpha_lock = !al;
+                        cx.notify();
+                    },
+                )),
+                "Paint only where the layer already has pixels",
+            )
+            .into_any_element(),
+        );
+        let qs = self.tools.quick_shape;
+        v.push(
+            tip(
+                chip("quick-shape", "QuickShape", qs, p).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.tools.quick_shape = !qs;
+                        cx.notify();
+                    },
+                )),
+                "Hold still at the end of a stroke to snap it to a line, circle, ellipse or polygon",
+            )
+            .into_any_element(),
+        );
         v
     }
 

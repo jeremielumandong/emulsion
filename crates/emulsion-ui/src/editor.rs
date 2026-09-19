@@ -59,6 +59,26 @@ pub enum Tool {
     Pen,
 }
 
+/// One line on what a rail tool does, for its tooltip.
+fn tool_help(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Hand => "Hand: drag to move around the picture. Space + drag works from any tool.",
+        Tool::Move => "Move: drag a layer; handles scale and rotate it.",
+        Tool::Select => "Select: rectangle, ellipse, lasso, wand and AI quick select.",
+        Tool::Mask => "Mask: paint what shows on the selected layer (reveal or hide).",
+        Tool::Brush => {
+            "Brush: paint, erase, smudge, fill, gradient and liquify. Choose the kind in the bar above."
+        }
+        Tool::Heal => "Heal: paint over a blemish to blend it away.",
+        Tool::Clone => "Clone: alt-click a source, then paint copies of it.",
+        Tool::Grade => "Grade: colour and tone adjustments as layers.",
+        Tool::Type => "Type: click to add text.",
+        Tool::Crop => "Crop: drag a frame, Enter to crop.",
+        Tool::Shape => "Shape: drag a rectangle or ellipse.",
+        Tool::Pen => "Pen: click to place path points; drag for curves.",
+    }
+}
+
 /// Rail order, glyphs, and whether the tool works yet.
 const TOOLS: [(Tool, &str, &str, bool); 12] = [
     (Tool::Hand, "Hand", "✋", true),
@@ -1483,6 +1503,9 @@ impl EditorView {
                             this.set_status(format!("{name} is not available yet."), false, cx);
                         }
                     }))
+                    .tooltip(move |w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tool_help(tool)).build(w, cx)
+                    })
                     .child(*glyph)
             }))
             .child(div().flex_1())
@@ -1496,28 +1519,54 @@ impl EditorView {
             .map(|t| t.1)
             .unwrap_or("Move");
         let options = self.tool_options(p, cx);
+        let advanced = crate::app_state::settings(cx).advanced_tools;
+        let more = if advanced {
+            self.tool_options_advanced(p, cx)
+        } else {
+            Vec::new()
+        };
         let zoom = format!("{:.0}%", self.view.zoom * 100.0);
         let rot = format!("{:.0}°", self.view.rotation);
         let can_compare = self.editor.differs_from_base();
         let track = self.tracks.entry(SliderKey::Compare).or_default().clone();
         let compare = self.compare;
-        div()
-            .flex()
-            .flex_none()
-            .flex_wrap()
-            .overflow_hidden()
-            .items_center()
-            .gap(px(10.))
-            .px(px(16.))
+        let row = |p: &Palette| {
+            div()
+                .flex()
+                .flex_none()
+                .flex_wrap()
+                .overflow_hidden()
+                .items_center()
+                .gap(px(10.))
+                .px(px(16.))
+                .font_family(MONO_FONT)
+                .text_size(px(10.5))
+                .text_color(p.muted)
+        };
+        let second = (!more.is_empty()).then(|| {
+            row(p)
+                .py(px(6.))
+                .bg(p.soft_bg.opacity(0.5))
+                .border_b_1()
+                .border_color(p.line)
+                .child(div().text_color(p.muted).child("ADVANCED"))
+                .children(more)
+        });
+        let first = row(p)
             .py(px(8.))
             .border_b_1()
             .border_color(p.line)
-            .font_family(MONO_FONT)
-            .text_size(px(10.5))
-            .text_color(p.muted)
             .child(div().text_color(p.ink).child(tool.to_uppercase()))
             .children(options)
             .child(div().flex_1().min_w(px(8.)))
+            .child(crate::widgets::tip(
+                chip("advanced", "advanced", advanced, p).on_click(cx.listener(
+                    move |_, _, _, cx| {
+                        crate::app_state::update_settings(cx, |s| s.advanced_tools = !advanced);
+                    },
+                )),
+                "Show the power-user row: brush dynamics, symmetry, guides and more",
+            ))
             .child(
                 chip("zoom", zoom, false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_100(cx))),
@@ -1565,7 +1614,13 @@ impl EditorView {
                     this.slider_down(SliderKey::Compare, (0.0, 100.0, 1.0), e, cx)
                 }),
             )))
-            .child(div().w(px(34.)).child(format!("{:.0}%", compare * 100.0)))
+            .child(div().w(px(34.)).child(format!("{:.0}%", compare * 100.0)));
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .child(first)
+            .children(second)
     }
 
     fn canvas_area(
