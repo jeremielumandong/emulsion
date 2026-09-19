@@ -1921,6 +1921,17 @@ impl EditorView {
         if n.mask.is_some() {
             meta = format!("{meta} · m");
         }
+        let ai_badge = n.model_id().map(|_| {
+            div()
+                .flex_none()
+                .px(px(3.))
+                .border_1()
+                .border_color(p.accent)
+                .text_color(p.accent)
+                .font_family(MONO_FONT)
+                .text_size(px(8.5))
+                .child("AI")
+        });
         let name_el: AnyElement = match &self.renaming {
             Some((rid, state, _)) if *rid == id => Input::new(state)
                 .appearance(false)
@@ -1989,6 +2000,7 @@ impl EditorView {
             )
             .child(chip_el)
             .child(name_el)
+            .children(ai_badge)
             .child(mono(meta, 9.5, meta_fg).flex_none())
     }
 
@@ -2020,6 +2032,16 @@ impl EditorView {
             .border_b_1()
             .border_color(p.line);
         body = body.child(label(n.name.clone(), p));
+        if let Some(model) = n.model_id() {
+            let model_name = emulsion_ai::models::spec(model)
+                .map(|m| m.name)
+                .unwrap_or(model);
+            body = body.child(mono(
+                format!("made by {model_name}, on this machine"),
+                10.,
+                p.muted,
+            ));
+        }
 
         // Opacity + blend.
         body = body.child(self.param_slider(

@@ -67,10 +67,20 @@ pub fn upscale(image: &Raster, job: &Job) -> Result<Raster, RunError> {
                 done as usize + 1,
                 total as usize
             ));
-            let out = model.run(&[("pixel_values", t.into_dyn())])?;
+            let input = model
+                .inputs
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "pixel_values".into());
+            let output = model
+                .outputs
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "reconstruction".into());
+            let out = model.run(&[(&input, t.into_dyn())])?;
             let r = out
-                .get("reconstruction")
-                .ok_or_else(|| RunError::Shape(spec.id.into(), "no reconstruction".into()))?;
+                .get(&output)
+                .ok_or_else(|| RunError::Shape(spec.id.into(), "no upscaled output".into()))?;
             let sh = r.shape();
             let (rh, rw) = (sh[2], sh[3]);
             // Weight fades over the overlap so tiles blend.

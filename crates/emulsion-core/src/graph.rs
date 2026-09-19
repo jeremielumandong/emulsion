@@ -628,6 +628,7 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
         mask,
         mask_enabled,
         styles: pick(&b.styles, &o.styles, &t.styles, |x, y| x == y)?,
+        origin: pick(&b.origin, &o.origin, &t.origin, |x, y| x == y)?,
         kind: pick(&b.kind, &o.kind, &t.kind, |x, y| x == y)?,
     })
 }

@@ -713,12 +713,19 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 emulsion_ai::inpaint::fill(&img, &hole, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
                 commands: vec![Command::AddNode {
-                    node: Box::new(Node::raster(
-                        0,
-                        "AI fill",
-                        Arc::new(layer),
-                        Placement::at(reg.x as f64, reg.y as f64),
-                    )),
+                    node: Box::new(
+                        Node::raster(
+                            0,
+                            "AI fill",
+                            Arc::new(layer),
+                            Placement::at(reg.x as f64, reg.y as f64),
+                        )
+                        .from_model(
+                            emulsion_ai::inpaint::available()
+                                .map(|m| m.id)
+                                .unwrap_or("lama"),
+                        ),
+                    ),
                     slot: Slot::TOP,
                 }],
                 message: format!(
@@ -743,12 +750,19 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 .to_string();
             Ok(Planned {
                 commands: vec![Command::AddNode {
-                    node: Box::new(Node::raster(
-                        0,
-                        name.clone(),
-                        Arc::new(m.to_grey_raster()),
-                        Placement::default(),
-                    )),
+                    node: Box::new(
+                        Node::raster(
+                            0,
+                            name.clone(),
+                            Arc::new(m.to_grey_raster()),
+                            Placement::default(),
+                        )
+                        .from_model(
+                            emulsion_ai::depth::available()
+                                .map(|m| m.id)
+                                .unwrap_or("depth"),
+                        ),
+                    ),
                     slot: Slot::TOP,
                 }],
                 message: format!("Added depth map {name:?}: near is bright, far is dark"),
@@ -776,12 +790,19 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                         height: h * f,
                     },
                     Command::AddNode {
-                        node: Box::new(Node::raster(
-                            0,
-                            format!("Upscaled ×{f} (AI)"),
-                            Arc::new(big),
-                            Placement::default(),
-                        )),
+                        node: Box::new(
+                            Node::raster(
+                                0,
+                                format!("Upscaled ×{f} (AI)"),
+                                Arc::new(big),
+                                Placement::default(),
+                            )
+                            .from_model(
+                                emulsion_ai::upscale::available()
+                                    .map(|m| m.id)
+                                    .unwrap_or("upscale"),
+                            ),
+                        ),
                         slot: Slot::TOP,
                     },
                 ],
@@ -927,8 +948,13 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 }
                 None => ("Cut-out".to_string(), Placement::default(), Slot::TOP, None),
             };
+            let model_id = emulsion_ai::matte::available()
+                .map(|m| m.id)
+                .unwrap_or("matte");
             let mut commands = vec![Command::AddNode {
-                node: Box::new(Node::raster(0, name.clone(), Arc::new(cut), placement)),
+                node: Box::new(
+                    Node::raster(0, name.clone(), Arc::new(cut), placement).from_model(model_id),
+                ),
                 slot,
             }];
             if let Some(id) = hide {
@@ -2377,6 +2403,7 @@ pub fn describe(editor: &Editor) -> Value {
                 "row": i + 1,
                 "depth": depth,
                 "name": n.name,
+                "origin": n.origin,
                 "kind": match &n.kind {
                     NodeKind::Raster { .. } => "pixels",
                     NodeKind::Group { .. } => "group",

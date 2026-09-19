@@ -160,7 +160,8 @@ impl EditorView {
                         None => ("Cut-out".to_string(), Placement::default(), None),
                     };
                     this.editor.begin("Remove background");
-                    let node = Node::raster(0, name, Arc::new(cut), placement);
+                    let node = Node::raster(0, name, Arc::new(cut), placement)
+                        .from_model(matte::available().map(|m| m.id).unwrap_or("matte"));
                     if let Some(id) = this.execute(
                         Command::AddNode {
                             node: Box::new(node),
@@ -324,7 +325,8 @@ impl EditorView {
                         "AI fill",
                         Arc::new(layer),
                         Placement::at(reg.x as f64, reg.y as f64),
-                    );
+                    )
+                    .from_model(inpaint::available().map(|m| m.id).unwrap_or("lama"));
                     if let Some(id) = this.execute(
                         Command::AddNode {
                             node: Box::new(node),
@@ -365,7 +367,8 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| match r {
                 Ok(grey) => {
-                    let node = Node::raster(0, "Depth (AI)", Arc::new(grey), Placement::default());
+                    let node = Node::raster(0, "Depth (AI)", Arc::new(grey), Placement::default())
+                        .from_model(depth::available().map(|m| m.id).unwrap_or("depth"));
                     if let Some(id) = this.execute(
                         Command::AddNode {
                             node: Box::new(node),
@@ -433,7 +436,8 @@ impl EditorView {
                         format!("Upscaled ×{f} (AI)"),
                         Arc::new(big),
                         Placement::default(),
-                    );
+                    )
+                    .from_model(upscale::available().map(|m| m.id).unwrap_or("upscale"));
                     if let Some(id) = this.execute(
                         Command::AddNode {
                             node: Box::new(node),

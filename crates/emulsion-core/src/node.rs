@@ -126,6 +126,8 @@ pub struct Node {
     pub mask_enabled: bool,
     /// Effects drawn from the node's alpha (shadows, glow, stroke, overlays).
     pub styles: Vec<crate::styles::LayerStyle>,
+    /// Provenance for content a model produced: `ai:<model id>`.
+    pub origin: Option<String>,
     pub kind: NodeKind,
 }
 
@@ -146,6 +148,7 @@ impl PartialEq for Node {
             }
             && self.mask_enabled == o.mask_enabled
             && self.styles == o.styles
+            && self.origin == o.origin
             && self.kind == o.kind
     }
 }
@@ -169,8 +172,20 @@ impl Node {
             mask: None,
             mask_enabled: true,
             styles: Vec::new(),
+            origin: None,
             kind,
         }
+    }
+
+    /// Mark the node as produced by a local model.
+    pub fn from_model(mut self, model_id: &str) -> Self {
+        self.origin = Some(format!("ai:{model_id}"));
+        self
+    }
+
+    /// The model id when a model produced this node.
+    pub fn model_id(&self) -> Option<&str> {
+        self.origin.as_deref()?.strip_prefix("ai:")
     }
 
     pub fn raster(

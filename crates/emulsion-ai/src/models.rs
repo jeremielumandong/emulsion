@@ -157,6 +157,19 @@ pub const MANIFEST: &[ModelSpec] = &[
         default: true,
     },
     ModelSpec {
+        id: "real-esrgan-x4",
+        name: "Real-ESRGAN ×4",
+        task: Task::Upscale,
+        files: &[ModelFile {
+            name: "real_esrgan_x4.onnx",
+            url: "https://huggingface.co/facefusion/models-3.0.0/resolve/main/real_esrgan_x4.onnx",
+            bytes: 69_183_432,
+        }],
+        license: "BSD-3-Clause",
+        note: "The well-known ×4 upscaler for photos and renders; larger and slower than Swin2SR, often cleaner on detail.",
+        default: false,
+    },
+    ModelSpec {
         id: "swin2sr-lightweight-x2",
         name: "Swin2SR lightweight ×2",
         task: Task::Upscale,
