@@ -17,6 +17,8 @@ pub enum ExportFormat {
     Jpeg,
     Webp,
     Tiff,
+    /// Layered Photoshop document.
+    Psd,
 }
 
 impl ExportFormat {
@@ -27,6 +29,7 @@ impl ExportFormat {
             "jpg" | "jpeg" => Self::Jpeg,
             "webp" => Self::Webp,
             "tif" | "tiff" => Self::Tiff,
+            "psd" | "psb" => Self::Psd,
             _ => return None,
         })
     }
@@ -83,12 +86,16 @@ pub fn png_gray(w: u32, h: u32, px: &[u8]) -> Result<Vec<u8>> {
 pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> {
     let format = ExportFormat::from_path(path)
         .ok_or_else(|| IoError::Unsupported(path.display().to_string()))?;
+    if format == ExportFormat::Psd {
+        return crate::psd::write(doc, path);
+    }
     let flat = flatten(&doc.composite_tree(), 0);
     let (w, h) = (doc.width, doc.height);
     let wide = opts.depth == 16 && format.supports_16bit();
     write_atomic(path, |f| {
         let mut out = BufWriter::new(f);
         match format {
+            ExportFormat::Psd => unreachable!("handled above"),
             ExportFormat::Png => {
                 let bytes = if wide {
                     png16(w, h, &flat.to_srgba16())?

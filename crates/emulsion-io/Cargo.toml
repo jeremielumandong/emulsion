@@ -20,6 +20,7 @@ zip = { workspace = true }
 quick-xml = { workspace = true }
 glam = { workspace = true }
 rawler = { workspace = true }
+ag-psd = { workspace = true }
 moxcms = { workspace = true }
 kamadak-exif = { workspace = true }
 ureq = { workspace = true }

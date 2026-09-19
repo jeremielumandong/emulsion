@@ -16,6 +16,7 @@ pub mod icc;
 pub mod import;
 pub mod lensfun;
 pub mod ora;
+pub mod psd;
 pub mod raw;
 pub mod recent;
 pub mod settings;
@@ -55,8 +56,8 @@ pub type Result<T> = std::result::Result<T, IoError>;
 
 /// Extensions `open` understands, for file dialogs.
 pub const OPEN_EXTENSIONS: &[&str] = &[
-    "ora", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif", "svg", "arw", "cr2", "cr3",
-    "nef", "dng", "raf", "orf", "rw2", "pef",
+    "ora", "psd", "psb", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif", "svg", "arw",
+    "cr2", "cr3", "nef", "dng", "raf", "orf", "rw2", "pef",
 ];
 
 pub fn is_svg(path: &Path) -> bool {
@@ -73,6 +74,8 @@ pub fn is_native(path: &Path) -> bool {
 pub fn open(path: &Path) -> Result<Document> {
     if is_native(path) {
         ora::read(path)
+    } else if psd::is_psd(path) {
+        psd::read(path)
     } else if is_svg(path) {
         let text = std::fs::read_to_string(path)?;
         Ok(svg::import(&text)?.doc)
@@ -94,6 +97,12 @@ pub use ora::Opened;
 pub fn open_full(path: &Path) -> Result<Opened> {
     if is_native(path) {
         ora::read_full(path)
+    } else if psd::is_psd(path) {
+        Ok(Opened {
+            doc: psd::read(path)?,
+            graph: None,
+            history_error: None,
+        })
     } else if is_svg(path) {
         let text = std::fs::read_to_string(path)?;
         let imp = svg::import(&text)?;
