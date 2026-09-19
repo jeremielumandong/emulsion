@@ -15,6 +15,7 @@ mod lens;
 mod panels;
 mod pen;
 mod presets;
+mod raw_panel;
 mod recipes;
 mod smart;
 mod snap;
@@ -128,6 +129,8 @@ pub(crate) enum SliderKey {
     ToolColorJitter,
     ToolTilt,
     ToolPressureCurve,
+    /// A RAW develop parameter, by name.
+    Raw(&'static str),
     PenWidth,
     /// Bounds slot for a node's curves editor.
     Curve(NodeId),
@@ -270,6 +273,8 @@ pub struct EditorView {
     pub(crate) warp: Option<transform::WarpState>,
     /// Animation assist and time-lapse.
     pub(crate) anim: animation::AnimState,
+    /// RAW develop panel state.
+    pub(crate) raw: raw_panel::RawState,
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
@@ -353,6 +358,7 @@ impl EditorView {
             view: View::default(),
             warp: None,
             anim: Default::default(),
+            raw: Default::default(),
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
@@ -1285,6 +1291,7 @@ impl EditorView {
                 self.tools.brush.color_jitter = v / 100.0;
                 cx.notify();
             }
+            SliderKey::Raw(name) => self.raw_slider(name, v, cx),
             SliderKey::ToolPressureCurve => {
                 // 0–100 → 2^(-2 … 2).
                 self.tools.brush.pressure_curve = 2f32.powf(v / 25.0 - 2.0);
@@ -2262,6 +2269,9 @@ impl EditorView {
             .border_b_1()
             .border_color(p.line);
         body = body.child(label(n.name.clone(), p));
+        if let Some(raw) = self.raw_panel(id, p, cx) {
+            body = body.child(raw);
+        }
         if let Some(model) = n.model_id() {
             let model_name = emulsion_ai::models::spec(model)
                 .map(|m| m.name)

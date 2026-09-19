@@ -42,20 +42,120 @@ pub struct RawInfo {
     pub height: u32,
 }
 
-/// Develop `path` into a 16-bit sRGB raster, upright.
+/// How to develop a RAW: the knobs of the RAW panel. Zero everywhere is
+/// the camera's own rendering (as-shot white balance, no exposure change).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DevelopParams {
+    /// Exposure compensation in EV, −3…+3.
+    pub exposure: f32,
+    /// White balance shift, −1 (cooler) … +1 (warmer).
+    pub temperature: f32,
+    /// White balance shift, −1 (greener) … +1 (more magenta).
+    pub tint: f32,
+    /// Highlight roll-off, 0…1: compress the top of the range so bright
+    /// skies and clouds keep their gradation.
+    pub highlights: f32,
+    /// Shadow lift, −1 (deeper) … +1 (lifted).
+    pub shadows: f32,
+}
+
+impl Default for DevelopParams {
+    fn default() -> Self {
+        Self {
+            exposure: 0.0,
+            temperature: 0.0,
+            tint: 0.0,
+            highlights: 0.0,
+            shadows: 0.0,
+        }
+    }
+}
+
+/// A decoded RAW kept in memory so the panel can re-develop it quickly
+/// (decoding is the slow half).
+pub struct RawSource {
+    raw: rawler::RawImage,
+    pub info: RawInfo,
+}
+
+impl RawSource {
+    pub fn load(path: &Path) -> Result<Self> {
+        let raw =
+            rawler::decode_file(path).map_err(|e| IoError::Unsupported(format!("RAW: {e}")))?;
+        let info = RawInfo {
+            make: raw.clean_make.clone(),
+            model: raw.clean_model.clone(),
+            wb_coeffs: raw.wb_coeffs,
+            width: raw.width as u32,
+            height: raw.height as u32,
+        };
+        Ok(Self { raw, info })
+    }
+
+    /// Develop with `params` into a 16-bit sRGB raster, upright.
+    pub fn develop_with(&self, params: &DevelopParams) -> Result<Raster> {
+        let mut raw = self.raw.clone();
+        // White balance: shift the camera's coefficients. Warmer = more
+        // red, less blue; magenta = less green.
+        if !raw.wb_coeffs[0].is_nan() {
+            let t = params.temperature.clamp(-1.0, 1.0);
+            let g = params.tint.clamp(-1.0, 1.0);
+            raw.wb_coeffs[0] *= 2f32.powf(0.7 * t);
+            raw.wb_coeffs[2] *= 2f32.powf(-0.7 * t);
+            raw.wb_coeffs[1] *= 2f32.powf(-0.4 * g);
+            if raw.wb_coeffs[3].is_finite() && raw.wb_coeffs[3] > 0.0 {
+                raw.wb_coeffs[3] *= 2f32.powf(-0.4 * g);
+            }
+        }
+        // Everything but the gamma step: we shape the linear values first.
+        let mut dev = RawDevelop::default();
+        dev.steps
+            .retain(|s| *s != rawler::imgop::develop::ProcessingStep::SRgb);
+        let developed = dev
+            .develop_intermediate(&raw)
+            .map_err(|e| IoError::Unsupported(format!("RAW develop: {e}")))?;
+        let gain = 2f32.powf(params.exposure.clamp(-3.0, 3.0));
+        let hl = params.highlights.clamp(0.0, 1.0);
+        let sh = params.shadows.clamp(-1.0, 1.0);
+        let shade_gamma = 1.0 - 0.35 * sh;
+        let shape = move |v: f32| -> f32 {
+            let mut v = (v * gain).max(0.0);
+            if hl > 0.0 && v > 0.7 {
+                // Soft knee above 70%: the brighter, the gentler the slope.
+                let over = v - 0.7;
+                v = 0.7 + over / (1.0 + over * hl * 3.0);
+            }
+            v = v.min(1.0);
+            if sh != 0.0 {
+                v = v.powf(shade_gamma);
+            }
+            // sRGB gamma.
+            if v <= 0.003_130_8 {
+                12.92 * v
+            } else {
+                1.055 * v.powf(1.0 / 2.4) - 0.055
+            }
+        };
+        finish(developed, raw.orientation, shape)
+    }
+}
+
+/// Develop `path` into a 16-bit sRGB raster, upright, as the camera
+/// meant it.
 pub fn develop(path: &Path) -> Result<(Raster, RawInfo)> {
-    let raw = rawler::decode_file(path).map_err(|e| IoError::Unsupported(format!("RAW: {e}")))?;
-    let info = RawInfo {
-        make: raw.clean_make.clone(),
-        model: raw.clean_model.clone(),
-        wb_coeffs: raw.wb_coeffs,
-        width: raw.width as u32,
-        height: raw.height as u32,
-    };
-    let orientation = raw.orientation;
-    let developed = RawDevelop::default()
-        .develop_intermediate(&raw)
-        .map_err(|e| IoError::Unsupported(format!("RAW develop: {e}")))?;
+    let src = RawSource::load(path)?;
+    let r = src.develop_with(&DevelopParams::default())?;
+    Ok((r, src.info))
+}
+
+/// Turn developed linear values into an upright 16-bit raster, passing
+/// each channel through `shape` (which also gamma-encodes).
+fn finish(
+    developed: Intermediate,
+    orientation: Orientation,
+    shape: impl Fn(f32) -> f32 + Sync,
+) -> Result<Raster> {
     let (w, h, rgb): (usize, usize, Vec<[f32; 3]>) = match developed {
         Intermediate::ThreeColor(px) => (px.width, px.height, px.data),
         Intermediate::FourColor(px) => (
@@ -69,8 +169,7 @@ pub fn develop(path: &Path) -> Result<(Raster, RawInfo)> {
         }
     };
     crate::import::check_size(w as u32, h as u32)?;
-    // rawler's SRgb step leaves gamma-encoded sRGB in 0–1.
-    let to16 = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
+    let to16 = |v: f32| (shape(v).clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
     type Index = Box<dyn Fn(usize, usize) -> usize>;
     let (ow, oh, mapper): (usize, usize, Index) = match orientation {
         Orientation::Rotate90 => (h, w, Box::new(move |x, y| (h - 1 - x) * w + y)),
@@ -87,7 +186,7 @@ pub fn develop(path: &Path) -> Result<(Raster, RawInfo)> {
             data.extend_from_slice(&[to16(p[0]), to16(p[1]), to16(p[2]), u16::MAX]);
         }
     }
-    Ok((Raster::from_srgba16(ow as u32, oh as u32, &data), info))
+    Ok(Raster::from_srgba16(ow as u32, oh as u32, &data))
 }
 
 /// Open a RAW file as a one-node 16-bit document.
