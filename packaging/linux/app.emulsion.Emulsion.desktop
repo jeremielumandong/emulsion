@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Emulsion
+GenericName=Image Editor
+Comment=Non-destructive image editor with nodes, a branchable history and optional AI
+Exec=emulsion %F
+TryExec=emulsion
+Icon=emulsion
+Terminal=false
+StartupNotify=true
+StartupWMClass=app.emulsion.Emulsion
+Categories=Graphics;2DGraphics;RasterGraphics;Photography;
+Keywords=photo;image;editor;layers;nodes;openraster;ora;
+MimeType=image/openraster;image/png;image/jpeg;image/webp;image/tiff;image/bmp;image/gif;

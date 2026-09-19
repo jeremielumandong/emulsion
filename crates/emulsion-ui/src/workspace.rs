@@ -36,6 +36,10 @@ pub struct Workspace {
         Entity<gpui_kit::component::input::InputState>,
     )>,
     pub(crate) jev_test: Option<(SharedString, bool)>,
+    /// The landing image, decoded once in the background.
+    pub(crate) landing: Option<Arc<RenderImage>>,
+    /// Launch splash, until the timer or the first click or key.
+    pub(crate) splash: bool,
 }
 
 fn stem(path: &Path) -> String {
@@ -90,6 +94,19 @@ impl Workspace {
         });
         let focus = cx.focus_handle();
         focus.focus(window, cx);
+        // Decoded up front (a few milliseconds) so the splash never shows without it.
+        let landing = crate::landing::decode().map(Arc::new);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1400))
+                .await;
+            this.update(cx, |this, cx| {
+                this.splash = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         Self {
             screen: Screen::Home,
             editor: None,
@@ -103,6 +120,8 @@ impl Workspace {
             closing: false,
             settings_inputs: None,
             jev_test: None,
+            landing,
+            splash: true,
         }
     }
 
@@ -193,6 +212,111 @@ impl Workspace {
             })
             .detach();
         });
+    }
+
+    /// Open the bundled landing image as a new document to edit.
+    pub(crate) fn open_landing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_discard(window, cx, |this, window, cx| {
+            this.busy = Some("Opening the landing image…".into());
+            cx.notify();
+            cx.spawn_in(window, async move |this, cx| {
+                let result = cx
+                    .background_spawn(async {
+                        emulsion_io::import::import_bytes(
+                            crate::landing::LANDING_NAME,
+                            crate::landing::LANDING_JPG,
+                        )
+                    })
+                    .await;
+                this.update_in(cx, |this, window, cx| {
+                    this.busy = None;
+                    match result {
+                        Ok(doc) => this.install(
+                            doc,
+                            None,
+                            None,
+                            crate::landing::LANDING_NAME.into(),
+                            window,
+                            cx,
+                        ),
+                        Err(e) => {
+                            this.error =
+                                Some(format!("Could not open the landing image: {e}").into());
+                            cx.notify();
+                        }
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        });
+    }
+
+    fn splash_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let p = theme::palette(cx);
+        let bg: AnyElement = match &self.landing {
+            Some(img_) => img(ImageSource::Render(img_.clone()))
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .into_any_element(),
+            None => div().size_full().bg(p.chrome).into_any_element(),
+        };
+        div()
+            .id("splash")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(p.chrome)
+            .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.splash = false;
+                    cx.notify();
+                }),
+            )
+            .child(bg)
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .bg(linear_gradient(
+                        90.,
+                        linear_color_stop(p.chrome.opacity(0.85), 0.),
+                        linear_color_stop(p.chrome.opacity(0.0), 0.6),
+                    )),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(48.))
+                    .bottom(px(48.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(14.))
+                            .child(div().size(px(22.)).bg(p.accent))
+                            .child(
+                                div()
+                                    .text_size(px(40.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(gpui_kit::white())
+                                    .child("Emulsion"),
+                            ),
+                    )
+                    .child(mono(
+                        format!("{} · every edit, still undoable", env!("CARGO_PKG_VERSION")),
+                        11.,
+                        gpui_kit::white().opacity(0.8),
+                    )),
+            )
     }
 
     fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -655,8 +779,16 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Suggestion4, _, cx| {
                 this.with_editor(cx, |e, cx| e.accept_suggestion(3, cx))
             }))
+            .relative()
+            .on_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
+                if this.splash {
+                    this.splash = false;
+                    cx.notify();
+                }
+            }))
             .child(top)
             .children(banner)
             .child(body)
+            .when(self.splash, |d| d.child(self.splash_view(cx)))
     }
 }

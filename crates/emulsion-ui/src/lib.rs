@@ -6,6 +6,7 @@ pub mod app_state;
 mod assistant;
 pub mod editor;
 mod home;
+pub mod landing;
 mod settings_screen;
 pub mod theme;
 pub mod viewport;

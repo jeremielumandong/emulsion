@@ -20,6 +20,17 @@ cargo run -p emulsion-app -- mcp-serve    # stdio MCP server (empty tool set for
 cargo test --workspace
 ```
 
+## Install (Linux)
+
+```sh
+scripts/install-appimage.sh --build   # build the AppImage and install it
+scripts/install-appimage.sh --uninstall
+```
+
+This puts `Emulsion.AppImage` in `~/Applications`, an `emulsion` command in `~/.local/bin`, and a
+desktop entry with icons and file associations. Settings and recent files are never touched.
+`scripts/build-appimage.sh` only builds, into `target/appimage/`.
+
 ## Layout
 
 | Path | What lives there |

@@ -86,3 +86,20 @@ pub fn import(path: &Path) -> Result<Document> {
     .map_err(|e| IoError::Manifest(e.to_string()))?;
     Ok(doc)
 }
+
+/// Import an encoded image held in memory as a new one-node document.
+pub fn import_bytes(name: &str, bytes: &[u8]) -> Result<Document> {
+    let img = image::load_from_memory(bytes)?;
+    check_size(img.width(), img.height())?;
+    let decoded = from_dynamic(img)?;
+    let mut doc = Document::new(decoded.raster.width(), decoded.raster.height());
+    doc.source_depth = decoded.depth;
+    let node = Node::raster(0, name, Arc::new(decoded.raster), Placement::default());
+    Command::AddNode {
+        node: Box::new(node),
+        slot: Slot::TOP,
+    }
+    .apply(&mut doc)
+    .map_err(|e| IoError::Manifest(e.to_string()))?;
+    Ok(doc)
+}

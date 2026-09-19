@@ -2,7 +2,7 @@
 
 use crate::theme::{self, Palette};
 use crate::viewport::bgra_image;
-use crate::widgets::{button, label, mono};
+use crate::widgets::{button, mono};
 use crate::workspace::Workspace;
 use emulsion_io::recent;
 use gpui_kit::*;
@@ -79,56 +79,7 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_end()
-                    .justify_between()
-                    .gap(px(30.))
-                    .px(px(40.))
-                    .pt(px(52.))
-                    .pb(px(32.))
-                    .border_b_1()
-                    .border_color(p.line)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(14.))
-                            .min_w(px(250.))
-                            .child(label(date, &p))
-                            .child(
-                                div()
-                                    .text_size(px(64.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .line_height(relative(0.95))
-                                    .child("Every edit,")
-                                    .child("still undoable."),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(10.))
-                            .child(
-                                button("new", "New canvas", false, &p)
-                                    .px(px(22.))
-                                    .py(px(14.))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.new_document(window, cx)
-                                    })),
-                            )
-                            .child(
-                                button("open", "Open a file", true, &p)
-                                    .px(px(22.))
-                                    .py(px(14.))
-                                    .on_click(cx.listener(|_, _, window, cx| {
-                                        window.dispatch_action(Box::new(crate::actions::Open), cx)
-                                    })),
-                            ),
-                    ),
-            )
+            .child(self.hero(date, &p, cx))
             .child(if cells.is_empty() {
                 div()
                     .px(px(40.))
@@ -167,6 +118,91 @@ impl Workspace {
                             .child(mono(tag.to_uppercase(), 9.5, p.accent))
                             .child(div().text_size(px(15.)).child(*body))
                     })),
+            )
+    }
+
+    /// The landing image, full width, with the headline and actions over it.
+    fn hero(&self, date: String, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let white = gpui_kit::white();
+        let image: AnyElement = match &self.landing {
+            Some(i) => img(ImageSource::Render(i.clone()))
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .into_any_element(),
+            None => div().size_full().bg(p.chrome).into_any_element(),
+        };
+        div()
+            .id("hero")
+            .relative()
+            .w_full()
+            .h(px(480.))
+            .flex_none()
+            .overflow_hidden()
+            .bg(p.chrome)
+            .border_b_1()
+            .border_color(p.line)
+            .child(image)
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .bg(linear_gradient(
+                        90.,
+                        linear_color_stop(p.chrome.opacity(0.88), 0.),
+                        linear_color_stop(p.chrome.opacity(0.0), 0.62),
+                    )),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(40.))
+                    .right(px(40.))
+                    .bottom(px(36.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(18.))
+                    .child(mono(date.to_uppercase(), 9.5, white.opacity(0.75)))
+                    .child(
+                        div()
+                            .text_size(px(64.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .line_height(relative(0.95))
+                            .text_color(white)
+                            .child("Every edit,")
+                            .child("still undoable."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(10.))
+                            .child(
+                                button("open", "Open a file", true, p)
+                                    .px(px(22.))
+                                    .py(px(14.))
+                                    .on_click(cx.listener(|_, _, window, cx| {
+                                        window.dispatch_action(Box::new(crate::actions::Open), cx)
+                                    })),
+                            )
+                            .child(
+                                button("new", "New canvas", false, p)
+                                    .px(px(22.))
+                                    .py(px(14.))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.new_document(window, cx)
+                                    })),
+                            )
+                            .child(
+                                button("edit-landing", "Edit this image", false, p)
+                                    .px(px(22.))
+                                    .py(px(14.))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_landing(window, cx)
+                                    })),
+                            ),
+                    ),
             )
     }
 

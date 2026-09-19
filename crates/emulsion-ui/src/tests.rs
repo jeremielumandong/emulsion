@@ -325,3 +325,55 @@ fn assistant_turn_through_the_ui_with_the_real_cli(cx: &mut TestAppContext) {
     );
     assert_eq!(steps, 1, "the whole turn is one undo step");
 }
+
+#[gpui_kit::test]
+fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        theme::install(cx);
+        actions::bind(cx);
+        cx.set_global(AppSettings(Settings::default()));
+        cx.set_global(Capabilities {
+            cli: CliStatus::Missing,
+        });
+    });
+    let slot: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::default();
+    let s = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        *s.borrow_mut() = Some(ws.clone());
+        Root::new(ws, window, cx)
+    });
+    let ws = slot.borrow().clone().unwrap();
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_, cx| ws.read(cx).landing.is_some()),
+        "landing image decoded"
+    );
+    assert!(
+        cx.update(|_, cx| ws.read(cx).splash),
+        "splash shows at launch"
+    );
+    cx.simulate_keystrokes("space");
+    assert!(
+        !cx.update(|_, cx| ws.read(cx).splash),
+        "any key dismisses the splash"
+    );
+
+    cx.update(|window, cx| ws.update(cx, |w, cx| w.open_landing(window, cx)));
+    cx.run_until_parked();
+    let (name, size, nodes) = cx.update(|_, cx| {
+        let e = ws
+            .read(cx)
+            .editor
+            .clone()
+            .expect("landing opened as a document");
+        let e = e.read(cx);
+        (
+            e.name.clone(),
+            (e.editor.doc.width, e.editor.doc.height),
+            e.editor.doc.nodes.len(),
+        )
+    });
+    assert_eq!((name.as_str(), size, nodes), ("landing", (1672, 941), 1));
+}
