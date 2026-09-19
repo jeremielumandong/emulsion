@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>app.emulsion.Emulsion</id>
+  <name>Emulsion</name>
+  <summary>Non-destructive image editor with nodes, a branchable history and optional AI</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <description>
+    <p>
+      Emulsion edits photographs and paintings with layers, masks, adjustment
+      nodes and a history you can branch. Brushes behave like their medium,
+      recipes recreate film and camera looks, and camera RAW and Photoshop
+      files open directly. Every AI feature is optional: local models for
+      selection, matting, fill, depth, upscaling and face restoration, an
+      image server of your own for generative fill, and a coding assistant
+      that drives the same commands you do.
+    </p>
+  </description>
+  <launchable type="desktop-id">app.emulsion.Emulsion.desktop</launchable>
+  <provides>
+    <binary>emulsion</binary>
+  </provides>
+  <categories>
+    <category>Graphics</category>
+    <category>RasterGraphics</category>
+    <category>Photography</category>
+  </categories>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.0.1" date="2026-09-19" />
+  </releases>
+</component>

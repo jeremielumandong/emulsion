@@ -88,6 +88,7 @@ install -Dm755 "$BIN" "$APPDIR/usr/bin/emulsion"
 strip --strip-debug "$APPDIR/usr/bin/emulsion" 2>/dev/null || true
 install -Dm644 "$ROOT_DIR/packaging/linux/$APP_ID.desktop" "$APPDIR/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$ROOT_DIR/packaging/linux/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
+install -Dm644 "$ROOT_DIR/packaging/linux/$APP_ID.metainfo.xml" "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml"
 install -Dm644 "$ROOT_DIR/assets/icons/emulsion.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/emulsion.svg"
 
 render_png() {

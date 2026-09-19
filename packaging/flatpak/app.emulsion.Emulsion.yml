@@ -1,0 +1,55 @@
+# Flatpak manifest for Emulsion.
+#
+# Build and install for the current user:
+#   scripts/build-flatpak.sh
+#
+# The Rust build runs with network access because the `ort` crate fetches
+# the ONNX Runtime binary while compiling (feature `download-binaries`).
+# A Flathub submission would replace that with a vendored tarball source
+# and `cargo --offline` against a generated cargo-sources.json; the script
+# already generates that file when flatpak-cargo-generator is installed.
+app-id: app.emulsion.Emulsion
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: emulsion
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  # Files: the picture folders plus the portal for everything else.
+  - --filesystem=xdg-pictures
+  - --filesystem=xdg-documents
+  - --filesystem=xdg-download
+  # Model downloads, recipe imports by URL, the lens database, and a
+  # Stable Diffusion server on the LAN.
+  - --share=network
+  # Pen tablets are read as evdev devices for pressure and tilt.
+  - --device=input
+  # Coding CLIs installed on the host, when the person points Settings at one.
+  - --talk-name=org.freedesktop.Flatpak
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/emulsion/cargo
+    CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  build-args:
+    - --share=network
+modules:
+  - name: emulsion
+    buildsystem: simple
+    build-commands:
+      - cargo build --release --locked -p emulsion-app
+      - install -Dm755 target/release/emulsion /app/bin/emulsion
+      - install -Dm644 packaging/linux/app.emulsion.Emulsion.desktop /app/share/applications/app.emulsion.Emulsion.desktop
+      - install -Dm644 packaging/linux/app.emulsion.Emulsion.metainfo.xml /app/share/metainfo/app.emulsion.Emulsion.metainfo.xml
+      - install -Dm644 assets/icons/emulsion.svg /app/share/icons/hicolor/scalable/apps/app.emulsion.Emulsion.svg
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - .git
