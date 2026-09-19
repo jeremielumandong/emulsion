@@ -187,6 +187,14 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         "canvas_size" => format!("canvas {}×{}", input["width"], input["height"]),
         "add_layer" => format!("add layer {}", input["name"].as_str().unwrap_or("Layer")),
         "list_recipes" => "look at the recipes".into(),
+        "convert_to_smart" => format!("smart layer {}", n()),
+        "add_filter" => format!(
+            "add {} to {}",
+            input["kind"].as_str().unwrap_or("filter").replace('_', " "),
+            n()
+        ),
+        "set_filter" => format!("tune filter {} on {}", input["index"], n()),
+        "remove_filter" => format!("remove filter {} from {}", input["index"], n()),
         "apply_recipe" => format!(
             "apply recipe {}",
             input["name"].as_str().unwrap_or("from text")

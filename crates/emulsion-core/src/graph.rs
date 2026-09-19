@@ -501,6 +501,30 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
                 out.push(("path style", "before".into(), "changed".into()));
             }
         }
+        (
+            NodeKind::Smart {
+                source: a,
+                filters: fa,
+                placement: pa,
+                ..
+            },
+            NodeKind::Smart {
+                source: b,
+                filters: fb,
+                placement: pb,
+                ..
+            },
+        ) => {
+            if !std::sync::Arc::ptr_eq(a, b) {
+                out.push(("pixels", "before".into(), "edited".into()));
+            }
+            if fa != fb {
+                out.push(("filters", "before".into(), "changed".into()));
+            }
+            if pa != pb {
+                out.push(("placement", "before".into(), "moved".into()));
+            }
+        }
         (a, b) if a != b => out.push(("content", "before".into(), "changed".into())),
         _ => {}
     }

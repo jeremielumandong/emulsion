@@ -21,6 +21,7 @@ evdev = "0.13"
 serde_json = { workspace = true }
 emulsion-io = { workspace = true }
 emulsion-raster = { workspace = true }
+emulsion-filters = { workspace = true }
 rayon = { workspace = true }
 smallvec = { workspace = true }
 image = { workspace = true }

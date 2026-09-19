@@ -1643,6 +1643,7 @@ name = "emulsion-core"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "emulsion-filters",
  "emulsion-raster",
  "glam",
  "parking_lot",
@@ -1658,9 +1659,10 @@ name = "emulsion-filters"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "emulsion-gpu",
  "emulsion-raster",
  "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1681,6 +1683,7 @@ dependencies = [
  "anyhow",
  "emulsion-color",
  "emulsion-core",
+ "emulsion-filters",
  "emulsion-raster",
  "image",
  "quick-xml 0.42.0",
@@ -1700,6 +1703,7 @@ dependencies = [
  "async-channel",
  "base64 0.23.1",
  "emulsion-core",
+ "emulsion-filters",
  "emulsion-io",
  "emulsion-raster",
  "emulsion-recipes",
@@ -1756,6 +1760,7 @@ dependencies = [
  "emulsion-ai",
  "emulsion-assistant",
  "emulsion-core",
+ "emulsion-filters",
  "emulsion-io",
  "emulsion-mcp",
  "emulsion-raster",

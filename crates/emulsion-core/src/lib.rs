@@ -9,6 +9,7 @@ pub mod geometry;
 pub mod graph;
 pub mod history;
 pub mod node;
+pub mod smart;
 
 pub use command::{Command, CommandError, Dirty};
 pub use document::{Document, DocumentError, PanelRow};

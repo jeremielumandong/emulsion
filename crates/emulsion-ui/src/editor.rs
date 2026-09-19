@@ -11,6 +11,7 @@ mod history;
 mod pen;
 mod presets;
 mod recipes;
+mod smart;
 mod snap;
 mod tools;
 mod transform;
@@ -94,6 +95,8 @@ enum SliderKey {
     PenWidth,
     /// Bounds slot for a node's curves editor.
     Curve(NodeId),
+    /// A smart layer's filter parameter: node, filter index, key.
+    Filter(NodeId, usize, &'static str),
     Tolerance,
     Feather,
     Straighten,
@@ -111,6 +114,7 @@ impl SliderKey {
                 | SliderKey::Scale(_)
                 | SliderKey::Rotation(_)
                 | SliderKey::PenWidth
+                | SliderKey::Filter(..)
         )
     }
 }
@@ -233,6 +237,7 @@ pub struct EditorView {
     pub(crate) presets: presets::PresetState,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
     pub(crate) recipes: recipes::RecipeState,
+    pub(crate) smart: smart::SmartUi,
     /// Shift held during a drag: free aspect, or 15° rotation steps.
     pub(crate) drag_shift: bool,
 }
@@ -301,6 +306,7 @@ impl EditorView {
             presets: Default::default(),
             adjust_ui: Default::default(),
             recipes: Default::default(),
+            smart: Default::default(),
             drag_shift: false,
         }
     }
@@ -747,7 +753,7 @@ impl EditorView {
             self.set_status("That node is locked.", false, cx);
             return;
         }
-        if let NodeKind::Raster { placement, .. } = &n.kind {
+        if let NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } = &n.kind {
             let start = *placement;
             let d = self.view.screen_to_doc(
                 (
@@ -906,6 +912,7 @@ impl EditorView {
             | Some(Drag::Slider { .. })
             | Some(Drag::Transform(_))
             | Some(Drag::Curve(_)) => {
+                self.flush_filter_param(cx);
                 if self.editor.in_transaction() {
                     self.editor.end();
                 }
@@ -960,6 +967,7 @@ impl EditorView {
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
                 SliderKey::PenWidth => "Stroke width".into(),
+                SliderKey::Filter(_, _, k) => k.replace('_', " "),
                 _ => "Rotate".into(),
             };
             self.editor.begin(name);
@@ -1063,6 +1071,7 @@ impl EditorView {
                 cx.notify();
             }
             SliderKey::Curve(_) => {}
+            SliderKey::Filter(id, idx, key) => self.set_filter_param(id, idx, key, v, false, cx),
             SliderKey::Tolerance => {
                 self.tools.tolerance = v as u8;
                 cx.notify();
@@ -1623,6 +1632,10 @@ impl EditorView {
             .child(label("Scene graph", p))
             .child(div().flex_1())
             .child(
+                chip("smart", "smart", false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.convert_smart(cx))),
+            )
+            .child(
                 chip("recipes", "recipes", self.recipes.open, p)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_recipes(cx))),
             )
@@ -1760,6 +1773,17 @@ impl EditorView {
                 .font_family(MONO_FONT)
                 .text_size(px(12.))
                 .child("◑")
+                .into_any_element(),
+            NodeKind::Smart { .. } => div()
+                .size(px(20.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(p.line)
+                .text_size(px(11.))
+                .child("fx")
                 .into_any_element(),
             NodeKind::Path { .. } => div()
                 .size(px(20.))
@@ -2058,6 +2082,28 @@ impl EditorView {
                             );
                         }),
                     ));
+                }
+            }
+            NodeKind::Smart {
+                source,
+                filters,
+                placement,
+                ..
+            } => {
+                body = body.child(mono(
+                    format!(
+                        "smart · {}×{} px at {:.0}, {:.0}",
+                        source.width(),
+                        source.height(),
+                        placement.x,
+                        placement.y
+                    ),
+                    10.5,
+                    p.muted,
+                ));
+                let filters = filters.clone();
+                for el in self.smart_panel(id, &filters, p, cx) {
+                    body = body.child(el);
                 }
             }
             NodeKind::Path { path, style, .. } => {

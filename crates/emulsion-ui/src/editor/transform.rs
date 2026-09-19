@@ -81,6 +81,9 @@ impl EditorView {
             NodeKind::Raster { raster, placement } => {
                 Some((id, raster.width(), raster.height(), *placement))
             }
+            NodeKind::Smart {
+                source, placement, ..
+            } => Some((id, source.width(), source.height(), *placement)),
             _ => None,
         }
     }

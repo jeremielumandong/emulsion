@@ -68,6 +68,21 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 placement.x = c2.x - rw * placement.scale_x / 2.0;
                 placement.y = c2.y - rh * placement.scale_y / 2.0;
             }
+            NodeKind::Smart {
+                placement, source, ..
+            } => {
+                let (rw, rh) = (source.width() as f64, source.height() as f64);
+                let c = dvec2(
+                    placement.x + rw * placement.scale_x / 2.0,
+                    placement.y + rh * placement.scale_y / 2.0,
+                );
+                let c2 = to_new.transform_point2(c);
+                placement.scale_x *= scale;
+                placement.scale_y *= scale;
+                placement.rotation += angle;
+                placement.x = c2.x - rw * placement.scale_x / 2.0;
+                placement.y = c2.y - rh * placement.scale_y / 2.0;
+            }
             NodeKind::Path { path, style, cache } => {
                 let mut p = (**path).clone();
                 p.transform(to_new);

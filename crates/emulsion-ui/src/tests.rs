@@ -996,6 +996,66 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn smart_layer_filters_are_editable_and_undoable(cx: &mut TestAppContext) {
+        use emulsion_core::NodeKind;
+        use emulsion_filters::Filter;
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        let id = cx.update(|_, cx| e.read(cx).editor.doc.nodes[0].id);
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.selected = Some(id);
+                e.convert_smart(cx);
+                e.add_filter(id, Filter::GaussianBlur { radius: 8.0 }, cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            let NodeKind::Smart {
+                filters,
+                cache,
+                source,
+                ..
+            } = &e.editor.doc.node(id).unwrap().kind
+            else {
+                panic!("expected a smart layer");
+            };
+            assert_eq!(filters.len(), 1);
+            assert!(
+                cache.width() > source.width(),
+                "the blur spread past the edge"
+            );
+            assert_eq!(e.editor.history.len(), 2, "convert, then one filter step");
+        });
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.set_filter_param(id, 0, "radius", 2.0, true, cx)
+            })
+        });
+        cx.run_until_parked();
+        let radius = cx.update(
+            |_, cx| match &e.read(cx).editor.doc.node(id).unwrap().kind {
+                NodeKind::Smart { filters, .. } => filters[0].params()[0].value,
+                _ => unreachable!(),
+            },
+        );
+        assert_eq!(radius, 2.0);
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.undo(cx);
+                e.undo(cx);
+                e.undo(cx);
+            })
+        });
+        assert_eq!(
+            cx.update(|_, cx| e.read(cx).editor.doc.node(id).unwrap().kind.tag()),
+            "px"
+        );
+    }
+
+    #[gpui_kit::test]
     fn the_default_hand_tool_pans_without_moving_pixels(cx: &mut TestAppContext) {
         let (ws, cx) = open(cx, doc(&["Photo"], None));
         cx.run_until_parked();

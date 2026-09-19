@@ -14,6 +14,7 @@ emulsion-recipes = { workspace = true }
 glam = { workspace = true }
 image = { workspace = true }
 emulsion-raster = { workspace = true }
+emulsion-filters = { workspace = true }
 emulsion-io = { workspace = true }
 async-channel = { workspace = true }
 base64 = { workspace = true }

@@ -360,6 +360,55 @@ fn rgba_arg(v: Option<&Value>) -> Result<Option<[u8; 4]>, ToolResult> {
     }
 }
 
+fn filter_by_kind(kind: &str) -> Option<emulsion_filters::Filter> {
+    let k = kind.trim().to_lowercase().replace(['-', ' '], "_");
+    let k = match k.as_str() {
+        "gaussian" | "blur" => "gaussian_blur",
+        "sharpen" | "unsharp" => "unsharp_mask",
+        "noise" => "add_noise",
+        "denoise" => "reduce_noise",
+        other => other,
+    };
+    emulsion_filters::Filter::catalogue()
+        .into_iter()
+        .find(|f| f.key() == k)
+}
+
+fn apply_filter_params(
+    f: &mut emulsion_filters::Filter,
+    params: &Map<String, Value>,
+) -> Result<(), ToolResult> {
+    for (k, v) in params {
+        let v = v
+            .as_f64()
+            .ok_or_else(|| err(format!("parameter '{k}' must be a number")))?;
+        if !f.set_param(k, v as f32) {
+            let keys: Vec<&str> = f.params().iter().map(|s| s.key).collect();
+            return Err(err(format!(
+                "{} has no parameter '{k}' (valid: {})",
+                f.label(),
+                keys.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The filter stack of a smart node.
+fn smart_filters(doc: &Document, id: NodeId) -> Result<Vec<emulsion_filters::Filter>, ToolResult> {
+    match &doc
+        .node(id)
+        .ok_or_else(|| err(format!("no node {id}")))?
+        .kind
+    {
+        NodeKind::Smart { filters, .. } => Ok(filters.clone()),
+        _ => Err(err(format!(
+            "{} is not a smart layer; call convert_to_smart first",
+            node_label(doc, id)
+        ))),
+    }
+}
+
 /// Compute a heavy tool against a document snapshot, on any thread.
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
     let (w, h) = (doc.width, doc.height);
@@ -397,6 +446,70 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             })
         }
         "paint" => plan_paint(doc, args),
+        "add_filter" | "set_filter" | "remove_filter" => {
+            let id = id_arg(args, "node")?;
+            let mut filters = smart_filters(doc, id)?;
+            match name {
+                "add_filter" => {
+                    let kind = args
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| err("missing 'kind'"))?;
+                    let mut f = filter_by_kind(kind).ok_or_else(|| {
+                        err(format!(
+                            "unknown filter {kind:?}; one of: {}",
+                            emulsion_filters::Filter::catalogue()
+                                .iter()
+                                .map(|f| f.key())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ))
+                    })?;
+                    if let Some(p) = args.get("params").and_then(Value::as_object) {
+                        apply_filter_params(&mut f, p)?;
+                    }
+                    filters.push(f);
+                }
+                "set_filter" => {
+                    let i = args
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| err("missing integer 'index'"))?
+                        as usize;
+                    let f = filters
+                        .get_mut(i)
+                        .ok_or_else(|| err(format!("no filter at index {i}")))?;
+                    let p = args
+                        .get("params")
+                        .and_then(Value::as_object)
+                        .ok_or_else(|| err("missing object 'params'"))?;
+                    apply_filter_params(f, p)?;
+                }
+                _ => {
+                    let i = args
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| err("missing integer 'index'"))?
+                        as usize;
+                    if i >= filters.len() {
+                        return Err(err(format!("no filter at index {i}")));
+                    }
+                    filters.remove(i);
+                }
+            }
+            if filters.len() > 32 {
+                return Err(err("at most 32 filters on a layer"));
+            }
+            let n = filters.len();
+            Ok(Planned {
+                commands: vec![Command::SetFilters { id, filters }],
+                message: format!(
+                    "{} now has {n} filter{}",
+                    node_label(doc, id),
+                    if n == 1 { "" } else { "s" }
+                ),
+            })
+        }
         "content_aware_fill" => {
             let sel = doc
                 .selection
@@ -947,6 +1060,34 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 "Applied recipe {:?} as group {gid} with {n} adjustment stages",
                 recipe.name
             )))
+        }
+        "convert_to_smart" => {
+            let id = id_arg(args, "node")?;
+            let kind = editor
+                .doc
+                .node(id)
+                .map(|n| n.kind.tag())
+                .ok_or_else(|| err(format!("no node {id}")))?;
+            match kind {
+                "px" => {
+                    exec(editor, Command::ConvertToSmart { id })?;
+                    Ok(ToolResult::text(format!(
+                        "{} is now a smart layer; add filters with add_filter",
+                        node_label(&editor.doc, id)
+                    )))
+                }
+                "smart" => {
+                    exec(editor, Command::Rasterize { id })?;
+                    Ok(ToolResult::text(format!(
+                        "{} was rasterized; its filters are baked in",
+                        node_label(&editor.doc, id)
+                    )))
+                }
+                _ => Err(err(format!(
+                    "{} has no pixels to filter",
+                    node_label(&editor.doc, id)
+                ))),
+            }
         }
         "add_layer" => {
             let (w, h) = (editor.doc.width, editor.doc.height);
@@ -1503,6 +1644,7 @@ pub fn describe(editor: &Editor) -> Value {
                     NodeKind::Adjust(_) => "adjustment",
                     NodeKind::Fill { .. } => "fill",
                     NodeKind::Path { .. } => "path",
+                    NodeKind::Smart { .. } => "smart",
                 },
                 "visible": n.visible,
                 "opacity": (n.opacity * 100.0).round(),
@@ -1536,6 +1678,19 @@ pub fn describe(editor: &Editor) -> Value {
                 }
                 NodeKind::Fill { rgba } => {
                     o.insert("color".into(), json!(format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])));
+                }
+                NodeKind::Smart { source, filters, placement, .. } => {
+                    o.insert("pixels".into(), json!(format!("{}×{}", source.width(), source.height())));
+                    o.insert("placement".into(), json!({ "x": placement.x, "y": placement.y, "scale": placement.scale_x.abs() * 100.0, "rotation": placement.rotation }));
+                    let fs: Vec<Value> = filters
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| {
+                            let params: Map<String, Value> = f.params().into_iter().map(|s| (s.key.to_string(), json!(s.value))).collect();
+                            json!({ "index": i, "kind": f.key(), "params": params })
+                        })
+                        .collect();
+                    o.insert("filters".into(), Value::Array(fs));
                 }
                 NodeKind::Path { path, style, .. } => {
                     o.insert("d".into(), json!(path.to_svg()));
@@ -2024,6 +2179,62 @@ mod tests {
             &json!({ "text": "Film Simulation: Kodachrome" }),
         );
         assert!(r.is_error);
+    }
+
+    #[test]
+    fn smart_layers_and_filters() {
+        let mut e = editor();
+        let r = execute(&mut e, "convert_to_smart", &json!({ "node": 1 }));
+        assert!(!r.is_error, "{}", text(&r));
+        let r = execute(
+            &mut e,
+            "add_filter",
+            &json!({ "node": 1, "kind": "gaussian blur", "params": { "radius": 6 } }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let r = execute(
+            &mut e,
+            "add_filter",
+            &json!({ "node": 1, "kind": "add_noise" }),
+        );
+        assert!(!r.is_error);
+        let d = describe(&e);
+        let me = d["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == 1)
+            .unwrap()
+            .clone();
+        assert_eq!(me["kind"], "smart");
+        assert_eq!(me["filters"].as_array().unwrap().len(), 2);
+        assert_eq!(me["filters"][0]["params"]["radius"], 6.0);
+        let r = execute(
+            &mut e,
+            "set_filter",
+            &json!({ "node": 1, "index": 0, "params": { "radius": 2 } }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let r = execute(&mut e, "remove_filter", &json!({ "node": 1, "index": 1 }));
+        assert!(!r.is_error);
+        let NodeKind::Smart {
+            filters,
+            cache,
+            source,
+            ..
+        } = &e.doc.node(1).unwrap().kind
+        else {
+            panic!()
+        };
+        assert_eq!(filters.len(), 1);
+        assert!(cache.width() > source.width(), "the blur spread");
+        let r = execute(&mut e, "add_filter", &json!({ "node": 1, "kind": "sepia" }));
+        assert!(r.is_error && text(&r).contains("unknown filter"));
+        let r = execute(&mut e, "convert_to_smart", &json!({ "node": 1 }));
+        assert!(
+            !r.is_error && e.doc.node(1).unwrap().kind.tag() == "px",
+            "rasterize back"
+        );
     }
 
     #[test]

@@ -26,6 +26,15 @@ pub enum NodeKind {
         style: PathStyle,
         cache: Arc<Raster>,
     },
+    /// Source pixels with an editable filter stack, rendered into `cache`,
+    /// whose top-left sits at `offset` in source pixels (see `smart`).
+    Smart {
+        source: Arc<Raster>,
+        filters: Vec<emulsion_filters::Filter>,
+        placement: Placement,
+        cache: Arc<Raster>,
+        offset: (i32, i32),
+    },
 }
 
 impl NodeKind {
@@ -41,6 +50,7 @@ impl NodeKind {
             NodeKind::Adjust(_) => "adj",
             NodeKind::Fill { .. } => "fill",
             NodeKind::Path { .. } => "path",
+            NodeKind::Smart { .. } => "smart",
         }
     }
 }
@@ -71,6 +81,20 @@ impl PartialEq for NodeKind {
                     path: b, style: sb, ..
                 },
             ) => sa == sb && (Arc::ptr_eq(a, b) || a == b),
+            (
+                NodeKind::Smart {
+                    source: a,
+                    filters: fa,
+                    placement: pa,
+                    ..
+                },
+                NodeKind::Smart {
+                    source: b,
+                    filters: fb,
+                    placement: pb,
+                    ..
+                },
+            ) => Arc::ptr_eq(a, b) && fa == fb && pa == pb,
             _ => false,
         }
     }
@@ -157,6 +181,28 @@ impl Node {
         let style = style.sanitized();
         let cache = Arc::new(path.rasterize(&style, w, h));
         Self::new(id, name, NodeKind::Path { path, style, cache })
+    }
+
+    /// A smart layer over `source` with `filters` applied.
+    pub fn smart(
+        id: NodeId,
+        name: impl Into<String>,
+        source: Arc<Raster>,
+        filters: Vec<emulsion_filters::Filter>,
+        placement: Placement,
+    ) -> Self {
+        let (cache, offset) = crate::smart::render(&source, &filters);
+        Self::new(
+            id,
+            name,
+            NodeKind::Smart {
+                source,
+                filters,
+                placement,
+                cache,
+                offset,
+            },
+        )
     }
 
     pub fn group(id: NodeId, name: impl Into<String>) -> Self {

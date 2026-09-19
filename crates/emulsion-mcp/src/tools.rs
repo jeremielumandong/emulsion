@@ -25,7 +25,14 @@ pub const DESTRUCTIVE: &[&str] = &[
 ];
 
 /// Tools that compute for a while; hosts run them off the UI thread.
-pub const HEAVY: &[&str] = &["select_color", "content_aware_fill", "paint"];
+pub const HEAVY: &[&str] = &[
+    "select_color",
+    "content_aware_fill",
+    "paint",
+    "add_filter",
+    "set_filter",
+    "remove_filter",
+];
 
 const BLEND_MODES: &[&str] = &[
     "normal",
@@ -268,6 +275,30 @@ pub fn definitions() -> Vec<ToolDef> {
             "Apply a film recipe as a group of adjustment nodes above the given node (or at the top). Give one of: name (from list_recipes), text (a pasted settings block like Fuji X Weekly's: 'Film Simulation: Classic Chrome', 'Grain Effect: Weak, Small', 'White Balance: Daylight, +2 Red & -4 Blue', 'Highlight: -1' …), or toml (a .recipe.toml). save=true also keeps a text or toml recipe for later.",
             json!({ "name": { "type": "string" }, "text": { "type": "string" }, "toml": { "type": "string" }, "save": { "type": "boolean" }, "above": node() }),
             &[],
+        ),
+        def(
+            "convert_to_smart",
+            "Make a pixel layer a smart layer (filters stay editable; painting on it is not possible), or rasterize a smart layer back to pixels.",
+            json!({ "node": node() }),
+            &["node"],
+        ),
+        def(
+            "add_filter",
+            "Add a filter to a smart layer's stack. Kinds and parameters: gaussian_blur {radius 0..100}; box_blur {radius}; motion_blur {angle -180..180, distance 0..200}; lens_blur {radius 0..40}; unsharp_mask {amount 0..500 %, radius 0.1..50, threshold 0..255}; smart_sharpen {amount, radius}; add_noise {amount 0..100, monochrome 0/1}; reduce_noise {strength 0..10, detail 0..100}; high_pass {radius}; lens_correction {distortion -100..100, vignette -100..100}; emboss {angle, height 1..20, amount}; find_edges {}; pinch {amount -100..100}; twirl {angle}; wave {amplitude, wavelength}. Blurs spread past the layer's edges.",
+            json!({ "node": node(), "kind": { "type": "string" }, "params": { "type": "object" } }),
+            &["node", "kind"],
+        ),
+        def(
+            "set_filter",
+            "Change parameters of the filter at index on a smart layer (indices from describe_document).",
+            json!({ "node": node(), "index": { "type": "integer", "minimum": 0 }, "params": { "type": "object" } }),
+            &["node", "index", "params"],
+        ),
+        def(
+            "remove_filter",
+            "Remove the filter at index from a smart layer.",
+            json!({ "node": node(), "index": { "type": "integer", "minimum": 0 } }),
+            &["node", "index"],
         ),
         def(
             "add_layer",

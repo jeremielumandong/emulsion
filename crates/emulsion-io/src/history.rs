@@ -156,6 +156,13 @@ enum HKind {
         path: emulsion_raster::vector::Path,
         style: emulsion_raster::vector::PathStyle,
     },
+    Smart {
+        source: u32,
+        cache: u32,
+        offset: (i32, i32),
+        filters: Vec<emulsion_filters::Filter>,
+        placement: Placement,
+    },
 }
 
 /// Planes and tiles seen so far, keyed by buffer address.
@@ -263,6 +270,19 @@ pub(crate) fn encode(graph: &Graph, live: Option<String>) -> Result<Vec<(String,
                             adjustment: a.clone(),
                         },
                         NodeKind::Fill { rgba } => HKind::Fill { rgba: *rgba },
+                        NodeKind::Smart {
+                            source,
+                            filters,
+                            placement,
+                            cache,
+                            offset,
+                        } => HKind::Smart {
+                            source: rasters.add(source),
+                            cache: rasters.add(cache),
+                            offset: *offset,
+                            filters: filters.clone(),
+                            placement: *placement,
+                        },
                         NodeKind::Path { path, style, .. } => HKind::Path {
                             path: (**path).clone(),
                             style: *style,
@@ -429,6 +449,19 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 HKind::Group { collapsed } => NodeKind::Group { collapsed },
                 HKind::Adjust { adjustment } => NodeKind::Adjust(adjustment),
                 HKind::Fill { rgba } => NodeKind::Fill { rgba },
+                HKind::Smart {
+                    source,
+                    cache,
+                    offset,
+                    filters,
+                    placement,
+                } => NodeKind::Smart {
+                    source: raster(source)?,
+                    cache: raster(cache)?,
+                    offset,
+                    filters,
+                    placement,
+                },
                 HKind::Path { path, style } => {
                     if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
                         return Err(IoError::Manifest("a path has too many anchors".into()));

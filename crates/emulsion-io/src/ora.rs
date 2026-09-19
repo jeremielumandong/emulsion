@@ -100,6 +100,14 @@ enum MKind {
         /// The rasterized path, for readers that only know layers.
         src: String,
     },
+    Smart {
+        /// Source pixels.
+        src: String,
+        width: u32,
+        height: u32,
+        filters: Vec<emulsion_filters::Filter>,
+        placement: Placement,
+    },
 }
 
 fn esc(s: &str) -> String {
@@ -240,6 +248,48 @@ fn encode(doc: &Document) -> Result<Encoded> {
                 adjustment: a.clone(),
             },
             NodeKind::Fill { rgba } => MKind::Fill { rgba: *rgba },
+            NodeKind::Smart {
+                source,
+                filters,
+                placement,
+                cache,
+                offset,
+            } => {
+                // Other readers get the filtered result, placed where it lands.
+                let data = format!("data/node-{}.png", n.id);
+                let src = format!("emulsion/src/node-{}.png", n.id);
+                jobs.push(Job::Png {
+                    path: src.clone(),
+                    raster: source,
+                });
+                let cp = emulsion_core::smart::cache_placement(
+                    placement,
+                    (source.width(), source.height()),
+                    (cache.width(), cache.height()),
+                    *offset,
+                );
+                if is_integer_translation(&cp) {
+                    jobs.push(Job::Png {
+                        path: data.clone(),
+                        raster: cache,
+                    });
+                    ora_layers.insert(n.id, (data, cp.x as i64, cp.y as i64));
+                } else {
+                    jobs.push(Job::Baked {
+                        path: data,
+                        id: n.id,
+                        raster: cache,
+                        placement: cp,
+                    });
+                }
+                MKind::Smart {
+                    src,
+                    width: source.width(),
+                    height: source.height(),
+                    filters: filters.clone(),
+                    placement: *placement,
+                }
+            }
             NodeKind::Path { path, style, cache } => {
                 let data = format!("data/node-{}.png", n.id);
                 jobs.push(Job::Png {
@@ -368,7 +418,7 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
             let pad = "  ".repeat(indent);
             let vis = if n.visible { "visible" } else { "hidden" };
             match &n.kind {
-                NodeKind::Raster { .. } | NodeKind::Path { .. } => {
+                NodeKind::Raster { .. } | NodeKind::Path { .. } | NodeKind::Smart { .. } => {
                     let Some((src, x, y)) = layers.get(&id) else {
                         continue;
                     };
@@ -587,7 +637,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     // Read compressed bytes sequentially, decode in parallel.
     let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
     for n in &m.nodes {
-        if let MKind::Raster { src, .. } = &n.kind
+        if let MKind::Raster { src, .. } | MKind::Smart { src, .. } = &n.kind
             && !blobs.contains_key(src)
         {
             blobs.insert(src.clone(), read_entry(zip, src, MAX_ENTRY_BYTES)?);
@@ -602,7 +652,9 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
         .nodes
         .par_iter()
         .filter_map(|n| match &n.kind {
-            MKind::Raster { src, .. } => Some((src.clone(), decode_png(&blobs[src]))),
+            MKind::Raster { src, .. } | MKind::Smart { src, .. } => {
+                Some((src.clone(), decode_png(&blobs[src])))
+            }
             _ => None,
         })
         .collect();
@@ -652,6 +704,43 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             MKind::Group { collapsed } => NodeKind::Group { collapsed },
             MKind::Adjust { adjustment } => NodeKind::Adjust(adjustment),
             MKind::Fill { rgba } => NodeKind::Fill { rgba },
+            MKind::Smart {
+                src,
+                width,
+                height,
+                filters,
+                placement,
+            } => {
+                let r = match raster_cache.get(&src) {
+                    Some(r) => r.clone(),
+                    None => {
+                        let (r, _) = rasters[&src]
+                            .as_ref()
+                            .map_err(|e| IoError::Manifest(format!("{src}: {e}")))?;
+                        let r = Arc::new(r.clone());
+                        raster_cache.insert(src.clone(), r.clone());
+                        r
+                    }
+                };
+                if r.width() != width || r.height() != height {
+                    return Err(IoError::Manifest(format!(
+                        "{src} is {}×{}, manifest says {width}×{height}",
+                        r.width(),
+                        r.height()
+                    )));
+                }
+                if filters.len() > 32 {
+                    return Err(IoError::Manifest("too many filters".into()));
+                }
+                let (cache, offset) = emulsion_core::smart::render(&r, &filters);
+                NodeKind::Smart {
+                    source: r,
+                    filters,
+                    placement,
+                    cache,
+                    offset,
+                }
+            }
             MKind::Path { path, style, .. } => {
                 if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
                     return Err(IoError::Manifest("a path has too many anchors".into()));

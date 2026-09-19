@@ -323,6 +323,21 @@ impl Document {
                             raster: cache.clone(),
                             placement: emulsion_raster::Placement::default(),
                         },
+                        NodeKind::Smart {
+                            source,
+                            placement,
+                            cache,
+                            offset,
+                            ..
+                        } => NodeContent::Pixels {
+                            raster: cache.clone(),
+                            placement: crate::smart::cache_placement(
+                                placement,
+                                (source.width(), source.height()),
+                                (cache.width(), cache.height()),
+                                *offset,
+                            ),
+                        },
                     };
                     CompositeNode {
                         id: n.id,
@@ -353,7 +368,10 @@ impl Document {
         let n = self.node(id)?;
         if !matches!(
             n.kind,
-            NodeKind::Raster { .. } | NodeKind::Fill { .. } | NodeKind::Path { .. }
+            NodeKind::Raster { .. }
+                | NodeKind::Fill { .. }
+                | NodeKind::Path { .. }
+                | NodeKind::Smart { .. }
         ) {
             // Mask-only nodes: the mask is already in document space.
             return n.mask.as_ref().map(|m| (**m).clone());
@@ -387,6 +405,16 @@ impl Document {
                 ));
             }
             if let NodeKind::Path { cache, .. } = &n.kind {
+                out.push((
+                    Arc::as_ptr(cache) as usize,
+                    cache.tile_count() * 256 * 256 * 8,
+                ));
+            }
+            if let NodeKind::Smart { source, cache, .. } = &n.kind {
+                out.push((
+                    Arc::as_ptr(source) as usize,
+                    source.tile_count() * 256 * 256 * 8,
+                ));
                 out.push((
                     Arc::as_ptr(cache) as usize,
                     cache.tile_count() * 256 * 256 * 8,

@@ -163,6 +163,19 @@ pub enum Command {
         path: Arc<Path>,
         style: PathStyle,
     },
+    /// Turn a pixel node into a smart layer with an empty filter stack.
+    ConvertToSmart {
+        id: NodeId,
+    },
+    /// Bake a smart layer's filters into pixels.
+    Rasterize {
+        id: NodeId,
+    },
+    /// Replace a smart layer's filter stack; the cache is rendered again.
+    SetFilters {
+        id: NodeId,
+        filters: Vec<emulsion_filters::Filter>,
+    },
     /// Replace the ruler guides.
     SetGuides {
         guides: Vec<crate::document::Guide>,
@@ -236,6 +249,12 @@ impl Command {
             Command::SetGuides { .. } => "Guides".into(),
             Command::ReplaceContent { label, .. } => label.clone(),
             Command::SetPath { .. } => "Edit path".into(),
+            Command::ConvertToSmart { .. } => "Smart layer".into(),
+            Command::Rasterize { .. } => "Rasterize".into(),
+            Command::SetFilters { filters, .. } => match filters.last() {
+                Some(f) => f.label().to_string(),
+                None => "Filters".into(),
+            },
         }
     }
 
@@ -462,7 +481,8 @@ impl Command {
             Command::SetPlacement { id, placement } => {
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 match &mut n.kind {
-                    NodeKind::Raster { placement: p, .. } => {
+                    NodeKind::Raster { placement: p, .. }
+                    | NodeKind::Smart { placement: p, .. } => {
                         *p = *placement;
                         Ok(None)
                     }
@@ -582,6 +602,67 @@ impl Command {
             }
             Command::SetGuides { guides } => {
                 doc.guides = guides.clone();
+                Ok(None)
+            }
+            Command::ConvertToSmart { id } => {
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let NodeKind::Raster { raster, placement } = &n.kind else {
+                    return Err(CommandError::NoSuchParam(*id, "pixels".into()));
+                };
+                n.kind = NodeKind::Smart {
+                    source: raster.clone(),
+                    filters: Vec::new(),
+                    placement: *placement,
+                    cache: raster.clone(),
+                    offset: (0, 0),
+                };
+                Ok(None)
+            }
+            Command::Rasterize { id } => {
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let NodeKind::Smart {
+                    source,
+                    placement,
+                    cache,
+                    offset,
+                    ..
+                } = &n.kind
+                else {
+                    return Err(CommandError::NoSuchParam(*id, "filters".into()));
+                };
+                let p = crate::smart::cache_placement(
+                    placement,
+                    (source.width(), source.height()),
+                    (cache.width(), cache.height()),
+                    *offset,
+                );
+                n.kind = NodeKind::Raster {
+                    raster: cache.clone(),
+                    placement: p,
+                };
+                Ok(None)
+            }
+            Command::SetFilters { id, filters } => {
+                if filters.len() > 32 {
+                    return Err(CommandError::Invalid(
+                        crate::document::DocumentError::BadValue(*id, "too many filters"),
+                    ));
+                }
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let NodeKind::Smart {
+                    source,
+                    filters: f,
+                    cache,
+                    offset,
+                    ..
+                } = &mut n.kind
+                else {
+                    return Err(CommandError::NoSuchParam(*id, "filters".into()));
+                };
+                let (c, o) = crate::smart::render(source, filters);
+                *cache = c;
+                *offset = o;
+                *f = filters.clone();
                 Ok(None)
             }
             Command::SetPath { id, path, style } => {

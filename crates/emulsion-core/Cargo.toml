@@ -19,3 +19,4 @@ parking_lot = { workspace = true }
 smallvec = { workspace = true }
 glam = { workspace = true }
 emulsion-raster = { workspace = true }
+emulsion-filters = { workspace = true }
