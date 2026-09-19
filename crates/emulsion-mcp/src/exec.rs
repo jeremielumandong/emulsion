@@ -680,6 +680,118 @@ fn doc_raster(doc: &Document) -> Raster {
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
     let (w, h) = (doc.width, doc.height);
     match name {
+        "inpaint" => {
+            if emulsion_ai::inpaint::available().is_none() {
+                return Err(err(
+                    "the fill model is not installed; download_model lama first",
+                ));
+            }
+            let hole = match args.get("rect").and_then(Value::as_array) {
+                Some(r) if r.len() == 4 => {
+                    let v: Vec<i32> = r
+                        .iter()
+                        .map(|x| x.as_f64().unwrap_or(0.0).round() as i32)
+                        .collect();
+                    let rect = IRect::new(v[0], v[1], v[2].max(1), v[3].max(1));
+                    emulsion_raster::Mask::from_fn(w, h, 0, move |x, y| {
+                        let (x, y) = (x as i32, y as i32);
+                        if x >= rect.x && y >= rect.y && x < rect.right() && y < rect.bottom() {
+                            255
+                        } else {
+                            0
+                        }
+                    })
+                }
+                _ => match &doc.selection {
+                    Some(s) => (**s).clone(),
+                    None => return Err(err("select the area to fill, or pass rect")),
+                },
+            };
+            let img = doc_raster(doc);
+            let job = emulsion_ai::jobs::Job::new();
+            let (layer, reg) =
+                emulsion_ai::inpaint::fill(&img, &hole, &job).map_err(|e| err(e.to_string()))?;
+            Ok(Planned {
+                commands: vec![Command::AddNode {
+                    node: Box::new(Node::raster(
+                        0,
+                        "AI fill",
+                        Arc::new(layer),
+                        Placement::at(reg.x as f64, reg.y as f64),
+                    )),
+                    slot: Slot::TOP,
+                }],
+                message: format!(
+                    "Filled {}×{} at {}, {} into a new node \"AI fill\"",
+                    reg.w, reg.h, reg.x, reg.y
+                ),
+            })
+        }
+        "depth_map" => {
+            if emulsion_ai::depth::available().is_none() {
+                return Err(err(
+                    "the depth model is not installed; download_model depth-anything-v2-small first",
+                ));
+            }
+            let img = doc_raster(doc);
+            let job = emulsion_ai::jobs::Job::new();
+            let m = emulsion_ai::depth::estimate(&img, &job).map_err(|e| err(e.to_string()))?;
+            let name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("Depth (AI)")
+                .to_string();
+            Ok(Planned {
+                commands: vec![Command::AddNode {
+                    node: Box::new(Node::raster(
+                        0,
+                        name.clone(),
+                        Arc::new(m.to_grey_raster()),
+                        Placement::default(),
+                    )),
+                    slot: Slot::TOP,
+                }],
+                message: format!("Added depth map {name:?}: near is bright, far is dark"),
+            })
+        }
+        "upscale" => {
+            if emulsion_ai::upscale::available().is_none() {
+                return Err(err(
+                    "no upscale model is installed; download_model swin2sr-realworld-x4 first",
+                ));
+            }
+            let f = emulsion_ai::upscale::factor();
+            if w.saturating_mul(f) > 16_384 || h.saturating_mul(f) > 16_384 {
+                return Err(err(
+                    "too large to upscale in one go; crop or downsize first",
+                ));
+            }
+            let img = doc_raster(doc);
+            let job = emulsion_ai::jobs::Job::new();
+            let big = emulsion_ai::upscale::upscale(&img, &job).map_err(|e| err(e.to_string()))?;
+            Ok(Planned {
+                commands: vec![
+                    Command::ImageSize {
+                        width: w * f,
+                        height: h * f,
+                    },
+                    Command::AddNode {
+                        node: Box::new(Node::raster(
+                            0,
+                            format!("Upscaled ×{f} (AI)"),
+                            Arc::new(big),
+                            Placement::default(),
+                        )),
+                        slot: Slot::TOP,
+                    },
+                ],
+                message: format!(
+                    "Upscaled ×{f} to {}×{}; the result is the top node",
+                    w * f,
+                    h * f
+                ),
+            })
+        }
         "download_model" => {
             let id = args
                 .get("id")

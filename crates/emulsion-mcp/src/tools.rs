@@ -40,6 +40,9 @@ pub const HEAVY: &[&str] = &[
     "select_subject",
     "select_by_points",
     "remove_background",
+    "inpaint",
+    "depth_map",
+    "upscale",
 ];
 
 const BLEND_MODES: &[&str] = &[
@@ -384,6 +387,24 @@ pub fn definitions() -> Vec<ToolDef> {
             "remove_background",
             "Cut the subject out of a pixel node (or the whole picture when node is omitted) into a new node with a transparent background, hiding the original. Needs a matte model.",
             json!({ "node": node() }),
+            &[],
+        ),
+        def(
+            "inpaint",
+            "Fill the selection (or rect [x, y, width, height]) from its surroundings with the LaMa model into a new node: removes objects and repairs holes, better than content_aware_fill on structure and texture. Needs the fill model.",
+            json!({ "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 } }),
+            &[],
+        ),
+        def(
+            "depth_map",
+            "Add a grey depth-map node of the picture (near is bright) with Depth Anything; use it as a mask for depth of field, fog or depth-aware grading. Needs the depth model.",
+            json!({ "name": { "type": "string" } }),
+            &[],
+        ),
+        def(
+            "upscale",
+            "Enlarge the whole picture with the installed super-resolution model (×4, or ×2 with the lightweight model): the canvas grows by the factor and the result lands as the top node. Slow on a CPU (tens of seconds per megapixel). Needs an upscale model.",
+            json!({}),
             &[],
         ),
         def(

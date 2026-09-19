@@ -1776,6 +1776,11 @@ impl EditorView {
                 "Remove background (AI)".into(),
                 MenuAction::RemoveBackground,
             ));
+            list.push(("Depth map (AI)".into(), MenuAction::DepthMap));
+            list.push((
+                format!("Upscale ×{} (AI)", emulsion_ai::upscale::factor()).into(),
+                MenuAction::Upscale,
+            ));
             self.menu_list("add-menu", list, p, cx)
         });
 
@@ -2503,6 +2508,8 @@ impl EditorView {
                             }
                             MenuAction::Add(node) => this.add_node((**node).clone(), cx),
                             MenuAction::RemoveBackground => this.remove_background(cx),
+                            MenuAction::DepthMap => this.depth_layer(cx),
+                            MenuAction::Upscale => this.ai_upscale(cx),
                         }
                         this.menu = None;
                         cx.notify();
@@ -2516,6 +2523,8 @@ enum MenuAction {
     Blend(NodeId, BlendMode),
     Add(Box<Node>),
     RemoveBackground,
+    DepthMap,
+    Upscale,
 }
 
 impl Render for EditorView {

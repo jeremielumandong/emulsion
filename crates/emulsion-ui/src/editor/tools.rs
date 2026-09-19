@@ -2181,6 +2181,11 @@ impl EditorView {
                         .on_click(cx.listener(|this, _, _, cx| this.content_aware_fill(cx)))
                         .into_any_element(),
                 );
+                v.push(
+                    chip("sel-aifill", "AI fill", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.ai_fill(cx)))
+                        .into_any_element(),
+                );
             }
             Tool::Brush | Tool::Heal | Tool::Clone => {
                 let open = self.presets.open;

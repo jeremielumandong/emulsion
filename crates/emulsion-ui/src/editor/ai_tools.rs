@@ -6,7 +6,7 @@
 use super::*;
 use emulsion_ai::jobs::Job;
 use emulsion_ai::models::Task;
-use emulsion_ai::{matte, sam};
+use emulsion_ai::{depth, inpaint, matte, sam, upscale};
 use emulsion_raster::IRect;
 use emulsion_raster::composite::region;
 use emulsion_raster::select::Combine;
@@ -286,6 +286,172 @@ impl EditorView {
                     );
                 }
                 Err(e) => this.set_status(format!("AI select: {e}"), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fill the selection from its surroundings with the inpainting model,
+    /// into a new node.
+    pub fn ai_fill(&mut self, cx: &mut Context<Self>) {
+        if inpaint::available().is_none() {
+            self.set_status(missing(Task::Inpaint), true, cx);
+            return;
+        }
+        let Some(sel) = self.editor.doc.selection.clone() else {
+            self.set_status("Select the area to fill first.", false, cx);
+            return;
+        };
+        let img = self.composite_raster();
+        let job = Job::new();
+        self.watch_job(job.clone(), cx);
+        let j = job.clone();
+        let slot = self.insertion_slot();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_spawn(async move {
+                    let img = img.await;
+                    let r = inpaint::fill(&img, &sel, &j);
+                    j.finish();
+                    r
+                })
+                .await;
+            this.update(cx, |this, cx| match r {
+                Ok((layer, reg)) => {
+                    let node = Node::raster(
+                        0,
+                        "AI fill",
+                        Arc::new(layer),
+                        Placement::at(reg.x as f64, reg.y as f64),
+                    );
+                    if let Some(id) = this.execute(
+                        Command::AddNode {
+                            node: Box::new(node),
+                            slot,
+                        },
+                        cx,
+                    ) {
+                        this.selected = Some(id);
+                        this.set_status("Filled into a new node. Hide it to compare.", false, cx);
+                    }
+                }
+                Err(e) => this.set_status(format!("AI fill: {e}"), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A grey depth map of the picture as a new node (near is bright).
+    pub fn depth_layer(&mut self, cx: &mut Context<Self>) {
+        if depth::available().is_none() {
+            self.set_status(missing(Task::Depth), true, cx);
+            return;
+        }
+        let img = self.composite_raster();
+        let job = Job::new();
+        self.watch_job(job.clone(), cx);
+        let j = job.clone();
+        let slot = self.insertion_slot();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_spawn(async move {
+                    let img = img.await;
+                    let r = depth::estimate(&img, &j).map(|m| m.to_grey_raster());
+                    j.finish();
+                    r
+                })
+                .await;
+            this.update(cx, |this, cx| match r {
+                Ok(grey) => {
+                    let node = Node::raster(0, "Depth (AI)", Arc::new(grey), Placement::default());
+                    if let Some(id) = this.execute(
+                        Command::AddNode {
+                            node: Box::new(node),
+                            slot,
+                        },
+                        cx,
+                    ) {
+                        this.selected = Some(id);
+                        this.set_status(
+                            "Depth map added: near is bright. Use it as a mask for depth of field or fog.",
+                            false,
+                            cx,
+                        );
+                    }
+                }
+                Err(e) => this.set_status(format!("Depth: {e}"), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Enlarge the whole picture with the upscale model: the canvas grows by
+    /// the model's factor and the result lands as a new node on top.
+    pub fn ai_upscale(&mut self, cx: &mut Context<Self>) {
+        if upscale::available().is_none() {
+            self.set_status(missing(Task::Upscale), true, cx);
+            return;
+        }
+        let f = upscale::factor();
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        if w.saturating_mul(f) > 16_384 || h.saturating_mul(f) > 16_384 {
+            self.set_status(
+                "Too large to upscale in one go: crop or downsize first.",
+                true,
+                cx,
+            );
+            return;
+        }
+        let img = self.composite_raster();
+        let job = Job::new();
+        self.watch_job(job.clone(), cx);
+        let j = job.clone();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_spawn(async move {
+                    let img = img.await;
+                    let r = upscale::upscale(&img, &j);
+                    j.finish();
+                    r
+                })
+                .await;
+            this.update(cx, |this, cx| match r {
+                Ok(big) => {
+                    this.editor.begin(format!("Upscale ×{f}"));
+                    this.execute(
+                        Command::ImageSize {
+                            width: w * f,
+                            height: h * f,
+                        },
+                        cx,
+                    );
+                    let node = Node::raster(
+                        0,
+                        format!("Upscaled ×{f} (AI)"),
+                        Arc::new(big),
+                        Placement::default(),
+                    );
+                    if let Some(id) = this.execute(
+                        Command::AddNode {
+                            node: Box::new(node),
+                            slot: Slot::TOP,
+                        },
+                        cx,
+                    ) {
+                        this.selected = Some(id);
+                    }
+                    this.editor.end();
+                    this.fit_pending = true;
+                    this.set_status(
+                        format!("Upscaled ×{f}: the canvas grew and the result is the top node."),
+                        false,
+                        cx,
+                    );
+                }
+                Err(e) => this.set_status(format!("Upscale: {e}"), true, cx),
             })
             .ok();
         })

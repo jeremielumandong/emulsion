@@ -15,6 +15,8 @@
 
 pub mod critique;
 pub mod decide;
+pub mod depth;
+pub mod inpaint;
 pub mod jev;
 pub mod jobs;
 pub mod matte;
@@ -24,3 +26,4 @@ pub mod prep;
 pub mod runner;
 pub mod sam;
 pub mod suggest;
+pub mod upscale;
