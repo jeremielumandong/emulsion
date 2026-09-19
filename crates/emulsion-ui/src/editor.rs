@@ -5,6 +5,7 @@ use crate::theme::{self, MONO_FONT, Palette, dim};
 use crate::viewport::{self, CanvasBounds, Scene, TileCache, View, Which};
 use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fraction};
 
+mod adjust_ui;
 mod canvas_size;
 mod history;
 mod pen;
@@ -90,6 +91,8 @@ enum SliderKey {
     ToolSizeJitter,
     ToolColorJitter,
     PenWidth,
+    /// Bounds slot for a node's curves editor.
+    Curve(NodeId),
     Tolerance,
     Feather,
     Straighten,
@@ -128,6 +131,8 @@ enum Drag {
         max: f32,
         step: f32,
     },
+    /// A point of a curves editor.
+    Curve(adjust_ui::CurveDrag),
     /// Dragging a Path node with the Move tool.
     MovePath {
         id: NodeId,
@@ -225,6 +230,7 @@ pub struct EditorView {
     pub(crate) size_panel: Option<canvas_size::SizePanel>,
     pub(crate) transform_fields: Option<transform::TransformFields>,
     pub(crate) presets: presets::PresetState,
+    pub(crate) adjust_ui: adjust_ui::AdjustUi,
     /// Shift held during a drag: free aspect, or 15° rotation steps.
     pub(crate) drag_shift: bool,
 }
@@ -291,6 +297,7 @@ impl EditorView {
             size_panel: None,
             transform_fields: None,
             presets: Default::default(),
+            adjust_ui: Default::default(),
             drag_shift: false,
         }
     }
@@ -816,6 +823,10 @@ impl EditorView {
                 p.y = (start.y + dy).round();
                 self.execute(Command::SetPlacement { id, placement: p }, cx);
             }
+            Drag::Curve(d) => {
+                let d = d.clone();
+                self.curve_move(&d, pos, cx);
+            }
             Drag::MovePath {
                 id,
                 start_doc,
@@ -890,7 +901,8 @@ impl EditorView {
             Some(Drag::Move { .. })
             | Some(Drag::MovePath { .. })
             | Some(Drag::Slider { .. })
-            | Some(Drag::Transform(_)) => {
+            | Some(Drag::Transform(_))
+            | Some(Drag::Curve(_)) => {
                 if self.editor.in_transaction() {
                     self.editor.end();
                 }
@@ -1047,6 +1059,7 @@ impl EditorView {
                 self.pen_restyle(cx);
                 cx.notify();
             }
+            SliderKey::Curve(_) => {}
             SliderKey::Tolerance => {
                 self.tools.tolerance = v as u8;
                 cx.notify();
@@ -1583,6 +1596,12 @@ impl EditorView {
             .key_context("NodePanel")
             .child(self.scene_graph(p, cx))
             .child(self.inspector(p, window, cx))
+            .child(
+                div()
+                    .px(px(15.))
+                    .pt(px(10.))
+                    .child(self.histogram_view(p, cx)),
+            )
             .child(self.history_list(p, cx))
     }
 
@@ -1639,6 +1658,7 @@ impl EditorView {
                     },
                 ),
             ));
+            items.push(("LUT from .cube file…".into(), Node::group(0, "__lut__")));
             items.push(("Empty group".into(), Node::group(0, "Group")));
             self.menu_list(
                 "add-menu",
@@ -1957,6 +1977,10 @@ impl EditorView {
 
         match &n.kind {
             NodeKind::Adjust(a) => {
+                let a = a.clone();
+                for extra in self.adjust_extras(id, &a, p, cx) {
+                    body = body.child(extra);
+                }
                 for spec in a.params() {
                     let ParamSpec {
                         key,
@@ -1978,7 +2002,7 @@ impl EditorView {
                         cx,
                     ));
                 }
-                if a.params().is_empty() {
+                if a.params().is_empty() && !matches!(a, Adjustment::Curves { .. }) {
                     body = body.child(mono("no parameters", 10., p.muted));
                 }
             }
@@ -2244,6 +2268,9 @@ impl EditorView {
                             MenuAction::Blend(id, m) => {
                                 let (id, m) = (*id, *m);
                                 this.execute(Command::SetBlend { id, blend: m }, cx);
+                            }
+                            MenuAction::Add(node) if node.name == "__lut__" => {
+                                this.import_lut(None, cx)
                             }
                             MenuAction::Add(node) => this.add_node((**node).clone(), cx),
                         }

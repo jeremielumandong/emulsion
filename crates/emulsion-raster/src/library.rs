@@ -16,6 +16,7 @@ pub struct BrushPreset {
 }
 
 pub const CATEGORIES: &[&str] = &[
+    "Manga",
     "Ink",
     "Pencil",
     "Chalk",
@@ -40,6 +41,234 @@ fn p(name: &str, category: &str, note: &str, brush: Brush) -> BrushPreset {
 pub fn library() -> Vec<BrushPreset> {
     let d = Brush::default();
     vec![
+        // ── Manga: nibs, liners, tones and effects ──
+        p(
+            "Maru pen",
+            "Manga",
+            "Mapping nib: very fine, thickens only under pressure; for eyes, hair and hatching",
+            Brush {
+                size: 4.0,
+                hardness: 1.0,
+                spacing: 0.06,
+                size_pressure: 1.0,
+                speed_thins: 0.9,
+                taper_start: 6.0,
+                taper_end: 8.0,
+                stabilizer: 0.4,
+                ..d
+            },
+        ),
+        p(
+            "Kabura pen",
+            "Manga",
+            "Turnip nib: even medium line with slight swell; for backgrounds and lettering",
+            Brush {
+                size: 6.0,
+                hardness: 1.0,
+                spacing: 0.06,
+                size_pressure: 0.35,
+                speed_thins: 0.3,
+                taper_start: 4.0,
+                taper_end: 4.0,
+                stabilizer: 0.5,
+                ..d
+            },
+        ),
+        p(
+            "Milli pen 0.3",
+            "Manga",
+            "Technical liner, constant 2 px",
+            Brush {
+                size: 2.0,
+                hardness: 1.0,
+                spacing: 0.1,
+                stabilizer: 0.6,
+                ..d
+            },
+        ),
+        p(
+            "Milli pen 0.8",
+            "Manga",
+            "Technical liner, constant 5 px; panel borders",
+            Brush {
+                size: 5.0,
+                hardness: 1.0,
+                spacing: 0.1,
+                stabilizer: 0.7,
+                ..d
+            },
+        ),
+        p(
+            "Fude brush",
+            "Manga",
+            "Brush pen for bold expressive lines and shadows",
+            Brush {
+                size: 22.0,
+                hardness: 0.95,
+                spacing: 0.05,
+                size_pressure: 1.0,
+                speed_thins: 1.0,
+                taper_start: 30.0,
+                taper_end: 50.0,
+                stabilizer: 0.5,
+                ..d
+            },
+        ),
+        p(
+            "Speed lines",
+            "Manga",
+            "Hairline that fades out; flick for motion and focus lines",
+            Brush {
+                size: 5.0,
+                hardness: 1.0,
+                spacing: 0.05,
+                size_pressure: 1.0,
+                speed_thins: 1.0,
+                taper_start: 2.0,
+                taper_end: 160.0,
+                stabilizer: 0.7,
+                ..d
+            },
+        ),
+        p(
+            "Screentone 20%",
+            "Manga",
+            "Light dot tone fixed to the page",
+            Brush {
+                size: 120.0,
+                hardness: 1.0,
+                spacing: 0.1,
+                grain: GrainKind::Halftone,
+                grain_scale: 6.0,
+                grain_strength: 0.32,
+                ..d
+            },
+        ),
+        p(
+            "Screentone 40%",
+            "Manga",
+            "Medium dot tone",
+            Brush {
+                size: 120.0,
+                hardness: 1.0,
+                spacing: 0.1,
+                grain: GrainKind::Halftone,
+                grain_scale: 6.0,
+                grain_strength: 0.5,
+                ..d
+            },
+        ),
+        p(
+            "Screentone 60%",
+            "Manga",
+            "Dark dot tone for shadows",
+            Brush {
+                size: 120.0,
+                hardness: 1.0,
+                spacing: 0.1,
+                grain: GrainKind::Halftone,
+                grain_scale: 6.0,
+                grain_strength: 0.68,
+                ..d
+            },
+        ),
+        p(
+            "Hatching",
+            "Manga",
+            "Parallel 45° lines fixed to the page",
+            Brush {
+                size: 80.0,
+                hardness: 1.0,
+                spacing: 0.1,
+                grain: GrainKind::Hatch,
+                grain_scale: 7.0,
+                grain_strength: 1.0,
+                ..d
+            },
+        ),
+        p(
+            "Cross hatch",
+            "Manga",
+            "Two crossing line directions for deeper shade",
+            Brush {
+                size: 80.0,
+                hardness: 1.0,
+                spacing: 0.1,
+                grain: GrainKind::CrossHatch,
+                grain_scale: 8.0,
+                grain_strength: 1.0,
+                ..d
+            },
+        ),
+        p(
+            "Blue pencil",
+            "Manga",
+            "Non-photo blue rough; set the colour to #A4C8FF and sketch loosely",
+            Brush {
+                size: 5.0,
+                hardness: 0.5,
+                flow: 0.4,
+                opacity: 0.8,
+                spacing: 0.1,
+                grain: GrainKind::Paper,
+                grain_scale: 3.0,
+                grain_strength: 0.5,
+                size_pressure: 0.5,
+                flow_pressure: 0.6,
+                speed_thins: 0.4,
+                ..d
+            },
+        ),
+        p(
+            "Sketch pencil",
+            "Manga",
+            "Loose graphite for roughs and construction lines",
+            Brush {
+                size: 6.0,
+                hardness: 0.4,
+                flow: 0.35,
+                opacity: 0.85,
+                spacing: 0.1,
+                grain: GrainKind::Paper,
+                grain_scale: 3.0,
+                grain_strength: 0.7,
+                size_pressure: 0.5,
+                flow_pressure: 0.7,
+                speed_thins: 0.5,
+                ..d
+            },
+        ),
+        p(
+            "White ink",
+            "Manga",
+            "Opaque correction and highlights; set the colour to white",
+            Brush {
+                size: 4.0,
+                hardness: 1.0,
+                spacing: 0.06,
+                size_pressure: 0.6,
+                taper_start: 3.0,
+                taper_end: 3.0,
+                stabilizer: 0.4,
+                ..d
+            },
+        ),
+        p(
+            "Ink wash",
+            "Manga",
+            "Diluted ink for grey washes; layers darken",
+            Brush {
+                size: 60.0,
+                hardness: 0.3,
+                flow: 0.25,
+                opacity: 0.5,
+                spacing: 0.08,
+                wetness: 0.4,
+                edge_darken: 0.5,
+                blend: BrushBlend::Multiply,
+                ..d
+            },
+        ),
         // ── Ink: crisp, opaque, pressure- and speed-sensitive lines ──
         p(
             "Fine liner",

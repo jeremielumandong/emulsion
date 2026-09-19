@@ -297,7 +297,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
             NodeContent::Adjust(op) => {
                 let mask = mask_doc(&node.mask);
                 let cov = coverage(mask.as_ref());
-                apply_adjust(acc, op, cov.as_deref(), node.blend, ctx.space);
+                apply_adjust(acc, op, cov.as_deref(), node.blend, ctx.space, ctx);
             }
         }
     }
@@ -344,7 +344,9 @@ fn apply_adjust(
     cov: Option<&[f32]>,
     mode: BlendMode,
     space: BlendSpace,
+    ctx: Ctx,
 ) {
+    let positional = op.positional();
     for (idx, p) in acc.iter_mut().enumerate() {
         let a = p[3];
         if a <= 0.0 {
@@ -356,7 +358,15 @@ fn apply_adjust(
         }
         let inv = 1.0 / a;
         let rgb = [p[0] * inv, p[1] * inv, p[2] * inv];
-        let adj = op.apply(rgb);
+        let adj = if positional {
+            // Grain is defined on document pixels at full size; scale up at
+            // reduced levels so it stays the same size on screen.
+            let x = (ctx.ox + (idx % TILE as usize) as i64) << ctx.level;
+            let y = (ctx.oy + (idx / TILE as usize) as i64) << ctx.level;
+            op.apply_at(rgb, x as i32, y as i32)
+        } else {
+            op.apply(rgb)
+        };
         let target = match mode {
             BlendMode::Normal | BlendMode::PassThrough | BlendMode::Dissolve => adj,
             m => {

@@ -588,6 +588,14 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             if let Some(p) = args.get("params").and_then(Value::as_object) {
                 apply_params(&mut adj, p)?;
             }
+            if let Adjustment::Lut3D { cube, .. } = &adj
+                && cube.name.is_empty()
+                && cube.size == 2
+            {
+                return Err(err(
+                    "a lut adjustment needs params.lut_file: the path to a .cube file",
+                ));
+            }
             let mut node = Node::adjust(0, adj);
             if let Some(n) = args.get("name").and_then(Value::as_str) {
                 node.name = n.to_string();
@@ -895,8 +903,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 .collect();
             Ok(ToolResult::text(serde_json::to_string_pretty(&json!({
                 "brushes": list,
-                "settings": "any Brush field: size, hardness, opacity, flow, spacing, roundness, angle, follow_path, grain (None|Paper|Canvas|Chalk|Speckle), grain_scale, grain_strength, size_pressure, flow_pressure, speed_thins, taper_start, taper_end, size_jitter, scatter, color_jitter, wetness, blend (Normal|Multiply|Behind)",
-                "tips": "Ink for lines (G-pen tapers), Pencil and Chalk show paper grain, Markers darken where they overlap, Watercolour and Oil mix with what is under them, Smudge drags colour, Eraser removes. Give pressure per point for thick-to-thin lines."
+                "settings": "any Brush field: size, hardness, opacity, flow, spacing, roundness, angle, follow_path, grain (None|Paper|Canvas|Chalk|Speckle|Bristle|Halftone|Hatch|CrossHatch), grain_scale (dot or line pitch for tones), grain_strength (dot size for Halftone), edge_darken, size_pressure, flow_pressure, speed_thins, taper_start, taper_end, size_jitter, scatter, color_jitter, wetness, blend (Normal|Multiply|Behind)",
+                "tips": "Manga: Maru/Kabura/Fude nibs for line work, Milli pens for borders, Screentone brushes lay dot tone fixed to the page (paint an area with one), Hatching/Cross hatch for shade, Speed lines flick from thick to hairline, Blue pencil for roughs (color #A4C8FF), White ink for highlights. Ink for lines (G-pen tapers), Pencil and Chalk show paper grain, Markers darken where they overlap, Watercolour and Oil mix with what is under them, Smudge drags colour, Eraser removes. Give pressure per point for thick-to-thin lines."
             })).unwrap_or_default()))
         }
         "select_all" => {
@@ -1182,22 +1190,129 @@ fn parse_blend(s: &str) -> Option<BlendMode> {
 }
 
 pub fn adjustment(kind: &str) -> Option<Adjustment> {
-    let want = match kind {
-        "exposure" => "Exposure",
-        "brightness_contrast" => "Brightness / Contrast",
-        "levels" => "Levels",
-        "hue_saturation" => "Hue / Saturation",
-        "white_balance" => "White balance",
-        "invert" => "Invert",
-        _ => return None,
+    let k = kind.trim().to_lowercase().replace(['-', ' '], "_");
+    let k = match k.as_str() {
+        "bw" | "black_white" | "monochrome" => "black_and_white",
+        "curve" => "curves",
+        "colour_balance" => "color_balance",
+        "lut3d" | "cube" => "lut",
+        other => other,
     };
-    Adjustment::catalogue()
-        .into_iter()
-        .find(|a| a.label() == want)
+    if k == "lut" {
+        // A LUT needs a file; the caller fills it in from `lut_file`.
+        return Some(Adjustment::Lut3D {
+            cube: emulsion_raster::adjust::Cube {
+                name: String::new(),
+                size: 2,
+                data: Arc::new(vec![
+                    [0, 0, 0],
+                    [65535, 0, 0],
+                    [0, 65535, 0],
+                    [65535, 65535, 0],
+                    [0, 0, 65535],
+                    [65535, 0, 65535],
+                    [0, 65535, 65535],
+                    [65535; 3],
+                ]),
+            },
+            strength: 100.0,
+        });
+    }
+    Adjustment::catalogue().into_iter().find(|a| a.key() == k)
+}
+
+fn curve_points(v: &Value, what: &str) -> Result<Vec<[f32; 2]>, ToolResult> {
+    let arr = v.as_array().ok_or_else(|| {
+        err(format!(
+            "{what} must be an array of [input, output] pairs on 0–255"
+        ))
+    })?;
+    let mut pts: Vec<[f32; 2]> = Vec::with_capacity(arr.len());
+    for p in arr {
+        let a = p
+            .as_array()
+            .filter(|a| a.len() == 2)
+            .ok_or_else(|| err(format!("{what}: each point is [input, output]")))?;
+        let (x, y) = (
+            a[0].as_f64().unwrap_or(f64::NAN),
+            a[1].as_f64().unwrap_or(f64::NAN),
+        );
+        if !x.is_finite() || !y.is_finite() {
+            return Err(err(format!("{what}: points must be numbers")));
+        }
+        pts.push([x.clamp(0.0, 255.0) as f32, y.clamp(0.0, 255.0) as f32]);
+    }
+    if pts.len() < 2 || pts.len() > 32 {
+        return Err(err(format!("{what} needs 2 to 32 points")));
+    }
+    pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    Ok(pts)
 }
 
 fn apply_params(adj: &mut Adjustment, params: &Map<String, Value>) -> Result<(), ToolResult> {
     for (k, v) in params {
+        // Structured parameters first.
+        match (&mut *adj, k.as_str()) {
+            (Adjustment::Curves { master, .. }, "points" | "master") => {
+                *master = curve_points(v, k)?;
+                continue;
+            }
+            (Adjustment::Curves { red, .. }, "red") => {
+                *red = curve_points(v, k)?;
+                continue;
+            }
+            (Adjustment::Curves { green, .. }, "green") => {
+                *green = curve_points(v, k)?;
+                continue;
+            }
+            (Adjustment::Curves { blue, .. }, "blue") => {
+                *blue = curve_points(v, k)?;
+                continue;
+            }
+            (Adjustment::GradientMap { stops, .. }, "stops") => {
+                let arr = v
+                    .as_array()
+                    .ok_or_else(|| err("stops must be an array of [position 0-1, \"#RRGGBB\"]"))?;
+                let mut out = Vec::new();
+                for s in arr {
+                    let a = s
+                        .as_array()
+                        .filter(|a| a.len() == 2)
+                        .ok_or_else(|| err("each stop is [position, \"#RRGGBB\"]"))?;
+                    let pos = a[0]
+                        .as_f64()
+                        .ok_or_else(|| err("stop position must be a number"))?
+                        .clamp(0.0, 1.0) as f32;
+                    let c = color::premul_to_srgba8(hex_color(&a[1])?);
+                    out.push(emulsion_raster::adjust::Stop {
+                        pos,
+                        color: [c[0], c[1], c[2]],
+                    });
+                }
+                if out.len() < 2 || out.len() > 16 {
+                    return Err(err("a gradient map needs 2 to 16 stops"));
+                }
+                *stops = out;
+                continue;
+            }
+            (Adjustment::Lut3D { cube, .. }, "lut_file") => {
+                let path = v
+                    .as_str()
+                    .ok_or_else(|| err("lut_file must be a path to a .cube file"))?;
+                let text = std::fs::read_to_string(path)
+                    .map_err(|e| err(format!("cannot read {path}: {e}")))?;
+                *cube = emulsion_raster::adjust::Cube::parse(&text)
+                    .map_err(|e| err(format!("{path}: {e}")))?;
+                if cube.name.is_empty() {
+                    cube.name = std::path::Path::new(path)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                }
+                continue;
+            }
+            _ => {}
+        }
         let v = v
             .as_f64()
             .ok_or_else(|| err(format!("parameter '{k}' must be a number")))?;
@@ -1735,6 +1850,62 @@ mod tests {
             &mut e,
             "draw_path",
             &json!({ "d": "M 0 0 A 5 5 0 0 1 1 1" }),
+        );
+        assert!(r.is_error);
+    }
+
+    #[test]
+    fn new_adjustment_kinds_and_structured_params() {
+        let mut e = editor();
+        let r = execute(
+            &mut e,
+            "add_adjustment",
+            &json!({ "kind": "curves", "params": { "points": [[0, 0], [64, 40], [192, 215], [255, 255]], "red": [[0, 10], [255, 255]] } }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let NodeKind::Adjust(Adjustment::Curves { master, red, .. }) =
+            &e.doc.nodes.last().unwrap().kind
+        else {
+            panic!()
+        };
+        assert_eq!((master.len(), red[0][1]), (4, 10.0));
+        let r = execute(
+            &mut e,
+            "add_adjustment",
+            &json!({ "kind": "gradient_map", "params": { "stops": [[0, "#000000"], [1, "#ffcc00"]], "reverse": 1 } }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let NodeKind::Adjust(Adjustment::GradientMap { stops, reverse }) =
+            &e.doc.nodes.last().unwrap().kind
+        else {
+            panic!()
+        };
+        assert!(*reverse && stops[1].color == [255, 204, 0]);
+        for kind in [
+            "color_balance",
+            "vibrance",
+            "black_and_white",
+            "photo_filter",
+            "grain",
+            "threshold",
+            "posterize",
+            "Colour Balance",
+        ] {
+            let r = execute(&mut e, "add_adjustment", &json!({ "kind": kind }));
+            assert!(!r.is_error, "{kind}: {}", text(&r));
+        }
+        let r = execute(
+            &mut e,
+            "add_adjustment",
+            &json!({ "kind": "color_balance", "params": { "midtones_cr": 40, "preserve_luminosity": 0 } }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let r = execute(&mut e, "add_adjustment", &json!({ "kind": "lut" }));
+        assert!(r.is_error && text(&r).contains("lut_file"));
+        let r = execute(
+            &mut e,
+            "add_adjustment",
+            &json!({ "kind": "curves", "params": { "points": [[0, 0]] } }),
         );
         assert!(r.is_error);
     }

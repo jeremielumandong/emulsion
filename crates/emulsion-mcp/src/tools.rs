@@ -169,12 +169,18 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "add_adjustment",
-            "Add an adjustment node. It changes everything below it in the same parent. Parameters: \
+            "Add an adjustment node. It changes everything below it in the same parent. Kinds and parameters: \
              exposure {exposure -5..5 ev, offset -0.5..0.5, gamma 0.1..3}; brightness_contrast \
              {brightness -150..150, contrast -50..100}; levels {in_black 0..253, in_white 2..255, gamma \
-             0.1..9.99, out_black, out_white 0..255}; hue_saturation {hue -180..180, saturation \
-             -100..100, lightness -100..100}; white_balance {temperature -100..100 (warmth), tint \
-             -100..100}; invert {}.",
+             0.1..9.99, out_black, out_white 0..255}; curves {points: [[in,out],...] on 0..255 for the master \
+             curve, plus red/green/blue arrays}; hue_saturation {hue -180..180, saturation -100..100, \
+             lightness -100..100}; color_balance {shadows_cr, shadows_mg, shadows_yb, midtones_*, highlights_* \
+             -100..100, preserve_luminosity 0/1}; vibrance {vibrance, saturation -100..100}; black_and_white \
+             {reds, yellows, greens, cyans, blues, magentas -200..300, tint_hue 0..360, tint_strength 0..100}; \
+             photo_filter {hue 0..360, saturation 0..100, density 0..100, preserve_luminosity 0/1}; gradient_map \
+             {stops: [[0, \"#000000\"], [1, \"#ffffff\"]], reverse 0/1}; grain {amount 0..100, size 0.5..8, \
+             monochrome 0/1}; white_balance {temperature -100..100 (warmth), tint -100..100}; threshold {level \
+             1..255}; posterize {levels 2..256}; lut {lut_file: path to a .cube, strength 0..100}; invert {}.",
             json!({
                 "kind": { "type": "string", "enum": ADJUSTMENTS },
                 "params": { "type": "object", "additionalProperties": { "type": "number" } },

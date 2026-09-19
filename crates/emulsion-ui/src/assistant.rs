@@ -982,37 +982,80 @@ impl EditorView {
         } else {
             "CLAUDE CODE"
         };
-        let cards: Vec<AnyElement> = turn
+        // Finished cards fold into a count once there are many, so the dock
+        // stays a strip above the canvas instead of covering it.
+        let shown: Vec<&ToolCard> = turn
             .cards
             .iter()
             .filter(|c| !matches!(c.tool.as_str(), "describe_document"))
-            .map(|c| {
-                let (glyph, color) = match &c.status {
-                    CardStatus::Running => ("…", p.muted),
-                    CardStatus::Waiting => ("?", p.accent),
-                    CardStatus::Done => ("✓", p.ink),
-                    CardStatus::Failed(_) => ("✗", p.accent),
-                    CardStatus::Skipped => ("–", p.muted),
-                };
+            .collect();
+        let done_total = shown
+            .iter()
+            .filter(|c| c.status == CardStatus::Done)
+            .count();
+        const KEEP_DONE: usize = 4;
+        let mut done_seen = 0usize;
+        let folded = done_total.saturating_sub(KEEP_DONE);
+        let mut cards: Vec<AnyElement> = Vec::new();
+        if folded > 0 {
+            cards.push(
                 div()
                     .flex()
                     .gap(px(6.))
                     .px(px(8.))
                     .py(px(3.))
                     .border_1()
-                    .border_color(if c.status == CardStatus::Waiting {
-                        p.accent
-                    } else {
-                        p.line
-                    })
+                    .border_color(p.line)
                     .bg(p.soft_bg)
                     .font_family(MONO_FONT)
                     .text_size(px(10.5))
-                    .child(div().text_color(color).child(glyph))
-                    .child(div().text_color(p.ink).child(c.summary.clone()))
-                    .into_any_element()
-            })
-            .collect();
+                    .child(div().text_color(p.ink).child("✓"))
+                    .child(
+                        div()
+                            .text_color(p.muted)
+                            .child(format!("{folded} more done · see transcript")),
+                    )
+                    .into_any_element(),
+            );
+        }
+        cards.extend(
+            shown
+                .iter()
+                .filter(|c| {
+                    if c.status == CardStatus::Done {
+                        done_seen += 1;
+                        done_seen > folded
+                    } else {
+                        true
+                    }
+                })
+                .map(|c| {
+                    let (glyph, color) = match &c.status {
+                        CardStatus::Running => ("…", p.muted),
+                        CardStatus::Waiting => ("?", p.accent),
+                        CardStatus::Done => ("✓", p.ink),
+                        CardStatus::Failed(_) => ("✗", p.accent),
+                        CardStatus::Skipped => ("–", p.muted),
+                    };
+                    div()
+                        .flex()
+                        .gap(px(6.))
+                        .px(px(8.))
+                        .py(px(3.))
+                        .border_1()
+                        .border_color(if c.status == CardStatus::Waiting {
+                            p.accent
+                        } else {
+                            p.line
+                        })
+                        .bg(p.soft_bg)
+                        .font_family(MONO_FONT)
+                        .text_size(px(10.5))
+                        .child(div().text_color(color).child(glyph))
+                        .child(div().text_color(p.ink).child(c.summary.clone()))
+                        .into_any_element()
+                }),
+        );
         let pending: Vec<AnyElement> = turn
             .pending
             .iter()
@@ -1050,6 +1093,19 @@ impl EditorView {
                                 cx.listener(move |this, _, _, cx| this.answer(Some(i), false, cx)),
                             )
                             .test_support(),
+                    )
+                    .child(
+                        button(("always", i), "Always", false, p)
+                            .py(px(4.))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                app_state::update_settings(cx, |s| s.approve_all = true);
+                                this.answer(None, true, cx);
+                                this.set_status(
+                                    "Assistant changes now apply without asking. Change it in Settings.",
+                                    false,
+                                    cx,
+                                );
+                            })),
                     )
                     .into_any_element()
             })
@@ -1163,7 +1219,16 @@ impl EditorView {
                     d.child(div().text_size(px(12.5)).text_color(p.ink).child(text))
                 })
                 .when(!cards.is_empty(), |d| {
-                    d.child(div().flex().flex_wrap().gap(px(6.)).children(cards))
+                    d.child(
+                        div()
+                            .id("assistant-cards")
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(6.))
+                            .max_h(px(96.))
+                            .overflow_y_scroll()
+                            .children(cards),
+                    )
                 })
                 .children(pending)
                 .when(many, |d| {

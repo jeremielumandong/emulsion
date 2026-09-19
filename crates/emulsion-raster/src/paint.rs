@@ -41,6 +41,14 @@ pub enum GrainKind {
     Speckle,
     /// Streaks along the stroke, like the hairs of a loaded brush.
     Bristle,
+    /// Screentone: a regular grid of dots fixed to the canvas; `scale` is
+    /// the dot pitch and `grain_strength` the dot size (0 = tiny, 1 = solid).
+    Halftone,
+    /// Parallel hatching lines fixed to the canvas at 45°; `scale` is the
+    /// line pitch.
+    Hatch,
+    /// Two hatching directions crossing.
+    CrossHatch,
 }
 
 /// How the stroke composites onto the layer.
@@ -344,6 +352,32 @@ pub fn grain(kind: GrainKind, x: f32, y: f32, scale: f32) -> f32 {
         }
         // Sampled in the dab's own frame; see `Stroke::stamp`.
         GrainKind::Bristle => 1.0,
+        GrainKind::Halftone => {
+            // Distance to the nearest dot centre on a 45° grid.
+            let (u, v) = (
+                (x + y) / std::f32::consts::SQRT_2,
+                (x - y) / std::f32::consts::SQRT_2,
+            );
+            let (fu, fv) = (
+                (u / scale).fract().abs() - 0.5,
+                (v / scale).fract().abs() - 0.5,
+            );
+            let d = (fu * fu + fv * fv).sqrt() * 2.0;
+            (1.0 - d * 1.6).clamp(0.0, 1.0)
+        }
+        GrainKind::Hatch => {
+            let u = (x + y) / std::f32::consts::SQRT_2;
+            let f = (u / scale).fract().abs();
+            if f < 0.28 { 1.0 } else { 0.0 }
+        }
+        GrainKind::CrossHatch => {
+            let (u, v) = (
+                (x + y) / std::f32::consts::SQRT_2,
+                (x - y) / std::f32::consts::SQRT_2,
+            );
+            let (fu, fv) = ((u / scale).fract().abs(), (v / scale).fract().abs());
+            if fu < 0.24 || fv < 0.24 { 1.0 } else { 0.0 }
+        }
     }
 }
 
@@ -613,7 +647,12 @@ impl Stroke {
                             } else {
                                 grain(gk, x as f32, y as f32, gs)
                             };
-                            a *= 1.0 - gstr + gstr * g;
+                            match gk {
+                                // Screentone: strength sets the dot size; the tone is crisp.
+                                GrainKind::Halftone => a *= if g >= 1.0 - gstr { 1.0 } else { 0.0 },
+                                GrainKind::Hatch | GrainKind::CrossHatch => a *= g,
+                                _ => a *= 1.0 - gstr + gstr * g,
+                            }
                         }
                         if a <= 0.0005 {
                             continue;

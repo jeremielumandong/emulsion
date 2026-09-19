@@ -2358,6 +2358,10 @@ impl EditorView {
             ("gr-canvas", "canvas", GrainKind::Canvas),
             ("gr-chalk", "chalk", GrainKind::Chalk),
             ("gr-speck", "speckle", GrainKind::Speckle),
+            ("gr-bristle", "bristle", GrainKind::Bristle),
+            ("gr-tone", "screentone", GrainKind::Halftone),
+            ("gr-hatch", "hatch", GrainKind::Hatch),
+            ("gr-cross", "cross hatch", GrainKind::CrossHatch),
         ] {
             v.push(self.mode_chip(id, t, k, b.grain, p, cx, |e, k, cx| {
                 e.tools.brush.grain = k;

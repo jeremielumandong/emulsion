@@ -912,6 +912,58 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn curves_editor_adds_and_drags_points(cx: &mut TestAppContext) {
+        use emulsion_core::NodeKind;
+        use emulsion_raster::Adjustment;
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        let curves = Adjustment::catalogue()
+            .into_iter()
+            .find(|a| matches!(a, Adjustment::Curves { .. }))
+            .unwrap();
+        let id = cx
+            .update(|_, cx| {
+                e.update(cx, |e, cx| {
+                    e.execute(
+                        emulsion_core::Command::AddNode {
+                            node: Box::new(emulsion_core::Node::adjust(0, curves)),
+                            slot: emulsion_core::command::Slot::TOP,
+                        },
+                        cx,
+                    )
+                })
+            })
+            .unwrap();
+        cx.update(|_, cx| e.update(cx, |e, _| e.selected = Some(id)));
+        cx.run_until_parked();
+        // The editor square records its bounds during layout.
+        let bounds =
+            cx.update(|_, cx| e.read(cx).curve_bounds(id).expect("curves editor laid out"));
+        let at = |fx: f32, fy: f32| {
+            bounds.origin + gpui_kit::point(bounds.size.width * fx, bounds.size.height * (1.0 - fy))
+        };
+        // Click the middle of the line to add a point, then drag it up.
+        cx.update(|window, cx| window.drag(at(0.5, 0.5), at(0.5, 0.75), cx));
+        cx.run_until_parked();
+        let (pts, steps) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            let NodeKind::Adjust(Adjustment::Curves { master, .. }) =
+                &e.editor.doc.node(id).unwrap().kind
+            else {
+                panic!()
+            };
+            (master.clone(), e.editor.history.len())
+        });
+        assert_eq!(pts.len(), 3, "{pts:?}");
+        assert!(
+            (pts[1][0] - 127.5).abs() < 6.0 && pts[1][1] > 170.0,
+            "{pts:?}"
+        );
+        assert_eq!(steps, 2, "add node, then one curves step");
+    }
+
+    #[gpui_kit::test]
     fn the_default_hand_tool_pans_without_moving_pixels(cx: &mut TestAppContext) {
         let (ws, cx) = open(cx, doc(&["Photo"], None));
         cx.run_until_parked();
