@@ -3501,6 +3501,20 @@ impl EditorView {
             b.tilt,
             (0.0, 100.0, 1.0)
         );
+        // Pressure curve on a log scale: soft (0.25) … linear (1) … firm (4).
+        sl!(
+            SliderKey::ToolPressureCurve,
+            "pressure curve",
+            if (b.pressure_curve - 1.0).abs() < 0.05 {
+                "linear".to_string()
+            } else if b.pressure_curve < 1.0 {
+                format!("soft {:.2}", b.pressure_curve)
+            } else {
+                format!("firm {:.2}", b.pressure_curve)
+            },
+            (b.pressure_curve.log2() + 2.0) / 4.0,
+            (0.0, 100.0, 1.0)
+        );
         for (id, t, k) in [
             ("bl-normal", "normal", BrushBlend::Normal),
             ("bl-mult", "multiply", BrushBlend::Multiply),

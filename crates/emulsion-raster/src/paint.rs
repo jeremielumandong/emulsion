@@ -106,6 +106,9 @@ pub struct Brush {
     /// How much pen tilt shapes the tip, 0–1: a tilted pen widens and
     /// flattens the dab along the tilt, like the side of a pencil.
     pub tilt: f32,
+    /// Pressure response: effective = pressure ^ curve. Below 1 a light
+    /// touch already paints strongly; above 1 it takes a firm press.
+    pub pressure_curve: f32,
 
     // ── Jitter ──
     /// Random size variation, 0–1.
@@ -149,6 +152,7 @@ impl Default for Brush {
             taper_start: 0.0,
             taper_end: 0.0,
             tilt: 0.0,
+            pressure_curve: 1.0,
             stabilizer: 0.0,
             size_jitter: 0.0,
             scatter: 0.0,
@@ -204,6 +208,11 @@ impl Brush {
         self.grain_strength = u(self.grain_strength);
         self.relief = u(self.relief);
         self.tilt = u(self.tilt);
+        self.pressure_curve = if self.pressure_curve.is_finite() {
+            self.pressure_curve.clamp(0.25, 4.0)
+        } else {
+            1.0
+        };
         self.size_pressure = u(self.size_pressure);
         self.flow_pressure = u(self.flow_pressure);
         self.speed_thins = u(self.speed_thins);
@@ -788,6 +797,11 @@ impl Stroke {
             let fast = ((self.speed - 0.8) / 5.0).clamp(0.0, 1.0);
             1.0 - self.brush.speed_thins * fast * 0.85
         });
+        let pressure = if (self.brush.pressure_curve - 1.0).abs() > 1e-3 {
+            pressure.clamp(0.0, 1.0).powf(self.brush.pressure_curve)
+        } else {
+            pressure
+        };
         self.raw.push((x, y, time_ms.unwrap_or(0.0), pressure));
         // Stabilizer: the stamped point lags behind the pointer.
         let k = 1.0 - self.brush.stabilizer * 0.92;
