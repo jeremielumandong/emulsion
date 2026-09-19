@@ -18,3 +18,8 @@ tracing = { workspace = true }
 emulsion-raster = { workspace = true }
 emulsion-core = { workspace = true }
 ureq = { workspace = true }
+ort = { workspace = true }
+ndarray = { workspace = true }
+sha2 = { workspace = true }
+rayon = { workspace = true }
+image = { workspace = true }

@@ -36,6 +36,7 @@ pub struct Workspace {
         Entity<gpui_kit::component::input::InputState>,
     )>,
     pub(crate) jev_test: Option<(SharedString, bool)>,
+    pub(crate) model_jobs: crate::settings_models::ModelJobs,
     /// The landing image, decoded once in the background.
     pub(crate) landing: Option<Arc<RenderImage>>,
     /// Recovery copies left by an earlier session that did not close cleanly.
@@ -129,6 +130,7 @@ impl Workspace {
             closing: false,
             settings_inputs: None,
             jev_test: None,
+            model_jobs: Default::default(),
             landing,
             splash: true,
         }

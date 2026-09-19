@@ -58,6 +58,9 @@ impl Workspace {
         self.ensure_settings_inputs(window, cx);
         let s = app_state::settings(cx).clone();
         let cli = app_state::cli(cx);
+        let models_on = emulsion_ai::models::MANIFEST
+            .iter()
+            .any(|m| emulsion_ai::models::status(m) == emulsion_ai::models::Status::Installed);
         let jev = s.jev_key();
         let section = |p: &Palette| {
             div()
@@ -128,8 +131,9 @@ impl Workspace {
             )
             .child(
                 section(&p)
-                    .child(tier(1, "Local models", false, "not yet", &p))
-                    .child(body("Segmentation, background removal, fill and upscaling on your GPU. These arrive in a later release; nothing to set up yet.", &p)),
+                    .child(tier(1, "Local models", models_on, if models_on { "on" } else { "off" }, &p))
+                    .child(body("Segmentation, subject mattes, depth, fill and upscaling that run on this machine with ONNX Runtime. Install what you want; each task's tools appear once its model is here. Select Subject and Remove Background need a matte model, the AI quick select needs SlimSAM.", &p))
+                    .child(self.models_list(&p, cx)),
             )
             .child(
                 section(&p)

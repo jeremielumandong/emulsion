@@ -6,6 +6,7 @@ use crate::viewport::{self, CanvasBounds, Scene, TileCache, View, Which};
 use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fraction};
 
 mod adjust_ui;
+mod ai_tools;
 mod canvas_size;
 mod history;
 mod panels;
@@ -256,6 +257,7 @@ pub struct EditorView {
     pub(crate) panels: panels::PanelState,
     pub(crate) styles_ui: styles_ui::StylesUi,
     pub(crate) type_tool: type_tool::TypeState,
+    pub(crate) ai: ai_tools::AiState,
     /// Shift held during a drag: free aspect, or 15° rotation steps.
     pub(crate) drag_shift: bool,
 }
@@ -328,6 +330,7 @@ impl EditorView {
             panels: Default::default(),
             styles_ui: Default::default(),
             type_tool: Default::default(),
+            ai: Default::default(),
             drag_shift: false,
         }
     }
@@ -1765,15 +1768,15 @@ impl EditorView {
             ));
             items.push(("LUT from .cube file…".into(), Node::group(0, "__lut__")));
             items.push(("Empty group".into(), Node::group(0, "Group")));
-            self.menu_list(
-                "add-menu",
-                items
-                    .into_iter()
-                    .map(|(l, n)| (l, MenuAction::Add(Box::new(n))))
-                    .collect(),
-                p,
-                cx,
-            )
+            let mut list: Vec<(SharedString, MenuAction)> = items
+                .into_iter()
+                .map(|(l, n)| (l, MenuAction::Add(Box::new(n))))
+                .collect();
+            list.push((
+                "Remove background (AI)".into(),
+                MenuAction::RemoveBackground,
+            ));
+            self.menu_list("add-menu", list, p, cx)
         });
 
         let row_els: Vec<AnyElement> = rows
@@ -2499,6 +2502,7 @@ impl EditorView {
                                 this.import_lut(None, cx)
                             }
                             MenuAction::Add(node) => this.add_node((**node).clone(), cx),
+                            MenuAction::RemoveBackground => this.remove_background(cx),
                         }
                         this.menu = None;
                         cx.notify();
@@ -2511,6 +2515,7 @@ impl EditorView {
 enum MenuAction {
     Blend(NodeId, BlendMode),
     Add(Box<Node>),
+    RemoveBackground,
 }
 
 impl Render for EditorView {

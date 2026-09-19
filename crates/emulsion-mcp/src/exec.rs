@@ -667,9 +667,174 @@ fn smart_filters(doc: &Document, id: NodeId) -> Result<Vec<emulsion_filters::Fil
 }
 
 /// Compute a heavy tool against a document snapshot, on any thread.
+/// The flattened document as a raster.
+fn doc_raster(doc: &Document) -> Raster {
+    let (w, h) = (doc.width, doc.height);
+    let px: Vec<[u16; 4]> = region(&doc.composite_tree(), IRect::new(0, 0, w as i32, h as i32))
+        .into_iter()
+        .map(color::f_to_px)
+        .collect();
+    Raster::from_pixels(w, h, [0; 4], &px)
+}
+
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
     let (w, h) = (doc.width, doc.height);
     match name {
+        "download_model" => {
+            let id = args
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| err("missing string 'id'"))?;
+            let spec = emulsion_ai::models::spec(id)
+                .ok_or_else(|| err(format!("unknown model {id:?}; see list_models")))?;
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            emulsion_ai::models::download(spec, &|_, _| {}, &cancel)
+                .map_err(|e| err(e.to_string()))?;
+            Ok(Planned {
+                commands: vec![],
+                message: format!(
+                    "Installed {} ({})",
+                    spec.name,
+                    emulsion_ai::models::human_bytes(spec.total_bytes())
+                ),
+            })
+        }
+        "select_subject" => {
+            if emulsion_ai::matte::available().is_none() {
+                return Err(err(
+                    "no subject matte model is installed; download_model rmbg14 (or isnet) first",
+                ));
+            }
+            let img = doc_raster(doc);
+            let job = emulsion_ai::jobs::Job::new();
+            let m = emulsion_ai::matte::matte(&img, &Default::default(), &job)
+                .map_err(|e| err(e.to_string()))?;
+            let m = emulsion_ai::matte::harden(&m, 20, 235);
+            let (c, msg) = selection_command(doc, m, combine_arg(args), 0.0);
+            Ok(Planned {
+                commands: vec![c],
+                message: msg,
+            })
+        }
+        "select_by_points" => {
+            if emulsion_ai::sam::available().is_none() {
+                return Err(err(
+                    "SlimSAM is not installed; download_model slimsam first",
+                ));
+            }
+            let pts = |k: &str, positive: bool| -> Vec<emulsion_ai::sam::Point> {
+                args.get(k)
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|p| {
+                                let p = p.as_array()?;
+                                Some(emulsion_ai::sam::Point {
+                                    x: p.first()?.as_f64()? as f32,
+                                    y: p.get(1)?.as_f64()? as f32,
+                                    positive,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let mut points = pts("points", true);
+            points.extend(pts("negative", false));
+            let bbox = args.get("box").and_then(Value::as_array).and_then(|b| {
+                if b.len() == 4 {
+                    Some((
+                        b[0].as_f64()? as f32,
+                        b[1].as_f64()? as f32,
+                        b[2].as_f64()? as f32,
+                        b[3].as_f64()? as f32,
+                    ))
+                } else {
+                    None
+                }
+            });
+            if points.is_empty() && bbox.is_none() {
+                return Err(err("give points and/or a box"));
+            }
+            let img = doc_raster(doc);
+            let job = emulsion_ai::jobs::Job::new();
+            let emb = emulsion_ai::sam::encode(&img, &job).map_err(|e| err(e.to_string()))?;
+            let (m, score) =
+                emulsion_ai::sam::decode(&emb, &points, bbox).map_err(|e| err(e.to_string()))?;
+            let m = emulsion_ai::matte::harden(&m, 96, 160);
+            let (c, msg) = selection_command(doc, m, combine_arg(args), 0.0);
+            Ok(Planned {
+                commands: vec![c],
+                message: format!("{msg} (confidence {:.0} %)", score * 100.0),
+            })
+        }
+        "remove_background" => {
+            if emulsion_ai::matte::available().is_none() {
+                return Err(err(
+                    "no subject matte model is installed; download_model rmbg14 (or isnet) first",
+                ));
+            }
+            let source = match args.get("node").and_then(Value::as_u64) {
+                Some(id) => {
+                    let n = doc.node(id).ok_or_else(|| err(format!("no node {id}")))?;
+                    match &n.kind {
+                        NodeKind::Raster { raster, placement } => {
+                            Some((id, n.name.clone(), raster.clone(), *placement, n.parent))
+                        }
+                        _ => {
+                            return Err(err(format!(
+                                "{} is not a pixel node",
+                                node_label(doc, id)
+                            )));
+                        }
+                    }
+                }
+                None => None,
+            };
+            let img: Arc<Raster> = match &source {
+                Some((_, _, r, _, _)) => r.clone(),
+                None => Arc::new(doc_raster(doc)),
+            };
+            let job = emulsion_ai::jobs::Job::new();
+            let m = emulsion_ai::matte::matte(&img, &Default::default(), &job)
+                .map_err(|e| err(e.to_string()))?;
+            let cut = emulsion_ai::matte::cut_out(&img, &emulsion_ai::matte::harden(&m, 12, 240));
+            let (name, placement, slot, hide) = match &source {
+                Some((id, name, _, pl, parent)) => {
+                    let sib = doc.children(*parent);
+                    let idx = sib.iter().position(|s| s == id).unwrap_or(0) + 1;
+                    (
+                        format!("{name} cut-out"),
+                        *pl,
+                        Slot {
+                            parent: *parent,
+                            index: idx,
+                        },
+                        Some(*id),
+                    )
+                }
+                None => ("Cut-out".to_string(), Placement::default(), Slot::TOP, None),
+            };
+            let mut commands = vec![Command::AddNode {
+                node: Box::new(Node::raster(0, name.clone(), Arc::new(cut), placement)),
+                slot,
+            }];
+            if let Some(id) = hide {
+                commands.push(Command::SetVisible { id, visible: false });
+            }
+            Ok(Planned {
+                commands,
+                message: format!(
+                    "Cut the subject out into {name:?}{}",
+                    if hide.is_some() {
+                        "; the original is hidden"
+                    } else {
+                        ""
+                    }
+                ),
+            })
+        }
+
         "select_color" => {
             let x = args
                 .get("x")
@@ -1506,6 +1671,29 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                     .unwrap_or_default(),
             ))
         }
+        "list_models" => {
+            let list: Vec<Value> = emulsion_ai::models::MANIFEST
+                .iter()
+                .map(|m| {
+                    json!({
+                        "id": m.id,
+                        "name": m.name,
+                        "task": m.task.label(),
+                        "installed": emulsion_ai::models::status(m) == emulsion_ai::models::Status::Installed,
+                        "bytes": m.total_bytes(),
+                        "license": m.license,
+                        "note": m.note,
+                    })
+                })
+                .collect();
+            Ok(ToolResult::text(
+                serde_json::to_string_pretty(&json!({
+                    "provider": emulsion_ai::runner::provider().label(),
+                    "models": list,
+                }))
+                .unwrap_or_default(),
+            ))
+        }
         "add_layer" => {
             let (w, h) = (editor.doc.width, editor.doc.height);
             let name = args.get("name").and_then(Value::as_str).unwrap_or("Layer");
@@ -2328,6 +2516,37 @@ mod tests {
             &json!({ "node": id, "params": { "nope": 1 } }),
         );
         assert!(r.is_error && text(&r).contains("valid: temperature, tint"));
+    }
+
+    #[test]
+    fn model_tools_list_and_validate_before_running() {
+        let mut e = editor();
+        let r = execute(&mut e, "list_models", &json!({}));
+        assert!(!r.is_error);
+        let v: Value = serde_json::from_str(&text(&r)).unwrap();
+        assert!(v["models"].as_array().unwrap().len() >= 5);
+        assert!(
+            v["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["id"] == "slimsam")
+        );
+        // Argument checks come before any model is touched.
+        let failed = |r: Result<Planned, ToolResult>| text(&r.err().expect("an error"));
+        let r = plan_heavy(&e.doc, "download_model", &json!({ "id": "nope" }));
+        assert!(failed(r).contains("unknown model"));
+        if emulsion_ai::sam::available().is_some() {
+            let r = plan_heavy(&e.doc, "select_by_points", &json!({}));
+            assert!(failed(r).contains("points and/or a box"));
+        } else {
+            let r = plan_heavy(&e.doc, "select_by_points", &json!({ "points": [[1, 1]] }));
+            assert!(failed(r).contains("not installed"));
+        }
+        assert!(
+            crate::tools::HEAVY.contains(&"select_subject")
+                && crate::tools::READ_ONLY.contains(&"list_models")
+        );
     }
 
     #[test]

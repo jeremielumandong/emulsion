@@ -13,6 +13,7 @@ pub const READ_ONLY: &[&str] = &[
     "list_recipes",
     "critique",
     "list_fonts",
+    "list_models",
 ];
 
 /// Tools whose effect is hard to see or undo at a glance; always confirmed.
@@ -35,6 +36,10 @@ pub const HEAVY: &[&str] = &[
     "add_filter",
     "set_filter",
     "remove_filter",
+    "download_model",
+    "select_subject",
+    "select_by_points",
+    "remove_background",
 ];
 
 const BLEND_MODES: &[&str] = &[
@@ -349,6 +354,36 @@ pub fn definitions() -> Vec<ToolDef> {
             "list_fonts",
             "Font families installed on this machine, usable as `font` in add_text and set_text.",
             json!({}),
+            &[],
+        ),
+        def(
+            "list_models",
+            "Local AI models: which are installed (segmentation, subject matte, depth, fill, upscale), their size and licence. Tools that need a model say so when it is missing; download_model fetches one.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "download_model",
+            "Download and install a local model by id from list_models (tens to hundreds of MB; takes a while). Ask before fetching anything large.",
+            json!({ "id": { "type": "string" } }),
+            &["id"],
+        ),
+        def(
+            "select_subject",
+            "Select the main subject of the picture with the local matte model (needs a matte model installed). mode combines with the current selection.",
+            json!({ "mode": mode() }),
+            &[],
+        ),
+        def(
+            "select_by_points",
+            "Select a thing by pointing at it with Segment Anything (needs SlimSAM installed): points are [[x, y], …] on the object, negative points [[x, y], …] mark what to leave out, and box [x0, y0, x1, y1] frames it. Returns the model's confidence.",
+            json!({ "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } }, "negative": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } }, "box": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "mode": mode() }),
+            &[],
+        ),
+        def(
+            "remove_background",
+            "Cut the subject out of a pixel node (or the whole picture when node is omitted) into a new node with a transparent background, hiding the original. Needs a matte model.",
+            json!({ "node": node() }),
             &[],
         ),
         def(

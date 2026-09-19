@@ -1070,7 +1070,13 @@ impl EditorView {
                     self.editor.end();
                 }
             }
-            ToolDrag::Quick { pts, combine } => self.quick_select(pts, combine, cx),
+            ToolDrag::Quick { pts, combine } => {
+                if self.ai.ai_select && emulsion_ai::sam::available().is_some() {
+                    self.sam_select(pts, combine, cx)
+                } else {
+                    self.quick_select(pts, combine, cx)
+                }
+            }
             ToolDrag::Pen(pd) => self.pen_up(pd),
         }
         cx.notify();
@@ -2036,6 +2042,40 @@ impl EditorView {
                     }));
                 }
                 if cur == SelectShape::Quick {
+                    let sam_ok = emulsion_ai::sam::available().is_some();
+                    let ai_on = self.ai.ai_select && sam_ok;
+                    v.push(
+                        chip(
+                            "sel-ai",
+                            if sam_ok { "AI" } else { "AI (install)" },
+                            ai_on,
+                            p,
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if sam_ok {
+                                this.ai.ai_select = !this.ai.ai_select;
+                                cx.notify();
+                            } else {
+                                window.dispatch_action(Box::new(crate::actions::ShowSettings), cx);
+                            }
+                        }))
+                        .into_any_element(),
+                    );
+                    if ai_on {
+                        v.push(
+                            mono("click a thing, or drag a box around it", 10., p.muted)
+                                .into_any_element(),
+                        );
+                    }
+                }
+                v.push(
+                    chip("sel-subject", "subject (AI)", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.select_subject(cx)))
+                        .into_any_element(),
+                );
+                if cur == SelectShape::Quick
+                    && !(self.ai.ai_select && emulsion_ai::sam::available().is_some())
+                {
                     let t = self.tools.tolerance as f32;
                     v.push(self.opt_slider(
                         SliderKey::Tolerance,

@@ -7,6 +7,7 @@ mod assistant;
 pub mod editor;
 mod home;
 pub mod landing;
+mod settings_models;
 mod settings_screen;
 pub mod tablet;
 pub mod theme;
