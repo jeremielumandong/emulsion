@@ -150,22 +150,41 @@ impl Model {
     }
 }
 
-/// Loaded models by path.
-fn cache() -> &'static Mutex<HashMap<PathBuf, Arc<Model>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Model>>>> = OnceLock::new();
+/// Sessions kept alive at once. A loaded model can hold hundreds of
+/// megabytes (LaMa in fp32 is about 800 MB), so only the most recently
+/// used few stay resident; SAM needs two.
+const CACHE_CAP: usize = 3;
+
+/// Loaded models by path, with a use counter for eviction.
+type Cache = HashMap<PathBuf, (u64, Arc<Model>)>;
+
+fn cache() -> &'static Mutex<Cache> {
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
-/// Load `path` once; later calls share the session.
+/// Load `path` once; later calls share the session until it is evicted.
 pub fn model(path: &Path) -> Result<Arc<Model>, RunError> {
-    if let Some(m) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(path) {
+    let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+    let tick = c.values().map(|(t, _)| *t).max().unwrap_or(0) + 1;
+    if let Some((t, m)) = c.get_mut(path) {
+        *t = tick;
         return Ok(m.clone());
     }
+    drop(c);
     let m = Model::load(path)?;
-    cache()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(path.to_path_buf(), m.clone());
+    let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+    while c.len() >= CACHE_CAP {
+        let Some(oldest) = c
+            .iter()
+            .min_by_key(|(_, (t, _))| *t)
+            .map(|(k, _)| k.clone())
+        else {
+            break;
+        };
+        c.remove(&oldest);
+    }
+    c.insert(path.to_path_buf(), (tick, m.clone()));
     Ok(m)
 }
 
