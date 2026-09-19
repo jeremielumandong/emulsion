@@ -239,6 +239,22 @@ impl Render for DraggedNode {
     }
 }
 
+/// ColorDrop: the foreground swatch dragged onto the canvas.
+#[derive(Clone)]
+pub struct DraggedColor(pub [u8; 4]);
+
+impl Render for DraggedColor {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = theme::palette(cx);
+        let [r, g, b, _] = self.0;
+        div()
+            .size(px(22.))
+            .border_1()
+            .border_color(p.ink)
+            .bg(rgb(((r as u32) << 16) | ((g as u32) << 8) | b as u32))
+    }
+}
+
 pub struct EditorView {
     pub editor: Editor,
     /// Display name (file stem of what was opened).
@@ -1697,6 +1713,10 @@ impl EditorView {
                 cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)),
             )
             .on_scroll_wheel(cx.listener(|this, e, _, cx| this.scroll(e, cx)))
+            .on_drop(cx.listener(|this, d: &DraggedColor, window, cx| {
+                let pos = window.mouse_position();
+                this.color_drop(d.0, pos, cx);
+            }))
             .on_pinch(cx.listener(|this, e: &PinchEvent, _, cx| {
                 if let Some(b) = this.canvas_bounds() {
                     this.view.zoom_at(

@@ -1666,6 +1666,33 @@ impl EditorView {
     }
 
     fn bucket(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
+        let color = premul(self.tools.fg);
+        self.fill_at(d, color, "Fill", cx);
+    }
+
+    /// ColorDrop: the swatch was dropped on the canvas at window `pos`;
+    /// fill the similar-coloured area there with that colour.
+    pub(crate) fn color_drop(
+        &mut self,
+        color: [u8; 4],
+        pos: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(d) = self.doc_point(pos) else {
+            return;
+        };
+        self.fill_at(d, premul(color), "ColorDrop", cx);
+    }
+
+    /// Flood-fill the area of similar colour at document point `d` on the
+    /// paint target, within the selection.
+    fn fill_at(
+        &mut self,
+        d: (f64, f64),
+        color: [f32; 4],
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) {
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         if d.0 < 0.0 || d.1 < 0.0 || d.0 >= w as f64 || d.1 >= h as f64 {
             return;
@@ -1676,11 +1703,7 @@ impl EditorView {
         let Some((raster, to_doc)) = self.target_raster(id) else {
             return;
         };
-        let (tol, contiguous, color) = (
-            self.tools.tolerance,
-            self.tools.contiguous,
-            premul(self.tools.fg),
-        );
+        let (tol, contiguous) = (self.tools.tolerance, self.tools.contiguous);
         let sel = self.editor.doc.selection.clone();
         let img = self.composite_srgb8();
         self.set_status("Filling…", false, cx);
@@ -1705,7 +1728,7 @@ impl EditorView {
                         id,
                         raster: Arc::new(r),
                         dirty,
-                        label: "Fill".into(),
+                        label: label.into(),
                     },
                     cx,
                 );
@@ -3527,6 +3550,16 @@ impl EditorView {
                     .border_color(p.ink)
                     .bg(rgb(((fr as u32) << 16) | ((fgc as u32) << 8) | fb as u32))
                     .cursor_pointer()
+                    // ColorDrop: drag the swatch onto the canvas to fill.
+                    .on_drag(super::DraggedColor(self.tools.fg), |d, _, _, cx| {
+                        cx.new(|_| d.clone())
+                    })
+                    .tooltip(|w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(
+                            "Foreground colour: click to pick, drag onto the canvas to fill an area",
+                        )
+                        .build(w, cx)
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.tools.picker = !this.tools.picker;
                         this.tools.hue = rgb_to_hsv(this.tools.fg).0;
