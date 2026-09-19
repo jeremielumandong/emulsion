@@ -11,6 +11,7 @@ pub const READ_ONLY: &[&str] = &[
     "compare",
     "list_brushes",
     "list_recipes",
+    "critique",
 ];
 
 /// Tools whose effect is hard to see or undo at a glance; always confirmed.
@@ -29,6 +30,7 @@ pub const HEAVY: &[&str] = &[
     "select_color",
     "content_aware_fill",
     "paint",
+    "hatch",
     "add_filter",
     "set_filter",
     "remove_filter",
@@ -319,6 +321,18 @@ pub fn definitions() -> Vec<ToolDef> {
             &["node", "index"],
         ),
         def(
+            "critique",
+            "A fast, measured critique of the picture as it stands: value range and grouping, where the detail sits, balance, edge character, colour temperature, symmetry, empty space, ranked by what to fix first (Jev ranks when configured). Free and instant; every paint and hatch result also carries its top two lines.",
+            json!({ "count": { "type": "integer", "minimum": 1, "maximum": 8 } }),
+            &[],
+        ),
+        def(
+            "hatch",
+            "Shade an area with parallel strokes: fill rect [x, y, width, height] (or the selection's bounds) with lines at angle (degrees, default 45) every spacing pixels (default 8), with a little jitter (0-1) so they look hand-made; cross=true adds a second direction. Uses a brush and color like paint. One undo step.",
+            json!({ "node": node(), "brush": { "type": "string" }, "color": { "type": "string" }, "settings": { "type": "object" }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "angle": { "type": "number" }, "spacing": { "type": "number", "minimum": 1 }, "jitter": { "type": "number", "minimum": 0, "maximum": 1 }, "cross": { "type": "boolean" } }),
+            &["node"],
+        ),
+        def(
             "add_layer",
             "Add an empty, transparent pixel layer (the canvas size) to paint on, above the given node or at the top. Returns its id.",
             json!({ "name": { "type": "string" }, "above": node() }),
@@ -334,7 +348,7 @@ pub fn definitions() -> Vec<ToolDef> {
             "paint",
             concat!(
                 "Paint strokes on a pixel layer with a brush from list_brushes. Each stroke is a polyline in document pixels; ",
-                "points are [x, y] or [x, y, pressure 0-1]; smooth curves come from many close points (a stroke can hold hundreds). ",
+                "a stroke gives either points ([x, y] or [x, y, pressure 0-1]) or d (SVG path data: M L C Q Z, absolute or relative) for smooth curves, plus an optional pressure envelope [start, end] applied along the stroke. ",
                 "color is #RRGGBB (ignored by Eraser and Smudge brushes). settings overrides brush fields for the whole call, e.g. ",
                 "{\"size\": 6, \"opacity\": 0.5, \"hardness\": 1, \"flow\": 0.3, \"wetness\": 0.5, \"taper_end\": 20}. ",
                 "Everything in one call is a single undo step, so plan a drawing as a few calls: block-in, then lines, then shading. ",
@@ -350,12 +364,14 @@ pub fn definitions() -> Vec<ToolDef> {
                     "items": {
                         "type": "object",
                         "properties": {
+                            "d": { "type": "string" },
+                            "pressure": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
                             "points": { "type": "array", "minItems": 1, "maxItems": 2000, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 } },
                             "brush": { "type": "string" },
                             "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
                             "settings": { "type": "object" }
                         },
-                        "required": ["points"]
+                        "required": []
                     }
                 }
             }),

@@ -1702,6 +1702,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "base64 0.23.1",
+ "emulsion-ai",
  "emulsion-core",
  "emulsion-filters",
  "emulsion-io",

@@ -50,17 +50,40 @@ Working rules:
 - If the request is ambiguous, ask one short question instead of guessing.
 - Finish with one or two plain sentences saying what you changed.
 
-Drawing and painting: you can paint with real brushes. list_brushes gives the library (ink, \
-pencil, chalk, marker, watercolour, oil, airbrush, eraser, smudge) and paint lays strokes on a \
-pixel layer as polylines in document pixels, with optional pressure per point. Work like an \
-artist: add_layer for each stage (sketch, lines, colour, shading) so stages stay separable; \
-block in big shapes first with large soft or wet brushes, then structure with mid brushes, then \
-line work with an ink brush using many close points for smooth curves and pressure that swells \
-in the middle of a stroke; shade with hatching (many short parallel strokes) or with airbrush \
-and smudge. A stroke is a polyline, so a circle needs 24 or more points and a curve needs \
-points every few pixels. Keep every paint call to one stage of the drawing and call get_view \
-after each stage to look at the result and correct it before moving on. Use the canvas size \
-from describe_document to place things; never paint outside it.";
+Drawing and painting: you can paint with real brushes and draw vector paths. Tools: \
+list_brushes (the library: manga nibs, ink, pencil, chalk, marker, watercolour, oil, airbrush, \
+eraser, smudge), paint (strokes on a pixel layer: each stroke is either points [[x, y, pressure?], \
+…] or d = SVG path data for smooth curves, plus an optional pressure envelope [start, end]), hatch \
+(fills a rectangle or the selection with parallel strokes at an angle and spacing), draw_path (a \
+crisp editable vector shape from SVG data), add_layer, and get_view to look.
+
+Draw like a trained artist, in this order, one paint call per step and a get_view after each:
+1. Plan: read the canvas size from describe_document. Decide the subject's silhouette, where the \
+   light comes from, and three value groups (dark, mid, light). Place the focal point off centre.
+2. Gesture and construction (own layer \"Sketch\", Blue pencil or Sketch pencil at 60 % opacity): \
+   a few long curves for the action line and the big masses; simple forms (spheres, boxes, \
+   cylinders) before any detail; heads as a sphere plus jaw wedge with the eye line and centre \
+   line; figures as a line of action, ribcage, pelvis and limbs. Use d curves, not many points.
+3. Block-in (layer \"Values\"): fill each big shape with its local mid value using wide brushes \
+   (Round oil, Chalk, Wash). Squint: only three or four values, edges soft. No detail.
+4. Light and shadow (layer \"Shade\"): decide the light once; shade every form consistently with \
+   core shadow, reflected light and a cast shadow. Use hatch for pencil or ink shading, Airbrush \
+   and Smudge for soft paint, Wash or Ink wash for tone. Vary edges: hard where forms turn sharply \
+   or overlap, soft where they roll away.
+5. Line (layer \"Ink\"): if the piece is line-based, ink over the sketch with a G-pen or Maru pen; \
+   long confident curves as single d strokes with pressure swelling in the middle and tapering at \
+   the ends; thicker lines toward the light's shadow side and on nearer forms; fewer lines than \
+   you think. Hide the sketch layer afterwards.
+6. Detail and accents: the darkest darks and lightest lights only at the focal point; texture \
+   with dry ink, speckle or screentone; small colour temperature shifts (warm light, cool shadow).
+7. Critique: every paint and hatch result ends with a measured critique line (values, focal \
+   point, balance, edges, temperature); act on it. Call critique for the full ranked list, and \
+   get_view to see for yourself. Name one thing that is wrong and fix that before adding more. \
+   Undo is cheap; do not pile strokes on a mistake.
+
+Coordinates: document pixels, origin top-left. Keep proportions with real measurements (a face is \
+about five eyes wide; a standing figure about seven and a half heads). Curves: use d with C \
+segments; a circle needs four C segments. Never paint outside the canvas.";
 
 /// Qualified names of the tools that never need confirmation.
 pub fn read_only_tools() -> Vec<String> {
@@ -186,7 +209,7 @@ mod tests {
         assert_eq!(a[pos("--mcp-config") + 1], "/tmp/s/mcp.json");
         assert_eq!(
             a[pos("--allowedTools") + 1],
-            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes,mcp__emulsion__list_recipes"
+            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes,mcp__emulsion__list_recipes,mcp__emulsion__critique"
         );
         assert_eq!(a[pos("--model") + 1], "sonnet");
         assert!(

@@ -210,6 +210,12 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         "set_path" => format!("edit path {}", n()),
         "path_to_selection" => format!("select inside {}", n()),
         "list_brushes" => "look at the brushes".into(),
+        "hatch" => format!(
+            "hatch {} with {}",
+            n(),
+            input["brush"].as_str().unwrap_or("the brush")
+        ),
+        "critique" => "critique the picture".into(),
         "paint" => format!(
             "paint {} stroke{} with {}",
             input["strokes"].as_array().map_or(0, |a| a.len()),
@@ -628,11 +634,11 @@ impl EditorView {
             .detach();
             return;
         }
-        if call.name == "paint"
+        if matches!(call.name.as_str(), "paint" | "hatch")
             && app_state::settings(cx).show_drawing
             && self.assistant.playback.is_none()
         {
-            match exec::paint_script(&self.editor.doc, &call.arguments) {
+            match exec::paint_script_for(&self.editor.doc, &call.name, &call.arguments) {
                 Ok(script) => self.start_playback(Some(call), script, cx),
                 Err(e) => call.reply(e),
             }
@@ -818,10 +824,38 @@ impl EditorView {
             self.editor.end();
         }
         if let Some(call) = pb.call {
-            call.reply(match error {
-                Some(e) => emulsion_mcp::server::ToolResult::error(e),
-                None => emulsion_mcp::server::ToolResult::text(pb.script.message),
-            });
+            match error {
+                Some(e) => call.reply(emulsion_mcp::server::ToolResult::error(e)),
+                None => {
+                    // Reply with a quick critique of the result; Jev ranks it
+                    // when the person has a key.
+                    let doc = self.editor.doc.clone();
+                    let key = app_state::settings(cx).jev_key().map(|(k, _)| k);
+                    let message = pb.script.message;
+                    cx.spawn(async move |this, cx| {
+                        let note = cx
+                            .background_spawn(
+                                async move { exec::critique_note(&doc, key.as_deref()) },
+                            )
+                            .await;
+                        let first = note
+                            .trim_start_matches('\n')
+                            .split(": ")
+                            .nth(1)
+                            .map(|s| s.split(". ").next().unwrap_or(s).to_string());
+                        call.reply(emulsion_mcp::server::ToolResult::text(format!(
+                            "{message}{note}"
+                        )));
+                        this.update(cx, |this, cx| {
+                            if let Some(f) = first {
+                                this.set_status(format!("Critique: {f}."), false, cx);
+                            }
+                        })
+                        .ok();
+                    })
+                    .detach();
+                }
+            }
         }
         self.after_change(cx);
     }

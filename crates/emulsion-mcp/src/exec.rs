@@ -205,6 +205,138 @@ impl PaintScript {
     }
 }
 
+/// Turn a `hatch` call into `paint` arguments: parallel strokes across a
+/// rectangle (or the selection's bounds) at an angle and spacing.
+pub fn hatch_to_paint(doc: &Document, args: &Value) -> Result<Value, ToolResult> {
+    let rect = match args.get("rect").and_then(Value::as_array) {
+        Some(r) if r.len() == 4 => {
+            let v: Vec<f64> = r.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect();
+            if v.iter().any(|x| !x.is_finite()) || v[2] <= 0.0 || v[3] <= 0.0 {
+                return Err(err("rect must be [x, y, width, height]"));
+            }
+            (v[0], v[1], v[2], v[3])
+        }
+        _ => match &doc.selection {
+            Some(sel) => {
+                let b = select::bounds(sel);
+                (b.x as f64, b.y as f64, b.w as f64, b.h as f64)
+            }
+            None => {
+                return Err(err(
+                    "give rect [x, y, width, height] or make a selection first",
+                ));
+            }
+        },
+    };
+    let angle = args
+        .get("angle")
+        .and_then(Value::as_f64)
+        .unwrap_or(45.0)
+        .to_radians();
+    let spacing = args
+        .get("spacing")
+        .and_then(Value::as_f64)
+        .unwrap_or(8.0)
+        .clamp(1.0, 200.0);
+    let jitter = args
+        .get("jitter")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.15)
+        .clamp(0.0, 1.0);
+    let cross = args.get("cross").and_then(Value::as_bool).unwrap_or(false);
+    let (cx, cy) = (rect.0 + rect.2 / 2.0, rect.1 + rect.3 / 2.0);
+    let half = (rect.2 * rect.2 + rect.3 * rect.3).sqrt() / 2.0;
+    let mut strokes = Vec::new();
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut rnd = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 40) as f64 / (1u64 << 24) as f64 - 0.5
+    };
+    let angles: Vec<f64> = if cross {
+        vec![angle, angle + std::f64::consts::FRAC_PI_2]
+    } else {
+        vec![angle]
+    };
+    for a in angles {
+        let (dx, dy) = (a.cos(), a.sin());
+        let (nx, ny) = (-dy, dx);
+        let n = (2.0 * half / spacing).ceil() as i64;
+        for k in -n..=n {
+            let off = k as f64 * spacing + rnd() * spacing * jitter;
+            let (mx, my) = (cx + nx * off, cy + ny * off);
+            // Clip the infinite line to the rectangle.
+            let mut ts: Vec<f64> = Vec::new();
+            for (edge, dir) in [(rect.0, dx), (rect.0 + rect.2, dx)] {
+                if dir.abs() > 1e-9 {
+                    ts.push((edge - mx) / dir);
+                }
+            }
+            for (edge, dir) in [(rect.1, dy), (rect.1 + rect.3, dy)] {
+                if dir.abs() > 1e-9 {
+                    ts.push((edge - my) / dir);
+                }
+            }
+            let inside = |t: f64| {
+                let (x, y) = (mx + dx * t, my + dy * t);
+                x >= rect.0 - 1e-6
+                    && x <= rect.0 + rect.2 + 1e-6
+                    && y >= rect.1 - 1e-6
+                    && y <= rect.1 + rect.3 + 1e-6
+            };
+            let mut hits: Vec<f64> = ts.into_iter().filter(|t| inside(*t)).collect();
+            hits.sort_by(|p, q| p.total_cmp(q));
+            if hits.len() < 2 || hits[hits.len() - 1] - hits[0] < 2.0 {
+                continue;
+            }
+            let (t0, t1) = (
+                hits[0] + rnd() * spacing * jitter,
+                hits[hits.len() - 1] + rnd() * spacing * jitter,
+            );
+            let wobble = rnd() * spacing * jitter * 0.5;
+            let (x0, y0, x1, y1) = (mx + dx * t0, my + dy * t0, mx + dx * t1, my + dy * t1);
+            let (xm, ym) = ((x0 + x1) / 2.0 + nx * wobble, (y0 + y1) / 2.0 + ny * wobble);
+            strokes
+                .push(json!({ "points": [[x0, y0], [xm, ym], [x1, y1]], "pressure": [0.6, 1.0] }));
+            if strokes.len() > 400 {
+                return Err(err(
+                    "that would take more than 400 strokes; use a wider spacing or smaller area",
+                ));
+            }
+        }
+    }
+    let mut paint =
+        json!({ "node": args.get("node").cloned().unwrap_or(Value::Null), "strokes": strokes });
+    for k in ["brush", "color", "settings"] {
+        if let Some(v) = args.get(k) {
+            paint[k] = v.clone();
+        }
+    }
+    Ok(paint)
+}
+
+/// A paint script for `paint` or `hatch`.
+pub fn paint_script_for(
+    doc: &Document,
+    name: &str,
+    args: &Value,
+) -> Result<PaintScript, ToolResult> {
+    if name == "hatch" {
+        let a = hatch_to_paint(doc, args)?;
+        let mut script = paint_script(doc, &a)?;
+        script.label = format!("Hatch ({} strokes)", script.strokes.len());
+        script.message = format!(
+            "Hatched with {} strokes on {}",
+            script.strokes.len(),
+            node_label(doc, script.id)
+        );
+        Ok(script)
+    } else {
+        paint_script(doc, args)
+    }
+}
+
 /// Resolve a `paint` call against `doc` without painting anything.
 pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolResult> {
     let id = id_arg(args, "node")?;
@@ -278,34 +410,85 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
                 Ink::Color(c)
             }
         };
-        let pts = s
-            .get("points")
-            .and_then(Value::as_array)
-            .ok_or_else(|| err(format!("stroke {i} has no points")))?;
-        if pts.len() > 2000 {
-            return Err(err(format!("stroke {i} has more than 2000 points")));
-        }
-        let mut points = Vec::with_capacity(pts.len());
-        for (j, p) in pts.iter().enumerate() {
-            let a = p.as_array().filter(|a| a.len() >= 2).ok_or_else(|| {
-                err(format!(
-                    "stroke {i} point {j} must be [x, y] or [x, y, pressure]"
-                ))
-            })?;
-            let (x, y) = (
-                a[0].as_f64().unwrap_or(f64::NAN),
-                a[1].as_f64().unwrap_or(f64::NAN),
-            );
-            if !x.is_finite() || !y.is_finite() {
-                return Err(err(format!("stroke {i} point {j} is not a number")));
+        // Points come as [x, y, pressure?] lists or as SVG path data.
+        let mut doc_pts: Vec<(f64, f64, Option<f32>)> = Vec::new();
+        if let Some(d) = s.get("d").and_then(Value::as_str) {
+            let path = emulsion_raster::vector::Path::from_svg(d)
+                .map_err(|e| err(format!("stroke {i}: bad path data: {e}")))?;
+            for (pts, closed) in path.flatten(0.75) {
+                let mut pts: Vec<(f64, f64, Option<f32>)> =
+                    pts.into_iter().map(|(x, y)| (x, y, None)).collect();
+                if closed && let Some(f) = pts.first().copied() {
+                    pts.push(f);
+                }
+                doc_pts.extend(pts);
             }
-            let pressure = a
-                .get(2)
-                .and_then(Value::as_f64)
-                .map(|p| p.clamp(0.0, 1.0) as f32);
-            let l = to_local.transform_point2(glam::dvec2(x, y));
-            points.push((l.x as f32, l.y as f32, pressure));
+        } else {
+            let pts = s
+                .get("points")
+                .and_then(Value::as_array)
+                .ok_or_else(|| err(format!("stroke {i} has neither points nor d")))?;
+            for (j, p) in pts.iter().enumerate() {
+                let a = p.as_array().filter(|a| a.len() >= 2).ok_or_else(|| {
+                    err(format!(
+                        "stroke {i} point {j} must be [x, y] or [x, y, pressure]"
+                    ))
+                })?;
+                let (x, y) = (
+                    a[0].as_f64().unwrap_or(f64::NAN),
+                    a[1].as_f64().unwrap_or(f64::NAN),
+                );
+                if !x.is_finite() || !y.is_finite() {
+                    return Err(err(format!("stroke {i} point {j} is not a number")));
+                }
+                doc_pts.push((
+                    x,
+                    y,
+                    a.get(2)
+                        .and_then(Value::as_f64)
+                        .map(|p| p.clamp(0.0, 1.0) as f32),
+                ));
+            }
         }
+        if doc_pts.len() > 4000 {
+            return Err(err(format!("stroke {i} has more than 4000 points")));
+        }
+        // A pressure envelope [start, end] fills in points without their own.
+        if let Some(env) = s
+            .get("pressure")
+            .and_then(Value::as_array)
+            .filter(|e| e.len() == 2)
+        {
+            let (p0, p1) = (
+                env[0].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32,
+                env[1].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32,
+            );
+            let total: f64 = doc_pts
+                .windows(2)
+                .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+                .sum();
+            let mut run = 0.0;
+            for k in 0..doc_pts.len() {
+                if k > 0 {
+                    run += (doc_pts[k].0 - doc_pts[k - 1].0).hypot(doc_pts[k].1 - doc_pts[k - 1].1);
+                }
+                if doc_pts[k].2.is_none() {
+                    let t = if total > 0.0 {
+                        (run / total) as f32
+                    } else {
+                        0.0
+                    };
+                    doc_pts[k].2 = Some(p0 + (p1 - p0) * t);
+                }
+            }
+        }
+        let points: Vec<(f32, f32, Option<f32>)> = doc_pts
+            .into_iter()
+            .map(|(x, y, p)| {
+                let l = to_local.transform_point2(glam::dvec2(x, y));
+                (l.x as f32, l.y as f32, p)
+            })
+            .collect();
         out.push(ScriptStroke { brush, ink, points });
     }
     let count = out.len();
@@ -329,10 +512,21 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
 /// Paint strokes onto a copy of a layer; runs off the UI thread.
 fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
     let script = paint_script(doc, args)?;
+    plan_from_script(doc, script)
+}
+
+fn plan_from_script(doc: &Document, script: PaintScript) -> Result<Planned, ToolResult> {
     let NodeKind::Raster { raster, .. } = &doc.node(script.id).expect("checked").kind else {
         unreachable!()
     };
     let (current, dirty) = script.render(raster);
+    // A quick look at the result, so the model corrects course.
+    let mut after = doc.clone();
+    if let Some(NodeKind::Raster { raster: r, .. }) = after.node_mut(script.id).map(|n| &mut n.kind)
+    {
+        *r = Arc::new(current.clone());
+    }
+    let note = critique_note(&after, std::env::var("TYPESAFE_API_KEY").ok().as_deref());
     Ok(Planned {
         commands: vec![Command::ReplacePixels {
             id: script.id,
@@ -340,8 +534,22 @@ fn plan_paint(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
             dirty,
             label: script.label,
         }],
-        message: script.message,
+        message: format!("{}{note}", script.message),
     })
+}
+
+/// "\nCritique: …" for the top two issues, ranked by Jev when a key is given.
+pub fn critique_note(doc: &Document, jev_key: Option<&str>) -> String {
+    let mut c = emulsion_ai::critique::analyze(doc);
+    if let Some(k) = jev_key.filter(|k| !k.is_empty()) {
+        let _ = emulsion_ai::critique::rank_with_jev(&emulsion_ai::jev::Jev::new(k), &mut c);
+    }
+    let lines = c.lines(2);
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("\nCritique ({}): {}", c.ranked_by, lines.join(" "))
+    }
 }
 
 fn hex(c: [u8; 4]) -> String {
@@ -446,6 +654,10 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             })
         }
         "paint" => plan_paint(doc, args),
+        "hatch" => {
+            let script = paint_script_for(doc, "hatch", args)?;
+            plan_from_script(doc, script)
+        }
         "add_filter" | "set_filter" | "remove_filter" => {
             let id = id_arg(args, "node")?;
             let mut filters = smart_filters(doc, id)?;
@@ -1371,6 +1583,28 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 .clamp(1, 30000);
             exec(editor, Command::ImageSize { width, height })?;
             Ok(ToolResult::text(format!("Image is now {width}×{height}")))
+        }
+        "critique" => {
+            let mut c = emulsion_ai::critique::analyze(&editor.doc);
+            if let Ok(k) = std::env::var("TYPESAFE_API_KEY")
+                && !k.is_empty()
+            {
+                let _ =
+                    emulsion_ai::critique::rank_with_jev(&emulsion_ai::jev::Jev::new(k), &mut c);
+            }
+            let n = args
+                .get("count")
+                .and_then(Value::as_u64)
+                .unwrap_or(3)
+                .clamp(1, 8) as usize;
+            Ok(ToolResult::text(
+                serde_json::to_string_pretty(&json!({
+                    "ranked_by": c.ranked_by,
+                    "issues": c.issues.iter().take(n).map(|i| json!({ "key": i.key, "severity": i.severity, "note": i.text })).collect::<Vec<_>>(),
+                    "metrics": c.metrics,
+                }))
+                .unwrap_or_default(),
+            ))
         }
         "list_history" => Ok(ToolResult::text(
             serde_json::to_string_pretty(&history_json(editor)).unwrap_or_default(),
@@ -2354,6 +2588,63 @@ mod tests {
         assert!(!r.is_error && e.doc.node(3).unwrap().styles.len() == 1);
         let r = execute(&mut e, "add_style", &json!({ "node": 3, "kind": "bevel" }));
         assert!(r.is_error);
+    }
+
+    #[test]
+    fn bezier_strokes_pressure_envelopes_and_hatch() {
+        let mut e = editor();
+        let r = execute(&mut e, "add_layer", &json!({ "name": "Ink" }));
+        assert!(!r.is_error);
+        let id = e.doc.nodes.last().unwrap().id;
+        let r = execute(
+            &mut e,
+            "paint",
+            &json!({ "node": id, "brush": "G-pen", "color": "#000000", "strokes": [{ "d": "M 20 20 C 80 0 120 100 180 80", "pressure": [0.2, 1.0] }] }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let NodeKind::Raster { raster, .. } = &e.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        // A tapered pen starts as a hairline, so probe a little way in.
+        let at = |t: f64| {
+            emulsion_raster::vector::cubic_at(
+                (20.0, 20.0),
+                (80.0, 0.0),
+                (120.0, 100.0),
+                (180.0, 80.0),
+                t,
+            )
+        };
+        for t in [0.15, 0.5, 0.85] {
+            let p = at(t);
+            assert!(
+                raster.get(p.0 as u32, p.1 as u32)[3] > 0,
+                "the curve is inked at t={t}"
+            );
+        }
+        assert_eq!(raster.get(100, 20)[3], 0, "nothing away from the curve");
+        let r = execute(
+            &mut e,
+            "hatch",
+            &json!({ "node": id, "brush": "HB pencil", "color": "#000000", "rect": [20, 60, 60, 35], "angle": 45, "spacing": 6 }),
+        );
+        assert!(
+            !r.is_error && text(&r).starts_with("Hatched"),
+            "{}",
+            text(&r)
+        );
+        let NodeKind::Raster { raster, .. } = &e.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        let inside = (22..78)
+            .step_by(2)
+            .flat_map(|x| (62..93).step_by(2).map(move |y| (x, y)))
+            .filter(|(x, y)| raster.get(*x, *y)[3] > 2000)
+            .count();
+        assert!(inside > 80, "hatching covers the rectangle: {inside}");
+        assert_eq!(raster.get(150, 95)[3], 0, "nothing outside it");
+        let r = execute(&mut e, "hatch", &json!({ "node": id, "color": "#000000" }));
+        assert!(r.is_error, "no rect and no selection");
     }
 
     #[test]

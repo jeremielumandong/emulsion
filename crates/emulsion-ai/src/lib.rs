@@ -8,6 +8,7 @@
 //! * [`suggest`] proposes adjustments from image statistics (tier 0: no
 //!   models, no network).
 
+pub mod critique;
 pub mod decide;
 pub mod jev;
 pub mod palette;

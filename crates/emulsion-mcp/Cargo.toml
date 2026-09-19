@@ -10,6 +10,7 @@ description = "Emulsion MCP server exposing editor commands to coding CLIs"
 workspace = true
 
 [dependencies]
+emulsion-ai = { workspace = true }
 emulsion-recipes = { workspace = true }
 glam = { workspace = true }
 image = { workspace = true }
