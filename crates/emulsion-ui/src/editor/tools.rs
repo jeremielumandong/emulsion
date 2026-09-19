@@ -2073,6 +2073,53 @@ impl EditorView {
                         .on_click(cx.listener(|this, _, _, cx| this.select_subject(cx)))
                         .into_any_element(),
                 );
+                if let Some(r) = self.ai.refine.clone() {
+                    v.push(mono("refine", 9., p.muted).into_any_element());
+                    v.push(self.opt_slider(
+                        SliderKey::RefineHi,
+                        "in above",
+                        format!("{:.0}", r.hi),
+                        r.hi / 255.0,
+                        (1.0, 255.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                    v.push(self.opt_slider(
+                        SliderKey::RefineLo,
+                        "out below",
+                        format!("{:.0}", r.lo),
+                        r.lo / 255.0,
+                        (0.0, 254.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                    v.push(self.opt_slider(
+                        SliderKey::RefineGrow,
+                        "grow",
+                        format!("{:+.0} px", r.grow),
+                        (r.grow + 40.0) / 80.0,
+                        (-40.0, 40.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                    v.push(self.opt_slider(
+                        SliderKey::RefineFeather,
+                        "feather",
+                        format!("{:.0} px", r.feather),
+                        (r.feather / 60.0).sqrt(),
+                        (0.0, 60.0, 0.5),
+                        p,
+                        cx,
+                    ));
+                    if let Some(why) = self.refine_why() {
+                        v.push(mono(why, 9.5, p.muted).into_any_element());
+                    }
+                    v.push(
+                        chip("sel-refine-done", "done", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.refine_done(cx)))
+                            .into_any_element(),
+                    );
+                }
                 if cur == SelectShape::Quick
                     && !(self.ai.ai_select && emulsion_ai::sam::available().is_some())
                 {

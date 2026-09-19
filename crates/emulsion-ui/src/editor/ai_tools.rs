@@ -8,6 +8,7 @@ use emulsion_ai::jobs::Job;
 use emulsion_ai::models::Task;
 use emulsion_ai::{depth, face, inpaint, matte, sam, upscale};
 use emulsion_raster::IRect;
+use emulsion_raster::Mask;
 use emulsion_raster::composite::region;
 use emulsion_raster::select::Combine;
 use std::time::Duration;
@@ -21,6 +22,29 @@ pub(crate) struct AiState {
     sam_loading: Option<u64>,
     /// The running job, for the status line and cancel.
     pub job: Option<Arc<Job>>,
+    /// The last model-made selection, kept soft so it can be refined.
+    pub refine: Option<Refine>,
+}
+
+/// A soft matte from a model with the settings that turn it into a
+/// selection, so the person can tune them after the fact.
+#[derive(Clone)]
+pub(crate) struct Refine {
+    /// The model's soft matte, 0–255.
+    pub raw: Mask,
+    /// What produced it, e.g. "SlimSAM" or "RMBG 1.4".
+    pub source: String,
+    /// The model's own confidence, when it gives one.
+    pub confidence: Option<f32>,
+    /// Selection before the model ran, and how the result joins it.
+    pub base: Option<Arc<Mask>>,
+    pub combine: Combine,
+    /// Below `lo` is out, above `hi` is in, soft between.
+    pub lo: f32,
+    pub hi: f32,
+    /// Pixels to grow (+) or shrink (−) the result.
+    pub grow: f32,
+    pub feather: f32,
 }
 
 /// What to tell someone when a task's model is not installed.
@@ -73,6 +97,87 @@ impl EditorView {
         .detach();
     }
 
+    /// Turn a model's matte into the selection through the refine settings
+    /// and remember it for further tuning.
+    #[allow(clippy::too_many_arguments)]
+    fn select_from_matte(
+        &mut self,
+        raw: Mask,
+        source: &str,
+        confidence: Option<f32>,
+        combine: Combine,
+        lo: f32,
+        hi: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let base = self.editor.doc.selection.clone();
+        self.ai.refine = Some(Refine {
+            raw,
+            source: source.to_string(),
+            confidence,
+            base,
+            combine,
+            lo,
+            hi,
+            grow: 0.0,
+            feather: self.tools.feather,
+        });
+        self.refine_apply(cx);
+    }
+
+    /// Recompute the selection from the kept matte and current settings.
+    pub(crate) fn refine_apply(&mut self, cx: &mut Context<Self>) {
+        let Some(r) = self.ai.refine.clone() else {
+            return;
+        };
+        let mut m = matte::harden(
+            &r.raw,
+            r.lo.round() as u8,
+            r.hi.round().max(r.lo + 1.0) as u8,
+        );
+        if r.grow.round() != 0.0 {
+            m = emulsion_raster::select::grow(&m, r.grow.round() as i32);
+        }
+        if r.feather > 0.5 {
+            m = emulsion_raster::select::feather(&m, r.feather);
+        }
+        let combined = emulsion_raster::select::combine(r.base.as_deref(), &m, r.combine);
+        let selection =
+            (!emulsion_raster::select::bounds(&combined).is_empty()).then(|| Arc::new(combined));
+        self.execute(Command::SetSelection { selection }, cx);
+    }
+
+    pub(crate) fn set_refine(&mut self, f: impl Fn(&mut Refine), cx: &mut Context<Self>) {
+        if let Some(r) = &mut self.ai.refine {
+            f(r);
+            self.refine_apply(cx);
+        }
+    }
+
+    /// Stop refining; the selection stays as it is.
+    pub fn refine_done(&mut self, cx: &mut Context<Self>) {
+        self.ai.refine = None;
+        cx.notify();
+    }
+
+    /// One line on where the mask came from.
+    pub(crate) fn refine_why(&self) -> Option<String> {
+        let r = self.ai.refine.as_ref()?;
+        let conf = r
+            .confidence
+            .map(|c| format!(", {:.0} % confident", c * 100.0))
+            .unwrap_or_default();
+        Some(format!(
+            "{}{conf} · in above {:.0}, out below {:.0}, {} {} px, feather {:.0}",
+            r.source,
+            r.hi,
+            r.lo,
+            if r.grow >= 0.0 { "grown" } else { "shrunk" },
+            r.grow.abs().round(),
+            r.feather
+        ))
+    }
+
     pub fn cancel_ai(&mut self, cx: &mut Context<Self>) {
         if let Some(j) = &self.ai.job {
             j.cancel();
@@ -103,9 +208,13 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| match r {
                 Ok(m) => {
-                    let m = matte::harden(&m, 20, 235);
-                    this.apply_selection(m, combine, cx);
-                    this.set_status("Subject selected.", false, cx);
+                    let source = matte::available().map(|m| m.name).unwrap_or("matte model");
+                    this.select_from_matte(m, source, None, combine, 20.0, 235.0, cx);
+                    this.set_status(
+                        "Subject selected — refine it in the Select options.",
+                        false,
+                        cx,
+                    );
                 }
                 Err(e) => this.set_status(format!("Select subject: {e}"), true, cx),
             })
@@ -279,9 +388,13 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| match r {
                 Ok((m, score)) => {
-                    this.apply_selection(matte::harden(&m, 96, 160), combine, cx);
+                    let source = sam::available().map(|m| m.name).unwrap_or("SAM");
+                    this.select_from_matte(m, source, Some(score), combine, 96.0, 160.0, cx);
                     this.set_status(
-                        format!("AI select · confidence {:.0} %", score * 100.0),
+                        format!(
+                            "AI select · confidence {:.0} % — refine below",
+                            score * 100.0
+                        ),
                         false,
                         cx,
                     );

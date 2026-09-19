@@ -81,6 +81,10 @@ pub(crate) enum SliderKey {
     Rotation(NodeId),
     Compare,
     TextSize,
+    RefineLo,
+    RefineHi,
+    RefineGrow,
+    RefineFeather,
     ToolSize,
     ToolHardness,
     ToolOpacity,
@@ -124,6 +128,10 @@ impl SliderKey {
                 | SliderKey::Rotation(_)
                 | SliderKey::PenWidth
                 | SliderKey::TextSize
+                | SliderKey::RefineLo
+                | SliderKey::RefineHi
+                | SliderKey::RefineGrow
+                | SliderKey::RefineFeather
                 | SliderKey::Filter(..)
                 | SliderKey::Style(..)
         )
@@ -1090,6 +1098,10 @@ impl EditorView {
                 SliderKey::Scale(_) => "Scale".into(),
                 SliderKey::PenWidth => "Stroke width".into(),
                 SliderKey::TextSize => "Text size".into(),
+                SliderKey::RefineLo
+                | SliderKey::RefineHi
+                | SliderKey::RefineGrow
+                | SliderKey::RefineFeather => "Refine selection".into(),
                 SliderKey::Filter(_, _, k) => k.replace('_', " "),
                 SliderKey::Style(_, _, k) => k.replace('_', " "),
                 _ => "Rotate".into(),
@@ -1211,6 +1223,10 @@ impl EditorView {
                 self.tools.feather = v;
                 cx.notify();
             }
+            SliderKey::RefineLo => self.set_refine(move |r| r.lo = v.min(r.hi - 1.0), cx),
+            SliderKey::RefineHi => self.set_refine(move |r| r.hi = v.max(r.lo + 1.0), cx),
+            SliderKey::RefineGrow => self.set_refine(move |r| r.grow = v, cx),
+            SliderKey::RefineFeather => self.set_refine(move |r| r.feather = v, cx),
             SliderKey::Straighten => {
                 self.tools.straighten = v;
                 cx.notify();
