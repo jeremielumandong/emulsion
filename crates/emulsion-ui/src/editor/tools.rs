@@ -71,6 +71,8 @@ pub struct ToolState {
     pub symmetry: u32,
     /// Alpha lock: paint only where the layer already has pixels.
     pub alpha_lock: bool,
+    /// Drawing guide and assist.
+    pub guide: super::guides::GuideState,
     /// Show every brush setting, not just the four usual ones.
     pub brush_more: bool,
     /// When the current stroke started, for speed dynamics.
@@ -120,6 +122,7 @@ impl Default for ToolState {
             mirror_y: false,
             symmetry: 0,
             alpha_lock: false,
+            guide: Default::default(),
             brush_more: false,
             stroke_started: None,
             quick_shape: true,
@@ -710,6 +713,7 @@ impl EditorView {
         }
         crate::tablet::start();
         self.tools.stroke_started = Some(Instant::now());
+        self.assist_begin(d);
         let p = to_local.transform_point2(dvec2(d.0, d.1));
         stroke.point_full(
             p.x as f32,
@@ -1000,6 +1004,11 @@ impl EditorView {
 
     pub(crate) fn tool_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(d) = self.doc_point(pos) else { return };
+        let d = if matches!(self.drag, Some(Drag::Tool(ToolDrag::Stroke { .. }))) {
+            self.assist_point(d)
+        } else {
+            d
+        };
         let Some(Drag::Tool(t)) = &mut self.drag else {
             return;
         };
@@ -1116,6 +1125,7 @@ impl EditorView {
                     }
                 }
                 self.tools.stroke_started = None;
+                self.assist_end();
                 if heal {
                     self.finish_heal(id, *stroke, cx);
                 } else if self.editor.in_transaction() {
@@ -1755,17 +1765,24 @@ pub struct Overlay {
     /// Guides and snap lines: (vertical, position in document pixels).
     pub guides: Vec<(bool, f64)>,
     pub snaps: Vec<(bool, f64)>,
+    /// Drawing guide (grid, isometric, perspective) polylines and the
+    /// vanishing points to show as handles, in document pixels.
+    pub assist: Vec<Vec<(f64, f64)>>,
+    pub vanishing: Vec<(f64, f64)>,
 }
 
 impl EditorView {
     pub(crate) fn overlay(&mut self, scale_factor: f32) -> Overlay {
         let level = self.view.level(scale_factor, 12);
         let (guides, snaps) = self.guide_lines();
+        let (assist, vanishing) = self.guide_overlay();
         let mut o = Overlay {
             ants: self.ants(level),
             phase: self.tools.ants_phase,
             guides,
             snaps,
+            assist,
+            vanishing,
             transform: self.transform_box(),
             pen: self.pen_overlay(),
             ghost: self.ghost_brush().and_then(|(d, size)| {
@@ -1904,6 +1921,37 @@ pub(crate) fn paint_overlay(
             window.paint_quad(fill(q, color));
         };
         let guide: Hsla = rgb(0x1FB5FF).into();
+        if !o.assist.is_empty() {
+            let mut pb = PathBuilder::stroke(px(1.));
+            for l in &o.assist {
+                if l.len() < 2 {
+                    continue;
+                }
+                pb.move_to(to_screen(l[0]));
+                for p in &l[1..] {
+                    pb.line_to(to_screen(*p));
+                }
+            }
+            if let Ok(p) = pb.build() {
+                window.paint_path(p, guide.opacity(0.45));
+            }
+        }
+        for v in &o.vanishing {
+            let c = to_screen(*v);
+            if !bounds.contains(&c) {
+                continue;
+            }
+            let r = px(6.);
+            window.paint_quad(fill(
+                Bounds::new(point(c.x - r, c.y - r), size(r * 2., r * 2.)),
+                gpui_kit::white().opacity(0.9),
+            ));
+            window.paint_quad(outline(
+                Bounds::new(point(c.x - r, c.y - r), size(r * 2., r * 2.)),
+                guide,
+                BorderStyle::Solid,
+            ));
+        }
         for (v, p) in &o.guides {
             full_line(*v, *p, guide, window);
         }
@@ -2471,6 +2519,38 @@ impl EditorView {
                             }))
                             .into_any_element(),
                     );
+                    let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
+                    let gk = self.tools.guide.kind.clone();
+                    let g_on = gk != super::guides::GuideKind::Off;
+                    v.push(
+                        chip("draw-guide", gk.label(), g_on, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                // Off → grid → isometric → 1/2/3-point → off.
+                                this.tools.guide.kind = gk.cycle(w, h);
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                    if g_on {
+                        let assist = self.tools.guide.assist;
+                        v.push(
+                            chip("draw-assist", "assist", assist, p)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.tools.guide.assist = !assist;
+                                    this.set_status(
+                                        if assist {
+                                            "Drawing assist off"
+                                        } else {
+                                            "Drawing assist: strokes follow the guide"
+                                        },
+                                        false,
+                                        cx,
+                                    );
+                                    cx.notify();
+                                }))
+                                .into_any_element(),
+                        );
+                    }
                     let al = self.tools.alpha_lock;
                     v.push(
                         chip("alpha-lock", "alpha lock", al, p)

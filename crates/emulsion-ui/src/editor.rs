@@ -8,6 +8,7 @@ use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fract
 mod adjust_ui;
 mod ai_tools;
 mod canvas_size;
+pub(crate) mod guides;
 mod history;
 mod lens;
 mod panels;
@@ -142,6 +143,8 @@ impl SliderKey {
 
 enum Drag {
     Tool(tools::ToolDrag),
+    /// Dragging a perspective guide's vanishing point.
+    Vanishing(usize),
     Pan {
         last: Point<Pixels>,
     },
@@ -802,6 +805,11 @@ impl EditorView {
                 cx.notify();
                 return;
             }
+            if let Some(i) = self.vanishing_hit(e.position) {
+                self.drag = Some(Drag::Vanishing(i));
+                cx.notify();
+                return;
+            }
             if matches!(self.tool, Tool::Move | Tool::Hand)
                 && let Some(i) = self.guide_hit(e.position)
             {
@@ -1008,6 +1016,13 @@ impl EditorView {
                     self.distort_move(corner, d, cx);
                 }
             }
+            Drag::Vanishing(i) => {
+                let i = *i;
+                if let Some(d) = self.doc_point(pos) {
+                    self.move_vanishing(i, d);
+                    cx.notify();
+                }
+            }
             Drag::Guide {
                 vertical, existing, ..
             } => {
@@ -1052,7 +1067,7 @@ impl EditorView {
                     self.editor.end();
                 }
             }
-            Some(Drag::Pan { .. }) | Some(Drag::Navigator) => {}
+            Some(Drag::Pan { .. }) | Some(Drag::Navigator) | Some(Drag::Vanishing(_)) => {}
             Some(Drag::Tool(t)) => self.tool_up(t, cx),
             Some(Drag::Guide {
                 vertical,
