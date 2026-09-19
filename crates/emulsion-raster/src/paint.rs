@@ -115,8 +115,10 @@ pub struct Brush {
     // ── Medium ──
     /// How much each dab picks up what is under it, 0–1 (oils, watercolour).
     pub wetness: f32,
-    /// Pigment pools at the edge of each dab, 0–1 (watercolour).
+    /// Pigment pools at the edge of the stroke, 0–1 (watercolour).
     pub edge_darken: f32,
+    /// Paint thickness lit from the top-left, 0–1 (oils, impasto).
+    pub relief: f32,
     pub blend: BrushBlend,
 }
 
@@ -145,6 +147,7 @@ impl Default for Brush {
             color_jitter: 0.0,
             wetness: 0.0,
             edge_darken: 0.0,
+            relief: 0.0,
             blend: BrushBlend::Normal,
         }
     }
@@ -189,6 +192,7 @@ impl Brush {
             4.0
         };
         self.grain_strength = u(self.grain_strength);
+        self.relief = u(self.relief);
         self.size_pressure = u(self.size_pressure);
         self.flow_pressure = u(self.flow_pressure);
         self.speed_thins = u(self.speed_thins);
@@ -243,7 +247,8 @@ struct Sample {
 
 /// Accumulated paint: premultiplied colour, alpha = coverage.
 /// Per pixel: accumulated premultiplied ink (0–3) and coverage (4).
-type PaintTile = Vec<[f32; 5]>;
+/// Premultiplied colour, coverage, and paint thickness (unbounded flow sum).
+type PaintTile = Vec<[f32; 6]>;
 
 pub struct Stroke {
     pub brush: Brush,
@@ -614,7 +619,7 @@ impl Stroke {
             self.brush.grain_scale,
             self.brush.grain_strength,
         );
-        let edge = self.brush.edge_darken;
+        let seed = self.seed as u32;
         self.dabs = self.dabs.wrapping_add(1);
         let dab_no = self.dabs;
         // Tiny tips: spread the dab over the pixel so thin lines stay continuous.
@@ -625,7 +630,7 @@ impl Stroke {
                 let tile = self
                     .paint
                     .entry(coord)
-                    .or_insert_with(|| vec![[0.0; 5]; TILE_PX]);
+                    .or_insert_with(|| vec![[0.0; 6]; TILE_PX]);
                 let tr = IRect::new(tx * t, ty * t, t, t).intersect(&b);
                 for y in tr.y..tr.bottom() {
                     for x in tr.x..tr.right() {
@@ -636,22 +641,30 @@ impl Stroke {
                         if a <= 0.0 {
                             continue;
                         }
-                        if edge > 0.0 {
-                            // Thin in the middle, pooled towards the rim.
-                            let pool = 0.35 + 0.65 * d * d;
-                            a *= 1.0 - edge + edge * pool * 1.3;
-                        }
+                        let mut thick = a;
                         if gstr > 0.0 {
-                            let g = if gk == GrainKind::Bristle {
-                                bristle(ry, rx, gs, dab_no)
-                            } else {
-                                grain(gk, x as f32, y as f32, gs)
-                            };
                             match gk {
+                                // Bristles live in the dab's frame and follow the stroke;
+                                // the same bristles persist so their streaks build up.
+                                GrainKind::Bristle => {
+                                    let g = bristle(ry, rx, gs, seed.wrapping_add(dab_no / 12));
+                                    // Bristles leave shallow gaps in the paint but carry
+                                    // most of its thickness, so the body stays opaque
+                                    // while the ridges catch the light.
+                                    thick = a * (0.3 + 1.7 * g);
+                                    a *= 1.0 - gstr * 0.3 * (1.0 - g);
+                                }
                                 // Screentone: strength sets the dot size; the tone is crisp.
-                                GrainKind::Halftone => a *= if g >= 1.0 - gstr { 1.0 } else { 0.0 },
-                                GrainKind::Hatch | GrainKind::CrossHatch => a *= g,
-                                _ => a *= 1.0 - gstr + gstr * g,
+                                GrainKind::Halftone => {
+                                    let g = grain(gk, x as f32, y as f32, gs);
+                                    a *= if g >= 1.0 - gstr { 1.0 } else { 0.0 };
+                                }
+                                GrainKind::Hatch | GrainKind::CrossHatch => {
+                                    a *= grain(gk, x as f32, y as f32, gs);
+                                }
+                                // Paper-like grains apply to the whole stroke in `render`,
+                                // so overlapping dabs cannot fill the tooth by themselves.
+                                _ => {}
                             }
                         }
                         if a <= 0.0005 {
@@ -662,6 +675,7 @@ impl Stroke {
                             p[i] = colour[i] * a + p[i] * (1.0 - a);
                         }
                         p[4] = a + p[4] * (1.0 - a);
+                        p[5] += thick;
                     }
                 }
                 self.pending.insert(coord);
@@ -788,7 +802,7 @@ impl Stroke {
                 .sum::<f32>();
             let touched: Vec<TileCoord> = self.paint.keys().copied().collect();
             for tile in self.paint.values_mut() {
-                tile.fill([0.0; 5]);
+                tile.fill([0.0; 6]);
             }
             self.pending.extend(touched);
             self.last = None;
@@ -817,20 +831,62 @@ impl Stroke {
             BrushBlend::Normal | BrushBlend::Behind => BlendMode::Normal,
             BrushBlend::Multiply => BlendMode::Multiply,
         };
+        let (gk, gs, gstr) = (
+            self.brush.grain,
+            self.brush.grain_scale,
+            self.brush.grain_strength,
+        );
+        let textured = gstr > 0.0
+            && matches!(
+                gk,
+                GrainKind::Paper | GrainKind::Canvas | GrainKind::Chalk | GrainKind::Speckle
+            );
+        let edge = self.brush.edge_darken;
+        let relief = self.brush.relief;
+        let base_fill = self.base.fill();
         for c in std::mem::take(&mut self.pending) {
             let paint = &self.paint[&c];
             let src = self
                 .base
                 .base_tile(c)
                 .map(|t| t.to_vec())
-                .unwrap_or_else(|| vec![[0u16; 4]; TILE_PX]);
+                .unwrap_or_else(|| vec![base_fill; TILE_PX]);
             let mut out = src.clone();
+            // Paint thickness of a neighbour inside this tile, compressed so
+            // heavy strokes still show ridges; for relief lighting.
+            let cov = |i: usize, dx: i32, dy: i32| -> f32 {
+                let (x, y) = (i as i32 % t + dx, i as i32 / t + dy);
+                let j = if x < 0 || y < 0 || x >= t || y >= t {
+                    i
+                } else {
+                    (y * t + x) as usize
+                };
+                (1.0 + paint[j][5]).ln()
+            };
             for (i, p) in paint.iter().enumerate() {
                 if p[4] <= 0.0 {
                     continue;
                 }
                 let (x, y) = (c.x * t + (i as i32 % t), c.y * t + (i as i32 / t));
-                let mut k = p[4].min(1.0) * opacity;
+                let raw = p[4].min(1.0);
+                let mut k = raw;
+                if textured {
+                    // The paper's tooth as a height the paint must reach: one
+                    // light pass catches only the peaks, and scrubbing or
+                    // pressing (more thickness) fills the valleys.
+                    let g = grain(gk, x as f32, y as f32, gs);
+                    let depth = gstr * (1.0 - g);
+                    let fill = (((1.0 + p[5]).ln() - 1.2 * depth) / 0.4).clamp(0.0, 1.0);
+                    k = raw * fill;
+                }
+                // Pigment pools where coverage falls off: the rim of a wash.
+                let rim = if edge > 0.0 {
+                    4.0 * raw * (1.0 - raw)
+                } else {
+                    0.0
+                };
+                k *= 1.0 + edge * rim * 0.6;
+                k = k.min(1.0) * opacity;
                 if let Some(clip) = &self.clip {
                     k *= clip(x, y);
                 }
@@ -840,7 +896,25 @@ impl Stroke {
                 let b = color::px_to_f(src[i]);
                 let a = p[4].max(1e-6);
                 // The dab colour at full coverage, then scaled by k.
-                let ink = [p[0] / a, p[1] / a, p[2] / a, p[3] / a];
+                let mut ink = [p[0] / a, p[1] / a, p[2] / a, p[3] / a];
+                if edge > 0.0 {
+                    let dark = 1.0 - edge * rim * 0.35;
+                    for c in ink.iter_mut().take(3) {
+                        *c *= dark;
+                    }
+                }
+                if relief > 0.0 {
+                    // Thickness lit from the top-left: slopes facing the
+                    // light brighten, slopes away from it darken.
+                    let gx = cov(i, 1, 0) - cov(i, -1, 0);
+                    let gy = cov(i, 0, 1) - cov(i, 0, -1);
+                    let light = (-gx - gy) * 0.7;
+                    let l = (1.0 + relief * light * 1.8).clamp(0.35, 1.6);
+                    let alpha = ink[3];
+                    for c in ink.iter_mut().take(3) {
+                        *c = (*c * l).min(alpha);
+                    }
+                }
                 let o = match &self.ink {
                     Ink::Color(_) | Ink::Smudge => {
                         let k = if self.brush.blend == BrushBlend::Behind {
