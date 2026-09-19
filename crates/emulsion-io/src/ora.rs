@@ -11,6 +11,7 @@
 //! emulsion.json             the full node stack (adjustments, placements, …)
 //! mergedimage.png           full composite
 //! Thumbnails/thumbnail.png  composite, at most 256 px
+//! history/…                 the history graph (see [`crate::history`])
 //! ```
 //!
 //! Emulsion reads `emulsion.json` when present and falls back to `stack.xml`,
@@ -24,6 +25,7 @@
 use crate::export::{png_gray, png8, png16};
 use crate::import::{check_size, from_dynamic};
 use crate::{IoError, Result, write_atomic};
+use emulsion_core::graph::Graph;
 use emulsion_core::node::{Node, NodeKind};
 use emulsion_core::{Document, NodeId};
 use emulsion_raster::blend::BlendSpace;
@@ -386,11 +388,24 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
 
 /// Write `doc` to `path` in the native format.
 pub fn write(doc: &Document, path: &Path) -> Result<()> {
+    write_full(doc, None, path)
+}
+
+/// Write `doc` and, when given, its history graph.
+pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<()> {
     doc.validate()?;
     let enc = encode(doc)?;
     let xml = stack_xml(doc, &enc.ora_layers);
     let manifest =
         serde_json::to_vec_pretty(&enc.manifest).map_err(|e| IoError::Manifest(e.to_string()))?;
+    let history = match graph {
+        Some(g) => {
+            let tip = g.commit(g.head_branch().tip).map(|c| &c.doc);
+            let live = (tip == Some(doc)).then(|| crate::history::fingerprint(&manifest));
+            crate::history::encode(g, live)?
+        }
+        None => Vec::new(),
+    };
     write_atomic(path, |f| {
         let mut z = ZipWriter::new(std::io::BufWriter::new(f));
         let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
@@ -409,12 +424,25 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
             )?;
             z.write_all(bytes)?;
         }
+        // Raw tiles compress well; favour speed.
+        let fast = deflated.compression_level(Some(1));
+        for (name, bytes) in &history {
+            z.start_file(
+                name.as_str(),
+                fast.large_file(bytes.len() as u64 >= u32::MAX as u64),
+            )?;
+            z.write_all(bytes)?;
+        }
         z.finish()?.flush()?;
         Ok(())
     })
 }
 
-fn read_entry<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str, max: u64) -> Result<Vec<u8>> {
+pub(crate) fn read_entry<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    name: &str,
+    max: u64,
+) -> Result<Vec<u8>> {
     let mut f = zip
         .by_name(name)
         .map_err(|_| IoError::Manifest(format!("missing entry {name}")))?;
@@ -436,6 +464,61 @@ fn decode_mask(bytes: &[u8]) -> Result<Mask> {
     let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)?.into_luma8();
     check_size(img.width(), img.height())?;
     Ok(Mask::from_gray8(img.width(), img.height(), img.as_raw()))
+}
+
+/// A native document with its history graph.
+pub struct Opened {
+    pub doc: Document,
+    pub graph: Option<Graph>,
+    /// Set when the file's history could not be read; the document itself
+    /// opened fine.
+    pub history_error: Option<String>,
+}
+
+/// Read a native document and its history graph, if it has one.
+pub fn read_full(path: &Path) -> Result<Opened> {
+    let doc = read(path)?;
+    let file = std::fs::File::open(path)?;
+    let mut zip = ZipArchive::new(std::io::BufReader::new(file))?;
+    let manifest = if zip.by_name(MANIFEST).is_ok() {
+        Some(read_entry(&mut zip, MANIFEST, MAX_MANIFEST_BYTES)?)
+    } else {
+        None
+    };
+    match crate::history::read(&mut zip) {
+        Ok(None) => Ok(Opened {
+            doc,
+            graph: None,
+            history_error: None,
+        }),
+        Ok(Some(h)) => {
+            // Use the exact tip (16-bit, buffers shared with older commits)
+            // when this file's live stack was written from it.
+            let same =
+                h.live.is_some() && h.live == manifest.as_deref().map(crate::history::fingerprint);
+            let tip = h
+                .graph
+                .commit(h.graph.head_branch().tip)
+                .map(|c| c.doc.clone());
+            let doc = match tip {
+                Some(t) if same && t.width == doc.width && t.height == doc.height => t,
+                _ => doc,
+            };
+            Ok(Opened {
+                doc,
+                graph: Some(h.graph),
+                history_error: None,
+            })
+        }
+        Err(e) => {
+            tracing::warn!("history graph in {} is unreadable: {e}", path.display());
+            Ok(Opened {
+                doc,
+                graph: None,
+                history_error: Some(e.to_string()),
+            })
+        }
+    }
 }
 
 /// Read a native document (or any ORA).
@@ -1011,5 +1094,91 @@ mod tests {
         let f = z.by_index(0).unwrap();
         assert_eq!(f.name(), "mimetype");
         assert_eq!(f.compression(), CompressionMethod::Stored);
+    }
+
+    #[test]
+    fn history_round_trips_with_shared_buffers() {
+        use emulsion_core::Editor;
+        use std::collections::HashMap;
+        let doc = sample_doc();
+        let first = doc.nodes[0].id;
+        let mut e = Editor::new(doc, None);
+        e.execute(Command::SetOpacity {
+            id: first,
+            opacity: 0.5,
+        })
+        .unwrap();
+        e.branch("warm").unwrap();
+        e.execute(Command::Rename {
+            id: first,
+            name: "warm sky".into(),
+        })
+        .unwrap();
+        e.commit("Warmer", false);
+        e.checkout("main").unwrap();
+        e.execute(Command::SetVisible {
+            id: first,
+            visible: false,
+        })
+        .unwrap();
+        e.commit("Saved", false);
+        let path = tmp("history.ora");
+        write_full(&e.doc, Some(&e.graph), &path).unwrap();
+
+        let o = read_full(&path).unwrap();
+        assert!(o.history_error.is_none());
+        let g = o.graph.expect("graph");
+        assert_eq!(g.len(), e.graph.len());
+        assert_eq!(g.head(), "main");
+        assert_eq!(g.branches().keys().collect::<Vec<_>>(), ["main", "warm"]);
+        // The live document is the exact head tip, so it shares buffers.
+        let tip = &g.commit(g.head_branch().tip).unwrap().doc;
+        assert!(o.doc == *tip);
+        // Commits that shared a raster still share it after reading.
+        let rasters: Vec<_> = g
+            .commits()
+            .filter_map(|c| match &c.doc.nodes[0].kind {
+                NodeKind::Raster { raster, .. } => Some(Arc::as_ptr(raster)),
+                _ => None,
+            })
+            .collect();
+        assert!(rasters.windows(2).all(|w| w[0] == w[1]));
+        // And the reopened graph merges exactly like the original.
+        let mut e2 = emulsion_core::Editor::with_graph(o.doc, Some(path.clone()), g);
+        let emulsion_core::graph::MergeOutcome::Merged(m) =
+            e2.merge("warm", &HashMap::new()).unwrap()
+        else {
+            panic!("clean merge expected");
+        };
+        let n = m.node(first).unwrap();
+        assert!(n.name == "warm sky" && !n.visible && n.opacity == 0.5);
+    }
+
+    #[test]
+    fn damaged_history_still_opens_the_document() {
+        let doc = sample_doc();
+        let e = emulsion_core::Editor::new(doc.clone(), None);
+        let path = tmp("damaged-history.ora");
+        write_full(&doc, Some(&e.graph), &path).unwrap();
+        // Rewrite the zip with a broken graph.
+        let bytes = std::fs::read(&path).unwrap();
+        let mut zin = ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut out = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zin.len() {
+            let mut f = zin.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut data = Vec::new();
+            f.read_to_end(&mut data).unwrap();
+            if name == crate::history::GRAPH {
+                data = br#"{"format":"emulsion-history","version":1,"head":"main","branches":{},"live":null,"rasters":[],"masks":[],"commits":[]}"#.to_vec();
+            }
+            out.start_file(name, SimpleFileOptions::default()).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        std::fs::write(&path, out.finish().unwrap().into_inner()).unwrap();
+        let o = read_full(&path).unwrap();
+        assert!(o.graph.is_none());
+        assert!(o.history_error.is_some());
+        assert_eq!(o.doc.nodes.len(), doc.nodes.len());
     }
 }

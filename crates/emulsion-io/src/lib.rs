@@ -9,6 +9,7 @@
 //! replace an open document.
 
 pub mod export;
+pub mod history;
 pub mod import;
 pub mod ora;
 pub mod recent;
@@ -68,6 +69,26 @@ pub fn open(path: &Path) -> Result<Document> {
 /// Save in the native format.
 pub fn save(doc: &Document, path: &Path) -> Result<()> {
     ora::write(doc, path)
+}
+
+pub use ora::Opened;
+
+/// Open a document with its history graph when it is a native file.
+pub fn open_full(path: &Path) -> Result<Opened> {
+    if is_native(path) {
+        ora::read_full(path)
+    } else {
+        Ok(Opened {
+            doc: import::import(path)?,
+            graph: None,
+            history_error: None,
+        })
+    }
+}
+
+/// Save in the native format with the history graph.
+pub fn save_full(doc: &Document, graph: &emulsion_core::graph::Graph, path: &Path) -> Result<()> {
+    ora::write_full(doc, Some(graph), path)
 }
 
 /// Write `bytes` to `path` via a temporary file in the same directory, so a

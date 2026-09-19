@@ -80,6 +80,7 @@ impl Workspace {
             .min_h_0()
             .overflow_y_scroll()
             .child(self.hero(date, &p, cx))
+            .children(self.recovered_rows(&p, cx))
             .child(if cells.is_empty() {
                 div()
                     .px(px(40.))
@@ -119,6 +120,56 @@ impl Workspace {
                             .child(div().text_size(px(15.)).child(*body))
                     })),
             )
+    }
+
+    /// Work an earlier session left unsaved, if any.
+    fn recovered_rows(
+        &self,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        if self.recovered.is_empty() {
+            return None;
+        }
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .px(px(40.))
+            .py(px(22.))
+            .border_b_1()
+            .border_color(p.line)
+            .bg(p.panel)
+            .child(mono("RECOVERED WORK · NOT SAVED LAST TIME", 9.5, p.accent));
+        for (i, (path, t)) in self.recovered.iter().enumerate() {
+            let (open, discard) = (path.clone(), path.clone());
+            list = list.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .child(crate::workspace::recovered_name(path)),
+                    )
+                    .child(mono(format!("autosaved {}", recent::ago(*t)), 10., p.muted))
+                    .child(div().flex_1())
+                    .child(
+                        button(("recover", i), "Open", true, p).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.open_recovered(open.clone(), window, cx)
+                            },
+                        )),
+                    )
+                    .child(
+                        button(("discard-recovered", i), "Discard", false, p).on_click(
+                            cx.listener(move |this, _, _, cx| this.discard_recovered(&discard, cx)),
+                        ),
+                    ),
+            );
+        }
+        Some(list)
     }
 
     /// The landing image, full width, with the headline and actions over it.

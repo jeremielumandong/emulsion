@@ -85,8 +85,40 @@ pub mod dim {
 pub struct ActivePalette(pub Palette);
 impl Global for ActivePalette {}
 
+/// Dark by default; `apply_saved` switches to light if the person chose it.
 pub fn install(cx: &mut App) {
-    cx.set_global(ActivePalette(light()));
+    cx.set_global(ActivePalette(dark()));
+}
+
+/// Use the theme saved in settings.
+pub fn apply_saved(cx: &mut App) {
+    let light = crate::app_state::settings(cx).light_mode;
+    cx.set_global(ActivePalette(if light { self::light() } else { dark() }));
+    sync_kit(cx);
+}
+
+/// Match gpui-kit's widgets (inputs, menus) to the palette. The design is
+/// square, so corner radii stay zero in both modes.
+pub fn sync_kit(cx: &mut App) {
+    use gpui_kit::component::{Theme, ThemeMode};
+    let mode = if palette(cx).dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    Theme::change(mode, None, cx);
+    let t = Theme::global_mut(cx);
+    t.radius = px(0.);
+    t.radius_lg = px(0.);
+}
+
+/// Switch theme and remember the choice.
+pub fn set_dark(dark_on: bool, cx: &mut App) {
+    if palette(cx).dark != dark_on {
+        cx.set_global(ActivePalette(if dark_on { dark() } else { light() }));
+        sync_kit(cx);
+        crate::app_state::update_settings(cx, |s| s.light_mode = !dark_on);
+    }
 }
 
 pub fn palette(cx: &App) -> Palette {
@@ -94,6 +126,6 @@ pub fn palette(cx: &App) -> Palette {
 }
 
 pub fn toggle(cx: &mut App) {
-    let next = if palette(cx).dark { light() } else { dark() };
-    cx.set_global(ActivePalette(next));
+    let dark_on = !palette(cx).dark;
+    set_dark(dark_on, cx);
 }

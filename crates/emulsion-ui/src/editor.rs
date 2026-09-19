@@ -5,6 +5,7 @@ use crate::theme::{self, MONO_FONT, Palette, dim};
 use crate::viewport::{self, CanvasBounds, Scene, TileCache, View, Which};
 use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fraction};
 
+mod history;
 mod tools;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
@@ -14,6 +15,7 @@ use emulsion_raster::{Adjustment, BlendMode, Placement, Raster, TileCoord, color
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+pub use history::recovery_dir;
 use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -25,6 +27,8 @@ pub use tools::{PaintKind, SelectShape, ShapeKind};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
+    /// Drag to pan the view. The default, so dragging a photo never moves its pixels by surprise.
+    Hand,
     Move,
     Select,
     Mask,
@@ -38,7 +42,8 @@ pub enum Tool {
 }
 
 /// Rail order, glyphs, and whether the tool works yet.
-const TOOLS: [(Tool, &str, &str, bool); 10] = [
+const TOOLS: [(Tool, &str, &str, bool); 11] = [
+    (Tool::Hand, "Hand", "✋", true),
     (Tool::Move, "Move", "✥", true),
     (Tool::Select, "Select", "▢", true),
     (Tool::Mask, "Mask", "◐", false),
@@ -165,11 +170,13 @@ pub struct EditorView {
     pub(crate) suggest_rev: u64,
     pub(crate) suggest_busy: bool,
     tools: tools::ToolState,
+    pub(crate) history: history::HistoryState,
 }
 
 impl EditorView {
     pub fn new(
         doc: Document,
+        graph: Option<emulsion_core::graph::Graph>,
         path: Option<PathBuf>,
         source: Option<PathBuf>,
         name: String,
@@ -177,7 +184,11 @@ impl EditorView {
     ) -> Self {
         let selected = doc.nodes.last().map(|n| n.id);
         Self::start_ants(cx);
-        let editor = Editor::new(doc, path);
+        Self::start_autosave(cx);
+        let editor = match graph {
+            Some(g) => Editor::with_graph(doc, path, g),
+            None => Editor::new(doc, path),
+        };
         let tree = Arc::new(editor.doc.composite_tree());
         let rev = editor.revision;
         let commit = editor.committed_revision;
@@ -197,7 +208,7 @@ impl EditorView {
             before_gen: 0,
             before_tree: None,
             selected,
-            tool: Tool::Move,
+            tool: Tool::Hand,
             drag: None,
             compare: 0.0,
             rulers: true,
@@ -217,6 +228,7 @@ impl EditorView {
             suggest_rev: 0,
             suggest_busy: false,
             tools: tools::ToolState::default(),
+            history: Default::default(),
         }
     }
 
@@ -328,16 +340,14 @@ impl EditorView {
             self.before_tree = None;
             self.cache.borrow_mut().clear_which(Which::Before);
         }
-        let differs = self.editor.revision != self.editor.committed_revision;
+        let differs = self.editor.differs_from_base();
         if self.compare > 0.0 && differs && self.before_tree.is_none() {
             self.before_tree = Some(Arc::new(self.editor.committed.composite_tree()));
         }
     }
 
     fn before_active(&self) -> bool {
-        self.compare > 0.0
-            && self.editor.revision != self.editor.committed_revision
-            && self.before_tree.is_some()
+        self.compare > 0.0 && self.editor.differs_from_base() && self.before_tree.is_some()
     }
 
     fn dispatch_render(&mut self, cx: &mut Context<Self>) {
@@ -612,8 +622,8 @@ impl EditorView {
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.canvas_focus, cx);
         self.menu = None;
-        let pan =
-            e.button == MouseButton::Middle || (e.button == MouseButton::Left && self.space_held);
+        let pan = e.button == MouseButton::Middle
+            || (e.button == MouseButton::Left && (self.space_held || self.tool == Tool::Hand));
         if pan {
             self.drag = Some(Drag::Pan { last: e.position });
             cx.notify();
@@ -958,6 +968,7 @@ impl EditorView {
                         p.muted,
                     )),
             )
+            .child(self.branch_badge(p, cx))
             .when(self.editor.is_modified(), |this| {
                 this.child(
                     div()
@@ -1048,7 +1059,7 @@ impl EditorView {
         let options = self.tool_options(p, cx);
         let zoom = format!("{:.0}%", self.view.zoom * 100.0);
         let rot = format!("{:.0}°", self.view.rotation);
-        let can_compare = self.editor.revision != self.editor.committed_revision;
+        let can_compare = self.editor.differs_from_base();
         let track = self.tracks.entry(SliderKey::Compare).or_default().clone();
         let compare = self.compare;
         div()
@@ -1151,6 +1162,7 @@ impl EditorView {
         let cursor = match (&self.drag, self.space_held) {
             (Some(Drag::Pan { .. }), _) => CursorStyle::ClosedHand,
             (_, true) => CursorStyle::OpenHand,
+            _ if self.tool == Tool::Hand => CursorStyle::OpenHand,
             _ if self.tool == Tool::Move => CursorStyle::Arrow,
             _ => CursorStyle::Crosshair,
         };
@@ -1256,8 +1268,12 @@ impl EditorView {
             .last_batch
             .map(|(k, d)| format!(" · {k} tiles in {} ms", d.as_millis()))
             .unwrap_or_default();
+        let autosaved = self
+            .autosave_note()
+            .map(|a| format!(" · {a}"))
+            .unwrap_or_default();
         let right = format!(
-            "non-destructive · {n} node{} · {saved}{render}",
+            "non-destructive · {n} node{} · {saved}{autosaved}{render}",
             if n == 1 { "" } else { "s" }
         );
         div()
@@ -1880,6 +1896,10 @@ impl EditorView {
                     .child(label("History", p))
                     .child(div().flex_1())
                     .child(
+                        chip("graph", "graph →", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_history(cx))),
+                    )
+                    .child(
                         chip("undo", "undo", false, p)
                             .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
                     )
@@ -1947,6 +1967,18 @@ impl Render for EditorView {
         let p = theme::palette(cx);
         self.sync_trees(cx);
         let doc_bar = self.doc_bar(&p, cx);
+        if self.history.open {
+            let page = self.history_page(&p, cx);
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .track_focus(&self.focus)
+                .child(doc_bar)
+                .child(page)
+                .into_any_element();
+        }
         let rail = self.tool_rail(&p, cx);
         let context = self.context_bar(&p, cx);
         let canvas = self.canvas_area(&p, window.scale_factor(), cx);
@@ -1987,5 +2019,6 @@ impl Render for EditorView {
                     .child(panel)
                     .children(picker),
             )
+            .into_any_element()
     }
 }

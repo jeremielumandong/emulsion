@@ -17,6 +17,8 @@ pub struct Settings {
     pub auto_apply: bool,
     /// Show suggestions from image statistics.
     pub suggestions: bool,
+    /// Light theme instead of the default dark one.
+    pub light_mode: bool,
 }
 
 impl Default for Settings {
@@ -27,6 +29,7 @@ impl Default for Settings {
             jev_api_key: None,
             auto_apply: false,
             suggestions: true,
+            light_mode: false,
         }
     }
 }

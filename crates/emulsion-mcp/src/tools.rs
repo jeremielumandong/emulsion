@@ -4,10 +4,17 @@ use crate::server::ToolDef;
 use serde_json::{Value, json};
 
 /// Tools that only read; the CLI may run them without asking.
-pub const READ_ONLY: &[&str] = &["describe_document", "get_view"];
+pub const READ_ONLY: &[&str] = &["describe_document", "get_view", "list_history", "compare"];
 
 /// Tools whose effect is hard to see or undo at a glance; always confirmed.
-pub const DESTRUCTIVE: &[&str] = &["delete_node", "ungroup", "undo", "crop", "image_size"];
+pub const DESTRUCTIVE: &[&str] = &[
+    "delete_node",
+    "ungroup",
+    "undo",
+    "crop",
+    "image_size",
+    "merge_branch",
+];
 
 /// Tools that compute for a while; hosts run them off the UI thread.
 pub const HEAVY: &[&str] = &["select_color", "content_aware_fill"];
@@ -238,6 +245,36 @@ pub fn definitions() -> Vec<ToolDef> {
             "Scale the whole image to a new width (height follows the aspect ratio). Lossless: layers keep their source pixels.",
             json!({ "width": { "type": "integer", "minimum": 1, "maximum": 30000 } }),
             &["width"],
+        ),
+        def(
+            "list_history",
+            "List branches (with the current one marked) and the most recent commits. Commits are the saved points of the history graph; ids are for compare and branch.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "create_branch",
+            "Start a new branch and switch to it, so edits can be tried without touching the current branch. from_commit starts it at an earlier commit instead of the current state.",
+            json!({ "name": { "type": "string", "minLength": 1, "maxLength": 64 }, "from_commit": { "type": "integer" } }),
+            &["name"],
+        ),
+        def(
+            "switch_branch",
+            "Switch to another branch. The current branch's work is committed first, so nothing is lost.",
+            json!({ "name": { "type": "string" } }),
+            &["name"],
+        ),
+        def(
+            "compare",
+            "What differs between two points: each of a and b is a branch name or a commit id; b defaults to the current document and a to the current branch's starting point.",
+            json!({ "a": { "type": ["string", "integer"] }, "b": { "type": ["string", "integer"] } }),
+            &[],
+        ),
+        def(
+            "merge_branch",
+            "Merge another branch into the current one. If both branches changed the same property of a node, nothing is merged and the conflicts are listed; call again with choices mapping each conflict key (a node id, or \"canvas\") to \"ours\" or \"theirs\". Only pass choices the person asked for.",
+            json!({ "branch": { "type": "string" }, "choices": { "type": "object", "additionalProperties": { "type": "string", "enum": ["ours", "theirs"] } } }),
+            &["branch"],
         ),
         def("undo", "Undo the most recent history step.", json!({}), &[]),
         def(

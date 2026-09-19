@@ -38,6 +38,8 @@ pub struct Workspace {
     pub(crate) jev_test: Option<(SharedString, bool)>,
     /// The landing image, decoded once in the background.
     pub(crate) landing: Option<Arc<RenderImage>>,
+    /// Recovery copies left by an earlier session that did not close cleanly.
+    pub(crate) recovered: Vec<(PathBuf, u64)>,
     /// Launch splash, until the timer or the first click or key.
     pub(crate) splash: bool,
 }
@@ -83,7 +85,13 @@ impl Workspace {
             let handle = window.window_handle();
             cx.spawn(async move |cx| {
                 if answer.await == Ok(0) {
-                    weak.update(cx, |this, _| this.closing = true).ok();
+                    weak.update(cx, |this, cx| {
+                        this.closing = true;
+                        if let Some(ed) = &this.editor {
+                            ed.update(cx, |e, _| e.discard_recovery());
+                        }
+                    })
+                    .ok();
                     handle
                         .update(cx, |_, window, _| window.remove_window())
                         .ok();
@@ -111,6 +119,7 @@ impl Workspace {
             screen: Screen::Home,
             editor: None,
             recents: recent::load(),
+            recovered: find_recovered(),
             thumbs: HashMap::new(),
             thumbs_loading: HashSet::new(),
             busy: None,
@@ -158,16 +167,21 @@ impl Workspace {
         .detach();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn install(
         &mut self,
         doc: Document,
+        graph: Option<emulsion_core::graph::Graph>,
         path: Option<PathBuf>,
         source: Option<PathBuf>,
         name: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let ed = cx.new(|cx| EditorView::new(doc, path, source, name, cx));
+        if let Some(old) = &self.editor {
+            old.update(cx, |e, _| e.discard_recovery());
+        }
+        let ed = cx.new(|cx| EditorView::new(doc, graph, path, source, name, cx));
         let focus = ed.read(cx).focus.clone();
         self.editor = Some(ed);
         self.screen = Screen::Editor;
@@ -184,22 +198,33 @@ impl Workspace {
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
                 let result = cx
-                    .background_spawn(async move { emulsion_io::open(&p) })
+                    .background_spawn(async move { emulsion_io::open_full(&p) })
                     .await;
                 this.update_in(cx, |this, window, cx| {
                     this.busy = None;
                     match result {
-                        Ok(doc) => {
+                        Ok(opened) => {
                             let native = emulsion_io::is_native(&path);
+                            let (doc, graph, broken) = (opened.doc, opened.graph, opened.history_error);
                             this.recents = recent::push(&path, summary(&doc));
                             this.install(
                                 doc,
+                                graph,
                                 native.then(|| path.clone()),
                                 Some(path.clone()),
                                 stem(&path),
                                 window,
                                 cx,
                             );
+                            if let (Some(err), Some(ed)) = (broken, &this.editor) {
+                                ed.update(cx, |e, cx| {
+                                    e.set_status(
+                                        format!("The file's history could not be read, so it starts fresh ({err})."),
+                                        true,
+                                        cx,
+                                    )
+                                });
+                            }
                         }
                         Err(e) => {
                             this.error =
@@ -212,6 +237,54 @@ impl Workspace {
             })
             .detach();
         });
+    }
+
+    /// Reopen a recovery copy as an untitled document, with its history.
+    pub(crate) fn open_recovered(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm_discard(window, cx, move |this, window, cx| {
+            this.busy = Some("Recovering…".into());
+            cx.notify();
+            cx.spawn_in(window, async move |this, cx| {
+                let p = path.clone();
+                let result = cx
+                    .background_spawn(async move { emulsion_io::ora::read_full(&p) })
+                    .await;
+                this.update_in(cx, |this, window, cx| {
+                    this.busy = None;
+                    match result {
+                        Ok(o) => {
+                            let name = recovered_name(&path);
+                            this.install(o.doc, o.graph, None, None, name, window, cx);
+                            let _ = std::fs::remove_file(&path);
+                            this.recovered.retain(|(q, _)| *q != path);
+                            if let Some(ed) = &this.editor {
+                                ed.update(cx, |e, cx| {
+                                    e.set_status("Recovered. Save it to keep it.", false, cx)
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            this.error =
+                                Some(format!("Could not recover {}: {e}", path.display()).into());
+                            cx.notify();
+                        }
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        });
+    }
+
+    pub(crate) fn discard_recovered(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let _ = std::fs::remove_file(path);
+        self.recovered.retain(|(q, _)| q != path);
+        cx.notify();
     }
 
     /// Open the bundled landing image as a new document to edit.
@@ -233,6 +306,7 @@ impl Workspace {
                     match result {
                         Ok(doc) => this.install(
                             doc,
+                            None,
                             None,
                             None,
                             crate::landing::LANDING_NAME.into(),
@@ -352,7 +426,7 @@ impl Workspace {
                 slot: Slot::TOP,
             }
             .apply(&mut doc);
-            this.install(doc, None, None, "untitled".into(), window, cx);
+            this.install(doc, None, None, None, "untitled".into(), window, cx);
         });
     }
 
@@ -360,7 +434,7 @@ impl Workspace {
         let Some(ed) = self.editor.clone() else {
             return;
         };
-        let (path, doc, rev, dir, name) = {
+        let (path, dir, name) = {
             let e = ed.read(cx);
             let dir = e
                 .source
@@ -368,16 +442,10 @@ impl Workspace {
                 .and_then(|p| p.parent().map(Path::to_path_buf))
                 .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
                 .unwrap_or_else(|| PathBuf::from("."));
-            (
-                e.editor.path.clone(),
-                e.editor.doc.clone(),
-                e.editor.revision,
-                dir,
-                e.name.clone(),
-            )
+            (e.editor.path.clone(), dir, e.name.clone())
         };
         match path {
-            Some(p) if !save_as => self.write(ed, p, doc, rev, cx),
+            Some(p) if !save_as => self.write(ed, p, cx),
             _ => {
                 let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}.ora")));
                 cx.spawn_in(window, async move |this, cx| {
@@ -385,8 +453,7 @@ impl Workspace {
                         if !emulsion_io::is_native(&p) {
                             p.set_extension("ora");
                         }
-                        this.update(cx, |this, cx| this.write(ed, p, doc, rev, cx))
-                            .ok();
+                        this.update(cx, |this, cx| this.write(ed, p, cx)).ok();
                     }
                 })
                 .detach();
@@ -394,21 +461,22 @@ impl Workspace {
         }
     }
 
-    fn write(
-        &mut self,
-        ed: Entity<EditorView>,
-        path: PathBuf,
-        doc: Document,
-        rev: u64,
-        cx: &mut Context<Self>,
-    ) {
-        ed.update(cx, |e, cx| {
-            e.set_status(format!("Saving {}…", path.display()), false, cx)
+    /// Save the document as it is now, with its history, committing first
+    /// so the file's newest commit is exactly what was written.
+    fn write(&mut self, ed: Entity<EditorView>, path: PathBuf, cx: &mut Context<Self>) {
+        let (doc, rev, graph) = ed.update(cx, |e, cx| {
+            e.editor.commit("Saved", false);
+            e.set_status(format!("Saving {}…", path.display()), false, cx);
+            (
+                e.editor.doc.clone(),
+                e.editor.revision,
+                e.editor.graph.clone(),
+            )
         });
         cx.spawn(async move |this, cx| {
             let (p, d) = (path.clone(), doc.clone());
             let result = cx
-                .background_spawn(async move { emulsion_io::save(&d, &p) })
+                .background_spawn(async move { emulsion_io::save_full(&d, &graph, &p) })
                 .await;
             this.update(cx, |this, cx| match result {
                 Ok(()) => {
@@ -416,7 +484,8 @@ impl Workspace {
                     this.thumbs
                         .remove(&std::fs::canonicalize(&path).unwrap_or(path.clone()));
                     ed.update(cx, |e, cx| {
-                        e.editor.mark_saved(path.clone(), rev, doc);
+                        e.editor.mark_saved(path.clone(), rev);
+                        e.discard_recovery();
                         e.name = stem(&path);
                         e.source = Some(path.clone());
                         e.set_status(format!("Saved {}", path.display()), false, cx);
@@ -453,7 +522,12 @@ impl Workspace {
             if emulsion_io::ExportFormat::from_path(&p).is_none() {
                 p.set_extension("png");
             }
+            let file = p
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default();
             ed.update(cx, |e, cx| {
+                e.editor.commit(format!("Exported {file}"), false);
                 e.set_status(format!("Exporting {}…", p.display()), false, cx)
             });
             let (q, d) = (p.clone(), doc.clone());
@@ -471,6 +545,9 @@ impl Workspace {
 
     fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm_discard(window, cx, |this, _, cx| {
+            if let Some(ed) = &this.editor {
+                ed.update(cx, |e, _| e.discard_recovery());
+            }
             this.closing = true;
             cx.quit();
         });
@@ -592,18 +669,14 @@ impl Workspace {
                     .border_color(p.chrome_line)
                     .child(
                         theme_btn("light", "☀", !p.dark).on_click(cx.listener(|_, _, _, cx| {
-                            if theme::palette(cx).dark {
-                                theme::toggle(cx);
-                                cx.refresh_windows();
-                            }
+                            theme::set_dark(false, cx);
+                            cx.refresh_windows();
                         })),
                     )
                     .child(
                         theme_btn("dark", "☾", p.dark).on_click(cx.listener(|_, _, _, cx| {
-                            if !theme::palette(cx).dark {
-                                theme::toggle(cx);
-                                cx.refresh_windows();
-                            }
+                            theme::set_dark(true, cx);
+                            cx.refresh_windows();
                         })),
                     ),
             )
@@ -767,6 +840,9 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
+            .on_action(cx.listener(|this, _: &ToolHand, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Hand, cx))
+            }))
             .on_action(cx.listener(|this, _: &ToolMove, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Move, cx))
             }))
@@ -888,5 +964,48 @@ impl Render for Workspace {
             .children(banner)
             .child(body)
             .when(self.splash, |d| d.child(self.splash_view(cx)))
+    }
+}
+
+/// Recovery copies from other sessions, newest first.
+fn find_recovered() -> Vec<(PathBuf, u64)> {
+    let me = format!("-{}-", std::process::id());
+    let Ok(dir) = std::fs::read_dir(crate::editor::recovery_dir()) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(PathBuf, u64)> = dir
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "ora")
+                && !p
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().contains(&me))
+        })
+        .map(|p| {
+            let t = std::fs::metadata(&p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs());
+            (p, t)
+        })
+        .collect();
+    out.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+    out
+}
+
+/// "campaign_hero" from "campaign_hero-1234-1700000000.ora".
+pub(crate) fn recovered_name(p: &Path) -> String {
+    let stem = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut parts: Vec<&str> = stem.rsplitn(3, '-').collect();
+    parts.reverse();
+    if parts.len() == 3 {
+        parts[0].to_string()
+    } else {
+        stem
     }
 }

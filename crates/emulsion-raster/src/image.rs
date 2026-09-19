@@ -136,6 +136,25 @@ impl<P: Pix> Plane<P> {
         self.tiles.iter()
     }
 
+    /// A plane built from existing level-0 tiles, sharing them. None when a
+    /// tile has the wrong length or lies outside the plane's grid.
+    pub fn from_tiles(
+        width: u32,
+        height: u32,
+        fill: P,
+        tiles: impl IntoIterator<Item = (TileCoord, Tile<P>)>,
+    ) -> Option<Self> {
+        let mut p = Self::empty(width, height, fill);
+        let (tw, th) = p.tiles_at(0);
+        for (c, t) in tiles {
+            if t.len() != TILE_PX || c.x < 0 || c.y < 0 || c.x >= tw || c.y >= th {
+                return None;
+            }
+            p.tiles.insert(c, t);
+        }
+        Some(p)
+    }
+
     /// Insert or replace a level-0 tile. Tiles that are entirely `fill` are
     /// dropped to keep the plane sparse. Clears the mip cache.
     pub fn set_tile(&mut self, c: TileCoord, px: Vec<P>) {

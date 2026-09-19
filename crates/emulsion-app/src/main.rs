@@ -2,7 +2,7 @@
 //! runs the stdio MCP server that a coding CLI attaches to.
 
 use emulsion_ui::{Workspace, actions, app_state, theme};
-use gpui_kit::component::{Root, Theme};
+use gpui_kit::component::Root;
 use gpui_kit::*;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
@@ -42,11 +42,9 @@ fn run_editor(file: Option<PathBuf>) {
         gpui_kit::init(cx);
         theme::install(cx);
         app_state::install(cx);
+        // Also squares gpui-kit's corners: the design has none but avatars and dots.
+        theme::apply_saved(cx);
         actions::bind(cx);
-        // The design is square: no rounded corners except avatars and dots.
-        let t = Theme::global_mut(cx);
-        t.radius = px(0.);
-        t.radius_lg = px(0.);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();

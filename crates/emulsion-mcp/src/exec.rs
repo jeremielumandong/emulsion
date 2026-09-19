@@ -560,6 +560,99 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             exec(editor, Command::ImageSize { width, height })?;
             Ok(ToolResult::text(format!("Image is now {width}×{height}")))
         }
+        "list_history" => Ok(ToolResult::text(
+            serde_json::to_string_pretty(&history_json(editor)).unwrap_or_default(),
+        )),
+        "create_branch" => {
+            let name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| err("missing string 'name'"))?;
+            let r = match args.get("from_commit").and_then(Value::as_u64) {
+                Some(c) => editor.branch_at(name, c),
+                None => editor.branch(name),
+            };
+            r.map_err(|e| err(e.to_string()))?;
+            Ok(ToolResult::text(format!(
+                "Created branch {name} and switched to it"
+            )))
+        }
+        "switch_branch" => {
+            let name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| err("missing string 'name'"))?;
+            editor.checkout(name).map_err(|e| err(e.to_string()))?;
+            Ok(ToolResult::text(format!("Switched to {name}")))
+        }
+        "compare" => {
+            let a = point(editor, args.get("a"), true)?;
+            let b = point(editor, args.get("b"), false)?;
+            let rows: Vec<Value> = emulsion_core::graph::compare(&a, &b)
+                .into_iter()
+                .map(|r| json!({ "what": r.label, "a": r.a, "b": r.b }))
+                .collect();
+            Ok(ToolResult::text(if rows.is_empty() {
+                "They are identical".to_string()
+            } else {
+                serde_json::to_string_pretty(&rows).unwrap_or_default()
+            }))
+        }
+        "merge_branch" => {
+            use emulsion_core::graph::{ConflictKey, MergeOutcome, Side};
+            let from = args
+                .get("branch")
+                .and_then(Value::as_str)
+                .ok_or_else(|| err("missing string 'branch'"))?;
+            let mut choices = std::collections::HashMap::new();
+            if let Some(map) = args.get("choices").and_then(Value::as_object) {
+                for (k, v) in map {
+                    let key = if k == "canvas" {
+                        ConflictKey::Canvas
+                    } else {
+                        ConflictKey::Node(
+                            k.parse()
+                                .map_err(|_| err(format!("bad conflict key {k:?}")))?,
+                        )
+                    };
+                    let side = match v.as_str() {
+                        Some("ours") => Side::Ours,
+                        Some("theirs") => Side::Theirs,
+                        _ => {
+                            return Err(err(format!(
+                                "choice for {k} must be \"ours\" or \"theirs\""
+                            )));
+                        }
+                    };
+                    choices.insert(key, side);
+                }
+            }
+            match editor
+                .merge(from, &choices)
+                .map_err(|e| err(e.to_string()))?
+            {
+                MergeOutcome::Merged(_) => Ok(ToolResult::text(format!(
+                    "Merged {from} into {}. One undo reverts it.",
+                    editor.graph.head()
+                ))),
+                MergeOutcome::Conflicts(c) => {
+                    let list: Vec<Value> = c
+                        .iter()
+                        .map(|c| {
+                            let key = match c.key {
+                                ConflictKey::Canvas => "canvas".to_string(),
+                                ConflictKey::Node(id) => id.to_string(),
+                            };
+                            json!({ "key": key, "what": c.what, "ours": c.ours, "theirs": c.theirs })
+                        })
+                        .collect();
+                    Err(err(format!(
+                        "Nothing was merged: both branches changed the same things. Ask the person which to keep, then call merge_branch again with choices.\n{}",
+                        serde_json::to_string_pretty(&list).unwrap_or_default()
+                    )))
+                }
+            }
+        }
         "undo" => Ok(ToolResult::text(if editor.undo() {
             "Undid the last step"
         } else {
@@ -625,6 +718,61 @@ fn apply_params(adj: &mut Adjustment, params: &Map<String, Value>) -> Result<(),
 }
 
 /// A model-friendly snapshot of the document.
+/// A document at a branch name or commit id; `None` means the branch base
+/// (when `base`) or the current document.
+fn point(editor: &Editor, v: Option<&Value>, base: bool) -> Result<Document, ToolResult> {
+    let g = &editor.graph;
+    match v {
+        None if base => Ok(editor.committed.clone()),
+        None => Ok(editor.doc.clone()),
+        Some(Value::Number(n)) => {
+            let id = n
+                .as_u64()
+                .ok_or_else(|| err("commit ids are positive integers"))?;
+            g.commit(id)
+                .map(|c| c.doc.clone())
+                .ok_or_else(|| err(format!("no commit {id}")))
+        }
+        Some(Value::String(name)) if *name == g.head() => Ok(editor.doc.clone()),
+        Some(Value::String(name)) => {
+            let b = g.branch(name).map_err(|e| err(e.to_string()))?;
+            Ok(g.commit(b.tip).expect("tip").doc.clone())
+        }
+        Some(_) => Err(err("a and b are branch names or commit ids")),
+    }
+}
+
+/// Branches and recent commits, for `list_history`.
+pub fn history_json(editor: &Editor) -> Value {
+    let g = &editor.graph;
+    let branches: Vec<Value> = g
+        .branches()
+        .iter()
+        .map(|(name, b)| {
+            json!({
+                "name": name,
+                "current": name == g.head(),
+                "tip": b.tip,
+                "base": b.base,
+                "ahead_of_main": g.ahead(name, emulsion_core::graph::MAIN),
+            })
+        })
+        .collect();
+    let commits: Vec<Value> = g
+        .commits()
+        .rev()
+        .filter(|c| !c.auto)
+        .take(30)
+        .map(|c| json!({ "id": c.id, "name": c.name, "branch": c.branch, "parents": c.parents }))
+        .collect();
+    json!({
+        "branches": branches,
+        "uncommitted_changes": editor.uncommitted(),
+        "recent_commits": commits,
+        "note": "autosave commits are omitted",
+    })
+}
+
 pub fn describe(editor: &Editor) -> Value {
     let doc = &editor.doc;
     let mut rows = Vec::new();
@@ -906,6 +1054,49 @@ mod tests {
         assert_eq!((e.doc.width, e.doc.height), (100, 50));
         let r = execute(&mut e, "image_size", &json!({ "width": 50 }));
         assert_eq!(text(&r), "Image is now 50×25");
+    }
+
+    #[test]
+    fn branch_compare_and_merge_tools() {
+        let mut e = editor();
+        let ok = |r: ToolResult| {
+            assert!(!r.is_error, "{}", text(&r));
+            text(&r)
+        };
+        ok(execute(
+            &mut e,
+            "create_branch",
+            &json!({ "name": "retouch" }),
+        ));
+        ok(execute(
+            &mut e,
+            "set_opacity",
+            &json!({ "node": 2, "opacity": 40 }),
+        ));
+        let diff = ok(execute(&mut e, "compare", &json!({})));
+        assert!(diff.contains("opacity"), "{diff}");
+        ok(execute(&mut e, "switch_branch", &json!({ "name": "main" })));
+        assert_eq!(e.doc.node(2).unwrap().opacity, 1.0);
+        ok(execute(
+            &mut e,
+            "set_opacity",
+            &json!({ "node": 2, "opacity": 70 }),
+        ));
+        let r = execute(&mut e, "merge_branch", &json!({ "branch": "retouch" }));
+        assert!(
+            r.is_error && text(&r).contains("\"key\": \"2\""),
+            "{}",
+            text(&r)
+        );
+        ok(execute(
+            &mut e,
+            "merge_branch",
+            &json!({ "branch": "retouch", "choices": { "2": "theirs" } }),
+        ));
+        assert_eq!(e.doc.node(2).unwrap().opacity, 0.4);
+        let h: Value =
+            serde_json::from_str(&ok(execute(&mut e, "list_history", &json!({})))).unwrap();
+        assert_eq!(h["branches"].as_array().unwrap().len(), 2);
     }
 
     #[test]

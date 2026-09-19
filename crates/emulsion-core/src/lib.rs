@@ -6,6 +6,7 @@
 pub mod command;
 pub mod document;
 pub mod geometry;
+pub mod graph;
 pub mod history;
 pub mod node;
 

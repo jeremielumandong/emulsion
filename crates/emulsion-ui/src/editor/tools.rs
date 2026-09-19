@@ -1562,7 +1562,13 @@ impl EditorView {
             Tool::Move => v.push(
                 div()
                     .flex_none()
-                    .child("drag to move the selected pixel node")
+                    .child("drag to move the selected pixel node · H to pan instead")
+                    .into_any_element(),
+            ),
+            Tool::Hand => v.push(
+                div()
+                    .flex_none()
+                    .child("drag to pan · ctrl+scroll to zoom · V to move a node")
                     .into_any_element(),
             ),
             _ => {}

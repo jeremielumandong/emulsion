@@ -62,7 +62,7 @@ fn open_with(
     let ws = slot.borrow().clone().unwrap();
     vcx.update(|window, cx| {
         ws.update(cx, |w, cx| {
-            w.install(d, None, None, "test".into(), window, cx)
+            w.install(d, None, None, None, "test".into(), window, cx)
         })
     });
     vcx.run_until_parked();
@@ -401,6 +401,99 @@ mod tools {
         cx.run_until_parked();
     }
 
+    #[gpui_kit::test]
+    fn move_tool_follows_the_pointer(cx: &mut TestAppContext) {
+        let (_ws, e, cx) = setup(cx, Tool::Move);
+        let id = cx.update(|_, cx| {
+            let e = e.read(cx);
+            e.editor.doc.nodes.last().unwrap().id
+        });
+        cx.update(|_, cx| e.update(cx, |e, _| e.selected = Some(id)));
+        let a = at(&e, cx, (100.0, 80.0));
+        let b = at(&e, cx, (130.0, 90.0));
+        cx.simulate_mouse_down(a, gpui_kit::MouseButton::Left, gpui_kit::Modifiers::none());
+        for i in 1..=10 {
+            let t = i as f32 / 10.0;
+            let p = gpui_kit::point(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+            cx.simulate_mouse_move(
+                p,
+                Some(gpui_kit::MouseButton::Left),
+                gpui_kit::Modifiers::none(),
+            );
+            cx.run_until_parked();
+        }
+        cx.simulate_mouse_up(b, gpui_kit::MouseButton::Left, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+        let (x, y) = cx.update(
+            |_, cx| match &e.read(cx).editor.doc.node(id).unwrap().kind {
+                NodeKind::Raster { placement, .. } => (placement.x, placement.y),
+                _ => unreachable!(),
+            },
+        );
+        assert_eq!(
+            (x, y),
+            (30.0, 10.0),
+            "the node moves exactly as far as the pointer"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn retouch_on_a_branch_then_merge_through_the_history_page(cx: &mut TestAppContext) {
+        use emulsion_core::Command;
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        let id = cx.update(|_, cx| e.read(cx).editor.doc.nodes[0].id);
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.create_branch("warm", None, cx);
+                e.execute(Command::SetOpacity { id, opacity: 0.6 }, cx);
+                e.open_history(cx);
+            })
+        });
+        cx.run_until_parked();
+        // The page renders with both branches and the compare pane.
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            assert!(e.history.open);
+            assert_eq!(e.editor.graph.head(), "warm");
+            assert!(e.editor.differs_from_base());
+        });
+        cx.update(|_, cx| e.update(cx, |e, cx| e.switch_branch("main", cx)));
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| e.read(cx).editor.doc.node(id).unwrap().opacity),
+            1.0
+        );
+        cx.update(|_, cx| e.update(cx, |e, cx| e.merge_branch("warm", Default::default(), cx)));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            assert_eq!(e.editor.doc.node(id).unwrap().opacity, 0.6);
+            assert!(e.history.merge.is_none());
+            let last = e.editor.graph.commits().last().unwrap();
+            assert_eq!(last.parents.len(), 2, "a merge commit");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn the_default_hand_tool_pans_without_moving_pixels(cx: &mut TestAppContext) {
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        assert_eq!(cx.update(|_, cx| e.read(cx).tool), Tool::Hand);
+        let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
+        let a = at(&e, cx, (100.0, 80.0));
+        let moved = at(&e, cx, (100.0, 80.0));
+        drag(&e, cx, (100.0, 80.0), (140.0, 100.0));
+        let after = at(&e, cx, (100.0, 80.0));
+        assert!(
+            cx.update(|_, cx| e.read(cx).editor.doc == before),
+            "pixels stay put"
+        );
+        assert!(after != a && a == moved, "the view moved under the pointer");
+    }
+
     fn setup(
         cx: &mut TestAppContext,
         tool: Tool,
@@ -519,6 +612,7 @@ mod tools {
             ("c", Tool::Crop),
             ("j", Tool::Heal),
             ("v", Tool::Move),
+            ("h", Tool::Hand),
         ] {
             cx.simulate_keystrokes(key);
             assert_eq!(cx.update(|_, cx| e.read(cx).tool), want, "key {key}");

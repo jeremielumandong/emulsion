@@ -7,8 +7,9 @@
 
 use crate::command::{Command, CommandError, Dirty};
 use crate::document::Document;
+use crate::graph::{CommitId, ConflictKey, Graph, GraphError, MergeOutcome, Side};
 use crate::node::NodeId;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 const MAX_STEPS: usize = 100;
@@ -22,7 +23,7 @@ pub struct Step {
     pub revision_before: u64,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct History {
     undo: Vec<Step>,
     redo: Vec<Step>,
@@ -56,9 +57,14 @@ pub struct Editor {
     next_revision: u64,
     saved_revision: u64,
     pub path: Option<PathBuf>,
-    /// Snapshot at the last commit (open or save), for before/after.
+    /// The head branch's base commit, which before/after compares against.
     pub committed: Document,
+    /// Changes whenever `committed` does, so views can re-render it.
     pub committed_revision: u64,
+    /// Commits and branches.
+    pub graph: Graph,
+    /// Undo stacks of the branches that are not checked out.
+    stashed: HashMap<String, History>,
     txn: Option<(String, Document, u64, u32)>,
     /// What changed on screen since the last `take_dirty`.
     dirty: Dirty,
@@ -66,8 +72,19 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(doc: Document, path: Option<PathBuf>) -> Self {
+        let name = if path.is_some() { "Opened" } else { "New" };
+        let graph = Graph::new(doc.clone(), name);
+        Self::with_graph(doc, path, graph)
+    }
+
+    /// An editor on a document whose history graph was read from its file.
+    pub fn with_graph(doc: Document, path: Option<PathBuf>, graph: Graph) -> Self {
+        let base = graph.head_branch().base;
+        let committed = graph
+            .commit(base)
+            .map_or_else(|| doc.clone(), |c| c.doc.clone());
         Self {
-            committed: doc.clone(),
+            committed,
             doc,
             history: History::default(),
             revision: 1,
@@ -75,6 +92,8 @@ impl Editor {
             saved_revision: 1,
             path,
             committed_revision: 1,
+            graph,
+            stashed: HashMap::new(),
             txn: None,
             dirty: Dirty::All,
         }
@@ -214,14 +233,11 @@ impl Editor {
         }
     }
 
-    /// Record that `snapshot`, which was the document at `revision`, was
-    /// written to `path`, and make it the before/after reference point.
+    /// Record that the document at `revision` was written to `path`.
     /// Edits made while the save ran stay unsaved.
-    pub fn mark_saved(&mut self, path: PathBuf, revision: u64, snapshot: Document) {
+    pub fn mark_saved(&mut self, path: PathBuf, revision: u64) {
         self.path = Some(path);
         self.saved_revision = revision;
-        self.committed = snapshot;
-        self.committed_revision = revision;
     }
 
     /// Revision recorded at the last save (or open).
@@ -229,9 +245,162 @@ impl Editor {
         self.saved_revision
     }
 
-    pub fn commit(&mut self) {
-        self.committed = self.doc.clone();
-        self.committed_revision = self.revision;
+    // ── History graph ───────────────────────────────────────────────────
+
+    /// Record the document as a commit on the head branch. None when
+    /// nothing changed since the branch's newest commit.
+    pub fn commit(&mut self, name: impl Into<String>, auto: bool) -> Option<CommitId> {
+        self.end_all();
+        self.graph.record(&self.doc, name, auto)
+    }
+
+    /// Whether the document differs from the head branch's newest commit.
+    pub fn uncommitted(&self) -> bool {
+        self.graph
+            .commit(self.graph.head_branch().tip)
+            .is_none_or(|c| c.doc != self.doc)
+    }
+
+    /// Whether the document differs from what before/after compares against.
+    pub fn differs_from_base(&self) -> bool {
+        self.doc != self.committed
+    }
+
+    fn refresh_base(&mut self) {
+        let base = self.graph.head_branch().base;
+        if let Some(c) = self.graph.commit(base)
+            && c.doc != self.committed
+        {
+            self.committed = c.doc.clone();
+            self.committed_revision = self.next_revision;
+            self.next_revision += 1;
+        }
+    }
+
+    /// Start a branch from the current state and switch to it. The work so
+    /// far is committed first, so nothing is left behind.
+    pub fn branch(&mut self, name: &str) -> Result<(), GraphError> {
+        self.end_all();
+        if !crate::graph::valid_branch_name(name) {
+            return Err(GraphError::BadName);
+        }
+        if self.graph.branches().contains_key(name) {
+            return Err(GraphError::BranchExists(name.into()));
+        }
+        self.graph.record(&self.doc, "Before branching", false);
+        let at = self.graph.head_branch().tip;
+        self.graph.create_branch(name, at)?;
+        let old = self.graph.head().to_string();
+        self.graph.set_head(name)?;
+        // The new branch keeps the undo stack it grew out of.
+        self.stashed.insert(old, self.history.clone());
+        self.refresh_base();
+        Ok(())
+    }
+
+    /// Start a branch at an earlier commit and switch to it.
+    pub fn branch_at(&mut self, name: &str, at: CommitId) -> Result<(), GraphError> {
+        self.end_all();
+        self.graph.record(&self.doc, "Work in progress", true);
+        self.graph.create_branch(name, at)?;
+        self.checkout(name)
+    }
+
+    /// Switch to another branch, committing the current one's work first.
+    pub fn checkout(&mut self, name: &str) -> Result<(), GraphError> {
+        let target = self.graph.branch(name)?;
+        if name == self.graph.head() {
+            return Ok(());
+        }
+        self.end_all();
+        self.graph.record(&self.doc, "Work in progress", true);
+        let old = self.graph.head().to_string();
+        self.graph.set_head(name)?;
+        let history = self.stashed.remove(name).unwrap_or_default();
+        self.stashed
+            .insert(old, std::mem::replace(&mut self.history, history));
+        self.doc = self
+            .graph
+            .commit(target.tip)
+            .ok_or(GraphError::NoCommit(target.tip))?
+            .doc
+            .clone();
+        self.bump();
+        self.dirty = Dirty::All;
+        self.refresh_base();
+        Ok(())
+    }
+
+    pub fn delete_branch(&mut self, name: &str) -> Result<(), GraphError> {
+        self.graph.delete_branch(name)?;
+        self.stashed.remove(name);
+        Ok(())
+    }
+
+    /// Merge branch `from` into the head branch. Conflicts come back unless
+    /// `choices` decides each one; the merge is one undo step and a commit.
+    pub fn merge(
+        &mut self,
+        from: &str,
+        choices: &HashMap<ConflictKey, Side>,
+    ) -> Result<MergeOutcome, GraphError> {
+        if from == self.graph.head() {
+            return Err(GraphError::SelfMerge);
+        }
+        let theirs_tip = self.graph.branch(from)?.tip;
+        self.end_all();
+        self.graph.record(&self.doc, "Before merging", false);
+        let ours_tip = self.graph.head_branch().tip;
+        if self.graph.ancestors(ours_tip).contains(&theirs_tip) {
+            return Err(GraphError::NothingToMerge(from.into()));
+        }
+        let base_id = self
+            .graph
+            .merge_base(ours_tip, theirs_tip)
+            .ok_or_else(|| GraphError::Invalid("the branches share no history".into()))?;
+        let (base, theirs) = (
+            &self.graph.commit(base_id).expect("base").doc,
+            &self.graph.commit(theirs_tip).expect("tip").doc,
+        );
+        let outcome = crate::graph::merge(base, &self.doc, theirs, choices)?;
+        if let MergeOutcome::Merged(doc) = &outcome {
+            let label = format!("Merge {from}");
+            self.replace_document(doc.clone(), &label);
+            self.graph.record_merge(
+                doc,
+                theirs_tip,
+                format!("Merge {from} into {}", self.graph.head()),
+            );
+        }
+        Ok(outcome)
+    }
+
+    /// Bring back the document as it was at `commit`, as one undo step.
+    pub fn restore(&mut self, commit: CommitId) -> Result<(), GraphError> {
+        let c = self
+            .graph
+            .commit(commit)
+            .ok_or(GraphError::NoCommit(commit))?;
+        let (doc, label) = (c.doc.clone(), format!("Restore “{}”", c.name));
+        self.replace_document(doc, &label);
+        Ok(())
+    }
+
+    /// Swap in a whole document as one undo step.
+    fn replace_document(&mut self, doc: Document, label: &str) {
+        self.end_all();
+        if doc == self.doc {
+            return;
+        }
+        let rev = self.revision;
+        let before = std::mem::replace(&mut self.doc, doc);
+        self.bump();
+        self.dirty = Dirty::All;
+        self.push(Step {
+            name: label.into(),
+            before,
+            revision_before: rev,
+        });
     }
 
     /// Drop the oldest steps beyond the count limit or while pixels kept alive
@@ -341,6 +510,42 @@ mod tests {
         assert!(matches!(e.take_dirty(), Dirty::Rect(r) if r.x <= 2 && r.right() >= 6));
         e.undo();
         assert_eq!(e.take_dirty(), Dirty::All);
+    }
+
+    #[test]
+    fn branch_switch_merge_and_restore() {
+        let (mut e, id) = editor();
+        e.execute(Command::SetOpacity { id, opacity: 0.8 }).unwrap();
+        e.branch("retouch").unwrap();
+        assert_eq!(e.graph.head(), "retouch");
+        assert!(!e.differs_from_base(), "a new branch starts at its base");
+        e.execute(Command::Rename {
+            id,
+            name: "retouched".into(),
+        })
+        .unwrap();
+        assert!(e.differs_from_base());
+        e.checkout("main").unwrap();
+        assert_eq!(e.doc.node(id).unwrap().name, "a");
+        assert_eq!(e.doc.node(id).unwrap().opacity, 0.8);
+        e.execute(Command::SetVisible { id, visible: false })
+            .unwrap();
+        let MergeOutcome::Merged(_) = e.merge("retouch", &HashMap::new()).unwrap() else {
+            panic!("clean merge expected");
+        };
+        let n = e.doc.node(id).unwrap();
+        assert!(n.name == "retouched" && !n.visible);
+        assert_eq!(
+            e.merge("retouch", &HashMap::new()).unwrap_err(),
+            GraphError::NothingToMerge("retouch".into())
+        );
+        e.undo();
+        assert_eq!(e.doc.node(id).unwrap().name, "a", "merge is one undo step");
+        let first = e.graph.commits().next().unwrap().id;
+        e.restore(first).unwrap();
+        assert_eq!(e.doc.node(id).unwrap().opacity, 1.0);
+        e.checkout("retouch").unwrap();
+        assert!(e.history.can_undo(), "each branch keeps its own undo stack");
     }
 
     #[test]
