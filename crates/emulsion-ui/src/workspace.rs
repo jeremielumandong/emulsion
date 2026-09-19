@@ -37,6 +37,11 @@ pub struct Workspace {
         Entity<gpui_kit::component::input::InputState>,
     )>,
     pub(crate) jev_test: Option<(SharedString, bool)>,
+    pub(crate) image_inputs: Option<(
+        Entity<gpui_kit::component::input::InputState>,
+        Entity<gpui_kit::component::input::InputState>,
+    )>,
+    pub(crate) image_test: Option<(SharedString, bool)>,
     pub(crate) model_jobs: crate::settings_models::ModelJobs,
     pub(crate) batch: crate::batch::BatchState,
     /// The landing image, decoded once in the background.
@@ -134,6 +139,8 @@ impl Workspace {
             closing: false,
             settings_inputs: None,
             jev_test: None,
+            image_inputs: None,
+            image_test: None,
             model_jobs: Default::default(),
             batch: Default::default(),
             landing,

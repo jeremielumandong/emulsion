@@ -9,6 +9,7 @@ mod adjust_ui;
 mod ai_tools;
 mod animation;
 mod canvas_size;
+pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
 mod lens;
@@ -275,6 +276,8 @@ pub struct EditorView {
     pub(crate) anim: animation::AnimState,
     /// RAW develop panel state.
     pub(crate) raw: raw_panel::RawState,
+    /// Generative fill prompt and state.
+    pub(crate) generate: generate_ui::GenState,
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
@@ -359,6 +362,7 @@ impl EditorView {
             warp: None,
             anim: Default::default(),
             raw: Default::default(),
+            generate: Default::default(),
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
@@ -2792,6 +2796,7 @@ impl Render for EditorView {
         let p = theme::palette(cx);
         self.sync_trees(cx);
         self.sync_transform_fields(window, cx);
+        self.ensure_gen_prompt(window, cx);
         let doc_bar = self.doc_bar(&p, cx);
         if self.history.open {
             let page = self.history_page(&p, cx);

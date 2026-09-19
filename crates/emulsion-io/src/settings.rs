@@ -28,6 +28,12 @@ pub struct Settings {
     /// Show the power-user row of tool options (dynamics, symmetry,
     /// guides). Off for a beginner-friendly bar.
     pub advanced_tools: bool,
+    /// Image server for generative fill: "" (none) or "a1111".
+    pub image_provider: String,
+    /// Base URL of that server; empty for its default.
+    pub image_endpoint: Option<String>,
+    /// Checkpoint to ask the server for; empty for its current one.
+    pub image_model: Option<String>,
 }
 
 impl Default for Settings {
@@ -43,6 +49,9 @@ impl Default for Settings {
             approve_all: false,
             show_drawing: true,
             advanced_tools: false,
+            image_provider: String::new(),
+            image_endpoint: None,
+            image_model: None,
         }
     }
 }

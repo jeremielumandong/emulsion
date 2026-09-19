@@ -72,7 +72,7 @@ impl EditorView {
     }
 
     /// Show a job's stage and percentage until it finishes.
-    fn watch_job(&mut self, job: Arc<Job>, cx: &mut Context<Self>) {
+    pub(crate) fn watch_job(&mut self, job: Arc<Job>, cx: &mut Context<Self>) {
         self.ai.job = Some(job.clone());
         cx.spawn(async move |this, cx| {
             loop {

@@ -23,4 +23,5 @@ ndarray = { workspace = true }
 sha2 = { workspace = true }
 rayon = { workspace = true }
 image = { workspace = true }
+base64 = { workspace = true }
 glam = { workspace = true }

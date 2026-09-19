@@ -49,6 +49,7 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
         self.ensure_settings_inputs(window, cx);
+        self.ensure_image_inputs(window, cx);
         let s = app_state::settings(cx).clone();
         let cli = app_state::cli(cx);
         let models_on = emulsion_ai::models::MANIFEST
@@ -218,6 +219,46 @@ impl Workspace {
                         p.muted,
                     )),
             )
+            .child({
+                let on = !s.image_provider.is_empty();
+                let endpoint_input = self.image_inputs.as_ref().map(|i| i.0.clone());
+                let model_input = self.image_inputs.as_ref().map(|i| i.1.clone());
+                section(&p)
+                    .child(tier(4, "Image generation", on, if on { "on" } else { "off" }, &p))
+                    .child(body("Generative fill and new layers from a prompt, through a Stable Diffusion server you run yourself (Automatic1111 or Forge, on this machine or your LAN). Pixels stay on your own network. In the Select tool, type a prompt and press Enter: with a selection it fills that area; without one it makes a canvas-sized layer.", &p))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(mono("server", 10., p.muted))
+                            .child(chip("img-none", "none", !on, &p).on_click(cx.listener(|_, _, _, cx| {
+                                app_state::update_settings(cx, |s| s.image_provider = String::new());
+                            })))
+                            .child(chip("img-a1111", "A1111 / Forge", s.image_provider == "a1111", &p).on_click(cx.listener(|_, _, _, cx| {
+                                app_state::update_settings(cx, |s| s.image_provider = "a1111".into());
+                            }))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(mono("address", 10., p.muted))
+                            .children(endpoint_input.map(|st| div().w(px(300.)).border_1().border_color(p.line).child(Input::new(&st).appearance(false))))
+                            .child(mono("checkpoint", 10., p.muted))
+                            .children(model_input.map(|st| div().w(px(220.)).border_1().border_color(p.line).child(Input::new(&st).appearance(false))))
+                            .child(chip("img-save", "save", false, &p).on_click(cx.listener(|this, _, _, cx| {
+                                let (e, m) = this.image_inputs.as_ref().map(|i| (i.0.read(cx).value().trim().to_string(), i.1.read(cx).value().trim().to_string())).unwrap_or_default();
+                                app_state::update_settings(cx, move |s| {
+                                    s.image_endpoint = (!e.is_empty()).then_some(e);
+                                    s.image_model = (!m.is_empty()).then_some(m);
+                                });
+                            })))
+                            .when(on, |d| d.child(chip("img-test", "test", false, &p).on_click(cx.listener(|this, _, _, cx| this.test_image_server(cx))))),
+                    )
+                    .children(self.image_test.clone().map(|(msg, err)| mono(msg, 10.5, if err { p.accent } else { p.ink })))
+            })
             .child(
                 section(&p)
                     .child(tier(3, "Jev decision model", jev.is_some(), if jev.is_some() { "on" } else { "off" }, &p))
@@ -260,6 +301,49 @@ impl Workspace {
                 this.screen = if this.editor.is_some() { crate::workspace::Screen::Editor } else { crate::workspace::Screen::Home };
                 cx.notify();
             }))))
+    }
+
+    fn ensure_image_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.image_inputs.is_some() {
+            return;
+        }
+        use gpui_kit::component::input::InputState;
+        let s = app_state::settings(cx);
+        let endpoint = s.image_endpoint.clone().unwrap_or_default();
+        let model = s.image_model.clone().unwrap_or_default();
+        let a = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("http://127.0.0.1:7860")
+                .default_value(endpoint)
+        });
+        let b = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("server's current checkpoint")
+                .default_value(model)
+        });
+        self.image_inputs = Some((a, b));
+    }
+
+    fn test_image_server(&mut self, cx: &mut Context<Self>) {
+        let Some(cfg) = crate::editor::generate_ui::config(cx) else {
+            return;
+        };
+        self.image_test = Some(("Asking the server…".into(), false));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_spawn(async move { emulsion_ai::generate::reachable(&cfg) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.image_test = Some(match r {
+                    Ok(m) => (format!("Reachable · checkpoint: {m}").into(), false),
+                    Err(e) => (e.to_string().into(), true),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn ensure_settings_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {

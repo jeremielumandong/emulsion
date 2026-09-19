@@ -2376,7 +2376,7 @@ impl EditorView {
     }
 
     /// A labelled divider between groups of options.
-    fn group(&self, label: &'static str, p: &Palette) -> AnyElement {
+    pub(crate) fn group(&self, label: &'static str, p: &Palette) -> AnyElement {
         div()
             .flex()
             .items_center()
@@ -2744,10 +2744,14 @@ impl EditorView {
                         .into_any_element(),
                 );
                 v.push(
-                    chip("sel-aifill", "AI fill", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.ai_fill(cx)))
-                        .into_any_element(),
+                    tip(
+                        chip("sel-aifill", "AI fill", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.ai_fill(cx))),
+                        "Fill the selection from its surroundings with the local LaMa model (no prompt)",
+                    )
+                    .into_any_element(),
                 );
+                v.extend(self.generate_row(p, cx));
             }
             Tool::Brush | Tool::Heal | Tool::Clone => {
                 let open = self.presets.open;

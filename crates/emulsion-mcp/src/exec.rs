@@ -892,6 +892,93 @@ fn doc_raster(doc: &Document) -> Raster {
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
     let (w, h) = (doc.width, doc.height);
     match name {
+        "generative_fill" | "generate_image" => {
+            let settings = emulsion_io::settings::Settings::load();
+            let provider = emulsion_ai::generate::Provider::parse(&settings.image_provider)
+                .ok_or_else(|| {
+                    err("no image server is set up; the person chooses one under Settings › Image generation")
+                })?;
+            let cfg = emulsion_ai::generate::Config {
+                provider,
+                endpoint: settings.image_endpoint.clone(),
+                model: settings.image_model.clone(),
+            };
+            let prompt = args
+                .get("prompt")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| err("missing 'prompt'"))?;
+            let negative = args.get("negative").and_then(Value::as_str);
+            let job = emulsion_ai::jobs::Job::new();
+            let model_id = cfg.model_id();
+            if name == "generate_image" {
+                let layer =
+                    emulsion_ai::generate::text_to_image(&cfg, prompt, negative, w, h, &job)
+                        .map_err(|e| err(e.to_string()))?;
+                let label = args
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        format!("Generated: {}", prompt.chars().take(40).collect::<String>())
+                    });
+                return Ok(Planned {
+                    commands: vec![Command::AddNode {
+                        node: Box::new(
+                            Node::raster(0, label.clone(), Arc::new(layer), Placement::default())
+                                .from_model(&model_id),
+                        ),
+                        slot: Slot::TOP,
+                    }],
+                    message: format!("Generated a {w}×{h} layer \"{label}\" from the prompt"),
+                });
+            }
+            let hole = match args.get("rect").and_then(Value::as_array) {
+                Some(r) if r.len() == 4 => {
+                    let v: Vec<i32> = r
+                        .iter()
+                        .map(|x| x.as_f64().unwrap_or(0.0).round() as i32)
+                        .collect();
+                    let rect = IRect::new(v[0], v[1], v[2].max(1), v[3].max(1));
+                    emulsion_raster::Mask::from_fn(w, h, 0, move |x, y| {
+                        let (x, y) = (x as i32, y as i32);
+                        if x >= rect.x && y >= rect.y && x < rect.right() && y < rect.bottom() {
+                            255
+                        } else {
+                            0
+                        }
+                    })
+                }
+                _ => match &doc.selection {
+                    Some(s) => (**s).clone(),
+                    None => return Err(err("select the area to fill, or pass rect")),
+                },
+            };
+            let img = doc_raster(doc);
+            let (layer, reg) =
+                emulsion_ai::generate::fill(&cfg, &img, &hole, prompt, negative, &job)
+                    .map_err(|e| err(e.to_string()))?;
+            let label = format!("Generated: {}", prompt.chars().take(40).collect::<String>());
+            Ok(Planned {
+                commands: vec![Command::AddNode {
+                    node: Box::new(
+                        Node::raster(
+                            0,
+                            label.clone(),
+                            Arc::new(layer),
+                            Placement::at(reg.x as f64, reg.y as f64),
+                        )
+                        .from_model(&model_id),
+                    ),
+                    slot: Slot::TOP,
+                }],
+                message: format!(
+                    "Generated {}×{} at {}, {} into a new node \"{label}\"",
+                    reg.w, reg.h, reg.x, reg.y
+                ),
+            })
+        }
         "inpaint" => {
             if emulsion_ai::inpaint::available().is_none() {
                 return Err(err(

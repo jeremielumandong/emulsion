@@ -43,6 +43,8 @@ pub const HEAVY: &[&str] = &[
     "select_by_points",
     "remove_background",
     "inpaint",
+    "generative_fill",
+    "generate_image",
     "depth_map",
     "upscale",
     "restore_faces",
@@ -412,6 +414,26 @@ pub fn definitions() -> Vec<ToolDef> {
             "Cut the subject out of a pixel node (or the whole picture when node is omitted) into a new node with a transparent background, hiding the original. Needs a matte model.",
             json!({ "node": node() }),
             &[],
+        ),
+        def(
+            "generative_fill",
+            "Paint the selection (or rect [x, y, width, height]) from a text prompt with the person's own Stable Diffusion server (Settings › Image generation), into a new labelled node. The picture around the area goes to that server as context. Use inpaint instead when the goal is only to remove something.",
+            json!({
+                "prompt": { "type": "string", "minLength": 1 },
+                "negative": { "type": "string" },
+                "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+            }),
+            &["prompt"],
+        ),
+        def(
+            "generate_image",
+            "Make a whole new canvas-sized layer from a text prompt with the person's own Stable Diffusion server (Settings › Image generation), for backgrounds and textures. The layer is labelled with its provenance.",
+            json!({
+                "prompt": { "type": "string", "minLength": 1 },
+                "negative": { "type": "string" },
+                "name": { "type": "string" }
+            }),
+            &["prompt"],
         ),
         def(
             "inpaint",

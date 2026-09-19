@@ -1636,6 +1636,7 @@ name = "emulsion-ai"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "emulsion-core",
  "emulsion-raster",
  "glam",
