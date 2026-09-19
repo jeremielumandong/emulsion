@@ -7,6 +7,7 @@ use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fract
 
 mod adjust_ui;
 mod ai_tools;
+mod animation;
 mod canvas_size;
 pub(crate) mod guides;
 mod history;
@@ -267,6 +268,8 @@ pub struct EditorView {
     pub(crate) view: View,
     /// Warp mesh in progress on a node (Move tool).
     pub(crate) warp: Option<transform::WarpState>,
+    /// Animation assist and time-lapse.
+    pub(crate) anim: animation::AnimState,
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
@@ -349,6 +352,7 @@ impl EditorView {
             source,
             view: View::default(),
             warp: None,
+            anim: Default::default(),
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
@@ -453,6 +457,7 @@ impl EditorView {
         {
             self.selected = self.editor.doc.nodes.last().map(|n| n.id);
         }
+        self.timelapse_tick(cx);
         cx.notify();
     }
 
@@ -497,7 +502,11 @@ impl EditorView {
             if heavy {
                 self.build_tree_async(cx);
             } else {
-                let tree = self.editor.doc.composite_tree();
+                let tree = if self.previewing() {
+                    self.render_doc().composite_tree()
+                } else {
+                    self.editor.doc.composite_tree()
+                };
                 self.install_tree(tree);
             }
         }
@@ -541,7 +550,7 @@ impl EditorView {
         }
         let rev = self.editor.revision;
         self.tree_building = Some(rev);
-        let doc = self.editor.doc.clone();
+        let doc = self.render_doc();
         cx.spawn(async move |this, cx| {
             let tree = cx
                 .background_spawn(async move { doc.composite_tree() })
@@ -1877,6 +1886,7 @@ impl EditorView {
             .track_focus(&self.panel_focus)
             .key_context("NodePanel")
             .child(self.scene_graph(p, cx))
+            .children(self.animation_panel(p, cx))
             .child(self.quick_adjust_view(p, cx))
             .child(self.inspector(p, window, cx))
             .child(
@@ -1920,6 +1930,31 @@ impl EditorView {
                 chip("recipes", "recipes", self.recipes.open, p)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_recipes(cx))),
             )
+            .child(
+                chip("animate", "animate", self.anim.open, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_animation(cx))),
+            )
+            .child(
+                chip(
+                    "timelapse",
+                    if self.anim.record {
+                        format!("rec ● {}", self.anim.captured)
+                    } else if self.anim.captured > 0 {
+                        format!("rec {}", self.anim.captured)
+                    } else {
+                        "rec".to_string()
+                    },
+                    self.anim.record,
+                    p,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_timelapse(cx))),
+            )
+            .when(self.anim.captured > 0, |d| {
+                d.child(
+                    chip("timelapse-gif", "time-lapse GIF", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.export_timelapse_gif(cx))),
+                )
+            })
             .child(
                 chip("add", "+ node", self.menu == Some(Menu::Add), p).on_click(cx.listener(
                     |this, _, _, cx| {

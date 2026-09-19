@@ -224,7 +224,7 @@ impl EditorView {
     }
 
     /// Lattice lines and points for the overlay, in document pixels.
-    pub(crate) fn warp_overlay(&self) -> (Vec<Vec<(f64, f64)>>, Vec<(f64, f64)>) {
+    pub(crate) fn warp_overlay(&self) -> (Vec<super::guides::Polyline>, Vec<(f64, f64)>) {
         let Some(w) = &self.warp else {
             return (Vec::new(), Vec::new());
         };
