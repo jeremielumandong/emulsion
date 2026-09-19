@@ -269,6 +269,8 @@ pub struct Stroke {
     path: Vec<Sample>,
     /// Raw input for the stabilizer and speed.
     raw_last: Option<(f32, f32, f64)>,
+    /// Every raw input point (x, y, time ms, pressure), for QuickShape.
+    raw: Vec<(f32, f32, f64, f32)>,
     smooth: Option<(f32, f32)>,
     speed: f32,
     /// Stamping state along `path`.
@@ -437,6 +439,7 @@ impl Stroke {
             touched: IRect::default(),
             path: Vec::new(),
             raw_last: None,
+            raw: Vec::new(),
             smooth: None,
             speed: 0.0,
             last: None,
@@ -730,6 +733,7 @@ impl Stroke {
             let fast = ((self.speed - 0.8) / 5.0).clamp(0.0, 1.0);
             1.0 - self.brush.speed_thins * fast * 0.85
         });
+        self.raw.push((x, y, time_ms.unwrap_or(0.0), pressure));
         // Stabilizer: the stamped point lags behind the pointer.
         let k = 1.0 - self.brush.stabilizer * 0.92;
         let (sx, sy) = match self.smooth {
@@ -742,6 +746,64 @@ impl Stroke {
             y: sy,
             pressure,
         });
+    }
+
+    /// The raw input so far: (x, y, time ms, pressure).
+    pub fn raw_points(&self) -> &[(f32, f32, f64, f32)] {
+        &self.raw
+    }
+
+    /// How long (ms) the pointer has rested within `radius` px of where it
+    /// is now, as of `now_ms`. Zero while it is still travelling.
+    pub fn held_ms(&self, now_ms: f64, radius: f32) -> f64 {
+        let Some(&(x, y, _, _)) = self.raw.last() else {
+            return 0.0;
+        };
+        // The first point (from the end) that lies outside the rest radius
+        // ends the hold; the hold began with the point after it.
+        let mut start = self.raw[0].2;
+        for w in self.raw.windows(2).rev() {
+            if (w[0].0 - x).hypot(w[0].1 - y) > radius {
+                start = w[1].2;
+                break;
+            }
+        }
+        (now_ms - start).max(0.0)
+    }
+
+    /// Has the stroke been ended (by `finish` or `replay`)?
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// Throw away what was painted and stamp along `pts` instead, at a
+    /// steady `pressure`: QuickShape re-drawing the hand's path as the
+    /// shape it meant. Stabilizer and tapers are off (a snapped shape has
+    /// no wobble to smooth and no ends to thin). The stroke is finished
+    /// afterwards, so later input is ignored until the pointer lifts.
+    pub fn replay(&mut self, pts: &[(f32, f32)], pressure: f32) {
+        let touched: Vec<TileCoord> = self.paint.keys().copied().collect();
+        for tile in self.paint.values_mut() {
+            tile.fill([0.0; 6]);
+        }
+        self.pending.extend(touched);
+        self.path.clear();
+        self.last = None;
+        self.carry = 0.0;
+        self.distance = 0.0;
+        self.dir = 0.0;
+        self.rng = self.seed;
+        self.load = None;
+        self.smooth = None;
+        let saved = self.brush;
+        self.brush.stabilizer = 0.0;
+        self.brush.taper_start = 0.0;
+        self.brush.taper_end = 0.0;
+        for &(x, y) in pts {
+            self.advance(Sample { x, y, pressure });
+        }
+        self.brush = saved;
+        self.finished = true;
     }
 
     fn advance(&mut self, s: Sample) {
@@ -1329,6 +1391,48 @@ mod tests {
             "cyan × yellow = green: {a:?}"
         );
         assert_eq!(a, b, "mirrored across x = 100");
+    }
+
+    #[test]
+    fn replay_repaints_along_the_new_path_only() {
+        let base = Arc::new(Raster::transparent(64, 64));
+        let mut s = Stroke::new(base.clone(), hard(4.0), opaque_red(), None);
+        for i in 0..20 {
+            s.point_at(
+                8.0 + i as f32 * 2.0,
+                8.0 + (i as f32 * 0.9).sin() * 6.0,
+                None,
+                Some(i as f64 * 10.0),
+            );
+        }
+        // Resting: the last few points sit within a pixel of each other.
+        for i in 0..5 {
+            s.point_at(
+                46.0,
+                8.0 + i as f32 * 0.2,
+                None,
+                Some(200.0 + i as f64 * 100.0),
+            );
+        }
+        assert_eq!(s.raw_points().len(), 25);
+        assert!(s.held_ms(700.0, 2.0) >= 490.0, "{}", s.held_ms(700.0, 2.0));
+        assert!(s.held_ms(210.0, 2.0) < 20.0);
+        let (before, _) = s.render(&base);
+        assert!(band(&before, 20) > 0, "the wobble painted off the line");
+        let line: Vec<(f32, f32)> = (0..39).map(|i| (8.0 + i as f32, 40.0)).collect();
+        s.replay(&line, 1.0);
+        assert!(s.is_finished());
+        let (after, dirty) = s.render(&before);
+        assert!(!dirty.is_empty());
+        let old_rows = (0..20).filter(|y| after.get(20, *y)[3] > 32000).count();
+        assert_eq!(old_rows, 0, "old paint gone");
+        assert!(
+            after.get(20, 40)[3] > 0 && after.get(30, 40)[3] > 0,
+            "new line present"
+        );
+        s.point_at(0.0, 0.0, None, None);
+        let (_, d2) = s.render(&after);
+        assert!(d2.is_empty(), "locked after replay");
     }
 
     #[test]

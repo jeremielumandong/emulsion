@@ -13,6 +13,7 @@ pub mod geom;
 pub mod image;
 pub mod library;
 pub mod paint;
+pub mod quickshape;
 pub mod select;
 pub mod tile;
 pub mod vector;

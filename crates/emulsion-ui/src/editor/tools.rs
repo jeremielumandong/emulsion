@@ -71,6 +71,9 @@ pub struct ToolState {
     pub brush_more: bool,
     /// When the current stroke started, for speed dynamics.
     pub stroke_started: Option<Instant>,
+    /// QuickShape: holding the pointer still at the end of a stroke snaps
+    /// it to the line, polygon, circle or ellipse it was aiming for.
+    pub quick_shape: bool,
     pub pen: super::pen::PenState,
     /// Brush and eraser paint the selected node's mask instead of pixels.
     pub mask_edit: bool,
@@ -113,6 +116,7 @@ impl Default for ToolState {
             mirror_y: false,
             brush_more: false,
             stroke_started: None,
+            quick_shape: true,
             pen: super::pen::PenState::fresh(),
             mask_edit: false,
             pointer: None,
@@ -697,6 +701,96 @@ impl EditorView {
             label,
             mask: mask_mode,
         }));
+        if self.tools.quick_shape && !heal {
+            self.watch_quick_shape(cx);
+        }
+    }
+
+    /// Poll the live stroke for a rest at its end; snap it when found.
+    /// Stops when the stroke ends or has been snapped.
+    fn watch_quick_shape(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(80))
+                    .await;
+                let go_on = this.update(cx, |this, cx| this.quick_shape_tick(cx));
+                if !matches!(go_on, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// One QuickShape poll. Returns whether to keep watching.
+    fn quick_shape_tick(&mut self, cx: &mut Context<Self>) -> bool {
+        const HOLD_MS: f64 = 450.0;
+        let now_ms = self
+            .tools
+            .stroke_started
+            .map(|s| s.elapsed().as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        // Rest radius: a few screen pixels, in layer pixels.
+        let radius = (3.0 / self.view.zoom.max(0.05)) as f32;
+        let Some(Drag::Tool(ToolDrag::Stroke {
+            id,
+            stroke,
+            heal: false,
+            label,
+            mask,
+            ..
+        })) = &mut self.drag
+        else {
+            return false;
+        };
+        if stroke.is_finished() {
+            return false;
+        }
+        let raw = stroke.raw_points();
+        if raw.len() < 8 || stroke.held_ms(now_ms, radius) < HOLD_MS {
+            return true;
+        }
+        let pts: Vec<(f32, f32)> = raw.iter().map(|r| (r.0, r.1)).collect();
+        let Some(shape) = emulsion_raster::quickshape::fit(&pts) else {
+            // Not a shape; leave the hand's line alone and stop asking.
+            return false;
+        };
+        let pressure = raw.iter().map(|r| r.3).sum::<f32>() / raw.len() as f32;
+        let step = (stroke.brush.size * stroke.brush.spacing * 0.5).max(1.0);
+        let path = shape.outline(step, pts[0]);
+        stroke.replay(&path, pressure);
+        let (id, label, mask) = (*id, *label, *mask);
+        let current = if mask {
+            match self.editor.doc.node(id).and_then(|n| n.mask.clone()) {
+                Some(m) => Arc::new(mask_to_raster(&m)),
+                None => return false,
+            }
+        } else {
+            match self.editor.doc.node(id).map(|n| &n.kind) {
+                Some(NodeKind::Raster { raster, .. }) => raster.clone(),
+                _ => return false,
+            }
+        };
+        let Some(Drag::Tool(ToolDrag::Stroke { stroke, .. })) = &mut self.drag else {
+            return false;
+        };
+        let (r, dirty) = stroke.render(&current);
+        self.commit_stroke(id, r, dirty, label, mask, cx);
+        let what = match shape {
+            emulsion_raster::quickshape::Shape::Line(..) => "line",
+            emulsion_raster::quickshape::Shape::Polyline(_) => "polyline",
+            emulsion_raster::quickshape::Shape::Polygon(ref v) => match v.len() {
+                3 => "triangle",
+                4 => "quadrilateral",
+                _ => "polygon",
+            },
+            emulsion_raster::quickshape::Shape::Circle { .. } => "circle",
+            emulsion_raster::quickshape::Shape::Ellipse { .. } => "ellipse",
+        };
+        self.set_status(format!("QuickShape: {what}"), false, cx);
+        cx.notify();
+        false
     }
 
     /// Put a rendered stroke into the document: pixels, or the mask it
@@ -2317,6 +2411,25 @@ impl EditorView {
                         chip("mirror-y", "mirror ↕", my, p)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.tools.mirror_y = !my;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                    let qs = self.tools.quick_shape;
+                    v.push(
+                        chip("quick-shape", "QuickShape", qs, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.tools.quick_shape = !qs;
+                                this.set_status(
+                                    if qs {
+                                        "QuickShape off".to_string()
+                                    } else {
+                                        "QuickShape: hold still at the end of a stroke to snap it to a shape"
+                                            .to_string()
+                                    },
+                                    false,
+                                    cx,
+                                );
                                 cx.notify();
                             }))
                             .into_any_element(),
