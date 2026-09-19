@@ -193,6 +193,13 @@ pub enum Adjustment {
         size: f32,
         monochrome: bool,
     },
+    /// Darken the corners (or lighten them with a negative amount).
+    Vignette {
+        amount: f32,
+        midpoint: f32,
+        feather: f32,
+        roundness: f32,
+    },
     WhiteBalance {
         temperature: f32,
         tint: f32,
@@ -318,6 +325,12 @@ impl Adjustment {
                 size: 1.5,
                 monochrome: true,
             },
+            Adjustment::Vignette {
+                amount: 40.0,
+                midpoint: 45.0,
+                feather: 60.0,
+                roundness: 30.0,
+            },
             Adjustment::WhiteBalance {
                 temperature: 0.0,
                 tint: 0.0,
@@ -341,6 +354,7 @@ impl Adjustment {
             Adjustment::PhotoFilter { .. } => "Photo filter",
             Adjustment::GradientMap { .. } => "Gradient map",
             Adjustment::Grain { .. } => "Grain",
+            Adjustment::Vignette { .. } => "Vignette",
             Adjustment::WhiteBalance { .. } => "White balance",
             Adjustment::Threshold { .. } => "Threshold",
             Adjustment::Posterize { .. } => "Posterize",
@@ -363,6 +377,7 @@ impl Adjustment {
             Adjustment::PhotoFilter { .. } => "photo_filter",
             Adjustment::GradientMap { .. } => "gradient_map",
             Adjustment::Grain { .. } => "grain",
+            Adjustment::Vignette { .. } => "vignette",
             Adjustment::WhiteBalance { .. } => "white_balance",
             Adjustment::Threshold { .. } => "threshold",
             Adjustment::Posterize { .. } => "posterize",
@@ -598,6 +613,17 @@ impl Adjustment {
             Adjustment::GradientMap { reverse, .. } => {
                 vec![p("reverse", "reverse", 0.0, 1.0, 1.0, b2f(*reverse), "on")]
             }
+            Adjustment::Vignette {
+                amount,
+                midpoint,
+                feather,
+                roundness,
+            } => vec![
+                p("amount", "amount", -100.0, 100.0, 1.0, *amount, ""),
+                p("midpoint", "midpoint", 0.0, 100.0, 1.0, *midpoint, ""),
+                p("feather", "feather", 1.0, 100.0, 1.0, *feather, ""),
+                p("roundness", "roundness", 0.0, 100.0, 1.0, *roundness, ""),
+            ],
             Adjustment::Grain {
                 amount,
                 size,
@@ -710,6 +736,10 @@ impl Adjustment {
             }
             (Adjustment::Grain { amount, .. }, "amount") => amount,
             (Adjustment::Grain { size, .. }, "size") => size,
+            (Adjustment::Vignette { amount, .. }, "amount") => amount,
+            (Adjustment::Vignette { midpoint, .. }, "midpoint") => midpoint,
+            (Adjustment::Vignette { feather, .. }, "feather") => feather,
+            (Adjustment::Vignette { roundness, .. }, "roundness") => roundness,
             (Adjustment::Grain { monochrome, .. }, "monochrome") => {
                 *monochrome = on;
                 return true;
@@ -842,6 +872,17 @@ impl Adjustment {
                 amount: amount / 100.0,
                 size: size.max(0.5),
                 mono: *monochrome,
+            },
+            Adjustment::Vignette {
+                amount,
+                midpoint,
+                feather,
+                roundness,
+            } => Prepared::Vignette {
+                amount: (amount / 100.0).clamp(-1.0, 1.0),
+                midpoint: (midpoint / 100.0).clamp(0.0, 1.0),
+                feather: (feather / 100.0).clamp(0.01, 1.0),
+                roundness: (roundness / 100.0).clamp(0.0, 1.0),
             },
             Adjustment::Threshold { level } => Prepared::Threshold(level / 255.0),
             Adjustment::Lut3D { cube, strength } => Prepared::Cube {
@@ -1099,6 +1140,13 @@ pub enum Prepared {
         size: f32,
         mono: bool,
     },
+    /// Darken (or lighten, negative amount) towards the corners.
+    Vignette {
+        amount: f32,
+        midpoint: f32,
+        feather: f32,
+        roundness: f32,
+    },
     Threshold(f32),
     Cube {
         cube: Cube,
@@ -1107,20 +1155,45 @@ pub enum Prepared {
 }
 
 impl Prepared {
-    /// Whether the result depends on the pixel position (grain).
+    /// Whether the result depends on the pixel position (grain, vignette).
     pub fn positional(&self) -> bool {
-        matches!(self, Prepared::Grain { .. })
+        matches!(self, Prepared::Grain { .. } | Prepared::Vignette { .. })
     }
 
     /// Apply to unpremultiplied linear RGB.
     #[inline]
     pub fn apply(&self, c: [f32; 3]) -> [f32; 3] {
-        self.apply_at(c, 0, 0)
+        self.apply_at(c, 0, 0, 1, 1)
     }
 
     /// Apply to unpremultiplied linear RGB at document pixel (x, y).
-    pub fn apply_at(&self, c: [f32; 3], x: i32, y: i32) -> [f32; 3] {
+    pub fn apply_at(&self, c: [f32; 3], x: i32, y: i32, width: u32, height: u32) -> [f32; 3] {
         match self {
+            Prepared::Vignette {
+                amount,
+                midpoint,
+                feather,
+                roundness,
+            } => {
+                let (fw, fh) = (width.max(1) as f32, height.max(1) as f32);
+                let nx = (x as f32 + 0.5) / fw * 2.0 - 1.0;
+                let ny = (y as f32 + 0.5) / fh * 2.0 - 1.0;
+                // Elliptical (follows the frame) blended towards circular.
+                let r_e = (nx * nx + ny * ny).sqrt() / std::f32::consts::SQRT_2;
+                let short = fw.min(fh);
+                let r_c = ((nx * fw).powi(2) + (ny * fh).powi(2)).sqrt()
+                    / short
+                    / std::f32::consts::SQRT_2;
+                let r = r_e + (r_c - r_e) * roundness;
+                let t = ((r - midpoint) / feather).clamp(0.0, 1.0);
+                let k = t * t * (3.0 - 2.0 * t);
+                let f = if *amount >= 0.0 {
+                    1.0 - amount * k * 0.92
+                } else {
+                    1.0 - amount * k * 0.6
+                };
+                c.map(|v| (v * f).clamp(0.0, 1.0))
+            }
             Prepared::Lut(t) => [lut(&t[0], c[0]), lut(&t[1], c[1]), lut(&t[2], c[2])],
             Prepared::HueSat { hue, sat, light } => {
                 let e = enc(c);
@@ -1503,8 +1576,21 @@ mod tests {
         }
         .prepare();
         assert!(g.positional());
-        let a = g.apply_at([0.4; 3], 3, 7);
-        let b2 = g.apply_at([0.4; 3], 40, 9);
+        let a = g.apply_at([0.4; 3], 3, 7, 100, 100);
+        let b2 = g.apply_at([0.4; 3], 40, 9, 100, 100);
+        let v = Adjustment::Vignette {
+            amount: 60.0,
+            midpoint: 30.0,
+            feather: 60.0,
+            roundness: 0.0,
+        }
+        .prepare();
+        let centre = v.apply_at([0.5; 3], 50, 50, 100, 100)[0];
+        let corner = v.apply_at([0.5; 3], 2, 2, 100, 100)[0];
+        assert!(
+            (centre - 0.5).abs() < 1e-3 && corner < 0.3,
+            "{centre} {corner}"
+        );
         assert!(a != b2 && a[0] == a[1], "mono grain varies by position");
         let th = Adjustment::Threshold { level: 128.0 }.prepare();
         assert_eq!(th.apply([0.9; 3]), [1.0; 3]);

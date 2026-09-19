@@ -187,6 +187,15 @@ impl Editor {
         self.txn.is_some()
     }
 
+    /// Abandon the open transaction: the document returns to how it was
+    /// when the outermost `begin` ran, and nothing reaches the history.
+    pub fn cancel(&mut self) {
+        if let Some((_, before, rev, _)) = self.txn.take() {
+            self.doc = before;
+            self.revision = rev.max(self.revision) + 1;
+        }
+    }
+
     fn push(&mut self, step: Step) {
         self.history.undo.push(step);
         self.history.redo.clear();

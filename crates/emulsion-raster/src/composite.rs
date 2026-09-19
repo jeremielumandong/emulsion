@@ -143,6 +143,9 @@ struct Ctx {
     ox: i64,
     oy: i64,
     space: BlendSpace,
+    /// Document size, for effects defined on the whole frame.
+    width: u32,
+    height: u32,
 }
 
 /// Size of the document at `level`, rounding up.
@@ -172,6 +175,8 @@ pub fn render_tile(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTile {
         ox,
         oy,
         space: tree.space,
+        width: tree.width,
+        height: tree.height,
     };
     render_list(&tree.nodes, &mut acc, ctx);
     // Clip to the canvas.
@@ -363,7 +368,7 @@ fn apply_adjust(
             // reduced levels so it stays the same size on screen.
             let x = (ctx.ox + (idx % TILE as usize) as i64) << ctx.level;
             let y = (ctx.oy + (idx / TILE as usize) as i64) << ctx.level;
-            op.apply_at(rgb, x as i32, y as i32)
+            op.apply_at(rgb, x as i32, y as i32, ctx.width, ctx.height)
         } else {
             op.apply(rgb)
         };

@@ -36,7 +36,8 @@ impl EditorView {
 
     /// Apply a recipe above the selected node, as one undo step.
     pub fn apply_recipe(&mut self, recipe: &Recipe, cx: &mut Context<Self>) {
-        let compiled = match emulsion_recipes::compile(recipe) {
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        let compiled = match emulsion_recipes::compile_sized(recipe, w, h) {
             Ok(c) => c,
             Err(e) => {
                 self.set_status(format!("Could not apply {}: {e}", recipe.name), true, cx);

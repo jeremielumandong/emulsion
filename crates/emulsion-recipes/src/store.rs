@@ -31,7 +31,7 @@ pub fn list(dir: &Path) -> Vec<(Recipe, Origin)> {
             }
         }
     }
-    for r in starter_set() {
+    for r in starter_set().into_iter().chain(crate::cameras::presets()) {
         if !out
             .iter()
             .any(|(o, _)| o.name.eq_ignore_ascii_case(&r.name))

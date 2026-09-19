@@ -1635,7 +1635,9 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             if from_text && args.get("save").and_then(Value::as_bool).unwrap_or(false) {
                 emulsion_recipes::store::save(&dir, &recipe).map_err(|e| err(e.to_string()))?;
             }
-            let compiled = emulsion_recipes::compile(&recipe).map_err(|e| err(e.to_string()))?;
+            let compiled =
+                emulsion_recipes::compile_sized(&recipe, editor.doc.width, editor.doc.height)
+                    .map_err(|e| err(e.to_string()))?;
             let slot = match args.get("above").and_then(Value::as_u64) {
                 Some(a) => {
                     let t = editor

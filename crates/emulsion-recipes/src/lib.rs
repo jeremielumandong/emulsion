@@ -6,6 +6,8 @@
 //! approximations, named descriptively; a recipe can name a `.cube` LUT as
 //! its base look instead.
 
+pub mod cameras;
+pub mod effects;
 pub mod import;
 pub mod looks;
 pub mod store;
@@ -103,6 +105,30 @@ pub struct Recipe {
     /// Kept as text ("+1/3 to +1"); its numbers set the exposure node.
     pub exposure_compensation: String,
     pub iso: String,
+
+    // ── Camera and film character (beyond what a Fuji body offers) ──
+    /// Corner darkening, 0–100.
+    pub vignette: f32,
+    /// Lifted blacks and softened whites, 0–100 (faded print).
+    pub fade: f32,
+    /// Colour shift in the shadows and highlights, −100–100 per RGB.
+    pub split_shadows: [f32; 3],
+    pub split_highlights: [f32; 3],
+    /// Show the picture as an orange-masked colour negative.
+    pub negative: bool,
+    /// Light leak strength 0–100, its colour and edge.
+    pub light_leak: f32,
+    pub leak_color: [u8; 3],
+    pub leak_side: effects::LeakSide,
+    /// Dust, hairs and scratches, 0–100.
+    pub dust: f32,
+    pub frame: effects::Frame,
+    /// Burn a compact-camera date into the corner; `date` like "'98 12 24"
+    /// (empty = today).
+    pub date_stamp: bool,
+    pub date: String,
+    /// Seed for the procedural effects.
+    pub seed: u32,
 }
 
 impl Default for Recipe {
@@ -128,6 +154,19 @@ impl Default for Recipe {
             sharpness: 0.0,
             noise_reduction: 0.0,
             clarity: 0.0,
+            vignette: 0.0,
+            fade: 0.0,
+            split_shadows: [0.0; 3],
+            split_highlights: [0.0; 3],
+            negative: false,
+            light_leak: 0.0,
+            leak_color: [255, 140, 60],
+            leak_side: effects::LeakSide::Right,
+            dust: 0.0,
+            frame: effects::Frame::None,
+            date_stamp: false,
+            date: String::new(),
+            seed: 7,
             exposure_compensation: String::new(),
             iso: String::new(),
         }
@@ -227,8 +266,22 @@ impl Recipe {
     }
 
     /// Compile into a group node and its children, bottom to top, in the
-    /// order the camera applies them.
+    /// order the camera applies them. Effects that need the canvas size
+    /// (leaks, dust, frames, the date) are left out; see `compile_for`.
     pub fn compile(&self, cube: Option<Cube>) -> (Node, Vec<Node>) {
+        self.compile_for(cube, 0, 0)
+    }
+
+    /// Whether the recipe adds pixel layers beyond adjustments.
+    pub fn has_effects(&self) -> bool {
+        self.light_leak > 0.0
+            || self.dust > 0.0
+            || self.frame != effects::Frame::None
+            || self.date_stamp
+    }
+
+    /// Compile for a `w × h` document, including its pixel-layer effects.
+    pub fn compile_for(&self, cube: Option<Cube>, w: u32, h: u32) -> (Node, Vec<Node>) {
         let mut stages: Vec<Adjustment> = Vec::new();
         // 1. White balance, in linear light before the look.
         let wb = &self.white_balance;
@@ -355,9 +408,44 @@ impl Recipe {
                 monochrome: true,
             });
         }
+        // 10. Film and print character.
+        if self.negative {
+            // Invert, then the orange mask of colour negative stock.
+            stages.push(curve(vec![[0.0, 255.0], [255.0, 0.0]]));
+            stages.push(Adjustment::ColorBalance {
+                shadows: [38.0, 14.0, -30.0],
+                midtones: [22.0, 6.0, -18.0],
+                highlights: [10.0, 2.0, -8.0],
+                preserve_luminosity: false,
+            });
+        }
+        if self.split_shadows != [0.0; 3] || self.split_highlights != [0.0; 3] {
+            stages.push(Adjustment::ColorBalance {
+                shadows: self.split_shadows.map(|v| v.clamp(-100.0, 100.0)),
+                midtones: [0.0; 3],
+                highlights: self.split_highlights.map(|v| v.clamp(-100.0, 100.0)),
+                preserve_luminosity: true,
+            });
+        }
+        if self.fade > 0.0 {
+            let f = self.fade.clamp(0.0, 100.0);
+            stages.push(curve(vec![
+                [0.0, f * 0.55],
+                [96.0, 96.0 + f * 0.25],
+                [255.0, 255.0 - f * 0.22],
+            ]));
+        }
+        if self.vignette != 0.0 {
+            stages.push(Adjustment::Vignette {
+                amount: self.vignette.clamp(-100.0, 100.0),
+                midpoint: 42.0,
+                feather: 65.0,
+                roundness: 25.0,
+            });
+        }
         let mut group = Node::group(0, format!("Recipe · {}", self.name));
         group.blend = emulsion_raster::BlendMode::PassThrough;
-        let children = stages
+        let mut children: Vec<Node> = stages
             .into_iter()
             .map(|a| {
                 let mut n = Node::adjust(0, a);
@@ -365,6 +453,53 @@ impl Recipe {
                 n
             })
             .collect();
+        if w > 0 && h > 0 {
+            let placement = emulsion_raster::Placement::default();
+            if self.light_leak > 0.0 {
+                let r = effects::light_leak(
+                    w,
+                    h,
+                    self.light_leak / 100.0,
+                    self.leak_color,
+                    self.leak_side,
+                    self.seed,
+                );
+                let mut n = Node::raster(
+                    0,
+                    format!("{} · Light leak", self.name),
+                    Arc::new(r),
+                    placement,
+                );
+                n.blend = emulsion_raster::BlendMode::Screen;
+                children.push(n);
+            }
+            if self.dust > 0.0 {
+                let r = effects::dust(w, h, self.dust / 100.0, self.seed);
+                let mut n =
+                    Node::raster(0, format!("{} · Dust", self.name), Arc::new(r), placement);
+                n.blend = emulsion_raster::BlendMode::Screen;
+                n.opacity = 0.85;
+                children.push(n);
+            }
+            if let Some(r) = effects::frame(w, h, self.frame, self.seed) {
+                children.push(Node::raster(
+                    0,
+                    format!("{} · Frame", self.name),
+                    Arc::new(r),
+                    placement,
+                ));
+            }
+            if self.date_stamp {
+                let spec = effects::date_stamp(w, h, Some(&self.date));
+                let mut n = Node::text(0, format!("{} · Date", self.name), spec, w, h);
+                n.styles.push(emulsion_core::styles::LayerStyle::OuterGlow {
+                    color: [255, 120, 30],
+                    opacity: 0.55,
+                    size: (w.min(h) as f32 * 0.006).max(1.5),
+                });
+                children.push(n);
+            }
+        }
         (group, children)
     }
 }
@@ -614,18 +749,25 @@ pub fn starter_set() -> Vec<Recipe> {
 pub type Compiled = (Node, Vec<Node>);
 
 /// Compile a recipe, loading its LUT if it names one.
-pub fn compile(recipe: &Recipe) -> Result<Compiled, RecipeError> {
+/// Compile with the canvas size, so leaks, dust, frames and the date stamp
+/// are included.
+pub fn compile_sized(recipe: &Recipe, w: u32, h: u32) -> Result<Compiled, RecipeError> {
     recipe.validate()?;
     let cube = match &recipe.lut {
-        Some(path) => {
-            let text = std::fs::read_to_string(path)
-                .map_err(|e| RecipeError::Invalid(format!("cannot read LUT {path}: {e}")))?;
-            Some(Cube::parse(&text).map_err(|e| RecipeError::Invalid(format!("{path}: {e}")))?)
-        }
+        Some(p) => Some(load_cube(p)?),
         None => None,
     };
-    let _ = Arc::new(0); // keep Arc in scope for future shared LUT caching
-    Ok(recipe.compile(cube))
+    Ok(recipe.compile_for(cube, w, h))
+}
+
+pub fn compile(recipe: &Recipe) -> Result<Compiled, RecipeError> {
+    compile_sized(recipe, 0, 0)
+}
+
+fn load_cube(path: &str) -> Result<Cube, RecipeError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| RecipeError::Invalid(format!("cannot read LUT {path}: {e}")))?;
+    Cube::parse(&text).map_err(|e| RecipeError::Invalid(format!("{path}: {e}")))
 }
 
 #[cfg(test)]
