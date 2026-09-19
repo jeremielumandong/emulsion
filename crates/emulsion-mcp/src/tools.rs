@@ -13,6 +13,7 @@ pub const DESTRUCTIVE: &[&str] = &[
     "undo",
     "crop",
     "image_size",
+    "canvas_size",
     "merge_branch",
 ];
 
@@ -251,6 +252,12 @@ pub fn definitions() -> Vec<ToolDef> {
             "Crop the canvas to a rectangle, optionally straightening by rotating everything clockwise first. The rectangle may extend past the canvas to enlarge it. Layers move; they are never resampled.",
             json!({ "x": { "type": "integer" }, "y": { "type": "integer" }, "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 }, "rotation": { "type": "number", "minimum": -45, "maximum": 45 } }),
             &["x", "y", "width", "height"],
+        ),
+        def(
+            "canvas_size",
+            "Change the canvas to width × height without scaling anything; the image stays pinned at the anchor. New canvas is transparent (select it and use content_aware_fill to fill it).",
+            json!({ "width": { "type": "integer", "minimum": 1, "maximum": 30000 }, "height": { "type": "integer", "minimum": 1, "maximum": 30000 }, "anchor": { "type": "string", "enum": ["top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right"] } }),
+            &["width", "height"],
         ),
         def(
             "image_size",

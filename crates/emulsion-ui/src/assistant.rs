@@ -165,6 +165,7 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         ),
         "crop" => format!("crop to {}×{}", input["width"], input["height"]),
         "image_size" => format!("resize to {} px wide", input["width"]),
+        "canvas_size" => format!("canvas {}×{}", input["width"], input["height"]),
         "select_node" => format!("select {}", n()),
         "transform_selection" => "move or resize the selection".into(),
         "list_history" => "read the history".into(),

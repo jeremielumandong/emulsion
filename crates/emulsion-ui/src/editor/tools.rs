@@ -58,6 +58,10 @@ pub struct ToolState {
     /// Pending crop rectangle in document pixels, until Enter.
     pub crop: Option<(f64, f64, f64, f64)>,
     pub straighten: f32,
+    /// Crops grow from their centre.
+    pub crop_centered: bool,
+    /// Fill canvas that a crop or canvas-size change adds, from the image.
+    pub fill_edges: bool,
     pub pointer: Option<Point<Pixels>>,
     pub ants_phase: bool,
     pub picker: bool,
@@ -91,6 +95,8 @@ impl Default for ToolState {
             polygon_combine: Combine::Replace,
             crop: None,
             straighten: 0.0,
+            crop_centered: false,
+            fill_edges: false,
             pointer: None,
             ants_phase: false,
             picker: false,
@@ -128,6 +134,8 @@ pub enum ToolDrag {
     Crop {
         start: (f64, f64),
         end: (f64, f64),
+        /// Grow from the start point in both directions (Alt, or the chip).
+        symmetric: bool,
     },
     Shape {
         start: (f64, f64),
@@ -157,6 +165,15 @@ fn combine_for(m: &Modifiers, default: Combine) -> Combine {
         (true, false) => Combine::Add,
         (false, true) => Combine::Subtract,
         _ => default,
+    }
+}
+
+/// The crop rectangle a drag describes; symmetric drags grow from `a`.
+fn crop_rect(a: (f64, f64), b: (f64, f64), symmetric: bool) -> (f64, f64, f64, f64) {
+    if symmetric {
+        norm((2.0 * a.0 - b.0, 2.0 * a.1 - b.1), b)
+    } else {
+        norm(a, b)
     }
 }
 
@@ -518,7 +535,14 @@ impl EditorView {
                     stroke.set_clone_offset(a.x as f32, a.y as f32);
                 }
             }
-            Tool::Crop => self.drag = Some(Drag::Tool(ToolDrag::Crop { start: d, end: d })),
+            Tool::Crop => {
+                let symmetric = e.modifiers.alt || self.tools.crop_centered;
+                self.drag = Some(Drag::Tool(ToolDrag::Crop {
+                    start: d,
+                    end: d,
+                    symmetric,
+                }))
+            }
             Tool::Shape => {
                 let ellipse = self.tools.shape == ShapeKind::Ellipse;
                 self.drag = Some(Drag::Tool(ToolDrag::Shape {
@@ -694,8 +718,12 @@ impl EditorView {
                 }
             }
             ToolDrag::Gradient { start, end } => self.make_gradient(start, end, cx),
-            ToolDrag::Crop { start, end } => {
-                let (x, y, rw, rh) = norm(start, end);
+            ToolDrag::Crop {
+                start,
+                end,
+                symmetric,
+            } => {
+                let (x, y, rw, rh) = crop_rect(start, end, symmetric);
                 self.tools.crop = (rw >= 1.0 && rh >= 1.0).then_some((x, y, rw, rh));
                 cx.notify();
             }
@@ -768,9 +796,7 @@ impl EditorView {
             );
             let rotation = self.tools.straighten as f64;
             self.tools.straighten = 0.0;
-            self.execute(Command::Crop { rect, rotation }, cx);
-            self.fit_pending = true;
-            cx.notify();
+            self.crop_canvas(rect, rotation, self.tools.fill_edges, cx);
         }
     }
 
@@ -1330,7 +1356,11 @@ impl EditorView {
                 }
                 ToolDrag::Lasso { pts, .. } => o.lines.push((pts.clone(), false)),
                 ToolDrag::Gradient { start, end } => o.lines.push((vec![*start, *end], false)),
-                ToolDrag::Crop { start, end } => o.crop = Some(norm(*start, *end)),
+                ToolDrag::Crop {
+                    start,
+                    end,
+                    symmetric,
+                } => o.crop = Some(crop_rect(*start, *end, *symmetric)),
                 _ => {}
             }
         }
@@ -1348,6 +1378,31 @@ impl EditorView {
         }
         if o.crop.is_none() {
             o.crop = self.tools.crop;
+        }
+        // Straightening: show the region that will be kept, turned back
+        // into the unrotated image, with a rule-of-thirds grid.
+        if let Some((x, y, w, h)) = o.crop
+            && self.tools.straighten != 0.0
+        {
+            o.crop = None;
+            let (dw, dh) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
+            let c = dvec2(dw / 2.0, dh / 2.0);
+            let back = DAffine2::from_translation(c)
+                * DAffine2::from_angle(-(self.tools.straighten as f64).to_radians())
+                * DAffine2::from_translation(-c);
+            let map = |px: f64, py: f64| {
+                let q = back.transform_point2(dvec2(px, py));
+                (q.x, q.y)
+            };
+            o.lines.push((
+                vec![map(x, y), map(x + w, y), map(x + w, y + h), map(x, y + h)],
+                true,
+            ));
+            for k in [1.0, 2.0] {
+                let (gx, gy) = (x + w * k / 3.0, y + h * k / 3.0);
+                o.lines.push((vec![map(gx, y), map(gx, y + h)], false));
+                o.lines.push((vec![map(x, gy), map(x + w, gy)], false));
+            }
         }
         let brushy = matches!(self.tool, Tool::Heal | Tool::Clone)
             || (self.tool == Tool::Brush
@@ -1809,6 +1864,31 @@ impl EditorView {
                     p,
                     cx,
                 ));
+                let centered = self.tools.crop_centered;
+                v.push(
+                    chip("crop-centre", "from centre", centered, p)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.tools.crop_centered = !centered;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                );
+                let fill = self.tools.fill_edges;
+                v.push(
+                    chip("crop-fill", "fill new edges", fill, p)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.tools.fill_edges = !fill;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("size-panel", "size…", self.size_panel.is_some(), p)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.toggle_size_panel(window, cx)),
+                        )
+                        .into_any_element(),
+                );
                 v.push(
                     chip("crop-apply", "apply ⏎", self.tools.crop.is_some(), p)
                         .on_click(cx.listener(|this, _, _, cx| this.tool_commit(cx)))

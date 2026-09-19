@@ -602,6 +602,52 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn alt_crop_grows_from_the_centre_and_new_edges_fill(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Crop);
+        let (a, b) = (at(&e, cx, (100.0, 80.0)), at(&e, cx, (140.0, 100.0)));
+        let alt = gpui_kit::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        cx.simulate_mouse_down(a, gpui_kit::MouseButton::Left, alt);
+        cx.simulate_mouse_move(b, Some(gpui_kit::MouseButton::Left), alt);
+        cx.simulate_mouse_up(b, gpui_kit::MouseButton::Left, alt);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let size = cx.update(|_, cx| {
+            let d = &e.read(cx).editor.doc;
+            (d.width, d.height)
+        });
+        assert!(
+            (size.0 as i32 - 80).abs() <= 1 && (size.1 as i32 - 40).abs() <= 1,
+            "{size:?}"
+        );
+
+        // Extend the canvas by 20 px on every side and fill what was added.
+        let (w, h) = size;
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.crop_canvas(
+                    emulsion_raster::IRect::new(-20, -20, w as i32 + 40, h as i32 + 40),
+                    0.0,
+                    true,
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        let (names, alpha) = cx.update(|_, cx| {
+            let d = &e.read(cx).editor.doc;
+            let flat = emulsion_raster::composite::flatten(&d.composite_tree(), 0);
+            let names: Vec<String> = d.nodes.iter().map(|n| n.name.clone()).collect();
+            (names, flat.get(2, 2)[3])
+        });
+        assert_eq!(names.last().map(String::as_str), Some("Extended edges"));
+        assert!(alpha > 60000, "the corner is filled, alpha {alpha}");
+    }
+
+    #[gpui_kit::test]
     fn the_default_hand_tool_pans_without_moving_pixels(cx: &mut TestAppContext) {
         let (ws, cx) = open(cx, doc(&["Photo"], None));
         cx.run_until_parked();

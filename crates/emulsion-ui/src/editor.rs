@@ -5,6 +5,7 @@ use crate::theme::{self, MONO_FONT, Palette, dim};
 use crate::viewport::{self, CanvasBounds, Scene, TileCache, View, Which};
 use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fraction};
 
+mod canvas_size;
 mod history;
 mod snap;
 mod tools;
@@ -184,6 +185,7 @@ pub struct EditorView {
     /// Ctrl held during a drag: move freely.
     pub(crate) snap_bypass: bool,
     pub(crate) snap_lines: Vec<(bool, f64)>,
+    pub(crate) size_panel: Option<canvas_size::SizePanel>,
 }
 
 impl EditorView {
@@ -245,6 +247,7 @@ impl EditorView {
             snap: true,
             snap_bypass: false,
             snap_lines: Vec::new(),
+            size_panel: None,
         }
     }
 
@@ -2074,6 +2077,7 @@ impl Render for EditorView {
         self.refresh_suggestions(cx);
         let strip = self.status_strip(&p, cx);
         let ask = self.ask_bar(&p, cx);
+        let size_panel = self.size_panel_view(&p, cx);
         let dock = self.assistant_dock(&p, cx);
         let panel = self.node_panel(&p, window, cx);
         div()
@@ -2099,6 +2103,7 @@ impl Render for EditorView {
                             .min_h_0()
                             .overflow_hidden()
                             .child(context)
+                            .children(size_panel)
                             .children(ask)
                             .child(canvas)
                             .children(dock)

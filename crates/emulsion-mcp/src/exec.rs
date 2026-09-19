@@ -589,6 +589,46 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 editor.doc.width, editor.doc.height
             )))
         }
+        "canvas_size" => {
+            let int = |k: &str| {
+                args.get(k)
+                    .and_then(Value::as_u64)
+                    .filter(|v| (1..=30_000).contains(v))
+                    .ok_or_else(|| err(format!("'{k}' must be an integer from 1 to 30000")))
+            };
+            let (w, h) = (int("width")? as i64, int("height")? as i64);
+            let (ow, oh) = (editor.doc.width as i64, editor.doc.height as i64);
+            let (ax, ay) = match args
+                .get("anchor")
+                .and_then(Value::as_str)
+                .unwrap_or("center")
+            {
+                "top-left" => (0, 0),
+                "top" => (1, 0),
+                "top-right" => (2, 0),
+                "left" => (0, 1),
+                "center" => (1, 1),
+                "right" => (2, 1),
+                "bottom-left" => (0, 2),
+                "bottom" => (1, 2),
+                "bottom-right" => (2, 2),
+                other => return Err(err(format!("unknown anchor {other:?}"))),
+            };
+            let rect = IRect::new(
+                (-((w - ow) * ax / 2)) as i32,
+                (-((h - oh) * ay / 2)) as i32,
+                w as i32,
+                h as i32,
+            );
+            exec(
+                editor,
+                Command::Crop {
+                    rect,
+                    rotation: 0.0,
+                },
+            )?;
+            Ok(ToolResult::text(format!("Canvas is now {w}×{h}")))
+        }
         "image_size" => {
             let width = args
                 .get("width")
@@ -1117,6 +1157,19 @@ mod tests {
         );
         assert!(!r.is_error, "{}", text(&r));
         assert_eq!((e.doc.width, e.doc.height), (100, 50));
+        let r = execute(
+            &mut e,
+            "canvas_size",
+            &json!({ "width": 120, "height": 60, "anchor": "top-left" }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        assert_eq!((e.doc.width, e.doc.height), (120, 60));
+        let r = execute(
+            &mut e,
+            "canvas_size",
+            &json!({ "width": 100, "height": 50, "anchor": "top-left" }),
+        );
+        assert!(!r.is_error);
         let r = execute(&mut e, "image_size", &json!({ "width": 50 }));
         assert_eq!(text(&r), "Image is now 50×25");
     }
