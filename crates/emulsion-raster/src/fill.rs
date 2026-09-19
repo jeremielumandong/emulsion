@@ -1,6 +1,48 @@
 //! Content-aware fill and gradients.
 
 use crate::color;
+use crate::composite::{CompositeTree, region};
+use crate::{IRect, Mask, Raster};
+
+/// Content-aware fill of `selection` against the visible image, as a layer.
+///
+/// Returns the pixels to put in a new node at the returned rect's origin.
+/// The node holds only the fill, so composited over the image it gives the
+/// filled result, and hiding it restores the original. None when the
+/// selection is empty.
+pub fn content_aware_layer(tree: &CompositeTree, selection: &Mask) -> Option<(Raster, IRect)> {
+    let b = crate::select::bounds(selection);
+    if b.is_empty() {
+        return None;
+    }
+    let canvas = IRect::new(0, 0, selection.width() as i32, selection.height() as i32);
+    let margin = (b.w.max(b.h) / 2).max(48);
+    let reg = IRect::new(
+        b.x - margin,
+        b.y - margin,
+        b.w + 2 * margin,
+        b.h + 2 * margin,
+    )
+    .intersect(&canvas);
+    let comp = region(tree, reg);
+    let hole: Vec<f32> = selection
+        .read_rect(reg)
+        .into_iter()
+        .map(|v| v as f32 / 255.0)
+        .collect();
+    let out = content_aware(&comp, &hole, reg.w as usize, reg.h as usize, 0x5EED);
+    // out = fill·k + comp·(1−k), so the fill alone is out − comp·(1−k).
+    let px: Vec<[u16; 4]> = out
+        .iter()
+        .zip(&comp)
+        .zip(&hole)
+        .map(|((o, c), k)| color::f_to_px([0, 1, 2, 3].map(|i| (o[i] - c[i] * (1.0 - k)).max(0.0))))
+        .collect();
+    Some((
+        Raster::from_pixels(reg.w as u32, reg.h as u32, [0; 4], &px),
+        reg,
+    ))
+}
 
 /// Fill the hole in a dense premultiplied-linear image from the rest of it.
 ///

@@ -141,6 +141,30 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         ),
         "set_adjustment" => format!("adjust {} {}", n(), input["params"]),
         "set_transform" => format!("place {}", n()),
+        "select_rect" | "select_ellipse" => format!(
+            "select {} {}×{} at {}, {}",
+            if tool == "select_rect" {
+                "rectangle"
+            } else {
+                "ellipse"
+            },
+            input["width"],
+            input["height"],
+            input["x"],
+            input["y"]
+        ),
+        "select_color" => format!("select similar colour at {}, {}", input["x"], input["y"]),
+        "select_all" => "select everything".into(),
+        "invert_selection" => "invert the selection".into(),
+        "modify_selection" => "adjust the selection edge".into(),
+        "content_aware_fill" => "fill the selection from its surroundings".into(),
+        "fill_selection" => format!(
+            "fill {} with {}",
+            n(),
+            input["color"].as_str().unwrap_or("?")
+        ),
+        "crop" => format!("crop to {}×{}", input["width"], input["height"]),
+        "image_size" => format!("resize to {} px wide", input["width"]),
         other => other.replace('_', " "),
     }
 }
@@ -537,6 +561,31 @@ impl EditorView {
             cx.background_spawn(async move {
                 let r = exec::view(&doc, &args).unwrap_or_else(|e| e);
                 call.reply(r);
+            })
+            .detach();
+            return;
+        }
+        if tools::HEAVY.contains(&call.name.as_str()) {
+            // Compute off the UI thread against a snapshot, then apply only
+            // if nobody edited the document in the meantime.
+            let (doc, rev) = (self.editor.doc.clone(), self.editor.revision);
+            self.set_status("Working…", false, cx);
+            cx.spawn(async move |this, cx| {
+                let (name, args) = (call.name.clone(), call.arguments.clone());
+                let planned = cx.background_spawn(async move { exec::plan_heavy(&doc, &name, &args) }).await;
+                this.update(cx, |this, cx| {
+                    this.status = None;
+                    let r = match planned {
+                        Err(e) => e,
+                        Ok(_) if this.editor.revision != rev => {
+                            emulsion_mcp::server::ToolResult::error("the document changed while this was computing; call the tool again")
+                        }
+                        Ok(p) => exec::apply(&mut this.editor, p),
+                    };
+                    call.reply(r);
+                    this.after_change(cx);
+                })
+                .ok();
             })
             .detach();
             return;

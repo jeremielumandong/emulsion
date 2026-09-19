@@ -10,6 +10,7 @@ description = "GPUI views and design tokens for Emulsion"
 workspace = true
 
 [dependencies]
+glam = { workspace = true }
 emulsion-ai = { workspace = true }
 emulsion-assistant = { workspace = true }
 emulsion-mcp = { workspace = true }

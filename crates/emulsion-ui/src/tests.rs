@@ -377,3 +377,247 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
     });
     assert_eq!((name.as_str(), size, nodes), ("landing", (1672, 941), 1));
 }
+
+// ── Phase 3 tools, driven through real pointer and key events ────────────
+
+mod tools {
+    use super::*;
+    use crate::editor::{EditorView, Tool};
+    use emulsion_core::NodeKind;
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{Pixels, Point};
+
+    fn editor(ws: &Entity<Workspace>, cx: &mut VisualTestContext) -> Entity<EditorView> {
+        cx.update(|_, cx| ws.read(cx).editor.clone().unwrap())
+    }
+
+    fn at(e: &Entity<EditorView>, cx: &mut VisualTestContext, d: (f64, f64)) -> Point<Pixels> {
+        cx.update(|_, cx| e.read(cx).doc_to_window(d).expect("canvas laid out"))
+    }
+
+    fn drag(e: &Entity<EditorView>, cx: &mut VisualTestContext, a: (f64, f64), b: (f64, f64)) {
+        let (a, b) = (at(e, cx, a), at(e, cx, b));
+        cx.update(|window, cx| window.drag(a, b, cx));
+        cx.run_until_parked();
+    }
+
+    fn setup(
+        cx: &mut TestAppContext,
+        tool: Tool,
+    ) -> (
+        Entity<Workspace>,
+        Entity<EditorView>,
+        &mut VisualTestContext,
+    ) {
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        cx.update(|_, cx| e.update(cx, |e, cx| e.set_tool(tool, cx)));
+        cx.run_until_parked();
+        (ws, e, cx)
+    }
+
+    #[gpui_kit::test]
+    fn marquee_drag_selects_and_undoes(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Select);
+        drag(&e, cx, (20.0, 20.0), (120.0, 80.0));
+        let b = cx.update(|_, cx| {
+            e.read(cx)
+                .editor
+                .doc
+                .selection
+                .as_deref()
+                .map(emulsion_raster::select::bounds)
+        });
+        let b = b.expect("a selection");
+        assert!(
+            (b.x - 20).abs() <= 1 && (b.w - 100).abs() <= 2 && (b.h - 60).abs() <= 2,
+            "{b:?}"
+        );
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(cx.update(|_, cx| e.read(cx).editor.doc.selection.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn brush_stroke_paints_inside_the_selection_only(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Select);
+        drag(&e, cx, (0.0, 0.0), (128.0, 192.0)); // left half
+        cx.update(|_, cx| e.update(cx, |e, cx| e.set_tool(Tool::Brush, cx)));
+        drag(&e, cx, (40.0, 96.0), (220.0, 96.0));
+        let (inside, outside, steps) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            let NodeKind::Raster { raster, .. } = &e.editor.doc.nodes[0].kind else {
+                panic!()
+            };
+            (
+                raster.get(80, 96),
+                raster.get(200, 96),
+                e.editor.history.len(),
+            )
+        });
+        let base = emulsion_raster::color::f_to_px([0.2, 0.3, 0.4, 1.0]);
+        assert_ne!(inside, base, "painted inside the selection");
+        assert_eq!(outside, base, "untouched outside it");
+        assert_eq!(
+            steps, 2,
+            "the selection, then one step for the whole stroke"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn crop_drag_then_enter_resizes_without_resampling(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Crop);
+        drag(&e, cx, (50.0, 40.0), (150.0, 140.0));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let (w, h, x) = cx.update(|_, cx| {
+            let d = &e.read(cx).editor.doc;
+            let NodeKind::Raster { placement, .. } = &d.nodes[0].kind else {
+                panic!()
+            };
+            (d.width, d.height, placement.x)
+        });
+        assert!(
+            (w as i32 - 100).abs() <= 1 && (h as i32 - 100).abs() <= 1,
+            "{w}×{h}"
+        );
+        assert!(
+            (x + 50.0).abs() <= 1.0,
+            "layer moved, not resampled: x = {x}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn shape_drag_adds_a_masked_fill_node(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Shape);
+        drag(&e, cx, (30.0, 30.0), (90.0, 70.0));
+        let (kind, masked) = cx.update(|_, cx| {
+            let n = e.read(cx).editor.doc.nodes.last().unwrap().clone();
+            (n.name.clone(), n.mask.is_some())
+        });
+        assert_eq!((kind.as_str(), masked), ("Rectangle", true));
+    }
+
+    #[gpui_kit::test]
+    fn content_aware_fill_adds_a_node_from_the_selection(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Select);
+        drag(&e, cx, (100.0, 80.0), (140.0, 110.0)); // selects and focuses the canvas
+        cx.simulate_keystrokes("shift-backspace");
+        cx.run_until_parked();
+        let top = cx.update(|_, cx| e.read(cx).editor.doc.nodes.last().unwrap().name.clone());
+        assert_eq!(top, "Content-aware fill");
+    }
+
+    #[gpui_kit::test]
+    fn tool_keys_switch_tools_when_the_canvas_has_focus(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Move);
+        let p = at(&e, cx, (10.0, 10.0));
+        cx.update(|window, cx| window.drag(p, p, cx));
+        for (key, want) in [
+            ("b", Tool::Brush),
+            ("m", Tool::Select),
+            ("c", Tool::Crop),
+            ("j", Tool::Heal),
+            ("v", Tool::Move),
+        ] {
+            cx.simulate_keystrokes(key);
+            assert_eq!(cx.update(|_, cx| e.read(cx).tool), want, "key {key}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn wand_gradient_and_heal(cx: &mut TestAppContext) {
+        // Left half red, right half blue; a white speck on the red.
+        let (w, h) = (256u32, 192u32);
+        let data: Vec<u8> = (0..h)
+            .flat_map(|y| {
+                (0..w).flat_map(move |x| {
+                    if (60..64).contains(&x) && (90..94).contains(&y) {
+                        [255, 255, 255, 255]
+                    } else if x < 128 {
+                        [200, 30, 30, 255]
+                    } else {
+                        [30, 30, 200, 255]
+                    }
+                })
+            })
+            .collect();
+        let (ws, cx) = open(
+            cx,
+            doc(
+                &["Photo"],
+                Some(emulsion_raster::Raster::from_srgba8(w, h, &data)),
+            ),
+        );
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+
+        // Wand on the blue half selects exactly it.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.set_select(crate::editor::SelectShape::Wand, cx)
+            })
+        });
+        drag(&e, cx, (200.0, 20.0), (200.0, 20.0));
+        let b = cx
+            .update(|_, cx| {
+                e.read(cx)
+                    .editor
+                    .doc
+                    .selection
+                    .as_deref()
+                    .map(emulsion_raster::select::bounds)
+            })
+            .expect("wand selection");
+        assert_eq!((b.x, b.w), (128, 128));
+
+        // A gradient drag fills only the selection, in a new node.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.set_paint(crate::editor::PaintKind::Gradient, cx)
+            })
+        });
+        drag(&e, cx, (130.0, 96.0), (250.0, 96.0));
+        let (name, left_alpha, right_alpha) = cx.update(|_, cx| {
+            let n = e.read(cx).editor.doc.nodes.last().unwrap().clone();
+            let NodeKind::Raster { raster, .. } = &n.kind else {
+                panic!()
+            };
+            (
+                n.name.clone(),
+                raster.get(20, 96)[3],
+                raster.get(200, 96)[3],
+            )
+        });
+        assert_eq!(name, "Gradient");
+        assert_eq!(left_alpha, 0, "outside the selection");
+        assert!(right_alpha > 60000, "inside it");
+
+        // Spot heal over the white speck on the red layer brings back red.
+        cx.simulate_keystrokes("ctrl-d");
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                let id = e.editor.doc.nodes[0].id;
+                e.selected = Some(id);
+                e.set_tool(Tool::Heal, cx)
+            })
+        });
+        drag(&e, cx, (58.0, 92.0), (66.0, 92.0));
+        for _ in 0..50 {
+            cx.run_until_parked();
+            if !cx.update(|_, cx| e.read(cx).editor.in_transaction()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let px = cx.update(|_, cx| {
+            let NodeKind::Raster { raster, .. } = &e.read(cx).editor.doc.nodes[0].kind else {
+                panic!()
+            };
+            emulsion_raster::color::premul_to_srgba8(emulsion_raster::color::px_to_f(
+                raster.get(61, 91),
+            ))
+        });
+        assert!(px[0] > 150 && px[1] < 90, "healed to red, got {px:?}");
+    }
+}

@@ -730,7 +730,11 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.rotate(-15.0, cx))
             }))
             .on_action(cx.listener(|this, _: &ResetRotation, _, cx| {
-                this.with_editor(cx, |e, cx| e.rotate(0.0, cx))
+                this.with_editor(cx, |e, cx| {
+                    if !e.tool_cancel(cx) {
+                        e.rotate(0.0, cx)
+                    }
+                })
             }))
             .on_action(cx.listener(|this, _: &ToggleRulers, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_rulers(cx))
@@ -762,6 +766,100 @@ impl Render for Workspace {
                     e.update(cx, |e, cx| e.open_ask(window, cx));
                     cx.notify();
                 }
+            }))
+            .on_action(cx.listener(|this, _: &ToolMove, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Move, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolMarquee, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    let next = if e.tool == crate::editor::Tool::Select
+                        && e.select_shape() == crate::editor::SelectShape::Rect
+                    {
+                        crate::editor::SelectShape::Ellipse
+                    } else {
+                        crate::editor::SelectShape::Rect
+                    };
+                    e.set_select(next, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolLasso, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    let next = if e.tool == crate::editor::Tool::Select
+                        && e.select_shape() == crate::editor::SelectShape::Lasso
+                    {
+                        crate::editor::SelectShape::Polygon
+                    } else {
+                        crate::editor::SelectShape::Lasso
+                    };
+                    e.set_select(next, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolWand, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.set_select(crate::editor::SelectShape::Wand, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolBrush, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_paint(crate::editor::PaintKind::Brush, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolEraser, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.set_paint(crate::editor::PaintKind::Eraser, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolBucket, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.set_paint(crate::editor::PaintKind::Bucket, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolGradient, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.set_paint(crate::editor::PaintKind::Gradient, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolHeal, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Heal, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolClone, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Clone, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolCrop, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Crop, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolShape, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Shape, cx))
+            }))
+            .on_action(cx.listener(|this, _: &SwapColors, _, cx| {
+                this.with_editor(cx, |e, cx| e.swap_colors(cx))
+            }))
+            .on_action(cx.listener(|this, _: &DefaultColors, _, cx| {
+                this.with_editor(cx, |e, cx| e.default_colors(cx))
+            }))
+            .on_action(cx.listener(|this, _: &BrushSmaller, _, cx| {
+                this.with_editor(cx, |e, cx| e.brush_size(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &BrushLarger, _, cx| {
+                this.with_editor(cx, |e, cx| e.brush_size(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &CommitTool, _, cx| {
+                this.with_editor(cx, |e, cx| e.tool_commit(cx))
+            }))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                this.with_editor(cx, |e, cx| e.select_all(cx))
+            }))
+            .on_action(
+                cx.listener(|this, _: &Deselect, _, cx| {
+                    this.with_editor(cx, |e, cx| e.deselect(cx))
+                }),
+            )
+            .on_action(cx.listener(|this, _: &InvertSelection, _, cx| {
+                this.with_editor(cx, |e, cx| e.invert_selection(cx))
+            }))
+            .on_action(cx.listener(|this, _: &FillSelection, _, cx| {
+                this.with_editor(cx, |e, cx| e.fill_selection(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ContentAwareFill, _, cx| {
+                this.with_editor(cx, |e, cx| e.content_aware_fill(cx))
             }))
             .on_action(cx.listener(|this, _: &ShowSettings, _, cx| {
                 this.screen = Screen::Settings;

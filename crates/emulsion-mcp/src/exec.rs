@@ -4,9 +4,12 @@ use crate::server::ToolResult;
 use base64::Engine as _;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
-use emulsion_raster::composite::{flatten, level_size};
+use emulsion_raster::composite::{flatten, level_size, region};
+use emulsion_raster::select::{self, Combine};
 use emulsion_raster::{Adjustment, BlendMode, Placement};
+use emulsion_raster::{IRect, color, fill};
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 
 fn err(msg: impl Into<String>) -> ToolResult {
     ToolResult::error(msg)
@@ -27,8 +30,126 @@ fn node_label(doc: &Document, id: NodeId) -> String {
 /// Run `name` with `args` against `editor`. Every change goes through the
 /// Command API, so it lands in history like a person's edit.
 pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
+    if crate::tools::HEAVY.contains(&name) {
+        return match plan_heavy(&editor.doc, name, args) {
+            Ok(planned) => apply(editor, planned),
+            Err(e) => e,
+        };
+    }
     match run(editor, name, args) {
         Ok(r) | Err(r) => r,
+    }
+}
+
+/// Commands computed for a heavy tool, and what to tell the model.
+pub struct Planned {
+    pub commands: Vec<Command>,
+    pub message: String,
+}
+
+/// Apply planned commands on the thread that owns the document.
+pub fn apply(editor: &mut Editor, p: Planned) -> ToolResult {
+    for c in p.commands {
+        if let Err(e) = editor.execute(c) {
+            return err(e.to_string());
+        }
+    }
+    ToolResult::text(p.message)
+}
+
+fn combine_arg(args: &Value) -> Combine {
+    match args.get("mode").and_then(Value::as_str) {
+        Some("add") => Combine::Add,
+        Some("subtract") => Combine::Subtract,
+        Some("intersect") => Combine::Intersect,
+        _ => Combine::Replace,
+    }
+}
+
+/// The command that combines `m` into the current selection.
+fn selection_command(
+    doc: &Document,
+    m: emulsion_raster::Mask,
+    combine: Combine,
+    feather: f32,
+) -> (Command, String) {
+    let m = if feather > 0.5 {
+        select::feather(&m, feather)
+    } else {
+        m
+    };
+    let combined = select::combine(doc.selection.as_deref(), &m, combine);
+    let b = select::bounds(&combined);
+    if b.is_empty() {
+        (
+            Command::SetSelection { selection: None },
+            "The selection is now empty".into(),
+        )
+    } else {
+        (
+            Command::SetSelection {
+                selection: Some(Arc::new(combined)),
+            },
+            format!("Selected {}×{} at {}, {}", b.w, b.h, b.x, b.y),
+        )
+    }
+}
+
+/// Compute a heavy tool against a document snapshot, on any thread.
+pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
+    let (w, h) = (doc.width, doc.height);
+    match name {
+        "select_color" => {
+            let x = args
+                .get("x")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| err("missing number 'x'"))?;
+            let y = args
+                .get("y")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| err("missing number 'y'"))?;
+            if x < 0.0 || y < 0.0 || x >= w as f64 || y >= h as f64 {
+                return Err(err("(x, y) is outside the canvas"));
+            }
+            let tol = args
+                .get("tolerance")
+                .and_then(Value::as_u64)
+                .unwrap_or(32)
+                .min(255) as u8;
+            let contiguous = args
+                .get("contiguous")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let img: Vec<u8> = region(&doc.composite_tree(), IRect::new(0, 0, w as i32, h as i32))
+                .into_iter()
+                .flat_map(color::premul_to_srgba8)
+                .collect();
+            let m = select::by_color(&img, w, h, x as u32, y as u32, tol, contiguous);
+            let (c, message) = selection_command(doc, m, combine_arg(args), 0.0);
+            Ok(Planned {
+                commands: vec![c],
+                message,
+            })
+        }
+        "content_aware_fill" => {
+            let sel = doc
+                .selection
+                .clone()
+                .ok_or_else(|| err("select the area to fill first"))?;
+            let (raster, reg) = fill::content_aware_layer(&doc.composite_tree(), &sel)
+                .ok_or_else(|| err("the selection is empty"))?;
+            let node = Node::raster(
+                0,
+                "Content-aware fill",
+                Arc::new(raster),
+                Placement::at(reg.x as f64, reg.y as f64),
+            );
+            Ok(Planned {
+                commands: vec![Command::AddNode { node: Box::new(node), slot: Slot::TOP }],
+                message: "Filled the selection into a new node \"Content-aware fill\" at the top of the stack".into(),
+            })
+        }
+        other => Err(err(format!("{other} is not a heavy tool"))),
     }
 }
 
@@ -293,6 +414,152 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 node_label(&editor.doc, id)
             )))
         }
+        "select_rect" | "select_ellipse" => {
+            let num = |k: &str| {
+                args.get(k)
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| err(format!("missing number '{k}'")))
+            };
+            let (x, y, rw, rh) = (
+                num("x")? as f32,
+                num("y")? as f32,
+                num("width")? as f32,
+                num("height")? as f32,
+            );
+            let (w, h) = (editor.doc.width, editor.doc.height);
+            let m = if name == "select_rect" {
+                select::rect(w, h, x, y, rw, rh)
+            } else {
+                select::ellipse(w, h, x, y, rw, rh)
+            };
+            let feather = args.get("feather").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+            let (c, msg) = selection_command(&editor.doc, m, combine_arg(args), feather);
+            exec(editor, c)?;
+            Ok(ToolResult::text(msg))
+        }
+        "select_all" => {
+            let (w, h) = (editor.doc.width, editor.doc.height);
+            exec(
+                editor,
+                Command::SetSelection {
+                    selection: Some(Arc::new(select::all(w, h))),
+                },
+            )?;
+            Ok(ToolResult::text("Selected everything"))
+        }
+        "deselect" => {
+            exec(editor, Command::SetSelection { selection: None })?;
+            Ok(ToolResult::text("Nothing is selected"))
+        }
+        "invert_selection" => {
+            let (w, h) = (editor.doc.width, editor.doc.height);
+            let inv = match &editor.doc.selection {
+                Some(s) => select::invert(s),
+                None => select::all(w, h),
+            };
+            let (c, msg) = selection_command(&editor.doc, inv, Combine::Replace, 0.0);
+            exec(editor, c)?;
+            Ok(ToolResult::text(msg))
+        }
+        "modify_selection" => {
+            let s = editor
+                .doc
+                .selection
+                .clone()
+                .ok_or_else(|| err("nothing is selected"))?;
+            let mut m = (*s).clone();
+            if let Some(g) = args.get("grow").and_then(Value::as_i64) {
+                m = select::grow(&m, g.clamp(-500, 500) as i32);
+            }
+            if let Some(f) = args.get("feather").and_then(Value::as_f64) {
+                m = select::feather(&m, f.clamp(0.0, 500.0) as f32);
+            }
+            let (c, msg) = selection_command(&editor.doc, m, Combine::Replace, 0.0);
+            exec(editor, c)?;
+            Ok(ToolResult::text(msg))
+        }
+        "fill_selection" => {
+            let id = id_arg(args, "node")?;
+            let hex = args
+                .get("color")
+                .and_then(Value::as_str)
+                .ok_or_else(|| err("missing string 'color'"))?;
+            let v = hex
+                .strip_prefix('#')
+                .filter(|h| h.len() == 6)
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .ok_or_else(|| err("color must be #RRGGBB"))?;
+            let premul = color::srgba8_to_premul([(v >> 16) as u8, (v >> 8) as u8, v as u8, 255]);
+            let node = editor
+                .doc
+                .node(id)
+                .ok_or_else(|| err(format!("no node {id}")))?;
+            let NodeKind::Raster { raster, placement } = &node.kind else {
+                return Err(err(format!(
+                    "{} has no pixels to fill",
+                    node_label(&editor.doc, id)
+                )));
+            };
+            let to_doc = placement.to_doc(raster.width(), raster.height());
+            let sel = editor.doc.selection.clone();
+            let cov = move |x: i32, y: i32| -> f32 {
+                let Some(s) = &sel else { return 1.0 };
+                let p = to_doc.transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
+                if p.x < 0.0 || p.y < 0.0 || p.x >= s.width() as f64 || p.y >= s.height() as f64 {
+                    return 0.0;
+                }
+                s.get(p.x as u32, p.y as u32) as f32 / 255.0
+            };
+            let (r, dirty) =
+                emulsion_raster::paint::fill_color(raster, raster.bounds(), &cov, premul);
+            exec(
+                editor,
+                Command::ReplacePixels {
+                    id,
+                    raster: Arc::new(r),
+                    dirty,
+                    label: "Fill".into(),
+                },
+            )?;
+            Ok(ToolResult::text(format!(
+                "Filled {} with {hex}",
+                node_label(&editor.doc, id)
+            )))
+        }
+        "crop" => {
+            let int = |k: &str| {
+                args.get(k)
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| err(format!("missing integer '{k}'")))
+            };
+            let (x, y, w, h) = (int("x")?, int("y")?, int("width")?, int("height")?);
+            if w < 1 || h < 1 || w > 30000 || h > 30000 {
+                return Err(err("width and height must be 1 to 30000"));
+            }
+            let rect = IRect::new(x as i32, y as i32, w as i32, h as i32);
+            let rotation = args
+                .get("rotation")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                .clamp(-45.0, 45.0);
+            exec(editor, Command::Crop { rect, rotation })?;
+            Ok(ToolResult::text(format!(
+                "Canvas is now {}×{}",
+                editor.doc.width, editor.doc.height
+            )))
+        }
+        "image_size" => {
+            let width = args
+                .get("width")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| err("missing integer 'width'"))?
+                .clamp(1, 30000) as u32;
+            let height = ((width as f64 * editor.doc.height as f64 / editor.doc.width as f64)
+                .round() as u32)
+                .clamp(1, 30000);
+            exec(editor, Command::ImageSize { width, height })?;
+            Ok(ToolResult::text(format!("Image is now {width}×{height}")))
+        }
         "undo" => Ok(ToolResult::text(if editor.undo() {
             "Undid the last step"
         } else {
@@ -428,8 +695,13 @@ pub fn describe(editor: &Editor) -> Value {
         .take(5)
         .map(|s| s.name.as_str())
         .collect();
+    let selection = doc.selection.as_deref().map(|s| {
+        let b = select::bounds(s);
+        json!({ "x": b.x, "y": b.y, "width": b.w, "height": b.h })
+    });
     json!({
         "canvas": { "width": doc.width, "height": doc.height },
+        "selection": selection,
         "rows": "row 1 is the top of the stack; depth > 0 means inside the group listed above it",
         "nodes": nodes,
         "recent_history": history,
@@ -589,6 +861,51 @@ mod tests {
             .unwrap();
         let img = image::load_from_memory(&png).unwrap();
         assert_eq!((img.width(), img.height()), (128, 64));
+    }
+
+    #[test]
+    fn selection_fill_and_canvas_tools() {
+        let mut e = editor();
+        let r = execute(
+            &mut e,
+            "select_rect",
+            &json!({ "x": 50, "y": 20, "width": 40, "height": 30 }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        assert_eq!(describe(&e)["selection"]["width"], 40);
+        let r = execute(
+            &mut e,
+            "select_ellipse",
+            &json!({ "x": 60, "y": 25, "width": 10, "height": 10, "mode": "subtract" }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let before = e.doc.nodes.len();
+        let r = execute(&mut e, "content_aware_fill", &json!({}));
+        assert!(!r.is_error, "{}", text(&r));
+        assert_eq!(e.doc.nodes.len(), before + 1);
+        let r = execute(&mut e, "select_color", &json!({ "x": 5, "y": 5 }));
+        assert!(
+            !r.is_error && text(&r).starts_with("Selected"),
+            "{}",
+            text(&r)
+        );
+        let r = execute(
+            &mut e,
+            "fill_selection",
+            &json!({ "node": 1, "color": "red" }),
+        );
+        assert!(r.is_error);
+        let r = execute(&mut e, "deselect", &json!({}));
+        assert!(!r.is_error && describe(&e)["selection"].is_null());
+        let r = execute(
+            &mut e,
+            "crop",
+            &json!({ "x": 10, "y": 10, "width": 100, "height": 50 }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        assert_eq!((e.doc.width, e.doc.height), (100, 50));
+        let r = execute(&mut e, "image_size", &json!({ "width": 50 }));
+        assert_eq!(text(&r), "Image is now 50×25");
     }
 
     #[test]

@@ -4,6 +4,8 @@
 use crate::theme::{self, MONO_FONT, Palette, dim};
 use crate::viewport::{self, CanvasBounds, Scene, TileCache, View, Which};
 use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fraction};
+
+mod tools;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
 use emulsion_raster::adjust::ParamSpec;
@@ -19,6 +21,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
+pub use tools::{PaintKind, SelectShape, ShapeKind};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
@@ -37,15 +40,15 @@ pub enum Tool {
 /// Rail order, glyphs, and whether the tool works yet.
 const TOOLS: [(Tool, &str, &str, bool); 10] = [
     (Tool::Move, "Move", "✥", true),
-    (Tool::Select, "Select", "▢", false),
+    (Tool::Select, "Select", "▢", true),
     (Tool::Mask, "Mask", "◐", false),
-    (Tool::Brush, "Brush", "✎", false),
-    (Tool::Heal, "Heal", "✚", false),
-    (Tool::Clone, "Clone", "◎", false),
+    (Tool::Brush, "Brush", "✎", true),
+    (Tool::Heal, "Heal", "✚", true),
+    (Tool::Clone, "Clone", "◎", true),
     (Tool::Grade, "Grade", "◑", false),
     (Tool::Type, "Type", "T", false),
-    (Tool::Crop, "Crop", "⌗", false),
-    (Tool::Shape, "Shape", "◇", false),
+    (Tool::Crop, "Crop", "⌗", true),
+    (Tool::Shape, "Shape", "◇", true),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -55,9 +58,32 @@ enum SliderKey {
     Scale(NodeId),
     Rotation(NodeId),
     Compare,
+    ToolSize,
+    ToolHardness,
+    ToolOpacity,
+    ToolFlow,
+    Tolerance,
+    Feather,
+    Straighten,
+    PickerSv,
+    PickerHue,
+}
+
+impl SliderKey {
+    /// Keys that edit the document (their drags are one history step).
+    fn edits_document(self) -> bool {
+        matches!(
+            self,
+            SliderKey::Opacity(_)
+                | SliderKey::Param(..)
+                | SliderKey::Scale(_)
+                | SliderKey::Rotation(_)
+        )
+    }
 }
 
 enum Drag {
+    Tool(tools::ToolDrag),
     Pan {
         last: Point<Pixels>,
     },
@@ -138,6 +164,7 @@ pub struct EditorView {
     pub(crate) suggestions: Vec<emulsion_ai::suggest::Suggestion>,
     pub(crate) suggest_rev: u64,
     pub(crate) suggest_busy: bool,
+    tools: tools::ToolState,
 }
 
 impl EditorView {
@@ -149,6 +176,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> Self {
         let selected = doc.nodes.last().map(|n| n.id);
+        Self::start_ants(cx);
         let editor = Editor::new(doc, path);
         let tree = Arc::new(editor.doc.composite_tree());
         let rev = editor.revision;
@@ -188,7 +216,29 @@ impl EditorView {
             suggestions: Vec::new(),
             suggest_rev: 0,
             suggest_busy: false,
+            tools: tools::ToolState::default(),
         }
+    }
+
+    /// Animate the marching ants while there is a selection.
+    fn start_ants(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(400))
+                    .await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.editor.doc.selection.is_some() {
+                        this.tools.ants_phase = !this.tools.ants_phase;
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     pub fn set_status(
@@ -256,9 +306,20 @@ impl EditorView {
         }
         if self.editor.revision != self.seen_rev {
             self.seen_rev = self.editor.revision;
+            let old = self.render_gen;
             self.gen_counter += 1;
             self.render_gen = self.gen_counter;
             self.tree = Arc::new(self.editor.doc.composite_tree());
+            // Keep every tile the change did not touch.
+            match self.editor.take_dirty() {
+                emulsion_core::Dirty::Nothing => {
+                    self.cache.borrow_mut().retag(old, self.render_gen, None)
+                }
+                emulsion_core::Dirty::Rect(r) => {
+                    self.cache.borrow_mut().retag(old, self.render_gen, Some(r))
+                }
+                emulsion_core::Dirty::All => {}
+            }
         }
         if self.editor.committed_revision != self.seen_commit {
             self.seen_commit = self.editor.committed_revision;
@@ -558,7 +619,11 @@ impl EditorView {
             cx.notify();
             return;
         }
-        if e.button != MouseButton::Left || self.tool != Tool::Move {
+        if e.button != MouseButton::Left {
+            return;
+        }
+        if self.tool != Tool::Move {
+            self.tool_down(e, cx);
             return;
         }
         let Some(b) = self.canvas_bounds() else {
@@ -593,8 +658,17 @@ impl EditorView {
     }
 
     fn drag_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
+        let inside = self.canvas_bounds().is_some_and(|b| b.contains(&pos));
+        let wants_pointer = matches!(self.tool, Tool::Brush | Tool::Heal | Tool::Clone)
+            || !self.tools.polygon.is_empty();
+        let pointer = inside.then_some(pos);
+        if wants_pointer && pointer != self.tools.pointer {
+            self.tools.pointer = pointer;
+            cx.notify();
+        }
         let Some(drag) = &self.drag else { return };
         match drag {
+            Drag::Tool(_) => self.tool_move(pos, cx),
             Drag::Pan { last } => {
                 let d = pos - *last;
                 self.view.pan(f32::from(d.x) as f64, f32::from(d.y) as f64);
@@ -643,6 +717,7 @@ impl EditorView {
                 }
             }
             Some(Drag::Pan { .. }) => {}
+            Some(Drag::Tool(t)) => self.tool_up(t, cx),
         }
         cx.notify();
     }
@@ -680,13 +755,12 @@ impl EditorView {
     ) {
         let track = self.tracks.entry(key).or_default().clone();
         let (min, max, step) = spec;
-        if key != SliderKey::Compare {
+        if key.edits_document() {
             let name = match key {
                 SliderKey::Opacity(_) => "Opacity".to_string(),
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
-                SliderKey::Rotation(_) => "Rotate".into(),
-                SliderKey::Compare => unreachable!(),
+                _ => "Rotate".into(),
             };
             self.editor.begin(name);
         }
@@ -704,6 +778,35 @@ impl EditorView {
 
     fn apply_slider(&mut self, key: SliderKey, v: f32, cx: &mut Context<Self>) {
         match key {
+            SliderKey::ToolSize => {
+                self.tools.brush.size = v.max(1.0);
+                cx.notify();
+            }
+            SliderKey::ToolHardness => {
+                self.tools.brush.hardness = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolOpacity => {
+                self.tools.brush.opacity = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::ToolFlow => {
+                self.tools.brush.flow = v / 100.0;
+                cx.notify();
+            }
+            SliderKey::Tolerance => {
+                self.tools.tolerance = v as u8;
+                cx.notify();
+            }
+            SliderKey::Feather => {
+                self.tools.feather = v;
+                cx.notify();
+            }
+            SliderKey::Straighten => {
+                self.tools.straighten = v;
+                cx.notify();
+            }
+            SliderKey::PickerSv | SliderKey::PickerHue => {}
             SliderKey::Compare => {
                 self.compare = v / 100.0;
                 cx.notify();
@@ -925,8 +1028,7 @@ impl EditorView {
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if enabled {
-                            this.tool = tool;
-                            cx.notify();
+                            this.set_tool(tool, cx);
                         } else {
                             this.set_status(format!("{name} is not available yet."), false, cx);
                         }
@@ -934,13 +1036,7 @@ impl EditorView {
                     .child(*glyph)
             }))
             .child(div().flex_1())
-            .child(
-                div()
-                    .size(px(30.))
-                    .border_1()
-                    .border_color(p.ink)
-                    .bg(p.accent),
-            )
+            .child(self.swatches(p, cx))
     }
 
     fn context_bar(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -949,12 +1045,7 @@ impl EditorView {
             .find(|t| t.0 == self.tool)
             .map(|t| t.1)
             .unwrap_or("Move");
-        let hint = match self.tool {
-            Tool::Move => {
-                "drag to move the selected pixel node · space-drag or middle-drag to pan · ctrl-wheel to zoom"
-            }
-            _ => "",
-        };
+        let options = self.tool_options(p, cx);
         let zoom = format!("{:.0}%", self.view.zoom * 100.0);
         let rot = format!("{:.0}°", self.view.rotation);
         let can_compare = self.editor.revision != self.editor.committed_revision;
@@ -963,26 +1054,20 @@ impl EditorView {
         div()
             .flex()
             .flex_none()
+            .flex_wrap()
             .overflow_hidden()
             .items_center()
-            .gap(px(13.))
+            .gap(px(10.))
             .px(px(16.))
-            .py(px(9.))
+            .py(px(8.))
             .border_b_1()
             .border_color(p.line)
             .font_family(MONO_FONT)
             .text_size(px(10.5))
             .text_color(p.muted)
             .child(div().text_color(p.ink).child(tool.to_uppercase()))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(hint),
-            )
+            .children(options)
+            .child(div().flex_1().min_w(px(8.)))
             .child(
                 chip("zoom", zoom, false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_100(cx))),
@@ -1021,7 +1106,15 @@ impl EditorView {
             .child(div().w(px(34.)).child(format!("{:.0}%", compare * 100.0)))
     }
 
-    fn canvas_area(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn canvas_area(
+        &mut self,
+        p: &Palette,
+        scale_factor: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let overlay = self.overlay(scale_factor);
+        let accent = p.accent;
+        let view_for_overlay = self.view;
         // Fit once the canvas has been laid out.
         if self.fit_pending
             && let Some(b) = self.canvas_bounds()
@@ -1127,10 +1220,11 @@ impl EditorView {
                         }
                         Some(plan)
                     },
-                    move |_, plan, window, cx| {
+                    move |bounds, plan, window, cx| {
                         if let Some(plan) = plan {
                             viewport::paint(plan, &scene2, &cache2, window, cx);
                         }
+                        tools::paint_overlay(&overlay, &view_for_overlay, bounds, accent, window);
                         // Drags continue outside the canvas, so listen window-wide.
                         window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
                             if phase == DispatchPhase::Bubble {
@@ -1855,7 +1949,8 @@ impl Render for EditorView {
         let doc_bar = self.doc_bar(&p, cx);
         let rail = self.tool_rail(&p, cx);
         let context = self.context_bar(&p, cx);
-        let canvas = self.canvas_area(&p, cx);
+        let canvas = self.canvas_area(&p, window.scale_factor(), cx);
+        let picker = self.picker(&p, cx);
         self.refresh_suggestions(cx);
         let strip = self.status_strip(&p, cx);
         let ask = self.ask_bar(&p, cx);
@@ -1889,7 +1984,8 @@ impl Render for EditorView {
                             .children(dock)
                             .child(strip),
                     )
-                    .child(panel),
+                    .child(panel)
+                    .children(picker),
             )
     }
 }

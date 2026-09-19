@@ -7,7 +7,10 @@ use serde_json::{Value, json};
 pub const READ_ONLY: &[&str] = &["describe_document", "get_view"];
 
 /// Tools whose effect is hard to see or undo at a glance; always confirmed.
-pub const DESTRUCTIVE: &[&str] = &["delete_node", "ungroup", "undo"];
+pub const DESTRUCTIVE: &[&str] = &["delete_node", "ungroup", "undo", "crop", "image_size"];
+
+/// Tools that compute for a while; hosts run them off the UI thread.
+pub const HEAVY: &[&str] = &["select_color", "content_aware_fill"];
 
 const BLEND_MODES: &[&str] = &[
     "normal",
@@ -51,6 +54,10 @@ pub const ADJUSTMENTS: &[&str] = &[
 
 fn node() -> Value {
     json!({ "type": "integer", "description": "Node id from describe_document." })
+}
+
+fn mode() -> Value {
+    json!({ "type": "string", "enum": ["replace", "add", "subtract", "intersect"] })
 }
 
 fn def(name: &str, description: &str, properties: Value, required: &[&str]) -> ToolDef {
@@ -180,6 +187,57 @@ pub fn definitions() -> Vec<ToolDef> {
                 "flip_x": { "type": "boolean" }, "flip_y": { "type": "boolean" }
             }),
             &["node"],
+        ),
+        def(
+            "select_rect",
+            "Select a rectangle in document pixels. mode: replace (default), add, subtract, intersect. feather softens the edge by that many pixels.",
+            json!({ "x": { "type": "number" }, "y": { "type": "number" }, "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 }, "mode": mode(), "feather": { "type": "number", "minimum": 0 } }),
+            &["x", "y", "width", "height"],
+        ),
+        def(
+            "select_ellipse",
+            "Select the ellipse inscribed in a rectangle. Same arguments as select_rect.",
+            json!({ "x": { "type": "number" }, "y": { "type": "number" }, "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 }, "mode": mode(), "feather": { "type": "number", "minimum": 0 } }),
+            &["x", "y", "width", "height"],
+        ),
+        def(
+            "select_color",
+            "Magic wand on the visible image: select pixels within tolerance (0-255) of the colour at (x, y); contiguous (default true) keeps it to the connected area.",
+            json!({ "x": { "type": "number" }, "y": { "type": "number" }, "tolerance": { "type": "integer", "minimum": 0, "maximum": 255 }, "contiguous": { "type": "boolean" }, "mode": mode() }),
+            &["x", "y"],
+        ),
+        def("select_all", "Select the whole canvas.", json!({}), &[]),
+        def("deselect", "Clear the selection.", json!({}), &[]),
+        def("invert_selection", "Invert the selection.", json!({}), &[]),
+        def(
+            "modify_selection",
+            "Grow or shrink the selection by pixels (negative shrinks), and/or feather it.",
+            json!({ "grow": { "type": "integer" }, "feather": { "type": "number", "minimum": 0 } }),
+            &[],
+        ),
+        def(
+            "content_aware_fill",
+            "Fill the selected area from its surroundings (object and blemish removal). The result goes into a new node above the selected node, so it can be hidden or masked.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "fill_selection",
+            "Paint a solid colour into the selection (or the whole node) on a pixel node.",
+            json!({ "node": node(), "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" } }),
+            &["node", "color"],
+        ),
+        def(
+            "crop",
+            "Crop the canvas to a rectangle, optionally straightening by rotating everything clockwise first. The rectangle may extend past the canvas to enlarge it. Layers move; they are never resampled.",
+            json!({ "x": { "type": "integer" }, "y": { "type": "integer" }, "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 }, "rotation": { "type": "number", "minimum": -45, "maximum": 45 } }),
+            &["x", "y", "width", "height"],
+        ),
+        def(
+            "image_size",
+            "Scale the whole image to a new width (height follows the aspect ratio). Lossless: layers keep their source pixels.",
+            json!({ "width": { "type": "integer", "minimum": 1, "maximum": 30000 } }),
+            &["width"],
         ),
         def("undo", "Undo the most recent history step.", json!({}), &[]),
         def(

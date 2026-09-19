@@ -574,6 +574,36 @@ fn sample_mask(mask: &Mask, placement: &Placement, ctx: Ctx) -> Vec<f32> {
     out
 }
 
+/// Render one document-space region at full resolution, row-major. Pixels
+/// outside the canvas are transparent.
+pub fn region(tree: &CompositeTree, rect: IRect) -> Vec<[f32; 4]> {
+    let t = TILE as i32;
+    let mut out = vec![[0.0f32; 4]; (rect.w.max(0) * rect.h.max(0)) as usize];
+    let clip = rect.intersect(&IRect::new(0, 0, tree.width as i32, tree.height as i32));
+    if clip.is_empty() {
+        return out;
+    }
+    let coords: Vec<TileCoord> = (clip.y.div_euclid(t)..=(clip.bottom() - 1).div_euclid(t))
+        .flat_map(|ty| {
+            (clip.x.div_euclid(t)..=(clip.right() - 1).div_euclid(t))
+                .map(move |tx| TileCoord::new(tx, ty))
+        })
+        .collect();
+    let tiles: Vec<(TileCoord, FTile)> = coords
+        .into_par_iter()
+        .map(|c| (c, render_tile(tree, 0, c)))
+        .collect();
+    for (c, tile) in tiles {
+        let tr = IRect::new(c.x * t, c.y * t, t, t).intersect(&clip);
+        for y in tr.y..tr.bottom() {
+            let src = ((y - c.y * t) * t + (tr.x - c.x * t)) as usize;
+            let dst = ((y - rect.y) * rect.w + (tr.x - rect.x)) as usize;
+            out[dst..dst + tr.w as usize].copy_from_slice(&tile[src..src + tr.w as usize]);
+        }
+    }
+    out
+}
+
 /// Render the whole document at `level` into a premultiplied RGBA16 raster.
 pub fn flatten(tree: &CompositeTree, level: u32) -> Raster {
     let (lw, lh) = level_size(tree.width, tree.height, level);

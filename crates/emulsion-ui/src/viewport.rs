@@ -262,6 +262,31 @@ impl TileCache {
         want
     }
 
+    /// A new document revision changed only `dirty` (document pixels), or
+    /// nothing visible when `dirty` is `None`: carry every tile at `from`
+    /// that does not touch it over to `to`, so only dirty tiles re-render.
+    pub fn retag(&mut self, from: u64, to: u64, dirty: Option<emulsion_raster::IRect>) {
+        for (k, e) in self.entries.iter_mut() {
+            if k.which != Which::Current || e.rev != from {
+                continue;
+            }
+            let keep = match dirty {
+                None => true,
+                Some(d) => {
+                    let s = (1i32 << k.level) * TILE;
+                    let m = 2 << k.level;
+                    let tile = emulsion_raster::IRect::new(k.x * s, k.y * s, s, s);
+                    let grown =
+                        emulsion_raster::IRect::new(d.x - m, d.y - m, d.w + 2 * m, d.h + 2 * m);
+                    tile.intersect(&grown).is_empty()
+                }
+            };
+            if keep {
+                e.rev = to;
+            }
+        }
+    }
+
     /// Drop everything (theme change, new document).
     pub fn clear(&mut self) {
         for (_, e) in self.entries.drain() {

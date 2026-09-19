@@ -101,6 +101,15 @@ impl Stroke {
         &self.base
     }
 
+    /// For clone strokes: where to copy from, relative to the brush, in
+    /// layer pixels.
+    pub fn set_clone_offset(&mut self, dx: f32, dy: f32) {
+        if let Ink::Clone { dx: a, dy: b } = &mut self.ink {
+            *a = dx;
+            *b = dy;
+        }
+    }
+
     fn dab(&mut self, cx: f32, cy: f32) {
         let r = (self.brush.size / 2.0).max(0.5);
         let b = IRect::new(
@@ -232,9 +241,70 @@ impl Stroke {
     }
 }
 
+/// Paint `color` (premultiplied linear) over `region` of `base`, weighted by
+/// `coverage` (0–1 per layer pixel). Used for bucket fills and filling a
+/// selection.
+pub fn fill_color(
+    base: &Raster,
+    region: IRect,
+    coverage: &(dyn Fn(i32, i32) -> f32 + Sync),
+    color: [f32; 4],
+) -> (Raster, IRect) {
+    use rayon::prelude::*;
+    let region = region.intersect(&base.bounds());
+    if region.is_empty() {
+        return (base.clone(), region);
+    }
+    let t = TILE as i32;
+    let coords: Vec<TileCoord> = (region.y.div_euclid(t)..=(region.bottom() - 1).div_euclid(t))
+        .flat_map(|ty| {
+            (region.x.div_euclid(t)..=(region.right() - 1).div_euclid(t))
+                .map(move |tx| TileCoord::new(tx, ty))
+        })
+        .collect();
+    let changes: Vec<(TileCoord, Option<Vec<[u16; 4]>>)> = coords
+        .into_par_iter()
+        .map(|c| {
+            let mut out = base
+                .base_tile(c)
+                .map(|t| t.to_vec())
+                .unwrap_or_else(|| vec![[0u16; 4]; TILE_PX]);
+            let tr = IRect::new(c.x * t, c.y * t, t, t).intersect(&region);
+            for y in tr.y..tr.bottom() {
+                for x in tr.x..tr.right() {
+                    let k = coverage(x, y).clamp(0.0, 1.0);
+                    if k <= 0.0 {
+                        continue;
+                    }
+                    let i = ((y - c.y * t) * t + (x - c.x * t)) as usize;
+                    let b = color::px_to_f(out[i]);
+                    out[i] =
+                        color::f_to_px([0, 1, 2, 3].map(|ch| color[ch] * k + b[ch] * (1.0 - k)));
+                }
+            }
+            (c, Some(out))
+        })
+        .collect();
+    (base.with_changes(changes), region)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fill_color_respects_coverage() {
+        let base = Raster::transparent(40, 40);
+        let (r, dirty) = fill_color(
+            &base,
+            IRect::new(0, 0, 40, 40),
+            &|x, _| if x < 20 { 1.0 } else { 0.0 },
+            [0.0, 1.0, 0.0, 1.0],
+        );
+        assert_eq!(r.get(5, 5)[1], 65535);
+        assert_eq!(r.get(30, 5), [0; 4]);
+        assert_eq!(dirty, IRect::new(0, 0, 40, 40));
+    }
 
     fn opaque_red() -> Ink {
         Ink::Color([1.0, 0.0, 0.0, 1.0])

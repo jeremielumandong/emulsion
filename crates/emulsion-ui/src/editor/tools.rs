@@ -1,0 +1,1787 @@
+//! Interactive tools: selection, painting, healing, cloning, crop, shapes,
+//! and the colour picker. Every result lands through the Command API, so it
+//! is one undo step and visible to the assistant.
+
+use super::*;
+use emulsion_raster::composite::region;
+use emulsion_raster::paint::{Brush, Clip, Ink, Stroke, fill_color};
+use emulsion_raster::select::{self, Combine};
+use emulsion_raster::{IRect, Mask, fill};
+use glam::{DAffine2, dvec2};
+
+/// Marching-ants outline segments: (x0, y0, x1, y1) in document pixels.
+pub(crate) type Segments = Arc<Vec<(f32, f32, f32, f32)>>;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SelectShape {
+    Rect,
+    Ellipse,
+    Lasso,
+    Polygon,
+    Wand,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PaintKind {
+    Brush,
+    Eraser,
+    Bucket,
+    Gradient,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShapeKind {
+    Rect,
+    Ellipse,
+}
+
+pub struct ToolState {
+    pub select: SelectShape,
+    pub combine: Combine,
+    pub feather: f32,
+    pub tolerance: u8,
+    pub contiguous: bool,
+    pub paint: PaintKind,
+    pub brush: Brush,
+    pub radial: bool,
+    pub fg: [u8; 4],
+    pub bg: [u8; 4],
+    pub shape: ShapeKind,
+    pub clone_source: Option<(f64, f64)>,
+    pub clone_offset: Option<(f64, f64)>,
+    pub polygon: Vec<(f64, f64)>,
+    polygon_combine: Combine,
+    /// Pending crop rectangle in document pixels, until Enter.
+    pub crop: Option<(f64, f64, f64, f64)>,
+    pub straighten: f32,
+    pub pointer: Option<Point<Pixels>>,
+    pub ants_phase: bool,
+    pub picker: bool,
+    /// Hue kept separately so greys do not lose it.
+    pub hue: f32,
+    ants: Option<(usize, u32, Segments)>,
+}
+
+impl Default for ToolState {
+    fn default() -> Self {
+        Self {
+            select: SelectShape::Rect,
+            combine: Combine::Replace,
+            feather: 0.0,
+            tolerance: 32,
+            contiguous: true,
+            paint: PaintKind::Brush,
+            brush: Brush::default(),
+            radial: false,
+            fg: [10, 10, 11, 255],
+            bg: [255, 255, 255, 255],
+            shape: ShapeKind::Rect,
+            clone_source: None,
+            clone_offset: None,
+            polygon: Vec::new(),
+            polygon_combine: Combine::Replace,
+            crop: None,
+            straighten: 0.0,
+            pointer: None,
+            ants_phase: false,
+            picker: false,
+            hue: 0.0,
+            ants: None,
+        }
+    }
+}
+
+pub enum ToolDrag {
+    Stroke {
+        id: NodeId,
+        stroke: Box<Stroke>,
+        to_local: DAffine2,
+        heal: bool,
+        label: &'static str,
+    },
+    Marquee {
+        start: (f64, f64),
+        end: (f64, f64),
+        combine: Combine,
+        ellipse: bool,
+    },
+    Lasso {
+        pts: Vec<(f64, f64)>,
+        combine: Combine,
+    },
+    Gradient {
+        start: (f64, f64),
+        end: (f64, f64),
+    },
+    Crop {
+        start: (f64, f64),
+        end: (f64, f64),
+    },
+    Shape {
+        start: (f64, f64),
+        end: (f64, f64),
+        ellipse: bool,
+    },
+    PickSv {
+        track: TrackBounds,
+    },
+    PickHue {
+        track: TrackBounds,
+    },
+}
+
+fn combine_for(m: &Modifiers, default: Combine) -> Combine {
+    match (m.shift, m.alt) {
+        (true, true) => Combine::Intersect,
+        (true, false) => Combine::Add,
+        (false, true) => Combine::Subtract,
+        _ => default,
+    }
+}
+
+fn norm(a: (f64, f64), b: (f64, f64)) -> (f64, f64, f64, f64) {
+    (
+        a.0.min(b.0),
+        a.1.min(b.1),
+        (a.0 - b.0).abs(),
+        (a.1 - b.1).abs(),
+    )
+}
+
+fn premul(c: [u8; 4]) -> [f32; 4] {
+    color::srgba8_to_premul(c)
+}
+
+/// Selection coverage for a layer pixel, through the layer's placement.
+fn local_clip(mask: Arc<Mask>, to_doc: DAffine2) -> Clip {
+    Arc::new(move |x, y| {
+        let p = to_doc.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
+        if p.x < 0.0 || p.y < 0.0 || p.x >= mask.width() as f64 || p.y >= mask.height() as f64 {
+            return 0.0;
+        }
+        mask.get(p.x as u32, p.y as u32) as f32 / 255.0
+    })
+}
+
+pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
+    let h6 = (h.rem_euclid(1.0)) * 6.0;
+    let c = v * s;
+    let x = c * (1.0 - ((h6 % 2.0) - 1.0).abs());
+    let (r, g, b) = match h6 as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r, g, b].map(|u| ((u + m) * 255.0).round() as u8)
+}
+
+pub fn rgb_to_hsv(c: [u8; 4]) -> (f32, f32, f32) {
+    let [r, g, b] = [c[0], c[1], c[2]].map(|u| u as f32 / 255.0);
+    let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+    let d = mx - mn;
+    let h = if d < 1e-6 {
+        0.0
+    } else if mx == r {
+        ((g - b) / d).rem_euclid(6.0) / 6.0
+    } else if mx == g {
+        ((b - r) / d + 2.0) / 6.0
+    } else {
+        ((r - g) / d + 4.0) / 6.0
+    };
+    (h, if mx > 0.0 { d / mx } else { 0.0 }, mx)
+}
+
+impl EditorView {
+    pub(crate) fn doc_point(&self, pos: Point<Pixels>) -> Option<(f64, f64)> {
+        let b = self.canvas_bounds()?;
+        Some(
+            self.view
+                .screen_to_doc((f32::from(pos.x) as f64, f32::from(pos.y) as f64), &b),
+        )
+    }
+
+    /// Window position of a document point, used by the headless tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn doc_to_window(&self, d: (f64, f64)) -> Option<Point<Pixels>> {
+        let b = self.canvas_bounds()?;
+        let s = self.view.doc_to_screen(d, &b);
+        Some(point(px(s.0 as f32), px(s.1 as f32)))
+    }
+
+    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        self.tool = tool;
+        self.tools.polygon.clear();
+        cx.notify();
+    }
+
+    pub fn set_paint(&mut self, kind: PaintKind, cx: &mut Context<Self>) {
+        self.tool = Tool::Brush;
+        self.tools.paint = kind;
+        cx.notify();
+    }
+
+    pub fn select_shape(&self) -> SelectShape {
+        self.tools.select
+    }
+
+    pub fn set_select(&mut self, shape: SelectShape, cx: &mut Context<Self>) {
+        self.tool = Tool::Select;
+        self.tools.select = shape;
+        self.tools.polygon.clear();
+        cx.notify();
+    }
+
+    pub fn swap_colors(&mut self, cx: &mut Context<Self>) {
+        std::mem::swap(&mut self.tools.fg, &mut self.tools.bg);
+        self.tools.hue = rgb_to_hsv(self.tools.fg).0;
+        cx.notify();
+    }
+
+    pub fn default_colors(&mut self, cx: &mut Context<Self>) {
+        self.tools.fg = [10, 10, 11, 255];
+        self.tools.bg = [255, 255, 255, 255];
+        cx.notify();
+    }
+
+    pub fn brush_size(&mut self, larger: bool, cx: &mut Context<Self>) {
+        let s = self.tools.brush.size;
+        let step = if s < 10.0 {
+            1.0
+        } else if s < 50.0 {
+            5.0
+        } else if s < 200.0 {
+            10.0
+        } else {
+            50.0
+        };
+        self.tools.brush.size = (if larger { s + step } else { s - step }).clamp(1.0, 2000.0);
+        cx.notify();
+    }
+
+    /// The pixel node strokes go into: the selected one, or a new empty
+    /// layer above the selection when that is not a pixel node.
+    fn paint_target(&mut self, cx: &mut Context<Self>) -> Option<NodeId> {
+        if let Some(id) = self.selected
+            && let Some(n) = self.editor.doc.node(id)
+        {
+            if n.locked {
+                self.set_status("That node is locked.", true, cx);
+                return None;
+            }
+            if matches!(n.kind, NodeKind::Raster { .. }) {
+                return Some(id);
+            }
+        }
+        let k = self
+            .editor
+            .doc
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Raster { .. }))
+            .count()
+            + 1;
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        let node = Node::raster(
+            0,
+            format!("Layer {k}"),
+            Arc::new(Raster::transparent(w, h)),
+            Placement::default(),
+        );
+        let slot = self.insertion_slot();
+        let id = self.execute(
+            Command::AddNode {
+                node: Box::new(node),
+                slot,
+            },
+            cx,
+        )?;
+        self.selected = Some(id);
+        Some(id)
+    }
+
+    fn target_raster(&self, id: NodeId) -> Option<(Arc<Raster>, DAffine2)> {
+        match &self.editor.doc.node(id)?.kind {
+            NodeKind::Raster { raster, placement } => Some((
+                raster.clone(),
+                placement.to_doc(raster.width(), raster.height()),
+            )),
+            _ => None,
+        }
+    }
+
+    fn apply_selection(&mut self, new: Mask, combine: Combine, cx: &mut Context<Self>) {
+        let new = if self.tools.feather > 0.5 {
+            select::feather(&new, self.tools.feather)
+        } else {
+            new
+        };
+        let combined = select::combine(self.editor.doc.selection.as_deref(), &new, combine);
+        let selection = (!select::bounds(&combined).is_empty()).then(|| Arc::new(combined));
+        self.execute(Command::SetSelection { selection }, cx);
+    }
+
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        self.execute(
+            Command::SetSelection {
+                selection: Some(Arc::new(select::all(w, h))),
+            },
+            cx,
+        );
+    }
+
+    pub fn deselect(&mut self, cx: &mut Context<Self>) {
+        self.execute(Command::SetSelection { selection: None }, cx);
+    }
+
+    pub fn invert_selection(&mut self, cx: &mut Context<Self>) {
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        let inv = match &self.editor.doc.selection {
+            Some(s) => select::invert(s),
+            None => select::all(w, h),
+        };
+        let selection = (!select::bounds(&inv).is_empty()).then(|| Arc::new(inv));
+        self.execute(Command::SetSelection { selection }, cx);
+    }
+
+    pub fn modify_selection(&mut self, grow: i32, feather: f32, cx: &mut Context<Self>) {
+        let Some(s) = self.editor.doc.selection.clone() else {
+            self.set_status("Nothing is selected.", false, cx);
+            return;
+        };
+        let mut m = (*s).clone();
+        if grow != 0 {
+            m = select::grow(&m, grow);
+        }
+        if feather > 0.0 {
+            m = select::feather(&m, feather);
+        }
+        let selection = (!select::bounds(&m).is_empty()).then(|| Arc::new(m));
+        self.execute(Command::SetSelection { selection }, cx);
+    }
+
+    // ── Pointer ─────────────────────────────────────────────────────────
+
+    pub(crate) fn tool_down(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
+        let Some(d) = self.doc_point(e.position) else {
+            return;
+        };
+        match self.tool {
+            Tool::Select => {
+                let combine = combine_for(&e.modifiers, self.tools.combine);
+                match self.tools.select {
+                    SelectShape::Rect | SelectShape::Ellipse => {
+                        let ellipse = self.tools.select == SelectShape::Ellipse;
+                        self.drag = Some(Drag::Tool(ToolDrag::Marquee {
+                            start: d,
+                            end: d,
+                            combine,
+                            ellipse,
+                        }));
+                    }
+                    SelectShape::Lasso => {
+                        self.drag = Some(Drag::Tool(ToolDrag::Lasso {
+                            pts: vec![d],
+                            combine,
+                        }))
+                    }
+                    SelectShape::Polygon => {
+                        let pts = &self.tools.polygon;
+                        let near_start = pts.first().is_some_and(|p0| {
+                            let z = self.view.zoom;
+                            ((p0.0 - d.0) * z).hypot((p0.1 - d.1) * z) < 8.0
+                        });
+                        if pts.len() >= 3 && (near_start || e.click_count >= 2) {
+                            self.commit_polygon(cx);
+                        } else {
+                            if pts.is_empty() {
+                                self.tools.polygon_combine = combine;
+                            }
+                            self.tools.polygon.push(d);
+                        }
+                    }
+                    SelectShape::Wand => self.wand(d, combine, cx),
+                }
+            }
+            Tool::Brush => {
+                if e.modifiers.alt {
+                    self.eyedropper(d, cx);
+                    return;
+                }
+                match self.tools.paint {
+                    PaintKind::Brush => self.start_stroke(
+                        d,
+                        Ink::Color(premul(self.tools.fg)),
+                        false,
+                        "Brush stroke",
+                        cx,
+                    ),
+                    PaintKind::Eraser => self.start_stroke(d, Ink::Erase, false, "Erase", cx),
+                    PaintKind::Bucket => self.bucket(d, cx),
+                    PaintKind::Gradient => {
+                        self.drag = Some(Drag::Tool(ToolDrag::Gradient { start: d, end: d }))
+                    }
+                }
+            }
+            Tool::Heal => self.start_stroke(
+                d,
+                Ink::Color([0.45, 0.05, 0.03, 0.5]),
+                true,
+                "Spot heal",
+                cx,
+            ),
+            Tool::Clone => {
+                if e.modifiers.alt {
+                    self.tools.clone_source = Some(d);
+                    self.tools.clone_offset = None;
+                    self.set_status("Clone source set. Paint to copy from it.", false, cx);
+                    return;
+                }
+                let Some(src) = self.tools.clone_source else {
+                    self.set_status("Alt-click to choose where to clone from.", false, cx);
+                    return;
+                };
+                // Aligned: the offset set by the first stroke stays for later ones.
+                let off = *self
+                    .tools
+                    .clone_offset
+                    .get_or_insert((src.0 - d.0, src.1 - d.1));
+                self.start_stroke(d, Ink::Clone { dx: 0.0, dy: 0.0 }, false, "Clone", cx);
+                if let Some(Drag::Tool(ToolDrag::Stroke {
+                    stroke, to_local, ..
+                })) = &mut self.drag
+                {
+                    // Offsets are in layer pixels.
+                    let a = to_local.transform_vector2(dvec2(off.0, off.1));
+                    stroke.set_clone_offset(a.x as f32, a.y as f32);
+                }
+            }
+            Tool::Crop => self.drag = Some(Drag::Tool(ToolDrag::Crop { start: d, end: d })),
+            Tool::Shape => {
+                let ellipse = self.tools.shape == ShapeKind::Ellipse;
+                self.drag = Some(Drag::Tool(ToolDrag::Shape {
+                    start: d,
+                    end: d,
+                    ellipse,
+                }));
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn start_stroke(
+        &mut self,
+        d: (f64, f64),
+        ink: Ink,
+        heal: bool,
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.paint_target(cx) else {
+            return;
+        };
+        let Some((raster, to_doc)) = self.target_raster(id) else {
+            return;
+        };
+        let to_local = to_doc.inverse();
+        let scale = to_doc.matrix2.determinant().abs().sqrt().max(1e-6);
+        let mut brush = self.tools.brush;
+        brush.size = (brush.size as f64 / scale) as f32;
+        let clip = self
+            .editor
+            .doc
+            .selection
+            .clone()
+            .map(|m| local_clip(m, to_doc));
+        let mut stroke = Stroke::new(raster.clone(), brush, ink, clip);
+        let p = to_local.transform_point2(dvec2(d.0, d.1));
+        stroke.point(p.x as f32, p.y as f32);
+        self.editor.begin(label);
+        let (r, dirty) = stroke.render(&raster);
+        self.execute(
+            Command::ReplacePixels {
+                id,
+                raster: Arc::new(r),
+                dirty,
+                label: label.into(),
+            },
+            cx,
+        );
+        self.drag = Some(Drag::Tool(ToolDrag::Stroke {
+            id,
+            stroke: Box::new(stroke),
+            to_local,
+            heal,
+            label,
+        }));
+    }
+
+    pub(crate) fn tool_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(d) = self.doc_point(pos) else { return };
+        let Some(Drag::Tool(t)) = &mut self.drag else {
+            return;
+        };
+        match t {
+            ToolDrag::Stroke {
+                id,
+                stroke,
+                to_local,
+                label,
+                ..
+            } => {
+                let p = to_local.transform_point2(dvec2(d.0, d.1));
+                stroke.point(p.x as f32, p.y as f32);
+                let (id, label) = (*id, *label);
+                let current = match self.editor.doc.node(id).map(|n| &n.kind) {
+                    Some(NodeKind::Raster { raster, .. }) => raster.clone(),
+                    _ => return,
+                };
+                let Some(Drag::Tool(ToolDrag::Stroke { stroke, .. })) = &mut self.drag else {
+                    return;
+                };
+                let (r, dirty) = stroke.render(&current);
+                if !dirty.is_empty() {
+                    self.execute(
+                        Command::ReplacePixels {
+                            id,
+                            raster: Arc::new(r),
+                            dirty,
+                            label: label.into(),
+                        },
+                        cx,
+                    );
+                }
+            }
+            ToolDrag::Marquee { end, .. }
+            | ToolDrag::Gradient { end, .. }
+            | ToolDrag::Crop { end, .. }
+            | ToolDrag::Shape { end, .. } => {
+                *end = d;
+                cx.notify();
+            }
+            ToolDrag::Lasso { pts, .. } => {
+                let last = *pts.last().unwrap_or(&d);
+                if ((last.0 - d.0) * self.view.zoom).hypot((last.1 - d.1) * self.view.zoom) >= 2.0 {
+                    pts.push(d);
+                    cx.notify();
+                }
+            }
+            ToolDrag::PickSv { track } => {
+                let track = track.clone();
+                self.pick_sv(&track, pos, cx);
+            }
+            ToolDrag::PickHue { track } => {
+                let track = track.clone();
+                self.pick_hue(&track, pos, cx);
+            }
+        }
+    }
+
+    pub(crate) fn tool_up(&mut self, t: ToolDrag, cx: &mut Context<Self>) {
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        match t {
+            ToolDrag::Stroke {
+                id, stroke, heal, ..
+            } => {
+                if heal {
+                    self.finish_heal(id, *stroke, cx);
+                } else if self.editor.in_transaction() {
+                    self.editor.end();
+                }
+            }
+            ToolDrag::Marquee {
+                start,
+                end,
+                combine,
+                ellipse,
+            } => {
+                let (x, y, rw, rh) = norm(start, end);
+                if rw * self.view.zoom < 2.0 && rh * self.view.zoom < 2.0 {
+                    // A click without a drag: deselect (Photoshop).
+                    if combine == Combine::Replace && self.editor.doc.selection.is_some() {
+                        self.deselect(cx);
+                    }
+                    return;
+                }
+                let m = if ellipse {
+                    select::ellipse(w, h, x as f32, y as f32, rw as f32, rh as f32)
+                } else {
+                    select::rect(w, h, x as f32, y as f32, rw as f32, rh as f32)
+                };
+                self.apply_selection(m, combine, cx);
+            }
+            ToolDrag::Lasso { pts, combine } => {
+                if pts.len() >= 3 {
+                    let p: Vec<(f32, f32)> =
+                        pts.iter().map(|(x, y)| (*x as f32, *y as f32)).collect();
+                    self.apply_selection(select::polygon(w, h, &p), combine, cx);
+                }
+            }
+            ToolDrag::Gradient { start, end } => self.make_gradient(start, end, cx),
+            ToolDrag::Crop { start, end } => {
+                let (x, y, rw, rh) = norm(start, end);
+                self.tools.crop = (rw >= 1.0 && rh >= 1.0).then_some((x, y, rw, rh));
+                cx.notify();
+            }
+            ToolDrag::Shape {
+                start,
+                end,
+                ellipse,
+            } => {
+                let (x, y, rw, rh) = norm(start, end);
+                if rw < 1.0 || rh < 1.0 {
+                    return;
+                }
+                let m = if ellipse {
+                    select::ellipse(w, h, x as f32, y as f32, rw as f32, rh as f32)
+                } else {
+                    select::rect(w, h, x as f32, y as f32, rw as f32, rh as f32)
+                };
+                let mut node = Node::new(
+                    0,
+                    if ellipse { "Ellipse" } else { "Rectangle" },
+                    NodeKind::Fill {
+                        rgba: self.tools.fg,
+                    },
+                );
+                node.mask = Some(Arc::new(m));
+                let slot = self.insertion_slot();
+                if let Some(id) = self.execute(
+                    Command::AddNode {
+                        node: Box::new(node),
+                        slot,
+                    },
+                    cx,
+                ) {
+                    self.selected = Some(id);
+                }
+            }
+            ToolDrag::PickSv { .. } | ToolDrag::PickHue { .. } => {}
+        }
+        cx.notify();
+    }
+
+    pub fn commit_polygon(&mut self, cx: &mut Context<Self>) {
+        let pts = std::mem::take(&mut self.tools.polygon);
+        if pts.len() >= 3 {
+            let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+            let p: Vec<(f32, f32)> = pts.iter().map(|(x, y)| (*x as f32, *y as f32)).collect();
+            let combine = self.tools.polygon_combine;
+            self.apply_selection(select::polygon(w, h, &p), combine, cx);
+        }
+        cx.notify();
+    }
+
+    /// Enter: commit whatever the tool has pending.
+    pub fn tool_commit(&mut self, cx: &mut Context<Self>) {
+        if !self.tools.polygon.is_empty() {
+            self.commit_polygon(cx);
+        } else if let Some((x, y, w, h)) = self.tools.crop.take() {
+            let rect = IRect::new(
+                x.round() as i32,
+                y.round() as i32,
+                (w.round() as i32).max(1),
+                (h.round() as i32).max(1),
+            );
+            let rotation = self.tools.straighten as f64;
+            self.tools.straighten = 0.0;
+            self.execute(Command::Crop { rect, rotation }, cx);
+            self.fit_pending = true;
+            cx.notify();
+        }
+    }
+
+    /// Escape: cancel what is pending; returns whether anything was.
+    pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        let had = !self.tools.polygon.is_empty() || self.tools.crop.is_some() || self.tools.picker;
+        self.tools.polygon.clear();
+        self.tools.crop = None;
+        self.tools.picker = false;
+        cx.notify();
+        had
+    }
+
+    // ── One-shot operations ─────────────────────────────────────────────
+
+    fn eyedropper(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
+        let px = region(
+            &self.tree,
+            IRect::new(d.0.floor() as i32, d.1.floor() as i32, 1, 1),
+        );
+        let c = color::premul_to_srgba8(px[0]);
+        if c[3] > 0 {
+            self.tools.fg = [c[0], c[1], c[2], 255];
+            self.tools.hue = rgb_to_hsv(self.tools.fg).0;
+            cx.notify();
+        }
+    }
+
+    /// The composite as straight sRGBA8, off the main thread.
+    fn composite_srgb8(&self) -> impl std::future::Future<Output = Vec<u8>> + use<> {
+        let tree = self.tree.clone();
+        async move {
+            let full = region(
+                &tree,
+                IRect::new(0, 0, tree.width as i32, tree.height as i32),
+            );
+            full.into_iter().flat_map(color::premul_to_srgba8).collect()
+        }
+    }
+
+    fn wand(&mut self, d: (f64, f64), combine: Combine, cx: &mut Context<Self>) {
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        if d.0 < 0.0 || d.1 < 0.0 || d.0 >= w as f64 || d.1 >= h as f64 {
+            return;
+        }
+        let (tol, contiguous) = (self.tools.tolerance, self.tools.contiguous);
+        let img = self.composite_srgb8();
+        self.set_status("Selecting…", false, cx);
+        cx.spawn(async move |this, cx| {
+            let m = cx
+                .background_spawn(async move {
+                    let img = img.await;
+                    select::by_color(&img, w, h, d.0 as u32, d.1 as u32, tol, contiguous)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.status = None;
+                this.apply_selection(m, combine, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn bucket(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        if d.0 < 0.0 || d.1 < 0.0 || d.0 >= w as f64 || d.1 >= h as f64 {
+            return;
+        }
+        let Some(id) = self.paint_target(cx) else {
+            return;
+        };
+        let Some((raster, to_doc)) = self.target_raster(id) else {
+            return;
+        };
+        let (tol, contiguous, color) = (
+            self.tools.tolerance,
+            self.tools.contiguous,
+            premul(self.tools.fg),
+        );
+        let sel = self.editor.doc.selection.clone();
+        let img = self.composite_srgb8();
+        self.set_status("Filling…", false, cx);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let img = img.await;
+                    let mut m =
+                        select::by_color(&img, w, h, d.0 as u32, d.1 as u32, tol, contiguous);
+                    if let Some(s) = &sel {
+                        m = select::combine(Some(&m), s, Combine::Intersect);
+                    }
+                    let clip = local_clip(Arc::new(m), to_doc);
+                    fill_color(&raster, raster.bounds(), &|x, y| clip(x, y), color)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.status = None;
+                let (r, dirty) = result;
+                this.execute(
+                    Command::ReplacePixels {
+                        id,
+                        raster: Arc::new(r),
+                        dirty,
+                        label: "Fill".into(),
+                    },
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fill the selection (or everything) on the target layer with the
+    /// foreground colour.
+    pub fn fill_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.paint_target(cx) else {
+            return;
+        };
+        let Some((raster, to_doc)) = self.target_raster(id) else {
+            return;
+        };
+        let color = premul(self.tools.fg);
+        let (r, dirty) = match self.editor.doc.selection.clone() {
+            Some(s) => {
+                let clip = local_clip(s, to_doc);
+                fill_color(&raster, raster.bounds(), &|x, y| clip(x, y), color)
+            }
+            None => fill_color(&raster, raster.bounds(), &|_, _| 1.0, color),
+        };
+        self.execute(
+            Command::ReplacePixels {
+                id,
+                raster: Arc::new(r),
+                dirty,
+                label: "Fill".into(),
+            },
+            cx,
+        );
+    }
+
+    /// Fill the selection from its surroundings into a new node.
+    pub fn content_aware_fill(&mut self, cx: &mut Context<Self>) {
+        let Some(sel) = self.editor.doc.selection.clone() else {
+            self.set_status("Select the area to fill first.", false, cx);
+            return;
+        };
+        let tree = self.tree.clone();
+        self.set_status("Filling from the surroundings…", false, cx);
+        cx.spawn(async move |this, cx| {
+            let Some((layer, reg)) = cx
+                .background_spawn(async move { fill::content_aware_layer(&tree, &sel) })
+                .await
+            else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.status = None;
+                let node = Node::raster(
+                    0,
+                    "Content-aware fill",
+                    Arc::new(layer),
+                    Placement::at(reg.x as f64, reg.y as f64),
+                );
+                let slot = this.insertion_slot();
+                if let Some(id) = this.execute(
+                    Command::AddNode {
+                        node: Box::new(node),
+                        slot,
+                    },
+                    cx,
+                ) {
+                    this.selected = Some(id);
+                    this.set_status("Filled into a new node. Hide it to compare.", false, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_heal(&mut self, id: NodeId, stroke: Stroke, cx: &mut Context<Self>) {
+        let hole = stroke.coverage();
+        let base = stroke.base().clone();
+        let b = select::bounds(&hole);
+        if b.is_empty() {
+            self.editor.end();
+            return;
+        }
+        let margin = (stroke.brush.size as i32 * 2).max(32);
+        let reg = IRect::new(
+            b.x - margin,
+            b.y - margin,
+            b.w + 2 * margin,
+            b.h + 2 * margin,
+        )
+        .intersect(&base.bounds());
+        cx.spawn(async move |this, cx| {
+            let (raster, dirty) = cx
+                .background_spawn(async move {
+                    let img: Vec<[f32; 4]> = base
+                        .read_rect(reg)
+                        .into_iter()
+                        .map(color::px_to_f)
+                        .collect();
+                    let h: Vec<f32> = hole
+                        .read_rect(reg)
+                        .into_iter()
+                        .map(|v| v as f32 / 255.0)
+                        .collect();
+                    let out = fill::content_aware(&img, &h, reg.w as usize, reg.h as usize, 0x4EA1);
+                    let px: Vec<[u16; 4]> = out.into_iter().map(color::f_to_px).collect();
+                    (base.write_rect(reg, &px), reg)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.execute(
+                    Command::ReplacePixels {
+                        id,
+                        raster: Arc::new(raster),
+                        dirty,
+                        label: "Spot heal".into(),
+                    },
+                    cx,
+                );
+                if this.editor.in_transaction() {
+                    this.editor.end();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn make_gradient(&mut self, a: (f64, f64), b: (f64, f64), cx: &mut Context<Self>) {
+        if ((a.0 - b.0) * self.view.zoom).hypot((a.1 - b.1) * self.view.zoom) < 3.0 {
+            return;
+        }
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        let (c0, c1) = (premul(self.tools.fg), premul(self.tools.bg));
+        let radial = self.tools.radial;
+        let sel = self.editor.doc.selection.clone();
+        let (dx, dy) = ((b.0 - a.0) as f32, (b.1 - a.1) as f32);
+        let len2 = (dx * dx + dy * dy).max(1e-6);
+        let r = Raster::from_fn(w, h, [0; 4], |x, y| {
+            let (px, py) = (x as f32 + 0.5 - a.0 as f32, y as f32 + 0.5 - a.1 as f32);
+            let t = if radial {
+                (px * px + py * py).sqrt() / len2.sqrt()
+            } else {
+                (px * dx + py * dy) / len2
+            }
+            .clamp(0.0, 1.0);
+            let k = sel.as_ref().map_or(1.0, |s| s.get(x, y) as f32 / 255.0);
+            color::f_to_px([0, 1, 2, 3].map(|i| (c0[i] + (c1[i] - c0[i]) * t) * k))
+        });
+        let node = Node::raster(
+            0,
+            if radial {
+                "Radial gradient"
+            } else {
+                "Gradient"
+            },
+            Arc::new(r),
+            Placement::default(),
+        );
+        let slot = self.insertion_slot();
+        if let Some(id) = self.execute(
+            Command::AddNode {
+                node: Box::new(node),
+                slot,
+            },
+            cx,
+        ) {
+            self.selected = Some(id);
+        }
+        let _ = fill::gradient; // the dense variant serves the MCP tools
+    }
+
+    // ── Colour picker ───────────────────────────────────────────────────
+
+    fn pick_sv(&mut self, track: &TrackBounds, pos: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(b) = track.get() else { return };
+        let s = (f32::from(pos.x - b.origin.x) / f32::from(b.size.width)).clamp(0.0, 1.0);
+        let v = 1.0 - (f32::from(pos.y - b.origin.y) / f32::from(b.size.height)).clamp(0.0, 1.0);
+        let [r, g, bl] = hsv_to_rgb(self.tools.hue, s, v);
+        self.tools.fg = [r, g, bl, 255];
+        cx.notify();
+    }
+
+    fn pick_hue(&mut self, track: &TrackBounds, pos: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(f) = track_fraction(track, pos.x) else {
+            return;
+        };
+        self.tools.hue = f.min(0.9999);
+        let (_, s, v) = rgb_to_hsv(self.tools.fg);
+        let [r, g, b] = hsv_to_rgb(self.tools.hue, s.max(0.05), v.max(0.05));
+        self.tools.fg = [r, g, b, 255];
+        cx.notify();
+    }
+
+    /// Marching-ants segments for the current selection, cached.
+    pub(crate) fn ants(&mut self, level: u32) -> Option<Segments> {
+        let sel = self.editor.doc.selection.clone()?;
+        let key = Arc::as_ptr(&sel) as usize;
+        // Keep the outline cheap: never finer than ~2048 px across.
+        let mut level = level;
+        while sel.level_size(level).0.max(sel.level_size(level).1) > 2048 {
+            level += 1;
+        }
+        if let Some((k, l, segs)) = &self.tools.ants
+            && *k == key
+            && *l == level
+        {
+            return Some(segs.clone());
+        }
+        let segs = Arc::new(select::outline(&sel, level));
+        self.tools.ants = Some((key, level, segs.clone()));
+        Some(segs)
+    }
+}
+
+/// What the canvas draws over the image this frame.
+#[derive(Clone, Default)]
+pub struct Overlay {
+    pub ants: Option<Segments>,
+    pub phase: bool,
+    /// Document-space polylines (closed when the flag is set).
+    pub lines: Vec<(Vec<(f64, f64)>, bool)>,
+    pub crop: Option<(f64, f64, f64, f64)>,
+    pub cursor: Option<(Point<Pixels>, f32)>,
+    pub marker: Option<(f64, f64)>,
+}
+
+impl EditorView {
+    pub(crate) fn overlay(&mut self, scale_factor: f32) -> Overlay {
+        let level = self.view.level(scale_factor, 12);
+        let mut o = Overlay {
+            ants: self.ants(level),
+            phase: self.tools.ants_phase,
+            ..Default::default()
+        };
+        let ellipse_pts = |x: f64, y: f64, w: f64, h: f64| -> Vec<(f64, f64)> {
+            (0..64)
+                .map(|i| {
+                    let t = i as f64 / 64.0 * std::f64::consts::TAU;
+                    (
+                        x + w / 2.0 + w / 2.0 * t.cos(),
+                        y + h / 2.0 + h / 2.0 * t.sin(),
+                    )
+                })
+                .collect()
+        };
+        let rect_pts =
+            |x: f64, y: f64, w: f64, h: f64| vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)];
+        if let Some(Drag::Tool(t)) = &self.drag {
+            match t {
+                ToolDrag::Marquee {
+                    start,
+                    end,
+                    ellipse,
+                    ..
+                }
+                | ToolDrag::Shape {
+                    start,
+                    end,
+                    ellipse,
+                } => {
+                    let (x, y, w, h) = norm(*start, *end);
+                    o.lines.push((
+                        if *ellipse {
+                            ellipse_pts(x, y, w, h)
+                        } else {
+                            rect_pts(x, y, w, h)
+                        },
+                        true,
+                    ));
+                }
+                ToolDrag::Lasso { pts, .. } => o.lines.push((pts.clone(), false)),
+                ToolDrag::Gradient { start, end } => o.lines.push((vec![*start, *end], false)),
+                ToolDrag::Crop { start, end } => o.crop = Some(norm(*start, *end)),
+                _ => {}
+            }
+        }
+        if !self.tools.polygon.is_empty() {
+            let mut pts = self.tools.polygon.clone();
+            if let Some(p) = self.tools.pointer.and_then(|p| self.doc_point(p)) {
+                pts.push(p);
+            }
+            o.lines.push((pts, false));
+        }
+        if o.crop.is_none() {
+            o.crop = self.tools.crop;
+        }
+        let brushy = matches!(self.tool, Tool::Heal | Tool::Clone)
+            || (self.tool == Tool::Brush
+                && matches!(self.tools.paint, PaintKind::Brush | PaintKind::Eraser));
+        if brushy && let Some(p) = self.tools.pointer {
+            o.cursor = Some((
+                p,
+                (self.tools.brush.size as f64 / 2.0 * self.view.zoom) as f32,
+            ));
+        }
+        if self.tool == Tool::Clone {
+            o.marker = self.tools.clone_source;
+        }
+        o
+    }
+}
+
+pub(crate) fn paint_overlay(
+    o: &Overlay,
+    view: &View,
+    bounds: Bounds<Pixels>,
+    accent: Hsla,
+    window: &mut Window,
+) {
+    let to_screen = |p: (f64, f64)| {
+        let s = view.doc_to_screen(p, &bounds);
+        point(px(s.0 as f32), px(s.1 as f32))
+    };
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        if let Some(segs) = &o.ants
+            && !segs.is_empty()
+        {
+            let mut solid = PathBuilder::stroke(px(1.));
+            let mut dashed = PathBuilder::stroke(px(1.)).dash_array(&[px(4.), px(4.)]);
+            for (x0, y0, x1, y1) in segs.iter() {
+                let (a, b) = (
+                    to_screen((*x0 as f64, *y0 as f64)),
+                    to_screen((*x1 as f64, *y1 as f64)),
+                );
+                solid.move_to(a);
+                solid.line_to(b);
+                dashed.move_to(a);
+                dashed.line_to(b);
+            }
+            let (base, dash) = if o.phase {
+                (gpui_kit::black(), gpui_kit::white())
+            } else {
+                (gpui_kit::white(), gpui_kit::black())
+            };
+            if let Ok(p) = solid.build() {
+                window.paint_path(p, base);
+            }
+            if let Ok(p) = dashed.build() {
+                window.paint_path(p, dash);
+            }
+        }
+        if let Some((x, y, w, h)) = o.crop {
+            let a = to_screen((x, y));
+            let b = to_screen((x + w, y + h));
+            let shade = gpui_kit::black().opacity(0.45);
+            let (l, t, r, btm) = (
+                bounds.origin.x,
+                bounds.origin.y,
+                bounds.origin.x + bounds.size.width,
+                bounds.origin.y + bounds.size.height,
+            );
+            window.paint_quad(fill(
+                Bounds::from_corners(point(l, t), point(r, a.y)),
+                shade,
+            ));
+            window.paint_quad(fill(
+                Bounds::from_corners(point(l, b.y), point(r, btm)),
+                shade,
+            ));
+            window.paint_quad(fill(
+                Bounds::from_corners(point(l, a.y), point(a.x, b.y)),
+                shade,
+            ));
+            window.paint_quad(fill(
+                Bounds::from_corners(point(b.x, a.y), point(r, b.y)),
+                shade,
+            ));
+            window.paint_quad(outline(
+                Bounds::from_corners(a, b),
+                accent,
+                BorderStyle::Solid,
+            ));
+        }
+        for (pts, closed) in &o.lines {
+            if pts.len() < 2 {
+                continue;
+            }
+            for (width, color) in [(px(3.), gpui_kit::white().opacity(0.8)), (px(1.), accent)] {
+                let mut pb = PathBuilder::stroke(width);
+                pb.add_polygon(
+                    &pts.iter().map(|p| to_screen(*p)).collect::<Vec<_>>(),
+                    *closed,
+                );
+                if let Ok(p) = pb.build() {
+                    window.paint_path(p, color);
+                }
+            }
+        }
+        if let Some((c, r)) = o.cursor {
+            let r = r.max(2.0);
+            let pts: Vec<Point<Pixels>> = (0..48)
+                .map(|i| {
+                    let t = i as f32 / 48.0 * std::f32::consts::TAU;
+                    c + point(px(r * t.cos()), px(r * t.sin()))
+                })
+                .collect();
+            for (width, color) in [
+                (px(3.), gpui_kit::black().opacity(0.5)),
+                (px(1.), gpui_kit::white()),
+            ] {
+                let mut pb = PathBuilder::stroke(width);
+                pb.add_polygon(&pts, true);
+                if let Ok(p) = pb.build() {
+                    window.paint_path(p, color);
+                }
+            }
+        }
+        if let Some(m) = o.marker {
+            let c = to_screen(m);
+            window.paint_quad(fill(
+                Bounds::new(c - point(px(6.), px(0.5)), size(px(12.), px(1.))),
+                accent,
+            ));
+            window.paint_quad(fill(
+                Bounds::new(c - point(px(0.5), px(6.)), size(px(1.), px(12.))),
+                accent,
+            ));
+        }
+    });
+}
+
+// ── Tool options and colour picker ──────────────────────────────────────
+
+impl EditorView {
+    #[allow(clippy::too_many_arguments)] // a UI row: each argument is one visible property
+    fn opt_slider(
+        &mut self,
+        key: SliderKey,
+        name: &str,
+        display: String,
+        norm: f32,
+        spec: (f32, f32, f32),
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let track = self.tracks.entry(key).or_default().clone();
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .flex_none()
+            .child(div().child(name.to_string()))
+            .child(div().w(px(84.)).child(slider(
+                SharedString::from(format!("{key:?}")),
+                norm,
+                track,
+                p,
+                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    this.slider_down(key, spec, e, cx)
+                }),
+            )))
+            .child(div().w(px(40.)).text_color(p.ink).child(display))
+            .into_any_element()
+    }
+
+    #[allow(clippy::too_many_arguments)] // a UI row: each argument is one visible property
+    fn mode_chip<T: PartialEq + Copy + 'static>(
+        &self,
+        id: &'static str,
+        text: &'static str,
+        value: T,
+        current: T,
+        p: &Palette,
+        cx: &mut Context<Self>,
+        set: fn(&mut EditorView, T, &mut Context<EditorView>),
+    ) -> AnyElement {
+        chip(id, text, value == current, p)
+            .on_click(cx.listener(move |this, _, _, cx| set(this, value, cx)))
+            .into_any_element()
+    }
+
+    pub(crate) fn tool_options(&mut self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut v: Vec<AnyElement> = Vec::new();
+        let b = self.tools.brush;
+        match self.tool {
+            Tool::Select => {
+                let cur = self.tools.select;
+                for (id, t, s) in [
+                    ("sel-rect", "rect", SelectShape::Rect),
+                    ("sel-ell", "ellipse", SelectShape::Ellipse),
+                    ("sel-lasso", "lasso", SelectShape::Lasso),
+                    ("sel-poly", "polygon", SelectShape::Polygon),
+                    ("sel-wand", "wand", SelectShape::Wand),
+                ] {
+                    v.push(self.mode_chip(id, t, s, cur, p, cx, |e, s, cx| e.set_select(s, cx)));
+                }
+                let cm = self.tools.combine;
+                for (id, t, c) in [
+                    ("cm-new", "new", Combine::Replace),
+                    ("cm-add", "add", Combine::Add),
+                    ("cm-sub", "sub", Combine::Subtract),
+                    ("cm-int", "int", Combine::Intersect),
+                ] {
+                    v.push(self.mode_chip(id, t, c, cm, p, cx, |e, c, cx| {
+                        e.tools.combine = c;
+                        cx.notify();
+                    }));
+                }
+                if cur == SelectShape::Wand {
+                    let t = self.tools.tolerance as f32;
+                    v.push(self.opt_slider(
+                        SliderKey::Tolerance,
+                        "tolerance",
+                        format!("{t:.0}"),
+                        t / 255.0,
+                        (0.0, 255.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                    let c = self.tools.contiguous;
+                    v.push(
+                        chip("contig", "contiguous", c, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.tools.contiguous = !c;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                } else {
+                    let f = self.tools.feather;
+                    v.push(self.opt_slider(
+                        SliderKey::Feather,
+                        "feather",
+                        format!("{f:.0}px"),
+                        f / 100.0,
+                        (0.0, 100.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                }
+                v.push(
+                    chip("sel-all", "all", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.select_all(cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("sel-none", "none", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.deselect(cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("sel-inv", "invert", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.invert_selection(cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("sel-grow", "grow 5", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.modify_selection(5, 0.0, cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("sel-shrink", "shrink 5", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.modify_selection(-5, 0.0, cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("sel-feather", "soften 10", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.modify_selection(0, 10.0, cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("sel-caf", "content-aware fill", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.content_aware_fill(cx)))
+                        .into_any_element(),
+                );
+            }
+            Tool::Brush | Tool::Heal | Tool::Clone => {
+                if self.tool == Tool::Brush {
+                    let cur = self.tools.paint;
+                    for (id, t, k) in [
+                        ("pk-brush", "brush", PaintKind::Brush),
+                        ("pk-eraser", "eraser", PaintKind::Eraser),
+                        ("pk-bucket", "bucket", PaintKind::Bucket),
+                        ("pk-grad", "gradient", PaintKind::Gradient),
+                    ] {
+                        v.push(self.mode_chip(id, t, k, cur, p, cx, |e, k, cx| e.set_paint(k, cx)));
+                    }
+                }
+                let brushy = self.tool != Tool::Brush
+                    || matches!(self.tools.paint, PaintKind::Brush | PaintKind::Eraser);
+                if brushy {
+                    v.push(self.opt_slider(
+                        SliderKey::ToolSize,
+                        "size",
+                        format!("{:.0}", b.size),
+                        (b.size / 500.0).sqrt(),
+                        (1.0, 500.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                    v.push(self.opt_slider(
+                        SliderKey::ToolHardness,
+                        "hard",
+                        format!("{:.0}%", b.hardness * 100.0),
+                        b.hardness,
+                        (0.0, 100.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                    if self.tool != Tool::Heal {
+                        v.push(self.opt_slider(
+                            SliderKey::ToolOpacity,
+                            "opacity",
+                            format!("{:.0}%", b.opacity * 100.0),
+                            b.opacity,
+                            (1.0, 100.0, 1.0),
+                            p,
+                            cx,
+                        ));
+                        v.push(self.opt_slider(
+                            SliderKey::ToolFlow,
+                            "flow",
+                            format!("{:.0}%", b.flow * 100.0),
+                            b.flow,
+                            (1.0, 100.0, 1.0),
+                            p,
+                            cx,
+                        ));
+                    }
+                } else if self.tools.paint == PaintKind::Bucket {
+                    let t = self.tools.tolerance as f32;
+                    v.push(self.opt_slider(
+                        SliderKey::Tolerance,
+                        "tolerance",
+                        format!("{t:.0}"),
+                        t / 255.0,
+                        (0.0, 255.0, 1.0),
+                        p,
+                        cx,
+                    ));
+                } else {
+                    let r = self.tools.radial;
+                    v.push(
+                        chip("g-lin", "linear", !r, p)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.tools.radial = false;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                    v.push(
+                        chip("g-rad", "radial", r, p)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.tools.radial = true;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                }
+                let hint = match self.tool {
+                    Tool::Clone if self.tools.clone_source.is_none() => "alt-click sets the source",
+                    Tool::Clone => "alt-click to move the source",
+                    Tool::Heal => "paint over a blemish",
+                    _ => "alt-click picks a colour",
+                };
+                v.push(div().flex_none().child(hint).into_any_element());
+            }
+            Tool::Crop => {
+                match self.tools.crop {
+                    Some((_, _, w, h)) => v.push(
+                        div()
+                            .flex_none()
+                            .text_color(p.ink)
+                            .child(format!("{:.0} × {:.0}", w, h))
+                            .into_any_element(),
+                    ),
+                    None => v.push(
+                        div()
+                            .flex_none()
+                            .child("drag a crop; it may extend past the canvas")
+                            .into_any_element(),
+                    ),
+                }
+                let s = self.tools.straighten;
+                v.push(self.opt_slider(
+                    SliderKey::Straighten,
+                    "straighten",
+                    format!("{s:+.1}°"),
+                    (s + 45.0) / 90.0,
+                    (-45.0, 45.0, 0.1),
+                    p,
+                    cx,
+                ));
+                v.push(
+                    chip("crop-apply", "apply ⏎", self.tools.crop.is_some(), p)
+                        .on_click(cx.listener(|this, _, _, cx| this.tool_commit(cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("crop-cancel", "cancel", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.tool_cancel(cx);
+                        }))
+                        .into_any_element(),
+                );
+                let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+                v.push(
+                    chip("img-half", "image 50%", false, p)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.execute(
+                                Command::ImageSize {
+                                    width: (w / 2).max(1),
+                                    height: (h / 2).max(1),
+                                },
+                                cx,
+                            );
+                            this.fit_pending = true;
+                        }))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("img-double", "image 200%", false, p)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.execute(
+                                Command::ImageSize {
+                                    width: w * 2,
+                                    height: h * 2,
+                                },
+                                cx,
+                            );
+                            this.fit_pending = true;
+                        }))
+                        .into_any_element(),
+                );
+            }
+            Tool::Shape => {
+                let cur = self.tools.shape;
+                v.push(self.mode_chip(
+                    "sh-rect",
+                    "rectangle",
+                    ShapeKind::Rect,
+                    cur,
+                    p,
+                    cx,
+                    |e, k, cx| {
+                        e.tools.shape = k;
+                        cx.notify();
+                    },
+                ));
+                v.push(self.mode_chip(
+                    "sh-ell",
+                    "ellipse",
+                    ShapeKind::Ellipse,
+                    cur,
+                    p,
+                    cx,
+                    |e, k, cx| {
+                        e.tools.shape = k;
+                        cx.notify();
+                    },
+                ));
+                v.push(
+                    div()
+                        .flex_none()
+                        .child("filled with the foreground colour")
+                        .into_any_element(),
+                );
+            }
+            Tool::Move => v.push(
+                div()
+                    .flex_none()
+                    .child("drag to move the selected pixel node")
+                    .into_any_element(),
+            ),
+            _ => {}
+        }
+        v
+    }
+
+    /// Foreground / background swatches at the foot of the tool rail.
+    pub(crate) fn swatches(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let [fr, fgc, fb, _] = self.tools.fg;
+        let [br, bgc, bb, _] = self.tools.bg;
+        div()
+            .relative()
+            .size(px(40.))
+            .child(
+                div()
+                    .id("bg-swatch")
+                    .absolute()
+                    .left(px(14.))
+                    .top(px(14.))
+                    .size(px(24.))
+                    .border_1()
+                    .border_color(p.ink)
+                    .bg(rgb(((br as u32) << 16) | ((bgc as u32) << 8) | bb as u32))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.swap_colors(cx))),
+            )
+            .child(
+                div()
+                    .id("fg-swatch")
+                    .absolute()
+                    .left(px(2.))
+                    .top(px(2.))
+                    .size(px(24.))
+                    .border_1()
+                    .border_color(p.ink)
+                    .bg(rgb(((fr as u32) << 16) | ((fgc as u32) << 8) | fb as u32))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.tools.picker = !this.tools.picker;
+                        this.tools.hue = rgb_to_hsv(this.tools.fg).0;
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
+    pub(crate) fn picker(&mut self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.tools.picker {
+            return None;
+        }
+        let sv_track = self.tracks.entry(SliderKey::PickerSv).or_default().clone();
+        let hue_track = self.tracks.entry(SliderKey::PickerHue).or_default().clone();
+        let (h, s, v) = rgb_to_hsv(self.tools.fg);
+        let hue = if s < 0.01 { self.tools.hue } else { h };
+        let [hr, hg, hb] = hsv_to_rgb(hue, 1.0, 1.0);
+        let pure = rgb(((hr as u32) << 16) | ((hg as u32) << 8) | hb as u32);
+        let (t1, t2) = (sv_track.clone(), hue_track.clone());
+        let hex = format!(
+            "#{:02X}{:02X}{:02X}",
+            self.tools.fg[0], self.tools.fg[1], self.tools.fg[2]
+        );
+        const SWATCHES: [u32; 10] = [
+            0x0A0A0B, 0xFFFFFF, 0x6E6D68, 0xD93A1E, 0xE8A33B, 0xF2E4C9, 0x4E8A4B, 0x3B6EA8,
+            0x7A4EA8, 0xC07A4A,
+        ];
+        let hue_segments: Vec<AnyElement> = (0..6)
+            .map(|i| {
+                let a = hsv_to_rgb(i as f32 / 6.0, 1.0, 1.0);
+                let b = hsv_to_rgb((i + 1) as f32 / 6.0, 1.0, 1.0);
+                let c = |x: [u8; 3]| -> Hsla {
+                    rgb(((x[0] as u32) << 16) | ((x[1] as u32) << 8) | x[2] as u32).into()
+                };
+                div()
+                    .flex_1()
+                    .h_full()
+                    .bg(linear_gradient(
+                        90.,
+                        linear_color_stop(c(a), 0.),
+                        linear_color_stop(c(b), 1.),
+                    ))
+                    .into_any_element()
+            })
+            .collect();
+        Some(
+            deferred(
+                anchored()
+                    .position(point(px(62.), px(420.)))
+                    .snap_to_window()
+                    .child(
+                        div()
+                            .id("picker")
+                            .occlude()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .p(px(10.))
+                            .w(px(212.))
+                            .bg(p.panel)
+                            .border_1()
+                            .border_color(p.ink)
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                this.tools.picker = false;
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .id("picker-sv")
+                                    .relative()
+                                    .w(px(190.))
+                                    .h(px(150.))
+                                    .bg(pure)
+                                    .cursor(CursorStyle::Crosshair)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                            this.pick_sv(&t1, e.position, cx);
+                                            this.drag = Some(Drag::Tool(ToolDrag::PickSv {
+                                                track: t1.clone(),
+                                            }));
+                                        }),
+                                    )
+                                    .child(
+                                        canvas(
+                                            {
+                                                let t = sv_track.clone();
+                                                move |b, _, _| t.set(Some(b))
+                                            },
+                                            |_, _, _, _| {},
+                                        )
+                                        .absolute()
+                                        .size_full(),
+                                    )
+                                    .child(div().absolute().size_full().bg(linear_gradient(
+                                        90.,
+                                        linear_color_stop(gpui_kit::white(), 0.),
+                                        linear_color_stop(gpui_kit::white().opacity(0.), 1.),
+                                    )))
+                                    .child(div().absolute().size_full().bg(linear_gradient(
+                                        180.,
+                                        linear_color_stop(gpui_kit::black().opacity(0.), 0.),
+                                        linear_color_stop(gpui_kit::black(), 1.),
+                                    )))
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .left(relative(s))
+                                            .top(relative(1.0 - v))
+                                            .ml(px(-5.))
+                                            .mt(px(-5.))
+                                            .size(px(10.))
+                                            .border_1()
+                                            .border_color(gpui_kit::white()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("picker-hue")
+                                    .relative()
+                                    .flex()
+                                    .w(px(190.))
+                                    .h(px(12.))
+                                    .cursor(CursorStyle::PointingHand)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                            this.pick_hue(&t2, e.position, cx);
+                                            this.drag = Some(Drag::Tool(ToolDrag::PickHue {
+                                                track: t2.clone(),
+                                            }));
+                                        }),
+                                    )
+                                    .child(
+                                        canvas(
+                                            {
+                                                let t = hue_track.clone();
+                                                move |b, _, _| t.set(Some(b))
+                                            },
+                                            |_, _, _, _| {},
+                                        )
+                                        .absolute()
+                                        .size_full(),
+                                    )
+                                    .children(hue_segments)
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .left(relative(hue))
+                                            .ml(px(-2.))
+                                            .w(px(4.))
+                                            .h_full()
+                                            .border_1()
+                                            .border_color(p.ink),
+                                    ),
+                            )
+                            .child(div().flex().gap(px(4.)).children(
+                                SWATCHES.iter().enumerate().map(|(i, c)| {
+                                    let c = *c;
+                                    div()
+                                        .id(("sw", i))
+                                        .size(px(15.))
+                                        .border_1()
+                                        .border_color(p.line)
+                                        .bg(rgb(c))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.tools.fg =
+                                                [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
+                                            this.tools.hue = rgb_to_hsv(this.tools.fg).0;
+                                            cx.notify();
+                                        }))
+                                }),
+                            ))
+                            .child(mono(format!("{hex} · x swaps · d resets"), 10., p.muted)),
+                    ),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
+    }
+}
