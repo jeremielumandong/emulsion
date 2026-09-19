@@ -736,6 +736,18 @@ impl Render for Workspace {
             window.set_window_title(&title);
             self.last_title = title;
         }
+        let title_bar = gpui_kit::component::TitleBar::new()
+            .on_close_window(|_, window, cx| {
+                window.dispatch_action(Box::new(Quit), cx);
+            })
+            .child(
+                div().flex().items_center().gap(px(10.)).pl(px(4.)).child(
+                    div()
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(self.last_title.trim_end_matches(" — Emulsion").to_string()),
+                ),
+            );
         let top = self.top_bar(cx);
         let banner = self.banner(cx);
         let body: AnyElement = match (self.screen, &self.editor) {
@@ -972,6 +984,7 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
+            .child(title_bar)
             .child(top)
             .children(banner)
             .child(body)

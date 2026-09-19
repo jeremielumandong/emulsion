@@ -215,6 +215,10 @@ pub struct EditorView {
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
     pub(crate) seen_rev: u64,
+    /// A composite tree is being built off the UI thread for this revision.
+    tree_building: Option<u64>,
+    /// Dirty area accumulated since the tree on screen was built.
+    tree_dirty: emulsion_core::Dirty,
     pub(crate) gen_counter: u64,
     pub(crate) render_gen: u64,
     pub(crate) tree: Arc<CompositeTree>,
@@ -290,6 +294,8 @@ impl EditorView {
             canvas_bounds: Default::default(),
             cache: Default::default(),
             seen_rev: rev,
+            tree_building: None,
+            tree_dirty: emulsion_core::Dirty::Nothing,
             gen_counter: 1,
             render_gen: 1,
             tree,
@@ -421,19 +427,18 @@ impl EditorView {
         }
         if self.editor.revision != self.seen_rev {
             self.seen_rev = self.editor.revision;
-            let old = self.render_gen;
-            self.gen_counter += 1;
-            self.render_gen = self.gen_counter;
-            self.tree = Arc::new(self.editor.doc.composite_tree());
-            // Keep every tile the change did not touch.
-            match self.editor.take_dirty() {
-                emulsion_core::Dirty::Nothing => {
-                    self.cache.borrow_mut().retag(old, self.render_gen, None)
-                }
-                emulsion_core::Dirty::Rect(r) => {
-                    self.cache.borrow_mut().retag(old, self.render_gen, Some(r))
-                }
-                emulsion_core::Dirty::All => {}
+            let dirty = self.editor.take_dirty();
+            self.tree_dirty =
+                std::mem::replace(&mut self.tree_dirty, emulsion_core::Dirty::Nothing).union(dirty);
+            // Layer styles render blurs while the tree is built; that work
+            // leaves the UI thread so slider drags stay smooth. Plain
+            // documents build in microseconds and stay synchronous.
+            let heavy = self.editor.doc.nodes.iter().any(|n| !n.styles.is_empty());
+            if heavy {
+                self.build_tree_async(cx);
+            } else {
+                let tree = self.editor.doc.composite_tree();
+                self.install_tree(tree);
             }
         }
         if self.editor.committed_revision != self.seen_commit {
@@ -447,6 +452,53 @@ impl EditorView {
         if self.compare > 0.0 && differs && self.before_tree.is_none() {
             self.before_tree = Some(Arc::new(self.editor.committed.composite_tree()));
         }
+    }
+
+    /// Put a freshly built tree on screen, keeping every cached tile the
+    /// accumulated changes did not touch.
+    fn install_tree(&mut self, tree: CompositeTree) {
+        let old = self.render_gen;
+        self.gen_counter += 1;
+        self.render_gen = self.gen_counter;
+        self.tree = Arc::new(tree);
+        match std::mem::replace(&mut self.tree_dirty, emulsion_core::Dirty::Nothing) {
+            emulsion_core::Dirty::Nothing => {
+                self.cache.borrow_mut().retag(old, self.render_gen, None)
+            }
+            emulsion_core::Dirty::Rect(r) => {
+                self.cache.borrow_mut().retag(old, self.render_gen, Some(r))
+            }
+            emulsion_core::Dirty::All => {}
+        }
+    }
+
+    /// Build the composite tree for the current revision in the background;
+    /// if the document moves on meanwhile, the newest revision is built
+    /// next and intermediate ones are skipped.
+    fn build_tree_async(&mut self, cx: &mut Context<Self>) {
+        if self.tree_building.is_some() {
+            return;
+        }
+        let rev = self.editor.revision;
+        self.tree_building = Some(rev);
+        let doc = self.editor.doc.clone();
+        cx.spawn(async move |this, cx| {
+            let tree = cx
+                .background_spawn(async move { doc.composite_tree() })
+                .await;
+            this.update(cx, |this, cx| {
+                this.tree_building = None;
+                if this.editor.revision == rev {
+                    this.install_tree(tree);
+                } else {
+                    // Stale: the newest revision is what matters.
+                    this.build_tree_async(cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn before_active(&self) -> bool {

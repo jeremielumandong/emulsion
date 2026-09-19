@@ -54,11 +54,19 @@ fn run_editor(file: Option<PathBuf>) {
 
         cx.spawn(async move |cx| {
             let bounds = cx.update(|cx| Bounds::centered(None, size(px(1440.), px(900.)), cx));
+            // The title bar is ours on every platform: it moves the window,
+            // and on Linux and Windows carries minimise, maximise and close.
             let opts = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Emulsion".into()),
-                    ..Default::default()
+                    ..gpui_kit::component::TitleBar::title_bar_options()
+                }),
+                app_owns_titlebar_drag: true,
+                window_decorations: Some(if cfg!(target_os = "linux") {
+                    WindowDecorations::Client
+                } else {
+                    WindowDecorations::Server
                 }),
                 app_id: Some("app.emulsion.Emulsion".into()),
                 ..Default::default()
