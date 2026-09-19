@@ -14,9 +14,9 @@ provider here; the GPU paths get measured on other hardware.
 | 4 | `ort` execution provider on this machine | pending | | |
 | 5 | Local diffusion inpaint speed | pending | | |
 | 6 | wgpu device alongside GPUI's renderer | started | gpui-pre-platform 0.3.5 on Linux uses `gpui-pre-wgpu` (wgpu 29.0.4), not Blade. Workspace pins wgpu 29 so one copy is linked. Device sharing not yet attempted. | |
-| 7 | Claude Code + `emulsion mcp-serve` image content | pending | | |
-| 8 | `agentops-core` as a dependency | pending | | |
-| 9 | Jev accuracy on editor intents | pending | | |
+| 7 | Claude Code + `emulsion mcp-serve` image content | done | Claude Code 2.1.273 runs with no built-in tools and only Emulsion's MCP server. It calls `describe_document`, reads `get_view` PNG image blocks, and describes the canvas correctly. Edits reach the host as confirmations only with `--permission-prompts host` plus the stdio prompt tool; `host` alone denies them. Edit turn 6.3 s / $0.035, look turn 3.6 s / $0.050. | CLI transport adopted. |
+| 8 | `agentops-core` as a dependency | decided without spike | A public repository cannot depend on a local path, and the crate brings tokio, reqwest and PTY support. | Ported the stream-json protocol, argv conventions and process-group handling into `emulsion-assistant` (about 700 lines). |
+| 9 | Jev accuracy on editor intents | blocked | No TypeSafe key on this machine. Client and question shapes are tested against a mock server. | Run with a key via Settings → test, then a request corpus. |
 | 10 | Film-simulation base look fidelity | pending | | |
 | 11 | Import analysis latency | pending | | |
 | 12 | Two-stack before/after cost | pending | | |
@@ -44,6 +44,26 @@ provider here; the GPU paths get measured on other hardware.
 | Open ORA | 0.46 s |
 
 Reproduce: `cargo run --release -p emulsion-io --example sample -- spikes/out/sample.ora`
+
+## Assistant findings
+
+- Headless `claude -p` over stream-json only routes confirmations to the host when
+  `--permission-prompt-tool stdio` is given together with `--permission-prompts host`.
+- Assistant text arrives as whole messages; consecutive messages separated by tool calls need
+  an explicit break in the UI.
+- The offline planner must refuse compound or visual clauses. Without a guard, "the top node
+  and the one under it should be invisible; the third should be called Sky" became a confident
+  but wrong single hide.
+- Closing an input overlay must return focus to the canvas, or every shortcut stops working
+  until the next click (caught by a headless UI test).
+
+Reproduce the live checks:
+
+```sh
+cargo build -p emulsion-app
+cargo run -p emulsion-assistant --example smoke -- target/debug/emulsion
+cargo test -p emulsion-ui assistant_turn_through_the_ui -- --ignored --nocapture
+```
 
 ## Log
 

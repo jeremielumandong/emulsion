@@ -107,32 +107,37 @@ pub struct EditorView {
     pub name: String,
     /// Where it came from, for Save As suggestions.
     pub source: Option<PathBuf>,
-    view: View,
-    fit_pending: bool,
-    canvas_bounds: CanvasBounds,
-    cache: Rc<RefCell<TileCache>>,
-    seen_rev: u64,
-    gen_counter: u64,
-    render_gen: u64,
-    tree: Arc<CompositeTree>,
-    seen_commit: u64,
-    before_gen: u64,
-    before_tree: Option<Arc<CompositeTree>>,
+    pub(crate) view: View,
+    pub(crate) fit_pending: bool,
+    pub(crate) canvas_bounds: CanvasBounds,
+    pub(crate) cache: Rc<RefCell<TileCache>>,
+    pub(crate) seen_rev: u64,
+    pub(crate) gen_counter: u64,
+    pub(crate) render_gen: u64,
+    pub(crate) tree: Arc<CompositeTree>,
+    pub(crate) seen_commit: u64,
+    pub(crate) before_gen: u64,
+    pub(crate) before_tree: Option<Arc<CompositeTree>>,
     pub selected: Option<NodeId>,
-    tool: Tool,
+    pub(crate) tool: Tool,
     drag: Option<Drag>,
-    compare: f32,
-    rulers: bool,
-    space_held: bool,
-    renaming: Option<(NodeId, Entity<InputState>, Subscription)>,
+    pub(crate) compare: f32,
+    pub(crate) rulers: bool,
+    pub(crate) space_held: bool,
+    pub(crate) renaming: Option<(NodeId, Entity<InputState>, Subscription)>,
     menu: Option<Menu>,
     tracks: HashMap<SliderKey, TrackBounds>,
-    thumbs: HashMap<usize, Arc<RenderImage>>,
-    checker: (u8, u8),
+    pub(crate) thumbs: HashMap<usize, Arc<RenderImage>>,
+    pub(crate) checker: (u8, u8),
     pub focus: FocusHandle,
-    canvas_focus: FocusHandle,
-    panel_focus: FocusHandle,
+    pub(crate) canvas_focus: FocusHandle,
+    pub(crate) panel_focus: FocusHandle,
     pub status: Option<(SharedString, bool)>,
+    pub(crate) assistant: crate::assistant::Assistant,
+    pub(crate) ask: Option<crate::assistant::AskBar>,
+    pub(crate) suggestions: Vec<emulsion_ai::suggest::Suggestion>,
+    pub(crate) suggest_rev: u64,
+    pub(crate) suggest_busy: bool,
 }
 
 impl EditorView {
@@ -178,6 +183,11 @@ impl EditorView {
             canvas_focus: cx.focus_handle(),
             panel_focus: cx.focus_handle(),
             status: None,
+            assistant: Default::default(),
+            ask: None,
+            suggestions: Vec::new(),
+            suggest_rev: 0,
+            suggest_busy: false,
         }
     }
 
@@ -206,7 +216,7 @@ impl EditorView {
         }
     }
 
-    fn after_change(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn after_change(&mut self, cx: &mut Context<Self>) {
         if let Some(sel) = self.selected
             && self.editor.doc.node(sel).is_none()
         {
@@ -1139,7 +1149,7 @@ impl EditorView {
             )
     }
 
-    fn status_strip(&self, p: &Palette) -> impl IntoElement + use<> {
+    fn status_strip(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let n = self.editor.doc.nodes.len();
         let saved = if self.editor.is_modified() {
             "unsaved"
@@ -1166,6 +1176,10 @@ impl EditorView {
             .border_t_1()
             .border_color(p.line)
             .overflow_hidden()
+            .when(!self.suggestions.is_empty(), |d| {
+                d.child(mono("IT NOTICED", 9.5, p.muted).whitespace_nowrap())
+            })
+            .children(self.suggestion_chips(p, cx))
             .children(self.status.as_ref().map(|(msg, err)| {
                 mono(msg.clone(), 10.5, if *err { p.accent } else { p.ink }).whitespace_nowrap()
             }))
@@ -1842,7 +1856,10 @@ impl Render for EditorView {
         let rail = self.tool_rail(&p, cx);
         let context = self.context_bar(&p, cx);
         let canvas = self.canvas_area(&p, cx);
-        let strip = self.status_strip(&p);
+        self.refresh_suggestions(cx);
+        let strip = self.status_strip(&p, cx);
+        let ask = self.ask_bar(&p, cx);
+        let dock = self.assistant_dock(&p, cx);
         let panel = self.node_panel(&p, window, cx);
         div()
             .flex()
@@ -1867,7 +1884,9 @@ impl Render for EditorView {
                             .min_h_0()
                             .overflow_hidden()
                             .child(context)
+                            .children(ask)
                             .child(canvas)
+                            .children(dock)
                             .child(strip),
                     )
                     .child(panel),

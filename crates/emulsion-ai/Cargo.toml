@@ -16,4 +16,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 emulsion-raster = { workspace = true }
-emulsion-gpu = { workspace = true }
+emulsion-core = { workspace = true }
+ureq = { workspace = true }

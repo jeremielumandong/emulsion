@@ -10,10 +10,16 @@ description = "Optional assistant"
 workspace = true
 
 [dependencies]
+async-channel = { workspace = true }
+libc = { workspace = true }
+parking_lot = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-crossbeam-channel = { workspace = true }
 emulsion-mcp = { workspace = true }
+
+[dev-dependencies]
+emulsion-core = { workspace = true }
+emulsion-raster = { workspace = true }

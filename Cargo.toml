@@ -40,6 +40,12 @@ rayon = "1"
 smallvec = "1"
 glam = "0.33"
 
+# assistant
+async-channel = "2"
+base64 = "0.23"
+libc = "0.2"
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
 # pixels / io
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff", "bmp", "gif"] }
 wgpu = "29"            # same major as gpui-pre 0.3.5 so one wgpu is linked (spike 6)

@@ -12,6 +12,7 @@ pub mod export;
 pub mod import;
 pub mod ora;
 pub mod recent;
+pub mod settings;
 pub mod thumb;
 
 use emulsion_core::Document;

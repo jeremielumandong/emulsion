@@ -1,7 +1,7 @@
 //! Emulsion binary. `emulsion [FILE]` opens the editor; `emulsion mcp-serve`
 //! runs the stdio MCP server that a coding CLI attaches to.
 
-use emulsion_ui::{Workspace, actions, theme};
+use emulsion_ui::{Workspace, actions, app_state, theme};
 use gpui_kit::component::{Root, Theme};
 use gpui_kit::*;
 use std::path::PathBuf;
@@ -41,6 +41,7 @@ fn run_editor(file: Option<PathBuf>) {
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         theme::install(cx);
+        app_state::install(cx);
         actions::bind(cx);
         // The design is square: no rounded corners except avatars and dots.
         let t = Theme::global_mut(cx);

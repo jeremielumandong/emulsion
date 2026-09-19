@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub enum Screen {
     Home,
     Editor,
+    Settings,
 }
 
 pub struct Workspace {
@@ -30,6 +31,11 @@ pub struct Workspace {
     focus: FocusHandle,
     last_title: String,
     closing: bool,
+    pub(crate) settings_inputs: Option<(
+        Entity<gpui_kit::component::input::InputState>,
+        Entity<gpui_kit::component::input::InputState>,
+    )>,
+    pub(crate) jev_test: Option<(SharedString, bool)>,
 }
 
 fn stem(path: &Path) -> String {
@@ -95,6 +101,8 @@ impl Workspace {
             focus,
             last_title: String::new(),
             closing: false,
+            settings_inputs: None,
+            jev_test: None,
         }
     }
 
@@ -131,7 +139,7 @@ impl Workspace {
         .detach();
     }
 
-    fn install(
+    pub(crate) fn install(
         &mut self,
         doc: Document,
         path: Option<PathBuf>,
@@ -438,6 +446,18 @@ impl Workspace {
                     },
                 )),
             )
+            .child(
+                tab(
+                    "tab-settings",
+                    "SETTINGS",
+                    self.screen == Screen::Settings,
+                    true,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.screen = Screen::Settings;
+                    cx.notify();
+                })),
+            )
             .child(div().flex_1().border_l_1().border_color(p.chrome_line))
             .child(
                 div()
@@ -521,6 +541,7 @@ impl Render for Workspace {
         let banner = self.banner(cx);
         let body: AnyElement = match (self.screen, &self.editor) {
             (Screen::Editor, Some(e)) => e.clone().into_any_element(),
+            (Screen::Settings, _) => self.settings_screen(window, cx).into_any_element(),
             _ => self.home(window, cx).into_any_element(),
         };
         div()
@@ -610,6 +631,29 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleNodeVisible, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_selected_visible(cx))
+            }))
+            .on_action(cx.listener(|this, _: &Ask, window, cx| {
+                if let Some(e) = this.editor.clone() {
+                    this.screen = Screen::Editor;
+                    e.update(cx, |e, cx| e.open_ask(window, cx));
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ShowSettings, _, cx| {
+                this.screen = Screen::Settings;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Suggestion1, _, cx| {
+                this.with_editor(cx, |e, cx| e.accept_suggestion(0, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Suggestion2, _, cx| {
+                this.with_editor(cx, |e, cx| e.accept_suggestion(1, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Suggestion3, _, cx| {
+                this.with_editor(cx, |e, cx| e.accept_suggestion(2, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Suggestion4, _, cx| {
+                this.with_editor(cx, |e, cx| e.accept_suggestion(3, cx))
             }))
             .child(top)
             .children(banner)
