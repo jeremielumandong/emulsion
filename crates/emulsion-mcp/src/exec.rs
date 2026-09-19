@@ -846,6 +846,179 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 ),
             })
         }
+        "import_recipe" => {
+            use emulsion_recipes::{Recipe, import, store};
+            let dir = emulsion_io::recent::data_dir().join("recipes");
+            let mut saved: Vec<String> = Vec::new();
+            let mut skipped: Vec<String> = Vec::new();
+            let mut keep = |r: Recipe, unknown: Vec<String>| -> Result<(), ToolResult> {
+                r.validate().map_err(|e| err(e.to_string()))?;
+                store::save(&dir, &r).map_err(|e| err(e.to_string()))?;
+                saved.push(r.name.clone());
+                skipped.extend(unknown);
+                Ok(())
+            };
+            if let Some(t) = args.get("text").and_then(Value::as_str) {
+                let trimmed = t.trim();
+                let (r, unknown) = match Recipe::from_toml(t) {
+                    Ok(r) => (r, Vec::new()),
+                    Err(_) if trimmed.starts_with('<') && trimmed.contains("crs:") => {
+                        import::from_xmp(t)
+                    }
+                    Err(_) if trimmed.starts_with('<') => import::from_fp1(t),
+                    Err(_) => import::parse_text(t),
+                };
+                keep(r, unknown)?;
+            } else if let Some(p) = args.get("path").and_then(Value::as_str) {
+                let (r, unknown) = import::from_file(std::path::Path::new(p)).map_err(err)?;
+                keep(r, unknown)?;
+            } else if let Some(url) = args.get("url").and_then(Value::as_str) {
+                let html = import::fetch(url).map_err(err)?;
+                let (single, unknown) = import::from_html(&html, url);
+                let links = import::recipe_links(&html, url);
+                if single.validate().is_ok()
+                    && single.film_simulation != Recipe::default().film_simulation
+                    || links.len() < 2
+                {
+                    keep(single, unknown)?;
+                } else {
+                    for link in links.iter().take(400) {
+                        if let Ok(h) = import::fetch(link) {
+                            let (r, unknown) = import::from_html(&h, link);
+                            if r.validate().is_ok() && store::save(&dir, &r).is_ok() {
+                                saved.push(r.name.clone());
+                                skipped.extend(unknown);
+                            }
+                        }
+                    }
+                }
+            } else {
+                return Err(err("give text, path or url"));
+            }
+            skipped.sort();
+            skipped.dedup();
+            Ok(Planned {
+                commands: vec![],
+                message: format!(
+                    "Saved {} recipe(s): {}{}",
+                    saved.len(),
+                    saved.join(", "),
+                    if skipped.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (not mapped: {})", skipped.join(", "))
+                    }
+                ),
+            })
+        }
+        "batch_export" => {
+            use emulsion_recipes::store;
+            let out_dir = std::path::PathBuf::from(
+                args.get("out_dir")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| err("missing string 'out_dir'"))?,
+            );
+            let mut paths: Vec<std::path::PathBuf> = args
+                .get("paths")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(std::path::PathBuf::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Some(folder) = args.get("folder").and_then(Value::as_str) {
+                let mut listed: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+                    .map_err(|e| err(format!("{folder}: {e}")))?
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.is_file()
+                            && p.extension()
+                                .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                                .is_some_and(|e| {
+                                    emulsion_io::OPEN_EXTENSIONS.contains(&e.as_str()) && e != "svg"
+                                })
+                    })
+                    .collect();
+                listed.sort();
+                paths.extend(listed);
+            }
+            if paths.is_empty() {
+                return Err(err("no pictures: give folder or paths"));
+            }
+            let recipe = match args.get("recipe").and_then(Value::as_str) {
+                Some(name) => Some(
+                    store::find(&emulsion_io::recent::data_dir().join("recipes"), name)
+                        .ok_or_else(|| {
+                            err(format!("no recipe named {name:?}; call list_recipes"))
+                        })?,
+                ),
+                None => None,
+            };
+            let ext = if args.get("format").and_then(Value::as_str) == Some("png") {
+                "png"
+            } else {
+                "jpg"
+            };
+            std::fs::create_dir_all(&out_dir).map_err(|e| err(e.to_string()))?;
+            let mut written = Vec::new();
+            let mut failed = Vec::new();
+            for p in &paths {
+                let result = (|| -> Result<std::path::PathBuf, String> {
+                    let d = emulsion_io::open(p).map_err(|e| e.to_string())?;
+                    let mut ed = Editor::new(d, None);
+                    if let Some(r) = &recipe {
+                        let compiled =
+                            emulsion_recipes::compile_sized(r, ed.doc.width, ed.doc.height)
+                                .map_err(|e| e.to_string())?;
+                        store::add_to(&mut ed, compiled, Slot::TOP).map_err(|e| e.to_string())?;
+                    }
+                    let stem = p
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "picture".into());
+                    let suffix = recipe
+                        .as_ref()
+                        .map(|r| {
+                            format!(
+                                "-{}",
+                                r.name
+                                    .to_lowercase()
+                                    .replace(|c: char| !c.is_ascii_alphanumeric(), "-")
+                            )
+                        })
+                        .unwrap_or_default();
+                    let out = out_dir.join(format!("{stem}{suffix}.{ext}"));
+                    emulsion_io::export::export(
+                        &ed.doc,
+                        &out,
+                        emulsion_io::export::ExportOptions::for_doc(&ed.doc),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Ok(out)
+                })();
+                match result {
+                    Ok(o) => written.push(o.display().to_string()),
+                    Err(e) => failed.push(format!("{}: {e}", p.display())),
+                }
+            }
+            Ok(Planned {
+                commands: vec![],
+                message: format!(
+                    "Exported {} of {} to {}{}",
+                    written.len(),
+                    paths.len(),
+                    out_dir.display(),
+                    if failed.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; failed: {}", failed.join("; "))
+                    }
+                ),
+            })
+        }
         "download_model" => {
             let id = args
                 .get("id")
@@ -1867,6 +2040,139 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 .unwrap_or_default(),
             ))
         }
+        "set_lock" => {
+            let id = id_arg(args, "node")?;
+            let locked = args
+                .get("locked")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| err("missing boolean 'locked'"))?;
+            exec(editor, Command::SetLocked { id, locked })?;
+            Ok(ToolResult::text(format!(
+                "{} {}",
+                node_label(&editor.doc, id),
+                if locked { "locked" } else { "unlocked" }
+            )))
+        }
+        "set_clip" => {
+            let id = id_arg(args, "node")?;
+            let clip_to = match args.get("to") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_u64()
+                        .ok_or_else(|| err("'to' must be a node id or null"))?,
+                ),
+            };
+            exec(editor, Command::SetClip { id, clip_to })?;
+            Ok(ToolResult::text(match clip_to {
+                Some(t) => format!(
+                    "{} now clips to {}",
+                    node_label(&editor.doc, id),
+                    node_label(&editor.doc, t)
+                ),
+                None => format!("{} unclipped", node_label(&editor.doc, id)),
+            }))
+        }
+        "add_mask" => {
+            let id = id_arg(args, "node")?;
+            let from = args
+                .get("from")
+                .and_then(Value::as_str)
+                .unwrap_or("selection");
+            let n = editor
+                .doc
+                .node(id)
+                .ok_or_else(|| err(format!("no node {id}")))?;
+            let (w, h, to_doc) = match &n.kind {
+                NodeKind::Raster { raster, placement } => (
+                    raster.width(),
+                    raster.height(),
+                    Some(placement.to_doc(raster.width(), raster.height())),
+                ),
+                _ => (editor.doc.width, editor.doc.height, None),
+            };
+            let mask = match (from, editor.doc.selection.clone()) {
+                ("all", _) | (_, None) => emulsion_raster::Mask::white(w, h),
+                (_, Some(sel)) => match to_doc {
+                    Some(td) => emulsion_raster::Mask::from_fn(w, h, 0, |x, y| {
+                        let p = td.transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
+                        if p.x < 0.0
+                            || p.y < 0.0
+                            || p.x >= sel.width() as f64
+                            || p.y >= sel.height() as f64
+                        {
+                            0
+                        } else {
+                            sel.get(p.x as u32, p.y as u32)
+                        }
+                    }),
+                    None => (*sel).clone(),
+                },
+            };
+            exec(
+                editor,
+                Command::SetMask {
+                    id,
+                    mask: Some(Arc::new(mask)),
+                },
+            )?;
+            Ok(ToolResult::text(format!(
+                "Mask added to {} (white reveals, black hides)",
+                node_label(&editor.doc, id)
+            )))
+        }
+        "remove_mask" => {
+            let id = id_arg(args, "node")?;
+            exec(editor, Command::SetMask { id, mask: None })?;
+            Ok(ToolResult::text(format!(
+                "Mask removed from {}",
+                node_label(&editor.doc, id)
+            )))
+        }
+        "set_mask_enabled" => {
+            let id = id_arg(args, "node")?;
+            let enabled = args
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| err("missing boolean 'enabled'"))?;
+            exec(editor, Command::SetMaskEnabled { id, enabled })?;
+            Ok(ToolResult::text(format!(
+                "Mask on {} {}",
+                node_label(&editor.doc, id),
+                if enabled { "enabled" } else { "disabled" }
+            )))
+        }
+        "rasterize" => {
+            let id = id_arg(args, "node")?;
+            exec(editor, Command::Rasterize { id })?;
+            Ok(ToolResult::text(format!(
+                "Rasterized {}",
+                node_label(&editor.doc, id)
+            )))
+        }
+        "save_document" => {
+            let path = match args.get("path").and_then(Value::as_str) {
+                Some(p) => std::path::PathBuf::from(p),
+                None => editor.path.clone().ok_or_else(|| {
+                    err("the document has no file yet; pass a path ending in .ora")
+                })?,
+            };
+            emulsion_io::save(&editor.doc, &path).map_err(|e| err(e.to_string()))?;
+            editor.path = Some(path.clone());
+            Ok(ToolResult::text(format!("Saved {}", path.display())))
+        }
+        "export_image" => {
+            let path = args
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| err("missing string 'path'"))?;
+            let mut opts = emulsion_io::export::ExportOptions::for_doc(&editor.doc);
+            if let Some(q) = args.get("quality").and_then(Value::as_u64) {
+                opts.jpeg_quality = q.clamp(1, 100) as u8;
+            }
+            emulsion_io::export::export(&editor.doc, std::path::Path::new(path), opts)
+                .map_err(|e| err(e.to_string()))?;
+            Ok(ToolResult::text(format!("Exported {path}")))
+        }
         "add_layer" => {
             let (w, h) = (editor.doc.width, editor.doc.height);
             let name = args.get("name").and_then(Value::as_str).unwrap_or("Layer");
@@ -2324,9 +2630,29 @@ fn apply_params(adj: &mut Adjustment, params: &Map<String, Value>) -> Result<(),
                 continue;
             }
             (Adjustment::Lut3D { cube, .. }, "lut_file") => {
-                let path = v
+                let given = v
                     .as_str()
-                    .ok_or_else(|| err("lut_file must be a path to a .cube file"))?;
+                    .ok_or_else(|| err("lut_file must be a path or URL of a .cube file"))?;
+                // A URL is fetched once into the LUT library.
+                let owned: String;
+                let path: &str = if given.starts_with("http://") || given.starts_with("https://") {
+                    let name = given
+                        .rsplit('/')
+                        .next()
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or("lut.cube");
+                    let dir = emulsion_io::recent::data_dir().join("luts");
+                    std::fs::create_dir_all(&dir).map_err(|e| err(e.to_string()))?;
+                    let dest = dir.join(name);
+                    if !dest.exists() {
+                        let body = emulsion_recipes::import::fetch(given).map_err(err)?;
+                        std::fs::write(&dest, body).map_err(|e| err(e.to_string()))?;
+                    }
+                    owned = dest.display().to_string();
+                    &owned
+                } else {
+                    given
+                };
                 let text = std::fs::read_to_string(path)
                     .map_err(|e| err(format!("cannot read {path}: {e}")))?;
                 *cube = emulsion_raster::adjust::Cube::parse(&text)
@@ -2730,6 +3056,97 @@ mod tests {
             assert!(crate::tools::HEAVY.contains(&t), "{t} is heavy");
         }
         assert!(crate::tools::READ_ONLY.contains(&"list_models"));
+    }
+
+    #[test]
+    fn masks_clips_locks_save_and_export_tools() {
+        let mut e = editor();
+        let id = e.doc.nodes[0].id;
+        let r = execute(&mut e, "set_lock", &json!({ "node": id, "locked": true }));
+        assert!(!r.is_error && e.doc.node(id).unwrap().locked);
+        execute(&mut e, "set_lock", &json!({ "node": id, "locked": false }));
+        let r = execute(&mut e, "add_layer", &json!({ "name": "Top" }));
+        assert!(!r.is_error);
+        let top = e.doc.nodes.last().unwrap().id;
+        let r = execute(&mut e, "set_clip", &json!({ "node": top, "to": id }));
+        assert!(!r.is_error && e.doc.node(top).unwrap().clip_to == Some(id));
+        let r = execute(&mut e, "set_clip", &json!({ "node": top, "to": null }));
+        assert!(!r.is_error && e.doc.node(top).unwrap().clip_to.is_none());
+        execute(
+            &mut e,
+            "select_rect",
+            &json!({ "x": 10, "y": 10, "width": 50, "height": 30 }),
+        );
+        let r = execute(
+            &mut e,
+            "add_mask",
+            &json!({ "node": id, "from": "selection" }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        let m = e.doc.node(id).unwrap().mask.clone().expect("mask");
+        assert_eq!(m.get(20, 20), 255);
+        assert_eq!(m.get(150, 50), 0);
+        let r = execute(
+            &mut e,
+            "set_mask_enabled",
+            &json!({ "node": id, "enabled": false }),
+        );
+        assert!(!r.is_error && !e.doc.node(id).unwrap().mask_enabled);
+        let r = execute(&mut e, "remove_mask", &json!({ "node": id }));
+        assert!(!r.is_error && e.doc.node(id).unwrap().mask.is_none());
+        let r = execute(&mut e, "rasterize", &json!({ "node": id }));
+        assert!(r.is_error, "plain pixels cannot be rasterized");
+        let dir = std::env::temp_dir().join(format!("emulsion-mcp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ora = dir.join("doc.ora");
+        let r = execute(
+            &mut e,
+            "save_document",
+            &json!({ "path": ora.to_string_lossy() }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        assert!(ora.exists() && e.path.as_deref() == Some(ora.as_path()));
+        let png = dir.join("out.png");
+        let r = execute(
+            &mut e,
+            "export_image",
+            &json!({ "path": png.to_string_lossy() }),
+        );
+        assert!(!r.is_error, "{}", text(&r));
+        assert!(png.metadata().unwrap().len() > 100);
+        let r = plan_heavy(
+            &e.doc,
+            "import_recipe",
+            &json!({ "text": "Film Simulation: Velvia\nGrain Effect: Weak, Small\nHighlight: +1" }),
+        );
+        assert!(
+            r.is_ok() || text(&r.err().unwrap()).contains("name"),
+            "text import plans"
+        );
+        let r = plan_heavy(
+            &e.doc,
+            "batch_export",
+            &json!({ "out_dir": dir.to_string_lossy() }),
+        );
+        assert!(text(&r.err().expect("needs pictures")).contains("no pictures"));
+        std::fs::remove_dir_all(&dir).ok();
+        for t in [
+            "set_lock",
+            "set_clip",
+            "add_mask",
+            "remove_mask",
+            "set_mask_enabled",
+            "rasterize",
+            "save_document",
+            "export_image",
+            "import_recipe",
+            "batch_export",
+        ] {
+            assert!(
+                crate::tools::definitions().iter().any(|d| d.name == t),
+                "{t} is defined"
+            );
+        }
     }
 
     #[test]

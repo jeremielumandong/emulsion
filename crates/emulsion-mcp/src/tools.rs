@@ -25,6 +25,7 @@ pub const DESTRUCTIVE: &[&str] = &[
     "image_size",
     "canvas_size",
     "merge_branch",
+    "rasterize",
 ];
 
 /// Tools that compute for a while; hosts run them off the UI thread.
@@ -44,6 +45,8 @@ pub const HEAVY: &[&str] = &[
     "depth_map",
     "upscale",
     "restore_faces",
+    "import_recipe",
+    "batch_export",
 ];
 
 const BLEND_MODES: &[&str] = &[
@@ -413,6 +416,66 @@ pub fn definitions() -> Vec<ToolDef> {
             "Enlarge the whole picture with the installed super-resolution model (×4, or ×2 with the lightweight model): the canvas grows by the factor and the result lands as the top node. Slow on a CPU (tens of seconds per megapixel). Needs an upscale model.",
             json!({}),
             &[],
+        ),
+        def(
+            "set_lock",
+            "Lock or unlock a node so it cannot be edited or moved.",
+            json!({ "node": node(), "locked": { "type": "boolean" } }),
+            &["node", "locked"],
+        ),
+        def(
+            "set_clip",
+            "Clip a node to the content of the node directly below it (clipping mask), or unclip with to = null.",
+            json!({ "node": node(), "to": { "type": ["integer", "null"] } }),
+            &["node"],
+        ),
+        def(
+            "add_mask",
+            "Give a node a layer mask: from = \"selection\" turns the current selection into the mask (white reveals), \"all\" makes a fully white mask to paint into.",
+            json!({ "node": node(), "from": { "type": "string", "enum": ["selection", "all"] } }),
+            &["node"],
+        ),
+        def(
+            "remove_mask",
+            "Remove a node's layer mask.",
+            json!({ "node": node() }),
+            &["node"],
+        ),
+        def(
+            "set_mask_enabled",
+            "Turn a node's layer mask on or off without removing it.",
+            json!({ "node": node(), "enabled": { "type": "boolean" } }),
+            &["node", "enabled"],
+        ),
+        def(
+            "rasterize",
+            "Bake a smart layer's filters into plain pixels (the filters stop being editable).",
+            json!({ "node": node() }),
+            &["node"],
+        ),
+        def(
+            "save_document",
+            "Save the document as OpenRaster (.ora) with its history: to path, or to the file it was opened from.",
+            json!({ "path": { "type": "string" } }),
+            &[],
+        ),
+        def(
+            "export_image",
+            "Write the flattened picture to path; the extension picks the format (.png, .jpg, .webp, .tif). quality 1–100 for JPEG.",
+            json!({ "path": { "type": "string" }, "quality": { "type": "integer", "minimum": 1, "maximum": 100 } }),
+            &["path"],
+        ),
+        def(
+            "import_recipe",
+            "Add a recipe to the library from text (a pasted settings block or .recipe.toml), a file path (.recipe.toml, Lightroom .xmp, Fujifilm .FP1, text) or a web page URL (a recipe page, or an index page whose recipe links are all followed). Returns what was saved.",
+            json!({ "text": { "type": "string" }, "path": { "type": "string" }, "url": { "type": "string" } }),
+            &[],
+        ),
+        def(
+            "batch_export",
+            "Apply a recipe to many pictures and write them out: folder (every picture in it) or paths, recipe by name (omit for none), out_dir, format jpg or png. Slow: seconds per picture.",
+            json!({ "folder": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "recipe": { "type": "string" }, "out_dir": { "type": "string" }, "format": { "type": "string", "enum": ["jpg", "png"] } }),
+            &["out_dir"],
         ),
         def(
             "add_layer",
