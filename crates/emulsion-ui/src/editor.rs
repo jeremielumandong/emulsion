@@ -130,6 +130,9 @@ pub(crate) enum SliderKey {
     ToolColorJitter,
     ToolTilt,
     ToolPressureCurve,
+    /// Draw mode's side sliders share the brush keys but need their own tracks.
+    SideSize,
+    SideOpacity,
     /// A RAW develop parameter, by name.
     Raw(&'static str),
     PenWidth,
@@ -181,6 +184,8 @@ enum Drag {
         min: f32,
         max: f32,
         step: f32,
+        /// Side sliders run bottom to top.
+        vertical: bool,
     },
     /// A point of a curves editor.
     Curve(adjust_ui::CurveDrag),
@@ -1111,8 +1116,14 @@ impl EditorView {
                 min,
                 max,
                 step,
+                vertical,
             } => {
-                if let Some(f) = track_fraction(track, pos.x) {
+                let f = if *vertical {
+                    crate::widgets::track_fraction_v(track, pos.y)
+                } else {
+                    track_fraction(track, pos.x)
+                };
+                if let Some(f) = f {
                     let v = snap(min + f * (max - min), *step);
                     let key = *key;
                     self.apply_slider(key, v, cx);
@@ -1214,6 +1225,30 @@ impl EditorView {
             min,
             max,
             step,
+            vertical: false,
+        });
+    }
+
+    /// Mouse down on a vertical side slider.
+    pub(crate) fn vslider_down(
+        &mut self,
+        key: SliderKey,
+        spec: (f32, f32, f32),
+        e: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let track = self.tracks.entry(key).or_default().clone();
+        let (min, max, step) = spec;
+        if let Some(f) = crate::widgets::track_fraction_v(&track, e.position.y) {
+            self.apply_slider(key, snap(min + f * (max - min), step), cx);
+        }
+        self.drag = Some(Drag::Slider {
+            key,
+            track,
+            min,
+            max,
+            step,
+            vertical: true,
         });
     }
 
@@ -1299,6 +1334,8 @@ impl EditorView {
                 cx.notify();
             }
             SliderKey::Raw(name) => self.raw_slider(name, v, cx),
+            SliderKey::SideSize => self.apply_slider(SliderKey::ToolSize, v, cx),
+            SliderKey::SideOpacity => self.apply_slider(SliderKey::ToolOpacity, v, cx),
             SliderKey::ToolPressureCurve => {
                 // 0–100 → 2^(-2 … 2).
                 self.tools.brush.pressure_curve = 2f32.powf(v / 25.0 - 2.0);
@@ -2808,6 +2845,7 @@ impl Render for EditorView {
                     .min_h_0()
                     .items_stretch()
                     .child(rail)
+                    .children(self.draw_side_sliders(&p, cx))
                     .child(
                         div()
                             .flex()

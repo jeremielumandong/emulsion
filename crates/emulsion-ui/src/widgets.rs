@@ -147,6 +147,67 @@ pub fn slider(
         )
 }
 
+/// A vertical slider (Procreate's side sliders): full height of its box,
+/// filled from the bottom. `value` is the normalised position in [0,1].
+pub fn vslider(
+    id: impl Into<ElementId>,
+    value: f32,
+    track: TrackBounds,
+    p: &Palette,
+    on_down: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let v = value.clamp(0.0, 1.0);
+    let t2 = track.clone();
+    div()
+        .id(id)
+        .relative()
+        .w(px(18.))
+        .h_full()
+        .cursor(CursorStyle::PointingHand)
+        .on_mouse_down(MouseButton::Left, on_down)
+        .child(
+            canvas(move |b, _, _| t2.set(Some(b)), |_, _, _, _| {})
+                .absolute()
+                .size_full(),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(8.))
+                .top_0()
+                .bottom_0()
+                .w(px(2.))
+                .bg(p.line),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(8.))
+                .bottom_0()
+                .w(px(2.))
+                .h(relative(v))
+                .bg(p.accent),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(3.))
+                .bottom(relative(v))
+                .mb(px(-6.))
+                .size(px(12.))
+                .bg(p.panel)
+                .border_1()
+                .border_color(p.ink),
+        )
+}
+
+/// Map a pointer y position to [0,1] up a vertical track (bottom = 0).
+pub fn track_fraction_v(track: &TrackBounds, y: Pixels) -> Option<f32> {
+    let b = track.get()?;
+    let h = f32::from(b.size.height).max(1.0);
+    Some((1.0 - f32::from(y - b.origin.y) / h).clamp(0.0, 1.0))
+}
+
 /// Map a pointer x position to [0,1] along a track.
 pub fn track_fraction(track: &TrackBounds, x: Pixels) -> Option<f32> {
     let b = track.get()?;

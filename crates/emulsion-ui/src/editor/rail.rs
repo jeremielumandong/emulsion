@@ -362,3 +362,84 @@ impl EditorView {
         rail.child(div().flex_1()).child(self.swatches(p, cx))
     }
 }
+
+impl EditorView {
+    /// Draw mode: size and opacity as tall sliders beside the canvas,
+    /// where a painter's off hand finds them (Procreate's side bar).
+    pub(crate) fn draw_side_sliders(
+        &mut self,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.draw_mode {
+            return None;
+        }
+        let brushy = matches!(
+            self.tool,
+            Tool::Brush | Tool::Heal | Tool::Clone | Tool::Mask
+        ) && !matches!(self.tools.paint, PaintKind::Bucket | PaintKind::Gradient);
+        if !brushy {
+            return None;
+        }
+        let b = self.tools.brush;
+        let size_track = self.tracks.entry(SliderKey::SideSize).or_default().clone();
+        let op_track = self
+            .tracks
+            .entry(SliderKey::SideOpacity)
+            .or_default()
+            .clone();
+        let size_norm = ((b.size - 1.0) / 499.0).clamp(0.0, 1.0).sqrt();
+        let column = |label: &'static str, value: String, el: AnyElement| {
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(4.))
+                .h(px(170.))
+                .child(div().flex_1().min_h_0().child(el))
+                .child(mono(value, 9.5, p.ink))
+                .child(mono(label, 9., p.muted))
+        };
+        Some(
+            div()
+                .flex()
+                .flex_none()
+                .flex_col()
+                .justify_center()
+                .gap(px(18.))
+                .w(px(40.))
+                .py(px(12.))
+                .border_r_1()
+                .border_color(p.line)
+                .child(column(
+                    "size",
+                    format!("{:.0}", b.size),
+                    crate::widgets::vslider(
+                        "side-size",
+                        size_norm,
+                        size_track,
+                        p,
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            this.vslider_down(SliderKey::SideSize, (1.0, 500.0, 1.0), e, cx)
+                        }),
+                    )
+                    .into_any_element(),
+                ))
+                .child(column(
+                    "opacity",
+                    format!("{:.0}%", b.opacity * 100.0),
+                    crate::widgets::vslider(
+                        "side-opacity",
+                        b.opacity,
+                        op_track,
+                        p,
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            this.vslider_down(SliderKey::SideOpacity, (1.0, 100.0, 1.0), e, cx)
+                        }),
+                    )
+                    .into_any_element(),
+                ))
+                .into_any_element(),
+        )
+    }
+}

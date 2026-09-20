@@ -315,30 +315,49 @@ impl Path {
         if b.is_empty() || self.is_empty() {
             return Raster::transparent(w, h);
         }
-        let mut px: Vec<[f32; 4]> = vec![[0.0; 4]; (b.w * b.h) as usize];
-        if let Some(c) = style.fill {
-            let m = self.fill_mask(w, h).read_rect(b);
-            let col = color::srgba8_to_premul(c);
-            for (o, k) in px.iter_mut().zip(m) {
-                let k = k as f32 / 255.0;
-                for i in 0..4 {
-                    o[i] = col[i] * k;
-                }
-            }
-        }
-        if let (Some(c), true) = (style.stroke, style.width > 0.0) {
-            let m = self.stroke_mask(style.width as f64, w, h).read_rect(b);
-            let col = color::srgba8_to_premul(c);
-            for (o, k) in px.iter_mut().zip(m) {
-                let k = k as f32 / 255.0;
-                if k > 0.0 {
-                    for i in 0..4 {
-                        o[i] = col[i] * k + o[i] * (1.0 - col[3] * k);
+        // Straight to 16-bit pixels, one row at a time in parallel: the
+        // fill goes down first, the stroke over it.
+        use rayon::prelude::*;
+        let fill = style.fill.map(|c| {
+            (
+                self.fill_mask(w, h).read_rect(b),
+                color::srgba8_to_premul(c),
+            )
+        });
+        let stroke = match (style.stroke, style.width > 0.0) {
+            (Some(c), true) => Some((
+                self.stroke_mask(style.width as f64, w, h).read_rect(b),
+                color::srgba8_to_premul(c),
+            )),
+            _ => None,
+        };
+        let bw = b.w as usize;
+        let mut out: Vec<[u16; 4]> = vec![[0; 4]; (b.w * b.h) as usize];
+        out.par_chunks_mut(bw).enumerate().for_each(|(row, o)| {
+            let base = row * bw;
+            for (i, px) in o.iter_mut().enumerate() {
+                let mut acc = [0.0f32; 4];
+                if let Some((m, col)) = &fill {
+                    let k = m[base + i] as f32 / 255.0;
+                    if k > 0.0 {
+                        for c in 0..4 {
+                            acc[c] = col[c] * k;
+                        }
                     }
                 }
+                if let Some((m, col)) = &stroke {
+                    let k = m[base + i] as f32 / 255.0;
+                    if k > 0.0 {
+                        for c in 0..4 {
+                            acc[c] = col[c] * k + acc[c] * (1.0 - col[3] * k);
+                        }
+                    }
+                }
+                if acc[3] > 0.0 {
+                    *px = color::f_to_px(acc);
+                }
             }
-        }
-        let out: Vec<[u16; 4]> = px.into_iter().map(color::f_to_px).collect();
+        });
         Raster::transparent(w, h).write_rect(b, &out)
     }
 
@@ -675,6 +694,9 @@ pub fn fill_coverage(polys: &[Vec<Pt>], w: u32, h: u32) -> Mask {
 
 /// Round-joined, round-capped stroke coverage from a signed distance to
 /// each polyline segment.
+/// A segment with its padded pixel box: ends, x0, x1, y0, y1.
+type SegBox = ((f64, f64), (f64, f64), i32, i32, i32, i32);
+
 pub fn stroke_coverage(polys: &[(Vec<Pt>, bool)], width: f64, w: u32, h: u32) -> Mask {
     let mask = Mask::empty(w, h, 0);
     let hw = (width / 2.0).max(0.0);
@@ -712,37 +734,53 @@ pub fn stroke_coverage(polys: &[(Vec<Pt>, bool)], width: f64, w: u32, h: u32) ->
     if b.is_empty() {
         return mask;
     }
-    let mut acc = vec![0f32; (b.w * b.h) as usize];
-    for (a, c) in &segs {
-        let sb = IRect::new(
-            (a.0.min(c.0) - pad).floor() as i32,
-            (a.1.min(c.1) - pad).floor() as i32,
-            ((a.0 - c.0).abs() + 2.0 * pad).ceil() as i32 + 1,
-            ((a.1 - c.1).abs() + 2.0 * pad).ceil() as i32 + 1,
-        )
-        .intersect(&b);
-        let (dx, dy) = (c.0 - a.0, c.1 - a.1);
-        let len2 = dx * dx + dy * dy;
-        for y in sb.y..sb.bottom() {
-            for x in sb.x..sb.right() {
-                let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
-                let t = if len2 > 1e-12 {
-                    ((px - a.0) * dx + (py - a.1) * dy) / len2
-                } else {
-                    0.0
+    // Rows in parallel: each row visits only the segments whose padded
+    // box reaches it, and keeps the greatest coverage.
+    use rayon::prelude::*;
+    let seg_boxes: Vec<SegBox> = segs
+        .iter()
+        .map(|(a, c)| {
+            let sb = IRect::new(
+                (a.0.min(c.0) - pad).floor() as i32,
+                (a.1.min(c.1) - pad).floor() as i32,
+                ((a.0 - c.0).abs() + 2.0 * pad).ceil() as i32 + 1,
+                ((a.1 - c.1).abs() + 2.0 * pad).ceil() as i32 + 1,
+            )
+            .intersect(&b);
+            (*a, *c, sb.x, sb.right(), sb.y, sb.bottom())
+        })
+        .collect();
+    let mut data = vec![0u8; (b.w * b.h) as usize];
+    data.par_chunks_mut(b.w as usize)
+        .enumerate()
+        .for_each(|(row, out)| {
+            let y = b.y + row as i32;
+            let py = y as f64 + 0.5;
+            for &(a, c, x0, x1, y0, y1) in &seg_boxes {
+                if y < y0 || y >= y1 {
+                    continue;
                 }
-                .clamp(0.0, 1.0);
-                let (qx, qy) = (a.0 + dx * t, a.1 + dy * t);
-                let d = (px - qx).hypot(py - qy);
-                let cov = (hw + 0.5 - d).clamp(0.0, 1.0) as f32;
-                if cov > 0.0 {
-                    let i = ((y - b.y) * b.w + (x - b.x)) as usize;
-                    acc[i] = acc[i].max(cov);
+                let (dx, dy) = (c.0 - a.0, c.1 - a.1);
+                let len2 = dx * dx + dy * dy;
+                for x in x0..x1 {
+                    let px = x as f64 + 0.5;
+                    let t = if len2 > 1e-12 {
+                        ((px - a.0) * dx + (py - a.1) * dy) / len2
+                    } else {
+                        0.0
+                    }
+                    .clamp(0.0, 1.0);
+                    let (qx, qy) = (a.0 + dx * t, a.1 + dy * t);
+                    let d = (px - qx).hypot(py - qy);
+                    let cov = (hw + 0.5 - d).clamp(0.0, 1.0);
+                    if cov > 0.0 {
+                        let v = (cov * 255.0).round() as u8;
+                        let o = &mut out[(x - b.x) as usize];
+                        *o = (*o).max(v);
+                    }
                 }
             }
-        }
-    }
-    let data: Vec<u8> = acc.into_iter().map(|v| (v * 255.0).round() as u8).collect();
+        });
     mask.write_rect(b, &data)
 }
 
