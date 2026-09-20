@@ -16,6 +16,9 @@ pub(crate) struct ImageInputs {
     key: Entity<gpui_kit::component::input::InputState>,
 }
 
+/// A heading and its (action label, key caps) rows.
+type ShortcutGroup = (&'static str, Vec<(String, Vec<String>)>);
+
 /// Which heading a shortcut sits under on the Settings screen.
 fn shortcut_group(action: &str, ctx: &str) -> &'static str {
     if action.starts_with("Tool")
@@ -389,7 +392,7 @@ impl Workspace {
                 let eff = probe.bindings.clone();
                 let overrides = probe.overrides;
                 // One line per action, keys as key caps, grouped by purpose.
-                let mut groups: Vec<(&'static str, Vec<(String, Vec<String>)>)> = Vec::new();
+                let mut groups: Vec<ShortcutGroup> = Vec::new();
                 for (ctx, action, keys) in &eff {
                     let title = shortcut_group(action, ctx);
                     let g = match groups.iter_mut().find(|(t, _)| *t == title) {
