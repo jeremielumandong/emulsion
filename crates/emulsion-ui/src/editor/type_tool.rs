@@ -12,6 +12,8 @@ pub struct TypeState {
     pub spec: TextSpec,
     /// The field editing `NodeId`'s text.
     pub field: Option<(NodeId, Entity<InputState>, Subscription)>,
+    /// Where the font chip was laid out, so its list opens under it.
+    pub font_chip: crate::widgets::TrackBounds,
 }
 
 impl EditorView {
@@ -308,10 +310,17 @@ impl EditorView {
         } else {
             format!("font: {} ▾", cur.font)
         };
+        let chip_bounds = self.type_tool.font_chip.clone();
         v.push(
             crate::widgets::tip(
                 chip("type-font", label, open, p)
+                    .relative()
                     .when(!cur.font.is_empty(), |c| c.font_family(cur.font.clone()))
+                    .child(
+                        canvas(move |b, _, _| chip_bounds.set(Some(b)), |_, _, _, _| {})
+                            .absolute()
+                            .size_full(),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.menu = if open { None } else { Some(super::Menu::Font) };
                         cx.notify();
@@ -375,29 +384,38 @@ impl EditorView {
                         }),
                 )
         });
+        // Under the chip, in window coordinates; snapped inside the window.
+        let at = self
+            .type_tool
+            .font_chip
+            .get()
+            .map(|b| point(b.left(), b.bottom() + px(4.)))
+            .unwrap_or(point(px(90.), px(230.)));
         Some(
             deferred(
-                div()
-                    .id("font-picker")
-                    .absolute()
-                    .top(px(40.))
-                    .left(px(16.))
-                    .w(px(340.))
-                    .max_h(px(380.))
-                    .flex()
-                    .flex_col()
-                    .border_1()
-                    .border_color(p.ink)
-                    .bg(p.panel)
-                    .text_color(p.ink)
-                    .overflow_y_scroll()
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        if this.menu == Some(super::Menu::Font) {
-                            this.menu = None;
-                            cx.notify();
-                        }
-                    }))
-                    .children(rows),
+                anchored().position(at).snap_to_window().child(
+                    div()
+                        .id("font-picker")
+                        // Wheel and clicks stop here instead of zooming
+                        // the canvas underneath.
+                        .occlude()
+                        .w(px(340.))
+                        .max_h(px(380.))
+                        .flex()
+                        .flex_col()
+                        .border_1()
+                        .border_color(p.ink)
+                        .bg(p.panel)
+                        .text_color(p.ink)
+                        .overflow_y_scroll()
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            if this.menu == Some(super::Menu::Font) {
+                                this.menu = None;
+                                cx.notify();
+                            }
+                        }))
+                        .children(rows),
+                ),
             )
             .with_priority(1)
             .into_any_element(),
