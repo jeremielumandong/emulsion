@@ -302,29 +302,106 @@ impl EditorView {
                     .into_any_element(),
             );
         }
-        let fonts = emulsion_core::text::font_families();
-        if !fonts.is_empty() {
-            let idx = fonts.iter().position(|f| *f == cur.font);
-            let label = if cur.font.is_empty() {
-                "font: default".to_string()
-            } else {
-                format!("font: {}", cur.font)
-            };
-            v.push(
-                chip("type-font", label, false, p)
+        let open = self.menu == Some(super::Menu::Font);
+        let label = if cur.font.is_empty() {
+            "font: default ▾".to_string()
+        } else {
+            format!("font: {} ▾", cur.font)
+        };
+        v.push(
+            crate::widgets::tip(
+                chip("type-font", label, open, p)
+                    .when(!cur.font.is_empty(), |c| c.font_family(cur.font.clone()))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        // Step through the installed families.
-                        let fonts = emulsion_core::text::font_families();
-                        let next = match idx {
-                            None => fonts.first().cloned().unwrap_or_default(),
-                            Some(i) if i + 1 < fonts.len() => fonts[i + 1].clone(),
-                            Some(_) => String::new(),
-                        };
-                        this.restyle_text(move |s| s.font = next.clone(), cx)
-                    }))
-                    .into_any_element(),
-            );
+                        this.menu = if open { None } else { Some(super::Menu::Font) };
+                        cx.notify();
+                    })),
+                "Choose a font; every family is shown in itself",
+            )
+            .into_any_element(),
+        );
+    }
+
+    /// The font list under the options bar: every installed family, each
+    /// name set in its own face so the choice can be made by eye.
+    pub(crate) fn font_picker(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.menu != Some(super::Menu::Font) || self.tool != Tool::Type {
+            return None;
         }
+        let current = self.type_tool.spec.font.clone();
+        let (accent, accent_fg, ink, paper) = (p.accent, p.accent_fg, p.ink, p.paper);
+        let mut fonts = emulsion_core::text::font_families();
+        fonts.insert(0, String::new());
+        let rows = fonts.into_iter().enumerate().map(|(i, name)| {
+            let on = name == current;
+            let display: SharedString = if name.is_empty() {
+                "default".into()
+            } else {
+                name.clone().into()
+            };
+            let choose = name.clone();
+            div()
+                .id(("font-row", i))
+                .flex()
+                .items_baseline()
+                .justify_between()
+                .gap(px(12.))
+                .px(px(10.))
+                .py(px(5.))
+                .cursor_pointer()
+                .when(on, |d| d.bg(ink).text_color(paper))
+                .hover(move |s| s.bg(accent).text_color(accent_fg))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let f = choose.clone();
+                    this.restyle_text(move |s| s.font = f.clone(), cx);
+                    this.menu = None;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .when(!name.is_empty(), |d| d.font_family(name.clone()))
+                        .child(display),
+                )
+                .child(
+                    div()
+                        .font_family(MONO_FONT)
+                        .text_size(px(9.5))
+                        .text_color(if on { paper } else { p.muted })
+                        .child(if name.is_empty() {
+                            "system"
+                        } else {
+                            "Aa Bb 0123"
+                        }),
+                )
+        });
+        Some(
+            deferred(
+                div()
+                    .id("font-picker")
+                    .absolute()
+                    .top(px(40.))
+                    .left(px(16.))
+                    .w(px(340.))
+                    .max_h(px(380.))
+                    .flex()
+                    .flex_col()
+                    .border_1()
+                    .border_color(p.ink)
+                    .bg(p.panel)
+                    .text_color(p.ink)
+                    .overflow_y_scroll()
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        if this.menu == Some(super::Menu::Font) {
+                            this.menu = None;
+                            cx.notify();
+                        }
+                    }))
+                    .children(rows),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
     }
 
     /// Bake the selected text layer into pixels.

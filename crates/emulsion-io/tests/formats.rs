@@ -197,3 +197,113 @@ fn unknown_kind_gives_a_clear_error() {
     );
     assert!(!emulsion_io::is_openable(&p));
 }
+
+// ── Export ──────────────────────────────────────────────────────────────
+
+fn two_layer_doc() -> emulsion_core::Document {
+    use emulsion_core::command::Slot;
+    use emulsion_core::{Command, Document, Node};
+    use emulsion_raster::{Placement, Raster};
+    use std::sync::Arc;
+    let mut d = Document::new(6, 4);
+    let bottom = Raster::from_fn(6, 4, [0; 4], |x, _| {
+        if x < 3 {
+            [65535, 0, 0, 65535]
+        } else {
+            [0, 0, 65535, 65535]
+        }
+    });
+    Command::AddNode {
+        node: Box::new(Node::raster(
+            0,
+            "Ground",
+            Arc::new(bottom),
+            Placement::default(),
+        )),
+        slot: Slot::TOP,
+    }
+    .apply(&mut d)
+    .unwrap();
+    // A half-transparent green top layer, hidden, must not leak into flats
+    // and must be left out of the XCF.
+    let mut top = Node::raster(
+        0,
+        "Hidden note",
+        Arc::new(Raster::solid(6, 4, [0.0, 1.0, 0.0, 0.5])),
+        Placement::default(),
+    );
+    top.visible = false;
+    Command::AddNode {
+        node: Box::new(top),
+        slot: Slot::TOP,
+    }
+    .apply(&mut d)
+    .unwrap();
+    d
+}
+
+#[test]
+fn every_in_process_export_format_round_trips_the_flat_picture() {
+    use emulsion_io::export::{ExportFormat, ExportOptions, export};
+    let d = two_layer_doc();
+    for ext in [
+        "png", "jpg", "webp", "tif", "bmp", "gif", "tga", "ppm", "ico", "hdr", "exr", "qoi", "ff",
+    ] {
+        let p = scratch(&format!("out.{ext}"));
+        let f = ExportFormat::from_path(&p).unwrap_or_else(|| panic!("{ext} is an export format"));
+        assert!(f.available(), "{ext}");
+        export(&d, &p, ExportOptions::for_doc(&d)).unwrap_or_else(|e| panic!("{ext}: {e}"));
+        let (w, h, left, right) = first_raster(&p);
+        assert_eq!((w, h), (6, 4), "{ext}");
+        // Lossy and float formats land near the primaries; exact ones hit them.
+        let near = |c: [u16; 4], want: [u16; 4]| {
+            c.iter()
+                .zip(want)
+                .all(|(a, b)| (*a as i32 - b as i32).abs() < 2600)
+        };
+        assert!(near(left, [65535, 0, 0, 65535]), "{ext} left {left:?}");
+        assert!(near(right, [0, 0, 65535, 65535]), "{ext} right {right:?}");
+    }
+}
+
+#[test]
+fn xcf_export_keeps_visible_layers_and_gimp_style_order() {
+    use emulsion_io::export::{ExportOptions, export};
+    let d = two_layer_doc();
+    let p = scratch("layered-out.xcf");
+    export(&d, &p, ExportOptions::for_doc(&d)).unwrap();
+    let back = open(&p).unwrap();
+    assert_eq!((back.width, back.height), (6, 4));
+    let names: Vec<&str> = back.nodes.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(names, ["Ground"], "hidden layers are left out");
+    let (_, _, left, right) = first_raster(&p);
+    assert_eq!(left, [65535, 0, 0, 65535]);
+    assert_eq!(right, [0, 0, 65535, 65535]);
+}
+
+#[test]
+fn converter_backed_export_writes_avif_when_a_tool_is_installed() {
+    use emulsion_io::export::{ExportFormat, ExportOptions, export};
+    let p = scratch("out.avif");
+    let Some(f) = ExportFormat::from_path(&p) else {
+        panic!("avif is an export format");
+    };
+    if !f.available() {
+        eprintln!("skipped: no AVIF encoder on PATH");
+        return;
+    }
+    let d = two_layer_doc();
+    export(&d, &p, ExportOptions::for_doc(&d)).unwrap();
+    assert!(std::fs::metadata(&p).unwrap().len() > 0);
+    if emulsion_io::external::can_open(&p) {
+        let (w, h, _, _) = first_raster(&p);
+        assert_eq!((w, h), (6, 4));
+    }
+}
+
+#[test]
+fn exportable_extensions_lists_in_process_formats_first() {
+    let v = emulsion_io::export::ExportFormat::exportable_extensions();
+    assert_eq!(&v[..5], &["png", "jpg", "webp", "tif", "psd"]);
+    assert!(v.contains(&"xcf") && v.contains(&"exr") && v.contains(&"qoi"));
+}

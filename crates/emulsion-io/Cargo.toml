@@ -24,6 +24,7 @@ rawler = { workspace = true }
 ag-psd = { workspace = true }
 jxl-oxide = { workspace = true }
 xcf-rs = { workspace = true }
+resvg = { workspace = true }
 moxcms = { workspace = true }
 kamadak-exif = { workspace = true }
 ureq = { workspace = true }

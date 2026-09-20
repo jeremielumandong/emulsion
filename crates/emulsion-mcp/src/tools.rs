@@ -555,7 +555,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "export_image",
-            "Write the flattened picture to path; the extension picks the format (.png, .jpg, .webp, .tif). quality 1–100 for JPEG.",
+            "Write the picture to path; the extension picks the format: png, jpg, webp, tif, bmp, gif, tga, ppm, ico, hdr, exr, qoi, ff flat; psd and xcf layered; avif, heic, jxl, pdf when a converter is installed. quality 1–100 for lossy formats.",
             json!({ "path": { "type": "string" }, "quality": { "type": "integer", "minimum": 1, "maximum": 100 } }),
             &["path"],
         ),
@@ -568,7 +568,7 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "batch_export",
             "Apply a film recipe or saved exact adjustment workflow to many pictures and write them out: folder (every picture in it) or paths, recipe by name (omit for none), out_dir, format jpg or png. Existing files and source pictures are never replaced: output name collisions gain a numeric suffix. Slow: seconds per picture.",
-            json!({ "folder": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "recipe": { "type": "string" }, "out_dir": { "type": "string" }, "format": { "type": "string", "enum": ["jpg", "png", "webp", "tif"] } }),
+            json!({ "folder": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "recipe": { "type": "string" }, "out_dir": { "type": "string" }, "format": { "type": "string", "description": "Output extension: jpg (default), png, webp, tif, bmp, gif, tga, ppm, qoi, ff, or avif/heic/jxl when a converter is installed." } }),
             &["out_dir"],
         ),
         def(

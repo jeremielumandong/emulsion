@@ -144,6 +144,16 @@ converters, so this path applies to the AppImage and native builds.
 cargo run --release -p emulsion-io --example open_any -- picture.heic layered.xcf
 ```
 
+### Exporting
+
+Export writes PNG, JPEG, WebP and TIFF (8 or 16-bit), layered PSD and layered
+8-bit XCF, and behind **more formats…**: OpenEXR and Radiance HDR (float), BMP,
+GIF, Targa, PPM, ICO, QOI and farbfeld, plus AVIF, HEIC, JPEG XL and one-page PDF
+when `avifenc`, `heif-enc`, `cjxl` or ImageMagick is installed. Formats without
+transparency composite over white. XCF carries the visible top-level layers with
+their names and opacity, each rendered with its own adjustments, masks and styles
+baked in; hidden layers are left out.
+
 ## Editor controls
 
 The right dock keeps **Layers** visible, with its own scrolling list and

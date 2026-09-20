@@ -8,6 +8,7 @@
 
 use crate::{IoError, Result};
 use emulsion_core::{Document, Node};
+use emulsion_raster::Raster;
 use emulsion_raster::vector::{Path, PathStyle};
 use glam::{DAffine2, dvec2};
 use quick_xml::Reader;
@@ -307,6 +308,49 @@ fn shape_path(name: &str, a: &HashMap<String, String>) -> Option<Path> {
         _ => return None,
     };
     Path::from_svg(&d).ok()
+}
+
+/// Long side a small SVG is scaled up to when rasterized: vectors are free
+/// to render large, and a 24 px icon is no use as a 24 px picture.
+const RASTER_MIN_SIDE: f32 = 1024.0;
+const RASTER_MAX_SIDE: f32 = 8192.0;
+
+/// Render the whole SVG, gradients, filters, text and embedded images
+/// included, through resvg into one pixel layer, the way GIMP opens SVGs.
+/// The document takes the SVG's own size, scaled so its long side is at
+/// least `RASTER_MIN_SIDE` and at most `RASTER_MAX_SIDE`.
+pub fn rasterize(text: &str) -> Result<Raster> {
+    use resvg::usvg;
+    let mut fonts = usvg::fontdb::Database::new();
+    fonts.load_system_fonts();
+    let opt = usvg::Options {
+        fontdb: Arc::new(fonts),
+        ..Default::default()
+    };
+    let tree =
+        usvg::Tree::from_str(text, &opt).map_err(|e| IoError::Unsupported(format!("SVG: {e}")))?;
+    let size = tree.size();
+    let (sw, sh) = (size.width().max(1.0), size.height().max(1.0));
+    let long = sw.max(sh);
+    let scale = (RASTER_MIN_SIDE / long)
+        .max(1.0)
+        .min(RASTER_MAX_SIDE / long);
+    let (w, h) = ((sw * scale).round() as u32, (sh * scale).round() as u32);
+    crate::import::check_size(w, h)?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)
+        .ok_or_else(|| IoError::Unsupported("SVG: could not allocate the picture".into()))?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    // tiny-skia stores premultiplied RGBA; the raster wants straight alpha.
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for px in pixmap.pixels() {
+        let c = px.demultiply();
+        rgba.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    }
+    Ok(Raster::from_srgba8(w, h, &rgba))
 }
 
 /// Import an SVG file as a document of Path nodes.

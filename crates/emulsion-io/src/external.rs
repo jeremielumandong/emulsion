@@ -229,3 +229,119 @@ pub fn decode(path: &Path) -> Result<Decoded> {
 pub fn open(path: &Path) -> Result<Document> {
     document_from(path, decode(path)?)
 }
+
+// ── Writing ─────────────────────────────────────────────────────────────
+
+/// Formats a converter may write for export.
+pub const EXPORT_EXTENSIONS: &[&str] = &["avif", "heic", "jxl", "pdf"];
+
+/// One way to turn a PNG into `ext`; `{q}` is the quality 1–100.
+struct Encoder {
+    tool: &'static str,
+    args: &'static [&'static str],
+}
+
+fn encoders(ext: &str) -> Vec<Encoder> {
+    let magick = |a: &'static [&'static str]| Encoder {
+        tool: "magick",
+        args: a,
+    };
+    let convert = |a: &'static [&'static str]| Encoder {
+        tool: "convert",
+        args: a,
+    };
+    match ext {
+        "avif" => vec![
+            Encoder {
+                tool: "avifenc",
+                args: &["-q", "{q}", "-s", "6", "{in}", "{out}"],
+            },
+            magick(&["{in}", "-quality", "{q}", "{out}"]),
+            convert(&["{in}", "-quality", "{q}", "{out}"]),
+        ],
+        "heic" => vec![
+            Encoder {
+                tool: "heif-enc",
+                args: &["-q", "{q}", "{in}", "-o", "{out}"],
+            },
+            magick(&["{in}", "-quality", "{q}", "{out}"]),
+            convert(&["{in}", "-quality", "{q}", "{out}"]),
+        ],
+        "jxl" => vec![
+            Encoder {
+                tool: "cjxl",
+                args: &["{in}", "{out}", "-q", "{q}"],
+            },
+            magick(&["{in}", "-quality", "{q}", "{out}"]),
+            convert(&["{in}", "-quality", "{q}", "{out}"]),
+        ],
+        "pdf" => vec![magick(&["{in}", "{out}"]), convert(&["{in}", "{out}"])],
+        _ => vec![],
+    }
+}
+
+/// Whether some installed tool writes `ext`.
+pub fn can_encode(ext: &str) -> bool {
+    encoders(ext).iter().any(|e| on_path(e.tool))
+}
+
+/// Write `png` (encoded bytes) as `ext` at `out` through the first
+/// converter that succeeds.
+pub fn encode(png: &[u8], ext: &'static str, out: &Path, quality: u8) -> Result<()> {
+    let tmp = temp_dir()?;
+    let src = tmp.0.join("picture.png");
+    std::fs::write(&src, png)?;
+    let staged = tmp.0.join(format!("out.{ext}"));
+    let q = quality.clamp(1, 100).to_string();
+    let mut failures = Vec::new();
+    for e in encoders(ext) {
+        if !on_path(e.tool) {
+            continue;
+        }
+        let args: Vec<String> = e
+            .args
+            .iter()
+            .map(|a| {
+                a.replace("{in}", &src.to_string_lossy())
+                    .replace("{out}", &staged.to_string_lossy())
+                    .replace("{q}", &q)
+            })
+            .collect();
+        let _ = std::fs::remove_file(&staged);
+        let result = Command::new(e.tool)
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        match result {
+            Ok(o) if o.status.success() && staged.is_file() => {
+                // Into place via rename when possible, else copy.
+                if std::fs::rename(&staged, out).is_err() {
+                    std::fs::copy(&staged, out)?;
+                }
+                return Ok(());
+            }
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let line = err
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("failed");
+                failures.push(format!("{}: {}", e.tool, line.trim()));
+            }
+            Err(err) => failures.push(format!("{}: {err}", e.tool)),
+        }
+    }
+    if failures.is_empty() {
+        let names: Vec<&str> = encoders(ext).iter().map(|e| e.tool).collect();
+        return Err(IoError::Unsupported(format!(
+            "no encoder for .{ext}; install one of {} to export it",
+            names.join(", ")
+        )));
+    }
+    Err(IoError::Unsupported(format!(
+        ".{ext} could not be written ({})",
+        failures.join("; ")
+    )))
+}

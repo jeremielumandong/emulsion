@@ -1,5 +1,8 @@
-//! GIMP's native XCF through `xcf-rs`: every 8-bit RGB/RGBA layer with its
-//! name, offset, opacity and visibility becomes a pixel layer. Greyscale,
+//! GIMP's native XCF through `xcf-rs`, both ways. Reading: every 8-bit
+//! RGB/RGBA layer with its name, offset, opacity and visibility becomes a
+//! pixel layer. Writing: every visible top-level layer is rendered by itself
+//! (adjustments, text, paths and styles baked in) and stored as an 8-bit
+//! RGBA layer with its name and opacity, so GIMP opens the picture layered. Greyscale,
 //! indexed and high-precision files, layer masks and groups are beyond the
 //! crate; those fall back to a flattened import through an installed
 //! converter (see `external`).
@@ -116,4 +119,112 @@ pub fn read(path: &Path) -> Result<Document> {
     doc.validate()
         .map_err(|e| IoError::Unsupported(format!("XCF: {e}")))?;
     Ok(doc)
+}
+
+/// Write `doc` as a layered 8-bit XCF (GIMP 2.10+ format, version 11).
+/// Hidden layers are left out, since the writer cannot mark them hidden.
+pub fn write(doc: &Document, path: &Path) -> Result<()> {
+    use xcf_rs::create::XcfCreator;
+    use xcf_rs::data::color::ColorType;
+    use xcf_rs::data::layer::Layer;
+    use xcf_rs::data::pixeldata::PixelData;
+    use xcf_rs::data::property::{Property, PropertyIdentifier, PropertyPayload};
+    use xcf_rs::data::rgba::RgbaPixel;
+    use xcf_rs::{LayerColorType, LayerColorValue};
+
+    let (w, h) = (doc.width, doc.height);
+    let mut xcf = XcfCreator::new(11, w, h, ColorType::Rgb);
+    xcf.add_properties(&vec![]);
+    // GIMP stores the top layer first.
+    let mut layers = Vec::new();
+    for id in doc.children(None).into_iter().rev() {
+        let Some(n) = doc.node(id) else { continue };
+        if !n.visible {
+            continue;
+        }
+        let px = render_alone(doc, id).to_srgba8();
+        let pixels: Vec<RgbaPixel> = px
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| RgbaPixel(*p))
+            .collect();
+        layers.push(Layer {
+            width: w,
+            height: h,
+            kind: LayerColorType {
+                kind: LayerColorValue::Rgb,
+                alpha: true,
+            },
+            name: n.name.clone(),
+            pixels: PixelData {
+                width: w,
+                height: h,
+                pixels,
+            },
+            properties: vec![
+                Property {
+                    kind: PropertyIdentifier::PropOffsets,
+                    length: 8,
+                    payload: PropertyPayload::OffsetsLayer(0, 0),
+                },
+                Property {
+                    kind: PropertyIdentifier::PropOpacity,
+                    length: 4,
+                    payload: PropertyPayload::OpacityLayer(RgbaPixel([
+                        0,
+                        0,
+                        0,
+                        (n.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
+                    ])),
+                },
+                Property {
+                    kind: PropertyIdentifier::PropVisible,
+                    length: 4,
+                    payload: PropertyPayload::VisibleLayer(),
+                },
+            ],
+        });
+    }
+    if layers.is_empty() {
+        // Nothing visible: one empty layer keeps the file valid.
+        layers.push(Layer {
+            width: w,
+            height: h,
+            kind: LayerColorType {
+                kind: LayerColorValue::Rgb,
+                alpha: true,
+            },
+            name: "Background".into(),
+            pixels: PixelData {
+                width: w,
+                height: h,
+                pixels: vec![RgbaPixel([0; 4]); (w * h) as usize],
+            },
+            properties: vec![],
+        });
+    }
+    xcf.add_layers(&layers);
+    let tmp = path.with_extension("xcf.emulsion-tmp");
+    xcf.save(&tmp)
+        .map_err(|e| IoError::Unsupported(format!("XCF: {e:?}")))?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// One top-level layer rendered by itself in document space, with its
+/// blend mode, mask, clipping and children (for a group) applied.
+fn render_alone(doc: &Document, id: emulsion_core::NodeId) -> Raster {
+    let mut d = doc.clone();
+    let keep: std::collections::HashSet<_> = d.subtree(id).into_iter().chain([id]).collect();
+    for n in d.nodes.iter_mut() {
+        if keep.contains(&n.id) {
+            if n.id == id {
+                n.opacity = 1.0;
+            }
+        } else {
+            n.visible = false;
+        }
+    }
+    emulsion_raster::composite::flatten(&d.composite_tree(), 0)
 }

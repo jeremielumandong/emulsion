@@ -13,6 +13,8 @@ pub struct ExportPrefs {
     pub quality: u8,
     /// 16-bit output where the format allows (PNG, TIFF).
     pub depth16: bool,
+    /// The longer list of formats is unfolded.
+    pub more: bool,
 }
 
 impl Default for ExportPrefs {
@@ -22,12 +24,15 @@ impl Default for ExportPrefs {
             ext: "png",
             quality: 92,
             depth16: false,
+            more: false,
         }
     }
 }
 
-/// (extension, label, what it is for).
-const FORMATS: [(&str, &str, &str); 5] = [
+/// (extension, label, what it is for). The everyday formats first; the
+/// rest sit behind "more formats". Converter-backed ones show only when
+/// this machine can write them.
+const FORMATS: &[(&str, &str, &str)] = &[
     (
         "png",
         "PNG",
@@ -53,6 +58,64 @@ const FORMATS: [(&str, &str, &str); 5] = [
         "PSD",
         "Layered Photoshop file. Layers, groups, masks and blend modes carry over; effects flatten.",
     ),
+    (
+        "xcf",
+        "XCF",
+        "Layered GIMP file, 8-bit. Visible top-level layers carry over with their opacity; everything else bakes into them.",
+    ),
+];
+
+/// Formats past the everyday ones, GIMP's list.
+const MORE_FORMATS: &[(&str, &str, &str)] = &[
+    (
+        "avif",
+        "AVIF",
+        "Modern lossy photo format, small at high quality. Written by avifenc or ImageMagick.",
+    ),
+    (
+        "heic",
+        "HEIC",
+        "Apple's photo format. Written by heif-enc or ImageMagick.",
+    ),
+    (
+        "jxl",
+        "JPEG XL",
+        "Next-generation JPEG, lossy or lossless at quality 100. Written by cjxl or ImageMagick.",
+    ),
+    (
+        "pdf",
+        "PDF",
+        "One-page PDF of the flat picture, via ImageMagick.",
+    ),
+    (
+        "exr",
+        "OpenEXR",
+        "Float linear RGBA for compositing and VFX; 16-bit source precision kept.",
+    ),
+    (
+        "hdr",
+        "Radiance HDR",
+        "Float RGB without alpha, for HDR pipelines.",
+    ),
+    ("bmp", "BMP", "Uncompressed Windows bitmap with alpha."),
+    (
+        "gif",
+        "GIF",
+        "256 colours, one frame. For the Timeline's animated GIF use that panel.",
+    ),
+    (
+        "tga",
+        "Targa",
+        "Game and 3D pipelines; lossless with alpha.",
+    ),
+    (
+        "ppm",
+        "PPM",
+        "Plain portable pixmap, no alpha; every image tool reads it.",
+    ),
+    ("ico", "ICO", "Windows icon, scaled to fit 256 px."),
+    ("qoi", "QOI", "Quite OK Image: lossless, fast, small."),
+    ("ff", "farbfeld", "suckless 16-bit RGBA, lossless."),
 ];
 
 impl EditorView {
@@ -85,25 +148,61 @@ impl EditorView {
             .border_color(p.line)
             .bg(p.panel)
             .child(label(format!("Export · {w}×{h}"), p));
-        for (ext, name, help) in FORMATS {
+        let more_open = prefs.more || MORE_FORMATS.iter().any(|(e, _, _)| *e == prefs.ext);
+        let listed: Vec<&(&str, &str, &str)> = FORMATS
+            .iter()
+            .chain(
+                more_open
+                    .then_some(MORE_FORMATS.iter())
+                    .into_iter()
+                    .flatten(),
+            )
+            .filter(|(ext, _, _)| {
+                emulsion_io::export::ExportFormat::from_path(std::path::Path::new(&format!(
+                    "x.{ext}"
+                )))
+                .is_some_and(|f| f.available())
+            })
+            .collect();
+        for (i, (ext, name, help)) in listed.into_iter().enumerate() {
+            let (ext, name, help) = (*ext, *name, *help);
             row = row.child(
                 tip(
-                    chip(
-                        ("export-fmt", ext.len() * 7 + name.len()),
-                        name,
-                        prefs.ext == ext,
-                        p,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.export_prefs.ext = ext;
-                        cx.notify();
-                    })),
+                    chip(("export-fmt", i), name, prefs.ext == ext, p).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.export_prefs.ext = ext;
+                            cx.notify();
+                        },
+                    )),
                     help,
                 )
                 .into_any_element(),
             );
         }
-        if prefs.ext == "jpg" {
+        row = row.child(
+            chip(
+                "export-more",
+                if more_open {
+                    "fewer formats"
+                } else {
+                    "more formats…"
+                },
+                false,
+                p,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.export_prefs.more = !more_open;
+                if !this.export_prefs.more
+                    && MORE_FORMATS
+                        .iter()
+                        .any(|(e, _, _)| *e == this.export_prefs.ext)
+                {
+                    this.export_prefs.ext = "png";
+                }
+                cx.notify();
+            })),
+        );
+        if matches!(prefs.ext, "jpg" | "avif" | "heic" | "jxl") {
             row = row.child(self.opt_slider(
                 SliderKey::ExportQuality,
                 "quality",
@@ -114,7 +213,10 @@ impl EditorView {
                 cx,
             ));
         }
-        if matches!(prefs.ext, "png" | "tif") {
+        if matches!(
+            prefs.ext,
+            "png" | "tif" | "exr" | "ff" | "avif" | "heic" | "jxl"
+        ) {
             for (bits, on) in [(8u8, !prefs.depth16), (16u8, prefs.depth16)] {
                 row = row.child(
                     chip(
@@ -131,9 +233,14 @@ impl EditorView {
             }
         }
         let note = match prefs.ext {
-            "jpg" => "flat image · lossy",
-            "webp" => "flat image · lossless",
+            "jpg" | "avif" | "heic" => "flat image · lossy · no transparency for JPEG",
+            "jxl" => "flat image · lossy below quality 100",
+            "webp" | "qoi" | "ff" | "tga" | "bmp" => "flat image · lossless",
             "psd" => "layers kept · adjustments and styles flattened into pixels",
+            "xcf" => "visible layers kept, 8-bit · hidden layers left out",
+            "gif" => "flat image · 256 colours",
+            "ppm" | "hdr" | "pdf" => "flat image · no transparency",
+            "ico" => "flat image · 256 px at most",
             _ => "flat image · lossless",
         };
         row = row

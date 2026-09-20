@@ -1504,11 +1504,25 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 ),
                 None => None,
             };
-            let ext = match args.get("format").and_then(Value::as_str) {
-                Some("png") => "png",
-                Some("webp") => "webp",
-                Some("tif") | Some("tiff") => "tif",
-                _ => "jpg",
+            let ext = {
+                let want = args
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .unwrap_or("jpg")
+                    .trim_start_matches('.')
+                    .to_ascii_lowercase();
+                let want = match want.as_str() {
+                    "jpeg" => "jpg".to_string(),
+                    "tiff" => "tif".to_string(),
+                    _ => want,
+                };
+                emulsion_io::export::ExportFormat::exportable_extensions()
+                    .into_iter()
+                    .filter(|e| !matches!(*e, "psd" | "xcf" | "pdf"))
+                    .find(|e| *e == want)
+                    .ok_or_else(|| {
+                        err(format!("format {want:?} is not one this machine can write"))
+                    })?
             };
             std::fs::create_dir_all(&out_dir).map_err(|e| err(e.to_string()))?;
             let mut written = Vec::new();

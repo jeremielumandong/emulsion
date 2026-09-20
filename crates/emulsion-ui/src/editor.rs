@@ -216,6 +216,8 @@ enum Drag {
 enum Menu {
     Blend,
     Add,
+    /// The Type tool's font list, each family shown in itself.
+    Font,
 }
 
 /// What a panel row drag carries.
@@ -1681,12 +1683,15 @@ impl EditorView {
                 )),
                 "Power-user controls: a second row of tool options (dynamics, symmetry, guides) and the rarer layer properties",
             ));
+        let font_picker = self.font_picker(p, cx);
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_none()
             .child(first)
             .children(second)
+            .children(font_picker)
     }
 
     fn canvas_area(

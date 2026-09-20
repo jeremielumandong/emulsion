@@ -1349,10 +1349,14 @@ mod export_safety_tests {
 
 /// The output extension for a batch format setting; anything unknown is JPEG.
 pub(crate) fn batch_ext(format: &str) -> &'static str {
-    match format {
-        "png" => "png",
-        "webp" => "webp",
-        "tif" | "tiff" => "tif",
-        _ => "jpg",
-    }
+    let f = format.trim_start_matches('.').to_ascii_lowercase();
+    let f = match f.as_str() {
+        "jpeg" => "jpg",
+        "tiff" => "tif",
+        other => other,
+    };
+    emulsion_io::export::ExportFormat::exportable_extensions()
+        .into_iter()
+        .find(|e| *e == f)
+        .unwrap_or("jpg")
 }

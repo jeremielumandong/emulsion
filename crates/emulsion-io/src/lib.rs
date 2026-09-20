@@ -128,7 +128,7 @@ fn import_any(path: &Path) -> Result<Document> {
             Err(e) => Err(e),
         }
     } else if is_svg(path) {
-        Ok(svg::import(&read_svg(path)?)?.doc)
+        open_svg(path)
     } else if raw::is_raw(path) {
         raw::open(path)
     } else if jxl::is_jxl(path) {
@@ -143,6 +143,41 @@ fn import_any(path: &Path) -> Result<Document> {
             }
             r => r,
         }
+    }
+}
+
+/// An SVG made only of plain paths and shapes opens as editable path
+/// layers; anything richer (gradients, filters, text, images, masks) is
+/// rendered whole into one pixel layer so it looks as drawn.
+fn open_svg(path: &Path) -> Result<Document> {
+    let text = read_svg(path)?;
+    let paths = svg::import(&text);
+    if let Ok(imp) = &paths
+        && imp.skipped.is_empty()
+        && !imp.doc.nodes.is_empty()
+    {
+        return Ok(imp.doc.clone());
+    }
+    match svg::rasterize(&text) {
+        Ok(raster) => {
+            let mut doc = import::document_from(path, import::Decoded { raster, depth: 8 })?;
+            if let Ok(imp) = &paths
+                && !imp.skipped.is_empty()
+            {
+                tracing::info!(
+                    path = %path.display(),
+                    skipped = imp.skipped.len(),
+                    "SVG rendered to pixels: some elements have no editable path form"
+                );
+            }
+            doc.info = Default::default();
+            Ok(doc)
+        }
+        Err(render_err) => match paths {
+            Ok(imp) if !imp.doc.nodes.is_empty() => Ok(imp.doc),
+            Ok(_) => Err(render_err),
+            Err(e) => Err(e),
+        },
     }
 }
 
