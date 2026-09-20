@@ -151,6 +151,24 @@ fn temp_dir() -> Result<TempDir> {
     Ok(TempDir(d))
 }
 
+/// The converter's output: `out` itself, or else the first PNG it wrote
+/// (heif-convert numbers them `page-1.png`, `page-2.png`… for a container
+/// holding several images, such as an iPhone burst; the first is the
+/// primary picture).
+fn first_png(dir: &Path, out: &Path) -> Option<PathBuf> {
+    if out.is_file() {
+        return Some(out.to_path_buf());
+    }
+    let mut pngs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")))
+        .collect();
+    pngs.sort();
+    pngs.into_iter().next()
+}
+
 /// Convert `path` to a PNG with the first converter that succeeds and
 /// decode it.
 pub fn decode(path: &Path) -> Result<Decoded> {
@@ -171,16 +189,21 @@ pub fn decode(path: &Path) -> Result<Decoded> {
                     .replace("{out}", &out.to_string_lossy())
             })
             .collect();
-        let _ = std::fs::remove_file(&out);
+        for stale in std::fs::read_dir(&tmp.0).into_iter().flatten().flatten() {
+            let _ = std::fs::remove_file(stale.path());
+        }
         let mut cmd = Command::new(c.tool);
         cmd.args(&args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped());
         match cmd.output() {
-            Ok(o) if o.status.success() && out.is_file() => {
+            Ok(o)
+                if o.status.success()
+                    && let Some(png) = first_png(&tmp.0, &out) =>
+            {
                 tracing::info!(tool = c.tool, path = %path.display(), "imported through converter");
-                return crate::import::decode(&out);
+                return crate::import::decode(&png);
             }
             Ok(o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
