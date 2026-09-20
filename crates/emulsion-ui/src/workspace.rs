@@ -44,6 +44,9 @@ pub struct Workspace {
     pub(crate) image_inputs: Option<crate::settings_screen::ImageInputs>,
     pub(crate) image_test: Option<(SharedString, bool)>,
     pub(crate) keymap_note: Option<SharedString>,
+    /// Filesystem facts the Settings screen shows, refreshed at most every
+    /// couple of seconds instead of on every frame.
+    pub(crate) probe: Option<(std::time::Instant, crate::settings_screen::Probe)>,
     pub(crate) model_jobs: crate::settings_models::ModelJobs,
     pub(crate) batch: crate::batch::BatchState,
     /// The landing image, decoded once in the background.
@@ -133,12 +136,26 @@ impl Workspace {
             .ok();
         })
         .detach();
+        // Recent files and recovery copies come from disk; read them off the
+        // first frame so the window appears at once.
+        cx.spawn(async move |this, cx| {
+            let (recents, recovered) = cx
+                .background_spawn(async { (recent::load(), find_recovered()) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.recents = recents;
+                this.recovered = recovered;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         Self {
             screen: Screen::Home,
             editor: None,
             tabs: Vec::new(),
-            recents: recent::load(),
-            recovered: find_recovered(),
+            recents: Vec::new(),
+            recovered: Vec::new(),
             thumbs: HashMap::new(),
             thumbs_loading: HashMap::new(),
             thumb_generation: 0,
@@ -152,6 +169,7 @@ impl Workspace {
             image_inputs: None,
             image_test: None,
             keymap_note: None,
+            probe: None,
             model_jobs: Default::default(),
             batch: Default::default(),
             landing,

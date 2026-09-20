@@ -320,7 +320,7 @@ fn batch_shows_legacy_rendering_limitations_beside_selected_recipe(cx: &mut Test
     cx.update(|_, cx| {
         ws.update(cx, |ws, cx| {
             ws.batch.recipe = Some(legacy.name.clone());
-            ws.batch.recipes = Some(vec![legacy, exact.clone()]);
+            ws.batch.recipes = Some(std::sync::Arc::new(vec![legacy, exact.clone()]));
             ws.screen = crate::workspace::Screen::Batch;
             cx.notify();
         })

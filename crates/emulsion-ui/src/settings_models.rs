@@ -146,8 +146,12 @@ impl Workspace {
     pub(crate) fn models_list(&self, p: &Palette, cx: &mut Context<Self>) -> Div {
         let mut list = div().flex().flex_col().gap(px(8.)).pt(px(4.));
         let mut task = None;
+        let statuses = self.probe.as_ref().map(|(_, p)| p.statuses.clone());
         for (i, m) in MANIFEST.iter().enumerate() {
-            let status = models::status(m);
+            let status = statuses
+                .as_ref()
+                .and_then(|s| s.get(i).copied())
+                .unwrap_or_else(|| models::status(m));
             let job = self.model_jobs.running.get(m.id).cloned();
             let err = self.model_jobs.errors.get(m.id).cloned();
             if task != Some(m.task) {
@@ -220,7 +224,11 @@ impl Workspace {
         // Lens profiles: the lensfun database, fetched like a model.
         let lens_key: &'static str = "lensfun";
         let lens_job = self.model_jobs.running.get(lens_key).cloned();
-        let lens_on = emulsion_io::lensfun::installed();
+        let lens_on = self
+            .probe
+            .as_ref()
+            .map(|(_, p)| p.lens_on)
+            .unwrap_or_else(emulsion_io::lensfun::installed);
         let lens_state = match (&lens_job, lens_on) {
             (Some(j), _) => j.summary(),
             (None, true) => "installed".into(),

@@ -908,7 +908,7 @@ fn batch_recipe_browser_preserves_photo_selection_and_export_settings(cx: &mut T
             ws.batch.current = Some(1);
             ws.batch.format = "jpg".into();
             ws.batch.out_dir = Some(out_dir.clone());
-            ws.batch.recipes = Some(
+            ws.batch.recipes = Some(std::sync::Arc::new(
                 (0..40)
                     .map(|i| Recipe {
                         name: format!("Test recipe {i:02}"),

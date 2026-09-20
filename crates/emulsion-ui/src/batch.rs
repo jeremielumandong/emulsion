@@ -39,7 +39,8 @@ pub(crate) struct BatchState {
     pub current: Option<usize>,
     /// Chosen recipe name, if any.
     pub recipe: Option<String>,
-    pub(crate) recipes: Option<Vec<Recipe>>,
+    /// The recipe library, shared so a frame does not clone it.
+    pub(crate) recipes: Option<Arc<Vec<Recipe>>>,
     pub(crate) tag: Option<String>,
     recipe_browser: bool,
     tag_browser: bool,
@@ -73,7 +74,7 @@ impl BatchState {
             ));
             self.recipe = None;
         }
-        self.recipes = Some(recipes);
+        self.recipes = Some(Arc::new(recipes));
         self.preview_generation = self.preview_generation.wrapping_add(1);
         self.preview = None;
         self.preview_loading = None;
@@ -366,14 +367,16 @@ impl Workspace {
         }
     }
 
-    fn batch_recipes(&mut self) -> Vec<Recipe> {
+    fn batch_recipes(&mut self) -> Arc<Vec<Recipe>> {
         self.batch
             .recipes
             .get_or_insert_with(|| {
-                store::list(&crate::editor::recipes_dir())
-                    .into_iter()
-                    .map(|(r, _)| r)
-                    .collect()
+                Arc::new(
+                    store::list(&crate::editor::recipes_dir())
+                        .into_iter()
+                        .map(|(r, _)| r)
+                        .collect(),
+                )
             })
             .clone()
     }

@@ -28,6 +28,40 @@ fn humanize(action: &str) -> String {
     out
 }
 
+/// What the Settings screen needs from disk: model files, CLI binaries on
+/// PATH, the lens database and the keymap file.
+#[derive(Clone)]
+pub(crate) struct Probe {
+    pub models_on: bool,
+    pub statuses: Vec<emulsion_ai::models::Status>,
+    pub installed: Vec<&'static str>,
+    pub lens_on: bool,
+    pub bindings: Vec<(String, String, String)>,
+    pub overrides: usize,
+}
+
+impl Probe {
+    fn read() -> Probe {
+        let statuses: Vec<emulsion_ai::models::Status> = emulsion_ai::models::MANIFEST
+            .iter()
+            .map(emulsion_ai::models::status)
+            .collect();
+        Probe {
+            models_on: statuses
+                .iter()
+                .any(|s| *s == emulsion_ai::models::Status::Installed),
+            statuses,
+            installed: emulsion_assistant::provider::installed()
+                .into_iter()
+                .map(|p| p.id)
+                .collect(),
+            lens_on: emulsion_io::lensfun::installed(),
+            bindings: crate::actions::effective(),
+            overrides: crate::actions::user_bindings().len(),
+        }
+    }
+}
+
 fn tier(n: u8, title: &str, on: bool, state: &str, p: &Palette) -> Div {
     div()
         .flex()
@@ -71,9 +105,8 @@ impl Workspace {
         self.ensure_image_inputs(window, cx);
         let s = app_state::settings(cx).clone();
         let cli = app_state::cli(cx);
-        let models_on = emulsion_ai::models::MANIFEST
-            .iter()
-            .any(|m| emulsion_ai::models::status(m) == emulsion_ai::models::Status::Installed);
+        let probe = self.probe(cx);
+        let models_on = probe.models_on;
         let jev = s.jev_key();
         let section = |p: &Palette| {
             div()
@@ -108,10 +141,7 @@ impl Workspace {
                 ),
             ),
         };
-        let installed: Vec<&'static str> = emulsion_assistant::provider::installed()
-            .into_iter()
-            .map(|p| p.id)
-            .collect();
+        let installed: Vec<&'static str> = probe.installed.clone();
 
         let cli_path = self.settings_inputs.as_ref().map(|i| i.0.clone());
         let jev_input = self.settings_inputs.as_ref().map(|i| i.1.clone());
@@ -278,8 +308,8 @@ impl Workspace {
                     .children(self.jev_test.clone().map(|(msg, err)| mono(msg, 10.5, if err { p.accent } else { p.ink }))),
             )
             .child({
-                let eff = crate::actions::effective();
-                let overrides = crate::actions::user_bindings().len();
+                let eff = probe.bindings.clone();
+                let overrides = probe.overrides;
                 let mut rows = div().flex().flex_wrap().gap(px(6.)).max_w(px(760.));
                 for (ctx, action, keys) in &eff {
                     let ctx_mark = match ctx.as_str() { "canvas" => "", "panel" => "panel · ", _ => "" };
@@ -309,6 +339,7 @@ impl Workspace {
                             .child(chip("km-open", "open keymap file", false, &p).on_click(cx.listener(|this, _, _, cx| this.open_keymap_file(cx))))
                             .child(chip("km-reload", "reload", false, &p).on_click(cx.listener(|this, _, _, cx| {
                                 crate::actions::bind(cx);
+                                this.invalidate_probe();
                                 this.keymap_note = Some(format!("Reloaded: {} custom binding(s).", crate::actions::user_bindings().len()).into());
                                 cx.notify();
                             })))
@@ -349,6 +380,23 @@ impl Workspace {
             .into(),
         );
         cx.notify();
+    }
+
+    /// Refresh the cached filesystem facts when they are stale.
+    pub(crate) fn probe(&mut self, _cx: &App) -> Probe {
+        if let Some((t, p)) = &self.probe
+            && t.elapsed() < std::time::Duration::from_millis(1500)
+        {
+            return p.clone();
+        }
+        let p = Probe::read();
+        self.probe = Some((std::time::Instant::now(), p.clone()));
+        p
+    }
+
+    /// Bump the cache after a change the screen made itself.
+    pub(crate) fn invalidate_probe(&mut self) {
+        self.probe = None;
     }
 
     fn ensure_image_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
