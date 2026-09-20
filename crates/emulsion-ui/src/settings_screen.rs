@@ -47,9 +47,7 @@ impl Probe {
             .map(emulsion_ai::models::status)
             .collect();
         Probe {
-            models_on: statuses
-                .iter()
-                .any(|s| *s == emulsion_ai::models::Status::Installed),
+            models_on: statuses.contains(&emulsion_ai::models::Status::Installed),
             statuses,
             installed: emulsion_assistant::provider::installed()
                 .into_iter()

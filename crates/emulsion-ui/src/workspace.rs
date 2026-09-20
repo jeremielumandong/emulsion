@@ -719,14 +719,19 @@ impl Workspace {
                 .unwrap_or_else(|| PathBuf::from("."));
             (e.editor.doc.clone(), dir, e.name.clone())
         };
-        let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}.png")));
+        let prefs = ed.read(cx).export_prefs;
+        let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}.{}", prefs.ext)));
         cx.spawn_in(window, async move |_, cx| {
             let Ok(Ok(Some(mut p))) = rx.await else {
                 return;
             };
             if emulsion_io::ExportFormat::from_path(&p).is_none() {
-                p.set_extension("png");
+                p.set_extension(prefs.ext);
             }
+            ed.update(cx, |e, cx| {
+                e.export_prefs.open = false;
+                cx.notify();
+            });
             let flattened_psd = emulsion_io::ExportFormat::from_path(&p)
                 == Some(emulsion_io::ExportFormat::Psd)
                 && emulsion_io::psd::needs_appearance_fallback(&doc);
@@ -739,7 +744,9 @@ impl Workspace {
                 e.set_status(format!("Exporting {}…", p.display()), false, cx)
             });
             let (q, d) = (p.clone(), doc.clone());
-            let opts = emulsion_io::ExportOptions::for_doc(&doc);
+            let mut opts = emulsion_io::ExportOptions::for_doc(&doc);
+            opts.depth = if prefs.depth16 { 16 } else { 8 };
+            opts.jpeg_quality = prefs.quality;
             let result = cx
                 .background_spawn(async move { emulsion_io::export(&d, &q, opts) })
                 .await;

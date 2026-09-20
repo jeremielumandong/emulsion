@@ -469,12 +469,7 @@ impl Workspace {
             return;
         }
         let recipe = self.chosen_recipe();
-        let ext = if self.batch.format == "png" {
-            "png"
-        } else {
-            "jpg"
-        }
-        .to_string();
+        let ext = batch_ext(&self.batch.format).to_string();
         let total = paths.len();
         self.batch.run_generation = self.batch.run_generation.wrapping_add(1);
         let generation = self.batch.run_generation;
@@ -782,12 +777,13 @@ impl Workspace {
             recipe = recipe.child(browser.test_support());
         }
         let mut format = div().flex().items_center().gap(px(6.));
-        for (value, title, id) in [("jpg", "JPEG", 3usize), ("png", "PNG", 13usize)] {
-            let selected = if self.batch.format == "png" {
-                "png"
-            } else {
-                "jpg"
-            } == value;
+        for (value, title, id) in [
+            ("jpg", "JPEG", 3usize),
+            ("png", "PNG", 13usize),
+            ("webp", "WebP", 23usize),
+            ("tif", "TIFF", 33usize),
+        ] {
+            let selected = batch_ext(&self.batch.format) == value;
             format = format.child(
                 chip(("batch-fmt", id), title, selected, &p)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1351,5 +1347,15 @@ mod export_safety_tests {
         assert_eq!(std::fs::read(b).unwrap(), b"new output");
         drop(stage);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// The output extension for a batch format setting; anything unknown is JPEG.
+pub(crate) fn batch_ext(format: &str) -> &'static str {
+    match format {
+        "png" => "png",
+        "webp" => "webp",
+        "tif" | "tiff" => "tif",
+        _ => "jpg",
     }
 }

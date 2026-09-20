@@ -1509,10 +1509,11 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 ),
                 None => None,
             };
-            let ext = if args.get("format").and_then(Value::as_str) == Some("png") {
-                "png"
-            } else {
-                "jpg"
+            let ext = match args.get("format").and_then(Value::as_str) {
+                Some("png") => "png",
+                Some("webp") => "webp",
+                Some("tif") | Some("tiff") => "tif",
+                _ => "jpg",
             };
             std::fs::create_dir_all(&out_dir).map_err(|e| err(e.to_string()))?;
             let mut written = Vec::new();

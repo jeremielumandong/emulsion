@@ -11,6 +11,7 @@ mod alignment;
 mod animation;
 mod canvas_size;
 mod clipboard;
+pub(crate) mod export_ui;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
@@ -133,6 +134,7 @@ pub(crate) enum SliderKey {
     /// Draw mode's side sliders share the brush keys but need their own tracks.
     SideSize,
     SideOpacity,
+    ExportQuality,
     /// A RAW develop parameter, by name.
     Raw(&'static str),
     PenWidth,
@@ -271,6 +273,8 @@ pub struct EditorView {
     pub(crate) rail: rail::RailState,
     /// Draw mode: painter's rail and a Layers-only sidebar.
     pub(crate) draw_mode: bool,
+    /// Export chooser state and the last format picked.
+    pub(crate) export_prefs: export_ui::ExportPrefs,
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
@@ -369,6 +373,7 @@ impl EditorView {
             generate: Default::default(),
             rail: Default::default(),
             draw_mode: cx
+            export_prefs: Default::default(),
                 .try_global::<crate::app_state::AppSettings>()
                 .is_some_and(|s| s.0.draw_mode),
             fit_pending: true,
@@ -1399,6 +1404,10 @@ impl EditorView {
                     cx,
                 );
             }
+            SliderKey::ExportQuality => {
+                self.export_prefs.quality = v.round().clamp(1.0, 100.0) as u8;
+                cx.notify();
+            }
             SliderKey::Scale(id) | SliderKey::Rotation(id) => {
                 let Some(NodeKind::Raster { raster, placement }) =
                     self.editor.doc.node(id).map(|n| &n.kind)
@@ -1557,9 +1566,8 @@ impl EditorView {
                 })),
             )
             .child(
-                button("export", "Export", true, p).on_click(cx.listener(|_, _, window, cx| {
-                    window.dispatch_action(Box::new(crate::actions::Export), cx);
-                })),
+                button("export", "Export", true, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_export_panel(cx))),
             )
     }
 
@@ -3019,6 +3027,7 @@ mod rendering_tests {
             assert_ne!(this.editor.doc.node(id), before.node(id));
             assert_eq!(
                 this.editor.doc.node(1),
+        let export_panel = self.export_panel_view(&p, cx);
                 before.node(1),
                 "other nodes are untouched"
             );
@@ -3034,3 +3043,4 @@ mod rendering_tests {
         });
     }
 }
+                            .children(export_panel)
