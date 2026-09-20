@@ -907,8 +907,15 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 })?;
             let cfg = emulsion_ai::generate::Config {
                 provider,
-                endpoint: settings.image_endpoint.clone(),
-                model: settings.image_model.clone(),
+                endpoint: (provider == emulsion_ai::generate::Provider::A1111)
+                    .then(|| settings.image_endpoint.clone())
+                    .flatten(),
+                model: match provider {
+                    emulsion_ai::generate::Provider::A1111 => settings.image_model.clone(),
+                    emulsion_ai::generate::Provider::OpenAi => settings.openai_image_model.clone(),
+                    emulsion_ai::generate::Provider::Google => settings.google_image_model.clone(),
+                },
+                api_key: settings.image_key(provider.id()).map(|(key, _)| key),
             };
             let prompt = args
                 .get("prompt")

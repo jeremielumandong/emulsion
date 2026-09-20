@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::widgets::tip;
-use emulsion_ai::generate::{self, Config};
+use emulsion_ai::generate::{self, Config, Provider};
 use emulsion_ai::jobs::Job;
 use emulsion_raster::IRect;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -14,17 +14,30 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 pub struct GenState {
     prompt: Option<(Entity<InputState>, Subscription)>,
     pub busy: bool,
+    /// Ctrl-K choice, retained when its prompt is closed and reopened.
+    pub ask_provider: Option<Provider>,
 }
 
 /// The image server settings, when one is configured.
 pub(crate) fn config(cx: &App) -> Option<Config> {
     let s = crate::app_state::settings(cx);
     let provider = generate::Provider::parse(&s.image_provider)?;
-    Some(Config {
+    Some(config_for(provider, cx))
+}
+
+pub(crate) fn config_for(provider: Provider, cx: &App) -> Config {
+    let s = crate::app_state::settings(cx);
+    let (endpoint, model) = match provider {
+        Provider::A1111 => (s.image_endpoint.clone(), s.image_model.clone()),
+        Provider::OpenAi => (None, s.openai_image_model.clone()),
+        Provider::Google => (None, s.google_image_model.clone()),
+    };
+    Config {
         provider,
-        endpoint: s.image_endpoint.clone(),
-        model: s.image_model.clone(),
-    })
+        endpoint,
+        model,
+        api_key: s.image_key(provider.id()).map(|(key, _)| key),
+    }
 }
 
 impl EditorView {
@@ -56,10 +69,6 @@ impl EditorView {
     /// Fill the selection from the prompt, or generate a full-canvas layer.
     pub(crate) fn generate_from_prompt(&mut self, cx: &mut Context<Self>) {
         let prompt = self.prompt_text(cx);
-        if prompt.is_empty() {
-            self.set_status("Type what to generate first.", false, cx);
-            return;
-        }
         let Some(cfg) = config(cx) else {
             self.set_status(
                 "No image server is set up: choose one under Settings › Image generation.",
@@ -68,13 +77,36 @@ impl EditorView {
             );
             return;
         };
-        if self.generate.busy {
-            self.set_status("Still generating the last request.", false, cx);
-            return;
+        if let Err(error) = self.generate_text(prompt, cfg, cx) {
+            self.set_status(error, true, cx);
         }
+    }
+
+    /// Shared by Ctrl-K and the Select tool. Validation leaves the input intact.
+    pub(crate) fn generate_text(
+        &mut self,
+        prompt: String,
+        cfg: Config,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let prompt = prompt.trim().to_string();
+        if prompt.is_empty() {
+            return Err("Type what to generate first.".into());
+        }
+        if self.generate.busy {
+            return Err("Still generating the last request.".into());
+        }
+        if self.assistant.running || self.editor.in_transaction() {
+            return Err("Finish the current edit before generating an image.".into());
+        }
+        if self.ai.job.as_ref().is_some_and(|job| !job.is_finished()) {
+            return Err("Wait for the current image task to finish.".into());
+        }
+        cfg.validate().map_err(|error| error.to_string())?;
         let sel = self.editor.doc.selection.clone();
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
-        let img = self.composite_raster();
+        // The displayed tree may lag edits while rendering catches up.
+        let source = sel.as_ref().map(|_| self.editor.doc.clone());
         let job = Job::new();
         self.watch_job(job.clone(), cx);
         let j = job.clone();
@@ -94,20 +126,41 @@ impl EditorView {
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_spawn(async move {
-                    let r = match &sel {
+                    match &sel {
                         Some(s) => {
-                            let img = img.await;
+                            let img = emulsion_raster::composite::flatten(
+                                &source.expect("fill document snapshot").composite_tree(),
+                                0,
+                            );
                             generate::fill(&cfg, &img, s, &prompt, None, &j)
                         }
                         None => generate::text_to_image(&cfg, &prompt, None, w, h, &j)
                             .map(|r| (r, IRect::new(0, 0, w as i32, h as i32))),
-                    };
-                    j.finish();
-                    r
+                    }
                 })
                 .await;
+            // A brush/slider edit may have started while the provider worked.
+            // Let it commit first so generation keeps its own undo step.
+            if r.is_ok() {
+                loop {
+                    let waiting = this.update(cx, |this, _| {
+                        this.editor.in_transaction() && !job.cancelled()
+                    });
+                    if !matches!(waiting, Ok(true)) {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(50))
+                        .await;
+                }
+            }
+            job.finish();
             this.update(cx, |this, cx| {
                 this.generate.busy = false;
+                if job.cancelled() {
+                    this.set_status("Image generation cancelled.", false, cx);
+                    return;
+                }
                 match r {
                     Ok((layer, reg)) => {
                         let node = Node::raster(
@@ -139,6 +192,7 @@ impl EditorView {
             .ok();
         })
         .detach();
+        Ok(())
     }
 
     /// The prompt field and its button for the options bar.

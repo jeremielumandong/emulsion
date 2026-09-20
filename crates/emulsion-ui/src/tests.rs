@@ -83,6 +83,315 @@ fn names(ws: &Entity<Workspace>, cx: &mut VisualTestContext) -> Vec<(String, boo
 }
 
 #[gpui_kit::test]
+fn long_multiline_status_preserves_canvas_and_footer_layout(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| e.update(cx, |e, cx| e.set_status("Ready", false, cx)));
+    cx.run_until_parked();
+    let (strip, canvas_origin, canvas_corner) = cx.update(|window, cx| {
+        let e = e.read(cx);
+        (
+            window.find("editor-status-strip").bounds(),
+            e.doc_to_window((0.0, 0.0)).unwrap(),
+            e.doc_to_window((256.0, 192.0)).unwrap(),
+        )
+    });
+    let diagnostic = format!(
+        "Generate: HTTP 429\n{}\nhttps://example.invalid/{}",
+        "Quota exceeded; enable billing and retry.\n".repeat(30),
+        "long-provider-diagnostic".repeat(60)
+    );
+    cx.update(|_, cx| e.update(cx, |e, cx| e.set_status(diagnostic.clone(), true, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(window.find("editor-status-strip").bounds(), strip);
+        let message = window.find("editor-status-message");
+        let meta = window.find("editor-status-meta");
+        assert!(message.visible() && meta.visible());
+        assert!(message.bounds().size.width > gpui_kit::px(0.));
+        assert!(message.bounds().size.height <= gpui_kit::px(16.));
+        assert!(message.bounds().right() <= meta.bounds().left());
+        assert!(meta.bounds().right() <= strip.right());
+        let e = e.read(cx);
+        assert_eq!(e.doc_to_window((0.0, 0.0)).unwrap(), canvas_origin);
+        assert_eq!(e.doc_to_window((256.0, 192.0)).unwrap(), canvas_corner);
+        assert_eq!(
+            e.status.as_ref().unwrap().0.as_ref(),
+            diagnostic.as_str(),
+            "full diagnostic remains available to the tooltip"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn ask_image_choices_preserve_prompt_and_busy_requests_do_not_edit(cx: &mut TestAppContext) {
+    use emulsion_ai::generate::Provider;
+    use gpui_kit::test::TestWindowExt;
+
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
+    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_input("hide Photo");
+    cx.run_until_parked();
+    for (id, choice) in [
+        ("ask-local", Some(Provider::A1111)),
+        ("ask-openai", Some(Provider::OpenAi)),
+        ("ask-google", Some(Provider::Google)),
+        ("ask-assistant", None),
+        ("ask-openai", Some(Provider::OpenAi)),
+    ] {
+        cx.update(|window, cx| window.click(id, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let e = e.read(cx);
+            assert_eq!(e.generate.ask_provider, choice);
+            assert_eq!(
+                e.ask.as_ref().unwrap().state.read(cx).value().as_str(),
+                "hide Photo"
+            );
+            assert_eq!(window.try_find("ask-reference").is_some(), choice.is_none());
+        });
+    }
+    // A busy job rejects the request before any provider can be contacted,
+    // even when the machine running this test has cloud credentials.
+    cx.update(|_, cx| e.update(cx, |e, _| e.generate.busy = true));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = e.read(cx);
+        assert!(e.status.as_ref().unwrap().0.contains("Still generating"));
+        assert_eq!(
+            e.ask.as_ref().unwrap().state.read(cx).value().as_str(),
+            "hide Photo"
+        );
+        assert_eq!(e.editor.doc, before);
+        assert_eq!(e.editor.history.len(), 0);
+        assert!(e.assistant.turn.is_none());
+        assert!(!e.assistant.running);
+    });
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("ctrl-k");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            assert_eq!(e.generate.ask_provider, Some(Provider::OpenAi));
+            e.submit_ask("hide Photo".into(), cx);
+            assert!(
+                e.status
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .contains("Wait for image generation")
+            );
+            assert_eq!(e.editor.doc, before);
+            assert_eq!(e.editor.history.len(), 0);
+            e.generate.busy = false;
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn image_generation_validates_credentials_and_excludes_active_edits(cx: &mut TestAppContext) {
+    use emulsion_ai::generate::{Config, Provider};
+
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.update(|_, cx| {
+        let e = ws.read(cx).editor.clone().unwrap();
+        e.update(cx, |e, cx| {
+            let before = e.editor.doc.clone();
+            // Explicit empty credentials keep this test independent of saved
+            // keys and environment variables. Neither request reaches a server.
+            for provider in [Provider::OpenAi, Provider::Google] {
+                let cfg = Config {
+                    provider,
+                    endpoint: None,
+                    model: None,
+                    api_key: None,
+                };
+                let error = e.generate_text("hide Photo".into(), cfg, cx).unwrap_err();
+                assert!(error.contains("API key"));
+                assert!(!e.generate.busy);
+                assert!(e.ai.job.is_none());
+            }
+            let local = Config {
+                provider: Provider::A1111,
+                endpoint: None,
+                model: None,
+                api_key: None,
+            };
+            e.assistant.running = true;
+            assert!(
+                e.generate_text("a landscape".into(), local.clone(), cx)
+                    .unwrap_err()
+                    .contains("current edit")
+            );
+            e.assistant.running = false;
+            e.editor.begin("in-progress edit");
+            assert!(
+                e.generate_text("a landscape".into(), local, cx)
+                    .unwrap_err()
+                    .contains("current edit")
+            );
+            e.editor.end();
+            assert_eq!(e.editor.doc, before);
+            assert_eq!(e.editor.history.len(), 0);
+            assert!(!e.generate.busy);
+            assert!(e.assistant.turn.is_none());
+        });
+    });
+}
+
+mod generated_images {
+    use super::*;
+    use emulsion_ai::generate::{Config, Provider};
+    use emulsion_core::NodeKind;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::time::{Duration, Instant};
+
+    /// One local A1111 response containing a red 1×1 PNG. All socket waits
+    /// have deadlines; no saved credentials or remote endpoints are used.
+    fn image_server() -> (Config, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fixture server did not receive a request: {error}"),
+                }
+            };
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with("POST /sdapi/v1/txt2img "));
+            let mut length = 0;
+            loop {
+                line.clear();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            assert!(length > 0 && length < 100_000);
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["prompt"], "a red square");
+            let response = r#"{"images":["iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="]}"#;
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+        });
+        (
+            Config {
+                provider: Provider::A1111,
+                endpoint: Some(endpoint),
+                model: Some("test-fixture".into()),
+                api_key: None,
+            },
+            server,
+        )
+    }
+
+    #[gpui_kit::test]
+    fn generated_image_is_a_separate_layer_with_provenance_and_undo(cx: &mut TestAppContext) {
+        let (cfg, server) = image_server();
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.generate_text("a red square".into(), cfg, cx).unwrap()
+            })
+        });
+        cx.run_until_parked();
+        server.join().unwrap();
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                assert!(!e.generate.busy);
+                assert_eq!(e.editor.history.len(), 1);
+                assert_eq!(e.editor.doc.nodes.len(), before.nodes.len() + 1);
+                assert_eq!(
+                    e.editor.doc.node(before.nodes[0].id),
+                    before.node(before.nodes[0].id)
+                );
+                let node = e.editor.doc.node(e.selected.unwrap()).unwrap();
+                assert_eq!(node.origin.as_deref(), Some("ai:a1111/test-fixture"));
+                let NodeKind::Raster { raster, .. } = &node.kind else {
+                    panic!("generated raster layer");
+                };
+                assert_eq!(
+                    (raster.width(), raster.height()),
+                    (before.width, before.height)
+                );
+                assert_eq!(raster.get(128, 96), [65535, 0, 0, 65535]);
+                e.undo(cx);
+                assert_eq!(e.editor.doc, before);
+            })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn generated_image_waiting_for_an_edit_can_still_be_cancelled(cx: &mut TestAppContext) {
+        let (cfg, server) = image_server();
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.generate_text("a red square".into(), cfg, cx).unwrap();
+                // A user edit starts while the provider is working.
+                e.editor.begin("ongoing brush edit");
+            })
+        });
+        cx.run_until_parked();
+        server.join().unwrap();
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                assert!(e.generate.busy);
+                assert!(
+                    !e.ai
+                        .job
+                        .as_ref()
+                        .expect("cancel remains available")
+                        .is_finished()
+                );
+                assert_eq!(e.editor.doc, before);
+                e.cancel_ai(cx);
+                e.editor.end();
+            })
+        });
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            assert!(!e.generate.busy);
+            assert_eq!(e.editor.doc, before);
+            assert_eq!(e.editor.history.len(), 0);
+            assert!(e.status.as_ref().unwrap().0.contains("cancelled"));
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn ask_bar_plans_offline_applies_as_one_step_and_undoes(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Grass", "Sun", "Clouds"], None));
     cx.simulate_keystrokes("ctrl-k");
@@ -551,6 +860,142 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
 
 // ── Phase 3 tools, driven through real pointer and key events ────────────
 
+#[gpui_kit::test]
+fn batch_recipe_browser_preserves_photo_selection_and_export_settings(cx: &mut TestAppContext) {
+    use crate::batch::BatchItem;
+    use crate::workspace::Screen;
+    use emulsion_recipes::Recipe;
+    use gpui_kit::test::TestWindowExt;
+
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    let source =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/landing/landing.jpg");
+    let out_dir = std::env::temp_dir().join("emulsion-batch-layout-export-unused");
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            let thumb = Arc::new(crate::viewport::bgra_image(1, 1, vec![80, 80, 80, 255]));
+            ws.batch.items = [true, false, true]
+                .into_iter()
+                .map(|selected| BatchItem {
+                    path: source.clone(),
+                    selected,
+                    thumb: Some(thumb.clone()),
+                })
+                .collect();
+            ws.batch.current = Some(1);
+            ws.batch.format = "jpg".into();
+            ws.batch.out_dir = Some(out_dir.clone());
+            ws.batch.recipes = Some(
+                (0..40)
+                    .map(|i| Recipe {
+                        name: format!("Test recipe {i:02}"),
+                        tags: vec![if i % 2 == 0 { "cool" } else { "warm" }.into()],
+                        ..Recipe::default()
+                    })
+                    .collect(),
+            );
+            ws.screen = Screen::Batch;
+            cx.notify();
+        });
+    });
+    cx.run_until_parked();
+    let toolbar_bounds = cx.update(|window, _| {
+        assert!(window.find("batch-settings").visible());
+        assert!(window.try_find("batch-recipe-browser").is_none());
+        assert!(window.try_find("batch-tag-list").is_none());
+        window.find("batch-toolbar").bounds()
+    });
+
+    cx.update(|window, cx| window.click("batch-recipe-toggle", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("batch-recipe-browser").visible());
+        assert!(window.try_find("batch-tag-list").is_none());
+        let list = window.find("batch-recipe-list").bounds();
+        let row = window.find(("batch-rc", 0usize)).bounds();
+        assert!(list.size.height > gpui_kit::px(0.));
+        assert!(
+            list.size.height < row.size.height * 40.,
+            "the recipe catalog scrolls within a bounded list"
+        );
+        assert_eq!(window.find("batch-toolbar").bounds(), toolbar_bounds);
+        window.click(("batch-rc", 0usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("batch-recipe-browser").is_none());
+        assert_eq!(ws.read(cx).batch.recipe.as_deref(), Some("Test recipe 00"));
+        window.click("batch-recipe-toggle", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("batch-filter-toggle", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("batch-tag-list").visible());
+        window.click(("batch-tag", 1usize), cx); // Sorted tags: cool, warm.
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find(("batch-rc", 0usize)).is_none());
+        assert!(window.find(("batch-rc", 1usize)).visible());
+        let search = ws
+            .read(cx)
+            .batch
+            .search
+            .as_ref()
+            .expect("recipe search input")
+            .0
+            .clone();
+        search.update(cx, |search, cx| search.set_value("recipe 03", window, cx));
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find(("batch-rc", 1usize)).is_none());
+        assert!(window.find(("batch-rc", 3usize)).visible());
+        assert_eq!(ws.read(cx).batch.recipe.as_deref(), Some("Test recipe 00"));
+        window.click("batch-filter-toggle", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("batch-tag-all", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let search = ws.read(cx).batch.search.as_ref().unwrap().0.clone();
+        search.update(cx, |search, cx| search.set_value("", window, cx));
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find(("batch-rc", 0usize)).visible());
+        window.click("batch-recipe-toggle", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("batch-fmt", 13usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("batch-settings").visible());
+        assert!(window.find("batch-out").visible());
+        assert!(window.find("batch-run").visible());
+        assert_eq!(window.find("batch-toolbar").bounds(), toolbar_bounds);
+        let batch = &ws.read(cx).batch;
+        assert_eq!(batch.recipe.as_deref(), Some("Test recipe 00"));
+        assert_eq!(batch.current, Some(1));
+        assert_eq!(
+            batch
+                .items
+                .iter()
+                .map(|item| item.selected)
+                .collect::<Vec<_>>(),
+            [true, false, true]
+        );
+        assert_eq!(batch.items.iter().filter(|item| item.selected).count(), 2);
+        assert_eq!(batch.format, "png");
+        assert_eq!(batch.out_dir.as_ref(), Some(&out_dir));
+        assert!(
+            batch.running.is_none(),
+            "changing export settings does not start an export"
+        );
+    });
+}
+
 mod tools {
     use super::*;
     use crate::editor::{EditorView, Tool};
@@ -570,6 +1015,126 @@ mod tools {
         let (a, b) = (at(e, cx, a), at(e, cx, b));
         cx.update(|window, cx| window.drag(a, b, cx));
         cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn grade_rail_adds_editable_adjustments_without_painting(cx: &mut TestAppContext) {
+        let (_, e, cx) = setup(cx, Tool::Brush);
+        let (before, revision, steps, selected) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            (
+                e.editor.doc.clone(),
+                e.editor.revision,
+                e.editor.history.len(),
+                e.selected,
+            )
+        });
+        let original =
+            emulsion_raster::composite::flatten(&before.composite_tree(), 0).get(128, 96);
+
+        cx.update(|window, cx| window.click("Grade", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("sidebar-adjustments-content").visible());
+            let e = e.read(cx);
+            assert!(e.tool == Tool::Grade);
+            assert_eq!(e.editor.doc, before);
+            assert_eq!(e.editor.revision, revision);
+            assert_eq!(e.editor.history.len(), steps);
+            assert_eq!(e.selected, selected);
+        });
+
+        // A canvas click after leaving Brush must not deposit paint.
+        let center = at(&e, cx, (128.0, 96.0));
+        cx.simulate_click(center, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            assert_eq!(e.editor.doc, before);
+            assert_eq!(e.editor.revision, revision);
+            assert_eq!(e.editor.history.len(), steps);
+        });
+
+        cx.update(|window, cx| window.click("grade-exposure", cx));
+        cx.run_until_parked();
+        let id = cx.update(|window, cx| {
+            assert!(window.find("sidebar-properties-content").visible());
+            let e = e.read(cx);
+            let id = e.selected.expect("new adjustment selected");
+            let NodeKind::Adjust(adjustment) = &e.editor.doc.node(id).unwrap().kind else {
+                panic!("Grade must create an editable adjustment");
+            };
+            assert_eq!(adjustment.key(), "exposure");
+            assert_eq!(e.editor.doc.nodes.len(), before.nodes.len() + 1);
+            assert_eq!(e.editor.history.len(), steps + 1);
+            id
+        });
+        // Use the same parameter command as the Properties exposure slider.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.execute(
+                    Command::SetParam {
+                        id,
+                        key: "exposure".into(),
+                        value: 1.0,
+                    },
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        let (graded, graded_revision) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            let pixel =
+                emulsion_raster::composite::flatten(&e.editor.doc.composite_tree(), 0).get(128, 96);
+            for channel in 0..3 {
+                assert!(
+                    pixel[channel] > original[channel],
+                    "exposure changes the composite"
+                );
+            }
+            assert_eq!(pixel[3], original[3]);
+            assert_eq!(
+                e.editor.doc.node(before.nodes[0].id),
+                before.node(before.nodes[0].id)
+            );
+            assert_eq!(e.editor.history.len(), steps + 2);
+            (e.editor.doc.clone(), e.editor.revision)
+        });
+
+        cx.update(|window, cx| window.click("grade-adjustments", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("sidebar-adjustments-content").visible());
+            window.click("Grade", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("sidebar-properties-content").visible());
+            let e = e.read(cx);
+            assert_eq!(e.selected, Some(id));
+            assert_eq!(e.editor.doc, graded);
+            assert_eq!(e.editor.revision, graded_revision);
+            assert_eq!(e.editor.history.len(), steps + 2);
+        });
+
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.undo(cx);
+                assert!(matches!(
+                    e.editor.doc.node(id).unwrap().kind,
+                    NodeKind::Adjust(_)
+                ));
+                assert_eq!(
+                    emulsion_raster::composite::flatten(&e.editor.doc.composite_tree(), 0)
+                        .get(128, 96),
+                    original,
+                    "undo restores the exposure while retaining the adjustment"
+                );
+                e.undo(cx);
+                assert_eq!(e.editor.doc, before, "the next undo removes the adjustment");
+            });
+        });
     }
 
     #[gpui_kit::test]

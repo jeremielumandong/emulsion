@@ -28,12 +28,16 @@ pub struct Settings {
     /// Show the power-user row of tool options (dynamics, symmetry,
     /// guides). Off for a beginner-friendly bar.
     pub advanced_tools: bool,
-    /// Image server for generative fill: "" (none) or "a1111".
+    /// Default image provider: "", "a1111", "openai", or "google".
     pub image_provider: String,
     /// Base URL of that server; empty for its default.
     pub image_endpoint: Option<String>,
     /// Checkpoint to ask the server for; empty for its current one.
     pub image_model: Option<String>,
+    pub openai_image_key: Option<String>,
+    pub openai_image_model: Option<String>,
+    pub google_image_key: Option<String>,
+    pub google_image_model: Option<String>,
 }
 
 impl Default for Settings {
@@ -52,6 +56,10 @@ impl Default for Settings {
             image_provider: String::new(),
             image_endpoint: None,
             image_model: None,
+            openai_image_key: None,
+            openai_image_model: None,
+            google_image_key: None,
+            google_image_model: None,
         }
     }
 }
@@ -61,6 +69,31 @@ fn file() -> PathBuf {
 }
 
 impl Settings {
+    /// Image credentials are separate from the assistant CLI subscription.
+    /// Environment variables take precedence over saved keys.
+    pub fn image_key(&self, provider: &str) -> Option<(String, &'static str)> {
+        let (names, saved): (&[&str], &Option<String>) = match provider {
+            "openai" => (&["OPENAI_API_KEY"], &self.openai_image_key),
+            "google" => (
+                &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+                &self.google_image_key,
+            ),
+            _ => return None,
+        };
+        for name in names {
+            if let Ok(key) = std::env::var(name)
+                && !key.trim().is_empty()
+            {
+                return Some((key.trim().to_string(), "environment"));
+            }
+        }
+        saved
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(|key| (key.to_string(), "settings"))
+    }
+
     pub fn load() -> Self {
         std::fs::read(file())
             .ok()
@@ -72,15 +105,20 @@ impl Settings {
         let dir = crate::recent::data_dir();
         std::fs::create_dir_all(&dir)?;
         let path = file();
-        std::fs::write(
-            &path,
-            serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?,
-        )?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         }
+        serde_json::to_writer_pretty(&mut file, self).map_err(std::io::Error::other)?;
         Ok(())
     }
 
@@ -95,5 +133,32 @@ impl Settings {
             .clone()
             .filter(|k| !k.trim().is_empty())
             .map(|k| (k, "settings"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_local_settings_load_and_cloud_profiles_round_trip_separately() {
+        let mut settings: Settings = serde_json::from_str(
+            r#"{"image_provider":"a1111","image_endpoint":"http://localhost:7860","image_model":"local-checkpoint"}"#,
+        ).unwrap();
+        assert!(settings.openai_image_key.is_none());
+        assert!(settings.google_image_model.is_none());
+        settings.openai_image_key = Some("openai-test-only".into());
+        settings.openai_image_model = Some("openai-model".into());
+        settings.google_image_key = Some("google-test-only".into());
+        settings.google_image_model = Some("google-model".into());
+        settings.image_provider = "google".into();
+        let restored: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(restored, settings);
+        assert_eq!(restored.image_model.as_deref(), Some("local-checkpoint"));
+        assert_eq!(
+            restored.image_endpoint.as_deref(),
+            Some("http://localhost:7860")
+        );
     }
 }

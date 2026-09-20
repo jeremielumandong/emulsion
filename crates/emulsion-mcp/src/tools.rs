@@ -430,7 +430,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "generative_fill",
-            "Paint the selection (or rect [x, y, width, height]) from a text prompt with the person's own Stable Diffusion server (Settings › Image generation), into a new labelled node. The picture around the area goes to that server as context. Use inpaint instead when the goal is only to remove something.",
+            "Paint the selection (or rect [x, y, width, height]) from a text prompt with the person's configured image provider (Local SD, OpenAI, or Google; Settings › Image generation), into a new labelled node. The picture around the area goes to that provider as context; cloud providers bill API usage. Use inpaint instead when the goal is only to remove something.",
             json!({
                 "prompt": { "type": "string", "minLength": 1 },
                 "negative": { "type": "string" },
@@ -440,7 +440,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "generate_image",
-            "Make a whole new canvas-sized layer from a text prompt with the person's own Stable Diffusion server (Settings › Image generation), for backgrounds and textures. The layer is labelled with its provenance.",
+            "Make a whole new canvas-sized layer from a text prompt with the person's configured image provider (Local SD, OpenAI, or Google; Settings › Image generation), for backgrounds and textures. The layer is labelled with its provenance.",
             json!({
                 "prompt": { "type": "string", "minLength": 1 },
                 "negative": { "type": "string" },

@@ -9,6 +9,13 @@ use gpui_kit::component::input::Input;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
+pub(crate) struct ImageInputs {
+    provider: emulsion_ai::generate::Provider,
+    address: Entity<gpui_kit::component::input::InputState>,
+    model: Entity<gpui_kit::component::input::InputState>,
+    key: Entity<gpui_kit::component::input::InputState>,
+}
+
 /// "ToggleNodeVisible" → "toggle node visible".
 fn humanize(action: &str) -> String {
     let mut out = String::new();
@@ -231,46 +238,7 @@ impl Workspace {
                         p.muted,
                     )),
             )
-            .child({
-                let on = !s.image_provider.is_empty();
-                let endpoint_input = self.image_inputs.as_ref().map(|i| i.0.clone());
-                let model_input = self.image_inputs.as_ref().map(|i| i.1.clone());
-                section(&p)
-                    .child(tier(4, "Image generation", on, if on { "on" } else { "off" }, &p))
-                    .child(body("Generative fill and new layers from a prompt, through a Stable Diffusion server you run yourself (Automatic1111 or Forge, on this machine or your LAN). Pixels stay on your own network. In the Select tool, type a prompt and press Enter: with a selection it fills that area; without one it makes a canvas-sized layer.", &p))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(mono("server", 10., p.muted))
-                            .child(chip("img-none", "none", !on, &p).on_click(cx.listener(|_, _, _, cx| {
-                                app_state::update_settings(cx, |s| s.image_provider = String::new());
-                            })))
-                            .child(chip("img-a1111", "A1111 / Forge", s.image_provider == "a1111", &p).on_click(cx.listener(|_, _, _, cx| {
-                                app_state::update_settings(cx, |s| s.image_provider = "a1111".into());
-                            }))),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(mono("address", 10., p.muted))
-                            .children(endpoint_input.map(|st| div().w(px(300.)).border_1().border_color(p.line).child(Input::new(&st).appearance(false))))
-                            .child(mono("checkpoint", 10., p.muted))
-                            .children(model_input.map(|st| div().w(px(220.)).border_1().border_color(p.line).child(Input::new(&st).appearance(false))))
-                            .child(chip("img-save", "save", false, &p).on_click(cx.listener(|this, _, _, cx| {
-                                let (e, m) = this.image_inputs.as_ref().map(|i| (i.0.read(cx).value().trim().to_string(), i.1.read(cx).value().trim().to_string())).unwrap_or_default();
-                                app_state::update_settings(cx, move |s| {
-                                    s.image_endpoint = (!e.is_empty()).then_some(e);
-                                    s.image_model = (!m.is_empty()).then_some(m);
-                                });
-                            })))
-                            .when(on, |d| d.child(chip("img-test", "test", false, &p).on_click(cx.listener(|this, _, _, cx| this.test_image_server(cx))))),
-                    )
-                    .children(self.image_test.clone().map(|(msg, err)| mono(msg, 10.5, if err { p.accent } else { p.ink })))
-            })
+            .child(self.image_settings_panel(&p, cx))
             .child(
                 section(&p)
                     .child(tier(3, "Jev decision model", jev.is_some(), if jev.is_some() { "on" } else { "off" }, &p))
@@ -387,36 +355,231 @@ impl Workspace {
         if self.image_inputs.is_some() {
             return;
         }
+        use emulsion_ai::generate::Provider;
         use gpui_kit::component::input::InputState;
         let s = app_state::settings(cx);
+        let provider = Provider::parse(&s.image_provider).unwrap_or(Provider::A1111);
         let endpoint = s.image_endpoint.clone().unwrap_or_default();
-        let model = s.image_model.clone().unwrap_or_default();
-        let a = cx.new(|cx| {
+        let model = match provider {
+            Provider::A1111 => s.image_model.clone(),
+            Provider::OpenAi => s.openai_image_model.clone(),
+            Provider::Google => s.google_image_model.clone(),
+        }
+        .unwrap_or_default();
+        let address = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("http://127.0.0.1:7860")
+                .placeholder(Provider::A1111.default_endpoint())
                 .default_value(endpoint)
         });
-        let b = cx.new(|cx| {
+        let model = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("server's current checkpoint")
+                .placeholder(if provider == Provider::A1111 {
+                    "server's current checkpoint"
+                } else {
+                    provider.default_model()
+                })
                 .default_value(model)
         });
-        self.image_inputs = Some((a, b));
+        let key = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Paste API key to save or replace")
+                .masked(true)
+        });
+        self.image_inputs = Some(ImageInputs {
+            provider,
+            address,
+            model,
+            key,
+        });
+    }
+
+    fn save_image_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(inputs) = &self.image_inputs else {
+            return;
+        };
+        let provider = inputs.provider;
+        let endpoint = inputs.address.read(cx).value().trim().to_string();
+        let model = inputs.model.read(cx).value().trim().to_string();
+        let key = inputs.key.read(cx).value().trim().to_string();
+        let key_input = inputs.key.clone();
+        app_state::update_settings(cx, move |s| {
+            let model = (!model.is_empty()).then_some(model);
+            match provider {
+                emulsion_ai::generate::Provider::A1111 => {
+                    s.image_endpoint = (!endpoint.is_empty()).then_some(endpoint);
+                    s.image_model = model;
+                }
+                emulsion_ai::generate::Provider::OpenAi => {
+                    s.openai_image_model = model;
+                    if !key.is_empty() {
+                        s.openai_image_key = Some(key);
+                    }
+                }
+                emulsion_ai::generate::Provider::Google => {
+                    s.google_image_model = model;
+                    if !key.is_empty() {
+                        s.google_image_key = Some(key);
+                    }
+                }
+            }
+        });
+        key_input.update(cx, |input, cx| input.set_value("", window, cx));
+        self.image_test = None;
+    }
+
+    fn image_settings_panel(&mut self, p: &Palette, cx: &mut Context<Self>) -> Div {
+        use emulsion_ai::generate::Provider;
+        let s = app_state::settings(cx);
+        let selected = Provider::parse(&s.image_provider);
+        let on = selected.is_some();
+        let mut choices = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.))
+            .child(mono("default", 10., p.muted))
+            .child(
+                chip("img-none", "Off", !on, p).on_click(cx.listener(|this, _, window, cx| {
+                    this.save_image_settings(window, cx);
+                    app_state::update_settings(cx, |s| s.image_provider.clear());
+                    this.image_test = None;
+                })),
+            );
+        for (id, title, provider) in [
+            ("img-a1111", "Local SD", Provider::A1111),
+            ("img-openai", "OpenAI", Provider::OpenAi),
+            ("img-google", "Google", Provider::Google),
+        ] {
+            choices = choices.child(
+                chip(id, title, selected == Some(provider), p)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.save_image_settings(window, cx);
+                        app_state::update_settings(cx, |s| s.image_provider = provider.id().into());
+                        this.image_inputs = None;
+                        this.image_test = None;
+                        cx.notify();
+                    }))
+                    .test_support(),
+            );
+        }
+        let mut panel = div().flex().flex_col().gap(px(10.)).px(px(40.)).py(px(24.))
+            .border_b_1().border_color(p.line)
+            .child(tier(4, "Image generation", on, if on { "on" } else { "off" }, p))
+            .child(div().max_w(px(700.)).text_size(px(13.)).text_color(p.muted)
+                .child("Use Ctrl-K to choose Assistant, Local SD, OpenAI, or Google. Image modes create a new layer, or fill the selected area. The Select tool uses the default provider below."))
+            .child(choices);
+        let Some(provider) = selected else {
+            return panel;
+        };
+        let Some(inputs) = &self.image_inputs else {
+            return panel;
+        };
+        let local = provider == Provider::A1111;
+        let key_status = app_state::settings(cx)
+            .image_key(provider.id())
+            .map(|(_, source)| source);
+        if local {
+            panel = panel
+                .child(mono(
+                    "Start A1111 / Forge with --api. Enter the base URL below.",
+                    10.5,
+                    p.muted,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(mono("Address", 10., p.muted))
+                        .child(div().w(px(300.)).child(Input::new(&inputs.address))),
+                );
+        } else {
+            panel = panel
+                .child(div().max_w(px(700.)).text_size(px(12.)).text_color(p.muted)
+                    .child("Cloud generation sends your prompt and, for fills, the selected canvas context to this provider. API usage is billed separately from chat or coding subscriptions."))
+                .child(mono(match key_status {
+                    Some("environment") => "API key: from environment",
+                    Some(_) => "API key: saved",
+                    None => "API key: not set",
+                }, 10., p.muted))
+                .child(div().flex().flex_wrap().items_center().gap(px(8.))
+                    .child(div().w(px(380.)).child(Input::new(&inputs.key)))
+                    .child(chip("img-clear-key", "Clear saved key", false, p)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            app_state::update_settings(cx, |s| match provider {
+                                Provider::OpenAi => s.openai_image_key = None,
+                                Provider::Google => s.google_image_key = None,
+                                Provider::A1111 => {},
+                            });
+                            if let Some(inputs) = &this.image_inputs {
+                                inputs.key.update(cx, |key, cx| key.set_value("", window, cx));
+                            }
+                            this.image_test = None;
+                        }))));
+        }
+        panel
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(mono(
+                        if local { "Checkpoint" } else { "Model" },
+                        10.,
+                        p.muted,
+                    ))
+                    .child(div().w(px(300.)).child(Input::new(&inputs.model)))
+                    .child(chip("img-save", "Save", false, p).on_click(cx.listener(
+                        |this, _, window, cx| {
+                            this.save_image_settings(window, cx);
+                            this.image_test = Some(("Settings saved".into(), false));
+                        },
+                    )))
+                    .child(
+                        chip("img-test", "Save & test", false, p).on_click(cx.listener(
+                            |this, _, window, cx| {
+                                this.save_image_settings(window, cx);
+                                this.test_image_server(cx);
+                            },
+                        )),
+                    ),
+            )
+            .children(
+                self.image_test
+                    .clone()
+                    .map(|(msg, err)| mono(msg, 10.5, if err { p.accent } else { p.ink })),
+            )
     }
 
     fn test_image_server(&mut self, cx: &mut Context<Self>) {
         let Some(cfg) = crate::editor::generate_ui::config(cx) else {
             return;
         };
-        self.image_test = Some(("Asking the server…".into(), false));
+        let provider = cfg.provider;
+        self.image_test = Some(("Checking connection and model access…".into(), false));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_spawn(async move { emulsion_ai::generate::reachable(&cfg) })
                 .await;
             this.update(cx, |this, cx| {
+                if app_state::settings(cx).image_provider != provider.id() {
+                    return;
+                }
                 this.image_test = Some(match r {
-                    Ok(m) => (format!("Reachable · checkpoint: {m}").into(), false),
+                    Ok(m) => (
+                        if provider == emulsion_ai::generate::Provider::A1111 {
+                            format!("Connected · {m}")
+                        } else {
+                            format!(
+                                "Key and model accessible · {m}. Generation quota is not checked."
+                            )
+                        }
+                        .into(),
+                        false,
+                    ),
                     Err(e) => (e.to_string().into(), true),
                 });
                 cx.notify();

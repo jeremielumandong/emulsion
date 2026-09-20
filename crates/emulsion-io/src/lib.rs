@@ -16,6 +16,7 @@ pub mod icc;
 pub mod import;
 pub mod lensfun;
 pub mod ora;
+mod path_data;
 pub mod psd;
 pub mod raw;
 pub mod recent;

@@ -14,6 +14,7 @@ use emulsion_raster::composite::flatten;
 use emulsion_raster::{Placement, Raster};
 use emulsion_recipes::Recipe;
 use emulsion_recipes::store;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::HashSet;
@@ -38,8 +39,11 @@ pub(crate) struct BatchState {
     pub current: Option<usize>,
     /// Chosen recipe name, if any.
     pub recipe: Option<String>,
-    recipes: Option<Vec<Recipe>>,
-    tag: Option<String>,
+    pub(crate) recipes: Option<Vec<Recipe>>,
+    pub(crate) tag: Option<String>,
+    recipe_browser: bool,
+    tag_browser: bool,
+    pub(crate) search: Option<(Entity<InputState>, Subscription)>,
     /// Large preview for (path, recipe).
     preview: Option<(PathBuf, Option<String>, Arc<RenderImage>)>,
     preview_loading: Option<(PathBuf, Option<String>)>,
@@ -397,9 +401,303 @@ impl Workspace {
         cx.notify();
     }
 
+    fn batch_settings_panel(
+        &mut self,
+        recipes: &[Recipe],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = theme::palette(cx);
+        if self.batch.recipe_browser && self.batch.search.is_none() {
+            let input =
+                cx.new(|cx| InputState::new(window, cx).placeholder("Search recipes or tags…"));
+            let subscription = cx.subscribe(&input, |_, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
+            self.batch.search = Some((input, subscription));
+        }
+        let chosen = self
+            .batch
+            .recipe
+            .clone()
+            .unwrap_or_else(|| "No recipe".into());
+        let mut recipe = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .p(px(14.))
+            .border_b_1()
+            .border_color(p.line)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(label("Recipe", &p))
+                    .child(div().flex_1())
+                    .when(self.batch.recipe.is_some(), |d| {
+                        d.child(
+                            chip("batch-recipe-clear", "Clear", false, &p)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.batch.recipe = None;
+                                    cx.notify();
+                                }))
+                                .test_support(),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .id("batch-recipe-toggle")
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .p(px(9.))
+                    .border_1()
+                    .border_color(p.line)
+                    .bg(p.soft_bg)
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_size(px(12.))
+                            .child(chosen),
+                    )
+                    .child(mono(
+                        if self.batch.recipe_browser {
+                            "▴"
+                        } else {
+                            "▾"
+                        },
+                        11.,
+                        p.muted,
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.recipe_browser = !this.batch.recipe_browser;
+                        this.batch.tag_browser = false;
+                        cx.notify();
+                    }))
+                    .test_support(),
+            );
+        if self.batch.recipe_browser {
+            let input = self
+                .batch
+                .search
+                .as_ref()
+                .expect("recipe search initialized")
+                .0
+                .clone();
+            let query = input.read(cx).value().trim().to_lowercase();
+            let tag = self.batch.tag.clone();
+            let mut browser = div()
+                .id("batch-recipe-browser")
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(Input::new(&input))
+                .child(
+                    chip(
+                        "batch-filter-toggle",
+                        format!("Category: {} ▾", tag.as_deref().unwrap_or("All")),
+                        self.batch.tag_browser,
+                        &p,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.tag_browser = !this.batch.tag_browser;
+                        cx.notify();
+                    }))
+                    .test_support(),
+                );
+            if self.batch.tag_browser {
+                let mut tags: Vec<_> = recipes.iter().flat_map(|r| r.tags.clone()).collect();
+                tags.sort();
+                tags.dedup();
+                let mut choices = div().flex().flex_wrap().gap(px(5.)).child(
+                    chip("batch-tag-all", "All categories", tag.is_none(), &p)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.batch.tag = None;
+                            this.batch.tag_browser = false;
+                            cx.notify();
+                        }))
+                        .test_support(),
+                );
+                for (i, name) in tags.into_iter().enumerate() {
+                    let active = tag.as_ref() == Some(&name);
+                    choices = choices.child(
+                        chip(("batch-tag", i), name.clone(), active, &p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.batch.tag = Some(name.clone());
+                                this.batch.tag_browser = false;
+                                cx.notify();
+                            }))
+                            .test_support(),
+                    );
+                }
+                browser = browser.child(
+                    div()
+                        .id("batch-tag-list")
+                        .max_h(px(120.))
+                        .overflow_y_scroll()
+                        .child(choices)
+                        .test_support(),
+                );
+            }
+            let filtered: Vec<_> = recipes
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    tag.as_ref().is_none_or(|tag| r.tags.contains(tag))
+                        && (query.is_empty()
+                            || r.name.to_lowercase().contains(&query)
+                            || r.tags.iter().any(|tag| tag.to_lowercase().contains(&query)))
+                })
+                .collect();
+            let mut list = div().flex().flex_col().gap(px(4.)).child(
+                chip(
+                    "batch-rc-none",
+                    "No recipe",
+                    self.batch.recipe.is_none(),
+                    &p,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.batch.recipe = None;
+                    this.batch.recipe_browser = false;
+                    cx.notify();
+                }))
+                .test_support(),
+            );
+            for (index, item) in &filtered {
+                let name = item.name.clone();
+                let on = self.batch.recipe.as_ref() == Some(&name);
+                list = list.child(
+                    div()
+                        .id(("batch-rc", *index))
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.))
+                        .p(px(8.))
+                        .border_1()
+                        .border_color(if on { p.accent } else { p.line })
+                        .bg(if on { p.accent.opacity(0.1) } else { p.soft_bg })
+                        .cursor_pointer()
+                        .text_size(px(12.))
+                        .child(
+                            div()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .child(name.clone()),
+                        )
+                        .child(mono(
+                            item.tags
+                                .iter()
+                                .take(3)
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(" · "),
+                            9.,
+                            p.muted,
+                        ))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.batch.recipe = Some(name.clone());
+                            this.batch.recipe_browser = false;
+                            cx.notify();
+                        }))
+                        .test_support(),
+                );
+            }
+            browser = browser
+                .child(mono(format!("{} recipes", filtered.len()), 9., p.muted))
+                .child(
+                    div()
+                        .id("batch-recipe-list")
+                        .max_h(px(260.))
+                        .overflow_y_scroll()
+                        .child(list)
+                        .test_support(),
+                )
+                .when(filtered.is_empty(), |d| {
+                    d.child(mono("No matching recipes", 10., p.muted))
+                });
+            recipe = recipe.child(browser.test_support());
+        }
+        let mut format = div().flex().items_center().gap(px(6.));
+        for (value, title, id) in [("jpg", "JPEG", 3usize), ("png", "PNG", 13usize)] {
+            let selected = if self.batch.format == "png" {
+                "png"
+            } else {
+                "jpg"
+            } == value;
+            format = format.child(
+                chip(("batch-fmt", id), title, selected, &p)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.batch.format = value.into();
+                        cx.notify();
+                    }))
+                    .test_support(),
+            );
+        }
+        let destination = self
+            .batch
+            .out_dir
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "Choose an output folder".into());
+        let destination_tip = destination.clone();
+        let export = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .p(px(14.))
+            .child(label("Export settings", &p))
+            .child(mono("Format", 10., p.muted))
+            .child(format)
+            .child(mono("Destination", 10., p.muted))
+            .child(
+                div()
+                    .id("batch-destination")
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(px(10.))
+                    .text_color(p.muted)
+                    .child(destination)
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(destination_tip.clone())
+                            .build(window, cx)
+                    }),
+            )
+            .child(
+                chip("batch-out", "Choose folder…", false, &p)
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_batch_out_dir(cx)))
+                    .test_support(),
+            );
+        div()
+            .id("batch-settings")
+            .w(px(264.))
+            .flex_none()
+            .min_h_0()
+            .overflow_y_scroll()
+            .border_l_1()
+            .border_color(p.line)
+            .child(recipe)
+            .child(export)
+            .test_support()
+            .into_any_element()
+    }
+
     // ── View ────────────────────────────────────────────────────────────
 
-    pub(crate) fn batch_screen(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn batch_screen(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
         self.batch_thumbs(cx);
         self.batch_preview(cx);
@@ -407,16 +705,19 @@ impl Workspace {
         let selected = self.batch.items.iter().filter(|i| i.selected).count();
         let total = self.batch.items.len();
 
-        // Toolbar.
-        let folder_label: SharedString = match &self.batch.folder {
-            Some(f) => f.display().to_string().into(),
-            None => "no folder yet".into(),
-        };
+        // Keep the primary actions in one row; detailed choices live in the dock.
+        let folder_label = self
+            .batch
+            .folder
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "Choose a folder to get started".into());
         let mut bar = div()
+            .id("batch-toolbar")
             .flex()
-            .flex_wrap()
+            .flex_none()
             .items_center()
-            .gap(px(8.))
+            .gap(px(12.))
             .px(px(16.))
             .py(px(10.))
             .border_b_1()
@@ -432,129 +733,60 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, _, cx| this.pick_batch_folder(cx))),
             )
             .child(
-                mono(folder_label, 10., p.muted)
-                    .max_w(px(360.))
+                div()
+                    .flex_1()
+                    .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_ellipsis(),
+                    .text_ellipsis()
+                    .child(mono(folder_label, 10., p.muted)),
             )
-            .child(mono(format!("{selected} of {total} ticked"), 10., p.ink))
-            .child(
-                chip("batch-all", "all", false, &p).on_click(cx.listener(|this, _, _, cx| {
-                    for i in &mut this.batch.items {
-                        i.selected = true;
-                    }
-                    cx.notify();
-                })),
-            )
-            .child(
-                chip("batch-none", "none", false, &p).on_click(cx.listener(|this, _, _, cx| {
-                    for i in &mut this.batch.items {
-                        i.selected = false;
-                    }
-                    cx.notify();
-                })),
-            )
-            .child(div().flex_1())
-            .child(mono("export as", 10., p.muted));
-        for f in ["jpg", "png"] {
-            let on = self.batch.format == f;
-            bar = bar.child(
-                chip(
-                    ("batch-fmt", f.len() + if f == "jpg" { 0 } else { 10 }),
-                    f,
-                    on,
-                    &p,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.batch.format = f.into();
-                    cx.notify();
-                })),
-            );
-        }
-        let out_label: SharedString = self
-            .batch
-            .out_dir
-            .as_ref()
-            .map(|d| d.display().to_string())
-            .unwrap_or_else(|| "…".into())
-            .into();
-        bar = bar.child(
-            chip("batch-out", format!("to {out_label}"), false, &p)
-                .on_click(cx.listener(|this, _, _, cx| this.pick_batch_out_dir(cx))),
-        );
+            .child(mono(format!("{selected} / {total} selected"), 10., p.ink).whitespace_nowrap());
         bar = match self.batch.running {
-            Some((done, n)) => bar
-                .child(mono(format!("exporting {done}/{n}"), 10., p.accent))
+            Some((done, count)) => bar
+                .child(mono(format!("Exporting {done}/{count}"), 10., p.accent))
                 .child(
-                    chip("batch-stop", "stop", false, &p)
+                    chip("batch-stop", "Stop", false, &p)
                         .on_click(cx.listener(|this, _, _, cx| this.cancel_batch(cx))),
                 ),
             None => bar.child(
                 button("batch-run", format!("Export {selected}"), selected > 0, &p)
                     .py(px(5.))
+                    .test_support()
                     .on_click(cx.listener(|this, _, _, cx| this.run_batch(cx))),
             ),
         };
-        if let Some((msg, err)) = &self.batch.note {
-            bar = bar.child(mono(msg.clone(), 10., if *err { p.accent } else { p.ink }));
-        }
-
-        // Recipe chips.
-        let mut tags: Vec<String> = recipes.iter().flat_map(|r| r.tags.clone()).collect();
-        tags.sort();
-        tags.dedup();
-        let tag = self.batch.tag.clone();
-        let mut recipe_row = div()
+        let settings = self.batch_settings_panel(&recipes, window, cx);
+        let photo_header = div()
             .flex()
-            .flex_wrap()
+            .flex_none()
             .items_center()
-            .gap(px(5.))
-            .px(px(16.))
-            .py(px(8.))
+            .gap(px(6.))
+            .p(px(12.))
             .border_b_1()
             .border_color(p.line)
-            .child(label("Recipe", &p))
-            .child(
-                chip("batch-rc-none", "none", self.batch.recipe.is_none(), &p).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.batch.recipe = None;
-                        cx.notify();
-                    }),
-                ),
-            );
-        for (i, r) in recipes.iter().enumerate() {
-            if tag.as_ref().is_some_and(|t| !r.tags.contains(t)) {
-                continue;
-            }
-            let on = self.batch.recipe.as_deref() == Some(r.name.as_str());
-            let name = r.name.clone();
-            recipe_row = recipe_row.child(chip(("batch-rc", i), r.name.clone(), on, &p).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    this.batch.recipe = Some(name.clone());
-                    cx.notify();
-                }),
-            ));
-        }
-        recipe_row = recipe_row
+            .child(label("Photos", &p))
             .child(div().flex_1())
-            .child(mono("filter", 9.5, p.muted));
-        recipe_row = recipe_row.child(chip("batch-tag-all", "all", tag.is_none(), &p).on_click(
-            cx.listener(|this, _, _, cx| {
-                this.batch.tag = None;
-                cx.notify();
-            }),
-        ));
-        for (i, t) in tags.iter().enumerate() {
-            let on = tag.as_deref() == Some(t);
-            let t2 = t.clone();
-            recipe_row = recipe_row.child(chip(("batch-tag", i), t.clone(), on, &p).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    this.batch.tag = Some(t2.clone());
-                    cx.notify();
-                }),
-            ));
-        }
+            .child(
+                chip("batch-all", "All", false, &p)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        for item in &mut this.batch.items {
+                            item.selected = true;
+                        }
+                        cx.notify();
+                    }))
+                    .test_support(),
+            )
+            .child(
+                chip("batch-none", "None", false, &p)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        for item in &mut this.batch.items {
+                            item.selected = false;
+                        }
+                        cx.notify();
+                    }))
+                    .test_support(),
+            );
 
         // Grid of pictures.
         let current = self.batch.current;
@@ -618,11 +850,13 @@ impl Workspace {
                                     .child(if item.selected { "✓" } else { "" })
                                     .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                                         let _ = e;
+                                        cx.stop_propagation();
                                         if let Some(it) = this.batch.items.get_mut(i) {
                                             it.selected = !it.selected;
                                         }
                                         cx.notify();
-                                    })),
+                                    }))
+                                    .test_support(),
                             ),
                     )
                     .child(
@@ -634,7 +868,8 @@ impl Workspace {
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .child(name),
-                    ),
+                    )
+                    .test_support(),
             );
         }
         if self.batch.items.is_empty() {
@@ -661,7 +896,7 @@ impl Workspace {
                     if self.batch.preview_loading.is_some() {
                         "rendering…"
                     } else {
-                        ""
+                        "Select a photo to preview its recipe"
                     },
                     10.,
                     p.muted,
@@ -693,8 +928,20 @@ impl Workspace {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .child(bar)
-            .child(recipe_row)
+            .child(bar.test_support())
+            .children(self.batch.note.as_ref().map(|(message, error)| {
+                div()
+                    .flex_none()
+                    .px(px(16.))
+                    .py(px(7.))
+                    .border_b_1()
+                    .border_color(p.line)
+                    .child(mono(
+                        message.clone(),
+                        10.,
+                        if *error { p.accent } else { p.ink },
+                    ))
+            }))
             .child(
                 div()
                     .flex()
@@ -702,14 +949,27 @@ impl Workspace {
                     .min_h_0()
                     .child(
                         div()
-                            .id("batch-grid")
-                            .w(px(460.))
+                            .flex()
+                            .flex_col()
+                            .w(px(if f32::from(window.viewport_size().width) < 1050. {
+                                172.
+                            } else {
+                                304.
+                            }))
                             .flex_none()
                             .min_h_0()
-                            .overflow_y_scroll()
                             .border_r_1()
                             .border_color(p.line)
-                            .child(grid),
+                            .child(photo_header)
+                            .child(
+                                div()
+                                    .id("batch-grid")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .child(grid)
+                                    .test_support(),
+                            ),
                     )
                     .child(
                         div()
@@ -728,7 +988,8 @@ impl Workspace {
                                     .border_color(p.line)
                                     .child(mono(caption, 10., p.muted)),
                             ),
-                    ),
+                    )
+                    .child(settings),
             )
     }
 }

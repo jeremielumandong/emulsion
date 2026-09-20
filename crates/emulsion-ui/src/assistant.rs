@@ -352,15 +352,22 @@ impl EditorView {
             return;
         }
         let state = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(
-                "Ask Emulsion — e.g. hide the top two nodes and rename the third to Sky",
-            )
+            InputState::new(window, cx)
+                .placeholder("Describe an edit or an image, then press Enter")
         });
         state.update(cx, |s, cx| s.focus(window, cx));
         let sub = cx.subscribe_in(&state, window, |this, st, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = ev {
                 let text = st.read(cx).value().to_string();
                 if !text.trim().is_empty() {
+                    if let Some(provider) = this.generate.ask_provider {
+                        let cfg = crate::editor::generate_ui::config_for(provider, cx);
+                        match this.generate_text(text, cfg, cx) {
+                            Ok(()) => this.close_ask(window, cx),
+                            Err(error) => this.set_status(error, true, cx),
+                        }
+                        return;
+                    }
                     if this.assistant.reference_loading {
                         this.set_status(
                             "Wait for the reference image to finish loading.",
@@ -388,6 +395,18 @@ impl EditorView {
 
     /// Plan without a language model; apply if complete, else hand over.
     pub fn submit_ask(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.generate.busy {
+            self.set_status("Wait for image generation to finish.", false, cx);
+            return;
+        }
+        if self.assistant.running {
+            self.set_status(
+                "The assistant is still working on the last request.",
+                false,
+                cx,
+            );
+            return;
+        }
         if self.assistant.reference_loading {
             self.set_status("Wait for the reference image to finish loading.", false, cx);
             return;
@@ -448,6 +467,14 @@ impl EditorView {
         note: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        if self.generate.busy {
+            self.set_status(
+                "Wait for image generation to finish, then submit the edit again.",
+                false,
+                cx,
+            );
+            return;
+        }
         self.editor.begin(format!("Ask: {}", short(text)));
         let mut cards = Vec::new();
         let mut error = None;
@@ -627,6 +654,9 @@ impl EditorView {
     }
 
     fn start_turn(&mut self, text: String, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.generate.busy {
+            return Err("Wait for image generation to finish.".into());
+        }
         if self.assistant.reference_loading {
             return Err("Wait for the reference image to finish loading.".into());
         }
@@ -1603,22 +1633,91 @@ impl EditorView {
     // ── Rendering ───────────────────────────────────────────────────────
 
     pub(crate) fn ask_bar(&mut self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let bar = self.ask.as_ref()?;
-        let jev = app_state::settings(cx).jev_key().is_some();
-        let cli = matches!(app_state::cli(cx), CliStatus::Found { .. });
-        let label = provider(cx).label;
-        let route: String = match (jev, cli) {
-            (true, true) => format!("Jev plans simple requests · {label} takes the rest"),
-            (true, false) => "Jev plans requests · no assistant for the rest".into(),
-            (false, true) => format!("simple requests resolve offline · {label} takes the rest"),
-            (false, false) => "simple requests resolve offline".into(),
+        use emulsion_ai::generate::Provider;
+        let state = self.ask.as_ref()?.state.clone();
+        let chosen = self.generate.ask_provider;
+        let route: String = match chosen {
+            Some(Provider::A1111) => {
+                "Generate locally · selection fills; otherwise adds a layer".into()
+            }
+            Some(provider) => format!(
+                "{} receives the prompt and selected canvas · usage is billed",
+                provider.label()
+            ),
+            None => {
+                let cli = matches!(app_state::cli(cx), CliStatus::Found { .. });
+                let planner = if app_state::settings(cx).jev_key().is_some() {
+                    "Jev"
+                } else {
+                    "Offline"
+                };
+                if cli {
+                    format!(
+                        "{planner} edits · {} handles other requests",
+                        provider(cx).label
+                    )
+                } else {
+                    format!(
+                        "{planner} edits · configure an assistant in Settings for other requests"
+                    )
+                }
+            }
         };
+        let mut modes = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(mono("ASK", 10., p.accent));
+        for (id, title, choice) in [
+            ("ask-assistant", "Assistant", None),
+            ("ask-local", "Local SD", Some(Provider::A1111)),
+            ("ask-openai", "OpenAI", Some(Provider::OpenAi)),
+            ("ask-google", "Google", Some(Provider::Google)),
+        ] {
+            modes = modes.child(
+                chip(id, title, chosen == choice, p)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.generate.ask_provider = choice;
+                        if let Some(bar) = &this.ask {
+                            bar.state.update(cx, |state, cx| state.focus(window, cx));
+                        }
+                        cx.notify();
+                    }))
+                    .test_support(),
+            );
+        }
+        modes = modes.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(mono(route, 9.5, p.muted)),
+        );
+        let mut input = div().flex().items_center().gap(px(10.)).child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(Input::new(&state).appearance(false).bordered(false)),
+        );
+        if chosen.is_none() {
+            input = input.child(
+                chip("ask-reference", "Add reference", false, p)
+                    .on_click(cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)))
+                    .test_support(),
+            );
+        }
+        input = input.child(
+            chip("ask-close", "esc", false, p)
+                .on_click(cx.listener(|this, _, window, cx| this.close_ask(window, cx))),
+        );
         Some(
             div()
                 .flex()
+                .flex_col()
                 .flex_none()
-                .items_center()
-                .gap(px(10.))
+                .gap(px(6.))
                 .px(px(16.))
                 .py(px(8.))
                 .border_b_1()
@@ -1629,22 +1728,8 @@ impl EditorView {
                         this.close_ask(window, cx);
                     }
                 }))
-                .child(mono("ASK", 10., p.accent).flex_none())
-                .child(
-                    chip("ask-reference", "Add reference", false, p).on_click(
-                        cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)),
-                    ),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .child(Input::new(&bar.state).appearance(false).bordered(false)),
-                )
-                .child(mono(route, 9.5, p.muted).flex_none())
-                .child(
-                    chip("ask-close", "esc", false, p)
-                        .on_click(cx.listener(|this, _, window, cx| this.close_ask(window, cx))),
-                )
+                .child(modes)
+                .child(input)
                 .into_any_element(),
         )
     }

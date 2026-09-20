@@ -384,6 +384,19 @@ impl EditorView {
         self.tools.polygon.clear();
         self.switch_slot(from, BrushSlot::of(tool, self.tools.paint));
         self.tools.mask_edit = tool == Tool::Mask;
+        if tool == Tool::Grade {
+            // Open the selected adjustment for editing, or offer new layers.
+            let tab = if self
+                .selected
+                .and_then(|id| self.editor.doc.node(id))
+                .is_some_and(|node| matches!(node.kind, NodeKind::Adjust(_)))
+            {
+                SidebarTab::Properties
+            } else {
+                SidebarTab::Adjustments
+            };
+            self.select_sidebar(tab, cx);
+        }
         if tool == Tool::Mask {
             // The tool needs a mask to paint; a node without one gets a
             // fully revealing mask now.
@@ -2553,6 +2566,35 @@ impl EditorView {
         let mut v: Vec<AnyElement> = Vec::new();
         let b = self.tools.brush;
         match self.tool {
+            Tool::Grade => {
+                v.push(self.group("add adjustment", p));
+                for (id, title, key) in [
+                    ("grade-exposure", "Exposure", "exposure"),
+                    ("grade-curves", "Curves", "curves"),
+                    ("grade-color-balance", "Color balance", "color_balance"),
+                    ("grade-hsl", "Hue / Saturation", "hue_saturation"),
+                ] {
+                    v.push(
+                        chip(id, title, false, p)
+                            .on_click(cx.listener(move |this, _, _, cx| this.quick_adjust(key, cx)))
+                            .test_support()
+                            .into_any_element(),
+                    );
+                }
+                v.push(
+                    chip(
+                        "grade-adjustments",
+                        "All adjustments",
+                        self.sidebar_tab == SidebarTab::Adjustments,
+                        p,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.select_sidebar(SidebarTab::Adjustments, cx)
+                    }))
+                    .test_support()
+                    .into_any_element(),
+                );
+            }
             Tool::Mask => {
                 let reveal = self.tools.mask_reveal;
                 for (id, t, help, r) in [
@@ -3310,7 +3352,6 @@ impl EditorView {
                     .child("drag to pan · ctrl+scroll to zoom · V to move a node")
                     .into_any_element(),
             ),
-            _ => {}
         }
         v
     }

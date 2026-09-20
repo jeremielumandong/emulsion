@@ -94,7 +94,7 @@ const TOOLS: [(Tool, &str, &str, bool); 12] = [
     (Tool::Brush, "Brush", "✎", true),
     (Tool::Heal, "Heal", "✚", true),
     (Tool::Clone, "Clone", "◎", true),
-    (Tool::Grade, "Grade", "◑", false),
+    (Tool::Grade, "Grade", "◑", true),
     (Tool::Type, "Type", "T", true),
     (Tool::Crop, "Crop", "⌗", true),
     (Tool::Shape, "Shape", "◇", true),
@@ -1600,6 +1600,7 @@ impl EditorView {
                         gpui_kit::component::tooltip::Tooltip::new(tool_help(tool)).build(w, cx)
                     })
                     .child(*glyph)
+                    .test_support()
             }))
             .child(div().flex_1())
             .child(self.swatches(p, cx))
@@ -1769,7 +1770,7 @@ impl EditorView {
             ) => CursorStyle::ResizeUpDown,
             (_, true) => CursorStyle::OpenHand,
             _ if self.tool == Tool::Hand => CursorStyle::OpenHand,
-            _ if self.tool == Tool::Move => CursorStyle::Arrow,
+            _ if matches!(self.tool, Tool::Move | Tool::Grade) => CursorStyle::Arrow,
             _ => CursorStyle::Crosshair,
         };
         div()
@@ -1891,8 +1892,10 @@ impl EditorView {
             if n == 1 { "" } else { "s" }
         );
         div()
+            .id("editor-status-strip")
             .flex()
             .flex_none()
+            .h(px(38.))
             .items_center()
             .gap(px(9.))
             .px(px(16.))
@@ -1905,10 +1908,39 @@ impl EditorView {
             })
             .children(self.suggestion_chips(p, cx))
             .children(self.status.as_ref().map(|(msg, err)| {
-                mono(msg.clone(), 10.5, if *err { p.accent } else { p.ink }).whitespace_nowrap()
+                let detail = msg.clone();
+                // Provider errors can contain explicit newlines and long URLs.
+                // Keep the strip one line while preserving the full diagnostic.
+                mono(
+                    msg.split_whitespace().collect::<Vec<_>>().join(" "),
+                    10.5,
+                    if *err { p.accent } else { p.ink },
+                )
+                .id("editor-status-message")
+                .flex_1()
+                .min_w_0()
+                .h(px(16.))
+                .line_height(px(16.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(detail.clone()).build(window, cx)
+                })
+                .test_support()
             }))
-            .child(div().flex_1())
-            .child(mono(right, 10., p.muted).whitespace_nowrap())
+            .when(self.status.is_none(), |d| d.child(div().flex_1()))
+            .child(
+                mono(right, 10., p.muted)
+                    .id("editor-status-meta")
+                    .flex_none()
+                    .max_w(relative(0.5))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .test_support(),
+            )
+            .test_support()
     }
 
     fn node_panel(

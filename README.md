@@ -43,6 +43,23 @@ The script creates a versioned `.app` and `.dmg` in `target/macos/`. The app is
 signed ad hoc for local use; distributing it requires Developer ID signing and
 notarization.
 
+## Compact project files
+
+Saving an ORA stores each unique editable path once, shared by the current
+artwork and its history. Coordinates remain full precision; redundant corner
+handles are omitted and reconstructed exactly. Layer previews and history are
+kept, with lossless ZIP compression.
+
+Older projects open normally. Newly saved projects use native format version 2
+and need this updated Emulsion build for native editing; other OpenRaster
+readers can still use the included layer previews.
+
+To create and verify a separate compact copy:
+
+```sh
+cargo run --release -p emulsion-io --example compact_native -- input.ora compact-copy.ora
+```
+
 ## Editor controls
 
 The right dock keeps **Layers** visible, with its own scrolling list and
@@ -52,10 +69,58 @@ The right dock keeps **Layers** visible, with its own scrolling list and
 - **Adjustments** adds adjustment layers and filters, then opens their Properties.
 - **Reference** keeps an attached image beside the canvas while selecting layers.
 
+Choose **Grade** in the left toolbar for colour and tone work. Its top bar adds
+Exposure, Curves, Color Balance, or Hue/Saturation as editable adjustment layers;
+**All adjustments** opens the full catalogue. Selecting Grade with an adjustment
+layer selected opens its existing controls in Properties.
+
 The **Panels** menu opens Navigator, Info, Recipes, Timeline, History, or Histogram
 in the same dock. Active tool options stay above the canvas.
 Leaving Recipes cancels an unapplied preview; leaving Timeline stops playback
 and returns to the full document.
+
+## Batch controls
+
+Choose a folder in the top bar, then select photos in the left pane. The centre
+shows the current photo; the right dock groups **Recipe** and **Export settings**.
+Open the recipe chooser to search by name or tag, and expand **Category** when
+you need a filter. Choosing a recipe closes the list. Set the format and output
+folder in the dock, then use **Export** in the top bar.
+
+## Image generation
+
+Press **Ctrl-K** and choose **Assistant**, **Local SD**, **OpenAI**, or **Google**.
+Assistant keeps the editing and drawing workflow. The image providers create
+a new raster layer; with an active selection they fill that area using the
+surrounding canvas as context. Enter your prompt and press **Enter**. Generated
+layers are labelled with their model and can be hidden or undone.
+
+Configure providers under **Settings → Image generation**:
+
+- **Local SD:** start A1111 / Forge with `./webui.sh --api`; use
+  `http://127.0.0.1:7860` as the base address.
+- **OpenAI:** save an API key, or set `OPENAI_API_KEY`. The default model is
+  `gpt-image-2.5-sunburst`.
+- **Google:** save a Gemini API key, or set `GEMINI_API_KEY` (`GOOGLE_API_KEY`
+  is also accepted). The default model is `gemini-3.1-flash-image`.
+
+Each provider keeps its own model and credentials. Environment keys take
+precedence over saved keys. **Save & test** checks key/model access without
+generating an image; it does not verify generation quota. If Google reports
+`free_tier` with `limit: 0`, check billing, prepaid credits, and model quotas
+for the API key's project in Google AI Studio. Waiting for a retry timer will
+not increase a zero quota. Cloud generation sends prompts and fill context to the chosen
+provider and uses separately billed API access, not a chat/CLI subscription.
+Google fill follows mask instructions; Emulsion masks the result locally so
+pixels outside the selection stay untouched. Cancelling discards the result;
+it does not guarantee cancellation of the provider's processing or charges.
+
+The Select tool's **generate** field uses the default provider from Settings.
+Attached Reference images are used by **Assistant**; image modes currently
+use the prompt and selected canvas context.
+
+Provider documentation: [OpenAI Images](https://developers.openai.com/api/docs/guides/image-generation),
+[Gemini Images](https://ai.google.dev/gemini-api/docs/generate-content/image-generation).
 
 ## Drawing from a reference
 

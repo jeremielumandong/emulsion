@@ -4,6 +4,7 @@
 //! history/graph.json      commits, branches, and which planes each uses
 //! history/tiles/r<n>      one 256×256 RGBA16 tile, little-endian, deflated
 //! history/tiles/m<n>      one 256×256 8-bit mask tile, deflated
+//! emulsion/paths/<n>.bin  compact geometry shared with the live document
 //! ```
 //!
 //! Commits share pixels the way they do in memory: each distinct tile is
@@ -15,6 +16,7 @@
 //! The graph is optional. Files without it open with a fresh history, and
 //! a damaged graph never stops the document itself from opening.
 
+use crate::path_data::{PathData, PathPool, PathReader};
 use crate::{IoError, Result};
 use emulsion_core::NodeId;
 use emulsion_core::document::Document;
@@ -29,7 +31,7 @@ use std::io::{Read, Seek};
 use std::sync::Arc;
 use zip::ZipArchive;
 
-pub const HISTORY_VERSION: u32 = 1;
+pub const HISTORY_VERSION: u32 = 2;
 pub(crate) const GRAPH: &str = "history/graph.json";
 const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
 
@@ -159,7 +161,7 @@ enum HKind {
         rgba: [u8; 4],
     },
     Path {
-        path: emulsion_raster::vector::Path,
+        path: PathData,
         style: emulsion_raster::vector::PathStyle,
     },
     Text {
@@ -246,7 +248,11 @@ pub(crate) fn fingerprint(bytes: &[u8]) -> String {
 
 /// Encode `graph`. `live` is the manifest fingerprint when the saved
 /// document equals the head branch's tip.
-pub(crate) fn encode(graph: &Graph, live: Option<String>) -> Result<Vec<(String, Vec<u8>)>> {
+pub(crate) fn encode(
+    graph: &Graph,
+    live: Option<String>,
+    paths: &mut PathPool,
+) -> Result<Vec<(String, Vec<u8>)>> {
     let mut rasters = Pool::<[u16; 4]>::new();
     let mut masks = Pool::<u8>::new();
     let commits = graph
@@ -256,55 +262,57 @@ pub(crate) fn encode(graph: &Graph, live: Option<String>) -> Result<Vec<(String,
             let nodes = d
                 .nodes
                 .iter()
-                .map(|n| HNode {
-                    id: n.id,
-                    name: n.name.clone(),
-                    parent: n.parent,
-                    visible: n.visible,
-                    locked: n.locked,
-                    opacity: n.opacity,
-                    blend: n.blend,
-                    clip_to: n.clip_to,
-                    mask: n.mask.as_ref().map(|m| masks.add(m)),
-                    mask_enabled: n.mask_enabled,
-                    styles: n.styles.clone(),
-                    origin: n.origin.clone(),
-                    kind: match &n.kind {
-                        NodeKind::Raster { raster, placement } => HKind::Raster {
-                            raster: rasters.add(raster),
-                            placement: *placement,
+                .map(|n| {
+                    Ok(HNode {
+                        id: n.id,
+                        name: n.name.clone(),
+                        parent: n.parent,
+                        visible: n.visible,
+                        locked: n.locked,
+                        opacity: n.opacity,
+                        blend: n.blend,
+                        clip_to: n.clip_to,
+                        mask: n.mask.as_ref().map(|m| masks.add(m)),
+                        mask_enabled: n.mask_enabled,
+                        styles: n.styles.clone(),
+                        origin: n.origin.clone(),
+                        kind: match &n.kind {
+                            NodeKind::Raster { raster, placement } => HKind::Raster {
+                                raster: rasters.add(raster),
+                                placement: *placement,
+                            },
+                            NodeKind::Group { collapsed } => HKind::Group {
+                                collapsed: *collapsed,
+                            },
+                            NodeKind::Adjust(a) => HKind::Adjust {
+                                adjustment: a.clone(),
+                            },
+                            NodeKind::Fill { rgba } => HKind::Fill { rgba: *rgba },
+                            NodeKind::Smart {
+                                source,
+                                filters,
+                                placement,
+                                cache,
+                                offset,
+                            } => HKind::Smart {
+                                source: rasters.add(source),
+                                cache: rasters.add(cache),
+                                offset: *offset,
+                                filters: filters.clone(),
+                                placement: *placement,
+                            },
+                            NodeKind::Path { path, style, .. } => HKind::Path {
+                                path: paths.add(path)?,
+                                style: *style,
+                            },
+                            NodeKind::Text { spec, .. } => HKind::Text {
+                                spec: (**spec).clone(),
+                            },
                         },
-                        NodeKind::Group { collapsed } => HKind::Group {
-                            collapsed: *collapsed,
-                        },
-                        NodeKind::Adjust(a) => HKind::Adjust {
-                            adjustment: a.clone(),
-                        },
-                        NodeKind::Fill { rgba } => HKind::Fill { rgba: *rgba },
-                        NodeKind::Smart {
-                            source,
-                            filters,
-                            placement,
-                            cache,
-                            offset,
-                        } => HKind::Smart {
-                            source: rasters.add(source),
-                            cache: rasters.add(cache),
-                            offset: *offset,
-                            filters: filters.clone(),
-                            placement: *placement,
-                        },
-                        NodeKind::Path { path, style, .. } => HKind::Path {
-                            path: (**path).clone(),
-                            style: *style,
-                        },
-                        NodeKind::Text { spec, .. } => HKind::Text {
-                            spec: (**spec).clone(),
-                        },
-                    },
+                    })
                 })
-                .collect();
-            HCommit {
+                .collect::<Result<Vec<_>>>()?;
+            Ok(HCommit {
                 id: c.id,
                 parents: c.parents.clone(),
                 name: c.name.clone(),
@@ -323,9 +331,9 @@ pub(crate) fn encode(graph: &Graph, live: Option<String>) -> Result<Vec<(String,
                     guides: d.guides.clone(),
                     info: d.info.clone(),
                 },
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     let mut entries = rasters.entries();
     entries.extend(masks.entries());
     let file = HFile {
@@ -448,6 +456,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
     };
 
     let mut commits = Vec::with_capacity(f.commits.len());
+    let mut paths = PathReader::default();
     for c in f.commits {
         let h = c.doc;
         crate::import::check_size(h.width, h.height)?;
@@ -498,16 +507,13 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     }
                 }
                 HKind::Path { path, style } => {
+                    let path = paths.read(path, zip)?;
                     if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
                         return Err(IoError::Manifest("a path has too many anchors".into()));
                     }
                     let style = style.sanitized();
                     let cache = Arc::new(path.rasterize(&style, h.width, h.height));
-                    NodeKind::Path {
-                        path: Arc::new(path),
-                        style,
-                        cache,
-                    }
+                    NodeKind::Path { path, style, cache }
                 }
             };
             let (mw, mh) = match &kind {
@@ -569,10 +575,118 @@ mod tests {
     use std::io::{Cursor, Write};
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
+    fn archive(
+        entries: impl IntoIterator<Item = (String, Vec<u8>)>,
+    ) -> ZipArchive<Cursor<Vec<u8>>> {
+        let mut output = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            output
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            output.write_all(&bytes).unwrap();
+        }
+        ZipArchive::new(output.finish().unwrap()).unwrap()
+    }
+
+    fn path_graph() -> (Graph, emulsion_raster::vector::Path) {
+        use emulsion_core::{Command, command::Slot};
+        use emulsion_raster::vector::{Path, PathStyle};
+        let path = Path::from_svg("M 2.123456789 3 C 4.25 1.125 27.5 7.75 29 20 Z M 31 22 L 37 28")
+            .unwrap();
+        let mut doc = Document::new(40, 32);
+        Command::AddNode {
+            node: Box::new(Node::path(
+                0,
+                "Outline",
+                Arc::new(path.clone()),
+                PathStyle::default(),
+                doc.width,
+                doc.height,
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let mut graph = Graph::new(doc.clone(), "Draw outline");
+        doc.nodes[0].opacity = 0.5;
+        assert!(graph.record(&doc, "Fade outline", false).is_some());
+        (graph, path)
+    }
+
+    #[test]
+    fn compact_paths_share_live_pool_and_restore_shared_geometry_across_commits() {
+        let (original, geometry) = path_graph();
+        let mut paths = PathPool::default();
+        // The caller first collects the live document into this same pool.
+        let live_path = serde_json::to_value(paths.add(&geometry).unwrap()).unwrap();
+        let mut entries = encode(&original, None, &mut paths).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
+        assert_eq!(manifest["version"], 2);
+        assert!(
+            live_path.is_string(),
+            "new history uses a compact blob reference"
+        );
+        for commit in manifest["commits"].as_array().unwrap() {
+            assert_eq!(commit["doc"]["nodes"][0]["kind"]["path"], live_path);
+        }
+        let blobs: Vec<_> = paths.entries().collect();
+        assert_eq!(
+            blobs.len(),
+            1,
+            "live and all commits share one geometry blob"
+        );
+        entries.extend(blobs);
+        let restored = read(&mut archive(entries)).unwrap().unwrap();
+        let paths: Vec<_> = restored
+            .graph
+            .commits()
+            .map(|commit| {
+                let NodeKind::Path { path, .. } = &commit.doc.nodes[0].kind else {
+                    panic!("editable path preserved");
+                };
+                assert_eq!(
+                    path.as_ref(),
+                    &geometry,
+                    "anchor/handle coordinates survive exactly"
+                );
+                path.clone()
+            })
+            .collect();
+        assert_eq!(paths.len(), original.len());
+        assert!(
+            Arc::ptr_eq(&paths[0], &paths[1]),
+            "commits reuse the decoded path buffer"
+        );
+    }
+
+    #[test]
+    fn legacy_history_inline_paths_remain_readable_without_blobs() {
+        let (original, geometry) = path_graph();
+        let mut paths = PathPool::default();
+        let mut entries = encode(&original, None, &mut paths).unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
+        manifest["version"] = serde_json::json!(1);
+        for commit in manifest["commits"].as_array_mut().unwrap() {
+            commit["doc"]["nodes"][0]["kind"]["path"] = serde_json::to_value(&geometry).unwrap();
+        }
+        entries[0].1 = serde_json::to_vec(&manifest).unwrap();
+        // Deliberately omit the new pool's blobs: v1 geometry is self-contained.
+        let restored = read(&mut archive(entries)).unwrap().unwrap();
+        assert_eq!(restored.graph.len(), original.len());
+        for (expected, actual) in original.commits().zip(restored.graph.commits()) {
+            assert_eq!(actual.doc, expected.doc);
+        }
+    }
+
     #[test]
     fn history_larger_than_old_limit_preserves_graph() {
         let original = Graph::new(Document::new(8, 8), "Initial");
-        let entries = encode(&original, Some("live-fingerprint".into())).unwrap();
+        let entries = encode(
+            &original,
+            Some("live-fingerprint".into()),
+            &mut PathPool::default(),
+        )
+        .unwrap();
         let mut output = ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)

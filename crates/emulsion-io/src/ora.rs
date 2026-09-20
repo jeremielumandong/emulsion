@@ -9,6 +9,7 @@
 //! emulsion/src/node-<id>.png  source pixels of transformed layers
 //! emulsion/mask-<id>.png    8-bit masks
 //! emulsion.json             the full node stack (adjustments, placements, …)
+//! emulsion/paths/*.bin      exact editable geometry, shared with history
 //! mergedimage.png           full composite
 //! Thumbnails/thumbnail.png  composite, at most 256 px
 //! history/…                 the history graph (see [`crate::history`])
@@ -40,7 +41,7 @@ use std::sync::Arc;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -105,7 +106,7 @@ enum MKind {
         rgba: [u8; 4],
     },
     Path {
-        path: emulsion_raster::vector::Path,
+        path: crate::path_data::PathData,
         style: emulsion_raster::vector::PathStyle,
         /// The rasterized path, for readers that only know layers.
         src: String,
@@ -196,7 +197,7 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
     (crop, b.x as i64, b.y as i64)
 }
 
-fn encode(doc: &Document) -> Result<Encoded> {
+fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Encoded> {
     enum Job<'a> {
         Png {
             path: String,
@@ -313,7 +314,7 @@ fn encode(doc: &Document) -> Result<Encoded> {
                 });
                 ora_layers.insert(n.id, (data.clone(), 0, 0));
                 MKind::Path {
-                    path: (**path).clone(),
+                    path: paths.add(path)?,
                     style: *style,
                     src: data,
                 }
@@ -509,7 +510,8 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
 /// Write `doc` and, when given, its history graph.
 pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<()> {
     doc.validate()?;
-    let enc = encode(doc)?;
+    let mut paths = crate::path_data::PathPool::default();
+    let enc = encode(doc, &mut paths)?;
     let xml = stack_xml(doc, &enc.ora_layers);
     let manifest =
         serde_json::to_vec(&enc.manifest).map_err(|e| IoError::Manifest(e.to_string()))?;
@@ -523,34 +525,45 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
         Some(g) => {
             let tip = g.commit(g.head_branch().tip).map(|c| &c.doc);
             let live = (tip == Some(doc)).then(|| crate::history::fingerprint(&manifest));
-            crate::history::encode(g, live)?
+            crate::history::encode(g, live, &mut paths)?
         }
         None => Vec::new(),
     };
     write_atomic(path, |f| {
         let mut z = ZipWriter::new(std::io::BufWriter::new(f));
         let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        let deflated = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(6));
         z.start_file("mimetype", stored)?;
         z.write_all(b"image/openraster")?;
         z.start_file("stack.xml", deflated)?;
         z.write_all(xml.as_bytes())?;
         z.start_file(MANIFEST, deflated)?;
         z.write_all(&manifest)?;
-        // PNGs are already compressed.
+        // Fast PNG encoding leaves useful redundancy; ZIP compression is lossless.
         for (name, bytes) in &enc.entries {
             z.start_file(
                 name.as_str(),
-                stored.large_file(bytes.len() as u64 >= u32::MAX as u64),
+                deflated.large_file(bytes.len() as u64 >= u32::MAX as u64),
             )?;
             z.write_all(bytes)?;
         }
-        // Raw tiles compress well; favour speed.
+        for (name, bytes) in paths.entries() {
+            z.start_file(name, deflated)?;
+            z.write_all(&bytes)?;
+        }
+        // Raw tiles favour speed; the small history index uses stronger compression.
         let fast = deflated.compression_level(Some(1));
         for (name, bytes) in &history {
             z.start_file(
                 name.as_str(),
-                fast.large_file(bytes.len() as u64 >= u32::MAX as u64),
+                (if name == crate::history::GRAPH {
+                    deflated
+                } else {
+                    fast
+                })
+                .large_file(bytes.len() as u64 >= u32::MAX as u64),
             )?;
             z.write_all(bytes)?;
         }
@@ -729,6 +742,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     doc.guides = m.guides.clone();
     doc.info = m.info.clone();
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
+    let mut paths = crate::path_data::PathReader::default();
     for n in m.nodes {
         let kind = match n.kind {
             MKind::Raster {
@@ -801,16 +815,13 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 }
             }
             MKind::Path { path, style, .. } => {
+                let path = paths.read(path, zip)?;
                 if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
                     return Err(IoError::Manifest("a path has too many anchors".into()));
                 }
                 let style = style.sanitized();
                 let cache = Arc::new(path.rasterize(&style, m.width, m.height));
-                NodeKind::Path {
-                    path: Arc::new(path),
-                    style,
-                    cache,
-                }
+                NodeKind::Path { path, style, cache }
             }
             MKind::Text { spec, .. } => {
                 let spec = spec.sanitized();
@@ -1183,6 +1194,10 @@ mod tests {
             entry.read_to_end(&mut data).unwrap();
             if entry.name() == MANIFEST {
                 assert!(!data.contains(&b'\n'), "new manifests use compact JSON");
+                let mut legacy: serde_json::Value = serde_json::from_slice(&data).unwrap();
+                legacy["version"] = serde_json::json!(1);
+                legacy["nodes"][0]["kind"]["path"] = serde_json::to_value(path.as_ref()).unwrap();
+                data = serde_json::to_vec(&legacy).unwrap();
                 // Valid legacy formatting above the former 4 MiB limit.
                 data.extend(std::iter::repeat_n(b' ', (4 << 20) + 1));
             }

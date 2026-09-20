@@ -38,10 +38,7 @@ pub struct Workspace {
         Entity<gpui_kit::component::input::InputState>,
     )>,
     pub(crate) jev_test: Option<(SharedString, bool)>,
-    pub(crate) image_inputs: Option<(
-        Entity<gpui_kit::component::input::InputState>,
-        Entity<gpui_kit::component::input::InputState>,
-    )>,
+    pub(crate) image_inputs: Option<crate::settings_screen::ImageInputs>,
     pub(crate) image_test: Option<(SharedString, bool)>,
     pub(crate) keymap_note: Option<SharedString>,
     pub(crate) model_jobs: crate::settings_models::ModelJobs,
@@ -784,7 +781,7 @@ impl Render for Workspace {
         let body: AnyElement = match (self.screen, &self.editor) {
             (Screen::Editor, Some(e)) => e.clone().into_any_element(),
             (Screen::Settings, _) => self.settings_screen(window, cx).into_any_element(),
-            (Screen::Batch, _) => self.batch_screen(cx).into_any_element(),
+            (Screen::Batch, _) => self.batch_screen(window, cx).into_any_element(),
             _ => self.home(window, cx).into_any_element(),
         };
         div()
