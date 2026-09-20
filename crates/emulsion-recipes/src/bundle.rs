@@ -30,6 +30,22 @@ impl Bundle {
         }
     }
 
+    /// Resolve external assets before export, reporting unavailable LUTs.
+    pub fn portable(&self) -> Result<Self, RecipeError> {
+        if self.version != VERSION {
+            return Err(RecipeError::Invalid(
+                "unsupported recipe bundle version".into(),
+            ));
+        }
+        let mut bundle = self.clone();
+        bundle.recipes = self
+            .recipes
+            .iter()
+            .map(Recipe::portable)
+            .collect::<Result<_, _>>()?;
+        Ok(bundle)
+    }
+
     pub fn to_toml(&self) -> String {
         toml::to_string_pretty(self).unwrap_or_default()
     }
@@ -38,6 +54,12 @@ impl Bundle {
     /// so nothing half-imports.
     pub fn from_toml(text: &str) -> Result<Bundle, RecipeError> {
         let b: Bundle = toml::from_str(text)?;
+        if b.version != VERSION {
+            return Err(RecipeError::Invalid(format!(
+                "unsupported recipe bundle version {}",
+                b.version
+            )));
+        }
         for r in &b.recipes {
             r.validate()?;
         }

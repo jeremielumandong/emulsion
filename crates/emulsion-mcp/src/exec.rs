@@ -61,6 +61,190 @@ pub fn apply(editor: &mut Editor, p: Planned) -> ToolResult {
     p.feedback.unwrap_or_else(|| ToolResult::text(p.message))
 }
 
+/// Save captured adjustments without touching the editor or process-global paths.
+fn save_recipe(
+    doc: &Document,
+    args: &Value,
+    dir: &std::path::Path,
+) -> Result<ToolResult, ToolResult> {
+    let id = id_arg(args, "node")?;
+    let name = args
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| err("name must be a nonempty string"))?;
+    let overwrite = match args.get("overwrite") {
+        None => false,
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| err("overwrite must be a boolean"))?,
+    };
+    let excluded = match args.get("exclude_nodes") {
+        None => Vec::new(),
+        Some(v) => v
+            .as_array()
+            .ok_or_else(|| err("exclude_nodes must be an array of node ids"))?
+            .iter()
+            .map(|v| {
+                v.as_u64()
+                    .ok_or_else(|| err("exclude_nodes must contain integer node ids"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    let mut recipe = emulsion_recipes::capture_adjustments(doc, id, name, &excluded)
+        .map_err(|e| err(e.to_string()))?;
+    if let Some(tags) = args.get("tags") {
+        recipe.tags = tags
+            .as_array()
+            .ok_or_else(|| err("tags must be an array of strings"))?
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| err("tags must contain strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+    if let Some(notes) = args.get("notes") {
+        recipe.notes = notes
+            .as_str()
+            .ok_or_else(|| err("notes must be a string"))?
+            .to_string();
+    }
+    let path = if overwrite {
+        emulsion_recipes::store::update(dir, name, &recipe)
+    } else {
+        emulsion_recipes::store::save_new(dir, &recipe)
+    }
+    .map_err(|e| err(e.to_string()))?;
+    let stages = recipe.workflow.as_ref().map_or(0, |w| w.stages.len());
+    Ok(ToolResult::text(format!(
+        "Saved adjustment recipe {:?} with {stages} stages to {}. The document is unchanged; use apply_recipe or batch_export with this name.",
+        recipe.name,
+        path.display()
+    )))
+}
+
+fn recipe_summary(r: &emulsion_recipes::Recipe, saved: bool) -> Value {
+    let mut summary = json!({
+        "name": r.name, "author": r.author, "tags": r.tags, "notes": r.notes,
+        "saved": saved, "limitations": r.limitations(),
+    });
+    if let Some(workflow) = &r.workflow {
+        summary["kind"] = json!("adjustment_workflow");
+        summary["workflow"] = json!({
+            "version": workflow.version, "group": workflow.group,
+            "stages": workflow.stages.iter().map(|stage| json!({
+                "settings": stage.settings, "adjustment": stage.adjustment.label(),
+            })).collect::<Vec<_>>(),
+            "order": "bottom to top"
+        });
+    } else {
+        summary["kind"] = json!("film_recipe");
+        summary["film_simulation"] = json!(r.film_simulation);
+        summary["settings"] = json!({
+            "dynamic_range": format!("{:?}", r.dynamic_range),
+            "grain": format!("{:?} {:?}", r.grain.strength, r.grain.size),
+            "color_chrome_effect": format!("{:?}", r.color_chrome_effect),
+            "white_balance": format!("{} R{:+} B{:+}", r.white_balance.preset, r.white_balance.red, r.white_balance.blue),
+            "highlight": r.highlight, "shadow": r.shadow, "color": r.color,
+            "exposure_compensation": r.exposure_compensation,
+        });
+    }
+    summary
+}
+
+fn recipe_limitations(recipe: &emulsion_recipes::Recipe) -> String {
+    let limitations = recipe.limitations();
+    if limitations.is_empty() {
+        String::new()
+    } else {
+        format!("; recipe limitations: {}", limitations.join("; "))
+    }
+}
+
+/// Reserve a private encoding target; publication below never replaces artwork.
+struct BatchExportStage(std::path::PathBuf);
+
+impl BatchExportStage {
+    fn new(dir: &std::path::Path, ext: &str) -> std::io::Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        loop {
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = dir.join(format!(
+                ".emulsion-mcp-batch-{}-{serial}.{ext}",
+                std::process::id()
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Ok(Self(path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+impl Drop for BatchExportStage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn export_batch_new(
+    doc: &Document,
+    dir: &std::path::Path,
+    stem: &str,
+    ext: &str,
+) -> Result<std::path::PathBuf, String> {
+    let stage = BatchExportStage::new(dir, ext).map_err(|e| e.to_string())?;
+    emulsion_io::export::export(
+        doc,
+        &stage.0,
+        emulsion_io::export::ExportOptions::for_doc(doc),
+    )
+    .map_err(|e| e.to_string())?;
+    for serial in 0u64.. {
+        let name = if serial == 0 {
+            format!("{stem}.{ext}")
+        } else {
+            format!("{stem}-{serial}.{ext}")
+        };
+        let path = dir.join(name);
+        match std::fs::hard_link(&stage.0, &path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                // FAT/exFAT may not support links. Exclusive creation still
+                // protects existing files; remove only our partial output.
+                let mut out = match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                {
+                    Ok(out) => out,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e.to_string()),
+                };
+                if let Err(e) = std::fs::File::open(&stage.0)
+                    .and_then(|mut input| std::io::copy(&mut input, &mut out))
+                    .and_then(|_| out.sync_all())
+                {
+                    drop(out);
+                    let _ = std::fs::remove_file(&path);
+                    return Err(e.to_string());
+                }
+                return Ok(path);
+            }
+        }
+    }
+    unreachable!()
+}
+
 fn combine_arg(args: &Value) -> Combine {
     match args.get("mode").and_then(Value::as_str) {
         Some("add") => Combine::Add,
@@ -933,6 +1117,20 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
     let (w, h) = (doc.width, doc.height);
     match name {
         "get_reference_image" => Err(crate::reference::missing_reference()),
+        "save_recipe" => {
+            let result = save_recipe(doc, args, &emulsion_io::recent::data_dir().join("recipes"))?;
+            let message = result
+                .content
+                .first()
+                .and_then(|block| block["text"].as_str())
+                .unwrap_or("Recipe saved")
+                .to_string();
+            Ok(Planned {
+                commands: Vec::new(),
+                message,
+                feedback: Some(result),
+            })
+        }
         "generative_fill" | "generate_image" => {
             let settings = emulsion_io::settings::Settings::load();
             let provider = emulsion_ai::generate::Provider::parse(&settings.image_provider)
@@ -1213,13 +1411,12 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             };
             if let Some(t) = args.get("text").and_then(Value::as_str) {
                 let trimmed = t.trim();
-                let (r, unknown) = match Recipe::from_toml(t) {
-                    Ok(r) => (r, Vec::new()),
-                    Err(_) if trimmed.starts_with('<') && trimmed.contains("crs:") => {
-                        import::from_xmp(t)
-                    }
-                    Err(_) if trimmed.starts_with('<') => import::from_fp1(t),
-                    Err(_) => import::parse_text(t),
+                let (r, unknown) = if trimmed.starts_with('<') && trimmed.contains("crs:") {
+                    import::from_xmp(t)
+                } else if trimmed.starts_with('<') {
+                    import::from_fp1(t)
+                } else {
+                    import::from_text(t).map_err(err)?
                 };
                 keep(r, unknown)?;
             } else if let Some(p) = args.get("path").and_then(Value::as_str) {
@@ -1345,14 +1542,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                             )
                         })
                         .unwrap_or_default();
-                    let out = out_dir.join(format!("{stem}{suffix}.{ext}"));
-                    emulsion_io::export::export(
-                        &ed.doc,
-                        &out,
-                        emulsion_io::export::ExportOptions::for_doc(&ed.doc),
-                    )
-                    .map_err(|e| e.to_string())?;
-                    Ok(out)
+                    export_batch_new(&ed.doc, &out_dir, &format!("{stem}{suffix}"), ext)
                 })();
                 match result {
                     Ok(o) => written.push(o.display().to_string()),
@@ -1363,7 +1553,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 feedback: None,
                 commands: vec![],
                 message: format!(
-                    "Exported {} of {} to {}{}",
+                    "Exported {} of {} to {}{}{}",
                     written.len(),
                     paths.len(),
                     out_dir.display(),
@@ -1371,7 +1561,8 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                         String::new()
                     } else {
                         format!("; failed: {}", failed.join("; "))
-                    }
+                    },
+                    recipe.as_ref().map(recipe_limitations).unwrap_or_default(),
                 ),
             })
         }
@@ -2277,21 +2468,10 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             let list: Vec<Value> = emulsion_recipes::store::list(&dir)
                 .into_iter()
                 .map(|(r, origin)| {
-                    json!({
-                        "name": r.name,
-                        "author": r.author,
-                        "film_simulation": r.film_simulation,
-                        "tags": r.tags,
-                        "saved": matches!(origin, emulsion_recipes::store::Origin::Saved(_)),
-                        "settings": {
-                            "dynamic_range": format!("{:?}", r.dynamic_range),
-                            "grain": format!("{:?} {:?}", r.grain.strength, r.grain.size),
-                            "color_chrome_effect": format!("{:?}", r.color_chrome_effect),
-                            "white_balance": format!("{} R{:+} B{:+}", r.white_balance.preset, r.white_balance.red, r.white_balance.blue),
-                            "highlight": r.highlight, "shadow": r.shadow, "color": r.color,
-                            "exposure_compensation": r.exposure_compensation,
-                        }
-                    })
+                    recipe_summary(
+                        &r,
+                        matches!(origin, emulsion_recipes::store::Origin::Saved(_)),
+                    )
                 })
                 .collect();
             let looks: Vec<Value> = emulsion_recipes::looks::LOOKS
@@ -2318,17 +2498,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                     true,
                 )
             } else if let Some(t) = args.get("text").and_then(Value::as_str) {
-                let (r, unknown) = emulsion_recipes::import::parse_text(t);
-                r.validate().map_err(|e| {
-                    err(format!(
-                        "{e}{}",
-                        if unknown.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" (lines not understood: {unknown:?})")
-                        }
-                    ))
-                })?;
+                let (r, _) = emulsion_recipes::import::from_text(t).map_err(err)?;
                 (r, true)
             } else {
                 return Err(err("give name, text or toml"));
@@ -2357,8 +2527,9 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             let gid = emulsion_recipes::store::add_to(editor, compiled, slot)
                 .map_err(|e| err(e.to_string()))?;
             Ok(ToolResult::text(format!(
-                "Applied recipe {:?} as group {gid} with {n} adjustment stages",
-                recipe.name
+                "Applied recipe {:?} as group {gid} with {n} adjustment stages{}",
+                recipe.name,
+                recipe_limitations(&recipe)
             )))
         }
         "add_style" | "set_style" | "remove_style" => {
@@ -3424,6 +3595,242 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .to_string()
+    }
+
+    fn recipe_test_dir(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "emulsion-mcp-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn captured_recipe_saves_updates_and_applies_exact_stages_without_changing_source() {
+        let dir = recipe_test_dir("saved-workflow");
+        let mut doc = Document::new(8, 8);
+        let add = |doc: &mut Document, node: Node, parent| {
+            Command::AddNode {
+                node: Box::new(node),
+                slot: Slot::top_of(parent),
+            }
+            .apply(doc)
+            .unwrap()
+            .unwrap()
+        };
+        add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Picture",
+                Arc::new(Raster::solid(8, 8, [0.1, 0.2, 0.3, 1.0])),
+                Placement::default(),
+            ),
+            None,
+        );
+        let picture = doc.clone();
+        let group = add(&mut doc, Node::group(0, "Custom tone"), None);
+        let mut exposure = Node::adjust(
+            0,
+            Adjustment::Exposure {
+                exposure: 0.7,
+                offset: 0.0,
+                gamma: 1.0,
+            },
+        );
+        exposure.name = "Lift".into();
+        exposure.opacity = 0.65;
+        add(&mut doc, exposure, Some(group));
+        let mut contrast = Node::adjust(
+            0,
+            Adjustment::BrightnessContrast {
+                brightness: 5.0,
+                contrast: 12.0,
+            },
+        );
+        contrast.visible = false;
+        let excluded = add(&mut doc, contrast, Some(group));
+        let e = Editor::new(doc, None);
+        let before = e.doc.clone();
+        let revision = e.revision;
+        let steps = e.history.len();
+        let args = json!({"node": group,"name": "My exact tone", "tags": ["portrait"],"notes": "Two editable stages"});
+        let result = save_recipe(&e.doc, &args, &dir).unwrap();
+        assert!(text(&result).contains("2 stages"));
+        let saved = emulsion_recipes::store::find(&dir, "My exact tone").unwrap();
+        assert_eq!(saved.tags, vec!["portrait"]);
+        assert_eq!(saved.notes, "Two editable stages");
+        assert_eq!(saved.workflow.as_ref().unwrap().stages.len(), 2);
+        assert_eq!(recipe_summary(&saved, true)["kind"], "adjustment_workflow");
+        assert!(recipe_summary(&saved, true)["workflow"]["stages"][0]["adjustment"].is_string());
+        let mut target = Editor::new(picture, None);
+        let result = execute(
+            &mut target,
+            "apply_recipe",
+            &json!({"text":saved.to_toml()}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        assert_eq!(
+            region(&target.doc.composite_tree(), IRect::new(0, 0, 8, 8)),
+            region(&e.doc.composite_tree(), IRect::new(0, 0, 8, 8))
+        );
+        assert_eq!(target.history.len(), 1);
+        assert!(target.undo());
+        assert!(
+            save_recipe(&e.doc, &args, &dir).is_err(),
+            "new save must not replace existing recipe"
+        );
+        assert_eq!(
+            emulsion_recipes::store::find(&dir, "My exact tone").unwrap(),
+            saved
+        );
+        let mut updated = args.clone();
+        updated["overwrite"] = json!(true);
+        updated["exclude_nodes"] = json!([excluded]);
+        updated["notes"] = json!("Keep visible exposure only");
+        save_recipe(&e.doc, &updated, &dir).unwrap();
+        let saved = emulsion_recipes::store::find(&dir, "My exact tone").unwrap();
+        assert_eq!(saved.workflow.as_ref().unwrap().stages.len(), 1);
+        assert_eq!(saved.notes, "Keep visible exposure only");
+        for patch in [
+            json!({"tags":[1]}),
+            json!({"notes":false}),
+            json!({"overwrite":"true"}),
+            json!({"exclude_nodes":["bad"]}),
+            json!({"exclude_nodes":[9999]}),
+            json!({"name":" "}),
+            json!({"node":9999}),
+        ] {
+            let mut invalid = updated.clone();
+            invalid
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            assert!(save_recipe(&e.doc, &invalid, &dir).is_err());
+            assert_eq!(
+                emulsion_recipes::store::find(&dir, "My exact tone").unwrap(),
+                saved
+            );
+        }
+        assert_eq!(e.doc, before);
+        assert_eq!(e.revision, revision);
+        assert_eq!(e.history.len(), steps);
+        assert!(
+            crate::tools::definitions()
+                .iter()
+                .any(|d| d.name == "save_recipe")
+        );
+        assert!(!crate::tools::READ_ONLY.contains(&"save_recipe"));
+        assert!(crate::tools::HEAVY.contains(&"save_recipe"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn apply_recipe_rejects_malformed_workflow_text_without_document_changes() {
+        let mut e = editor();
+        let before = e.doc.clone();
+        let revision = e.revision;
+        let steps = e.history.len();
+        for input in [
+            "name = \"Broken\"\n[workflow]\nversion = 999",
+            "name = \"Broken\"\nworkflow = \"unsupported\"",
+            "name = \"Broken\"\nunknown_stage = true",
+            "name = \"Broken\"\nhighlight = nan",
+            "name = \"unterminated",
+            "[workflow",
+        ] {
+            let result = execute(&mut e, "apply_recipe", &json!({"text": input}));
+            assert!(result.is_error, "must reject {input}: {}", text(&result));
+            assert_eq!(e.doc, before);
+            assert_eq!(e.revision, revision);
+            assert_eq!(e.history.len(), steps);
+        }
+    }
+
+    #[test]
+    fn recipe_tools_report_legacy_settings_that_are_not_applied() {
+        let recipe = emulsion_recipes::Recipe {
+            name: "Legacy notes".into(),
+            sharpness: 2.0,
+            noise_reduction: -2.0,
+            color_chrome_fx_blue: emulsion_recipes::Strength::Weak,
+            ..Default::default()
+        };
+        let summary = recipe_summary(&recipe, false);
+        assert_eq!(summary["kind"], "film_recipe");
+        assert_eq!(summary["limitations"].as_array().unwrap().len(), 3);
+        let mut e = editor();
+        let result = execute(&mut e, "apply_recipe", &json!({"toml":recipe.to_toml()}));
+        assert!(!result.is_error, "{}", text(&result));
+        assert!(text(&result).contains("stored but not applied"));
+    }
+
+    #[test]
+    fn batch_export_never_overwrites_sources_or_same_named_outputs() {
+        let dir = recipe_test_dir("batch-collisions");
+        let a = dir.join("a");
+        let b = dir.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let first = a.join("photo.png");
+        let second = b.join("photo.png");
+        for (path, color) in [(&first, [255, 0, 0, 255]), (&second, [0, 0, 255, 255])] {
+            let image = image::RgbaImage::from_pixel(8, 8, image::Rgba(color));
+            std::fs::write(
+                path,
+                emulsion_io::export::png8(8, 8, image.as_raw()).unwrap(),
+            )
+            .unwrap();
+        }
+        let original = std::fs::read(&first).unwrap();
+        let existing = a.join("photo-1.png");
+        std::fs::write(&existing, b"existing artwork").unwrap();
+        let mut e = editor();
+        let before = e.doc.clone();
+        let revision = e.revision;
+        let result = execute(
+            &mut e,
+            "batch_export",
+            &json!({"paths":[first,second],"out_dir":a,"format":"png"}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        assert!(
+            text(&result).contains("Exported 2 of 2"),
+            "{}",
+            text(&result)
+        );
+        assert_eq!(std::fs::read(&first).unwrap(), original);
+        assert_eq!(std::fs::read(&existing).unwrap(), b"existing artwork");
+        assert_eq!(
+            image::open(a.join("photo-2.png"))
+                .unwrap()
+                .into_rgba8()
+                .get_pixel(0, 0)
+                .0,
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            image::open(a.join("photo-3.png"))
+                .unwrap()
+                .into_rgba8()
+                .get_pixel(0, 0)
+                .0,
+            [0, 0, 255, 255]
+        );
+        assert_eq!(
+            std::fs::read_dir(&a).unwrap().count(),
+            4,
+            "no private stage files remain"
+        );
+        assert_eq!(e.doc, before);
+        assert_eq!(e.revision, revision);
+        assert!(e.history.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

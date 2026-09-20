@@ -19,3 +19,12 @@ Scripted paint does not receive physical tablet tilt or timestamps. Tilt and spe
 Regression coverage includes translucent shading, erasing, selection strength, transformed symmetry, paginated brush discovery, real local MCP relay ordering, cancellation, provider completion, and an editable drawing/correction workflow. Existing playbook examples execute against the current MCP tools.
 
 Live model drawing quality still needs representative artist review: run the same briefs and reference images before and after this change, with the same provider/model and budget. Compare composition, proportions, edge control, medium character, and retained editability. These code and tool tests cannot prove that every model will make better artistic decisions.
+
+## Results
+
+- `EMULSION_DRAWING_WORKFLOW_ARTIFACT=1 cargo test --release --workspace --lib --tests --no-fail-fast`: **403 passed, 0 failed, 1 ignored** (live Claude CLI). This includes 13 new regressions compared with the preceding alignment pass.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed. Formatting and diff checks passed. Cargo reports the existing dependency future-compatibility notice for `block 0.1.6`.
+- The first run exposed the unchanged-pixel undo defect; after the shared renderer fix, the full rerun passed, including animated and immediate paint execution.
+- Inspected the rendered leaf correction study. Pixel checks verify selection containment and unchanged alpha; the integration also verifies native save/reopen preserves editable paths and paint layers. The preview is a small deterministic tool study, not a model-generated art benchmark.
+- Final test log: `/tmp/emulsion-assistant-drawing-final-tests.log`. Preview: `$TMPDIR/emulsion-drawing-workflow.png`.
+- Mac release build, ad hoc signature verification, and DMG creation passed. Outputs: `target/macos/Emulsion.app` and `target/macos/Emulsion-0.0.1-arm64.dmg`. Packaging log: `/tmp/emulsion-assistant-drawing-package.log`.

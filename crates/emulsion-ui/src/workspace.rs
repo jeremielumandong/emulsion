@@ -683,7 +683,7 @@ impl Workspace {
                 tab("tab-batch", "BATCH", self.screen == Screen::Batch, true).on_click(
                     cx.listener(|this, _, _, cx| {
                         this.screen = Screen::Batch;
-                        cx.notify();
+                        this.refresh_batch_recipes(cx);
                     }),
                 ),
             )

@@ -29,6 +29,9 @@ mod filter_gesture_tests;
 #[path = "movement_tests.rs"]
 mod movement_tests;
 
+#[path = "workflow_recipe_tests.rs"]
+mod workflow_recipe_tests;
+
 #[path = "alignment_tests.rs"]
 mod alignment_tests;
 

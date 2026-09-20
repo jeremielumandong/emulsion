@@ -36,6 +36,18 @@ pub(crate) struct RecipeState {
     url: Option<(Entity<InputState>, Subscription)>,
     /// Bulk import progress: done, total.
     pub importing: Option<(usize, usize)>,
+    pub(crate) capture: Option<RecipeCapture>,
+    saving: bool,
+}
+
+pub(crate) struct RecipeCapture {
+    pub(crate) source: NodeId,
+    pub(crate) revision: u64,
+    pub(crate) name: Entity<InputState>,
+    pub(crate) tags: Entity<InputState>,
+    pub(crate) notes: Entity<InputState>,
+    /// Display order is the layer stack's top-to-bottom order.
+    pub(crate) stages: Vec<(NodeId, String, bool)>,
 }
 
 pub(crate) struct Preview {
@@ -75,6 +87,207 @@ fn render_thumb(source: &Arc<Raster>, recipe: &Recipe) -> Option<(u32, u32, Vec<
 }
 
 impl EditorView {
+    fn recipe_capture_busy(&self) -> bool {
+        self.assistant.running
+            || self.editor.in_transaction()
+            || self.drag.is_some()
+            || self.warp.is_some()
+    }
+
+    pub(crate) fn begin_recipe_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recipe_capture_busy() || self.recipes.saving {
+            self.set_status(
+                "Finish the current edit or recipe preview before saving a recipe.",
+                false,
+                cx,
+            );
+            return;
+        }
+        let Some(source) = self.selected else {
+            self.set_status(
+                "Select an adjustment layer or adjustment group to save.",
+                false,
+                cx,
+            );
+            return;
+        };
+        let Some(node) = self.editor.doc.node(source) else {
+            return;
+        };
+        let name = node
+            .name
+            .strip_prefix("Recipe · ")
+            .unwrap_or(&node.name)
+            .to_string();
+        if let Err(error) =
+            emulsion_recipes::capture_adjustments(&self.editor.doc, source, &name, &[])
+        {
+            self.set_status(error.to_string(), true, cx);
+            return;
+        }
+        let ids = if node.is_group() {
+            self.editor
+                .doc
+                .children(Some(source))
+                .into_iter()
+                .rev()
+                .collect()
+        } else {
+            vec![source]
+        };
+        let stages = ids
+            .into_iter()
+            .map(|id| {
+                let node = self.editor.doc.node(id).expect("captured node");
+                (id, node.name.clone(), true)
+            })
+            .collect();
+        let name = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("Recipe name");
+            state.set_value(name, window, cx);
+            state
+        });
+        let tags =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Tags, separated by commas"));
+        let notes = cx.new(|cx| InputState::new(window, cx).placeholder("Notes (optional)"));
+        self.recipes.capture = Some(RecipeCapture {
+            source,
+            revision: self.editor.revision,
+            name,
+            tags,
+            notes,
+            stages,
+        });
+        self.status = None;
+        cx.notify();
+    }
+
+    pub(crate) fn captured_recipe(
+        &self,
+        cx: &Context<Self>,
+    ) -> Result<Recipe, emulsion_recipes::RecipeError> {
+        let invalid = |message: &str| emulsion_recipes::RecipeError::Invalid(message.into());
+        let draft = self
+            .recipes
+            .capture
+            .as_ref()
+            .ok_or_else(|| invalid("Open Save edits as recipe first."))?;
+        if self.recipe_capture_busy() {
+            return Err(invalid("Finish the current edit before saving a recipe."));
+        }
+        if draft.revision != self.editor.revision || self.selected != Some(draft.source) {
+            return Err(invalid(
+                "The artwork or selected layer changed. Reopen Save edits as recipe to capture the current edits.",
+            ));
+        }
+        let excluded: Vec<_> = draft
+            .stages
+            .iter()
+            .filter(|(_, _, included)| !included)
+            .map(|(id, _, _)| *id)
+            .collect();
+        let mut recipe = emulsion_recipes::capture_adjustments(
+            &self.editor.doc,
+            draft.source,
+            draft.name.read(cx).value().trim(),
+            &excluded,
+        )?;
+        recipe.tags = draft
+            .tags
+            .read(cx)
+            .value()
+            .split(',')
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_string)
+            .collect();
+        recipe.tags.sort();
+        recipe.tags.dedup();
+        recipe.notes = draft.notes.read(cx).value().trim().to_string();
+        recipe.validate()?;
+        Ok(recipe)
+    }
+
+    fn save_captured_recipe(&mut self, overwrite: bool, cx: &mut Context<Self>) {
+        if self.recipes.saving {
+            return;
+        }
+        let recipe = match self.captured_recipe(cx) {
+            Ok(recipe) => recipe,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
+        let name = recipe.name.clone();
+        let dir = recipes_dir();
+        self.recipes.saving = true;
+        self.set_status("Saving recipe…", false, cx);
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move {
+                if overwrite { store::update(&dir, &recipe.name, &recipe) }
+                else { store::save_new(&dir, &recipe) }
+            }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.recipes.saving = false;
+                match result {
+                    Ok(_) => {
+                        this.recipes.capture = None;
+                        this.reload_recipes();
+                        this.recipes.tag = None;
+                        this.set_status(format!("Saved {name}. Available in Recipes and Batch; your document is unchanged."), false, cx);
+                    }
+                    Err(error) => this.set_status(error.to_string(), true, cx),
+                }
+            });
+        }).detach();
+    }
+
+    fn recipe_capture_view(&self, p: &Palette, cx: &Context<Self>) -> Option<AnyElement> {
+        let draft = self.recipes.capture.as_ref()?;
+        if self.recipes.saving {
+            return Some(mono("Saving recipe…", 11., p.muted).into_any_element());
+        }
+        let mut stages = div()
+            .id("rc-capture-stages")
+            .max_h(px(220.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(3.));
+        for (index, (_, name, included)) in draft.stages.iter().enumerate() {
+            stages = stages.child(
+                chip(
+                    ("rc-capture-stage", index),
+                    format!("{} {}", if *included { "✓" } else { "□" }, name),
+                    *included,
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(draft) = &mut this.recipes.capture
+                        && let Some(stage) = draft.stages.get_mut(index)
+                    {
+                        stage.2 = !stage.2;
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        Some(div().id("rc-capture-form").test_support().flex().flex_col().gap(px(6.)).p(px(8.)).border_1().border_color(p.line)
+            .child(label("Save current edits", p))
+            .child(mono("Choose the adjustments to reuse. Exposure and white balance can be left out for other lighting.", 10., p.muted))
+            .child(Input::new(&draft.name))
+            .child(Input::new(&draft.tags))
+            .child(Input::new(&draft.notes))
+            .child(stages)
+            .child(div().flex().flex_wrap().gap(px(5.))
+                .child(button("rc-save-new", "Save new", true, p).on_click(cx.listener(|this, _, _, cx| this.save_captured_recipe(false, cx))))
+                .child(button("rc-update", "Update existing", false, p).on_click(cx.listener(|this, _, _, cx| this.save_captured_recipe(true, cx))))
+                .child(chip("rc-capture-cancel", "Cancel", false, p).on_click(cx.listener(|this, _, _, cx| { this.recipes.capture = None; cx.notify(); }))))
+            .child(mono("Update existing replaces your saved recipe with the same name. Image pixels, masks and RAW settings are not captured.", 9.5, p.muted))
+            .into_any_element())
+    }
+
     pub fn toggle_recipes(&mut self, cx: &mut Context<Self>) {
         if self.recipes.open {
             self.cancel_preview(cx);
@@ -82,7 +295,6 @@ impl EditorView {
         self.recipes.open = !self.recipes.open;
         if self.recipes.open {
             self.select_sidebar(SidebarTab::Recipes, cx);
-            self.recipes.cache = Some(store::list(&recipes_dir()));
         } else {
             self.select_sidebar(SidebarTab::Properties, cx);
         }
@@ -96,7 +308,7 @@ impl EditorView {
             .clone()
     }
 
-    fn reload_recipes(&mut self) {
+    pub(super) fn reload_recipes(&mut self) {
         self.recipes.cache = Some(store::list(&recipes_dir()));
         self.recipes.thumbs.clear();
         self.recipes.thumbs_rev = None;
@@ -125,8 +337,7 @@ impl EditorView {
             return;
         }
         if self.recipes.preview.is_some() {
-            self.editor.cancel();
-            self.recipes.preview = None;
+            self.cancel_preview(cx);
         }
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let compiled = match emulsion_recipes::compile_sized(recipe, w, h) {
@@ -168,8 +379,17 @@ impl EditorView {
         };
         self.editor.end();
         self.selected = Some(p.group);
+        let limitations = self
+            .recipe_list()
+            .into_iter()
+            .find(|(recipe, _)| recipe.name == p.name)
+            .map(|(recipe, _)| recipe.limitations().join(" "))
+            .unwrap_or_default();
         self.set_status(
-            format!("Applied {}. Preview another to stack it on top.", p.name),
+            format!(
+                "Applied {}. Preview another to stack it on top. {limitations}",
+                p.name
+            ),
             false,
             cx,
         );
@@ -211,8 +431,9 @@ impl EditorView {
                 self.selected = Some(gid);
                 self.set_status(
                     format!(
-                        "Applied {}. Open the group to tune each stage.",
-                        recipe.name
+                        "Applied {}. Open the group to tune each stage. {}",
+                        recipe.name,
+                        recipe.limitations().join(" ")
                     ),
                     false,
                     cx,
@@ -265,13 +486,19 @@ impl EditorView {
             self.import_recipe_from_url(trimmed.to_string(), cx);
             return;
         }
-        let (recipe, unknown) = match Recipe::from_toml(&text) {
-            Ok(r) => (r, Vec::new()),
-            Err(_) if trimmed.starts_with('<') && trimmed.contains("crs:") => {
-                import::from_xmp(&text)
+        let parsed = if trimmed.starts_with('<') && trimmed.contains("crs:") {
+            Ok(import::from_xmp(&text))
+        } else if trimmed.starts_with('<') {
+            Ok(import::from_fp1(&text))
+        } else {
+            import::from_text(&text)
+        };
+        let (recipe, unknown) = match parsed {
+            Ok(value) => value,
+            Err(error) => {
+                self.set_status(format!("Could not import recipe: {error}"), true, cx);
+                return;
             }
-            Err(_) if trimmed.starts_with('<') => import::from_fp1(&text),
-            Err(_) => import::parse_text(&text),
         };
         self.save_imported(recipe, &unknown, cx);
     }
@@ -307,8 +534,19 @@ impl EditorView {
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "Recipes".into());
-            let text = emulsion_recipes::bundle::Bundle::new(name, recipes).to_toml();
-            let result = std::fs::write(&path, text);
+            let output = path.clone();
+            let result = cx
+                .background_spawn(async move {
+                    let bundle = emulsion_recipes::bundle::Bundle::new(name, recipes)
+                        .portable()
+                        .map_err(|e| e.to_string())?;
+                    let text = bundle.to_toml();
+                    if text.is_empty() {
+                        return Err("Could not serialize recipe bundle".to_string());
+                    }
+                    std::fs::write(&output, text).map_err(|e| e.to_string())
+                })
+                .await;
             this.update(cx, |this, cx| match result {
                 Ok(()) => this.set_status(
                     format!("Exported {count} recipes to {}", path.display()),
@@ -607,6 +845,11 @@ impl EditorView {
             .items_center()
             .gap(px(5.))
             .child(label("Recipes", p))
+            .child(
+                chip("rc-capture", "Save edits as recipe…", false, p).on_click(
+                    cx.listener(|this, _, window, cx| this.begin_recipe_capture(window, cx)),
+                ),
+            )
             .child(div().flex_1())
             .child(
                 chip("rc-all", "all", tag.is_none(), p).on_click(cx.listener(|this, _, _, cx| {
@@ -626,6 +869,11 @@ impl EditorView {
         }
 
         let previewing = self.recipes.preview.as_ref().map(|p| p.name.clone());
+        let limitations = previewing
+            .as_ref()
+            .and_then(|name| all.iter().find(|(r, _)| &r.name == name))
+            .map(|(recipe, _)| recipe.limitations())
+            .unwrap_or_default();
         let mut grid = div().flex().flex_wrap().gap(px(6.));
         let card_w = px(80.);
         for (i, (r, origin)) in shown.iter().enumerate() {
@@ -746,7 +994,15 @@ impl EditorView {
                 .border_color(p.line)
                 .bg(p.panel)
                 .child(header)
+                .children(self.recipe_capture_view(p, cx))
                 .child(actions)
+                .when(!limitations.is_empty(), |view| {
+                    view.child(mono(
+                        format!("Saved but not rendered: {}", limitations.join(", ")),
+                        10.,
+                        p.accent,
+                    ))
+                })
                 .child(grid)
                 .child(import_row)
                 .children(url_field)

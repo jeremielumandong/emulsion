@@ -6,6 +6,33 @@ use crate::{
     DynamicRange, Grain, GrainSize, Recipe, Strength, WhiteBalance, looks, parse_fraction,
 };
 
+/// Parse clipboard/MCP text without downgrading malformed recipe TOML into a
+/// camera settings block. TOML-looking input always receives strict validation.
+pub fn from_text(text: &str) -> Result<(Recipe, Vec<String>), String> {
+    let toml_like = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .any(|line| {
+            line.starts_with('[')
+                || line.split_once('=').is_some_and(|(key, _)| {
+                    let key = key.trim();
+                    !key.is_empty()
+                        && key.chars().all(|c| {
+                            c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '\"' | '\'')
+                        })
+                })
+        });
+    if toml_like {
+        return Recipe::from_toml(text)
+            .map(|r| (r, Vec::new()))
+            .map_err(|e| e.to_string());
+    }
+    let (recipe, unknown) = parse_text(text);
+    recipe.validate().map_err(|e| e.to_string())?;
+    Ok((recipe, unknown))
+}
+
 /// Parse a pasted block. Returns the recipe and the lines it did not
 /// understand, so the panel can show them.
 pub fn parse_text(text: &str) -> (Recipe, Vec<String>) {
@@ -912,7 +939,7 @@ pub fn from_file(path: &std::path::Path) -> Result<(Recipe, Vec<String>), String
         "xmp" => from_xmp(&text),
         "fp1" | "fp2" | "fp3" => from_fp1(&text),
         "html" | "htm" => from_html(&text, ""),
-        _ => parse_text(&text),
+        _ => from_text(&text)?,
     };
     if r.name == Recipe::default().name && !stem.is_empty() {
         r.name = stem.trim_end_matches(".recipe").to_string();
@@ -996,5 +1023,31 @@ mod import_ext_tests {
         assert_eq!(r.color_chrome_effect, Strength::Strong);
         assert_eq!(r.exposure_compensation, "+1/3");
         r.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod strict_text_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_recipe_toml_is_never_reinterpreted_as_camera_settings() {
+        for text in [
+            "name = \"Broken\"\n[workflow]\nversion = 999",
+            "name = \"Broken\"\nworkflow = \"unsupported\"",
+            "name = \"Broken\"\nunknown_stage = true",
+            "name = \"Broken\"\nhighlight = nan",
+            "name = \"unterminated",
+            "[workflow",
+        ] {
+            assert!(from_text(text).is_err(), "must reject {text}");
+        }
+        let (recipe, unknown) = from_text("name = \"Saved\"\ncolor = 2").unwrap();
+        assert_eq!(recipe.name, "Saved");
+        assert_eq!(recipe.color, 2.0);
+        assert!(unknown.is_empty());
+        let (recipe, _) =
+            from_text("My Camera Look\nFilm Simulation: Classic Chrome\nHighlight: -1").unwrap();
+        assert_eq!(recipe.highlight, -1.0);
     }
 }

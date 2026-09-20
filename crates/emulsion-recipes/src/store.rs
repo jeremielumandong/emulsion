@@ -73,16 +73,117 @@ fn file_name(name: &str) -> String {
     )
 }
 
-/// Save (or overwrite) a recipe under `dir`. Returns the path.
+/// Save an import, replacing only an existing saved recipe with the same name.
+/// An unrelated recipe with a colliding sanitized filename is never replaced.
 pub fn save(dir: &Path, recipe: &Recipe) -> Result<PathBuf, RecipeError> {
-    recipe.validate()?;
-    std::fs::create_dir_all(dir)
-        .map_err(|e| RecipeError::Invalid(format!("cannot create {}: {e}", dir.display())))?;
-    let path = dir.join(file_name(&recipe.name));
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, recipe.to_toml()).map_err(|e| RecipeError::Invalid(e.to_string()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| RecipeError::Invalid(e.to_string()))?;
+    if list(dir).iter().any(|(r, origin)| {
+        matches!(origin, Origin::Saved(_)) && r.name.eq_ignore_ascii_case(&recipe.name)
+    }) {
+        update(dir, &recipe.name, recipe)
+    } else {
+        create_saved(dir, recipe, false)
+    }
+}
+
+/// Create a new recipe without replacing any saved or built-in name.
+pub fn save_new(dir: &Path, recipe: &Recipe) -> Result<PathBuf, RecipeError> {
+    create_saved(dir, recipe, true)
+}
+
+fn serialized(recipe: &Recipe) -> Result<String, RecipeError> {
+    let text = toml::to_string_pretty(recipe)
+        .map_err(|e| RecipeError::Invalid(format!("cannot serialize recipe: {e}")))?;
+    if text.trim().is_empty() {
+        return Err(RecipeError::Invalid(
+            "recipe serialization was empty".into(),
+        ));
+    }
+    Ok(text)
+}
+
+/// Write and sync privately. Neither readers nor an interrupted write can see a
+/// half recipe. The temporary extension is deliberately not .recipe.toml.
+fn stage(dir: &Path, text: &str) -> Result<PathBuf, RecipeError> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).map_err(|e| RecipeError::Invalid(e.to_string()))?;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let (path, mut file) = loop {
+        let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!(".recipe-stage-{}-{serial}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => break (path, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(RecipeError::Invalid(e.to_string())),
+        }
+    };
+    if let Err(e) = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(RecipeError::Invalid(e.to_string()));
+    }
     Ok(path)
+}
+
+fn create_saved(dir: &Path, recipe: &Recipe, reject_builtin: bool) -> Result<PathBuf, RecipeError> {
+    let recipe = recipe.portable()?;
+    if list(dir).iter().any(|(r, origin)| {
+        r.name.eq_ignore_ascii_case(&recipe.name)
+            && (reject_builtin || matches!(origin, Origin::Saved(_)))
+    }) {
+        return Err(RecipeError::Invalid(
+            "a recipe with this name already exists; choose a new name or explicitly update it"
+                .into(),
+        ));
+    }
+    let text = serialized(&recipe)?;
+    let path = dir.join(file_name(&recipe.name));
+    let tmp = stage(dir, &text)?;
+    // Atomic, exclusive publication. On filesystems without hard links, fail
+    // clearly rather than expose a partial file or risk replacing another one.
+    let result = std::fs::hard_link(&tmp, &path);
+    let _ = std::fs::remove_file(&tmp);
+    result.map_err(|e| {
+        RecipeError::Invalid(format!(
+            "cannot publish {} without overwriting: {e}",
+            path.display()
+        ))
+    })?;
+    Ok(path)
+}
+
+/// Replace an explicitly named saved recipe. Renaming requires Save as New.
+/// Resolve its actual path from the library, never a guessed sanitized filename.
+pub fn update(dir: &Path, existing_name: &str, recipe: &Recipe) -> Result<PathBuf, RecipeError> {
+    let recipe = recipe.portable()?;
+    if !recipe.name.eq_ignore_ascii_case(existing_name.trim()) {
+        return Err(RecipeError::Invalid(
+            "use Save as New to rename a recipe".into(),
+        ));
+    }
+    let paths: Vec<_> = list(dir)
+        .into_iter()
+        .filter_map(|(r, origin)| match origin {
+            Origin::Saved(path) if r.name.eq_ignore_ascii_case(existing_name.trim()) => Some(path),
+            _ => None,
+        })
+        .collect();
+    if paths.len() != 1 {
+        return Err(RecipeError::Invalid("update requires exactly one existing saved recipe; built-in recipes cannot be replaced".into()));
+    }
+    let path = &paths[0];
+    let tmp = stage(dir, &serialized(&recipe)?)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(RecipeError::Invalid(e.to_string()));
+    }
+    Ok(path.clone())
 }
 
 pub fn delete(dir: &Path, name: &str) -> bool {

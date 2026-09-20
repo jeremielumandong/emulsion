@@ -47,6 +47,8 @@ pub(crate) struct BatchState {
     /// Large preview for (path, recipe).
     preview: Option<(PathBuf, Option<String>, Arc<RenderImage>)>,
     preview_loading: Option<(PathBuf, Option<String>)>,
+    /// Invalidates renders for older recipe contents, even when names match.
+    preview_generation: u64,
     /// "jpg" or "png".
     pub format: String,
     pub out_dir: Option<PathBuf>,
@@ -54,6 +56,53 @@ pub(crate) struct BatchState {
     pub running: Option<(usize, usize)>,
     run_generation: u64,
     pub note: Option<(SharedString, bool)>,
+}
+
+impl BatchState {
+    fn refresh_recipes(&mut self, dir: &Path) {
+        let recipes: Vec<_> = store::list(dir)
+            .into_iter()
+            .map(|(recipe, _)| recipe)
+            .collect();
+        if let Some(name) = &self.recipe
+            && !recipes.iter().any(|recipe| &recipe.name == name)
+        {
+            self.note = Some((
+                format!("Recipe {name} is no longer available. Choose another recipe.").into(),
+                false,
+            ));
+            self.recipe = None;
+        }
+        self.recipes = Some(recipes);
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        self.preview = None;
+        self.preview_loading = None;
+    }
+
+    fn finish_preview(
+        &mut self,
+        generation: u64,
+        key: (PathBuf, Option<String>),
+        rendered: Option<(u32, u32, Vec<u8>)>,
+    ) -> bool {
+        if generation != self.preview_generation || self.preview_loading.as_ref() != Some(&key) {
+            return false;
+        }
+        self.preview_loading = None;
+        if self.recipe != key.1
+            || self
+                .current
+                .and_then(|i| self.items.get(i))
+                .map(|item| &item.path)
+                != Some(&key.0)
+        {
+            return false;
+        }
+        if let Some((w, h, bgra)) = rendered {
+            self.preview = Some((key.0, key.1, Arc::new(bgra_image(w, h, bgra))));
+        }
+        true
+    }
 }
 
 fn is_picture(p: &Path) -> bool {
@@ -221,6 +270,11 @@ fn slug(s: &str) -> String {
 }
 
 impl Workspace {
+    pub(crate) fn refresh_batch_recipes(&mut self, cx: &mut Context<Self>) {
+        self.batch.refresh_recipes(&crate::editor::recipes_dir());
+        cx.notify();
+    }
+
     pub fn pick_batch_folder(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -265,6 +319,7 @@ impl Workspace {
         b.current = (!b.items.is_empty()).then_some(0);
         b.preview = None;
         b.preview_loading = None;
+        b.preview_generation = b.preview_generation.wrapping_add(1);
         b.note = None;
         if b.format.is_empty() {
             b.format = "jpg".into();
@@ -348,6 +403,8 @@ impl Workspace {
             return;
         }
         self.batch.preview_loading = Some(key.clone());
+        self.batch.preview_generation = self.batch.preview_generation.wrapping_add(1);
+        let generation = self.batch.preview_generation;
         let recipe = self.chosen_recipe();
         cx.spawn(async move |this, cx| {
             let p = path.clone();
@@ -358,13 +415,9 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if this.batch.preview_loading.as_ref() == Some(&key) {
-                    this.batch.preview_loading = None;
+                if this.batch.finish_preview(generation, key, r) {
+                    cx.notify();
                 }
-                if let Some((w, h, bgra)) = r {
-                    this.batch.preview = Some((key.0, key.1, Arc::new(bgra_image(w, h, bgra))));
-                }
-                cx.notify();
             })
             .ok();
         })
@@ -565,6 +618,24 @@ impl Workspace {
                     }))
                     .test_support(),
             );
+        if let Some(chosen) = self
+            .batch
+            .recipe
+            .as_ref()
+            .and_then(|name| recipes.iter().find(|r| &r.name == name))
+        {
+            let limitations = chosen.limitations();
+            if !limitations.is_empty() {
+                recipe = recipe.child(
+                    div()
+                        .id("batch-recipe-limitations")
+                        .text_size(px(11.))
+                        .text_color(p.muted)
+                        .child(limitations.join(" · "))
+                        .test_support(),
+                );
+            }
+        }
         if self.batch.recipe_browser {
             let input = self
                 .batch
@@ -1078,6 +1149,186 @@ impl Workspace {
 #[cfg(test)]
 mod export_safety_tests {
     use super::{BatchStage, publish_batch_file};
+
+    #[test]
+    fn refreshing_recipe_catalog_loads_new_and_updated_workflows_and_rejects_old_preview() {
+        use super::{BatchItem, BatchState};
+        use emulsion_core::command::Slot;
+        use emulsion_core::{Command, Document, Node};
+        use emulsion_raster::Adjustment;
+        use emulsion_recipes::{capture_adjustments, store};
+        use std::sync::Arc;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "emulsion-batch-refresh-{}-{unique}",
+            std::process::id()
+        ));
+        let mut doc = Document::new(16, 16);
+        let id = Command::AddNode {
+            node: Box::new(Node::adjust(
+                0,
+                Adjustment::Exposure {
+                    exposure: 0.25,
+                    offset: 0.0,
+                    gamma: 1.0,
+                },
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        let mut original = capture_adjustments(&doc, id, "Existing workflow", &[]).unwrap();
+        store::save_new(&dir, &original).unwrap();
+        let path = dir.join("photo.png");
+        let mut batch = BatchState {
+            recipe: Some(original.name.clone()),
+            items: vec![BatchItem {
+                path: path.clone(),
+                selected: true,
+                thumb: None,
+            }],
+            current: Some(0),
+            format: "png".into(),
+            out_dir: Some(dir.join("exports")),
+            ..Default::default()
+        };
+        batch.refresh_recipes(&dir);
+        assert!(batch.recipes.as_ref().unwrap().contains(&original));
+        let key = (path.clone(), Some(original.name.clone()));
+        let old_generation = batch.preview_generation;
+        batch.preview_loading = Some(key.clone());
+        batch.preview = Some((
+            path,
+            key.1.clone(),
+            Arc::new(super::bgra_image(1, 1, vec![0, 0, 0, 255])),
+        ));
+        original.workflow.as_mut().unwrap().stages[0].adjustment = Adjustment::Exposure {
+            exposure: 1.25,
+            offset: 0.0,
+            gamma: 1.0,
+        };
+        store::update(&dir, &original.name, &original).unwrap();
+        let mut added = original.clone();
+        added.name = "New workflow".into();
+        store::save_new(&dir, &added).unwrap();
+
+        batch.refresh_recipes(&dir);
+        let recipes = batch.recipes.as_ref().unwrap();
+        assert!(
+            recipes.contains(&original),
+            "same-name workflow reloads changed stages"
+        );
+        assert!(recipes.contains(&added), "newly saved workflow appears");
+        assert_eq!(batch.recipe.as_deref(), Some("Existing workflow"));
+        assert!(batch.items[0].selected);
+        assert_eq!(batch.current, Some(0));
+        assert_eq!(batch.format, "png");
+        assert_eq!(batch.out_dir, Some(dir.join("exports")));
+        assert!(batch.preview.is_none() && batch.preview_loading.is_none());
+
+        // Even an identical photo/name pair must reject the old recipe render.
+        batch.preview_loading = Some(key.clone());
+        let new_generation = batch.preview_generation;
+        assert!(!batch.finish_preview(
+            old_generation,
+            key.clone(),
+            Some((1, 1, vec![0, 0, 0, 255]))
+        ));
+        assert!(batch.preview.is_none());
+        assert_eq!(batch.preview_loading.as_ref(), Some(&key));
+        assert!(batch.finish_preview(new_generation, key.clone(), Some((1, 1, vec![255; 4]))));
+        let current = batch.preview.as_ref().unwrap().2.clone();
+        assert!(!batch.finish_preview(old_generation, key, Some((1, 1, vec![0, 0, 0, 255]))));
+        assert!(Arc::ptr_eq(&current, &batch.preview.as_ref().unwrap().2));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn saved_workflow_batch_export_matches_native_stages_and_preserves_existing_files() {
+        use emulsion_core::command::Slot;
+        use emulsion_core::{Command, Node};
+        use emulsion_raster::{Adjustment, composite::flatten};
+        use emulsion_recipes::{Recipe, capture_adjustments, store};
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "emulsion-workflow-batch-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let input = dir.join("photo.png");
+        let pixels: Vec<u8> = (0..120)
+            .flat_map(|i| [30 + i as u8, 90, 130, 255])
+            .collect();
+        let source = emulsion_io::export::png8(12, 10, &pixels).unwrap();
+        std::fs::write(&input, &source).unwrap();
+        let mut expected = emulsion_io::open(&input).unwrap();
+        let group = Command::AddNode {
+            node: Box::new(Node::group(0, "Original grade")),
+            slot: Slot::TOP,
+        }
+        .apply(&mut expected)
+        .unwrap()
+        .unwrap();
+        for adjustment in [
+            Adjustment::Exposure {
+                exposure: 0.6,
+                offset: 0.02,
+                gamma: 1.1,
+            },
+            Adjustment::HueSaturation {
+                hue: 21.,
+                saturation: -30.,
+                lightness: 4.,
+            },
+        ] {
+            let mut node = Node::adjust(0, adjustment);
+            node.opacity = 0.7;
+            Command::AddNode {
+                node: Box::new(node),
+                slot: Slot::top_of(Some(group)),
+            }
+            .apply(&mut expected)
+            .unwrap();
+        }
+        let recipe = capture_adjustments(&expected, group, "Exact grade", &[]).unwrap();
+        let saved = store::save_new(&dir.join("recipes"), &recipe).unwrap();
+        let recipe = Recipe::from_toml(&std::fs::read_to_string(saved).unwrap()).unwrap();
+        let expected_pixels = flatten(&expected.composite_tree(), 0).to_srgba8();
+        assert_ne!(expected_pixels, pixels);
+        let existing = dir.join("photo-exact-grade.png");
+        std::fs::write(&existing, b"existing artwork").unwrap();
+        let first = super::process_one(&input, Some(&recipe), &dir, "png").unwrap();
+        let first_bytes = std::fs::read(&first).unwrap();
+        let second = super::process_one(&input, Some(&recipe), &dir, "png").unwrap();
+        assert_ne!(first, second);
+        assert_ne!(first, existing);
+        assert_ne!(second, existing);
+        assert_eq!(std::fs::read(&input).unwrap(), source);
+        assert_eq!(std::fs::read(&existing).unwrap(), b"existing artwork");
+        assert_eq!(std::fs::read(&first).unwrap(), first_bytes);
+        for output in [first, second] {
+            let actual = image::open(output).unwrap().to_rgba8();
+            assert_eq!(actual.dimensions(), (12, 10));
+            assert_eq!(actual.as_raw(), &expected_pixels);
+        }
+        assert!(std::fs::read_dir(&dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".emulsion-batch-")
+        }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn duplicate_stems_and_existing_outputs_are_never_overwritten() {

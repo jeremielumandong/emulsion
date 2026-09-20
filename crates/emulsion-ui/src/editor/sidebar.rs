@@ -17,6 +17,9 @@ pub(crate) enum SidebarTab {
 impl EditorView {
     /// Resolve temporary previews before hiding their Apply/Cancel controls.
     pub(crate) fn select_sidebar(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        if tab == SidebarTab::Recipes {
+            self.reload_recipes();
+        }
         if tab != SidebarTab::Recipes && self.recipes.preview.is_some() {
             self.cancel_preview(cx);
             self.set_status("Unapplied recipe preview canceled.", false, cx);

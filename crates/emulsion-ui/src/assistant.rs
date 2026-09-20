@@ -289,6 +289,15 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         "canvas_size" => format!("canvas {}×{}", input["width"], input["height"]),
         "add_layer" => format!("add layer {}", input["name"].as_str().unwrap_or("Layer")),
         "list_recipes" => "look at the recipes".into(),
+        "save_recipe" => format!(
+            "{} recipe {}",
+            if input["overwrite"].as_bool().unwrap_or(false) {
+                "update"
+            } else {
+                "save"
+            },
+            input["name"].as_str().unwrap_or("from current edits")
+        ),
         "convert_to_smart" => format!("smart layer {}", n()),
         "add_style" => format!(
             "add {} to {}",

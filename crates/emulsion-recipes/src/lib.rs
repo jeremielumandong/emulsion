@@ -12,6 +12,8 @@ pub mod effects;
 pub mod import;
 pub mod looks;
 pub mod store;
+pub mod workflow;
+pub use workflow::capture_adjustments;
 
 use emulsion_core::Node;
 use emulsion_raster::adjust::{Adjustment, Cube, straight_curve};
@@ -76,8 +78,14 @@ impl Default for WhiteBalance {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Recipe {
+    /// Exact captured edits, when present, replace the camera-style recipe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<workflow::Workflow>,
+    /// Embedded film LUT; takes precedence over the legacy path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedded_lut: Option<Cube>,
     pub name: String,
     pub author: String,
     pub source_url: String,
@@ -135,6 +143,8 @@ pub struct Recipe {
 impl Default for Recipe {
     fn default() -> Self {
         Self {
+            workflow: None,
+            embedded_lut: None,
             name: "Untitled recipe".into(),
             author: String::new(),
             source_url: String::new(),
@@ -183,6 +193,39 @@ pub enum RecipeError {
 }
 
 impl Recipe {
+    /// Settings retained for interchange but not applied by the current renderer.
+    pub fn limitations(&self) -> Vec<&'static str> {
+        if self.workflow.is_some() {
+            return Vec::new();
+        }
+        let mut notes = Vec::new();
+        if self.sharpness != 0.0 {
+            notes.push("Recipe sharpness is stored but not applied.");
+        }
+        if self.noise_reduction != 0.0 {
+            notes.push("Recipe noise reduction is stored but not applied.");
+        }
+        if self.color_chrome_fx_blue != Strength::Off {
+            notes.push("Color Chrome FX Blue is stored but not applied.");
+        }
+        notes
+    }
+
+    /// Snapshot external LUT data so the saved recipe can travel independently.
+    pub fn portable(&self) -> Result<Self, RecipeError> {
+        self.validate()?;
+        let mut recipe = self.clone();
+        if recipe.workflow.is_none()
+            && recipe.embedded_lut.is_none()
+            && let Some(path) = &recipe.lut
+        {
+            recipe.embedded_lut = Some(load_cube(path)?);
+        }
+        recipe.lut = None;
+        recipe.validate()?;
+        Ok(recipe)
+    }
+
     pub fn from_toml(text: &str) -> Result<Recipe, RecipeError> {
         let r: Recipe = toml::from_str(text)?;
         r.validate()?;
@@ -199,7 +242,16 @@ impl Recipe {
                 "a recipe needs a name of up to 120 characters".into(),
             ));
         }
-        if self.lut.is_none() && looks::find(&self.film_simulation).is_none() {
+        if let Some(w) = &self.workflow {
+            return w.validate();
+        }
+        if let Some(cube) = &self.embedded_lut {
+            workflow::validate_cube(cube)?;
+        }
+        if self.embedded_lut.is_none()
+            && self.lut.is_none()
+            && looks::find(&self.film_simulation).is_none()
+        {
             return Err(RecipeError::Invalid(format!(
                 "unknown film simulation {:?}; one of: {}",
                 self.film_simulation,
@@ -224,7 +276,23 @@ impl Recipe {
                 ));
             }
         }
-        if self.white_balance.red.abs() > 9 || self.white_balance.blue.abs() > 9 {
+        for value in [self.vignette, self.fade, self.light_leak, self.dust]
+            .into_iter()
+            .chain(self.split_shadows)
+            .chain(self.split_highlights)
+        {
+            if !value.is_finite() || value.abs() > 100.0 {
+                return Err(RecipeError::Invalid(
+                    "film effects must be finite and within ±100".into(),
+                ));
+            }
+        }
+        if !self.exposure_ev().is_finite() || self.exposure_ev().abs() > 20.0 {
+            return Err(RecipeError::Invalid(
+                "exposure compensation must be finite and within ±20 EV".into(),
+            ));
+        }
+        if self.white_balance.red.unsigned_abs() > 9 || self.white_balance.blue.unsigned_abs() > 9 {
             return Err(RecipeError::Invalid(
                 "white balance shifts are −9 to +9".into(),
             ));
@@ -275,14 +343,19 @@ impl Recipe {
 
     /// Whether the recipe adds pixel layers beyond adjustments.
     pub fn has_effects(&self) -> bool {
-        self.light_leak > 0.0
-            || self.dust > 0.0
-            || self.frame != effects::Frame::None
-            || self.date_stamp
+        self.workflow.is_none()
+            && (self.light_leak > 0.0
+                || self.dust > 0.0
+                || self.frame != effects::Frame::None
+                || self.date_stamp)
     }
 
     /// Compile for a `w × h` document, including its pixel-layer effects.
     pub fn compile_for(&self, cube: Option<Cube>, w: u32, h: u32) -> (Node, Vec<Node>) {
+        if let Some(workflow) = &self.workflow {
+            return workflow.compile();
+        }
+        let cube = self.embedded_lut.clone().or(cube);
         let mut stages: Vec<Adjustment> = Vec::new();
         // 1. White balance, in linear light before the look.
         let wb = &self.white_balance;
@@ -754,9 +827,13 @@ pub type Compiled = (Node, Vec<Node>);
 /// are included.
 pub fn compile_sized(recipe: &Recipe, w: u32, h: u32) -> Result<Compiled, RecipeError> {
     recipe.validate()?;
-    let cube = match &recipe.lut {
-        Some(p) => Some(load_cube(p)?),
-        None => None,
+    if let Some(workflow) = &recipe.workflow {
+        return Ok(workflow.compile());
+    }
+    let cube = match (&recipe.embedded_lut, &recipe.lut) {
+        (Some(cube), _) => Some(cube.clone()),
+        (None, Some(p)) => Some(load_cube(p)?),
+        (None, None) => None,
     };
     Ok(recipe.compile_for(cube, w, h))
 }

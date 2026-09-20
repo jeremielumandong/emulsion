@@ -51,6 +51,7 @@ pub const HEAVY: &[&str] = &[
     "restore_faces",
     "lens_profile",
     "import_recipe",
+    "save_recipe",
     "batch_export",
 ];
 
@@ -333,13 +334,25 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "list_recipes",
-            "Film recipes available: the starter set and the person's saved ones, with their film simulation, tags and settings. Base looks that a recipe can name: see `looks`.",
+            "Available recipes: film looks and saved exact adjustment workflows. Includes tags, workflow stage summaries or film settings, and unsupported legacy settings when present. Base looks that a film recipe can name: see looks.",
             json!({}),
             &[],
         ),
         def(
+            "save_recipe",
+            "Save a flat adjustment group or single adjustment from the current document as an exact reusable adjustment recipe, without changing the document. Preserves supported stage order, settings, visibility, opacity and blend modes. Unsupported spatial edits, masks, clipping or non-adjustment content are rejected; exclude_nodes explicitly omits chosen direct adjustment stages. Give a unique name, or overwrite=true to update an existing saved recipe of the same name. Reuse with apply_recipe or batch_export.",
+            json!({
+                "node": node(), "name": {"type": "string", "minLength": 1},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": "string"},
+                "exclude_nodes": {"type": "array", "items": {"type": "integer"}},
+                "overwrite": {"type": "boolean", "default": false}
+            }),
+            &["node", "name"],
+        ),
+        def(
             "apply_recipe",
-            "Apply a film recipe as a group of adjustment nodes above the given node (or at the top). Give one of: name (from list_recipes), text (a pasted settings block like Fuji X Weekly's: 'Film Simulation: Classic Chrome', 'Grain Effect: Weak, Small', 'White Balance: Daylight, +2 Red & -4 Blue', 'Highlight: -1' …), or toml (a .recipe.toml). save=true also keeps a text or toml recipe for later.",
+            "Apply a saved exact adjustment workflow or film recipe as an editable group above the given node (or at the top). Exact workflows preserve their captured stages; film recipes approximate camera settings and report unsupported legacy settings. Give one of: name (from list_recipes), text (a pasted film settings block), or toml (a .recipe.toml). save=true also keeps a text or toml recipe for later.",
             json!({ "name": { "type": "string" }, "text": { "type": "string" }, "toml": { "type": "string" }, "save": { "type": "boolean" }, "above": node() }),
             &[],
         ),
@@ -554,7 +567,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "batch_export",
-            "Apply a recipe to many pictures and write them out: folder (every picture in it) or paths, recipe by name (omit for none), out_dir, format jpg or png. Slow: seconds per picture.",
+            "Apply a film recipe or saved exact adjustment workflow to many pictures and write them out: folder (every picture in it) or paths, recipe by name (omit for none), out_dir, format jpg or png. Existing files and source pictures are never replaced: output name collisions gain a numeric suffix. Slow: seconds per picture.",
             json!({ "folder": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "recipe": { "type": "string" }, "out_dir": { "type": "string" }, "format": { "type": "string", "enum": ["jpg", "png"] } }),
             &["out_dir"],
         ),
