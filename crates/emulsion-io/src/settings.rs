@@ -30,6 +30,9 @@ pub struct Settings {
     /// Show the power-user row of tool options (dynamics, symmetry,
     /// guides). Off for a beginner-friendly bar.
     pub advanced_tools: bool,
+    /// Draw mode: a Procreate-like shell with only the drawing tools and
+    /// the Layers dock, for painting sessions.
+    pub draw_mode: bool,
     /// Default image provider: "", "a1111", "openai", or "google".
     pub image_provider: String,
     /// Base URL of that server; empty for its default.
@@ -56,6 +59,7 @@ impl Default for Settings {
             approve_all: false,
             show_drawing: true,
             advanced_tools: false,
+            draw_mode: false,
             image_provider: String::new(),
             image_endpoint: None,
             image_model: None,

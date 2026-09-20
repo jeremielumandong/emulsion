@@ -111,6 +111,30 @@ pub const GROUPS: &[&[RailItem]] = &[
     &[item("Zoom", "⌕", "Z", Tool::Zoom)],
 ];
 
+/// Draw mode: the painter's rail, in the order Procreate users reach for.
+pub const DRAW_GROUPS: &[&[RailItem]] = &[
+    &[
+        paint("Brush", "✎", "B", PaintKind::Brush),
+        paint("Liquify", "≈", "B", PaintKind::Liquify),
+    ],
+    &[paint("Smudge", "☁", "B", PaintKind::Smudge)],
+    &[paint("Eraser", "◻", "E", PaintKind::Eraser)],
+    &[item("Eyedropper", "◔", "I", Tool::Eyedropper)],
+    &[
+        paint("Paint bucket", "◍", "G", PaintKind::Bucket),
+        paint("Gradient", "▤", "G", PaintKind::Gradient),
+    ],
+    &[
+        select("Lasso", "〰", "L", SelectShape::Lasso),
+        select("Rectangular marquee", "▭", "M", SelectShape::Rect),
+        select("Quick select (AI)", "✦", "W", SelectShape::Quick),
+    ],
+    &[item("Move", "✥", "V", Tool::Move)],
+    &[item("Mask", "◐", "", Tool::Mask)],
+    &[item("Hand", "✋", "H", Tool::Hand)],
+    &[item("Zoom", "⌕", "Z", Tool::Zoom)],
+];
+
 /// Rail button height; a little tighter than the old rail so eighteen
 /// slots and the swatches fit a 720 px window.
 const BTN_H: Pixels = px(32.);
@@ -139,6 +163,11 @@ pub fn tool_name(tool: Tool) -> &'static str {
 }
 
 impl EditorView {
+    /// The rail's slots for the current mode.
+    fn rail_groups(&self) -> &'static [&'static [RailItem]] {
+        if self.draw_mode { DRAW_GROUPS } else { GROUPS }
+    }
+
     /// Does the current tool state match this item?
     fn rail_item_active(&self, it: &RailItem) -> bool {
         if self.tool != it.tool {
@@ -154,7 +183,7 @@ impl EditorView {
 
     /// Which member a group slot shows.
     fn rail_shown(&self, g: usize) -> usize {
-        let group = GROUPS[g];
+        let group = self.rail_groups()[g];
         if let Some(i) = group.iter().position(|it| self.rail_item_active(it)) {
             return i;
         }
@@ -167,7 +196,7 @@ impl EditorView {
     }
 
     pub(crate) fn activate_rail_item(&mut self, g: usize, i: usize, cx: &mut Context<Self>) {
-        let it = GROUPS[g][i];
+        let it = self.rail_groups()[g][i];
         self.rail.pick.insert(g, i);
         self.rail.flyout = None;
         match (it.paint, it.select, it.shape) {
@@ -206,7 +235,8 @@ impl EditorView {
                     cx.notify();
                 }
             }));
-        for (g, group) in GROUPS.iter().enumerate() {
+        let groups = self.rail_groups();
+        for (g, group) in groups.iter().enumerate() {
             let shown = self.rail_shown(g);
             let it = group[shown];
             let on = self.rail_item_active(&it) || (self.tool == it.tool && group.len() == 1);

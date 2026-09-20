@@ -153,15 +153,16 @@ impl EditorView {
             .track_focus(&self.panel_focus)
             .key_context("NodePanel")
             .child(div().flex_none().child(self.scene_graph(p, cx)))
-            .child(tabs)
-            .child(
-                div()
-                    .id(("sidebar-content", self.sidebar_tab as usize))
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(content),
-            )
+            .when(!self.draw_mode, |d| {
+                d.child(tabs).child(
+                    div()
+                        .id(("sidebar-content", self.sidebar_tab as usize))
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(content),
+                )
+            })
     }
 
     pub(super) fn sidebar_panel_menu(

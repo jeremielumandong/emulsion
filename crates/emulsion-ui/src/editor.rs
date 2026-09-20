@@ -264,6 +264,8 @@ pub struct EditorView {
     pub(crate) generate: generate_ui::GenState,
     /// Tool rail fly-outs and remembered picks.
     pub(crate) rail: rail::RailState,
+    /// Draw mode: painter's rail and a Layers-only sidebar.
+    pub(crate) draw_mode: bool,
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
@@ -361,6 +363,9 @@ impl EditorView {
             raw: Default::default(),
             generate: Default::default(),
             rail: Default::default(),
+            draw_mode: cx
+                .try_global::<crate::app_state::AppSettings>()
+                .is_some_and(|s| s.0.draw_mode),
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
@@ -736,6 +741,25 @@ impl EditorView {
 
     fn canvas_bounds(&self) -> Option<Bounds<Pixels>> {
         self.canvas_bounds.get()
+    }
+
+    /// Switch between the painter's shell and the full photo shell.
+    pub fn toggle_draw_mode(&mut self, cx: &mut Context<Self>) {
+        self.draw_mode = !self.draw_mode;
+        let on = self.draw_mode;
+        crate::app_state::update_settings(cx, |s| s.draw_mode = on);
+        self.rail = Default::default();
+        if on {
+            self.set_paint(PaintKind::Brush, cx);
+            self.set_status(
+                "Draw mode: brush, smudge, eraser and colour up front. Tap Draw again for the photo tools.",
+                false,
+                cx,
+            );
+        } else {
+            self.set_status("Full shell: every tool and panel.", false, cx);
+        }
+        cx.notify();
     }
 
     pub fn zoom_step(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
@@ -1483,6 +1507,13 @@ impl EditorView {
                 )
             })
             .child(div().flex_1())
+            .child(
+                crate::widgets::tip(
+                    chip("draw-mode", "Draw", self.draw_mode, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_draw_mode(cx))),
+                    "Draw mode: only the painting tools and the Layers dock, like Procreate. Click again for the full photo shell.",
+                ),
+            )
             .child(
                 button("save", "Save", false, p).on_click(cx.listener(|_, _, window, cx| {
                     window.dispatch_action(Box::new(crate::actions::Save), cx);
