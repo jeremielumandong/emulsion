@@ -1644,11 +1644,6 @@ impl EditorView {
         } else {
             Vec::new()
         };
-        let zoom = format!("{:.0}%", self.view.zoom * 100.0);
-        let rot = format!("{:.0}°", self.view.rotation);
-        let can_compare = self.editor.differs_from_base();
-        let track = self.tracks.entry(SliderKey::Compare).or_default().clone();
-        let compare = self.compare;
         let row = |p: &Palette| {
             div()
                 .flex()
@@ -1684,56 +1679,8 @@ impl EditorView {
                         crate::app_state::update_settings(cx, |s| s.advanced_tools = !advanced);
                     },
                 )),
-                "Show the power-user row: brush dynamics, symmetry, guides and more",
-            ))
-            .child(
-                chip("zoom", zoom, false, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.zoom_100(cx))),
-            )
-            .child(
-                chip("fit", "fit", false, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx))),
-            )
-            .child(
-                chip("rot", rot, self.view.rotation != 0.0, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.rotate(0.0, cx))),
-            )
-            .child(
-                chip("rulers", "rulers", self.rulers, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_rulers(cx))),
-            )
-            .child(
-                chip("snap", "snap", self.snap, p).on_click(cx.listener(|this, _, _, cx| {
-                    this.snap = !this.snap;
-                    cx.notify();
-                })),
-            )
-            .when(!self.editor.doc.guides.is_empty(), |d| {
-                d.child(
-                    chip("clear-guides", "clear guides", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.clear_guides(cx))),
-                )
-            })
-            .child(
-                div()
-                    .whitespace_nowrap()
-                    .text_color(if can_compare {
-                        p.muted
-                    } else {
-                        p.muted.opacity(0.5)
-                    })
-                    .child("before / after"),
-            )
-            .child(div().w(dim::COMPARE_SLIDER_W).flex_none().child(slider(
-                "compare",
-                compare,
-                track,
-                p,
-                cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                    this.slider_down(SliderKey::Compare, (0.0, 100.0, 1.0), e, cx)
-                }),
-            )))
-            .child(div().w(px(34.)).child(format!("{:.0}%", compare * 100.0)));
+                "Power-user controls: a second row of tool options (dynamics, symmetry, guides) and the rarer layer properties",
+            ));
         div()
             .flex()
             .flex_col()
@@ -2006,7 +1953,93 @@ impl EditorView {
         )
     }
 
-    fn status_strip(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// The view controls that used to crowd every tool's options row: zoom,
+    /// fit, rotation, rulers, snap, guides and the before/after slider.
+    /// They belong to the window, not the tool, so they live in the strip.
+    fn view_controls(&mut self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let zoom = format!("{:.0}%", self.view.zoom * 100.0);
+        let rot = format!("{:.0}°", self.view.rotation);
+        let can_compare = self.editor.differs_from_base();
+        let track = self.tracks.entry(SliderKey::Compare).or_default().clone();
+        let compare = self.compare;
+        let tip = crate::widgets::tip;
+        let mut v: Vec<AnyElement> = vec![
+            tip(
+                chip("zoom", zoom, false, p)
+                    .flex_none()
+                    .on_click(cx.listener(|this, _, _, cx| this.zoom_100(cx))),
+                "Zoom · click for 100% (Ctrl-1) · Ctrl-scroll on the canvas",
+            )
+            .into_any_element(),
+            tip(
+                chip("fit", "fit", false, p)
+                    .flex_none()
+                    .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx))),
+                "Fit the picture in the window (Ctrl-0)",
+            )
+            .into_any_element(),
+            tip(
+                chip("rot", rot, self.view.rotation != 0.0, p)
+                    .flex_none()
+                    .on_click(cx.listener(|this, _, _, cx| this.rotate(0.0, cx))),
+                "Canvas rotation · click to reset",
+            )
+            .into_any_element(),
+            tip(
+                chip("rulers", "rulers", self.rulers, p)
+                    .flex_none()
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_rulers(cx))),
+                "Rulers (Ctrl-R); drag from a ruler for a guide",
+            )
+            .into_any_element(),
+            tip(
+                chip("snap", "snap", self.snap, p)
+                    .flex_none()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.snap = !this.snap;
+                        cx.notify();
+                    })),
+                "Snap moves and shapes to guides, edges and centres",
+            )
+            .into_any_element(),
+        ];
+        if !self.editor.doc.guides.is_empty() {
+            v.push(
+                chip("clear-guides", "clear guides", false, p)
+                    .flex_none()
+                    .on_click(cx.listener(|this, _, _, cx| this.clear_guides(cx)))
+                    .into_any_element(),
+            );
+        }
+        if can_compare || compare > 0.0 {
+            v.push(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(6.))
+                    .font_family(MONO_FONT)
+                    .text_size(px(10.))
+                    .text_color(p.muted)
+                    .child(div().whitespace_nowrap().child("before / after"))
+                    .child(div().w(dim::COMPARE_SLIDER_W).flex_none().child(slider(
+                        "compare",
+                        compare,
+                        track,
+                        p,
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            this.slider_down(SliderKey::Compare, (0.0, 100.0, 1.0), e, cx)
+                        }),
+                    )))
+                    .child(div().w(px(30.)).child(format!("{:.0}%", compare * 100.0)))
+                    .into_any_element(),
+            );
+        }
+        v
+    }
+
+    fn status_strip(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let controls = self.view_controls(p, cx);
         let n = self.editor.doc.nodes.len();
         let saved = if self.editor.is_modified() {
             "unsaved"
@@ -2024,18 +2057,18 @@ impl EditorView {
             .map(|a| format!(" · {a}"))
             .unwrap_or_default();
         let right = format!(
-            "non-destructive · {n} layer{} · {saved}{autosaved}{render}",
+            "{n} layer{} · {saved}{autosaved}{render}",
             if n == 1 { "" } else { "s" }
         );
         div()
             .id("editor-status-strip")
             .flex()
             .flex_none()
-            .h(px(38.))
+            .h(px(40.))
             .items_center()
-            .gap(px(9.))
+            .gap(px(8.))
             .px(px(16.))
-            .py(px(10.))
+            .py(px(6.))
             .border_t_1()
             .border_color(p.line)
             .overflow_hidden()
@@ -2070,12 +2103,13 @@ impl EditorView {
                 mono(right, 10., p.muted)
                     .id("editor-status-meta")
                     .flex_none()
-                    .max_w(relative(0.5))
+                    .max_w(px(220.))
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .test_support(),
             )
+            .children(controls)
             .test_support()
     }
 
@@ -2445,28 +2479,10 @@ impl EditorView {
             .py(px(13.))
             .border_b_1()
             .border_color(p.line);
+        let advanced = crate::app_state::settings(cx).advanced_tools;
         body = body.child(label(n.name.clone(), p));
-        if matches!(n.kind, NodeKind::Raster { .. }) {
-            body = body.child(
-                chip("smart", "Convert to Smart Object", false, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.convert_smart(cx))),
-            );
-        }
-        if let Some(rotation) = self.rotation_controls(p, cx) {
-            body = body.child(rotation);
-        }
         if let Some(raw) = self.raw_panel(id, p, cx) {
             body = body.child(raw);
-        }
-        if let Some(model) = n.model_id() {
-            let model_name = emulsion_ai::models::spec(model)
-                .map(|m| m.name)
-                .unwrap_or(model);
-            body = body.child(mono(
-                format!("made by {model_name}, on this machine"),
-                10.,
-                p.muted,
-            ));
         }
 
         // Opacity + blend.
@@ -2600,18 +2616,8 @@ impl EditorView {
         )));
         body = body.child(toggles);
 
-        if matches!(
-            n.kind,
-            NodeKind::Raster { .. }
-                | NodeKind::Smart { .. }
-                | NodeKind::Path { .. }
-                | NodeKind::Text { .. }
-        ) {
-            let styles = n.styles.clone();
-            for el in self.styles_panel(id, &styles, p, cx) {
-                body = body.child(el);
-            }
-        }
+        // What the layer is made of comes next: an adjustment's sliders, a
+        // smart layer's filters, a text or path's description.
         match &n.kind {
             NodeKind::Adjust(a) => {
                 let a = a.clone();
@@ -2643,7 +2649,7 @@ impl EditorView {
                     body = body.child(mono("no parameters", 10., p.muted));
                 }
             }
-            NodeKind::Raster { raster, placement } => {
+            NodeKind::Raster { raster, placement } if advanced => {
                 body = body.child(mono(
                     format!(
                         "{}×{} px at {:.0}, {:.0}",
@@ -2689,6 +2695,7 @@ impl EditorView {
                     ));
                 }
             }
+            NodeKind::Raster { .. } => {}
             NodeKind::Smart {
                 source,
                 filters,
@@ -2766,6 +2773,67 @@ impl EditorView {
                 body = body.child(mono(
                     format!("{k} layer{} inside", if k == 1 { "" } else { "s" }),
                     10.5,
+                    p.muted,
+                ));
+            }
+        }
+
+        // The rarer controls, behind the same "advanced" switch as the
+        // options bar's second row: layer styles, Smart Object conversion,
+        // rotating the object by an angle, the model that made it.
+        let styled = matches!(
+            n.kind,
+            NodeKind::Raster { .. }
+                | NodeKind::Smart { .. }
+                | NodeKind::Path { .. }
+                | NodeKind::Text { .. }
+        );
+        let has_more = styled || n.model_id().is_some();
+        if has_more {
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .pt(px(4.))
+                    .child(mono("MORE", 9.5, p.muted))
+                    .child(
+                        chip(
+                            "props-advanced",
+                            if advanced { "hide ▴" } else { "show ▾" },
+                            advanced,
+                            p,
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            crate::app_state::update_settings(cx, |s| s.advanced_tools = !advanced);
+                        }))
+                        .test_support(),
+                    ),
+            );
+        }
+        if advanced {
+            if styled {
+                let styles = n.styles.clone();
+                for el in self.styles_panel(id, &styles, p, cx) {
+                    body = body.child(el);
+                }
+            }
+            if let Some(rotation) = self.rotation_controls(p, cx) {
+                body = body.child(rotation);
+            }
+            if matches!(n.kind, NodeKind::Raster { .. }) {
+                body = body.child(
+                    chip("smart", "Convert to Smart Object", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.convert_smart(cx))),
+                );
+            }
+            if let Some(model) = n.model_id() {
+                let model_name = emulsion_ai::models::spec(model)
+                    .map(|m| m.name)
+                    .unwrap_or(model);
+                body = body.child(mono(
+                    format!("made by {model_name}, on this machine"),
+                    10.,
                     p.muted,
                 ));
             }

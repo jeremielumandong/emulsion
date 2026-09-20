@@ -140,10 +140,12 @@ pub fn chip_action(
 
 /// Attach a plain-text tooltip to an element, for a first-time user who
 /// wants to know what a chip does before clicking it.
-pub fn tip<E: InteractiveElement>(el: E, text: &'static str) -> E {
+pub fn tip<E: InteractiveElement>(el: E, text: impl Into<SharedString>) -> E {
     let mut el = el;
-    el.interactivity()
-        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(text).build(w, cx));
+    let text = text.into();
+    el.interactivity().tooltip(move |w, cx| {
+        gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(w, cx)
+    });
     el
 }
 

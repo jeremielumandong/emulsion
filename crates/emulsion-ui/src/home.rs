@@ -339,7 +339,12 @@ impl Workspace {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let meta = format!("{} · {}", recent::ago(r.opened), r.summary);
+        // Summaries written by older builds said "nodes".
+        let summary = r
+            .summary
+            .replace(" nodes", " layers")
+            .replace(" node", " layer");
+        let meta = format!("{} · {}", recent::ago(r.opened), summary);
         let thumb: AnyElement = match self
             .thumbs
             .get(&r.path)
@@ -379,8 +384,8 @@ impl Workspace {
                             .left(px(9.))
                             .px(px(6.))
                             .py(px(2.))
-                            .bg(p.ink.opacity(0.8))
-                            .child(mono(kind, 9.5, gpui_kit::white())),
+                            .bg(p.chrome.opacity(0.85))
+                            .child(mono(kind, 9.5, p.chrome_fg)),
                     )
                     .child(
                         // Forget this entry (the file stays where it is).
@@ -393,8 +398,8 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .bg(p.ink.opacity(0.75))
-                            .text_color(gpui_kit::white())
+                            .bg(p.chrome.opacity(0.85))
+                            .text_color(p.chrome_fg)
                             .text_size(px(12.))
                             .cursor_pointer()
                             .hover(move |s| s.bg(accent).text_color(accent_fg))

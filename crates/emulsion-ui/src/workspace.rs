@@ -927,11 +927,37 @@ impl Workspace {
                     .border_color(p.chrome_line)
                     .map(|d| {
                         #[cfg(target_os = "linux")]
-                        let d = d.child(
-                            theme_btn("omarchy", "Follow Omarchy", theme::following_omarchy(cx))
-                                .w(px(120.))
-                                .on_click(cx.listener(|_, _, _, cx| theme::follow_omarchy(cx))),
-                        );
+                        let d = {
+                            // A quiet theme control, not a social button: the
+                            // Omarchy mark, and the theme's name while it is on.
+                            let on = theme::following_omarchy(cx);
+                            let name = theme::omarchy_theme_name();
+                            let label: SharedString = match (&name, on) {
+                                (Some(n), true) => format!("◆ {n}").into(),
+                                _ => "◆ omarchy".into(),
+                            };
+                            let tip: SharedString = match &name {
+                                Some(n) if on => format!(
+                                    "Colours follow your Omarchy theme ({n}), live. Click for Emulsion's own light or dark palette."
+                                )
+                                .into(),
+                                Some(n) => format!(
+                                    "Use the colours of your Omarchy theme ({n}) and follow it when it changes"
+                                )
+                                .into(),
+                                None => "Omarchy theme not found; Emulsion keeps its own palette".into(),
+                            };
+                            d.child(crate::widgets::tip(
+                                theme_btn("omarchy", "", on)
+                                    .w_auto()
+                                    .px(px(10.))
+                                    .text_size(px(10.))
+                                    .when(!on, |d| d.border_color(transparent_black()))
+                                    .child(label)
+                                    .on_click(cx.listener(|_, _, _, cx| theme::follow_omarchy(cx))),
+                                tip,
+                            ))
+                        };
                         d
                     })
                     .child(
@@ -968,9 +994,11 @@ impl Workspace {
                 .gap(px(10.))
                 .px(px(16.))
                 .py(px(8.))
-                .bg(if err { p.accent } else { p.ink })
-                .text_color(if err { p.accent_fg } else { p.paper })
-                .child(mono(msg, 11., if err { p.accent_fg } else { p.paper }).flex_1())
+                .border_l_4()
+                .border_color(p.accent)
+                .bg(if err { p.accent } else { p.chrome })
+                .text_color(if err { p.accent_fg } else { p.chrome_fg })
+                .child(mono(msg, 11., if err { p.accent_fg } else { p.chrome_fg }).flex_1())
                 .when(err, |d| {
                     d.child(
                         div()

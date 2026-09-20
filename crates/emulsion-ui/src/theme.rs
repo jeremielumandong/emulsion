@@ -143,6 +143,12 @@ pub fn set_dark(dark_on: bool, cx: &mut App) {
     cx.refresh_windows();
 }
 
+/// The current Omarchy theme's name (its `theme.name` file), for labels.
+#[cfg(target_os = "linux")]
+pub fn omarchy_theme_name() -> Option<String> {
+    omarchy::current_name()
+}
+
 pub fn following_omarchy(cx: &App) -> bool {
     cfg!(target_os = "linux") && crate::app_state::settings(cx).follow_omarchy
 }

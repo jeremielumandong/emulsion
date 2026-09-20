@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Emulsion, symbolic: the plate outline and the square, in the shell's
+       own colour so themed panels and launchers can recolour it. -->
+  <rect x="1.5" y="1.5" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1"/>
+  <rect x="5" y="5" width="6" height="6" fill="currentColor"/>
+</svg>

@@ -111,6 +111,11 @@ pub const GROUPS: &[&[RailItem]] = &[
     &[item("Zoom", "⌕", "Z", Tool::Zoom)],
 ];
 
+/// Thin lines after these `GROUPS` slots, Photoshop's clusters: move ·
+/// selection · crop and sampling · retouch and paint · vector · Emulsion's
+/// mask and grade · navigation.
+pub const DIVIDERS: &[usize] = &[0, 3, 5, 10, 13, 15];
+
 /// Draw mode: the painter's rail, in the order Procreate users reach for.
 pub const DRAW_GROUPS: &[&[RailItem]] = &[
     &[
@@ -134,6 +139,9 @@ pub const DRAW_GROUPS: &[&[RailItem]] = &[
     &[item("Hand", "✋", "H", Tool::Hand)],
     &[item("Zoom", "⌕", "Z", Tool::Zoom)],
 ];
+
+/// Dividers for `DRAW_GROUPS`: paint · fill · select and move · navigation.
+pub const DRAW_DIVIDERS: &[usize] = &[3, 4, 7];
 
 /// Rail button height; a little tighter than the old rail so eighteen
 /// slots and the swatches fit a 720 px window.
@@ -423,6 +431,14 @@ impl EditorView {
                     .children(list.map(|l| deferred(l).with_priority(1)))
                     .test_support(),
             );
+            let dividers = if self.draw_mode {
+                DRAW_DIVIDERS
+            } else {
+                DIVIDERS
+            };
+            if dividers.contains(&g) && g + 1 < groups.len() {
+                rail = rail.child(div().w(px(18.)).h(px(1.)).my(px(3.)).bg(line.opacity(0.9)));
+            }
         }
         rail.child(div().flex_1()).child(self.swatches(p, cx))
     }

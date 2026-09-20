@@ -135,6 +135,33 @@ fn read_paths(paths: impl IntoIterator<Item = std::path::PathBuf>) -> Option<Pal
     None
 }
 
+/// Roots that may hold `omarchy/current/…`: XDG state, then config.
+#[cfg(target_os = "linux")]
+fn omarchy_roots() -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let xdg_path = |name: &str| {
+        std::env::var_os(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    let state =
+        xdg_path("XDG_STATE_HOME").or_else(|| home.as_ref().map(|home| home.join(".local/state")));
+    let config =
+        xdg_path("XDG_CONFIG_HOME").or_else(|| home.as_ref().map(|home| home.join(".config")));
+    state.into_iter().chain(config).collect()
+}
+
+/// The name Omarchy records for the current theme, e.g. "tokyo-night".
+#[cfg(target_os = "linux")]
+pub(super) fn current_name() -> Option<String> {
+    omarchy_roots().into_iter().find_map(|root| {
+        let text = std::fs::read_to_string(root.join("omarchy/current/theme.name")).ok()?;
+        let name = text.trim();
+        (!name.is_empty() && name.len() <= 64).then(|| name.to_string())
+    })
+}
+
 #[cfg(target_os = "linux")]
 pub(super) fn read_current() -> Option<Palette> {
     use std::path::PathBuf;

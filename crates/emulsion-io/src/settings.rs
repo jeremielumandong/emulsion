@@ -59,6 +59,27 @@ pub struct Settings {
     pub google_image_model: Option<String>,
 }
 
+/// Whether this desktop is Omarchy (its current-theme colours exist).
+pub fn omarchy_present() -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let root = |var: &str, fallback: &str| {
+        std::env::var_os(var)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| home.as_ref().map(|h| h.join(fallback)))
+    };
+    [
+        root("XDG_STATE_HOME", ".local/state"),
+        root("XDG_CONFIG_HOME", ".config"),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|r| r.join("omarchy/current/theme/colors.toml").is_file())
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -117,10 +138,14 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        std::fs::read(file())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        match std::fs::read(file()) {
+            Ok(b) => serde_json::from_slice(&b).unwrap_or_default(),
+            // First run: on an Omarchy desktop, start in its colours.
+            Err(_) => Self {
+                follow_omarchy: omarchy_present(),
+                ..Self::default()
+            },
+        }
     }
 
     pub fn save(&self) -> std::io::Result<()> {

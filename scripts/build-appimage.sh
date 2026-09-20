@@ -102,6 +102,7 @@ install -Dm644 "$ROOT_DIR/vendor/gpui/gpui-pre/LICENSE-APACHE" "$APPDIR/usr/shar
 install -Dm644 "$ROOT_DIR/vendor/gpui/gpui-base/LICENSE-APACHE" "$APPDIR/usr/share/doc/emulsion/licenses/GPUI-KIT-LICENSE-APACHE"
 install -Dm644 "$ROOT_DIR/licenses/LGPL-2.1-rawler.txt" "$APPDIR/usr/share/doc/emulsion/licenses/LGPL-2.1-rawler.txt"
 install -Dm644 "$ROOT_DIR/assets/icons/emulsion.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/emulsion.svg"
+install -Dm644 "$ROOT_DIR/assets/icons/emulsion-symbolic.svg" "$APPDIR/usr/share/icons/hicolor/symbolic/apps/emulsion-symbolic.svg"
 
 render_png() {
   local size="$1" dest="$2"

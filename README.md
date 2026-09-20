@@ -90,10 +90,14 @@ notarization.
 ## Appearance
 
 Use the Light/Dark controls in the top bar to choose Emulsion's built-in palette.
-On Linux, **Follow Omarchy** follows the active Omarchy theme, including changes
-while Emulsion is running (within about one second). Choosing Light or Dark, or
-using the theme toggle shortcut, stops following. Existing preferences are preserved;
-following is off by default. macOS and Windows keep the built-in theme controls.
+On Linux, the **◆ omarchy** control beside them takes the colours of the active
+Omarchy theme and follows changes while Emulsion is running (within about a
+second); while it is on it shows the theme's name. Choosing Light or Dark, or using
+the theme toggle shortcut, switches back to Emulsion's own palette. On an Omarchy
+desktop a first run starts in the theme's colours; an existing settings file is
+left as it is. macOS and Windows keep the built-in theme controls. The package also
+ships a symbolic icon (`emulsion-symbolic`) that themed panels and launchers can
+recolour.
 
 Emulsion reads `omarchy/current/theme/colors.toml` under `$XDG_STATE_HOME`
 (default `~/.local/state`), with a fallback to `$XDG_CONFIG_HOME` (default
