@@ -385,13 +385,19 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                 .collect()
         },
         || {
-            // Composite and thumbnail.
+            // Composite and thumbnail. When the picture is one untouched
+            // layer, the merged image would only repeat that layer's PNG
+            // (a fifth of the file for a 16-bit photo), so it is left out;
+            // stack.xml already points readers at the layer itself.
             let tree = doc.composite_tree();
-            let merged = flatten(&tree, 0);
-            let mut out = vec![(
-                "mergedimage.png".to_string(),
-                png8(doc.width, doc.height, &merged.to_srgba8())?,
-            )];
+            let mut out = Vec::new();
+            if !merged_is_redundant(doc) {
+                let merged = flatten(&tree, 0);
+                out.push((
+                    "mergedimage.png".to_string(),
+                    png8(doc.width, doc.height, &merged.to_srgba8())?,
+                ));
+            }
             let mut level = 0;
             while level_size(doc.width, doc.height, level)
                 .0
@@ -450,6 +456,24 @@ fn fit(w: u32, h: u32, max: u32) -> (u32, u32) {
         ((w as f64 * s).round() as u32).max(1),
         ((h as f64 * s).round() as u32).max(1),
     )
+}
+
+/// Is the composite exactly the one and only layer's own pixels?
+fn merged_is_redundant(doc: &Document) -> bool {
+    let [n] = doc.nodes.as_slice() else {
+        return false;
+    };
+    let NodeKind::Raster { raster, placement } = &n.kind else {
+        return false;
+    };
+    n.visible
+        && n.opacity >= 1.0
+        && n.blend == emulsion_raster::BlendMode::Normal
+        && n.mask.is_none()
+        && n.styles.is_empty()
+        && *placement == Placement::default()
+        && raster.width() == doc.width
+        && raster.height() == doc.height
 }
 
 fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> String {
