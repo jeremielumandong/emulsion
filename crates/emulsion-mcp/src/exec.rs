@@ -750,6 +750,17 @@ fn plan_from_script(doc: &Document, script: PaintScript) -> Result<Planned, Tool
         unreachable!()
     };
     let (current, dirty) = script.render(raster);
+    if dirty.is_empty() {
+        let message = format!(
+            "No pixels changed on {}. Check the selection, alpha lock, stroke location, or brush coverage before adjusting the stroke.",
+            node_label(doc, script.id)
+        );
+        return Ok(Planned {
+            feedback: Some(paint_feedback(doc, message.clone())),
+            commands: Vec::new(),
+            message,
+        });
+    }
     // Render feedback on the same background thread as the paint computation.
     let mut after = doc.clone();
     if let Some(NodeKind::Raster { raster: r, .. }) = after.node_mut(script.id).map(|n| &mut n.kind)
@@ -778,7 +789,7 @@ pub fn paint_feedback(doc: &Document, message: impl Into<String>) -> ToolResult 
         Ok(preview) => result.content.extend(preview.content),
         Err(error) => result.content.push(json!({
             "type": "text",
-            "text": format!("The paint was applied, but its preview is unavailable: {}. Inspect with get_view before making visual judgments; do not repeat the paint call.",
+            "text": format!("The operation completed, but its preview is unavailable: {}. Inspect with get_view before making visual judgments; do not repeat the paint call.",
                 error.content.first().and_then(|b| b["text"].as_str()).unwrap_or("preview failed"))
         })),
     }
@@ -3734,9 +3745,14 @@ mod tests {
         assert_eq!(e.doc, before);
         let mut erase = args;
         erase["brush"] = json!("Hard eraser");
+        let revision = e.revision;
+        let steps = e.history.len();
         let result = execute(&mut e, "paint", &erase);
         assert!(!result.is_error, "{}", text(&result));
+        assert!(text(&result).starts_with("No pixels changed"));
         assert_eq!(e.doc, before, "erasing cannot alter alpha-locked content");
+        assert_eq!(e.revision, revision);
+        assert_eq!(e.history.len(), steps);
     }
 
     #[test]

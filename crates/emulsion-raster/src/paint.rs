@@ -1265,6 +1265,16 @@ impl Stroke {
                 };
                 out[i] = color::f_to_px(o.map(|v| v.clamp(0.0, 1.0)));
             }
+            // A touched tile need not change pixels (selection, alpha lock,
+            // identical colour). Compare against the live image, not the
+            // stroke base: finishing a taper can restore earlier paint.
+            let unchanged = current.base_tile(c).map_or_else(
+                || out.iter().all(|p| *p == current.fill()),
+                |tile| tile.as_ref() == out.as_slice(),
+            );
+            if unchanged {
+                continue;
+            }
             dirty = dirty.union(&IRect::new(c.x * t, c.y * t, t, t));
             changes.push((c, Some(out)));
         }
@@ -1731,6 +1741,41 @@ mod tests {
         s.point(48.0, 32.0);
         let (r, _) = s.render(&base);
         assert_eq!(r.get(48, 32)[0], 65535, "red cloned from x - 40");
+    }
+
+    #[test]
+    fn no_op_strokes_keep_dirty_empty_and_existing_tiles() {
+        let base = Arc::new(Raster::solid(32, 32, [0.2, 0.1, 0.0, 0.5]));
+        for (ink, alpha_lock, clip) in [
+            (Ink::Erase, true, None),
+            (opaque_red(), false, Some(Arc::new(|_, _| 0.0) as Clip)),
+        ] {
+            let mut stroke = Stroke::new(base.clone(), hard(12.0), ink, clip);
+            stroke.set_alpha_lock(alpha_lock);
+            stroke.point(16.0, 16.0);
+            let (result, dirty) = stroke.render(&base);
+            assert!(dirty.is_empty());
+            for (coord, tile) in base.base_tiles() {
+                assert!(Arc::ptr_eq(tile, result.base_tile(*coord).unwrap()));
+            }
+        }
+    }
+
+    #[test]
+    fn rendering_can_restore_current_pixels_to_the_stroke_base() {
+        let base = Arc::new(Raster::transparent(32, 32));
+        let mut stroke = Stroke::new(base.clone(), hard(12.0), opaque_red(), None);
+        stroke.point(16.0, 16.0);
+        let (painted, dirty) = stroke.render(&base);
+        assert!(!dirty.is_empty());
+        assert!(painted.get(16, 16)[3] > 0);
+        // Model a live rerender that removes the stroke's previous coverage.
+        // Comparing output with `base` would incorrectly skip this restoration.
+        stroke.clip = Some(Arc::new(|_, _| 0.0));
+        stroke.pending.extend(stroke.paint.keys().copied());
+        let (restored, dirty) = stroke.render(&painted);
+        assert!(!dirty.is_empty());
+        assert_eq!(restored.to_srgba8(), base.to_srgba8());
     }
 
     #[test]

@@ -1377,9 +1377,13 @@ impl EditorView {
                 Some(e) => call.reply(emulsion_mcp::server::ToolResult::error(e)),
                 None => {
                     let doc = self.editor.doc.clone();
-                    let message = pb.script.message;
                     let revision = self.editor.revision;
                     let changed = revision != pb.revision_before;
+                    let message = if changed {
+                        pb.script.message
+                    } else {
+                        "No pixels changed. Check selection, alpha lock and stroke placement before changing the drawing.".into()
+                    };
                     let generation = self.assistant.turn_generation;
                     let tool_generation = pb.tool_generation;
                     self.assistant.tool_feedback_pending += 1;
@@ -2311,6 +2315,48 @@ mod mutation_queue_tests {
             ] {
                 assert_eq!(response["isError"], false, "{response}");
             }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn alpha_locked_eraser_keeps_pixels_revision_and_history_in_both_playback_modes(
+        cx: &mut TestAppContext,
+    ) {
+        for live in [true, false] {
+            let relay = Relay::start().unwrap();
+            let view = painting(cx, live);
+            let before = view.update(cx, |view, _| {
+                let mut doc = view.editor.doc.clone();
+                let NodeKind::Raster { raster, .. } = &mut doc.node_mut(1).unwrap().kind else {
+                    panic!("ink layer")
+                };
+                *raster = Arc::new(emulsion_raster::Raster::solid(300, 100, [0.5, 0., 0., 0.5]));
+                view.editor = emulsion_core::Editor::new(doc.clone(), None);
+                view.editor.begin("Assistant drawing");
+                (doc, view.editor.revision)
+            });
+            let mut args = stroke(25, "#ff0000");
+            args["brush"] = serde_json::json!("Hard eraser");
+            args["alpha_lock"] = serde_json::json!(true);
+            let (erase, reply) = call(&relay, "paint", args);
+            view.update(cx, |view, cx| {
+                view.run_tool_now(erase, cx);
+                view.complete_provider_turn(0.0, cx);
+            });
+            for _ in 0..100 {
+                cx.executor().advance_clock(Duration::from_millis(16));
+                cx.run_until_parked();
+                if view.read_with(cx, |view, _| !view.assistant.running) {
+                    break;
+                }
+            }
+            assert_eq!(reply.join().unwrap()["isError"], false);
+            view.read_with(cx, |view, _| {
+                assert!(!view.assistant.running);
+                assert_eq!(view.editor.doc, before.0);
+                assert_eq!(view.editor.revision, before.1);
+                assert!(view.editor.history.is_empty());
+            });
         }
     }
 
