@@ -78,8 +78,13 @@ fn crates() -> &'static [(String, String, String)] {
     })
 }
 
-/// Downloaded-on-request content that is not a crate.
-const DATA_SOURCES: [(&str, &str, &str); 2] = [
+/// Downloaded-on-request content that is not a crate, and bundled artwork.
+const DATA_SOURCES: [(&str, &str, &str); 3] = [
+    (
+        "Home screen picture",
+        "Emulsion (MIT)",
+        "Red and blue liquid, generated for this project with OpenAI's image model (content credentials recorded it as AI-generated) and embedded as a JPEG.",
+    ),
     (
         "lensfun database",
         "CC BY-SA 3.0",
