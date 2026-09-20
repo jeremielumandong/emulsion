@@ -65,7 +65,7 @@ pub fn write_codex_home(
     std::fs::create_dir_all(&home)?;
     let user_home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")));
+        .or_else(|| crate::provider::home().map(|h| h.join(".codex")));
     let mut config = String::new();
     if let Some(u) = &user_home {
         for f in ["auth.json", "version.json", "instructions.md"] {
@@ -113,7 +113,7 @@ pub fn write_codex_home(
 fn user_opencode_config() -> serde_json::Value {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+        .or_else(|| crate::provider::home().map(|h| h.join(".config")));
     let candidates = base.into_iter().flat_map(|b| {
         [
             b.join("opencode/opencode.json"),

@@ -31,6 +31,36 @@ This puts `Emulsion.AppImage` in `~/Applications`, an `emulsion` command in `~/.
 desktop entry with icons and file associations. Settings and recent files are never touched.
 `scripts/build-appimage.sh` only builds, into `target/appimage/`.
 
+## Build (Windows)
+
+Install Rust and Visual Studio Build Tools with the **Desktop development with C++**
+workload (including the Windows SDK). Use the MSVC Rust toolchain; the repository's
+`rust-toolchain.toml` selects the Rust version.
+
+```powershell
+.\scripts\build-windows.ps1                       # release build
+.\scripts\build-windows.ps1 -Configuration Debug  # development build
+.\scripts\build-windows.ps1 -Package              # release build + NSIS installer
+```
+
+The script works from any working directory and builds the `emulsion` executable
+under `target/` (normally `target/release/emulsion.exe` or `target/debug/emulsion.exe`).
+Cargo errors stop the script. Release builds launch without a console window;
+debug builds retain the console for diagnostics.
+
+For packaging, install `cargo-packager` with
+`cargo install cargo-packager --version 0.11.8 --locked`. Like AgentOps, `-Package`
+uses cargo-packager's NSIS backend (downloaded automatically on first use) and
+creates `target/windows/emulsion_<version>_x64-setup.exe` on x64 Windows.
+The installer installs for the current user, supplies shortcuts and an
+uninstaller, and bundles runtime DLLs beside the application. The app and
+installer use the Emulsion icon. These local builds are unsigned.
+
+Close a running copy from `target/release/` before rebuilding, since Windows
+locks executable files while they are in use. Coding assistant detection supports
+native Windows executables and npm launchers, including Claude Code in
+`%USERPROFILE%\.local\bin` and Codex in `%APPDATA%\npm`.
+
 ## Build (macOS)
 
 ```sh

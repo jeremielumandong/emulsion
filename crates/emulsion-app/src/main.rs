@@ -1,6 +1,10 @@
 //! Emulsion binary. `emulsion [FILE]` opens the editor; `emulsion mcp-serve`
 //! runs the stdio MCP server that a coding CLI attaches to.
 
+// Ship a Windows GUI executable without a console. Inherited pipes still work
+// for mcp-serve; debug builds retain their console for development diagnostics.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use emulsion_ui::{Workspace, actions, app_state, theme};
 use gpui_kit::component::Root;
 use gpui_kit::*;
@@ -38,48 +42,50 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_editor(file: Option<PathBuf>) {
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
-        theme::install(cx);
-        app_state::install(cx);
-        // Also squares gpui-kit's corners: the design has none but avatars and dots.
-        theme::apply_saved(cx);
-        actions::bind(cx);
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-
-        cx.spawn(async move |cx| {
-            let bounds = cx.update(|cx| Bounds::centered(None, size(px(1440.), px(900.)), cx));
-            // The title bar is ours on every platform: it moves the window,
-            // and on Linux and Windows carries minimise, maximise and close.
-            let opts = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Emulsion".into()),
-                    ..gpui_kit::component::TitleBar::title_bar_options()
-                }),
-                app_owns_titlebar_drag: true,
-                window_decorations: Some(if cfg!(target_os = "linux") {
-                    WindowDecorations::Client
-                } else {
-                    WindowDecorations::Server
-                }),
-                app_id: Some("app.emulsion.Emulsion".into()),
-                ..Default::default()
-            };
-            cx.open_window(opts, |window, cx| {
-                let ws = cx.new(|cx| Workspace::new(window, cx));
-                if let Some(path) = file {
-                    ws.update(cx, |ws, cx| ws.open_path(path, window, cx));
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            theme::install(cx);
+            app_state::install(cx);
+            // Also squares gpui-kit's corners: the design has none but avatars and dots.
+            theme::apply_saved(cx);
+            actions::bind(cx);
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
                 }
-                cx.new(|cx| Root::new(ws, window, cx))
             })
-            .expect("failed to open window");
-        })
-        .detach();
-    });
+            .detach();
+
+            cx.spawn(async move |cx| {
+                let bounds = cx.update(|cx| Bounds::centered(None, size(px(1440.), px(900.)), cx));
+                // The title bar is ours on every platform: it moves the window,
+                // and on Linux and Windows carries minimise, maximise and close.
+                let opts = WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Emulsion".into()),
+                        ..gpui_kit::component::TitleBar::title_bar_options()
+                    }),
+                    app_owns_titlebar_drag: true,
+                    window_decorations: Some(if cfg!(target_os = "linux") {
+                        WindowDecorations::Client
+                    } else {
+                        WindowDecorations::Server
+                    }),
+                    app_id: Some("app.emulsion.Emulsion".into()),
+                    ..Default::default()
+                };
+                cx.open_window(opts, |window, cx| {
+                    let ws = cx.new(|cx| Workspace::new(window, cx));
+                    if let Some(path) = file {
+                        ws.update(cx, |ws, cx| ws.open_path(path, window, cx));
+                    }
+                    cx.new(|cx| Root::new(ws, window, cx))
+                })
+                .expect("failed to open window");
+            })
+            .detach();
+        });
 }

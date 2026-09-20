@@ -20,3 +20,20 @@ emulsion-mcp = { workspace = true }
 [[bin]]
 name = "emulsion"
 path = "src/main.rs"
+
+[package.metadata.packager]
+product-name = "Emulsion"
+identifier = "app.emulsion.Emulsion"
+category = "GraphicsAndDesign"
+description = "The Emulsion image editor"
+icons = ["../../assets/icons/emulsion.ico"]
+binaries-dir = "../../target/release"
+# Flatten Cargo's runtime DLLs beside the executable, resolving ort symlinks.
+resources = ["../../target/release/*.dll"]
+
+[package.metadata.packager.nsis]
+installer-mode = "currentUser"
+installer-icon = "../../assets/icons/emulsion.ico"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

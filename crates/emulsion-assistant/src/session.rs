@@ -11,7 +11,7 @@ use crate::protocol::{self, Event, Parser};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 
 /// Output from the child, before parsing.
@@ -71,8 +71,10 @@ impl CliProcess for ProdProcess {
         }
         #[cfg(windows)]
         {
-            let _ = Command::new("taskkill")
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
                 .args(["/T", "/F", "/PID", &self.pid.to_string()])
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
                 .status();
         }
     }
@@ -80,7 +82,7 @@ impl CliProcess for ProdProcess {
 
 impl Launcher for ProdLauncher {
     fn spawn(&self, spec: &LaunchSpec, sink: LineSink) -> std::io::Result<Box<dyn CliProcess>> {
-        let mut cmd = Command::new(&spec.program);
+        let mut cmd = crate::provider::command(&spec.program);
         cmd.args(&spec.args)
             .current_dir(&spec.cwd)
             .stdin(Stdio::piped())
@@ -93,11 +95,6 @@ impl Launcher for ProdLauncher {
         {
             use std::os::unix::process::CommandExt;
             cmd.process_group(0);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
         let mut child = cmd.spawn()?;
         let pid = child.id();
