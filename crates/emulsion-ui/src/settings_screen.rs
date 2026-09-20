@@ -16,6 +16,86 @@ pub(crate) struct ImageInputs {
     key: Entity<gpui_kit::component::input::InputState>,
 }
 
+/// Which heading a shortcut sits under on the Settings screen.
+fn shortcut_group(action: &str, ctx: &str) -> &'static str {
+    if action.starts_with("Tool")
+        || matches!(
+            action,
+            "SwapColors" | "DefaultColors" | "BrushSmaller" | "BrushLarger" | "CommitTool"
+        )
+    {
+        "Tools"
+    } else if matches!(
+        action,
+        "NewDocument"
+            | "Open"
+            | "Save"
+            | "SaveAs"
+            | "Export"
+            | "Quit"
+            | "ShowHome"
+            | "ShowSettings"
+            | "ImageSizeDialog"
+            | "CanvasSizeDialog"
+    ) {
+        "Files"
+    } else if matches!(
+        action,
+        "Undo"
+            | "Redo"
+            | "FillSelection"
+            | "ContentAwareFill"
+            | "CutPixels"
+            | "CopyPixels"
+            | "PastePixels"
+            | "ClearPixels"
+            | "FreeTransform"
+    ) || action.starts_with("Nudge")
+    {
+        "Edit"
+    } else if action.contains("Select") || action == "Deselect" {
+        "Selection"
+    } else if action.contains("Node")
+        || matches!(action, "GroupNodes" | "Ungroup" | "CanvasDelete")
+        || ctx == "panel"
+    {
+        "Layers"
+    } else if action.starts_with("Zoom")
+        || action.starts_with("Rotate")
+        || matches!(
+            action,
+            "ResetRotation" | "ToggleRulers" | "ToggleTheme" | "ShowEditor"
+        )
+    {
+        "View"
+    } else if action.ends_with("Tab") {
+        "Documents"
+    } else if action == "Ask" || action.starts_with("Suggestion") {
+        "Assistant"
+    } else {
+        "Other"
+    }
+}
+
+/// "ctrl-shift-s" → "Ctrl+Shift+S".
+fn pretty_keys(keys: &str) -> String {
+    keys.split('-')
+        .map(|part| match part {
+            "ctrl" => "Ctrl".to_string(),
+            "shift" => "Shift".to_string(),
+            "alt" => "Alt".to_string(),
+            "cmd" => "Cmd".to_string(),
+            "enter" => "Enter".to_string(),
+            "escape" => "Esc".to_string(),
+            "backspace" => "Backspace".to_string(),
+            "delete" => "Delete".to_string(),
+            "tab" => "Tab".to_string(),
+            other => other.to_uppercase(),
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 /// "ToggleNodeVisible" → "toggle node visible".
 fn humanize(action: &str) -> String {
     let mut out = String::new();
@@ -308,23 +388,62 @@ impl Workspace {
             .child({
                 let eff = probe.bindings.clone();
                 let overrides = probe.overrides;
-                let mut rows = div().flex().flex_wrap().gap(px(6.)).max_w(px(760.));
+                // One line per action, keys as key caps, grouped by purpose.
+                let mut groups: Vec<(&'static str, Vec<(String, Vec<String>)>)> = Vec::new();
                 for (ctx, action, keys) in &eff {
-                    let ctx_mark = match ctx.as_str() { "canvas" => "", "panel" => "panel · ", _ => "" };
-                    rows = rows.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(5.))
-                            .px(px(6.))
-                            .py(px(2.))
-                            .border_1()
-                            .border_color(p.line)
-                            .font_family(crate::theme::MONO_FONT)
-                            .text_size(px(10.))
-                            .child(div().text_color(p.ink).child(keys.clone()))
-                            .child(div().text_color(p.muted).child(format!("{ctx_mark}{}", humanize(action)))),
-                    );
+                    let title = shortcut_group(action, ctx);
+                    let g = match groups.iter_mut().find(|(t, _)| *t == title) {
+                        Some(g) => g,
+                        None => {
+                            groups.push((title, Vec::new()));
+                            groups.last_mut().unwrap()
+                        }
+                    };
+                    let label = humanize(action);
+                    match g.1.iter_mut().find(|(a, _)| *a == label) {
+                        Some((_, ks)) => ks.push(pretty_keys(keys)),
+                        None => g.1.push((label, vec![pretty_keys(keys)])),
+                    }
+                }
+                let order = ["Tools", "Files", "Edit", "Selection", "Layers", "View", "Documents", "Assistant"];
+                groups.sort_by_key(|(t, _)| order.iter().position(|o| o == t).unwrap_or(99));
+                let mut rows = div().flex().flex_wrap().gap(px(28.)).items_start();
+                for (title, items) in groups {
+                    let mut col = div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .w(px(300.))
+                        .child(mono(title.to_uppercase(), 9.5, p.muted));
+                    for (label, keys) in items {
+                        let mut caps = div().flex().items_center().gap(px(4.)).w(px(130.)).flex_none();
+                        for (i, k) in keys.iter().enumerate() {
+                            if i > 0 {
+                                caps = caps.child(mono("/", 9.5, p.muted));
+                            }
+                            caps = caps.child(
+                                div()
+                                    .px(px(5.))
+                                    .py(px(1.))
+                                    .border_1()
+                                    .border_color(p.line)
+                                    .bg(p.soft_bg)
+                                    .font_family(crate::theme::MONO_FONT)
+                                    .text_size(px(10.))
+                                    .text_color(p.ink)
+                                    .child(k.clone()),
+                            );
+                        }
+                        col = col.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(caps)
+                                .child(div().text_size(px(12.)).text_color(p.ink).child(label)),
+                        );
+                    }
+                    rows = rows.child(col);
                 }
                 section(&p)
                     .child(tier(5, "Shortcuts", overrides > 0, if overrides > 0 { "custom" } else { "default" }, &p))
