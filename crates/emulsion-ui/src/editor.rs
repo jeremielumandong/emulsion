@@ -15,6 +15,7 @@ pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
 mod lens;
+pub(crate) mod menu_bar;
 mod movement;
 mod panels;
 mod pen;
@@ -268,6 +269,8 @@ pub struct EditorView {
     pub(crate) raw: raw_panel::RawState,
     /// Generative fill prompt and state.
     pub(crate) generate: generate_ui::GenState,
+    /// The File · Edit · … menu bar.
+    pub(crate) menus: menu_bar::MenuBarState,
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
@@ -364,6 +367,7 @@ impl EditorView {
             anim: Default::default(),
             raw: Default::default(),
             generate: Default::default(),
+            menus: Default::default(),
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
@@ -2827,12 +2831,14 @@ impl Render for EditorView {
         let dock = self.assistant_dock(&p, cx);
         let panel = self.node_panel(&p, window, cx);
         div()
+        let menu_bar = self.menu_bar(&p, cx);
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
             .track_focus(&self.focus)
             .child(doc_bar)
+            .child(menu_bar)
             .child(
                 div()
                     .flex()
