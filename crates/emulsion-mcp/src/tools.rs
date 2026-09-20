@@ -96,7 +96,7 @@ pub const ADJUSTMENTS: &[&str] = &[
 ];
 
 fn node() -> Value {
-    json!({ "type": "integer", "description": "Node id from describe_document." })
+    json!({ "type": "integer", "description": "Layer id (called a node in describe_document; every layer, group, adjustment, text and path is a node)." })
 }
 
 fn mode() -> Value {
