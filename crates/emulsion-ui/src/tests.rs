@@ -26,6 +26,9 @@ mod tool_safety_tests;
 #[path = "painting_tests.rs"]
 mod painting_tests;
 
+#[path = "layer_tests.rs"]
+mod layer_tests;
+
 #[path = "filter_gesture_tests.rs"]
 mod filter_gesture_tests;
 

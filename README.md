@@ -123,7 +123,11 @@ cargo run --release -p emulsion-io --example compact_native -- input.ora compact
 ## Editor controls
 
 The right dock keeps **Layers** visible, with its own scrolling list and
-**+ Layer**, **Group**, **Duplicate**, and **Delete** actions. Below it:
+**+ Layer**, **Group**, **Duplicate**, and **Delete** actions. **+ Layer** starts
+with **Empty layer (transparent)**, also on Ctrl-Shift-N; the rest of the menu
+adds adjustments, a solid fill, a LUT or a group. **New transparent canvas** on
+the home screen starts a document with one empty layer instead of a white
+background. Below the layer list:
 
 - **Properties** edits the selected layer, including transforms, blending, and masks.
 - **Adjustments** adds adjustment layers and filters, then opens their Properties.

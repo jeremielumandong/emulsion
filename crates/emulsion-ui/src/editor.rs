@@ -2155,10 +2155,13 @@ impl EditorView {
             ));
             items.push(("LUT from .cube file…".into(), Node::group(0, "__lut__")));
             items.push(("Empty group".into(), Node::group(0, "Group")));
-            let mut list: Vec<(SharedString, MenuAction)> = items
-                .into_iter()
-                .map(|(l, n)| (l, MenuAction::Add(Box::new(n))))
-                .collect();
+            let mut list: Vec<(SharedString, MenuAction)> =
+                vec![("Empty layer (transparent)".into(), MenuAction::NewLayer)];
+            list.extend(
+                items
+                    .into_iter()
+                    .map(|(l, n)| (l, MenuAction::Add(Box::new(n)))),
+            );
             list.push((
                 "Remove background (AI)".into(),
                 MenuAction::RemoveBackground,
@@ -2964,6 +2967,15 @@ impl EditorView {
                                 this.import_lut(None, cx)
                             }
                             MenuAction::Add(node) => this.add_node((**node).clone(), cx),
+                            MenuAction::NewLayer => {
+                                if this.new_empty_layer(cx).is_some() {
+                                    this.set_status(
+                                        "Empty transparent layer added. Paint on it, or fill a selection.",
+                                        false,
+                                        cx,
+                                    );
+                                }
+                            }
                             MenuAction::RemoveBackground => this.remove_background(cx),
                             MenuAction::DepthMap => this.depth_layer(cx),
                             MenuAction::RestoreFaces => this.restore_faces(cx),
@@ -2979,6 +2991,8 @@ impl EditorView {
 
 enum MenuAction {
     Blend(NodeId, BlendMode),
+    /// An empty, transparent pixel layer.
+    NewLayer,
     Add(Box<Node>),
     RemoveBackground,
     DepthMap,

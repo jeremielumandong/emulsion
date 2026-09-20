@@ -620,18 +620,33 @@ impl Workspace {
         .detach();
     }
 
+    /// A new 1920×1080 document on a white background.
     pub fn new_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.add_tab_then(window, cx, |this, window, cx| {
+        self.new_document_with(Some([255, 255, 255, 255]), window, cx);
+    }
+
+    /// A new 1920×1080 document: `background` fills a Background layer;
+    /// None gives a single empty, transparent layer (Photoshop's
+    /// "Background contents: Transparent").
+    pub fn new_document_with(
+        &mut self,
+        background: Option<[u8; 4]>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.add_tab_then(window, cx, move |this, window, cx| {
             let mut doc = Document::new(1920, 1080);
-            let bg = Node::new(
-                0,
-                "Background",
-                NodeKind::Fill {
-                    rgba: [255, 255, 255, 255],
-                },
-            );
+            let first = match background {
+                Some(rgba) => Node::new(0, "Background", NodeKind::Fill { rgba }),
+                None => Node::raster(
+                    0,
+                    "Layer 1",
+                    Arc::new(emulsion_raster::Raster::transparent(doc.width, doc.height)),
+                    Default::default(),
+                ),
+            };
             let _ = Command::AddNode {
-                node: Box::new(bg),
+                node: Box::new(first),
                 slot: Slot::TOP,
             }
             .apply(&mut doc);
@@ -1094,6 +1109,11 @@ impl Render for Workspace {
                     if !(e.tool == crate::editor::Tool::Pen && e.pen_delete(cx)) {
                         e.delete_selected(cx)
                     }
+                })
+            }))
+            .on_action(cx.listener(|this, _: &NewLayer, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.new_empty_layer(cx);
                 })
             }))
             .on_action(cx.listener(|this, _: &DuplicateNode, _, cx| {

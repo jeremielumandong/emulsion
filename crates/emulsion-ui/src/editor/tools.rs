@@ -614,6 +614,14 @@ impl EditorView {
                 return Some(id);
             }
         }
+        self.new_empty_layer(cx)
+    }
+
+    /// Add an empty, transparent pixel layer the size of the canvas above
+    /// the selected layer (or on top), select it, and return its id: what
+    /// "+ Layer › Empty layer" and Ctrl-Shift-N do, and what painting does
+    /// when nothing paintable is selected.
+    pub(crate) fn new_empty_layer(&mut self, cx: &mut Context<Self>) -> Option<NodeId> {
         let k = self
             .editor
             .doc

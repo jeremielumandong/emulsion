@@ -59,7 +59,10 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
     } else if action.contains("Select") || action == "Deselect" {
         "Selection"
     } else if action.contains("Node")
-        || matches!(action, "GroupNodes" | "Ungroup" | "CanvasDelete")
+        || matches!(
+            action,
+            "NewLayer" | "GroupNodes" | "Ungroup" | "CanvasDelete"
+        )
         || ctx == "panel"
     {
         "Layers"

@@ -303,6 +303,14 @@ impl Workspace {
                                     })),
                             )
                             .child(
+                                button("new-transparent", "New transparent canvas", false, p)
+                                    .px(px(22.))
+                                    .py(px(14.))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.new_document_with(None, window, cx)
+                                    })),
+                            )
+                            .child(
                                 button("edit-landing", "Edit this image", false, p)
                                     .px(px(22.))
                                     .py(px(14.))
