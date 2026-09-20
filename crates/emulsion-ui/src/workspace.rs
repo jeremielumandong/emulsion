@@ -23,7 +23,10 @@ pub enum Screen {
 
 pub struct Workspace {
     pub screen: Screen,
+    /// The active document; always one of `tabs` when open.
     pub editor: Option<Entity<EditorView>>,
+    /// Every open document, in tab order.
+    pub tabs: Vec<Entity<EditorView>>,
     pub recents: Vec<Recent>,
     pub(crate) thumbs: HashMap<PathBuf, crate::home::GalleryThumbnail>,
     pub(crate) thumbs_loading: HashMap<PathBuf, u64>,
@@ -133,6 +136,7 @@ impl Workspace {
         Self {
             screen: Screen::Home,
             editor: None,
+            tabs: Vec::new(),
             recents: recent::load(),
             recovered: find_recovered(),
             thumbs: HashMap::new(),
@@ -155,10 +159,158 @@ impl Workspace {
         }
     }
 
+    /// Does any open document have unsaved changes?
     fn modified(&self, cx: &App) -> bool {
-        self.editor
-            .as_ref()
-            .is_some_and(|e| e.read(cx).editor.is_modified())
+        self.tabs.iter().any(|e| e.read(cx).editor.is_modified())
+    }
+
+    /// Run `then` at once: opening another document adds a tab, so nothing
+    /// is discarded.
+    fn add_tab_then(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        then(self, window, cx);
+    }
+
+    /// Make tab `i` the active document. The tab leaving the screen drops
+    /// its rendered tiles; they come back on demand.
+    pub fn activate_tab(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ed) = self.tabs.get(i).cloned() else {
+            return;
+        };
+        if let Some(old) = &self.editor
+            && old != &ed
+        {
+            old.update(cx, |e, _| e.cache.borrow_mut().clear());
+        }
+        let focus = ed.read(cx).focus.clone();
+        self.editor = Some(ed);
+        self.screen = Screen::Editor;
+        focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub fn next_tab(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let n = self.tabs.len();
+        if n < 2 {
+            return;
+        }
+        let cur = self.active_tab().unwrap_or(0) as isize;
+        let next = (cur + delta).rem_euclid(n as isize) as usize;
+        self.activate_tab(next, window, cx);
+    }
+
+    pub fn active_tab(&self) -> Option<usize> {
+        let e = self.editor.as_ref()?;
+        self.tabs.iter().position(|t| t == e)
+    }
+
+    /// Close tab `i`, asking first when it has unsaved changes.
+    pub fn close_tab(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ed) = self.tabs.get(i).cloned() else {
+            return;
+        };
+        let dirty = ed.read(cx).editor.is_modified();
+        let name = ed.read(cx).name.clone();
+        let finish = move |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+            let Some(i) = this.tabs.iter().position(|t| t == &ed) else {
+                return;
+            };
+            ed.update(cx, |e, _| e.discard_recovery());
+            this.tabs.remove(i);
+            if this.editor.as_ref() == Some(&ed) {
+                this.editor = None;
+                if this.tabs.is_empty() {
+                    this.screen = Screen::Home;
+                } else {
+                    let j = i.min(this.tabs.len() - 1);
+                    this.activate_tab(j, window, cx);
+                }
+            }
+            cx.notify();
+        };
+        if !dirty {
+            finish(self, window, cx);
+            return;
+        }
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Close {name} without saving?"),
+            Some("Its changes will be lost."),
+            &["Close", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await == Ok(0) {
+                this.update_in(cx, |this, window, cx| finish(this, window, cx))
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// The row of document tabs above the editor.
+    fn tab_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.tabs.len() < 2 {
+            return None;
+        }
+        let p = crate::theme::palette(cx);
+        let active = self.active_tab();
+        let mut row = div()
+            .flex()
+            .flex_none()
+            .items_end()
+            .gap(px(2.))
+            .px(px(8.))
+            .pt(px(4.))
+            .border_b_1()
+            .border_color(p.line)
+            .bg(p.chrome)
+            .font_family(crate::theme::MONO_FONT)
+            .text_size(px(11.));
+        for (i, ed) in self.tabs.iter().enumerate() {
+            let (name, dirty) = {
+                let e = ed.read(cx);
+                (e.name.clone(), e.editor.is_modified())
+            };
+            let on = active == Some(i);
+            let (ink, paper, line, chrome_fg) = (p.ink, p.paper, p.line, p.chrome_fg);
+            row = row.child(
+                div()
+                    .id(("doc-tab", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(10.))
+                    .py(px(5.))
+                    .border_1()
+                    .border_b_0()
+                    .border_color(if on { ink } else { line })
+                    .bg(if on { paper } else { transparent_black() })
+                    .text_color(if on { ink } else { chrome_fg })
+                    .cursor_pointer()
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.activate_tab(i, window, cx)),
+                    )
+                    .child(format!("{name}{}", if dirty { " •" } else { "" }))
+                    .child(
+                        div()
+                            .id(("doc-tab-close", i))
+                            .px(px(3.))
+                            .text_color(chrome_fg)
+                            .hover(move |s| s.text_color(ink))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.close_tab(i, window, cx)
+                            }))
+                            .child("×"),
+                    ),
+            );
+        }
+        Some(row.into_any_element())
     }
 
     /// Run `then` now, or after the user agrees to drop unsaved changes.
@@ -199,11 +351,23 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Already open? Switch to it rather than opening twice.
+        if let Some(p) = &path
+            && let Some(i) = self
+                .tabs
+                .iter()
+                .position(|t| t.read(cx).editor.path.as_ref() == Some(p))
+        {
+            self.error = None;
+            self.activate_tab(i, window, cx);
+            return;
+        }
         if let Some(old) = &self.editor {
-            old.update(cx, |e, _| e.discard_recovery());
+            old.update(cx, |e, _| e.cache.borrow_mut().clear());
         }
         let ed = cx.new(|cx| EditorView::new(doc, graph, path, source, name, cx));
         let focus = ed.read(cx).focus.clone();
+        self.tabs.push(ed.clone());
         self.editor = Some(ed);
         self.screen = Screen::Editor;
         self.error = None;
@@ -212,7 +376,7 @@ impl Workspace {
     }
 
     pub fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.confirm_discard(window, cx, move |this, window, cx| {
+        self.add_tab_then(window, cx, move |this, window, cx| {
             this.busy = Some(format!("Opening {}…", path.display()).into());
             this.error = None;
             cx.notify();
@@ -267,7 +431,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.confirm_discard(window, cx, move |this, window, cx| {
+        self.add_tab_then(window, cx, move |this, window, cx| {
             this.busy = Some("Recovering…".into());
             cx.notify();
             cx.spawn_in(window, async move |this, cx| {
@@ -310,7 +474,7 @@ impl Workspace {
 
     /// Open the bundled landing image as a new document to edit.
     pub(crate) fn open_landing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.confirm_discard(window, cx, |this, window, cx| {
+        self.add_tab_then(window, cx, |this, window, cx| {
             this.busy = Some("Opening the landing image…".into());
             cx.notify();
             cx.spawn_in(window, async move |this, cx| {
@@ -433,7 +597,7 @@ impl Workspace {
     }
 
     pub fn new_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.confirm_discard(window, cx, |this, window, cx| {
+        self.add_tab_then(window, cx, |this, window, cx| {
             let mut doc = Document::new(1920, 1080);
             let bg = Node::new(
                 0,
@@ -577,7 +741,7 @@ impl Workspace {
 
     fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm_discard(window, cx, |this, _, cx| {
-            if let Some(ed) = &this.editor {
+            for ed in &this.tabs {
                 ed.update(cx, |e, _| e.discard_recovery());
             }
             this.closing = true;
@@ -802,7 +966,14 @@ impl Render for Workspace {
         let top = self.top_bar(cx);
         let banner = self.banner(cx);
         let body: AnyElement = match (self.screen, &self.editor) {
-            (Screen::Editor, Some(e)) => e.clone().into_any_element(),
+            (Screen::Editor, Some(e)) => div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .children(self.tab_strip(cx))
+                .child(e.clone())
+                .into_any_element(),
             (Screen::Settings, _) => self.settings_screen(window, cx).into_any_element(),
             (Screen::Batch, _) => self.batch_screen(window, cx).into_any_element(),
             _ => self.home(window, cx).into_any_element(),
@@ -987,6 +1158,13 @@ impl Render for Workspace {
                     };
                     e.set_select(next, cx)
                 })
+            }))
+            .on_action(cx.listener(|this, _: &NextTab, window, cx| this.next_tab(1, window, cx)))
+            .on_action(cx.listener(|this, _: &PrevTab, window, cx| this.next_tab(-1, window, cx)))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                if let Some(i) = this.active_tab() {
+                    this.close_tab(i, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &ToolEyedropper, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Eyedropper, cx))
