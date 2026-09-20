@@ -5,6 +5,7 @@ use crate::app_state::{self, CliStatus};
 use crate::theme::{self, Palette};
 use crate::widgets::{button, chip, label, mono};
 use crate::workspace::Workspace;
+use emulsion_io::settings::DrawingPace;
 use gpui_kit::component::input::Input;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -343,6 +344,25 @@ impl Workspace {
                         .child(
                             chip("show-drawing", "show the assistant drawing live", s.show_drawing, &p).on_click(cx.listener(|_, _, _, cx| {
                                 app_state::update_settings(cx, |s| s.show_drawing = !s.show_drawing);
+                            })),
+                        )
+                        .child(
+                            chip(
+                                "drawing-pace",
+                                match s.drawing_pace {
+                                    DrawingPace::Natural => "at a hand's pace",
+                                    DrawingPace::Quick => "quickly (a few seconds per call)",
+                                },
+                                s.show_drawing,
+                                &p,
+                            )
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                app_state::update_settings(cx, |s| {
+                                    s.drawing_pace = match s.drawing_pace {
+                                        DrawingPace::Natural => DrawingPace::Quick,
+                                        DrawingPace::Quick => DrawingPace::Natural,
+                                    }
+                                });
                             })),
                         ),
                     )

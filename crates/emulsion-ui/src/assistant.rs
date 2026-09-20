@@ -20,6 +20,7 @@ use emulsion_assistant::review::{self, Completion, DrawingReview};
 use emulsion_assistant::{Event, ProdLauncher, Session, launch};
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Node, NodeKind};
+use emulsion_io::settings::DrawingPace;
 use emulsion_mcp::relay::{Relay, RelayCall};
 use emulsion_mcp::{exec, tools};
 use gpui_kit::TestSupportExt;
@@ -179,6 +180,14 @@ pub(crate) struct Playback {
     /// Layer pixels advanced per tick.
     speed: f32,
     carry: f32,
+    /// Natural pace: strokes ease in and out and the pen lifts between them.
+    natural: bool,
+    /// Ticks to wait before the next stroke starts (the pen in the air).
+    pause: u32,
+    /// Length of the current stroke and how much of it is drawn, in layer
+    /// pixels, for easing.
+    stroke_len: f32,
+    stroke_done: f32,
     /// Where the brush is within the current segment, in layer pixels.
     pos: Option<(f32, f32, Option<f32>)>,
     revision_before: u64,
@@ -1245,11 +1254,25 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         const TICK_MS: u64 = 16;
-        const MIN_SPEED: f32 = 2400.0; // layer px per second
-        const MAX_SECS: f32 = 6.0;
         let len = script.length().max(1.0);
-        let speed = (len / MAX_SECS).max(MIN_SPEED) * TICK_MS as f32 / 1000.0;
+        let natural = app_state::settings(cx).drawing_pace == DrawingPace::Natural;
+        let per_second = if natural {
+            // A hand sweeps the canvas in about three seconds whatever its
+            // pixel size; never slower than a couple of minutes per call.
+            const MAX_SECS: f32 = 120.0;
+            let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+            let scale = script.to_doc.matrix2.determinant().abs().sqrt().max(1e-6) as f32;
+            let hand = (0.35 * w.max(h) as f32 / scale).clamp(300.0, 3000.0);
+            hand.max(len / MAX_SECS)
+        } else {
+            const MIN_SPEED: f32 = 2400.0; // layer px per second
+            const MAX_SECS: f32 = 6.0;
+            (len / MAX_SECS).max(MIN_SPEED)
+        };
+        let speed = per_second * TICK_MS as f32 / 1000.0;
         self.editor.begin(script.label.clone());
+        let strokes = script.strokes.len();
+        self.set_status(format!("Drawing… stroke 1/{strokes}"), false, cx);
         self.assistant.playback = Some(Playback {
             call,
             script,
@@ -1258,6 +1281,10 @@ impl EditorView {
             current: None,
             speed,
             carry: 0.0,
+            natural,
+            pause: 0,
+            stroke_len: 0.0,
+            stroke_done: 0.0,
             pos: None,
             revision_before: self.editor.revision,
             tool_generation: self.assistant.tool_generation,
@@ -1288,8 +1315,22 @@ impl EditorView {
             self.finish_playback(Some("the layer disappeared while painting"), cx);
             return false;
         };
+        if pb.pause > 0 {
+            pb.pause -= 1;
+            cx.notify();
+            return true;
+        }
         let mut layer = raster.clone();
-        let mut budget = pb.speed + pb.carry;
+        // Ease each stroke: slow leaving the paper's first touch, fastest
+        // through the middle, slow into the lift.
+        let ease = if pb.natural && pb.stroke_len > 0.0 {
+            let t = (pb.stroke_done / pb.stroke_len).clamp(0.0, 1.0);
+            0.35 + 0.65 * (std::f32::consts::PI * t).sin()
+        } else {
+            1.0
+        };
+        let tick_budget = pb.speed * ease;
+        let mut budget = tick_budget + pb.carry;
         let mut done = false;
         let mut dirty_all = emulsion_raster::IRect::default();
         let mut changed: Option<Arc<emulsion_raster::Raster>> = None;
@@ -1303,6 +1344,12 @@ impl EditorView {
                 pb.current = Some(Box::new(pb.script.start_stroke(layer.clone(), s)));
                 pb.point = 0;
                 pb.pos = None;
+                pb.stroke_len = s
+                    .points
+                    .windows(2)
+                    .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+                    .sum();
+                pb.stroke_done = 0.0;
             }
             let stroke = pb.current.as_mut().expect("set above");
             let size = (s.brush.size as f64 * scale) as f32;
@@ -1321,10 +1368,12 @@ impl EditorView {
                         pb.pos = Some(step);
                         let dp = to_doc.transform_point2(glam::dvec2(step.0 as f64, step.1 as f64));
                         pb.cursor = Some(((dp.x, dp.y), size));
+                        pb.stroke_done += budget;
                         budget = 0.0;
                         break;
                     }
                     budget -= d;
+                    pb.stroke_done += d;
                 }
                 stroke.point_at(x, y, p, None);
                 pb.pos = Some((x, y, p));
@@ -1346,6 +1395,13 @@ impl EditorView {
                 pb.current = None;
                 pb.pos = None;
                 pb.stroke += 1;
+                if pb.natural && pb.stroke < pb.script.strokes.len() {
+                    // The pen lifts and travels to the next stroke.
+                    const LIFT_MS: u32 = 140;
+                    pb.pause = LIFT_MS / 16;
+                    budget = 0.0;
+                    break;
+                }
                 if budget <= 0.0 {
                     break;
                 }
@@ -1353,7 +1409,9 @@ impl EditorView {
                 break;
             }
         }
-        pb.carry = if done { 0.0 } else { budget.min(pb.speed) };
+        pb.carry = if done { 0.0 } else { budget.min(tick_budget) };
+        let progress = (pb.stroke + 1).min(pb.script.strokes.len());
+        let strokes = pb.script.strokes.len();
         let label = pb.script.label.clone();
         if let Some(r) = changed {
             self.execute(
@@ -1370,6 +1428,16 @@ impl EditorView {
             self.finish_playback(None, cx);
             return false;
         }
+        if self
+            .status
+            .as_ref()
+            .is_some_and(|(t, _)| t.starts_with("Drawing… stroke"))
+        {
+            self.status = Some((
+                format!("Drawing… stroke {progress}/{strokes}").into(),
+                false,
+            ));
+        }
         cx.notify();
         true
     }
@@ -1378,6 +1446,13 @@ impl EditorView {
         let Some(pb) = self.assistant.playback.take() else {
             return;
         };
+        if self
+            .status
+            .as_ref()
+            .is_some_and(|(t, _)| t.starts_with("Drawing… stroke"))
+        {
+            self.status = None;
+        }
         if self.editor.in_transaction() {
             self.editor.end();
         }
@@ -2237,6 +2312,7 @@ mod mutation_queue_tests {
             theme::install(cx);
             cx.set_global(app_state::AppSettings(emulsion_io::settings::Settings {
                 show_drawing: live,
+                drawing_pace: DrawingPace::Quick,
                 suggestions: false,
                 ..Default::default()
             }));
@@ -2550,6 +2626,83 @@ mod mutation_queue_tests {
         ] {
             assert_eq!(response["isError"], true, "{response}");
         }
+    }
+
+    #[gpui_kit::test]
+    fn natural_pace_draws_slower_lifts_between_strokes_and_ends_with_the_same_ink(
+        cx: &mut TestAppContext,
+    ) {
+        // How far the first tick gets at each pace, and the ink at the end.
+        let run = |cx: &mut TestAppContext, pace: DrawingPace| {
+            let relay = Relay::start().unwrap();
+            let view = painting(cx, true);
+            cx.update(|cx| app_state::update_settings(cx, |s| s.drawing_pace = pace));
+            let two = serde_json::json!({
+                "node": 1, "brush": "Maru pen", "color": "#ff0000",
+                "settings": {"size": 8, "hardness": 1, "opacity": 1, "flow": 1,
+                    "size_pressure": 0, "taper_start": 0, "taper_end": 0},
+                "strokes": [{"points": [[10, 25], [290, 25]]}, {"points": [[10, 75], [290, 75]]}]
+            });
+            let (call_, reply) = call(&relay, "paint", two);
+            let reach = view.update(cx, |view, cx| {
+                view.run_tool_now(call_, cx);
+                assert!(view.playback_tick(cx));
+                assert!(
+                    view.status
+                        .as_ref()
+                        .is_some_and(|(t, _)| t.starts_with("Drawing… stroke 1/2")),
+                    "{:?}",
+                    view.status
+                );
+                let NodeKind::Raster { raster, .. } = &view.editor.doc.node(1).unwrap().kind else {
+                    panic!("ink layer");
+                };
+                (0..300)
+                    .rev()
+                    .find(|x| raster.get(*x, 25)[3] > 0)
+                    .unwrap_or(0)
+            });
+            let mut paused = false;
+            for _ in 0..2000 {
+                let more = view.update(cx, |view, cx| {
+                    let more = view.playback_tick(cx);
+                    paused |= view
+                        .assistant
+                        .playback
+                        .as_ref()
+                        .is_some_and(|p| p.pause > 0);
+                    more
+                });
+                if !more {
+                    break;
+                }
+            }
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            let response = reply.join().unwrap();
+            assert_ne!(response["isError"], true, "{response}");
+            view.update(cx, |view, _| {
+                assert!(view.assistant.playback.is_none());
+                assert!(view.status.is_none(), "{:?}", view.status);
+                let NodeKind::Raster { raster, .. } = &view.editor.doc.node(1).unwrap().kind else {
+                    panic!("ink layer");
+                };
+                for (x, y) in [(20, 25), (280, 25), (20, 75), (280, 75)] {
+                    assert!(raster.get(x, y)[3] > 0, "ink at {x},{y}");
+                }
+            });
+            (reach, paused)
+        };
+        let (quick_reach, quick_paused) = run(cx, DrawingPace::Quick);
+        let (natural_reach, natural_paused) = run(cx, DrawingPace::Natural);
+        assert!(
+            natural_reach < quick_reach,
+            "natural {natural_reach} vs quick {quick_reach}"
+        );
+        assert!(
+            natural_paused && !quick_paused,
+            "the pen lifts only at a hand's pace"
+        );
     }
 
     #[gpui_kit::test]

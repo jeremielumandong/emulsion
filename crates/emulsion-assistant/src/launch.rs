@@ -38,10 +38,19 @@ fn env_map(relay_env: &[(String, String)]) -> serde_json::Map<String, serde_json
         .collect()
 }
 
+/// Longest a single tool call may run, in seconds: painting plays at a
+/// hand's pace on the canvas and answers only when it has finished.
+pub const TOOL_TIMEOUT_SECS: u64 = 900;
+
 fn common_env() -> Vec<(String, String)> {
     vec![
         ("NO_COLOR".into(), "1".into()),
         ("FORCE_COLOR".into(), "0".into()),
+        // Claude Code reads this for MCP tool execution.
+        (
+            "MCP_TOOL_TIMEOUT".into(),
+            (TOOL_TIMEOUT_SECS * 1000).to_string(),
+        ),
         (
             "PATH".into(),
             crate::provider::child_path().to_string_lossy().into_owned(),
@@ -86,9 +95,10 @@ pub fn write_codex_home(
         }
     }
     config.push_str(&format!(
-        "\n[mcp_servers.{}]\ncommand = {}\nargs = [\"mcp-serve\"]\n",
+        "\n[mcp_servers.{}]\ncommand = {}\nargs = [\"mcp-serve\"]\ntool_timeout_sec = {}\n",
         emulsion_mcp::SERVER_NAME,
-        toml_str(&exe.to_string_lossy())
+        toml_str(&exe.to_string_lossy()),
+        TOOL_TIMEOUT_SECS
     ));
     let env: Vec<String> = relay_env
         .iter()

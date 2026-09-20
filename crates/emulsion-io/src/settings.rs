@@ -4,6 +4,18 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// How the assistant's strokes play on the canvas.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DrawingPace {
+    /// About the speed of a hand: each stroke eases in and out and the
+    /// pen lifts between strokes, so the drawing can be watched.
+    #[default]
+    Natural,
+    /// A few seconds for the whole call, however long it is.
+    Quick,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
@@ -27,6 +39,8 @@ pub struct Settings {
     pub approve_all: bool,
     /// Play the assistant's brush strokes on the canvas as it paints.
     pub show_drawing: bool,
+    /// How fast those strokes play.
+    pub drawing_pace: DrawingPace,
     /// Show the power-user row of tool options (dynamics, symmetry,
     /// guides). Off for a beginner-friendly bar.
     pub advanced_tools: bool,
@@ -58,6 +72,7 @@ impl Default for Settings {
             follow_omarchy: false,
             approve_all: false,
             show_drawing: true,
+            drawing_pace: DrawingPace::Natural,
             advanced_tools: false,
             draw_mode: false,
             image_provider: String::new(),
