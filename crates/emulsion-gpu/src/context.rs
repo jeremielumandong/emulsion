@@ -6,6 +6,7 @@ use std::time::Duration;
 
 const MAX_DISPATCH_BYTES: usize = 256 * 1024 * 1024;
 const MAX_STAGED_DISPATCH_BYTES: usize = 384 * 1024 * 1024;
+const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 
 /// Shared compute queue; results are committed only after successful readback.
 pub struct GpuContext {
@@ -16,12 +17,41 @@ pub struct GpuContext {
     state: Mutex<State>,
     tile_preparation: Mutex<()>,
     dispatches: AtomicU64,
+    #[cfg(test)]
+    scratch_allocations: AtomicU64,
 }
 
 #[derive(Default)]
 struct State {
     pipelines: HashMap<&'static str, wgpu::ComputePipeline>,
     unsupported: HashSet<&'static str>,
+    scratch: Option<Scratch>,
+    reuse: bool,
+    #[cfg(test)]
+    reuse_override: Option<bool>,
+}
+
+/// One bounded workspace, reused only after the previous readback completes.
+/// Contents are never authoritative: every input is rewritten on each dispatch.
+struct Scratch {
+    inputs: Vec<wgpu::Buffer>,
+    output: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    bytes: usize,
+    group: Option<wgpu::BindGroup>,
+    binding_key: Option<&'static str>,
+    binding_sizes: Vec<usize>,
+}
+
+impl Scratch {
+    fn fits(&self, inputs: &[&[u8]], output: usize) -> bool {
+        let requested = inputs.iter().map(|input| input.len()).sum::<usize>() + output * 2;
+        self.inputs.len() == inputs.len()
+            && self.inputs.iter().zip(inputs).all(|(buffer, input)| buffer.size() >= input.len() as u64)
+            && self.output.size() >= output as u64
+            // Release a large workspace after switching back to tiny jobs.
+            && self.bytes <= requested.saturating_mul(2)
+    }
 }
 
 impl GpuContext {
@@ -88,6 +118,8 @@ impl GpuContext {
                 state: Mutex::new(State::default()),
                 tile_preparation: Mutex::new(()),
                 dispatches: AtomicU64::new(0),
+                #[cfg(test)]
+                scratch_allocations: AtomicU64::new(0),
             });
         }
         bail!(
@@ -106,6 +138,36 @@ impl GpuContext {
         self.dispatches.load(Ordering::Relaxed)
     }
 
+    /// Serialize experimental persistent work with ordinary compute and its
+    /// device error scopes. The caller owns resource bounds and error handling.
+    pub(crate) fn with_device<T>(
+        &self,
+        work: impl FnOnce(&wgpu::Device, &wgpu::Queue) -> Result<T>,
+    ) -> Result<T> {
+        ensure!(self.available(), "Compute device unavailable");
+        let _state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Compute lock poisoned"))?;
+        ensure!(self.available(), "Compute device unavailable");
+        work(&self.device, &self.queue)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_reuse_buffers(&self, enabled: bool) {
+        self.state.lock().unwrap().reuse_override = Some(enabled);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_reuse_buffers(&self) {
+        self.state.lock().unwrap().reuse_override = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scratch_allocation_count(&self) -> u64 {
+        self.scratch_allocations.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn tile_permit(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
         self.tile_preparation.try_lock().ok()
     }
@@ -120,6 +182,20 @@ impl GpuContext {
         output_bytes: usize,
         workgroups: u32,
     ) -> Result<Vec<u8>> {
+        self.run_with_reuse(key, shader, inputs, output_bytes, workgroups, false)
+    }
+
+    /// Callers opt into reuse only for workloads with measured wins. Test-only
+    /// overrides compare the two paths without changing shaders or CPU packing.
+    pub(crate) fn run_with_reuse(
+        &self,
+        key: &'static str,
+        shader: &str,
+        inputs: &[&[u8]],
+        output_bytes: usize,
+        workgroups: u32,
+        requested_reuse: bool,
+    ) -> Result<Vec<u8>> {
         ensure!(self.available(), "Compute device disabled");
         validate_dispatch(inputs, output_bytes, workgroups, &self.device.limits())?;
         let mut state = self
@@ -131,6 +207,25 @@ impl GpuContext {
             !state.unsupported.contains(key),
             "Shader disabled after previous failure"
         );
+        #[cfg(test)]
+        {
+            state.reuse = state.reuse_override.unwrap_or(requested_reuse);
+        }
+        #[cfg(not(test))]
+        {
+            state.reuse = requested_reuse;
+        }
+        // Keep a brush workspace through intervening small compositor jobs,
+        // but account for it before allocating an uncached dispatch. Charging
+        // retained bytes as input also conservatively includes staging overhead.
+        if !state.reuse {
+            let input_bytes = inputs.iter().map(|input| input.len()).sum::<usize>();
+            if state.scratch.as_ref().is_some_and(|scratch| {
+                validate_memory_budget(input_bytes + scratch.bytes, output_bytes).is_err()
+            }) {
+                state.scratch = None;
+            }
+        }
         let result = self.run_locked(&mut state, key, shader, inputs, output_bytes, workgroups);
         if let Err(error) = &result {
             #[cfg(test)]
@@ -177,41 +272,16 @@ impl GpuContext {
             }
             state.pipelines.insert(key, pipeline);
         }
+        let reuse = state.reuse;
+        let cached = if reuse { state.scratch.take() } else { None };
+        let mut scratch = match cached.filter(|scratch| scratch.fits(inputs, output_bytes)) {
+            Some(scratch) => scratch,
+            None => self.allocate_scratch(key, inputs, output_bytes, reuse)?,
+        };
         let pipeline = &state.pipelines[key];
-        let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let oom = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        let buffers: Vec<_> = inputs
-            .iter()
-            .map(|contents| {
-                self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(key),
-                    size: contents.len() as u64,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                })
-            })
-            .collect();
-        let output = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(key),
-            size: output_bytes as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Emulsion readback"),
-            size: output_bytes as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        // Check allocations before touching buffers. create_buffer_init maps
-        // immediately and can panic on a failed allocation despite error scopes.
-        let oom = pollster::block_on(oom.pop());
-        let validation = pollster::block_on(validation.pop());
-        if let Some(error) = oom.or(validation) {
-            bail!("Compute buffer allocation: {error}");
-        }
-        ensure!(self.available(), "Compute device lost during allocation");
-
+        let buffers = &scratch.inputs;
+        let output = &scratch.output;
+        let readback = &scratch.readback;
         let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let oom = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         for (buffer, contents) in buffers.iter().zip(inputs) {
@@ -239,38 +309,61 @@ impl GpuContext {
             };
             upload.copy_from_slice(contents);
         }
-        let entries: Vec<_> = buffers
+        let sizes: Vec<_> = inputs
             .iter()
-            .chain(std::iter::once(&output))
-            .enumerate()
-            .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                binding: binding as u32,
-                resource: buffer.as_entire_binding(),
-            })
+            .map(|input| input.len())
+            .chain(std::iter::once(output_bytes))
             .collect();
-        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(key),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &entries,
-        });
+        if scratch.binding_key != Some(key) || scratch.binding_sizes != sizes {
+            let entries: Vec<_> = buffers
+                .iter()
+                .chain(std::iter::once(output))
+                .zip(&sizes)
+                .enumerate()
+                .map(|(binding, (buffer, &size))| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(size as u64),
+                    }),
+                })
+                .collect();
+            scratch.group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(key),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            }));
+            scratch.binding_key = Some(key);
+            scratch.binding_sizes = sizes;
+        }
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(key) });
+        // Preserve fresh-buffer semantics even for kernels that write only a
+        // subset. Never expose old output or a capacity tail to a later job.
+        if reuse {
+            encoder.clear_buffer(output, 0, Some(output_bytes as u64));
+        }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some(key),
                 timestamp_writes: None,
             });
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &group, &[]);
+            pass.set_bind_group(
+                0,
+                scratch.group.as_ref().expect("validated bind group"),
+                &[],
+            );
             let x = workgroups.min(self.device.limits().max_compute_workgroups_per_dimension);
             pass.dispatch_workgroups(x, workgroups.div_ceil(x), 1);
         }
-        encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, output_bytes as u64);
+        encoder.copy_buffer_to_buffer(output, 0, readback, 0, output_bytes as u64);
         let submission = self.queue.submit([encoder.finish()]);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         readback
-            .slice(..)
+            .slice(..output_bytes as u64)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = tx.send(result);
             });
@@ -289,10 +382,86 @@ impl GpuContext {
         }
         rx.recv_timeout(Duration::from_secs(2))
             .context("Readback timed out")??;
-        let bytes = readback.slice(..).get_mapped_range().to_vec();
+        let bytes = readback
+            .slice(..output_bytes as u64)
+            .get_mapped_range()
+            .to_vec();
         readback.unmap();
         self.dispatches.fetch_add(1, Ordering::Relaxed);
+        if reuse && scratch.bytes <= MAX_RETAINED_BYTES {
+            state.scratch = Some(scratch);
+        }
         Ok(bytes)
+    }
+    fn allocate_scratch(
+        &self,
+        key: &'static str,
+        inputs: &[&[u8]],
+        output_bytes: usize,
+        rounded: bool,
+    ) -> Result<Scratch> {
+        let exact: Vec<_> = inputs.iter().map(|input| input.len()).collect();
+        let mut capacities: Vec<_> = exact.iter().map(|&size| size.next_power_of_two()).collect();
+        let mut output_capacity = output_bytes.next_power_of_two();
+        // Round small growth up, but never shrink the supported job envelope.
+        if !rounded
+            || validate_memory_budget(capacities.iter().sum(), output_capacity).is_err()
+            || capacities
+                .iter()
+                .any(|&size| size > self.device.limits().max_storage_buffer_binding_size as usize)
+            || output_capacity > self.device.limits().max_storage_buffer_binding_size as usize
+        {
+            capacities = exact;
+            output_capacity = output_bytes;
+        }
+        let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let oom = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let buffers: Vec<_> = capacities
+            .iter()
+            .map(|&capacity| {
+                self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(key),
+                    size: capacity as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+        let output = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(key),
+            size: output_capacity as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Emulsion readback"),
+            size: output_capacity as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        // Check allocations before touching buffers. create_buffer_init maps
+        // immediately and can panic on a failed allocation despite error scopes.
+        let oom = pollster::block_on(oom.pop());
+        let validation = pollster::block_on(validation.pop());
+        if let Some(error) = oom.or(validation) {
+            bail!("Compute buffer allocation: {error}");
+        }
+        ensure!(self.available(), "Compute device lost during allocation");
+
+        #[cfg(test)]
+        self.scratch_allocations
+            .fetch_add((buffers.len() + 2) as u64, Ordering::Relaxed);
+        Ok(Scratch {
+            bytes: capacities.iter().sum::<usize>() + output_capacity * 2,
+            inputs: buffers,
+            output,
+            readback,
+            group: None,
+            binding_key: None,
+            binding_sizes: Vec::new(),
+        })
     }
 }
 
@@ -359,6 +528,77 @@ fn validate_memory_budget(inputs: usize, output: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reused_buffers_respect_new_lengths_contents_and_zero_output() {
+        if crate::test_gpu().is_none() {
+            return;
+        }
+        let gpu = GpuContext::new().expect("dedicated scratch test device");
+        const COPY: &str = r#"
+            @group(0) @binding(0) var<storage, read> input: array<u32>;
+            @group(0) @binding(1) var<storage, read_write> output: array<u32>;
+            @compute @workgroup_size(64)
+            fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                if id.x < arrayLength(&output) && input[0] != 0u {
+                    output[id.x] = input[id.x % arrayLength(&input)];
+                }
+            }
+        "#;
+        let run = |key, data: &[u32], length: usize| {
+            let bytes = gpu
+                .run_with_reuse(
+                    key,
+                    COPY,
+                    &[bytemuck::cast_slice(data)],
+                    length * 4,
+                    (length as u32).div_ceil(64),
+                    true,
+                )
+                .unwrap();
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|value| u32::from_le_bytes(*value))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run("scratch-copy", &[9; 64], 64), vec![9; 64]);
+        let allocations = gpu.scratch_allocation_count();
+        // Rebind the shorter logical length, so wrapping cannot read old tails.
+        let data: Vec<_> = (1..=40).collect();
+        assert_eq!(
+            run("scratch-copy", &data, 48),
+            (0..48).map(|i| data[i % 40]).collect::<Vec<_>>()
+        );
+        assert_eq!(gpu.scratch_allocation_count(), allocations);
+        // The new invocation writes nothing: stale output must be cleared.
+        assert_eq!(run("scratch-copy", &[0; 40], 48), vec![0; 48]);
+        // Another pipeline must bind the shared buffers through its own layout.
+        assert_eq!(run("scratch-other", &[7; 40], 48), vec![7; 48]);
+        assert_eq!(gpu.scratch_allocation_count(), allocations);
+        assert_eq!(run("scratch-copy", &[3; 128], 128), vec![3; 128]);
+        assert!(gpu.scratch_allocation_count() > allocations);
+        let large_allocations = gpu.scratch_allocation_count();
+        assert_eq!(run("scratch-copy", &[2; 4], 4), vec![2; 4]);
+        assert!(
+            gpu.scratch_allocation_count() > large_allocations,
+            "oversized cache must shrink"
+        );
+        // A normal compositor/filter dispatch between pointer events should
+        // not evict a small brush workspace when both fit the memory budget.
+        gpu.run(
+            "scratch-other",
+            COPY,
+            &[bytemuck::cast_slice(&[11u32; 4])],
+            16,
+            1,
+        )
+        .unwrap();
+        let after_interleaved = gpu.scratch_allocation_count();
+        assert_eq!(run("scratch-copy", &[4; 4], 4), vec![4; 4]);
+        assert_eq!(gpu.scratch_allocation_count(), after_interleaved);
+    }
     #[test]
     fn rejects_malformed_and_oversized_jobs_before_allocation() {
         let limits = wgpu::Limits::default();

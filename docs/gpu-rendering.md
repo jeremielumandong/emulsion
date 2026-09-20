@@ -29,6 +29,11 @@ exceeding buffer or memory limits. Compositing is bounded to 64 nodes, depth 16,
 256 MiB for input/output/readback buffers and 384 MiB including transient upload
 staging, subject to tighter device limits. Busy tile
 preparation uses the parallel CPU renderer instead of queuing unbounded uploads.
+For measured dense four-tile brush jobs, the context can retain one completed
+compute workspace of up to 64 MiB for reuse;
+larger jobs are released after completion. Retained buffers do not accumulate
+per shader or per stroke, and count against the memory budget when another job
+runs between brush updates.
 
 ## Performance routing
 
@@ -101,3 +106,12 @@ without other GPU workloads:
 ```sh
 EMULSION_REQUIRE_GPU_TESTS=1 cargo test -p emulsion-gpu --release benchmark_ -- --ignored --nocapture --test-threads=1
 ```
+
+
+The [brush-specific persistent router](gpu-brush-performance.md#brush-specific-routing)
+is available with `EMULSION_GPU_BRUSHES=persistent`. It selects persistent GPU
+accumulation for supported large dry round brushes on rasters up to 1024×1024;
+small brushes and unsupported settings use CPU. Backend failure replays the
+resolved dab journal on CPU, preserving the current raster/history contract.
+This mode remains experimental and off by default. Direct GPU presentation and
+broader brush support remain future work.

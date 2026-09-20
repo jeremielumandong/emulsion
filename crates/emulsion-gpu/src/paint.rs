@@ -118,7 +118,7 @@ impl PaintCompositor for GpuContext {
             bytemuck::cast_slice(&dense_paint)
         };
         let bytes = self
-            .run(
+            .run_with_reuse(
                 "paint-composite",
                 include_str!("paint.wgsl"),
                 &[
@@ -129,6 +129,10 @@ impl PaintCompositor for GpuContext {
                 ],
                 count * 8,
                 (count as u32).div_ceil(64),
+                // Same-executable A/B tests found repeatable wins for dense
+                // four-tile batches; sparse and larger jobs stayed faster or
+                // indistinguishable with fresh buffers.
+                !sparse && batch.tiles.len() == 4,
             )
             .ok()?;
         if bytes.len() != count * 8 {
@@ -268,6 +272,133 @@ mod tests {
                 gpu_time.as_secs_f64() / cpu_time.as_secs_f64()
             );
         }
+    }
+
+    /// Compare buffer allocation with reuse in the same binary and device.
+    /// Run alone in release mode; includes packing, transfers, readback, and
+    /// immutable tile replacement, but excludes dab generation and parity checks.
+    #[test]
+    #[ignore = "manual release-mode GPU buffer reuse A/B benchmark"]
+    fn benchmark_stroke_buffer_reuse() {
+        use emulsion_raster::paint::{Brush, Ink, Stroke};
+        use std::time::{Duration, Instant};
+
+        let Some(gpu) = crate::test_gpu() else {
+            return;
+        };
+        struct RequiredGpu<'a>(&'a GpuContext);
+        impl PaintCompositor for RequiredGpu<'_> {
+            fn composite_paint(&self, batch: &PaintBatch<'_>) -> Option<Vec<Vec<[u16; 4]>>> {
+                Some(self.0.composite_paint(batch).expect("GPU must execute"))
+            }
+        }
+        let required_gpu = RequiredGpu(&gpu);
+        const ITERATIONS: usize = 12;
+        for (label, dimension, brush_size) in [
+            ("sparse-4-tiles", 512, 40.0),
+            ("dense-4-tiles", 512, 1000.0),
+            ("dense-16-tiles", 1024, 1000.0),
+        ] {
+            let base = Arc::new(Raster::empty(
+                dimension,
+                dimension,
+                f_to_px([0.1, 0.2, 0.3, 0.6]),
+            ));
+            let make_stroke = |sample: usize| {
+                // Change both the dirty footprint and source data between frames.
+                // Repeating three sizes allows every required capacity to warm.
+                let offset = (sample % 3) as f32 - 1.0;
+                let mut stroke = Stroke::new(
+                    base.clone(),
+                    Brush {
+                        size: brush_size,
+                        hardness: 1.0,
+                        opacity: 0.43,
+                        ..Brush::default()
+                    },
+                    Ink::Color([0.5 + offset * 0.03, 0.1, 0.2, 0.7]),
+                    None,
+                );
+                stroke.point(
+                    dimension as f32 / 2.0 + offset * 2.0,
+                    dimension as f32 / 2.0 - offset * 3.0,
+                );
+                stroke.finish();
+                stroke
+            };
+            for reuse in [false, true] {
+                gpu.set_reuse_buffers(reuse);
+                for sample in 0..6 {
+                    make_stroke(sample).render_with_compositor(&base, Some(&required_gpu));
+                }
+            }
+            // Modes: CPU, fresh GPU buffers, reused GPU buffers. Rotate their
+            // order to avoid consistently favoring one with a hotter CPU/device.
+            let mut elapsed = [Duration::ZERO; 3];
+            let mut allocations = [0_u64; 3];
+            let mut latencies = [Vec::new(), Vec::new(), Vec::new()];
+            for sample in 0..ITERATIONS {
+                let mut outputs = [None, None, None];
+                for step in 0..3 {
+                    let mode = (sample + step) % 3;
+                    let mut stroke = make_stroke(sample);
+                    gpu.set_reuse_buffers(mode == 2);
+                    let before_allocations = gpu.scratch_allocation_count();
+                    let before_dispatches = gpu.dispatch_count();
+                    let compositor = (mode != 0).then_some(&required_gpu as &dyn PaintCompositor);
+                    let start = Instant::now();
+                    let output = stroke.render_with_compositor(&base, compositor);
+                    let duration = start.elapsed();
+                    elapsed[mode] += duration;
+                    latencies[mode].push(duration.as_secs_f64() * 1000.0);
+                    allocations[mode] += gpu.scratch_allocation_count() - before_allocations;
+                    assert_eq!(
+                        gpu.dispatch_count() - before_dispatches,
+                        u64::from(mode != 0),
+                        "{label}: mode {mode} must execute its intended backend"
+                    );
+                    outputs[mode] = Some(output);
+                }
+                let (expected, expected_dirty) = outputs[0].as_ref().unwrap();
+                let expected_pixels = expected.to_pixels();
+                for (mode, output) in outputs.iter().enumerate().skip(1) {
+                    let (actual, dirty) = output.as_ref().unwrap();
+                    assert_eq!(dirty, expected_dirty, "{label}: mode {mode} dirty tiles");
+                    let actual_pixels = actual.to_pixels();
+                    assert_eq!(actual_pixels.len(), expected_pixels.len());
+                    for (actual, expected) in actual_pixels.iter().zip(&expected_pixels) {
+                        for (actual, expected) in actual.iter().zip(expected) {
+                            assert!(
+                                actual.abs_diff(*expected) <= 1,
+                                "{label}: mode {mode} sample {sample}: {actual} vs {expected}"
+                            );
+                        }
+                    }
+                }
+            }
+            assert_eq!(allocations[0], 0);
+            assert!(allocations[1] >= ITERATIONS as u64);
+            assert_eq!(allocations[2], 0, "all reusable capacities were warmed");
+            for samples in &mut latencies {
+                samples.sort_by(f64::total_cmp);
+            }
+            let means = elapsed.map(|d| d.as_secs_f64() * 1000.0 / ITERATIONS as f64);
+            let medians = latencies.map(|v| (v[ITERATIONS / 2 - 1] + v[ITERATIONS / 2]) / 2.0);
+            eprintln!(
+                "{label} changing strokes ({ITERATIONS} iterations): mean CPU {:.3} ms, fresh GPU {:.3} ms, reused GPU {:.3} ms; median CPU {:.3} ms, fresh GPU {:.3} ms, reused GPU {:.3} ms; allocations fresh {}, reused {}; reuse/fresh {:.2}, reuse/CPU {:.2}",
+                means[0],
+                means[1],
+                means[2],
+                medians[0],
+                medians[1],
+                medians[2],
+                allocations[1],
+                allocations[2],
+                means[2] / means[1],
+                means[2] / means[0]
+            );
+        }
+        gpu.reset_reuse_buffers();
     }
 
     #[test]

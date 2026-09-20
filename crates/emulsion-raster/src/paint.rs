@@ -274,7 +274,16 @@ struct Sample {
 /// Premultiplied colour, coverage, and paint thickness (unbounded flow sum).
 type PaintTile = Vec<[f32; 6]>;
 
+struct PersistentPaint {
+    backend: Box<dyn crate::paint_accel::PersistentStroke>,
+    brush: Brush,
+    journal: Vec<crate::paint_accel::ResolvedDab>,
+    submitted: usize,
+}
+
 pub struct Stroke {
+    persistent_factory: Option<Arc<dyn crate::paint_accel::PersistentFactory>>,
+    persistent: Option<PersistentPaint>,
     pub brush: Brush,
     ink: Ink,
     base: Arc<Raster>,
@@ -578,8 +587,21 @@ fn rotate_hue(p: [f32; 4], amount: f32, light: f32) -> [f32; 4] {
 
 impl Stroke {
     pub fn new(base: Arc<Raster>, brush: Brush, ink: Ink, clip: Option<Clip>) -> Self {
+        Self::new_with_persistent(base, brush, ink, clip, crate::paint_accel::persistent())
+    }
+
+    /// Explicit backend selection for parity tests and callers requiring CPU painting.
+    pub fn new_with_persistent(
+        base: Arc<Raster>,
+        brush: Brush,
+        ink: Ink,
+        clip: Option<Clip>,
+        factory: Option<Arc<dyn crate::paint_accel::PersistentFactory>>,
+    ) -> Self {
         let seed = 0x5EED_0000 ^ (base.width() as u64) << 20 ^ base.height() as u64;
         Self {
+            persistent_factory: factory,
+            persistent: None,
             brush: brush.sanitized(),
             ink,
             base,
@@ -610,18 +632,99 @@ impl Stroke {
         }
     }
 
+    /// Whether this stroke is currently accumulating dabs on the optional backend.
+    pub fn uses_persistent(&self) -> bool {
+        self.persistent.is_some()
+    }
+
+    fn persistent_eligible(&self) -> bool {
+        let b = self.brush;
+        b.size >= 400.0
+            && self.base.width() <= 1024
+            && self.base.height() <= 1024
+            && b.roundness == 1.0
+            && b.angle == 0.0
+            && !b.follow_path
+            && b.grain == GrainKind::None
+            && b.grain_tex == 0
+            && b.tip == 0
+            && b.grain_strength == 0.0
+            && b.wetness == 0.0
+            && b.edge_darken == 0.0
+            && b.relief == 0.0
+            && b.blend == BrushBlend::Normal
+            && b.size_pressure == 0.0
+            && b.flow_pressure == 0.0
+            && b.speed_thins == 0.0
+            && b.taper_start == 0.0
+            && b.taper_end == 0.0
+            && b.tilt == 0.0
+            && b.size_jitter == 0.0
+            && b.scatter == 0.0
+            && b.color_jitter == 0.0
+            && matches!(self.ink, Ink::Color(_))
+            && self.clip.is_none()
+            && !self.alpha_lock
+            && self.mirror_x.is_none()
+            && self.mirror_y.is_none()
+            && self.radial.is_none()
+            && self.symmetry_space == DAffine2::IDENTITY
+    }
+
+    fn check_persistent_brush(&mut self) {
+        if self
+            .persistent
+            .as_ref()
+            .is_some_and(|p| p.brush != self.brush)
+        {
+            self.recover_persistent();
+        }
+    }
+
+    fn replay_journal(&mut self, journal: &[crate::paint_accel::ResolvedDab], brush: Brush) {
+        let saved = self.brush;
+        self.brush = brush;
+        for dab in journal {
+            self.brush.hardness = dab.hardness;
+            self.stamp(
+                (dab.center[0], dab.center[1]),
+                dab.radius * 2.0,
+                0.0,
+                dab.flow,
+                dab.color,
+                DAffine2::IDENTITY,
+            );
+        }
+        self.brush = saved;
+    }
+
+    fn recover_persistent(&mut self) {
+        self.persistent_factory = None;
+        if let Some(p) = self.persistent.take() {
+            let count = self.dabs;
+            self.replay_journal(&p.journal, p.brush);
+            self.dabs = count;
+        }
+    }
+
     pub fn base(&self) -> &Arc<Raster> {
         &self.base
     }
 
     /// Preserve the layer's alpha, including partially transparent edges.
     pub fn set_alpha_lock(&mut self, enabled: bool) {
+        if self.persistent.is_some() {
+            self.recover_persistent();
+        }
         self.alpha_lock = enabled;
     }
 
     /// For clone strokes: where to copy from, relative to the brush, in
     /// layer pixels.
     pub fn set_clone_offset(&mut self, dx: f32, dy: f32) {
+        if self.persistent.is_some() {
+            self.recover_persistent();
+        }
         if let Ink::Clone { dx: a, dy: b } = &mut self.ink {
             *a = dx;
             *b = dy;
@@ -631,11 +734,17 @@ impl Stroke {
     /// Let wet brushes and smudges see the image under this layer, so they
     /// mix with the photo (or the layers below), not only with this layer.
     pub fn set_backdrop(&mut self, backdrop: Backdrop) {
+        if self.persistent.is_some() {
+            self.recover_persistent();
+        }
         self.backdrop = Some(backdrop);
     }
 
     /// Also stamp every dab mirrored across x = `x` and/or y = `y`.
     pub fn set_mirror(&mut self, x: Option<f32>, y: Option<f32>) {
+        if self.persistent.is_some() {
+            self.recover_persistent();
+        }
         self.mirror_x = x;
         self.mirror_y = y;
     }
@@ -643,12 +752,18 @@ impl Stroke {
     /// Interpret mirror axes and radial centers in this space (usually the
     /// document), transforming both dab positions and tip shapes back to pixels.
     pub fn set_symmetry_space(&mut self, layer_to_space: DAffine2) {
+        if self.persistent.is_some() {
+            self.recover_persistent();
+        }
         self.symmetry_space = layer_to_space;
     }
 
     /// Also stamp every dab rotated `n` ways around `center` (mandalas).
     /// `n < 2` turns it off.
     pub fn set_radial(&mut self, center: (f32, f32), n: u32) {
+        if self.persistent.is_some() {
+            self.recover_persistent();
+        }
         self.radial = (n >= 2).then_some((center, n.min(64)));
     }
 
@@ -837,8 +952,45 @@ impl Stroke {
         if b.is_empty() {
             return;
         }
+        self.check_persistent_brush();
+        if self.persistent.is_none()
+            && self.paint.is_empty()
+            && let Some(factory) = self.persistent_factory.take()
+            && self.persistent_eligible()
+            && let Some(backend) = factory.start(&self.base, self.brush.opacity)
+        {
+            self.persistent = Some(PersistentPaint {
+                backend,
+                brush: self.brush,
+                journal: Vec::new(),
+                submitted: 0,
+            });
+        }
+        if self
+            .persistent
+            .as_ref()
+            .is_some_and(|p| p.journal.len() >= 65536)
+        {
+            self.recover_persistent();
+        }
         self.touched = self.touched.union(&b);
         let t = TILE as i32;
+        if let Some(p) = &mut self.persistent {
+            p.journal.push(crate::paint_accel::ResolvedDab {
+                center: [cx, cy],
+                radius: r,
+                hardness: self.brush.hardness,
+                flow: flow.clamp(0.0, 1.0),
+                color: colour,
+            });
+            for ty in b.y.div_euclid(t)..=(b.bottom() - 1).div_euclid(t) {
+                for tx in b.x.div_euclid(t)..=(b.right() - 1).div_euclid(t) {
+                    self.pending.insert(TileCoord::new(tx, ty));
+                }
+            }
+            self.dabs = self.dabs.wrapping_add(1);
+            return;
+        }
         let flow = flow.clamp(0.0, 1.0);
         let (hard, round) = (self.brush.hardness, self.brush.roundness);
         let (s, c) = (-angle_deg.to_radians()).sin_cos();
@@ -1032,6 +1184,7 @@ impl Stroke {
     /// no wobble to smooth and no ends to thin). The stroke is finished
     /// afterwards, so later input is ignored until the pointer lifts.
     pub fn replay(&mut self, pts: &[(f32, f32)], pressure: f32) {
+        self.recover_persistent();
         let touched: Vec<TileCoord> = self.paint.keys().copied().collect();
         for tile in self.paint.values_mut() {
             tile.fill([0.0; 6]);
@@ -1062,6 +1215,7 @@ impl Stroke {
     }
 
     fn advance(&mut self, s: Sample) {
+        self.check_persistent_brush();
         self.path.push(s);
         self.stamp_segment(s, None);
     }
@@ -1119,6 +1273,7 @@ impl Stroke {
     /// re-tapers the end when the brush asks for it. Returns whether the
     /// paint changed, so the caller knows to render once more.
     pub fn finish(&mut self) -> bool {
+        self.check_persistent_brush();
         if self.finished {
             return false;
         }
@@ -1172,6 +1327,48 @@ impl Stroke {
     /// descend from the stroke's base). Returns the new layer and the
     /// layer-space rectangle that changed.
     pub fn render(&mut self, current: &Raster) -> (Raster, IRect) {
+        self.check_persistent_brush();
+        if self.persistent.is_some() {
+            if self.pending.is_empty() {
+                return (current.clone(), IRect::default());
+            }
+            let p = self.persistent.as_mut().unwrap();
+            let output = if p.backend.append(&p.journal[p.submitted..]) {
+                p.submitted = p.journal.len();
+                p.backend.preview()
+            } else {
+                None
+            };
+            if let Some(pixels) = output
+                && pixels.len() == self.base.width() as usize * self.base.height() as usize
+            {
+                let mut changes = Vec::new();
+                let mut dirty = IRect::default();
+                let t = TILE as i32;
+                for c in self.pending.drain() {
+                    let mut tile = current
+                        .base_tile(c)
+                        .map_or_else(|| vec![current.fill(); TILE_PX], |p| p.to_vec());
+                    let bounds = IRect::new(c.x * t, c.y * t, t, t).intersect(&self.base.bounds());
+                    let mut changed = false;
+                    for y in bounds.y..bounds.bottom() {
+                        for x in bounds.x..bounds.right() {
+                            let i = ((y - c.y * t) * t + x - c.x * t) as usize;
+                            let value =
+                                pixels[y as usize * self.base.width() as usize + x as usize];
+                            changed |= tile[i] != value;
+                            tile[i] = value;
+                        }
+                    }
+                    if changed {
+                        changes.push((c, Some(tile)));
+                        dirty = dirty.union(&bounds);
+                    }
+                }
+                return (current.with_changes(changes), dirty);
+            }
+            self.recover_persistent();
+        }
         self.render_with_compositor(current, crate::paint_accel::compositor())
     }
 
@@ -1181,6 +1378,7 @@ impl Stroke {
         current: &Raster,
         compositor: Option<&dyn crate::paint_accel::PaintCompositor>,
     ) -> (Raster, IRect) {
+        self.recover_persistent();
         let t = TILE as i32;
         let mut changes = Vec::new();
         let mut dirty = IRect::default();
@@ -1405,6 +1603,17 @@ impl Stroke {
 
     /// Stroke coverage as a mask in layer space (for healing).
     pub fn coverage(&self) -> Mask {
+        if let Some(p) = &self.persistent {
+            let mut cpu = Self::new_with_persistent(
+                self.base.clone(),
+                self.brush,
+                self.ink.clone(),
+                self.clip.clone(),
+                None,
+            );
+            cpu.replay_journal(&p.journal, p.brush);
+            return cpu.coverage();
+        }
         let mut m = Mask::empty(self.base.width(), self.base.height(), 0);
         for (c, tile) in &self.paint {
             m.set_tile(
@@ -1539,6 +1748,285 @@ mod tests {
     }
 
     use super::*;
+    struct MockPersistentFactory {
+        fail_append: bool,
+        fail_preview: usize,
+        malformed: bool,
+        starts: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    struct MockPersistent {
+        cpu: Stroke,
+        fail_append: bool,
+        fail_preview: usize,
+        previews: usize,
+        malformed: bool,
+    }
+
+    impl crate::paint_accel::PersistentFactory for MockPersistentFactory {
+        fn start(
+            &self,
+            base: &Raster,
+            opacity: f32,
+        ) -> Option<Box<dyn crate::paint_accel::PersistentStroke>> {
+            self.starts
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(Box::new(MockPersistent {
+                cpu: Stroke::new_with_persistent(
+                    Arc::new(base.clone()),
+                    Brush {
+                        opacity,
+                        ..Brush::default()
+                    },
+                    Ink::Color([0.0; 4]),
+                    None,
+                    None,
+                ),
+                fail_append: self.fail_append,
+                fail_preview: self.fail_preview,
+                previews: 0,
+                malformed: self.malformed,
+            }))
+        }
+    }
+
+    impl crate::paint_accel::PersistentStroke for MockPersistent {
+        fn append(&mut self, dabs: &[crate::paint_accel::ResolvedDab]) -> bool {
+            // Partial application must still recover every dab exactly once.
+            for dab in dabs {
+                self.cpu.brush.hardness = dab.hardness;
+                self.cpu.stamp(
+                    (dab.center[0], dab.center[1]),
+                    dab.radius * 2.0,
+                    0.0,
+                    dab.flow,
+                    dab.color,
+                    DAffine2::IDENTITY,
+                );
+                if self.fail_append {
+                    return false;
+                }
+            }
+            true
+        }
+        fn preview(&mut self) -> Option<Vec<[u16; 4]>> {
+            self.previews += 1;
+            if self.previews == self.fail_preview {
+                return None;
+            }
+            if self.malformed {
+                return Some(Vec::new());
+            }
+            let base = self.cpu.base.clone();
+            self.cpu.pending.extend(self.cpu.paint.keys().copied());
+            let (image, _) = self.cpu.render_with_compositor(&base, None);
+            Some(
+                (0..image.height())
+                    .flat_map(|y| {
+                        let image = &image;
+                        (0..image.width()).map(move |x| image.get(x, y))
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    fn persistent_test_pair(
+        fail_append: bool,
+        fail_preview: usize,
+        malformed: bool,
+    ) -> (Stroke, Stroke) {
+        let base = Arc::new(Raster::solid(320, 256, [0.05, 0.1, 0.15, 0.5]));
+        let brush = Brush {
+            size: 400.0,
+            hardness: 0.2,
+            flow: 0.3,
+            opacity: 0.6,
+            ..Brush::default()
+        };
+        let ink = Ink::Color([0.4, 0.1, 0.2, 0.7]);
+        let factory = MockPersistentFactory {
+            fail_append,
+            fail_preview,
+            malformed,
+            starts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        (
+            Stroke::new_with_persistent(
+                base.clone(),
+                brush,
+                ink.clone(),
+                None,
+                Some(Arc::new(factory)),
+            ),
+            Stroke::new_with_persistent(base, brush, ink, None, None),
+        )
+    }
+
+    fn assert_same_raster(a: &Raster, b: &Raster) {
+        for y in 0..a.height() {
+            for x in 0..a.width() {
+                assert_eq!(a.get(x, y), b.get(x, y), "pixel {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn persistent_brush_selects_supported_types_only() {
+        let variants = [
+            Brush {
+                size: 399.0,
+                ..Brush::default()
+            },
+            Brush {
+                size: 400.0,
+                wetness: 0.1,
+                ..Brush::default()
+            },
+            Brush {
+                size: 400.0,
+                tip: 12,
+                ..Brush::default()
+            },
+            Brush {
+                size: 400.0,
+                grain: GrainKind::Halftone,
+                ..Brush::default()
+            },
+            Brush {
+                size: 400.0,
+                taper_end: 10.0,
+                ..Brush::default()
+            },
+            Brush {
+                size: 400.0,
+                tilt: 0.5,
+                ..Brush::default()
+            },
+            Brush {
+                size: 400.0,
+                blend: BrushBlend::Multiply,
+                ..Brush::default()
+            },
+        ];
+        for brush in variants {
+            let (mut selected, _) = persistent_test_pair(false, 0, false);
+            selected.brush = brush;
+            selected.point(120.0, 120.0);
+            assert!(!selected.uses_persistent(), "{brush:?}");
+            assert!(!selected.paint.is_empty());
+        }
+        for feature in 0..6 {
+            let (mut selected, _) = persistent_test_pair(false, 0, false);
+            match feature {
+                0 => selected.set_alpha_lock(true),
+                1 => selected.set_mirror(Some(120.0), None),
+                2 => selected.set_radial((120.0, 120.0), 2),
+                3 => selected.clip = Some(Arc::new(|_, _| 1.0)),
+                4 => selected.ink = Ink::Erase,
+                _ => selected.set_symmetry_space(DAffine2::from_scale(glam::dvec2(2.0, 1.0))),
+            }
+            selected.point(120.0, 120.0);
+            assert!(!selected.uses_persistent());
+        }
+        let (mut selected, _) = persistent_test_pair(false, 0, false);
+        selected.point(120.0, 120.0);
+        assert!(selected.uses_persistent());
+        assert!(
+            selected.paint.is_empty(),
+            "successful routing skips CPU rasterization"
+        );
+    }
+
+    #[test]
+    fn persistent_brush_recovers_failed_and_partial_batches() {
+        for (fail_append, fail_preview, malformed) in [
+            (true, 0, false),
+            (false, 1, false),
+            (false, 2, false),
+            (false, 0, true),
+        ] {
+            let (mut accelerated, mut cpu) =
+                persistent_test_pair(fail_append, fail_preview, malformed);
+            let mut live = (*cpu.base).clone();
+            let mut reference = live.clone();
+            for (x, y) in [(90.0, 90.0), (170.0, 130.0), (240.0, 170.0)] {
+                accelerated.point(x, y);
+                cpu.point(x, y);
+                live = accelerated.render(&live).0;
+                reference = cpu.render_with_compositor(&reference, None).0;
+                assert_same_raster(&live, &reference);
+            }
+            assert!(!accelerated.uses_persistent());
+        }
+    }
+
+    #[test]
+    fn persistent_brush_preview_coverage_replay_and_cancel_preserve_base() {
+        let (mut accelerated, mut cpu) = persistent_test_pair(false, 0, false);
+        let original = accelerated.base.clone();
+        accelerated.point(80.0, 80.0);
+        cpu.point(80.0, 80.0);
+        accelerated.point(220.0, 140.0);
+        cpu.point(220.0, 140.0);
+        let mask = accelerated.coverage();
+        let reference_mask = cpu.coverage();
+        for y in 0..mask.height() {
+            for x in 0..mask.width() {
+                assert_eq!(mask.get(x, y), reference_mask.get(x, y));
+            }
+        }
+        assert!(accelerated.uses_persistent());
+        let (live, dirty) = accelerated.render(&original);
+        let (reference, expected_dirty) = cpu.render_with_compositor(&original, None);
+        assert_eq!(dirty, expected_dirty);
+        assert_same_raster(&live, &reference);
+        assert!(accelerated.render(&live).1.is_empty());
+        accelerated.replay(&[(5.0, 5.0)], 1.0);
+        cpu.replay(&[(5.0, 5.0)], 1.0);
+        assert_same_raster(
+            &accelerated.render(&live).0,
+            &cpu.render_with_compositor(&reference, None).0,
+        );
+        assert!(!accelerated.uses_persistent());
+        // Cancellation restores the immutable original, with no backend-owned mutations.
+        assert_same_raster(&original, &Raster::solid(320, 256, [0.05, 0.1, 0.15, 0.5]));
+    }
+
+    #[test]
+    fn persistent_brush_mutation_and_explicit_cpu_render_materialize_journal() {
+        for use_setter in [false, true] {
+            let (mut accelerated, mut cpu) = persistent_test_pair(false, 0, false);
+            accelerated.point(90.0, 90.0);
+            cpu.point(90.0, 90.0);
+            if use_setter {
+                accelerated.set_alpha_lock(true);
+                cpu.set_alpha_lock(true);
+            } else {
+                accelerated.brush.hardness = 0.9;
+                cpu.brush.hardness = 0.9;
+                accelerated.brush.wetness = 0.5;
+                cpu.brush.wetness = 0.5;
+            }
+            accelerated.point(240.0, 150.0);
+            cpu.point(240.0, 150.0);
+            let base = cpu.base.clone();
+            assert_same_raster(
+                &accelerated.render(&base).0,
+                &cpu.render_with_compositor(&base, None).0,
+            );
+            assert!(!accelerated.uses_persistent());
+        }
+        let (mut accelerated, mut cpu) = persistent_test_pair(false, 0, false);
+        accelerated.point(90.0, 90.0);
+        cpu.point(90.0, 90.0);
+        let base = cpu.base.clone();
+        assert_same_raster(
+            &accelerated.render_with_compositor(&base, None).0,
+            &cpu.render_with_compositor(&base, None).0,
+        );
+        assert!(!accelerated.uses_persistent());
+    }
 
     #[test]
     fn fill_color_respects_coverage() {

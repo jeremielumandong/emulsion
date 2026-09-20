@@ -97,8 +97,16 @@ fn main() {
         s
     });
     timed("textured soft stroke (render)", || s2.render(&base).0);
-    for name in ["Screentone 20%", "Screentone 40%", "Screentone 60%", "Speed lines", "Maru pen"] {
-        let Some(preset) = emulsion_raster::library::find(name) else { continue };
+    for name in [
+        "Screentone 20%",
+        "Screentone 40%",
+        "Screentone 60%",
+        "Speed lines",
+        "Maru pen",
+    ] {
+        let Some(preset) = emulsion_raster::library::find(name) else {
+            continue;
+        };
         let mut sb = preset.brush;
         sb.size = 120.0;
         let mut s3 = timed(&format!("{name} 300 pts size 120 (stamp)"), || {

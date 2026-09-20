@@ -39,10 +39,169 @@ Hardware and Mesa software parity tests cover ordinary blending, erasing,
 clipping, alpha lock, sparse reconstruction, all-zero coverage restoration and
 invalid sparse coverage. Strict GPU-crate Clippy checks pass.
 
-## Next implementation: persistent dab accumulation
+## Reusing compute buffers
 
-Start with dry procedural color brushes and erasers, retaining the current UI
-contract and CPU document/history storage:
+The compute context now retains one reusable set of input, output and readback
+buffers when requested, with a 64 MiB retention limit. Automatic reuse is limited
+to dense four-tile brush batches: these improved repeatedly in A/B measurements,
+while sparse and sixteen-tile cases did not improve consistently. GPU brushes
+still require the existing experimental opt-in. Small growth fits rounded capacities;
+large size changes or different binding counts replace the workspace. Small
+uncached jobs may run between brush updates without evicting it; retained memory
+counts against the next job's allocation budget. The next
+dispatch rewrites all input data, binds only its logical ranges, clears output,
+and reads only its own result range. Reuse occurs after the previous readback
+has completed and its buffer is unmapped. This does not retain stroke pixels as
+authoritative GPU state.
+
+The matching bind group is also reused when shader and logical sizes are
+unchanged. CPU packing and temporary upload staging still allocate; this change
+does not claim a completely allocation-free brush loop. A dedicated regression
+test checks changed inputs, shorter bindings, cleared output, pipeline changes,
+growth, and eviction after shrinking.
+
+The ignored `benchmark_stroke_buffer_reuse` compares CPU composition, fresh GPU
+buffers and reused GPU buffers in the same executable, alternating order across
+12 iterations. It changes stroke positions and colors, verifies actual dispatch
+and pixel parity, and counts buffer allocations outside the timed comparisons.
+Run it alone to avoid other GPU tests disturbing allocation counts or timings:
+
+```sh
+EMULSION_REQUIRE_GPU_TESTS=1 cargo test -p emulsion-gpu --release benchmark_stroke_buffer_reuse -- --ignored --nocapture
+```
+
+The final same-executable A/B run against the original exact-size allocation
+policy measured these mean composition times on Intel Iris Plus:
+
+| Changing-stroke workload | CPU | Fresh GPU buffers | Reused GPU buffers |
+| --- | ---: | ---: | ---: |
+| Sparse, four tiles | 4.35 ms | 7.63 ms | 7.77 ms |
+| Dense, four tiles | 18.12 ms | 29.53 ms | 20.10 ms |
+| Dense, sixteen tiles | 42.46 ms | 73.53 ms | 69.00 ms |
+
+Dense four-tile GPU composition was about 32% faster with reuse; CPU remained
+faster. Preliminary A/B runs also improved that workload, but sparse and larger
+cases varied or regressed. Every reused case made zero new compute/readback
+buffer allocations after warmup, compared with 72 for fresh buffers over 12
+iterations. This excludes temporary upload staging and CPU allocations.
+Compare timings within a run: these changing-stroke tests use different ordering
+and warmup from the earlier fixed-stroke benchmark, and absolute times vary with
+machine load. No whole-editor frame-rate improvement is claimed.
+
+## Brush-specific routing
+
+Start the app with `EMULSION_GPU_BRUSHES=persistent` to enable the experimental
+per-stroke router. `Stroke` decides from actual brush settings, not preset names.
+GPU initialization remains asynchronous, so strokes begun before it completes
+stay on CPU. `EMULSION_GPU=cpu` always disables GPU compute.
+
+| Stroke features | Backend in persistent mode |
+| --- | --- |
+| Dry, round, normal-color brush, diameter at least 400 layer pixels, raster at most 1024×1024 | Persistent GPU when available |
+| Small brush; eraser, clone or smudge; selection or alpha lock | CPU |
+| Grain, texture, wetness, relief, edge darkening, other blends, ellipse or rotated tip | CPU |
+| Pressure size/flow, speed thinning, taper, tilt, jitter, scatter, mirror or radial symmetry | CPU |
+| GPU unavailable, busy with another persistent stroke, or initialization failure | CPU |
+
+The 400 px threshold is deliberately conservative, based on the measured test
+workload rather than a universal crossover. Larger documents remain on CPU until
+the engine supports tiled persistent allocation. The opt-in is necessary while
+other adapters and real GPUI presentation latency are evaluated.
+
+GPU sessions begin lazily on the first eligible dab. CPU code resolves the path
+and records ordered dab geometry, flow and color; the backend receives batches
+at preview boundaries. One factory retains at most one GPU stroke (about 40 MiB
+maximum), and the recovery journal is capped at 65,536 dabs. Once the cap is
+reached, the stroke materializes on CPU and continues there.
+
+An append/readback failure or malformed output discards the backend and replays
+the complete resolved journal into CPU accumulation from the original base.
+This includes commands already submitted and those awaiting submission. Changes
+to brush settings or stroke options similarly switch to CPU. QuickShape replays
+on CPU, restoring previously painted tiles; coverage requests reconstruct a CPU
+mask. Existing CPU raster transactions continue to own undo, redo and cancel.
+Explicit `render_with_compositor` calls select the old composition path and
+materialize any persistent stroke first, keeping benchmark control explicit.
+
+The integrated release benchmark (`benchmark_routed_persistent_brush`) includes
+lazy GPU setup, CPU path generation, eight incremental previews, immutable
+raster updates and finishing the stroke. On the tested Intel adapter, 400 px
+strokes averaged 56.65 ms with routing versus 83.08 ms on CPU (about 32% less
+time). The 40 px case stayed on CPU in both modes: 15.43 versus 16.43 ms, ordinary
+run variance. This is still not a GPUI presentation benchmark or a measurement
+on Windows/macOS hardware.
+
+Verification after integration: 86 raster tests and 49 core tests passed;
+21 GPU tests passed on hardware and Mesa software rendering (six manual
+benchmarks ignored). App/UI compile checks and strict raster/GPU Clippy pass.
+New tests cover selection, incremental GPU/CPU pixel parity, partial append and
+preview failures, malformed outputs, coverage, brush mutation, QuickShape
+restoration and the one-session allocation limit. Device-failure recovery is
+injected through the backend contract; no physical GPU reset is required.
+
+The prior `EMULSION_GPU_BRUSHES=1` final-composition experiment remains a separate
+mode. Neither experimental mode is enabled by default.
+
+## ArmorPaint-inspired persistent brush experiment
+
+`crates/emulsion-gpu/src/persistent_paint.rs` and its WGSL kernel implement a
+persistent paint engine. This is original MIT Emulsion code inspired by the
+persistent-paint architecture, not copied ArmorPaint code or an ArmorPaint port.
+
+The session uploads its original base once and keeps accumulated premultiplied
+paint and final output on the GPU. Each update uploads only ordered, resolved
+48-byte dab descriptors. The GPU calculates circular brush coverage, including
+sixteen-sample sharp-edge antialiasing, accumulates pigment in stroke order, and
+blends against the original base. Preview downloads RGBA16 pixels. Dimensions
+are bounded to 1024×1024, with at most 1024 dabs per submission and about 40 MiB
+of GPU buffers per session. The editor adapter allows only one active session
+per factory and declines additional strokes to CPU.
+
+The GPU kernel supports dry circular normal-color brushes only. Unsupported
+features use CPU through the router above. GPU undo and direct GPUI texture
+presentation are not implemented. Invalid input is rejected before dispatch; a
+GPU error invalidates the session and the router reconstructs the stroke on CPU.
+
+`persistent_dabs_match_application_brush` compares the kernel against the actual
+`Stroke` CPU implementation, covering soft and sharp brushes, subpixel centers,
+small tips, clipping at the image boundary, and transparent or translucent bases.
+The ignored `benchmark_persistent_application_brush` compares CPU `Stroke`, the
+existing optional GPU composition route, and persistent GPU accumulation across
+eight successive previews. All paths include dab pixel calculations; GPU paths
+include transfer and readback. The existing route can decline small batches.
+Persistent setup is measured separately. GPUI presentation is excluded, and the
+prototype returns a flat pixel vector rather than updating immutable raster
+tiles, so this is an architecture experiment, not an editor latency claim.
+
+```sh
+EMULSION_REQUIRE_GPU_TESTS=1 cargo test -p emulsion-gpu --release benchmark_persistent_application_brush -- --ignored --nocapture
+```
+
+Two release runs on the Intel hardware adapter measured these mean update
+latencies (six measured strokes per run, eight previews per stroke, rotating
+backend order):
+
+| Brush diameter | CPU Stroke | Existing GPU route | Persistent GPU prototype |
+| --- | ---: | ---: | ---: |
+| 40 px | 1.21–1.29 ms | 1.48–1.72 ms | 2.51–2.87 ms |
+| 400 px | 11.37–13.22 ms | 16.54–17.94 ms | 2.88–3.01 ms |
+
+The large-brush prototype was 3.8–4.6× faster than CPU in this experiment;
+small brushes remained faster on CPU. Persistent session setup additionally
+cost 3.0–6.8 ms per stroke, including buffer allocation, pipeline creation and
+initial base upload. These timings do not establish a production routing
+threshold. Compare complete editor preview latency after integration before
+enabling it automatically.
+
+The initial prototype tests compare output within two RGBA16 channel units.
+The integrated routing tests above now additionally exercise CPU recovery and
+existing history checks; a physical device-loss event remains untested.
+
+## Further persistent brush support
+
+The opt-in router integrates the first bounded dry circular brush path.
+Extending it to large documents and more brush types must preserve the current
+UI contract and CPU document/history storage:
 
 1. Keep smoothing, pressure, spacing, symmetry and randomness on CPU. Record
    resolved dab commands containing geometry, flow and color, in order.
@@ -100,3 +259,17 @@ platforms and describes reusable staging as an alternative. Persistent buffers
 and batching address that overhead; they do not by themselves remove readback.
 GPU painting research also uses GPU tile copies to avoid frequent CPU transfers
 for undo: [Baxter's dissertation](https://www.billbaxter.com/dissertation/Baxter-dissertation.pdf).
+
+## Open-source references
+
+- GIMP's [3.2.6 release notes](https://www.gimp.org/news/2026/09/10/gimp-3-2-6-released/)
+  describe updated GEGL OpenCL support but say it remains disabled by default.
+- Krita documents GPU [canvas acceleration](https://docs.krita.org/en/reference_manual/preferences/display_settings.html)
+  separately from CPU multithreading and vector optimizations in its
+  [painting performance settings](https://docs.krita.org/en/reference_manual/preferences/performance_settings.html).
+- ArmorPaint's [manual](https://armorpaint.org/manual) states that painting runs on
+  GPU. Its [paint path](https://github.com/armory3d/armorpaint/blob/main/paint/sources/render/render_path_paint.c)
+  uses persistent render targets for paint and coverage and binds the layer
+  textures for display. Its [history implementation](https://github.com/armory3d/armorpaint/blob/main/paint/sources/history.c)
+  uses GPU copies into undo targets and layer swaps. These are useful references
+  for the later persistent-texture stage; no upstream code is copied here.

@@ -1,9 +1,13 @@
 //! Selective GPU image operations with the existing CPU algorithms as fallback.
 //! CPU documents remain authoritative for undo, saving, and recovery.
+pub mod brush_backend;
 mod compositor;
 mod context;
 mod filters;
 mod paint;
+pub mod persistent_paint;
+#[cfg(test)]
+mod persistent_parity;
 pub mod screen;
 
 pub use context::GpuContext;
@@ -39,6 +43,11 @@ pub fn initialize() {
                 // reference. Keep it opt-in until stroke tiles stay GPU-resident.
                 if std::env::var("EMULSION_GPU_BRUSHES").as_deref() == Ok("1") {
                     emulsion_raster::paint_accel::install(context.clone());
+                }
+                if std::env::var("EMULSION_GPU_BRUSHES").as_deref() == Ok("persistent") {
+                    emulsion_raster::paint_accel::install_persistent(Arc::new(
+                        brush_backend::BrushFactory::new(context.clone()),
+                    ));
                 }
                 emulsion_filters::install_accelerator(context.clone());
                 Some(context)
