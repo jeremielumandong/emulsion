@@ -1748,7 +1748,7 @@ mod tests {
         let base = Arc::new(Raster::solid(32, 32, [0.2, 0.1, 0.0, 0.5]));
         for (ink, alpha_lock, clip) in [
             (Ink::Erase, true, None),
-            (opaque_red(), false, Some(Arc::new(|_, _| 0.0) as Clip)),
+            (opaque_red(), false, Some(Arc::new(|_, _| 0.0_f32) as Clip)),
         ] {
             let mut stroke = Stroke::new(base.clone(), hard(12.0), ink, clip);
             stroke.set_alpha_lock(alpha_lock);
