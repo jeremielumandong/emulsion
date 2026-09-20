@@ -29,6 +29,7 @@ Legacy film recipes continue to work. Their stored sharpness, noise reduction an
 - Release workspace tests passed all 299 non-UI tests. After correcting the new visibility test to open the Recipes panel through its normal UI path, `cargo test --release -p emulsion-ui --lib` passed all 121 UI tests. Total: **420 passed**, with the existing external Claude CLI integration test intentionally ignored.
 - New regressions cover capture/serialized pixel equivalence, editable stages, embedded LUT portability, stage exclusions, unsupported content, malformed imports, save/update collisions, visible form rendering, stale draft rejection, preview replacement/cancel/failure, one-step undo, Batch catalog refresh, stale background previews, and safe batch outputs.
 - Paid model calls and manual visual review are not part of this verification.
+- `scripts/build-macos.sh` passed and produced `target/macos/Emulsion.app` and `target/macos/Emulsion-0.0.1-arm64.dmg`.
 
 ## Follow-on releases
 
