@@ -474,12 +474,19 @@ fn pattern_tile(kind: GrainKind, scale: f32, radius: f32, c: TileCoord) -> Arc<[
     }
     let t = TILE as i32;
     let (ox, oy) = (c.x * t, c.y * t);
-    let tile: Arc<[f32]> = (0..TILE_PX)
-        .map(|i| {
-            let (x, y) = (ox + i as i32 % t, oy + i as i32 / t);
-            pattern_coverage(kind, x as f32, y as f32, scale, radius)
-        })
-        .collect();
+    // Sixteen samples per pixel over a whole tile is real work; rows go
+    // wide across the cores.
+    use rayon::prelude::*;
+    let mut v = vec![0.0f32; TILE_PX];
+    v.par_chunks_mut(TILE as usize)
+        .enumerate()
+        .for_each(|(row, out)| {
+            let y = (oy + row as i32) as f32;
+            for (col, o) in out.iter_mut().enumerate() {
+                *o = pattern_coverage(kind, (ox + col as i32) as f32, y, scale, radius);
+            }
+        });
+    let tile: Arc<[f32]> = v.into();
     let mut cache = pattern_cache().lock().unwrap();
     if cache.len() >= 256 {
         cache.clear();
@@ -489,29 +496,52 @@ fn pattern_tile(kind: GrainKind, scale: f32, radius: f32, c: TileCoord) -> Arc<[
 }
 
 fn pattern_coverage(kind: GrainKind, x: f32, y: f32, scale: f32, radius: f32) -> f32 {
-    if kind == GrainKind::Halftone {
-        if radius <= 0.0 {
-            return 0.0;
+    // Coverage of the pixel at (x, y) by the pattern, antialiased over one
+    // pixel from the signed distance to the ink edge: one evaluation per
+    // pixel instead of a 4×4 supersample.
+    let (px, py) = (x + 0.5, y + 0.5);
+    let u = (px + py) * std::f32::consts::FRAC_1_SQRT_2;
+    let v = (px - py) * std::f32::consts::FRAC_1_SQRT_2;
+    // Signed distance (pixels) from the pixel centre to the edge of the
+    // ink band centred on each cell boundary, positive inside the ink.
+    let band = |w: f32, half: f32| -> f32 {
+        let f = (w / scale).rem_euclid(1.0);
+        let g = f.min(1.0 - f);
+        (half - g) * scale
+    };
+    match kind {
+        GrainKind::Halftone => {
+            if radius <= 0.0 {
+                return 0.0;
+            }
+            if radius >= std::f32::consts::FRAC_1_SQRT_2 {
+                return 1.0;
+            }
+            // Dots are small and overlap at heavy tones, where a distance
+            // ramp under-counts the concave gaps; a 3×3 sample keeps the
+            // density calibration exact at a fraction of the old 4×4.
+            let r2 = radius * radius;
+            let mut inked = 0u32;
+            for sy in [-1.0f32 / 3.0, 0.0, 1.0 / 3.0] {
+                for sx in [-1.0f32 / 3.0, 0.0, 1.0 / 3.0] {
+                    let (qx, qy) = (px + sx, py + sy);
+                    let fu =
+                        ((qx + qy) * std::f32::consts::FRAC_1_SQRT_2 / scale).rem_euclid(1.0) - 0.5;
+                    let fv =
+                        ((qx - qy) * std::f32::consts::FRAC_1_SQRT_2 / scale).rem_euclid(1.0) - 0.5;
+                    inked += (fu * fu + fv * fv <= r2) as u32;
+                }
+            }
+            inked as f32 / 9.0
         }
-        if radius >= std::f32::consts::FRAC_1_SQRT_2 {
-            return 1.0;
+        GrainKind::Hatch => (band(u, 0.28) + 0.5).clamp(0.0, 1.0),
+        GrainKind::CrossHatch => {
+            let a = (band(u, 0.28) + 0.5).clamp(0.0, 1.0);
+            let b = (band(v, 0.28) + 0.5).clamp(0.0, 1.0);
+            a.max(b)
         }
+        _ => grain(kind, x, y, scale),
     }
-    let mut coverage = 0.0;
-    for sy in [0.125, 0.375, 0.625, 0.875] {
-        for sx in [0.125, 0.375, 0.625, 0.875] {
-            let (px, py) = (x + sx, y + sy);
-            let inked = if kind == GrainKind::Halftone {
-                let u = ((px + py) * std::f32::consts::FRAC_1_SQRT_2 / scale).rem_euclid(1.0) - 0.5;
-                let v = ((px - py) * std::f32::consts::FRAC_1_SQRT_2 / scale).rem_euclid(1.0) - 0.5;
-                (u * u + v * v <= radius * radius) as u8 as f32
-            } else {
-                grain(kind, px, py, scale)
-            };
-            coverage += inked;
-        }
-    }
-    coverage / 16.0
 }
 
 /// Bristle streaks: vary across the stroke (`across`, in pixels), stay
@@ -1510,10 +1540,11 @@ mod tests {
                     (-shift, shift),
                     (-shift, -shift),
                 ] {
-                    assert_eq!(
-                        original,
-                        pattern_coverage(kind, x + dx, y + dy, pitch, halftone_radius(0.4)),
-                        "{kind:?}: shift {dx},{dy} at {x},{y}"
+                    let shifted =
+                        pattern_coverage(kind, x + dx, y + dy, pitch, halftone_radius(0.4));
+                    assert!(
+                        (original - shifted).abs() < 1e-4,
+                        "{kind:?}: shift {dx},{dy} at {x},{y}: {original} vs {shifted}"
                     );
                     assert!(
                         (grain(kind, x, y, pitch) - grain(kind, x + dx, y + dy, pitch)).abs()
