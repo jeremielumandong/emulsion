@@ -301,7 +301,18 @@ impl EditorView {
                     .when(!on, |d| d.hover(move |s| s.border_color(ink)))
                     .cursor(CursorStyle::PointingHand)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.activate_rail_item(g, shown, cx);
+                        // Clicking the tool you already hold opens its group,
+                        // the way click-and-hold does in Photoshop.
+                        if has_more && on {
+                            this.rail.flyout = if this.rail.flyout == Some(g) {
+                                None
+                            } else {
+                                Some(g)
+                            };
+                            cx.notify();
+                        } else {
+                            this.activate_rail_item(g, shown, cx);
+                        }
                     }))
                     .on_mouse_down(
                         MouseButton::Right,
@@ -343,7 +354,8 @@ impl EditorView {
                                 .child("◢"),
                         )
                     })
-                    .children(list)
+                    // Painted after the canvas, so the list is not covered.
+                    .children(list.map(|l| deferred(l).with_priority(1)))
                     .test_support(),
             );
         }

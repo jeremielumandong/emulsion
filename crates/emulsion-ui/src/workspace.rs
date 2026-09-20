@@ -582,15 +582,16 @@ impl Workspace {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
-            multiple: false,
+            // Several files open as several tabs.
+            multiple: true,
             prompt: Some("Open".into()),
         });
         cx.spawn_in(window, async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = rx.await
-                && let Some(p) = paths.into_iter().next()
-            {
-                this.update_in(cx, |this, window, cx| this.open_path(p, window, cx))
-                    .ok();
+            if let Ok(Ok(Some(paths))) = rx.await {
+                for p in paths {
+                    this.update_in(cx, |this, window, cx| this.open_path(p, window, cx))
+                        .ok();
+                }
             }
         })
         .detach();
