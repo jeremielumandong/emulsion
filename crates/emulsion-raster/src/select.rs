@@ -347,10 +347,20 @@ pub fn live_wire(
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
     let (wu, hu) = (w as usize, h as usize);
+    if w == 0
+        || h == 0
+        || wu.checked_mul(hu) != Some(edge.len())
+        || a.0 >= w
+        || a.1 >= h
+        || b.0 >= w
+        || b.1 >= h
+    {
+        return Vec::new();
+    }
     let x0 = a.0.min(b.0).saturating_sub(margin) as usize;
     let y0 = a.1.min(b.1).saturating_sub(margin) as usize;
-    let x1 = ((a.0.max(b.0) + margin) as usize).min(wu - 1);
-    let y1 = ((a.1.max(b.1) + margin) as usize).min(hu - 1);
+    let x1 = (a.0.max(b.0).saturating_add(margin) as usize).min(wu - 1);
+    let y1 = (a.1.max(b.1).saturating_add(margin) as usize).min(hu - 1);
     let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
     let local = |x: usize, y: usize| (y - y0) * bw + (x - x0);
     let mut cost = vec![f32::MAX; bw * bh];
@@ -797,5 +807,12 @@ mod tests {
         assert_eq!(path.first(), Some(&(19, 2)));
         assert_eq!(path.last(), Some(&(19, 37)));
         assert!(path.iter().all(|(x, _)| (18..=21).contains(x)), "{path:?}");
+    }
+
+    #[test]
+    fn live_wire_rejects_stale_dimensions_and_invalid_points() {
+        assert!(live_wire(&[0.; 16], 8, 8, (1, 1), (6, 6), 4).is_empty());
+        assert!(live_wire(&[], 0, 0, (0, 0), (0, 0), 4).is_empty());
+        assert!(live_wire(&[0.; 16], 4, 4, (4, 1), (2, 2), 4).is_empty());
     }
 }

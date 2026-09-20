@@ -34,16 +34,49 @@ fn save(presets: &[BrushPreset]) -> std::io::Result<()> {
     std::fs::rename(tmp, file())
 }
 
-/// Close enough to be the same brush in the panel.
+#[cfg(test)]
+mod identity_tests {
+    use super::matches;
+    use emulsion_raster::paint::Brush;
+
+    #[test]
+    fn dynamics_and_texture_changes_are_distinct_presets() {
+        let original = Brush::default();
+        for changed in [
+            Brush {
+                size_pressure: 0.6,
+                ..original
+            },
+            Brush {
+                tilt: 0.8,
+                ..original
+            },
+            Brush {
+                spacing: 0.72,
+                ..original
+            },
+            Brush {
+                taper_end: 30.0,
+                ..original
+            },
+            Brush {
+                tip: 42,
+                ..original
+            },
+            Brush {
+                grain_tex: 17,
+                ..original
+            },
+        ] {
+            assert!(!matches(&original, &changed));
+        }
+        assert!(matches(&original, &original));
+    }
+}
+
+/// Every setting affects a brush; dynamics and textures must survive saving.
 pub(crate) fn matches(a: &Brush, b: &Brush) -> bool {
-    (a.size - b.size).abs() < 0.5
-        && (a.hardness - b.hardness).abs() < 0.01
-        && (a.opacity - b.opacity).abs() < 0.01
-        && (a.flow - b.flow).abs() < 0.01
-        && a.grain == b.grain
-        && (a.wetness - b.wetness).abs() < 0.01
-        && a.blend == b.blend
-        && (a.roundness - b.roundness).abs() < 0.01
+    a.sanitized() == b.sanitized()
 }
 
 #[derive(Default)]
@@ -78,22 +111,16 @@ impl EditorView {
     /// Switch to a brush. Erasers and smudges also switch the paint kind,
     /// so picking "Soft eraser" erases without another click.
     pub fn apply_preset(&mut self, p: &BrushPreset, cx: &mut Context<Self>) {
-        self.tools.brush = p.brush.sanitized();
-        self.presets.current = Some(p.name.clone());
         if self.tool == Tool::Brush {
-            self.tools.paint = match p.category.as_str() {
+            let kind = match p.category.as_str() {
                 "Eraser" => PaintKind::Eraser,
                 "Smudge" => PaintKind::Smudge,
-                _ if matches!(
-                    self.tools.paint,
-                    PaintKind::Bucket | PaintKind::Gradient | PaintKind::Eraser | PaintKind::Smudge
-                ) =>
-                {
-                    PaintKind::Brush
-                }
-                _ => self.tools.paint,
+                _ => PaintKind::Brush,
             };
+            self.set_paint(kind, cx);
         }
+        self.tools.brush = p.brush.sanitized();
+        self.presets.current = Some(p.name.clone());
         cx.notify();
     }
 
@@ -136,14 +163,17 @@ impl EditorView {
                         Vec::new();
                     for p in paths {
                         let r = emulsion_io::brushset::import(&p)
-                            .map_err(|e| format!("{}: {e}", p.display()));
-                        if let Ok(list) = &r {
-                            for b in list {
-                                for png in [&b.shape_png, &b.grain_png].into_iter().flatten() {
-                                    let _ = emulsion_io::brushset::store_texture(png);
+                            .and_then(|list| {
+                                for brush in &list {
+                                    for png in
+                                        [&brush.shape_png, &brush.grain_png].into_iter().flatten()
+                                    {
+                                        emulsion_io::brushset::store_texture(png)?;
+                                    }
                                 }
-                            }
-                        }
+                                Ok(list)
+                            })
+                            .map_err(|e| format!("{}: {e}", p.display()));
                         out.push(r);
                     }
                     out
@@ -151,6 +181,7 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 let saved = this.presets.saved.get_or_insert_with(load);
+                let previous = saved.clone();
                 let (mut added, mut errors) = (0usize, Vec::new());
                 for r in imported {
                     match r {
@@ -170,7 +201,11 @@ impl EditorView {
                         Err(e) => errors.push(e),
                     }
                 }
-                let _ = save(saved);
+                if let Err(error) = save(saved) {
+                    *saved = previous;
+                    added = 0;
+                    errors.push(format!("Could not save imported brushes: {error}"));
+                }
                 this.presets.category = None;
                 this.presets.open = true;
                 if errors.is_empty() {

@@ -52,6 +52,7 @@ pub(crate) struct BatchState {
     pub out_dir: Option<PathBuf>,
     /// Export progress: done, total.
     pub running: Option<(usize, usize)>,
+    run_generation: u64,
     pub note: Option<(SharedString, bool)>,
 }
 
@@ -130,10 +131,81 @@ fn process_one(
         .map(|r| format!("-{}", slug(&r.name)))
         .unwrap_or_default();
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
-    let out = out_dir.join(format!("{stem}{suffix}.{ext}"));
-    emulsion_io::export::export(&ed.doc, &out, ExportOptions::for_doc(&ed.doc))
+    let stage = BatchStage::new(out_dir, ext).map_err(|e| e.to_string())?;
+    emulsion_io::export::export(&ed.doc, &stage.0, ExportOptions::for_doc(&ed.doc))
         .map_err(|e| e.to_string())?;
-    Ok(out)
+    publish_batch_file(&stage.0, out_dir, &format!("{stem}{suffix}"), ext)
+        .map_err(|e| e.to_string())
+}
+
+/// Encode privately, then publish with an exclusive hard link. Unlike an
+/// exists-check followed by rename, this never overwrites an existing target.
+struct BatchStage(PathBuf);
+
+impl BatchStage {
+    fn new(dir: &Path, ext: &str) -> std::io::Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        loop {
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = dir.join(format!(
+                ".emulsion-batch-{}-{serial}.{ext}",
+                std::process::id()
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Ok(Self(path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+impl Drop for BatchStage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn publish_batch_file(stage: &Path, dir: &Path, stem: &str, ext: &str) -> std::io::Result<PathBuf> {
+    for serial in 0u64.. {
+        let name = if serial == 0 {
+            format!("{stem}.{ext}")
+        } else {
+            format!("{stem}-{serial}.{ext}")
+        };
+        let path = dir.join(name);
+        match std::fs::hard_link(stage, &path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                // Removable FAT/exFAT volumes may not support hard links.
+                // Exclusive creation still protects existing artwork there.
+                let mut output = match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                {
+                    Ok(file) => file,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e),
+                };
+                let result = std::fs::File::open(stage)
+                    .and_then(|mut input| std::io::copy(&mut input, &mut output))
+                    .and_then(|_| output.sync_all());
+                if let Err(e) = result {
+                    drop(output);
+                    let _ = std::fs::remove_file(&path);
+                    return Err(e);
+                }
+                return Ok(path);
+            }
+        }
+    }
+    unreachable!()
 }
 
 fn slug(s: &str) -> String {
@@ -348,6 +420,8 @@ impl Workspace {
         }
         .to_string();
         let total = paths.len();
+        self.batch.run_generation = self.batch.run_generation.wrapping_add(1);
+        let generation = self.batch.run_generation;
         self.batch.running = Some((0, total));
         self.batch.note = None;
         cx.notify();
@@ -362,6 +436,9 @@ impl Workspace {
                     .await;
                 let go_on = this
                     .update(cx, |this, cx| {
+                        if this.batch.run_generation != generation || this.batch.running.is_none() {
+                            return false;
+                        }
                         if let Err(e) = r {
                             failed += 1;
                             this.batch.note = Some((e.into(), true));
@@ -376,6 +453,9 @@ impl Workspace {
                 }
             }
             this.update(cx, |this, cx| {
+                if this.batch.run_generation != generation {
+                    return;
+                }
                 this.batch.running = None;
                 if failed == 0 {
                     this.batch.note = Some((
@@ -396,6 +476,7 @@ impl Workspace {
     }
 
     pub fn cancel_batch(&mut self, cx: &mut Context<Self>) {
+        self.batch.run_generation = self.batch.run_generation.wrapping_add(1);
         self.batch.running = None;
         self.batch.note = Some(("Export stopped.".into(), false));
         cx.notify();
@@ -991,5 +1072,30 @@ impl Workspace {
                     )
                     .child(settings),
             )
+    }
+}
+
+#[cfg(test)]
+mod export_safety_tests {
+    use super::{BatchStage, publish_batch_file};
+
+    #[test]
+    fn duplicate_stems_and_existing_outputs_are_never_overwritten() {
+        let dir =
+            std::env::temp_dir().join(format!("emulsion-batch-collisions-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("photo.png");
+        std::fs::write(&original, b"original artwork").unwrap();
+        let stage = BatchStage::new(&dir, "png").unwrap();
+        std::fs::write(&stage.0, b"new output").unwrap();
+        let a = publish_batch_file(&stage.0, &dir, "photo", "png").unwrap();
+        let b = publish_batch_file(&stage.0, &dir, "photo", "png").unwrap();
+        assert_ne!(a, b);
+        assert_ne!(a, original);
+        assert_eq!(std::fs::read(&original).unwrap(), b"original artwork");
+        assert_eq!(std::fs::read(a).unwrap(), b"new output");
+        assert_eq!(std::fs::read(b).unwrap(), b"new output");
+        drop(stage);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

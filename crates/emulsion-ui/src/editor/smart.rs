@@ -12,9 +12,26 @@ pub(crate) struct SmartUi {
     pending: Option<(NodeId, usize, &'static str, f32)>,
     /// Bumped per request so stale renders are dropped.
     render_gen: u64,
+    requests: HashMap<NodeId, (u64, Vec<Filter>)>,
+}
+
+impl SmartUi {
+    pub(super) fn cancel_pending(&mut self) {
+        self.requests.clear();
+        self.pending = None;
+    }
 }
 
 impl EditorView {
+    fn requested_filters(&self, id: NodeId) -> Option<Vec<Filter>> {
+        if let Some((_, filters)) = self.smart.requests.get(&id) {
+            return Some(filters.clone());
+        }
+        match &self.editor.doc.node(id)?.kind {
+            NodeKind::Smart { filters, .. } => Some(filters.clone()),
+            _ => None,
+        }
+    }
     /// Turn the selected pixel node into a smart layer (or back).
     pub fn convert_smart(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected else { return };
@@ -39,22 +56,18 @@ impl EditorView {
     }
 
     pub fn add_filter(&mut self, id: NodeId, f: Filter, cx: &mut Context<Self>) {
-        let Some(NodeKind::Smart { filters, .. }) = self.editor.doc.node(id).map(|n| &n.kind)
-        else {
+        let Some(mut filters) = self.requested_filters(id) else {
             return;
         };
-        let mut filters = filters.clone();
         filters.push(f);
         self.set_filters_async(id, filters, cx);
         self.smart.menu_for = None;
     }
 
     pub fn remove_filter(&mut self, id: NodeId, idx: usize, cx: &mut Context<Self>) {
-        let Some(NodeKind::Smart { filters, .. }) = self.editor.doc.node(id).map(|n| &n.kind)
-        else {
+        let Some(mut filters) = self.requested_filters(id) else {
             return;
         };
-        let mut filters = filters.clone();
         if idx < filters.len() {
             filters.remove(idx);
             self.set_filters_async(id, filters, cx);
@@ -81,11 +94,9 @@ impl EditorView {
             return;
         }
         self.smart.pending = None;
-        let Some(NodeKind::Smart { filters, .. }) = self.editor.doc.node(id).map(|n| &n.kind)
-        else {
+        let Some(mut filters) = self.requested_filters(id) else {
             return;
         };
-        let mut filters = filters.clone();
         if let Some(f) = filters.get_mut(idx)
             && f.set_param(key, v)
         {
@@ -97,32 +108,54 @@ impl EditorView {
     /// Render the stack off the UI thread, then set filters and cache in
     /// one undoable step. A newer request supersedes an older one.
     fn set_filters_async(&mut self, id: NodeId, filters: Vec<Filter>, cx: &mut Context<Self>) {
+        if self.editor.doc.locked_ancestor(id).is_some() {
+            self.set_status("That layer or its group is locked.", true, cx);
+            return;
+        }
         let Some(NodeKind::Smart { source, .. }) = self.editor.doc.node(id).map(|n| &n.kind) else {
             return;
         };
         let source = source.clone();
+        let original = self.editor.doc.node(id).cloned();
+        let history_epoch = self.history_epoch;
         self.smart.render_gen += 1;
         let generation = self.smart.render_gen;
+        self.smart
+            .requests
+            .insert(id, (generation, filters.clone()));
         cx.spawn(async move |this, cx| {
             let f2 = filters.clone();
             let (cache, offset) = cx
                 .background_spawn(async move { emulsion_core::smart::render(&source, &f2) })
                 .await;
-            this.update(cx, |this, cx| {
-                if this.smart.render_gen != generation {
-                    return;
-                }
-                this.execute(
-                    Command::SetSmartCache {
-                        id,
-                        filters,
-                        cache,
-                        offset,
-                    },
-                    cx,
-                );
-            })
-            .ok();
+            let mut ready = Some((filters, cache, offset));
+            loop {
+                let done = this.update(cx, |this, cx| {
+                    if this.smart.requests.get(&id).map(|r| r.0) != Some(generation) {
+                        return true;
+                    }
+                    if this.history_epoch != history_epoch
+                        || this.editor.doc.node(id) != original.as_ref()
+                        || this.editor.doc.locked_ancestor(id).is_some()
+                    {
+                        this.smart.requests.remove(&id);
+                        return true;
+                    }
+                    // A filter may preview inside its own slider gesture, but
+                    // never join another layer's or another tool's undo step.
+                    let owns_gesture = matches!(&this.drag,
+                        Some(Drag::Slider { key: SliderKey::Filter(node, _, _), .. }) if *node == id);
+                    if this.editor.in_transaction() && !owns_gesture {
+                        return false;
+                    }
+                    this.smart.requests.remove(&id);
+                    let (filters, cache, offset) = ready.take().expect("one filter result");
+                    this.execute(Command::SetSmartCache { id, filters, cache, offset }, cx);
+                    true
+                }).unwrap_or(true);
+                if done { break; }
+                cx.background_executor().timer(std::time::Duration::from_millis(32)).await;
+            }
         })
         .detach();
     }
@@ -131,6 +164,24 @@ impl EditorView {
     pub(crate) fn flush_filter_param(&mut self, cx: &mut Context<Self>) {
         if let Some((id, idx, key, v)) = self.smart.pending.take() {
             self.set_filter_param(id, idx, key, v, true, cx);
+        }
+    }
+
+    /// Preview mutations belong to the drag transaction. Restore that base,
+    /// then commit the final render once, even when it finishes after release.
+    pub(crate) fn finish_filter_gesture(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let mut filters = self.requested_filters(id);
+        if let Some((node, idx, key, value)) = self.smart.pending.take()
+            && node == id
+            && let Some(filter) = filters.as_mut().and_then(|f| f.get_mut(idx))
+        {
+            filter.set_param(key, value);
+        }
+        self.smart.requests.remove(&id);
+        self.editor.cancel();
+        self.after_change(cx);
+        if let Some(filters) = filters {
+            self.set_filters_async(id, filters, cx);
         }
     }
 

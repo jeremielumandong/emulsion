@@ -34,7 +34,9 @@ impl EditorView {
             .iter()
             .rev()
             .find_map(|n| match &n.kind {
-                NodeKind::Text { spec, cache } if n.visible && !n.locked => {
+                NodeKind::Text { spec, cache }
+                    if n.visible && self.editor.doc.locked_ancestor(n.id).is_none() =>
+                {
                     let ink = inside && cache.get(d.0 as u32, d.1 as u32)[3] > 0;
                     let lines = spec.text.lines().count().max(1) as f64;
                     let est_w = spec.width.map(f64::from).unwrap_or(

@@ -93,6 +93,7 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
             offset,
             ..
         } => {
+            let cache_mask = Document::composite_mask(node);
             let p = crate::smart::cache_placement(
                 placement,
                 (source.width(), source.height()),
@@ -100,7 +101,7 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
                 *offset,
             );
             return Some(mapped_bounds(
-                ink_bounds(cache, mask),
+                ink_bounds(cache, cache_mask.as_deref()),
                 p.to_doc(cache.width(), cache.height()),
             ))
             .filter(|b| !b.is_empty());
@@ -146,6 +147,179 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
         bounds.intersect(&emulsion_raster::select::bounds(m))
     });
     (!bounds.is_empty()).then_some(bounds)
+}
+
+/// Align using artwork bounds, retaining editable geometry and source pixels.
+/// Whole-pixel offsets retain an existing fractional placement. Center ties
+/// use nearest-even rounding: a residual half pixel rounds to zero on the next
+/// invocation, so repeated centering never oscillates between adjacent pixels.
+pub(crate) fn align_node(
+    doc: &mut Document,
+    id: NodeId,
+    alignment: crate::command::Alignment,
+    target: crate::command::AlignTarget,
+) -> Result<(), crate::CommandError> {
+    use crate::CommandError;
+    use crate::command::{AlignTarget, Alignment};
+    let node = doc.node(id).ok_or(CommandError::NoSuchNode(id))?;
+    if matches!(node.kind, NodeKind::Fill { .. } | NodeKind::Adjust(_)) && node.mask.is_none() {
+        return Err(CommandError::NothingToMove(id));
+    }
+    let reference = match target {
+        AlignTarget::Canvas => IRect::new(0, 0, doc.width as i32, doc.height as i32),
+        AlignTarget::Selection => doc
+            .selection
+            .as_deref()
+            .map(emulsion_raster::select::bounds)
+            .filter(|bounds| !bounds.is_empty())
+            .ok_or(CommandError::EmptyAlignmentSelection)?,
+    };
+    let bounds = node_bounds(doc, id)
+        .or_else(|| {
+            // Masks can hide every pixel without removing editable geometry.
+            // Measure the underlying object only when visible bounds are empty.
+            let mut unmasked = doc.clone();
+            for node in &mut unmasked.nodes {
+                node.mask_enabled = false;
+            }
+            node_bounds(&unmasked, id)
+        })
+        .ok_or(CommandError::NothingToMove(id))?;
+    let (dx, dy) = match alignment {
+        Alignment::Left => ((reference.x as f64 - bounds.x as f64), 0.0),
+        Alignment::HorizontalCenter => (
+            reference.x as f64 + reference.w as f64 / 2.0 - bounds.x as f64 - bounds.w as f64 / 2.0,
+            0.0,
+        ),
+        Alignment::Right => ((reference.right() as f64 - bounds.right() as f64), 0.0),
+        Alignment::Top => (0.0, reference.y as f64 - bounds.y as f64),
+        Alignment::VerticalCenter => (
+            0.0,
+            reference.y as f64 + reference.h as f64 / 2.0 - bounds.y as f64 - bounds.h as f64 / 2.0,
+        ),
+        Alignment::Bottom => (0.0, reference.bottom() as f64 - bounds.bottom() as f64),
+    };
+    translate_node(doc, id, dx.round_ties_even(), dy.round_ties_even())
+}
+
+/// Tight bounds of stored mask detail, including black holes in white masks.
+/// Outside the canvas a mask evaluates to its fill, so only deviations from
+/// that fill must remain inside the stored extent to avoid throwing detail away.
+fn mask_detail_bounds(mask: &Mask) -> IRect {
+    let mut bounds = IRect::default();
+    let tile = emulsion_raster::TILE as i32;
+    for (coord, pixels) in mask.base_tiles() {
+        for (i, pixel) in pixels.iter().enumerate() {
+            if *pixel == mask.fill() {
+                continue;
+            }
+            let x = coord.x * tile + i as i32 % tile;
+            let y = coord.y * tile + i as i32 / tile;
+            if x >= 0 && y >= 0 && x < mask.width() as i32 && y < mask.height() as i32 {
+                bounds = bounds.union(&IRect::new(x, y, 1, 1));
+            }
+        }
+    }
+    bounds
+}
+
+/// Move spatial content, including hidden descendants, without rasterizing
+/// editable nodes or resampling raster sources and their local masks.
+pub(crate) fn translate_node(
+    doc: &mut Document,
+    id: NodeId,
+    dx: f64,
+    dy: f64,
+) -> Result<(), crate::CommandError> {
+    use crate::{CommandError, DocumentError};
+    if !dx.is_finite() || !dy.is_finite() {
+        return Err(DocumentError::BadValue(id, "translation").into());
+    }
+    doc.node(id).ok_or(CommandError::NoSuchNode(id))?;
+    if dx == 0.0 && dy == 0.0 {
+        return Ok(());
+    }
+    let ids: std::collections::HashSet<_> = doc.subtree(id).into_iter().collect();
+    let movable = doc
+        .nodes
+        .iter()
+        .filter(|n| ids.contains(&n.id))
+        .any(|n| match &n.kind {
+            NodeKind::Raster { .. } | NodeKind::Smart { .. } | NodeKind::Text { .. } => true,
+            NodeKind::Path { path, .. } => path.anchor_count() > 0,
+            NodeKind::Fill { .. } | NodeKind::Adjust(_) => n.mask.is_some(),
+            NodeKind::Group { .. } => false,
+        });
+    if !movable {
+        return Err(CommandError::NothingToMove(id));
+    }
+    let (w, h) = (doc.width, doc.height);
+    for node in doc.nodes.iter().filter(|n| ids.contains(&n.id)) {
+        if matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. }) {
+            continue;
+        }
+        if let Some(mask) = &node.mask {
+            let bounds = mask_detail_bounds(mask);
+            // Floor/ceil include the extra edge samples introduced by a
+            // fractional bilinear translation. Disabled masks retain their
+            // detail too, so enabling one later never exposes a clipped mask.
+            if !bounds.is_empty()
+                && ((bounds.x as f64 + dx).floor() < 0.0
+                    || (bounds.y as f64 + dy).floor() < 0.0
+                    || (bounds.right() as f64 + dx).ceil() > w as f64
+                    || (bounds.bottom() as f64 + dy).ceil() > h as f64)
+            {
+                return Err(CommandError::MaskWouldClip(node.id));
+            }
+        }
+    }
+    let inverse = DAffine2::from_translation(dvec2(-dx, -dy));
+    for node in &mut doc.nodes {
+        if !ids.contains(&node.id) {
+            continue;
+        }
+        match &mut node.kind {
+            NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } => {
+                placement.x += dx;
+                placement.y += dy;
+                // Source-space masks move through placement with the pixels.
+                continue;
+            }
+            NodeKind::Path { path, style, cache } => {
+                let mut updated = (**path).clone();
+                updated.translate(dx, dy);
+                if updated.subpaths.iter().flat_map(|p| &p.anchors).any(|a| {
+                    [a.p, a.h_in, a.h_out]
+                        .iter()
+                        .any(|p| !p.0.is_finite() || !p.1.is_finite())
+                }) {
+                    return Err(DocumentError::BadValue(id, "translation").into());
+                }
+                *cache = Arc::new(updated.rasterize(style, w, h));
+                *path = Arc::new(updated);
+            }
+            NodeKind::Text { spec, cache } => {
+                let mut updated = (**spec).clone();
+                updated.x = (updated.x as f64 + dx) as f32;
+                updated.y = (updated.y as f64 + dy) as f32;
+                if !updated.x.is_finite() || !updated.y.is_finite() {
+                    return Err(DocumentError::BadValue(id, "translation").into());
+                }
+                *cache = Arc::new(crate::text::rasterize(&updated, w, h));
+                *spec = Arc::new(updated);
+            }
+            NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
+        }
+        if let Some(mask) = &node.mask {
+            let translated = if dx.abs() >= w as f64 || dy.abs() >= h as f64 {
+                Mask::empty(w, h, mask.fill())
+            } else {
+                remap(mask, w, h, inverse)
+            };
+            node.mask = Some(Arc::new(translated));
+        }
+    }
+    Ok(())
 }
 
 /// Rotate the selected subtree about one common pivot, retaining editable
@@ -400,6 +574,676 @@ mod tests {
         .apply(&mut d)
         .unwrap();
         d
+    }
+
+    fn alignment_doc() -> (Document, crate::NodeId, Arc<Raster>) {
+        let mut doc = Document::new(100, 80);
+        let source = Arc::new(Raster::solid(20, 10, [1.0, 0.0, 0.0, 1.0]));
+        let id = Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Align",
+                source.clone(),
+                Placement::at(15.0, 20.0),
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        (doc, id, source)
+    }
+
+    #[test]
+    fn six_alignments_use_canvas_or_selection_bounds_and_repeat_without_history() {
+        use crate::command::{AlignTarget, Alignment::*};
+        let (baseline, id, source) = alignment_doc();
+        for (target, cases) in [
+            (
+                AlignTarget::Canvas,
+                [
+                    (Left, 0.0, 20.0),
+                    (HorizontalCenter, 40.0, 20.0),
+                    (Right, 80.0, 20.0),
+                    (Top, 15.0, 0.0),
+                    (VerticalCenter, 15.0, 35.0),
+                    (Bottom, 15.0, 70.0),
+                ],
+            ),
+            (
+                AlignTarget::Selection,
+                [
+                    (Left, 20.0, 20.0),
+                    (HorizontalCenter, 35.0, 20.0),
+                    (Right, 50.0, 20.0),
+                    (Top, 15.0, 15.0),
+                    (VerticalCenter, 15.0, 30.0),
+                    (Bottom, 15.0, 45.0),
+                ],
+            ),
+        ] {
+            for (alignment, x, y) in cases {
+                let mut doc = baseline.clone();
+                doc.selection = Some(Arc::new(emulsion_raster::select::rect(
+                    100, 80, 20.0, 15.0, 50.0, 40.0,
+                )));
+                let selected_area = doc.selection.clone();
+                let before = doc.clone();
+                let mut editor = crate::Editor::new(doc, None);
+                let command = Command::AlignNode {
+                    id,
+                    alignment,
+                    target,
+                };
+                editor.execute(command.clone()).unwrap();
+                let NodeKind::Raster { raster, placement } = &editor.doc.node(id).unwrap().kind
+                else {
+                    panic!("raster")
+                };
+                assert_eq!(
+                    (placement.x, placement.y),
+                    (x, y),
+                    "{alignment:?} {target:?}"
+                );
+                assert!(Arc::ptr_eq(raster, &source));
+                assert!(Arc::ptr_eq(
+                    editor.doc.selection.as_ref().unwrap(),
+                    selected_area.as_ref().unwrap()
+                ));
+                let revision = editor.revision;
+                editor.execute(command).unwrap();
+                assert_eq!(editor.revision, revision);
+                assert_eq!(editor.history.len(), 1);
+                assert!(editor.undo());
+                assert_eq!(editor.doc, before);
+            }
+        }
+    }
+
+    #[test]
+    fn center_alignment_retains_fractional_placement_and_is_stable_at_half_pixel_ties() {
+        use crate::command::{AlignTarget, Alignment};
+        for width in [9, 10] {
+            for x in [10.0, 10.25, 11.25] {
+                let mut doc = Document::new(100, 80);
+                let id = Command::AddNode {
+                    node: Box::new(Node::raster(
+                        0,
+                        "Fractional",
+                        Arc::new(Raster::solid(width, 7, [1.0; 4])),
+                        Placement::at(x, 12.25),
+                    )),
+                    slot: Slot::TOP,
+                }
+                .apply(&mut doc)
+                .unwrap()
+                .unwrap();
+                let mut editor = crate::Editor::new(doc, None);
+                for alignment in [Alignment::HorizontalCenter, Alignment::VerticalCenter] {
+                    let cmd = Command::AlignNode {
+                        id,
+                        alignment,
+                        target: AlignTarget::Canvas,
+                    };
+                    editor.execute(cmd.clone()).unwrap();
+                    let first = editor.doc.clone();
+                    let steps = editor.history.len();
+                    let revision = editor.revision;
+                    for _ in 0..3 {
+                        editor.execute(cmd.clone()).unwrap();
+                    }
+                    assert_eq!(editor.doc, first);
+                    assert_eq!(editor.history.len(), steps);
+                    assert_eq!(editor.revision, revision);
+                }
+                let NodeKind::Raster { placement, .. } = &editor.doc.node(id).unwrap().kind else {
+                    panic!("raster")
+                };
+                assert_eq!(placement.x.fract(), x.fract());
+                assert_eq!(placement.y.fract(), 0.25);
+                let bounds = node_bounds(&editor.doc, id).unwrap();
+                assert!((bounds.x as f64 + bounds.w as f64 / 2.0 - 50.0).abs() <= 0.5);
+                assert!((bounds.y as f64 + bounds.h as f64 / 2.0 - 40.0).abs() <= 0.5);
+            }
+        }
+    }
+
+    #[test]
+    fn alignment_rejects_absent_selection_and_uniform_nonspatial_layers() {
+        use crate::command::{AlignTarget, Alignment};
+        let (mut doc, id, _) = alignment_doc();
+        for selection in [
+            None,
+            Some(Arc::new(emulsion_raster::Mask::empty(100, 80, 0))),
+        ] {
+            doc.selection = selection;
+            let before = doc.clone();
+            assert_eq!(
+                Command::AlignNode {
+                    id,
+                    alignment: Alignment::Left,
+                    target: AlignTarget::Selection
+                }
+                .apply(&mut doc),
+                Err(crate::CommandError::EmptyAlignmentSelection)
+            );
+            assert_eq!(doc, before);
+        }
+        for kind in [
+            NodeKind::Fill {
+                rgba: [0, 0, 0, 255],
+            },
+            NodeKind::Adjust(emulsion_raster::Adjustment::Exposure {
+                exposure: 1.0,
+                offset: 0.0,
+                gamma: 1.0,
+            }),
+        ] {
+            let id = Command::AddNode {
+                node: Box::new(Node::new(0, "Uniform", kind)),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap()
+            .unwrap();
+            let before = doc.clone();
+            assert_eq!(
+                Command::AlignNode {
+                    id,
+                    alignment: Alignment::Left,
+                    target: AlignTarget::Canvas
+                }
+                .apply(&mut doc),
+                Err(crate::CommandError::NothingToMove(id))
+            );
+            assert_eq!(doc, before);
+        }
+    }
+
+    #[test]
+    fn alignment_moves_masked_group_as_editable_unit_and_protects_locks_and_masks() {
+        use crate::command::{AlignTarget, Alignment};
+        use emulsion_raster::vector::{Path, PathStyle};
+        let (mut doc, raster_id, source) = alignment_doc();
+        let path = Arc::new(Path::from_svg("M 40 20 L 60 20 L 60 30 Z").unwrap());
+        let path_id = Command::AddNode {
+            node: Box::new(Node::path(
+                0,
+                "Path",
+                path.clone(),
+                PathStyle {
+                    stroke: None,
+                    fill: Some([0, 0, 0, 255]),
+                    ..Default::default()
+                },
+                100,
+                80,
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        let group = Command::Group {
+            ids: vec![raster_id, path_id],
+            name: "Align group".into(),
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        // Fully hidden groups still expose their underlying editable geometry.
+        Command::SetMask {
+            id: group,
+            mask: Some(Arc::new(emulsion_raster::Mask::empty(100, 80, 0))),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let before = doc.clone();
+        Command::AlignNode {
+            id: group,
+            alignment: Alignment::Left,
+            target: AlignTarget::Canvas,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let NodeKind::Raster { raster, placement } = &doc.node(raster_id).unwrap().kind else {
+            panic!("raster")
+        };
+        assert!(Arc::ptr_eq(raster, &source));
+        assert_eq!(placement.x, 0.0);
+        let NodeKind::Path {
+            path: translated, ..
+        } = &doc.node(path_id).unwrap().kind
+        else {
+            panic!("path")
+        };
+        assert_eq!(translated.subpaths[0].anchors[0].p, (25.0, 20.0));
+        assert_eq!(path.subpaths[0].anchors[0].p, (40.0, 20.0));
+        for locked in [group, path_id] {
+            doc = before.clone();
+            Command::SetLocked {
+                id: locked,
+                locked: true,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let protected = doc.clone();
+            assert!(matches!(
+                Command::AlignNode {
+                    id: group,
+                    alignment: Alignment::Right,
+                    target: AlignTarget::Canvas
+                }
+                .apply(&mut doc),
+                Err(crate::CommandError::Locked(_))
+            ));
+            assert_eq!(doc, protected);
+        }
+        doc = before;
+        // Visible artwork starts at x=15, but the group's mask stores detail
+        // starting at x=5. Aligning artwork to x=0 would discard mask detail.
+        Command::SetMask {
+            id: group,
+            mask: Some(Arc::new(emulsion_raster::select::rect(
+                100, 80, 5.0, 5.0, 80.0, 60.0,
+            ))),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let protected = doc.clone();
+        assert_eq!(
+            Command::AlignNode {
+                id: group,
+                alignment: Alignment::Left,
+                target: AlignTarget::Canvas
+            }
+            .apply(&mut doc),
+            Err(crate::CommandError::MaskWouldClip(group))
+        );
+        assert_eq!(doc, protected);
+    }
+
+    #[test]
+    fn translation_moves_mixed_group_hidden_children_and_masks_without_baking_sources() {
+        use emulsion_raster::vector::{Path, PathStyle};
+        let mut d = Document::new(128, 96);
+        let add = |d: &mut Document, node: Node, parent| {
+            Command::AddNode {
+                node: Box::new(node),
+                slot: Slot::top_of(parent),
+            }
+            .apply(d)
+            .unwrap()
+            .unwrap()
+        };
+        let mut group = Node::group(0, "Move together");
+        group.mask = Some(Arc::new(emulsion_raster::select::rect(
+            128, 96, 10.0, 10.0, 80.0, 60.0,
+        )));
+        let group = add(&mut d, group, None);
+        let source = Arc::new(Raster::solid(8, 6, [1.0, 0.0, 0.0, 1.0]));
+        let local_mask = Arc::new(emulsion_raster::Mask::white(8, 6));
+        let mut raster = Node::raster(0, "Pixels", source.clone(), Placement::at(20.0, 20.0));
+        raster.mask = Some(local_mask.clone());
+        let raster = add(&mut d, raster, Some(group));
+        let mut smart = Node::smart(
+            0,
+            "Hidden smart",
+            source.clone(),
+            Vec::new(),
+            Placement::at(40.0, 20.0),
+        );
+        smart.visible = false;
+        smart.mask = Some(local_mask.clone());
+        let smart = add(&mut d, smart, Some(group));
+        let path = Arc::new(Path::from_svg("M 20 40 L 40 40 L 40 50 Z").unwrap());
+        let mut path_node = Node::path(
+            0,
+            "Editable path",
+            path.clone(),
+            PathStyle::default(),
+            128,
+            96,
+        );
+        path_node.mask = Some(Arc::new(emulsion_raster::select::rect(
+            128, 96, 20.0, 40.0, 20.0, 10.0,
+        )));
+        let path_id = add(&mut d, path_node, Some(group));
+        let text = add(
+            &mut d,
+            Node::text(
+                0,
+                "Editable text",
+                crate::text::TextSpec {
+                    text: "Move".into(),
+                    x: 20.0,
+                    y: 55.0,
+                    size: 12.0,
+                    rotation: 15.0,
+                    ..Default::default()
+                },
+                128,
+                96,
+            ),
+            Some(group),
+        );
+        let before = d.clone();
+        let mut editor = crate::Editor::new(d, None);
+        editor
+            .execute(Command::TranslateNode {
+                id: group,
+                dx: 3.0,
+                dy: 4.0,
+            })
+            .unwrap();
+        let moved = &editor.doc;
+        let NodeKind::Raster {
+            raster: pixels,
+            placement,
+        } = &moved.node(raster).unwrap().kind
+        else {
+            panic!("raster")
+        };
+        assert!(Arc::ptr_eq(pixels, &source));
+        assert_eq!((placement.x, placement.y), (23.0, 24.0));
+        assert!(Arc::ptr_eq(
+            moved.node(raster).unwrap().mask.as_ref().unwrap(),
+            &local_mask
+        ));
+        let NodeKind::Smart {
+            source: pixels,
+            placement,
+            ..
+        } = &moved.node(smart).unwrap().kind
+        else {
+            panic!("smart")
+        };
+        assert!(Arc::ptr_eq(pixels, &source));
+        assert_eq!((placement.x, placement.y), (43.0, 24.0));
+        assert!(!moved.node(smart).unwrap().visible);
+        assert!(Arc::ptr_eq(
+            moved.node(smart).unwrap().mask.as_ref().unwrap(),
+            &local_mask
+        ));
+        let NodeKind::Path {
+            path: moved_path, ..
+        } = &moved.node(path_id).unwrap().kind
+        else {
+            panic!("path")
+        };
+        assert_eq!(moved_path.subpaths[0].anchors[0].p, (23.0, 44.0));
+        assert_eq!(path.subpaths[0].anchors[0].p, (20.0, 40.0));
+        assert_eq!(
+            moved
+                .node(path_id)
+                .unwrap()
+                .mask
+                .as_ref()
+                .unwrap()
+                .get(23, 44),
+            255
+        );
+        assert_eq!(
+            moved
+                .node(group)
+                .unwrap()
+                .mask
+                .as_ref()
+                .unwrap()
+                .get(10, 10),
+            0
+        );
+        assert_eq!(
+            moved
+                .node(group)
+                .unwrap()
+                .mask
+                .as_ref()
+                .unwrap()
+                .get(13, 14),
+            255
+        );
+        let NodeKind::Text { spec, .. } = &moved.node(text).unwrap().kind else {
+            panic!("text")
+        };
+        assert_eq!((spec.x, spec.y, spec.rotation), (23.0, 59.0, 15.0));
+        assert_eq!(spec.text, "Move");
+        assert_eq!(editor.history.len(), 1);
+        assert!(editor.undo());
+        assert_eq!(editor.doc, before);
+    }
+
+    #[test]
+    fn translation_rejects_invalid_locked_or_nonspatial_targets_atomically() {
+        let mut d = doc();
+        let id = d.nodes[0].id;
+        let group = Command::Group {
+            ids: vec![id],
+            name: "Group".into(),
+        }
+        .apply(&mut d)
+        .unwrap()
+        .unwrap();
+        for (dx, dy) in [(f64::NAN, 0.0), (0.0, f64::INFINITY)] {
+            let before = d.clone();
+            assert!(
+                Command::TranslateNode { id: group, dx, dy }
+                    .apply(&mut d)
+                    .is_err()
+            );
+            assert_eq!(d, before);
+        }
+        for lock in [id, group] {
+            Command::SetLocked {
+                id: lock,
+                locked: true,
+            }
+            .apply(&mut d)
+            .unwrap();
+            let before = d.clone();
+            for target in [id, group] {
+                assert!(matches!(
+                    Command::TranslateNode {
+                        id: target,
+                        dx: 2.0,
+                        dy: 3.0
+                    }
+                    .apply(&mut d),
+                    Err(crate::CommandError::Locked(_))
+                ));
+                assert_eq!(d, before);
+            }
+            Command::SetLocked {
+                id: lock,
+                locked: false,
+            }
+            .apply(&mut d)
+            .unwrap();
+        }
+        for node in [
+            Node::group(0, "Empty"),
+            Node::new(
+                0,
+                "Uniform",
+                NodeKind::Fill {
+                    rgba: [0, 0, 0, 255],
+                },
+            ),
+            Node::adjust(
+                0,
+                emulsion_raster::Adjustment::Exposure {
+                    exposure: 1.0,
+                    offset: 0.0,
+                    gamma: 1.0,
+                },
+            ),
+        ] {
+            let id = Command::AddNode {
+                node: Box::new(node),
+                slot: Slot::TOP,
+            }
+            .apply(&mut d)
+            .unwrap()
+            .unwrap();
+            let before = d.clone();
+            assert!(matches!(
+                Command::TranslateNode {
+                    id,
+                    dx: 1.0,
+                    dy: 0.0
+                }
+                .apply(&mut d),
+                Err(crate::CommandError::NothingToMove(_))
+            ));
+            assert_eq!(d, before);
+        }
+    }
+
+    #[test]
+    fn translation_moves_masked_fill_and_adjustment_in_document_coordinates() {
+        let mut d = Document::new(32, 24);
+        for kind in [
+            NodeKind::Fill {
+                rgba: [0, 0, 0, 255],
+            },
+            NodeKind::Adjust(emulsion_raster::Adjustment::Exposure {
+                exposure: 1.0,
+                offset: 0.0,
+                gamma: 1.0,
+            }),
+        ] {
+            let mut node = Node::new(0, "Masked", kind);
+            node.mask = Some(Arc::new(emulsion_raster::select::rect(
+                32, 24, 5.0, 6.0, 8.0, 4.0,
+            )));
+            let id = Command::AddNode {
+                node: Box::new(node),
+                slot: Slot::TOP,
+            }
+            .apply(&mut d)
+            .unwrap()
+            .unwrap();
+            Command::TranslateNode {
+                id,
+                dx: 3.0,
+                dy: -2.0,
+            }
+            .apply(&mut d)
+            .unwrap();
+            assert_eq!(
+                emulsion_raster::select::bounds(d.node(id).unwrap().mask.as_ref().unwrap()),
+                IRect::new(8, 4, 8, 4)
+            );
+        }
+    }
+
+    #[test]
+    fn translation_protects_positive_mask_detail_and_white_mask_holes_including_disabled_masks() {
+        use emulsion_raster::Mask;
+        for fill in [0, 255] {
+            let mut d = Document::new(16, 12);
+            let mask = Arc::new(Mask::from_fn(16, 12, fill, |x, y| {
+                if (2..6).contains(&x) && (3..7).contains(&y) {
+                    255 - fill
+                } else {
+                    fill
+                }
+            }));
+            let mut node = Node::new(
+                1,
+                "Mask detail",
+                NodeKind::Fill {
+                    rgba: [255, 0, 0, 255],
+                },
+            );
+            node.mask = Some(mask.clone());
+            node.mask_enabled = fill == 0;
+            d.nodes.push(node);
+            let before = d.clone();
+            for (dx, dy) in [(-2.25, 0.0), (10.25, 0.0), (0.0, -3.25), (0.0, 5.25)] {
+                let error = Command::TranslateNode { id: 1, dx, dy }
+                    .apply(&mut d)
+                    .unwrap_err();
+                assert_eq!(error, crate::CommandError::MaskWouldClip(1));
+                assert_eq!(
+                    error.to_string(),
+                    "This move would clip a document-space mask; enlarge the canvas first."
+                );
+                assert_eq!(d, before);
+                assert!(Arc::ptr_eq(d.nodes[0].mask.as_ref().unwrap(), &mask));
+            }
+            // Fractional interpolation wholly inside the canvas is allowed.
+            Command::TranslateNode {
+                id: 1,
+                dx: -1.5,
+                dy: -2.5,
+            }
+            .apply(&mut d)
+            .unwrap();
+            let shifted = d.nodes[0].mask.as_ref().unwrap();
+            assert_eq!(shifted.get(0, 0), if fill == 0 { 64 } else { 191 });
+            assert_eq!(d.nodes[0].mask_enabled, fill == 0);
+            // An exact integer translation may put detail flush with an edge.
+            d = before;
+            Command::TranslateNode {
+                id: 1,
+                dx: -2.0,
+                dy: -3.0,
+            }
+            .apply(&mut d)
+            .unwrap();
+            assert_eq!(d.nodes[0].mask.as_ref().unwrap().get(0, 0), 255 - fill);
+        }
+    }
+
+    #[test]
+    fn group_mask_clipping_rejects_entire_move_and_local_pixel_masks_can_leave_canvas() {
+        use emulsion_raster::Mask;
+        let mut d = Document::new(16, 12);
+        let source = Arc::new(Raster::solid(4, 4, [1.0, 0.0, 0.0, 1.0]));
+        let local = Arc::new(Mask::white(4, 4));
+        let mut raster = Node::raster(1, "Pixels", source.clone(), Placement::at(2.0, 3.0));
+        raster.parent = Some(2);
+        raster.mask = Some(local.clone());
+        let mut group = Node::group(2, "Group mask");
+        group.mask = Some(Arc::new(emulsion_raster::select::rect(
+            16, 12, 2.0, 3.0, 4.0, 4.0,
+        )));
+        group.mask_enabled = false;
+        d.nodes = vec![raster, group];
+        let before = d.clone();
+        assert_eq!(
+            Command::TranslateNode {
+                id: 2,
+                dx: 11.0,
+                dy: 0.0
+            }
+            .apply(&mut d),
+            Err(crate::CommandError::MaskWouldClip(2))
+        );
+        assert_eq!(d, before);
+        // Moving the raster alone carries its local mask without clipping it.
+        Command::TranslateNode {
+            id: 1,
+            dx: 20.0,
+            dy: 0.0,
+        }
+        .apply(&mut d)
+        .unwrap();
+        let NodeKind::Raster { raster, placement } = &d.nodes[0].kind else {
+            panic!("raster")
+        };
+        assert_eq!(placement.x, 22.0);
+        assert!(Arc::ptr_eq(raster, &source));
+        assert!(Arc::ptr_eq(d.nodes[0].mask.as_ref().unwrap(), &local));
+        Command::TranslateNode {
+            id: 1,
+            dx: -20.0,
+            dy: 0.0,
+        }
+        .apply(&mut d)
+        .unwrap();
+        assert_eq!(d, before);
     }
 
     #[test]

@@ -199,6 +199,9 @@ mod tests {
                     Err(error) => panic!("mock did not receive a request: {error}"),
                 }
             };
+            // Accepted sockets can inherit nonblocking mode on macOS.
+            // Buffered request reads need blocking mode plus a bounded timeout.
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();

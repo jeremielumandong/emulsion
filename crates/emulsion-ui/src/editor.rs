@@ -7,12 +7,15 @@ use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fract
 
 mod adjust_ui;
 mod ai_tools;
+mod alignment;
 mod animation;
 mod canvas_size;
+mod clipboard;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
 mod lens;
+mod movement;
 mod panels;
 mod pen;
 mod presets;
@@ -69,7 +72,7 @@ pub enum Tool {
 fn tool_help(tool: Tool) -> &'static str {
     match tool {
         Tool::Hand => "Hand: drag to move around the picture. Space + drag works from any tool.",
-        Tool::Move => "Move: drag a layer; handles scale and rotate it.",
+        Tool::Move => "Move: drag a layer or group. Arrows nudge 1 px; Shift+arrows nudge 10 px.",
         Tool::Select => "Select: rectangle, ellipse, lasso, wand and AI quick select.",
         Tool::Mask => "Mask: paint what shows on the selected layer (reveal or hide).",
         Tool::Brush => {
@@ -177,11 +180,7 @@ enum Drag {
     Pan {
         last: Point<Pixels>,
     },
-    Move {
-        id: NodeId,
-        start_doc: (f64, f64),
-        start: Placement,
-    },
+    Move(movement::MoveGesture),
     Slider {
         key: SliderKey,
         track: TrackBounds,
@@ -191,18 +190,6 @@ enum Drag {
     },
     /// A point of a curves editor.
     Curve(adjust_ui::CurveDrag),
-    /// Dragging a Path node with the Move tool.
-    MovePath {
-        id: NodeId,
-        start_doc: (f64, f64),
-        path: Arc<emulsion_raster::vector::Path>,
-        style: emulsion_raster::vector::PathStyle,
-    },
-    MoveText {
-        id: NodeId,
-        start_doc: (f64, f64),
-        spec: Arc<emulsion_core::text::TextSpec>,
-    },
     /// Free Transform: a handle of the selected pixel node.
     Transform(transform::Grab),
     /// Distort: one corner moves freely; pixels re-project on release.
@@ -321,7 +308,7 @@ pub struct EditorView {
     pub(crate) doc_kind: Option<emulsion_ai::kind::Classification>,
     pub(crate) suggest_rev: u64,
     pub(crate) suggest_busy: bool,
-    tools: tools::ToolState,
+    pub(crate) tools: tools::ToolState,
     pub(crate) history: history::HistoryState,
     /// Snap moves to guides, edges and centres.
     pub(crate) snap: bool,
@@ -341,6 +328,11 @@ pub struct EditorView {
     pub(crate) ai: ai_tools::AiState,
     /// Shift held during a drag: free aspect, or 15° rotation steps.
     pub(crate) drag_shift: bool,
+    /// Monotonic UI intent counter: unlike history revisions, never rewinds on undo.
+    pub(crate) operation_epoch: u64,
+    pub(crate) history_epoch: u64,
+    selection_request: u64,
+    pending_edit_job: Option<(u64, u64)>,
 }
 
 impl EditorView {
@@ -352,6 +344,7 @@ impl EditorView {
         name: String,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::tablet::start();
         let selected = doc.nodes.last().map(|n| n.id);
         Self::start_ants(cx);
         Self::start_autosave(cx);
@@ -424,6 +417,10 @@ impl EditorView {
             type_tool: Default::default(),
             ai: Default::default(),
             drag_shift: false,
+            operation_epoch: 0,
+            history_epoch: 0,
+            selection_request: 0,
+            pending_edit_job: None,
         }
     }
 
@@ -474,6 +471,7 @@ impl EditorView {
     }
 
     pub(crate) fn after_change(&mut self, cx: &mut Context<Self>) {
+        self.operation_epoch = self.operation_epoch.wrapping_add(1);
         if let Some(sel) = self.selected
             && self.editor.doc.node(sel).is_none()
         {
@@ -484,22 +482,84 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_pending_edits();
+        self.drag = None;
+        self.warp = None;
         if self.editor.undo() {
             self.after_change(cx);
         }
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_pending_edits();
+        self.drag = None;
+        self.warp = None;
         if self.editor.redo() {
             self.after_change(cx);
         }
     }
 
     fn undo_to(&mut self, steps: usize, cx: &mut Context<Self>) {
+        self.invalidate_pending_edits();
+        self.drag = None;
+        self.warp = None;
         for _ in 0..steps {
             self.editor.undo();
         }
         self.after_change(cx);
+    }
+
+    pub(crate) fn invalidate_pending_edits(&mut self) {
+        self.operation_epoch = self.operation_epoch.wrapping_add(1);
+        self.history_epoch = self.history_epoch.wrapping_add(1);
+        self.selection_request = self.selection_request.wrapping_add(1);
+        self.smart.cancel_pending();
+    }
+
+    pub(crate) fn edit_ticket(&self) -> (u64, u64) {
+        (self.operation_epoch, self.editor.revision)
+    }
+
+    pub(crate) fn begin_edit_job(&mut self) -> (u64, u64) {
+        self.operation_epoch = self.operation_epoch.wrapping_add(1);
+        let ticket = self.edit_ticket();
+        self.pending_edit_job = Some(ticket);
+        ticket
+    }
+
+    pub(crate) fn edit_is_current(&self, ticket: (u64, u64)) -> bool {
+        self.edit_ticket() == ticket && !self.editor.in_transaction()
+    }
+
+    pub(crate) fn accept_edit_result(
+        &mut self,
+        ticket: (u64, u64),
+        label: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let current = self.edit_is_current(ticket);
+        if self.pending_edit_job == Some(ticket) {
+            self.pending_edit_job = None;
+            if !current {
+                self.set_status(
+                    format!(
+                        "{label} canceled because the document changed. Run it again to retry."
+                    ),
+                    false,
+                    cx,
+                );
+            }
+        }
+        current
+    }
+
+    fn selection_ticket(&mut self) -> ((u64, u64), u64) {
+        self.selection_request = self.selection_request.wrapping_add(1);
+        (self.edit_ticket(), self.selection_request)
+    }
+
+    fn selection_is_current(&self, ticket: ((u64, u64), u64)) -> bool {
+        self.edit_is_current(ticket.0) && self.selection_request == ticket.1
     }
 
     /// Refresh render trees when the document or its commit point moved.
@@ -887,6 +947,10 @@ impl EditorView {
     // ── Pointer ─────────────────────────────────────────────────────────
 
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // A second button must not replace the move that owns an undo transaction.
+        if matches!(self.drag, Some(Drag::Move(_))) {
+            return;
+        }
         window.focus(&self.canvas_focus, cx);
         self.menu = None;
         if e.button == MouseButton::Left && !self.space_held {
@@ -935,65 +999,8 @@ impl EditorView {
             cx.notify();
             return;
         }
-        let Some(b) = self.canvas_bounds() else {
-            return;
-        };
-        let Some(id) = self.selected else { return };
-        let Some(n) = self.editor.doc.node(id) else {
-            return;
-        };
-        if n.locked {
-            self.set_status("That node is locked.", false, cx);
-            return;
-        }
-        if let NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } = &n.kind {
-            let start = *placement;
-            let d = self.view.screen_to_doc(
-                (
-                    f32::from(e.position.x) as f64,
-                    f32::from(e.position.y) as f64,
-                ),
-                &b,
-            );
-            self.editor.begin("Move");
-            self.drag = Some(Drag::Move {
-                id,
-                start_doc: d,
-                start,
-            });
-        } else if let NodeKind::Path { path, style, .. } = &n.kind {
-            let d = self.view.screen_to_doc(
-                (
-                    f32::from(e.position.x) as f64,
-                    f32::from(e.position.y) as f64,
-                ),
-                &b,
-            );
-            let (path, style) = (path.clone(), *style);
-            self.editor.begin("Move path");
-            self.drag = Some(Drag::MovePath {
-                id,
-                start_doc: d,
-                path,
-                style,
-            });
-        } else if let NodeKind::Text { spec, .. } = &n.kind {
-            let d = self.view.screen_to_doc(
-                (
-                    f32::from(e.position.x) as f64,
-                    f32::from(e.position.y) as f64,
-                ),
-                &b,
-            );
-            let spec = spec.clone();
-            self.editor.begin("Move text");
-            self.drag = Some(Drag::MoveText {
-                id,
-                start_doc: d,
-                spec,
-            });
-        } else {
-            self.set_status("Select a pixel node, a path or text to move it.", false, cx);
+        if let Some(point) = self.doc_point(e.position) {
+            self.begin_move(point, cx);
         }
     }
 
@@ -1025,79 +1032,17 @@ impl EditorView {
                 self.drag = Some(Drag::Pan { last: pos });
                 cx.notify();
             }
-            Drag::Move {
-                id,
-                start_doc,
-                start,
-            } => {
-                let Some(b) = self.canvas_bounds() else {
-                    return;
-                };
-                let d = self
-                    .view
-                    .screen_to_doc((f32::from(pos.x) as f64, f32::from(pos.y) as f64), &b);
-                let (id, start) = (*id, *start);
-                let (dx, dy) = self.snap_move(id, &start, d.0 - start_doc.0, d.1 - start_doc.1);
-                let mut p = start;
-                p.x = (start.x + dx).round();
-                p.y = (start.y + dy).round();
-                self.execute(Command::SetPlacement { id, placement: p }, cx);
-            }
-            Drag::MoveText {
-                id,
-                start_doc,
-                spec,
-            } => {
-                let Some(b) = self.canvas_bounds() else {
-                    return;
-                };
-                let d = self
-                    .view
-                    .screen_to_doc((f32::from(pos.x) as f64, f32::from(pos.y) as f64), &b);
-                let (dx, dy) = ((d.0 - start_doc.0).round(), (d.1 - start_doc.1).round());
-                let mut s = (**spec).clone();
-                s.x += dx as f32;
-                s.y += dy as f32;
-                let id = *id;
-                self.execute(
-                    Command::SetText {
-                        id,
-                        spec: Box::new(s),
-                    },
-                    cx,
-                );
+            Drag::Move(gesture) => {
+                let gesture = *gesture;
+                if let Some(point) = self.doc_point(pos) {
+                    self.move_drag(gesture, point, cx);
+                }
             }
             Drag::Curve(d) => {
                 let d = d.clone();
                 self.curve_move(&d, pos, cx);
             }
             Drag::Navigator => self.nav_click(pos, cx),
-            Drag::MovePath {
-                id,
-                start_doc,
-                path,
-                style,
-            } => {
-                let Some(b) = self.canvas_bounds() else {
-                    return;
-                };
-                let d = self
-                    .view
-                    .screen_to_doc((f32::from(pos.x) as f64, f32::from(pos.y) as f64), &b);
-                let (dx, dy) = ((d.0 - start_doc.0).round(), (d.1 - start_doc.1).round());
-                let (id, style, path) = (*id, *style, path.clone());
-                let (dx, dy) = self.snap_path_move(&path, &style, dx, dy);
-                let mut p = (*path).clone();
-                p.translate(dx, dy);
-                self.execute(
-                    Command::SetPath {
-                        id,
-                        path: Arc::new(p),
-                        style,
-                    },
-                    cx,
-                );
-            }
             Drag::Transform(g) => {
                 let g = *g;
                 if let Some(d) = self.doc_point(pos) {
@@ -1160,9 +1105,13 @@ impl EditorView {
         match self.drag.take() {
             None => return,
             Some(Drag::Distort { id, quad, .. }) => self.finish_distort(id, quad, cx),
-            Some(Drag::Move { .. })
-            | Some(Drag::MovePath { .. })
-            | Some(Drag::MoveText { .. })
+            Some(Drag::Slider {
+                key: SliderKey::Filter(id, _, _),
+                ..
+            }) => {
+                self.finish_filter_gesture(id, cx);
+            }
+            Some(Drag::Move(_))
             | Some(Drag::Slider { .. })
             | Some(Drag::Transform(_))
             | Some(Drag::Curve(_)) => {

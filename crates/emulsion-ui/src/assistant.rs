@@ -94,8 +94,8 @@ pub struct Assistant {
     pub dock_open: bool,
     /// A `paint` call being played back stroke by stroke.
     pub(crate) playback: Option<Playback>,
-    /// Mutations execute in arrival order so parallel tool calls cannot plan
-    /// against the same snapshot and then discard each other's changes.
+    /// Document reads and mutations execute in arrival order, so inspection
+    /// sees completed preceding edits and parallel writes retain each other.
     tool_busy: bool,
     tool_queue: VecDeque<RelayCall>,
     tool_generation: u64,
@@ -395,6 +395,14 @@ impl EditorView {
 
     /// Plan without a language model; apply if complete, else hand over.
     pub fn submit_ask(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.editor.in_transaction() && !self.assistant.running {
+            self.set_status(
+                "Finish the current edit before starting a request.",
+                false,
+                cx,
+            );
+            return;
+        }
         if self.generate.busy {
             self.set_status("Wait for image generation to finish.", false, cx);
             return;
@@ -467,6 +475,14 @@ impl EditorView {
         note: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        if self.editor.in_transaction() {
+            self.set_status(
+                "Finish the current edit, then submit the request again.",
+                false,
+                cx,
+            );
+            return;
+        }
         if self.generate.busy {
             self.set_status(
                 "Wait for image generation to finish, then submit the edit again.",
@@ -654,6 +670,9 @@ impl EditorView {
     }
 
     fn start_turn(&mut self, text: String, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.editor.in_transaction() {
+            return Err("Finish the current edit before starting the assistant.".into());
+        }
         if self.generate.busy {
             return Err("Wait for image generation to finish.".into());
         }
@@ -1042,7 +1061,7 @@ impl EditorView {
             ));
             return;
         }
-        if !tools::READ_ONLY.contains(&call.name.as_str()) {
+        if Self::ordered_tool(&call.name) {
             if self.assistant.tool_busy {
                 self.assistant.tool_queue.push_back(call);
                 return;
@@ -1052,12 +1071,19 @@ impl EditorView {
         self.execute_tool_now(call, cx);
     }
 
+    fn ordered_tool(name: &str) -> bool {
+        // Discovery of brushes, fonts and the attached reference is independent
+        // of document edits. Other reads can depend on preceding operations,
+        // including list_models after a download or list_recipes after import.
+        !matches!(name, "list_brushes" | "list_fonts" | "get_reference_image")
+    }
+
     fn complete_tool_work(&mut self, generation: u64, cx: &mut Context<Self>) {
         if generation != self.assistant.tool_generation {
             return;
         }
         if let Some(call) = self.assistant.tool_queue.pop_front() {
-            // Yield between mutations, and snapshot the document only when
+            // Yield between document operations, and snapshot only when
             // the queued operation starts. Keep the queue reserved meanwhile.
             cx.spawn(async move |this, cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -1100,7 +1126,7 @@ impl EditorView {
 
     fn execute_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
         let tool_generation = self.assistant.tool_generation;
-        let mutates = !tools::READ_ONLY.contains(&call.name.as_str());
+        let ordered = Self::ordered_tool(&call.name);
         if call.name == "get_reference_image" {
             call.reply(self.reference_result());
             return;
@@ -1117,12 +1143,21 @@ impl EditorView {
                         exec::inspect(&doc, &name, &args).unwrap_or_else(|e| e)
                     })
                     .await;
-                let _ = this.update(cx, |this, _| {
-                    if this.assistant.turn_generation == generation {
-                        this.observe_drawing_tool(&call.name, &call.arguments, &r, revision, false);
+                let _ = this.update(cx, |this, cx| {
+                    if this.assistant.turn_generation != generation
+                        || this.assistant.tool_generation != tool_generation
+                    {
+                        call.reply(emulsion_mcp::server::ToolResult::error(
+                            "The assistant request ended while this inspection was computing. Do not use this preview or retry automatically.",
+                        ));
+                        return;
+                    }
+                    this.observe_drawing_tool(&call.name, &call.arguments, &r, revision, false);
+                    call.reply(r);
+                    if ordered {
+                        this.complete_tool_work(tool_generation, cx);
                     }
                 });
-                call.reply(r);
             })
             .detach();
             return;
@@ -1185,7 +1220,7 @@ impl EditorView {
         );
         call.reply(r);
         self.after_change(cx);
-        if mutates {
+        if ordered {
             self.complete_tool_work(tool_generation, cx);
         }
     }
@@ -2238,18 +2273,13 @@ mod mutation_queue_tests {
                 view.run_tool_now(first, cx);
                 view.run_tool_now(second, cx);
                 view.run_tool_now(inspect, cx);
-                assert_eq!(view.assistant.tool_queue.len(), 1);
+                assert_eq!(view.assistant.tool_queue.len(), 2);
                 // A prematurely delivered provider result must not cancel the
                 // active paint, discard its queued successor, or split undo.
                 view.complete_provider_turn(0.25, cx);
                 assert!(view.assistant.running && view.assistant.completion_pending);
                 assert!(view.editor.history.is_empty());
             });
-            assert_eq!(
-                inspect_reply.join().unwrap()["isError"],
-                false,
-                "inspection is available during painting"
-            );
             for _ in 0..100 {
                 cx.executor().advance_clock(Duration::from_millis(16));
                 cx.run_until_parked();
@@ -2274,9 +2304,153 @@ mod mutation_queue_tests {
                 assert_eq!(raster.get(150, 25)[3], 0);
                 assert_eq!(raster.get(150, 75)[3], 0);
             });
-            for response in [first_reply.join().unwrap(), second_reply.join().unwrap()] {
+            for response in [
+                first_reply.join().unwrap(),
+                second_reply.join().unwrap(),
+                inspect_reply.join().unwrap(),
+            ] {
                 assert_eq!(response["isError"], false, "{response}");
             }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn queued_view_sees_completed_paint_before_a_later_mutation(cx: &mut TestAppContext) {
+        for live in [true, false] {
+            let relay = Relay::start().unwrap();
+            let view = painting(cx, live);
+            let args = serde_json::json!({});
+            let (paint, paint_reply) = call(&relay, "paint", stroke(25, "#ff0000"));
+            let (inspect, inspect_reply) = call(&relay, "get_view", args.clone());
+            let (hide, hide_reply) = call(
+                &relay,
+                "set_visibility",
+                serde_json::json!({"node": 1, "visible": false}),
+            );
+            view.update(cx, |view, cx| {
+                view.run_tool_now(paint, cx);
+                view.run_tool_now(inspect, cx);
+                view.run_tool_now(hide, cx);
+                assert_eq!(view.assistant.tool_queue.len(), 2);
+                view.complete_provider_turn(0.25, cx);
+                assert!(view.assistant.running && view.assistant.completion_pending);
+            });
+            for _ in 0..100 {
+                cx.executor().advance_clock(Duration::from_millis(16));
+                cx.run_until_parked();
+                if view.read_with(cx, |view, _| !view.assistant.running) {
+                    break;
+                }
+            }
+            let expected = view.update(cx, |view, _| {
+                assert!(!view.assistant.running);
+                assert!(!view.assistant.tool_busy && view.assistant.tool_queue.is_empty());
+                assert_eq!(view.assistant.cost, 0.25);
+                let node = view.editor.doc.node(1).unwrap();
+                assert!(!node.visible, "the mutation following inspection must run");
+                let NodeKind::Raster { raster, .. } = &node.kind else {
+                    panic!("ink layer")
+                };
+                assert!(
+                    raster.get(280, 25)[0] > 60000,
+                    "stroke endpoint was completed"
+                );
+                let mut at_inspection = view.editor.doc.clone();
+                at_inspection.node_mut(1).unwrap().visible = true;
+                exec::view(&at_inspection, &args).unwrap()
+            });
+            let response = inspect_reply.join().unwrap();
+            assert_eq!(response["isError"], false);
+            let returned_image = response["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|block| block["type"] == "image")
+                .unwrap();
+            let expected_image = expected
+                .content
+                .iter()
+                .find(|block| block["type"] == "image")
+                .unwrap();
+            assert_eq!(
+                returned_image, expected_image,
+                "inspection must show the entire prior stroke while the layer was still visible"
+            );
+            for response in [paint_reply.join().unwrap(), hide_reply.join().unwrap()] {
+                assert_eq!(response["isError"], false, "{response}");
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn brush_discovery_bypasses_playback_without_releasing_its_queue(cx: &mut TestAppContext) {
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, true);
+        let (paint, paint_reply) = call(&relay, "paint", stroke(25, "#ff0000"));
+        let (inspect, inspect_reply) = call(&relay, "get_view", serde_json::json!({}));
+        let (brushes, brushes_reply) = call(&relay, "list_brushes", serde_json::json!({}));
+        view.update(cx, |view, cx| {
+            view.run_tool_now(paint, cx);
+            view.run_tool_now(inspect, cx);
+            view.run_tool_now(brushes, cx);
+            assert_eq!(view.assistant.tool_queue.len(), 1);
+        });
+        // No playback clock advances: only independent discovery can finish.
+        cx.run_until_parked();
+        assert_eq!(brushes_reply.join().unwrap()["isError"], false);
+        view.update(cx, |view, cx| {
+            assert!(view.assistant.playback.is_some());
+            assert!(view.assistant.tool_busy);
+            assert_eq!(view.assistant.tool_queue.len(), 1);
+            view.complete_provider_turn(0.125, cx);
+            view.stop_assistant(cx);
+        });
+        cx.run_until_parked();
+        for response in [paint_reply.join().unwrap(), inspect_reply.join().unwrap()] {
+            assert_eq!(
+                response["isError"], true,
+                "queued inspection must be cancelled: {response}"
+            );
+        }
+        view.read_with(cx, |view, _| {
+            assert!(!view.assistant.running);
+            assert!(!view.assistant.tool_busy && view.assistant.tool_queue.is_empty());
+            assert_eq!(view.assistant.cost, 0.125);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn inspection_defers_provider_completion_and_stop_rejects_inflight_result(
+        cx: &mut TestAppContext,
+    ) {
+        for stop in [false, true] {
+            let relay = Relay::start().unwrap();
+            let view = painting(cx, false);
+            let (inspect, inspect_reply) = call(&relay, "get_view", serde_json::json!({}));
+            let before = view.update(cx, |view, cx| {
+                let before = view.editor.doc.clone();
+                view.run_tool_now(inspect, cx);
+                assert!(view.assistant.tool_busy);
+                view.complete_provider_turn(0.125, cx);
+                assert!(
+                    view.assistant.running && view.assistant.completion_pending,
+                    "the provider result must wait for its outstanding inspection"
+                );
+                if stop {
+                    view.stop_assistant(cx);
+                    assert!(!view.assistant.running);
+                }
+                before
+            });
+            cx.run_until_parked();
+            assert_eq!(inspect_reply.join().unwrap()["isError"], stop);
+            view.read_with(cx, |view, _| {
+                assert!(!view.assistant.running);
+                assert!(!view.assistant.tool_busy && view.assistant.tool_queue.is_empty());
+                assert_eq!(view.assistant.cost, 0.125);
+                assert_eq!(view.editor.doc, before);
+                assert!(view.editor.history.is_empty());
+            });
         }
     }
 

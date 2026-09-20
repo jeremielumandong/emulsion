@@ -201,6 +201,9 @@ impl EditorView {
     }
 
     fn after_graph_change(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_pending_edits();
+        self.drag = None;
+        self.warp = None;
         self.history.selected = None;
         self.after_change(cx);
     }

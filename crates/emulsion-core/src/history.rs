@@ -157,6 +157,29 @@ impl Editor {
         Ok(out)
     }
 
+    /// Render a drag preview from the outer transaction's original document.
+    /// Pass the complete gesture delta, not a delta from the previous preview.
+    /// The transaction and history remain intact; a failed command changes
+    /// neither document, revision, dirty state, nor transaction ownership.
+    pub fn preview(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
+        let Some((_, baseline, baseline_revision, 1)) = &self.txn else {
+            return Err(CommandError::PreviewTransaction);
+        };
+        let mut next = baseline.clone();
+        let out = cmd.apply(&mut next)?;
+        let restored_revision = (next == *baseline).then_some(*baseline_revision);
+        if next != self.doc {
+            self.doc = next;
+            if let Some(revision) = restored_revision {
+                self.revision = revision;
+            } else {
+                self.bump();
+            }
+            self.dirty = Dirty::All;
+        }
+        Ok(out)
+    }
+
     /// Start a transaction: every command until the matching `end` becomes
     /// one step. Nests.
     pub fn begin(&mut self, name: impl Into<String>) {
@@ -180,6 +203,10 @@ impl Editor {
                 before,
                 revision_before: rev,
             });
+        } else {
+            // Returning a gesture to its starting state is not an edit.
+            // Keep the allocator ahead of every issued preview revision.
+            self.revision = rev;
         }
     }
 
@@ -190,9 +217,12 @@ impl Editor {
     /// Abandon the open transaction: the document returns to how it was
     /// when the outermost `begin` ran, and nothing reaches the history.
     pub fn cancel(&mut self) {
-        if let Some((_, before, rev, _)) = self.txn.take() {
+        if let Some((_, before, revision, _)) = self.txn.take() {
+            if self.doc != before {
+                self.dirty = Dirty::All;
+            }
             self.doc = before;
-            self.revision = rev.max(self.revision) + 1;
+            self.revision = revision;
         }
     }
 
@@ -492,6 +522,193 @@ mod tests {
         assert_eq!(e.history.len(), 1, "no-op is not a step");
         e.undo();
         assert_eq!(e.doc.node(id).unwrap().opacity, 1.0);
+    }
+
+    #[test]
+    fn baseline_preview_rejects_mask_clipping_and_roundtrip_drag_adds_no_undo() {
+        let mut doc = Document::new(16, 16);
+        let mask = Arc::new(emulsion_raster::select::rect(16, 16, 2.0, 3.0, 5.0, 4.0));
+        let mut node = Node::new(
+            0,
+            "Masked shape",
+            crate::NodeKind::Fill {
+                rgba: [255, 0, 0, 255],
+            },
+        );
+        node.mask = Some(mask.clone());
+        let id = Command::AddNode {
+            node: Box::new(node),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        let baseline = doc.clone();
+        let mut e = Editor::new(doc, None);
+        let initial_revision = e.revision;
+        e.take_dirty();
+        e.begin("Move");
+        assert_eq!(
+            e.preview(Command::TranslateNode {
+                id,
+                dx: 20.0,
+                dy: 0.0,
+            }),
+            Err(CommandError::MaskWouldClip(id))
+        );
+        assert_eq!(e.doc, baseline);
+        assert_eq!(e.revision, initial_revision);
+        assert_eq!(e.take_dirty(), Dirty::Nothing);
+        let outside_revision = e.revision;
+        e.preview(Command::TranslateNode {
+            id,
+            dx: 1.0,
+            dy: 0.0,
+        })
+        .unwrap();
+        assert!(e.revision > outside_revision);
+        assert_eq!(
+            emulsion_raster::select::bounds(e.doc.node(id).unwrap().mask.as_ref().unwrap()),
+            emulsion_raster::IRect::new(3, 3, 5, 4)
+        );
+        e.preview(Command::TranslateNode {
+            id,
+            dx: 0.0,
+            dy: 0.0,
+        })
+        .unwrap();
+        assert_eq!(e.doc, baseline);
+        assert_eq!(e.revision, initial_revision);
+        assert!(!e.is_modified());
+        assert_eq!(e.take_dirty(), Dirty::All);
+        assert!(Arc::ptr_eq(
+            e.doc.node(id).unwrap().mask.as_ref().unwrap(),
+            &mask
+        ));
+        let zero_revision = e.revision;
+        e.take_dirty();
+        e.preview(Command::TranslateNode {
+            id,
+            dx: 0.0,
+            dy: 0.0,
+        })
+        .unwrap();
+        assert_eq!(e.revision, zero_revision);
+        assert_eq!(e.take_dirty(), Dirty::Nothing);
+        assert!(e.in_transaction());
+        e.end();
+        assert_eq!(e.history.len(), 0);
+        assert!(!e.is_modified());
+        assert!(!e.undo());
+        e.begin("Move");
+        assert_eq!(
+            e.preview(Command::TranslateNode {
+                id,
+                dx: 20.0,
+                dy: 0.0,
+            }),
+            Err(CommandError::MaskWouldClip(id))
+        );
+        e.preview(Command::TranslateNode {
+            id,
+            dx: 2.0,
+            dy: 3.0,
+        })
+        .unwrap();
+        e.end();
+        assert_eq!(e.history.len(), 1);
+        assert!(e.undo());
+        assert_eq!(e.doc, baseline);
+    }
+
+    #[test]
+    fn preview_requires_outer_transaction_and_failed_previews_leave_state_intact() {
+        let (mut e, id) = editor();
+        let initial_revision = e.revision;
+        let command = Command::TranslateNode {
+            id,
+            dx: 5.0,
+            dy: 6.0,
+        };
+        assert_eq!(
+            e.preview(command.clone()),
+            Err(CommandError::PreviewTransaction)
+        );
+        e.begin("Move");
+        e.preview(command.clone()).unwrap();
+        let before = e.doc.clone();
+        let revision = e.revision;
+        e.take_dirty();
+        assert!(
+            e.preview(Command::TranslateNode {
+                id,
+                dx: f64::NAN,
+                dy: 0.0
+            })
+            .is_err()
+        );
+        assert_eq!(e.doc, before);
+        assert_eq!(e.revision, revision);
+        assert_eq!(e.take_dirty(), Dirty::Nothing);
+        e.begin("Nested");
+        assert_eq!(e.preview(command), Err(CommandError::PreviewTransaction));
+        assert_eq!(e.doc, before);
+        e.end();
+        assert!(e.in_transaction());
+        e.cancel();
+        let cancelled_revision = e.revision;
+        assert_eq!(cancelled_revision, initial_revision);
+        assert!(!e.is_modified());
+        assert_eq!(e.take_dirty(), Dirty::All);
+        assert_eq!(e.history.len(), 0);
+        e.execute(Command::TranslateNode {
+            id,
+            dx: 1.0,
+            dy: 0.0,
+        })
+        .unwrap();
+        assert!(
+            e.revision > revision,
+            "new revisions must not reuse canceled previews"
+        );
+    }
+
+    #[test]
+    fn no_op_transaction_and_cancel_restore_saved_state_without_reusing_revisions() {
+        let (mut e, id) = editor();
+        let initial_revision = e.revision;
+        e.mark_saved(PathBuf::from("saved.ora"), initial_revision);
+        e.take_dirty();
+        e.begin("Click without movement");
+        e.cancel();
+        assert_eq!(e.revision, initial_revision);
+        assert_eq!(e.take_dirty(), Dirty::Nothing);
+        assert!(!e.is_modified());
+        e.begin("Return to starting opacity");
+        e.execute(Command::SetOpacity { id, opacity: 0.5 }).unwrap();
+        e.execute(Command::SetOpacity { id, opacity: 1.0 }).unwrap();
+        let transient_revision = e.revision;
+        e.end();
+        assert_eq!(e.revision, initial_revision);
+        assert!(!e.is_modified());
+        assert_eq!(e.history.len(), 0);
+        assert_eq!(e.take_dirty(), Dirty::All);
+        e.execute(Command::SetOpacity { id, opacity: 0.7 }).unwrap();
+        assert!(e.revision > transient_revision);
+        let unsaved_revision = e.revision;
+        e.begin("Canceled move over existing unsaved changes");
+        e.preview(Command::TranslateNode {
+            id,
+            dx: 2.0,
+            dy: 3.0,
+        })
+        .unwrap();
+        e.take_dirty();
+        e.cancel();
+        assert_eq!(e.revision, unsaved_revision);
+        assert!(e.is_modified());
+        assert_eq!(e.take_dirty(), Dirty::All);
+        assert_eq!(e.doc.node(id).unwrap().opacity, 0.7);
     }
 
     #[test]

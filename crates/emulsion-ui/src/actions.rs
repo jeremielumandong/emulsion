@@ -60,6 +60,20 @@ gpui_kit::actions!(
         InvertSelection,
         FillSelection,
         ContentAwareFill,
+        CopyPixels,
+        CutPixels,
+        PastePixels,
+        ClearPixels,
+        CanvasDelete,
+        FreeTransform,
+        NudgeLeft,
+        NudgeRight,
+        NudgeUp,
+        NudgeDown,
+        NudgeLeftLarge,
+        NudgeRightLarge,
+        NudgeUpLarge,
+        NudgeDownLarge,
         ShowSettings,
         Suggestion1,
         Suggestion2,
@@ -90,6 +104,9 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         ToolWand, ToolBrush, ToolEraser, ToolBucket, ToolGradient, ToolHeal, ToolClone,
         ToolCrop, ToolShape, SwapColors, DefaultColors, BrushSmaller, BrushLarger, CommitTool,
         SelectAll, Deselect, InvertSelection, FillSelection, ContentAwareFill, ShowSettings,
+        CopyPixels, CutPixels, PastePixels, ClearPixels, CanvasDelete, FreeTransform,
+        NudgeLeft, NudgeRight, NudgeUp, NudgeDown,
+        NudgeLeftLarge, NudgeRightLarge, NudgeUpLarge, NudgeDownLarge,
         Suggestion1, Suggestion2, Suggestion3, Suggestion4, Quit,
     )
 }
@@ -155,14 +172,40 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("canvas", "CommitTool", "enter"),
     ("canvas", "FillSelection", "alt-backspace"),
     ("canvas", "ContentAwareFill", "shift-backspace"),
+    ("canvas", "CopyPixels", "ctrl-c"),
+    ("canvas", "CutPixels", "ctrl-x"),
+    ("canvas", "PastePixels", "ctrl-v"),
+    ("canvas", "FreeTransform", "ctrl-t"),
+    ("canvas", "NudgeLeft", "left"),
+    ("canvas", "NudgeRight", "right"),
+    ("canvas", "NudgeUp", "up"),
+    ("canvas", "NudgeDown", "down"),
+    ("canvas", "NudgeLeftLarge", "shift-left"),
+    ("canvas", "NudgeRightLarge", "shift-right"),
+    ("canvas", "NudgeUpLarge", "shift-up"),
+    ("canvas", "NudgeDownLarge", "shift-down"),
     ("canvas", "RotateCw", "r"),
     ("canvas", "RotateCcw", "shift-r"),
     ("canvas", "ResetRotation", "escape"),
-    ("canvas", "DeleteNode", "delete"),
-    ("canvas", "DeleteNode", "backspace"),
+    ("canvas", "CanvasDelete", "delete"),
+    ("canvas", "CanvasDelete", "backspace"),
     ("panel", "DeleteNode", "delete"),
     ("panel", "DeleteNode", "backspace"),
 ];
+
+fn platform_defaults() -> Vec<(String, String, String)> {
+    let mut out: Vec<_> = DEFAULTS
+        .iter()
+        .map(|(c, a, k)| (c.to_string(), a.to_string(), k.to_string()))
+        .collect();
+    if cfg!(target_os = "macos") {
+        out.extend(DEFAULTS.iter().filter_map(|(c, a, k)| {
+            k.strip_prefix("ctrl-")
+                .map(|keys| (c.to_string(), a.to_string(), format!("cmd-{keys}")))
+        }));
+    }
+    out
+}
 
 /// Where the person's overrides live.
 pub fn keymap_path() -> std::path::PathBuf {
@@ -181,8 +224,8 @@ pub fn keymap_template() -> String {
     );
     for (ctx, _) in CONTEXTS {
         out.push_str(&format!("[{ctx}]\n"));
-        for (c, action, keys) in DEFAULTS {
-            if *c == ctx {
+        for (c, action, keys) in platform_defaults() {
+            if c == ctx {
                 out.push_str(&format!("# {action} = \"{keys}\"\n"));
             }
         }
@@ -223,10 +266,9 @@ pub fn user_bindings() -> Vec<(String, String, String)> {
 /// every default of the same action in that context).
 pub fn effective() -> Vec<(String, String, String)> {
     let user = user_bindings();
-    let mut out: Vec<(String, String, String)> = DEFAULTS
-        .iter()
+    let mut out: Vec<(String, String, String)> = platform_defaults()
+        .into_iter()
         .filter(|(c, a, _)| !user.iter().any(|(uc, ua, _)| uc == c && ua == a))
-        .map(|(c, a, k)| (c.to_string(), a.to_string(), k.to_string()))
         .collect();
     out.extend(user);
     out
@@ -263,5 +305,49 @@ mod tests {
             panic!("{e}");
         }
         assert!(t.contains("# Undo = \"ctrl-z\""));
+    }
+
+    #[test]
+    fn clipboard_bindings_are_canvas_scoped_and_mac_aliases_keep_control() {
+        let defaults = super::platform_defaults();
+        for (action, key) in [
+            ("CopyPixels", "c"),
+            ("CutPixels", "x"),
+            ("PastePixels", "v"),
+            ("FreeTransform", "t"),
+        ] {
+            assert!(defaults.contains(&("canvas".into(), action.into(), format!("ctrl-{key}"))));
+            if cfg!(target_os = "macos") {
+                assert!(defaults.contains(&("canvas".into(), action.into(), format!("cmd-{key}"))));
+            }
+            assert!(
+                defaults
+                    .iter()
+                    .filter(|(_, a, _)| a == action)
+                    .all(|(c, _, _)| c == "canvas")
+            );
+        }
+        assert!(defaults.contains(&("panel".into(), "DeleteNode".into(), "backspace".into())));
+        assert!(defaults.contains(&("canvas".into(), "CanvasDelete".into(), "backspace".into())));
+    }
+
+    #[test]
+    fn nudge_bindings_are_canvas_scoped_and_available_to_keymaps() {
+        let defaults = super::platform_defaults();
+        for (action, key) in [
+            ("NudgeLeft", "left"),
+            ("NudgeRight", "right"),
+            ("NudgeUp", "up"),
+            ("NudgeDown", "down"),
+            ("NudgeLeftLarge", "shift-left"),
+            ("NudgeRightLarge", "shift-right"),
+            ("NudgeUpLarge", "shift-up"),
+            ("NudgeDownLarge", "shift-down"),
+        ] {
+            let matches: Vec<_> = defaults.iter().filter(|(_, a, _)| a == action).collect();
+            assert_eq!(matches.len(), 1, "{action} must have one scoped default");
+            assert_eq!(matches[0], &("canvas".into(), action.into(), key.into()));
+            assert!(super::binding(action, key, Some("Canvas")).is_some());
+        }
     }
 }

@@ -22,6 +22,7 @@ use crate::color;
 use crate::geom::{IRect, TileCoord};
 use crate::image::{Mask, Raster};
 use crate::tile::{TILE, TILE_PX};
+use glam::{DAffine2, dvec2};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -278,6 +279,7 @@ pub struct Stroke {
     ink: Ink,
     base: Arc<Raster>,
     clip: Option<Clip>,
+    alpha_lock: bool,
     paint: HashMap<TileCoord, PaintTile>,
     pending: HashSet<TileCoord>,
     /// Layer-space bounds of everything painted so far.
@@ -309,6 +311,8 @@ pub struct Stroke {
     mirror_y: Option<f32>,
     /// Rotational symmetry: centre and number of copies.
     radial: Option<((f32, f32), u32)>,
+    /// Layer pixels to the coordinate space containing symmetry axes.
+    symmetry_space: DAffine2,
     finished: bool,
 }
 
@@ -517,6 +521,7 @@ impl Stroke {
             ink,
             base,
             clip,
+            alpha_lock: false,
             paint: HashMap::new(),
             pending: HashSet::new(),
             touched: IRect::default(),
@@ -537,12 +542,18 @@ impl Stroke {
             mirror_x: None,
             mirror_y: None,
             radial: None,
+            symmetry_space: DAffine2::IDENTITY,
             finished: false,
         }
     }
 
     pub fn base(&self) -> &Arc<Raster> {
         &self.base
+    }
+
+    /// Preserve the layer's alpha, including partially transparent edges.
+    pub fn set_alpha_lock(&mut self, enabled: bool) {
+        self.alpha_lock = enabled;
     }
 
     /// For clone strokes: where to copy from, relative to the brush, in
@@ -564,6 +575,12 @@ impl Stroke {
     pub fn set_mirror(&mut self, x: Option<f32>, y: Option<f32>) {
         self.mirror_x = x;
         self.mirror_y = y;
+    }
+
+    /// Interpret mirror axes and radial centers in this space (usually the
+    /// document), transforming both dab positions and tip shapes back to pixels.
+    pub fn set_symmetry_space(&mut self, layer_to_space: DAffine2) {
+        self.symmetry_space = layer_to_space;
     }
 
     /// Also stamp every dab rotated `n` ways around `center` (mandalas).
@@ -651,33 +668,40 @@ impl Stroke {
             self.brush.roundness = (saved_round * (1.0 - lean * 0.7)).max(0.05);
         }
         let colour = self.dab_colour(sx, sy, size / 2.0);
-        let mut stamps: Vec<(f32, f32, f32)> = vec![(sx, sy, angle)];
+        let mut stamps = vec![DAffine2::IDENTITY];
         if let Some(mx) = self.mirror_x {
-            stamps.push((2.0 * mx - sx, sy, -angle));
+            stamps.push(
+                DAffine2::from_translation(dvec2(2.0 * mx as f64, 0.0))
+                    * DAffine2::from_scale(dvec2(-1.0, 1.0)),
+            );
         }
         if let Some(my) = self.mirror_y {
-            stamps.push((sx, 2.0 * my - sy, -angle));
-            if let Some(mx) = self.mirror_x {
-                stamps.push((2.0 * mx - sx, 2.0 * my - sy, angle));
+            let reflection = DAffine2::from_translation(dvec2(0.0, 2.0 * my as f64))
+                * DAffine2::from_scale(dvec2(1.0, -1.0));
+            for transform in stamps.clone() {
+                stamps.push(reflection * transform);
             }
         }
         if let Some(((ox, oy), n)) = self.radial {
             let base = stamps.clone();
             for k in 1..n {
-                let a = k as f32 / n as f32 * std::f32::consts::TAU;
-                let (sa, ca) = a.sin_cos();
-                for &(x, y, ang) in &base {
-                    let (dx, dy) = (x - ox, y - oy);
-                    stamps.push((
-                        ox + dx * ca - dy * sa,
-                        oy + dx * sa + dy * ca,
-                        ang + a.to_degrees(),
-                    ));
+                let center = dvec2(ox as f64, oy as f64);
+                let rotation = DAffine2::from_translation(center)
+                    * DAffine2::from_angle(k as f64 / n as f64 * std::f64::consts::TAU)
+                    * DAffine2::from_translation(-center);
+                for transform in &base {
+                    stamps.push(rotation * *transform);
                 }
             }
         }
-        for (x, y, ang) in stamps {
-            self.stamp(x, y, size, ang, flow, colour);
+        let inverse = self.symmetry_space.inverse();
+        for transform in stamps {
+            let transform = if transform == DAffine2::IDENTITY {
+                transform
+            } else {
+                inverse * transform * self.symmetry_space
+            };
+            self.stamp((sx, sy), size, angle, flow, colour, transform);
         }
         self.brush.roundness = saved_round;
     }
@@ -723,13 +747,28 @@ impl Stroke {
         }
     }
 
-    fn stamp(&mut self, cx: f32, cy: f32, size: f32, angle_deg: f32, flow: f32, colour: [f32; 4]) {
+    fn stamp(
+        &mut self,
+        center: (f32, f32),
+        size: f32,
+        angle_deg: f32,
+        flow: f32,
+        colour: [f32; 4],
+        transform: DAffine2,
+    ) {
         let r = (size / 2.0).max(0.3);
+        let center = transform.transform_point2(dvec2(center.0 as f64, center.1 as f64));
+        let (cx, cy) = (center.x as f32, center.y as f32);
+        let m = transform.matrix2;
+        let (rx, ry) = (
+            r * (m.x_axis.x.abs() + m.y_axis.x.abs()) as f32,
+            r * (m.x_axis.y.abs() + m.y_axis.y.abs()) as f32,
+        );
         let b = IRect::new(
-            (cx - r).floor() as i32,
-            (cy - r).floor() as i32,
-            (2.0 * r).ceil() as i32 + 2,
-            (2.0 * r).ceil() as i32 + 2,
+            (cx - rx).floor() as i32,
+            (cy - ry).floor() as i32,
+            (2.0 * rx).ceil() as i32 + 2,
+            (2.0 * ry).ceil() as i32 + 2,
         )
         .intersect(&self.base.bounds());
         if b.is_empty() {
@@ -740,6 +779,13 @@ impl Stroke {
         let flow = flow.clamp(0.0, 1.0);
         let (hard, round) = (self.brush.hardness, self.brush.roundness);
         let (s, c) = (-angle_deg.to_radians()).sin_cos();
+        let inverse = m.inverse();
+        let (xx, xy, yx, yy) = (
+            inverse.x_axis.x as f32,
+            inverse.y_axis.x as f32,
+            inverse.x_axis.y as f32,
+            inverse.y_axis.y as f32,
+        );
         let (gk, gs, gstr) = (
             self.brush.grain,
             self.brush.grain_scale,
@@ -751,8 +797,11 @@ impl Stroke {
         let dab_no = self.dabs;
         // Integrate sharp procedural edges over the pixel. Sampling just its
         // centre can miss a thin dab entirely when it lands between centres.
-        let footprint = std::f32::consts::FRAC_1_SQRT_2 / (r * round);
-        let antialias = (1.0 - hard) * r * round < 1.0 || r * round < 2.0;
+        let footprint = std::f32::consts::FRAC_1_SQRT_2
+            * (xx.abs() + xy.abs()).max(yx.abs() + yy.abs())
+            / (r * round);
+        let antialias =
+            (1.0 - hard) * r * round < 1.0 || r * round < 2.0 || transform != DAffine2::IDENTITY;
         for ty in b.y.div_euclid(t)..=(b.bottom() - 1).div_euclid(t) {
             for tx in b.x.div_euclid(t)..=(b.right() - 1).div_euclid(t) {
                 let coord = TileCoord::new(tx, ty);
@@ -764,6 +813,7 @@ impl Stroke {
                 for y in tr.y..tr.bottom() {
                     for x in tr.x..tr.right() {
                         let (ox, oy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                        let (ox, oy) = (ox * xx + oy * xy, ox * yx + oy * yy);
                         let (rx, ry) = (ox * c - oy * s, (ox * s + oy * c) / round);
                         let d = (rx * rx + ry * ry).sqrt() / r;
                         let shape = match &tip {
@@ -784,6 +834,7 @@ impl Stroke {
                                 let mut coverage = 0.0;
                                 for sy in [-0.375, -0.125, 0.125, 0.375] {
                                     for sx in [-0.375, -0.125, 0.125, 0.375] {
+                                        let (sx, sy) = (sx * xx + sy * xy, sx * yx + sy * yy);
                                         let u = rx + sx * c - sy * s;
                                         let v = ry + (sx * s + sy * c) / round;
                                         coverage += falloff(u.hypot(v) / r, hard);
@@ -1147,6 +1198,9 @@ impl Stroke {
                     continue;
                 }
                 let b = color::px_to_f(src[i]);
+                if self.alpha_lock && b[3] <= 0.0 {
+                    continue;
+                }
                 let a = p[4].max(1e-6);
                 // The dab colour at full coverage, then scaled by k.
                 let mut ink = [p[0] / a, p[1] / a, p[2] / a, p[3] / a];
@@ -1176,8 +1230,15 @@ impl Stroke {
                             k
                         };
                         let s = ink.map(|v| v * k);
-                        blend_px(mode, BlendSpace::Linear, b, s, 0.0)
+                        if self.alpha_lock {
+                            let opaque = [b[0] / b[3], b[1] / b[3], b[2] / b[3], 1.0];
+                            let mixed = blend_px(mode, BlendSpace::Linear, opaque, s, 0.0);
+                            [mixed[0] * b[3], mixed[1] * b[3], mixed[2] * b[3], b[3]]
+                        } else {
+                            blend_px(mode, BlendSpace::Linear, b, s, 0.0)
+                        }
                     }
+                    Ink::Erase if self.alpha_lock => b,
                     Ink::Erase => b.map(|v| v * (1.0 - k)),
                     Ink::Clone { dx, dy } => {
                         let (sx, sy) = ((x as f32 + dx).round(), (y as f32 + dy).round());
@@ -1189,7 +1250,17 @@ impl Stroke {
                             continue;
                         }
                         let s = color::px_to_f(self.base.get(sx as u32, sy as u32));
-                        [0, 1, 2, 3].map(|ch| s[ch] * k + b[ch] * (1.0 - k))
+                        if self.alpha_lock {
+                            let a = s[3];
+                            [
+                                s[0] * k * b[3] + b[0] * (1.0 - a * k),
+                                s[1] * k * b[3] + b[1] * (1.0 - a * k),
+                                s[2] * k * b[3] + b[2] * (1.0 - a * k),
+                                b[3],
+                            ]
+                        } else {
+                            [0, 1, 2, 3].map(|ch| s[ch] * k + b[ch] * (1.0 - k))
+                        }
                     }
                 };
                 out[i] = color::f_to_px(o.map(|v| v.clamp(0.0, 1.0)));
@@ -1210,7 +1281,18 @@ impl Stroke {
             m.set_tile(
                 *c,
                 tile.iter()
-                    .map(|p| (p[4].min(1.0) * 255.0).round() as u8)
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let x = c.x * TILE as i32 + (i % TILE as usize) as i32;
+                        let y = c.y * TILE as i32 + (i / TILE as usize) as i32;
+                        let clip = self.clip.as_ref().map_or(1.0, |clip| clip(x, y));
+                        let alpha = if self.alpha_lock {
+                            self.base.get(x as u32, y as u32)[3] as f32 / 65535.0
+                        } else {
+                            1.0
+                        };
+                        (p[4].min(1.0) * self.brush.opacity * clip * alpha * 255.0).round() as u8
+                    })
                     .collect(),
             );
         }
@@ -1649,6 +1731,79 @@ mod tests {
         s.point(48.0, 32.0);
         let (r, _) = s.render(&base);
         assert_eq!(r.get(48, 32)[0], 65535, "red cloned from x - 40");
+    }
+
+    #[test]
+    fn alpha_lock_preserves_translucent_edges_for_paint_erase_and_clone() {
+        let base = Arc::new(Raster::solid(32, 32, [0.2, 0.1, 0.0, 0.5]));
+        for ink in [opaque_red(), Ink::Erase, Ink::Clone { dx: 4.0, dy: 0.0 }] {
+            let mut stroke = Stroke::new(base.clone(), hard(12.0), ink, None);
+            stroke.set_alpha_lock(true);
+            stroke.point(16.0, 16.0);
+            let (result, _) = stroke.render(&base);
+            for y in 0..32 {
+                for x in 0..32 {
+                    assert_eq!(result.get(x, y)[3], base.get(x, y)[3]);
+                }
+            }
+        }
+        let transparent = Arc::new(Raster::transparent(32, 32));
+        let mut stroke = Stroke::new(transparent.clone(), hard(12.0), opaque_red(), None);
+        stroke.set_alpha_lock(true);
+        stroke.point(16.0, 16.0);
+        assert_eq!(stroke.render(&transparent).0.get(16, 16), [0; 4]);
+    }
+
+    #[test]
+    fn healing_coverage_includes_selection_opacity_and_alpha_lock() {
+        let base = Arc::new(Raster::solid(32, 32, [0.0, 0.0, 0.0, 0.5]));
+        let mut stroke = Stroke::new(
+            base,
+            Brush {
+                opacity: 0.5,
+                ..hard(24.0)
+            },
+            opaque_red(),
+            Some(Arc::new(|x, _| if x < 16 { 1.0 } else { 0.0 })),
+        );
+        stroke.set_alpha_lock(true);
+        stroke.point(16.0, 16.0);
+        let coverage = stroke.coverage();
+        assert!((coverage.get(12, 16) as i32 - 64).abs() <= 1);
+        assert_eq!(coverage.get(20, 16), 0);
+    }
+
+    #[test]
+    fn symmetry_uses_document_axes_on_rotated_nonuniform_layers() {
+        let base = Arc::new(Raster::transparent(128, 128));
+        let center = dvec2(64.0, 64.0);
+        let to_doc = DAffine2::from_translation(center)
+            * DAffine2::from_angle(std::f64::consts::FRAC_PI_4)
+            * DAffine2::from_scale(dvec2(1.5, 0.75))
+            * DAffine2::from_translation(-center);
+        let local = dvec2(48.0, 52.0);
+        let doc = to_doc.transform_point2(local);
+        let expected = to_doc
+            .inverse()
+            .transform_point2(dvec2(128.0 - doc.x, doc.y));
+        let mut stroke = Stroke::new(base.clone(), hard(5.0), opaque_red(), None);
+        stroke.set_symmetry_space(to_doc);
+        stroke.set_mirror(Some(64.0), None);
+        stroke.point(local.x as f32, local.y as f32);
+        let (result, _) = stroke.render(&base);
+        assert!(result.get(expected.x.floor() as u32, expected.y.floor() as u32)[3] > 50000);
+        assert_eq!(
+            result.get(80, 52)[3],
+            0,
+            "the former layer-space reflection must not be painted"
+        );
+        // Compare reflected samples in document space, including the shaped footprint.
+        for delta in [dvec2(0.0, 0.0), dvec2(1.0, 0.0), dvec2(0.0, 1.0)] {
+            let p = local + delta;
+            let d = to_doc.transform_point2(p);
+            let q = to_doc.inverse().transform_point2(dvec2(128.0 - d.x, d.y));
+            assert!(result.get(q.x.floor() as u32, q.y.floor() as u32)[3] > 0);
+        }
     }
 
     /// Width of the painted band at column x.

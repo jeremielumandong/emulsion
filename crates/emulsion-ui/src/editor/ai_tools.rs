@@ -18,8 +18,8 @@ pub(crate) struct AiState {
     /// Quick select uses SAM when a model is installed and this is on.
     pub ai_select: bool,
     /// SAM embedding of the composite, by document revision.
-    sam: Option<(u64, Arc<sam::Embedding>)>,
-    sam_loading: Option<u64>,
+    sam: Option<((u64, u64), Arc<sam::Embedding>)>,
+    sam_loading: Option<((u64, u64), u64)>,
     /// The running job, for the status line and cancel.
     pub job: Option<Arc<Job>>,
     /// The last model-made selection, kept soft so it can be refined.
@@ -45,6 +45,8 @@ pub(crate) struct Refine {
     /// Pixels to grow (+) or shrink (−) the result.
     pub grow: f32,
     pub feather: f32,
+    /// Document state after the last application of this refine session.
+    epoch: (u64, u64),
 }
 
 /// What to tell someone when a task's model is not installed.
@@ -60,9 +62,10 @@ pub(crate) fn missing(task: Task) -> String {
 impl EditorView {
     /// The flattened document as a raster, computed off the UI thread.
     pub(crate) fn composite_raster(&self) -> impl std::future::Future<Output = Raster> + use<> {
-        let tree = self.tree.clone();
+        let doc = self.editor.doc.clone();
         async move {
-            let (w, h) = (tree.width, tree.height);
+            let tree = doc.composite_tree();
+            let (w, h) = (doc.width, doc.height);
             let px: Vec<[u16; 4]> = region(&tree, IRect::new(0, 0, w as i32, h as i32))
                 .into_iter()
                 .map(color::f_to_px)
@@ -73,16 +76,24 @@ impl EditorView {
 
     /// Show a job's stage and percentage until it finishes.
     pub(crate) fn watch_job(&mut self, job: Arc<Job>, cx: &mut Context<Self>) {
-        self.ai.job = Some(job.clone());
+        if let Some(previous) = self.ai.job.replace(job.clone())
+            && !Arc::ptr_eq(&previous, &job)
+        {
+            previous.cancel();
+        }
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(150))
                     .await;
                 let more = this.update(cx, |this, cx| {
-                    if job.is_finished() {
+                    if !this.ai.job.as_ref().is_some_and(|j| Arc::ptr_eq(j, &job)) {
+                        return false;
+                    }
+                    if job.is_finished() || job.cancelled() {
                         if this.ai.job.as_ref().is_some_and(|j| Arc::ptr_eq(j, &job)) {
                             this.ai.job = None;
+                            cx.notify();
                         }
                         return false;
                     }
@@ -110,6 +121,14 @@ impl EditorView {
         hi: f32,
         cx: &mut Context<Self>,
     ) {
+        if (raw.width(), raw.height()) != (self.editor.doc.width, self.editor.doc.height) {
+            self.set_status(
+                "AI selection dimensions do not match the current canvas.",
+                true,
+                cx,
+            );
+            return;
+        }
         let base = self.editor.doc.selection.clone();
         self.ai.refine = Some(Refine {
             raw,
@@ -121,6 +140,7 @@ impl EditorView {
             hi,
             grow: 0.0,
             feather: self.tools.feather,
+            epoch: self.edit_ticket(),
         });
         self.refine_apply(cx);
     }
@@ -130,6 +150,13 @@ impl EditorView {
         let Some(r) = self.ai.refine.clone() else {
             return;
         };
+        if self.edit_ticket() != r.epoch
+            || (r.raw.width(), r.raw.height()) != (self.editor.doc.width, self.editor.doc.height)
+        {
+            self.ai.refine = None;
+            cx.notify();
+            return;
+        }
         let mut m = matte::harden(
             &r.raw,
             r.lo.round() as u8,
@@ -145,6 +172,10 @@ impl EditorView {
         let selection =
             (!emulsion_raster::select::bounds(&combined).is_empty()).then(|| Arc::new(combined));
         self.execute(Command::SetSelection { selection }, cx);
+        let epoch = self.edit_ticket();
+        if let Some(refine) = &mut self.ai.refine {
+            refine.epoch = epoch;
+        }
     }
 
     pub(crate) fn set_refine(&mut self, f: impl Fn(&mut Refine), cx: &mut Context<Self>) {
@@ -179,8 +210,9 @@ impl EditorView {
     }
 
     pub fn cancel_ai(&mut self, cx: &mut Context<Self>) {
-        if let Some(j) = &self.ai.job {
+        if let Some(j) = self.ai.job.take() {
             j.cancel();
+            self.ai.sam_loading = None;
             self.set_status("Cancelled.", false, cx);
         }
     }
@@ -191,6 +223,7 @@ impl EditorView {
             self.set_status(missing(Task::Matte), true, cx);
             return;
         }
+        let ticket = self.selection_ticket();
         let img = self.composite_raster();
         let combine = self.tools.combine;
         let job = Job::new();
@@ -206,17 +239,22 @@ impl EditorView {
                     r
                 })
                 .await;
-            this.update(cx, |this, cx| match r {
-                Ok(m) => {
-                    let source = matte::available().map(|m| m.name).unwrap_or("matte model");
-                    this.select_from_matte(m, source, None, combine, 20.0, 235.0, cx);
-                    this.set_status(
-                        "Subject selected — refine it in the Select options.",
-                        false,
-                        cx,
-                    );
+            this.update(cx, |this, cx| {
+                if job.cancelled() || !this.selection_is_current(ticket) {
+                    return;
                 }
-                Err(e) => this.set_status(format!("Select subject: {e}"), true, cx),
+                match r {
+                    Ok(m) => {
+                        let source = matte::available().map(|m| m.name).unwrap_or("matte model");
+                        this.select_from_matte(m, source, None, combine, 20.0, 235.0, cx);
+                        this.set_status(
+                            "Subject selected — refine it in the Select options.",
+                            false,
+                            cx,
+                        );
+                    }
+                    Err(e) => this.set_status(format!("Select subject: {e}"), true, cx),
+                }
             })
             .ok();
         })
@@ -240,6 +278,7 @@ impl EditorView {
             }
             _ => None,
         };
+        let ticket = self.begin_edit_job();
         let job = Job::new();
         job.set_stage("finding the subject");
         self.watch_job(job.clone(), cx);
@@ -262,41 +301,46 @@ impl EditorView {
                     r
                 })
                 .await;
-            this.update(cx, |this, cx| match r {
-                Ok(cut) => {
-                    let (name, placement, hide) = match &source {
-                        Some((id, name, _, pl)) => (format!("{name} cut-out"), *pl, Some(*id)),
-                        None => ("Cut-out".to_string(), Placement::default(), None),
-                    };
-                    this.editor.begin("Remove background");
-                    let node = Node::raster(0, name, Arc::new(cut), placement)
-                        .from_model(matte::available().map(|m| m.id).unwrap_or("matte"));
-                    if let Some(id) = this.execute(
-                        Command::AddNode {
-                            node: Box::new(node),
-                            slot,
-                        },
-                        cx,
-                    ) {
-                        if let Some(h) = hide {
-                            this.execute(
-                                Command::SetVisible {
-                                    id: h,
-                                    visible: false,
-                                },
-                                cx,
-                            );
-                        }
-                        this.selected = Some(id);
-                    }
-                    this.editor.end();
-                    this.set_status(
-                        "Background removed into a new node; the original is hidden.",
-                        false,
-                        cx,
-                    );
+            this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Remove background", cx) || job.cancelled() {
+                    return;
                 }
-                Err(e) => this.set_status(format!("Remove background: {e}"), true, cx),
+                match r {
+                    Ok(cut) => {
+                        let (name, placement, hide) = match &source {
+                            Some((id, name, _, pl)) => (format!("{name} cut-out"), *pl, Some(*id)),
+                            None => ("Cut-out".to_string(), Placement::default(), None),
+                        };
+                        this.editor.begin("Remove background");
+                        let node = Node::raster(0, name, Arc::new(cut), placement)
+                            .from_model(matte::available().map(|m| m.id).unwrap_or("matte"));
+                        if let Some(id) = this.execute(
+                            Command::AddNode {
+                                node: Box::new(node),
+                                slot,
+                            },
+                            cx,
+                        ) {
+                            if let Some(h) = hide {
+                                this.execute(
+                                    Command::SetVisible {
+                                        id: h,
+                                        visible: false,
+                                    },
+                                    cx,
+                                );
+                            }
+                            this.selected = Some(id);
+                        }
+                        this.editor.end();
+                        this.set_status(
+                            "Background removed into a new node; the original is hidden.",
+                            false,
+                            cx,
+                        );
+                    }
+                    Err(e) => this.set_status(format!("Remove background: {e}"), true, cx),
+                }
             })
             .ok();
         })
@@ -313,46 +357,82 @@ impl EditorView {
         let Some((&first, &last)) = pts.first().zip(pts.last()) else {
             return;
         };
-        let prompt = if (last.0 - first.0).hypot(last.1 - first.1) > 12.0 {
-            Prompt::Box(first.0 as f32, first.1 as f32, last.0 as f32, last.1 as f32)
-        } else {
-            Prompt::Point(first.0 as f32, first.1 as f32)
-        };
-        let rev = self.editor.revision;
-        if let Some((r, emb)) = &self.ai.sam
-            && *r == rev
+        if ![first.0, first.1, last.0, last.1]
+            .iter()
+            .all(|v| v.is_finite())
         {
-            let emb = emb.clone();
-            self.sam_decode(emb, prompt, combine, cx);
             return;
         }
-        if self.ai.sam_loading == Some(rev) {
-            self.set_status("Still reading the picture…", false, cx);
-            return;
-        }
-        self.ai.sam_loading = Some(rev);
-        let img = self.composite_raster();
+        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        let clamp = |p: (f64, f64)| {
+            (
+                p.0.clamp(0., w.saturating_sub(1) as f64) as f32,
+                p.1.clamp(0., h.saturating_sub(1) as f64) as f32,
+            )
+        };
+        let (first, last) = (clamp(first), clamp(last));
+        let prompt = if (last.0 - first.0).hypot(last.1 - first.1) > 12.0 {
+            Prompt::Box(
+                first.0.min(last.0),
+                first.1.min(last.1),
+                first.0.max(last.0),
+                first.1.max(last.1),
+            )
+        } else {
+            Prompt::Point(first.0, first.1)
+        };
+        let ticket = self.selection_ticket();
         let job = Job::new();
         self.watch_job(job.clone(), cx);
+        if let Some((key, emb)) = &self.ai.sam
+            && *key == ticket.0
+            && (emb.width, emb.height) == (w, h)
+        {
+            let emb = emb.clone();
+            self.sam_decode(emb, prompt, combine, ticket, job, cx);
+            return;
+        }
+        self.ai.sam_loading = Some(ticket);
+        let img = self.composite_raster();
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_spawn(async move {
                     let img = img.await;
-                    let r = sam::encode(&img, &j);
-                    j.finish();
-                    r
+                    j.check()
+                        .map_err(emulsion_ai::runner::RunError::from)
+                        .and_then(|_| sam::encode(&img, &j))
                 })
                 .await;
             this.update(cx, |this, cx| {
-                this.ai.sam_loading = None;
+                if this.ai.sam_loading == Some(ticket) {
+                    this.ai.sam_loading = None;
+                }
+                if job.cancelled() || !this.selection_is_current(ticket) {
+                    job.finish();
+                    return;
+                }
                 match r {
-                    Ok(emb) => {
+                    Ok(emb)
+                        if (emb.width, emb.height)
+                            == (this.editor.doc.width, this.editor.doc.height) =>
+                    {
                         let emb = Arc::new(emb);
-                        this.ai.sam = Some((rev, emb.clone()));
-                        this.sam_decode(emb, prompt, combine, cx);
+                        this.ai.sam = Some((ticket.0, emb.clone()));
+                        this.sam_decode(emb, prompt, combine, ticket, job, cx);
                     }
-                    Err(e) => this.set_status(format!("AI select: {e}"), true, cx),
+                    Ok(_) => {
+                        job.finish();
+                        this.set_status(
+                            "AI select returned an embedding with the wrong dimensions.",
+                            true,
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        job.finish();
+                        this.set_status(format!("AI select: {e}"), true, cx);
+                    }
                 }
             })
             .ok();
@@ -365,41 +445,55 @@ impl EditorView {
         emb: Arc<sam::Embedding>,
         prompt: Prompt,
         combine: Combine,
+        ticket: ((u64, u64), u64),
+        job: Arc<Job>,
         cx: &mut Context<Self>,
     ) {
+        let j = job.clone();
+        job.set_stage("selecting the object");
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_spawn(async move {
-                    match prompt {
-                        Prompt::Point(x, y) => sam::decode(
-                            &emb,
-                            &[sam::Point {
-                                x,
-                                y,
-                                positive: true,
-                            }],
-                            None,
-                        ),
-                        Prompt::Box(x0, y0, x1, y1) => {
-                            sam::decode(&emb, &[], Some((x0, y0, x1, y1)))
-                        }
-                    }
+                    let r = j
+                        .check()
+                        .map_err(emulsion_ai::runner::RunError::from)
+                        .and_then(|_| match prompt {
+                            Prompt::Point(x, y) => sam::decode(
+                                &emb,
+                                &[sam::Point {
+                                    x,
+                                    y,
+                                    positive: true,
+                                }],
+                                None,
+                            ),
+                            Prompt::Box(x0, y0, x1, y1) => {
+                                sam::decode(&emb, &[], Some((x0, y0, x1, y1)))
+                            }
+                        });
+                    j.finish();
+                    r
                 })
                 .await;
-            this.update(cx, |this, cx| match r {
-                Ok((m, score)) => {
-                    let source = sam::available().map(|m| m.name).unwrap_or("SAM");
-                    this.select_from_matte(m, source, Some(score), combine, 96.0, 160.0, cx);
-                    this.set_status(
-                        format!(
-                            "AI select · confidence {:.0} % — refine below",
-                            score * 100.0
-                        ),
-                        false,
-                        cx,
-                    );
+            this.update(cx, |this, cx| {
+                if job.cancelled() || !this.selection_is_current(ticket) {
+                    return;
                 }
-                Err(e) => this.set_status(format!("AI select: {e}"), true, cx),
+                match r {
+                    Ok((m, score)) => {
+                        let source = sam::available().map(|m| m.name).unwrap_or("SAM");
+                        this.select_from_matte(m, source, Some(score), combine, 96.0, 160.0, cx);
+                        this.set_status(
+                            format!(
+                                "AI select · confidence {:.0} % — refine below",
+                                score * 100.0
+                            ),
+                            false,
+                            cx,
+                        );
+                    }
+                    Err(e) => this.set_status(format!("AI select: {e}"), true, cx),
+                }
             })
             .ok();
         })
@@ -417,6 +511,7 @@ impl EditorView {
             self.set_status("Select the area to fill first.", false, cx);
             return;
         };
+        let ticket = self.selection_ticket();
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(job.clone(), cx);
@@ -431,27 +526,36 @@ impl EditorView {
                     r
                 })
                 .await;
-            this.update(cx, |this, cx| match r {
-                Ok((layer, reg)) => {
-                    let node = Node::raster(
-                        0,
-                        "AI fill",
-                        Arc::new(layer),
-                        Placement::at(reg.x as f64, reg.y as f64),
-                    )
-                    .from_model(inpaint::available().map(|m| m.id).unwrap_or("lama"));
-                    if let Some(id) = this.execute(
-                        Command::AddNode {
-                            node: Box::new(node),
-                            slot,
-                        },
-                        cx,
-                    ) {
-                        this.selected = Some(id);
-                        this.set_status("Filled into a new node. Hide it to compare.", false, cx);
-                    }
+            this.update(cx, |this, cx| {
+                if job.cancelled() || !this.selection_is_current(ticket) {
+                    return;
                 }
-                Err(e) => this.set_status(format!("AI fill: {e}"), true, cx),
+                match r {
+                    Ok((layer, reg)) => {
+                        let node = Node::raster(
+                            0,
+                            "AI fill",
+                            Arc::new(layer),
+                            Placement::at(reg.x as f64, reg.y as f64),
+                        )
+                        .from_model(inpaint::available().map(|m| m.id).unwrap_or("lama"));
+                        if let Some(id) = this.execute(
+                            Command::AddNode {
+                                node: Box::new(node),
+                                slot,
+                            },
+                            cx,
+                        ) {
+                            this.selected = Some(id);
+                            this.set_status(
+                                "Filled into a new node. Hide it to compare.",
+                                false,
+                                cx,
+                            );
+                        }
+                    }
+                    Err(e) => this.set_status(format!("AI fill: {e}"), true, cx),
+                }
             })
             .ok();
         })
@@ -464,6 +568,7 @@ impl EditorView {
             self.set_status(missing(Task::Depth), true, cx);
             return;
         }
+        let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(job.clone(), cx);
@@ -478,7 +583,9 @@ impl EditorView {
                     r
                 })
                 .await;
-            this.update(cx, |this, cx| match r {
+            this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Depth", cx) || job.cancelled() { return; }
+                match r {
                 Ok(grey) => {
                     let node = Node::raster(0, "Depth (AI)", Arc::new(grey), Placement::default())
                         .from_model(depth::available().map(|m| m.id).unwrap_or("depth"));
@@ -498,6 +605,7 @@ impl EditorView {
                     }
                 }
                 Err(e) => this.set_status(format!("Depth: {e}"), true, cx),
+                }
             })
             .ok();
         })
@@ -521,6 +629,7 @@ impl EditorView {
             );
             return;
         }
+        let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(job.clone(), cx);
@@ -534,41 +643,48 @@ impl EditorView {
                     r
                 })
                 .await;
-            this.update(cx, |this, cx| match r {
-                Ok(big) => {
-                    this.editor.begin(format!("Upscale ×{f}"));
-                    this.execute(
-                        Command::ImageSize {
-                            width: w * f,
-                            height: h * f,
-                        },
-                        cx,
-                    );
-                    let node = Node::raster(
-                        0,
-                        format!("Upscaled ×{f} (AI)"),
-                        Arc::new(big),
-                        Placement::default(),
-                    )
-                    .from_model(upscale::available().map(|m| m.id).unwrap_or("upscale"));
-                    if let Some(id) = this.execute(
-                        Command::AddNode {
-                            node: Box::new(node),
-                            slot: Slot::TOP,
-                        },
-                        cx,
-                    ) {
-                        this.selected = Some(id);
-                    }
-                    this.editor.end();
-                    this.fit_pending = true;
-                    this.set_status(
-                        format!("Upscaled ×{f}: the canvas grew and the result is the top node."),
-                        false,
-                        cx,
-                    );
+            this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Upscale", cx) || job.cancelled() {
+                    return;
                 }
-                Err(e) => this.set_status(format!("Upscale: {e}"), true, cx),
+                match r {
+                    Ok(big) => {
+                        this.editor.begin(format!("Upscale ×{f}"));
+                        this.execute(
+                            Command::ImageSize {
+                                width: w * f,
+                                height: h * f,
+                            },
+                            cx,
+                        );
+                        let node = Node::raster(
+                            0,
+                            format!("Upscaled ×{f} (AI)"),
+                            Arc::new(big),
+                            Placement::default(),
+                        )
+                        .from_model(upscale::available().map(|m| m.id).unwrap_or("upscale"));
+                        if let Some(id) = this.execute(
+                            Command::AddNode {
+                                node: Box::new(node),
+                                slot: Slot::TOP,
+                            },
+                            cx,
+                        ) {
+                            this.selected = Some(id);
+                        }
+                        this.editor.end();
+                        this.fit_pending = true;
+                        this.set_status(
+                            format!(
+                                "Upscaled ×{f}: the canvas grew and the result is the top node."
+                            ),
+                            false,
+                            cx,
+                        );
+                    }
+                    Err(e) => this.set_status(format!("Upscale: {e}"), true, cx),
+                }
             })
             .ok();
         })
@@ -585,6 +701,7 @@ impl EditorView {
             self.set_status(missing(Task::FaceRestore), true, cx);
             return;
         }
+        let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(job.clone(), cx);
@@ -598,24 +715,28 @@ impl EditorView {
                     r
                 })
                 .await;
-            this.update(cx, |this, cx| match r {
-                Ok((restored, n)) => {
-                    let node = Node::raster(
-                        0,
-                        "Faces restored (AI)",
-                        Arc::new(restored),
-                        Placement::default(),
-                    )
-                    .from_model(face::available().map(|m| m.id).unwrap_or("gfpgan"));
-                    if let Some(id) = this.execute(
-                        Command::AddNode {
-                            node: Box::new(node),
-                            slot: Slot::TOP,
-                        },
-                        cx,
-                    ) {
-                        this.selected = Some(id);
-                        this.set_status(
+            this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Restore faces", cx) || job.cancelled() {
+                    return;
+                }
+                match r {
+                    Ok((restored, n)) => {
+                        let node = Node::raster(
+                            0,
+                            "Faces restored (AI)",
+                            Arc::new(restored),
+                            Placement::default(),
+                        )
+                        .from_model(face::available().map(|m| m.id).unwrap_or("gfpgan"));
+                        if let Some(id) = this.execute(
+                            Command::AddNode {
+                                node: Box::new(node),
+                                slot: Slot::TOP,
+                            },
+                            cx,
+                        ) {
+                            this.selected = Some(id);
+                            this.set_status(
                             format!(
                                 "Restored {n} face{}: lower the node's opacity to keep it natural.",
                                 if n == 1 { "" } else { "s" }
@@ -623,9 +744,10 @@ impl EditorView {
                             false,
                             cx,
                         );
+                        }
                     }
+                    Err(e) => this.set_status(format!("Restore faces: {e}"), true, cx),
                 }
-                Err(e) => this.set_status(format!("Restore faces: {e}"), true, cx),
             })
             .ok();
         })
@@ -637,4 +759,134 @@ impl EditorView {
 enum Prompt {
     Point(f32, f32),
     Box(f32, f32, f32, f32),
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{Combine, EditorView, IRect, Job, Mask, Placement, Slot};
+    use emulsion_core::{Command, Document, Node};
+    use emulsion_raster::Raster;
+    use gpui_kit::{AppContext, Entity, TestAppContext};
+    use std::sync::Arc;
+
+    fn editor(cx: &mut TestAppContext) -> Entity<EditorView> {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::install(cx);
+        });
+        let mut doc = Document::new(8, 8);
+        Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Source",
+                Arc::new(Raster::empty(8, 8, [65535, 0, 0, 65535])),
+                Placement::default(),
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        cx.new(|cx| EditorView::new(doc, None, None, None, "AI lifecycle test".into(), cx))
+    }
+
+    #[gpui_kit::test]
+    async fn ai_composite_uses_captured_document_not_display_tree(cx: &mut TestAppContext) {
+        let view = editor(cx);
+        let snapshot = cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                let id = view.editor.doc.nodes[0].id;
+                view.execute(
+                    Command::ReplacePixels {
+                        id,
+                        raster: Arc::new(Raster::empty(8, 8, [0, 65535, 0, 65535])),
+                        dirty: IRect::new(0, 0, 8, 8),
+                        label: "New source".into(),
+                    },
+                    cx,
+                );
+                let snapshot = view.composite_raster();
+                view.execute(
+                    Command::ReplacePixels {
+                        id,
+                        raster: Arc::new(Raster::empty(8, 8, [0, 0, 65535, 65535])),
+                        dirty: IRect::new(0, 0, 8, 8),
+                        label: "Later source".into(),
+                    },
+                    cx,
+                );
+                snapshot
+            })
+        });
+        let raster = snapshot.await;
+        assert_eq!(raster.get(4, 4), [0, 65535, 0, 65535]);
+    }
+
+    #[gpui_kit::test]
+    fn ai_refinement_cannot_restore_a_deselected_or_resized_matte(cx: &mut TestAppContext) {
+        let view = editor(cx);
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.select_from_matte(
+                    Mask::empty(8, 8, 255),
+                    "test",
+                    None,
+                    Combine::Replace,
+                    20.,
+                    235.,
+                    cx,
+                );
+                assert!(view.editor.doc.selection.is_some());
+                view.set_refine(|r| r.lo = 30., cx);
+                assert!(view.ai.refine.is_some(), "own refinement can continue");
+                view.deselect(cx);
+                view.set_refine(|r| r.feather = 2., cx);
+                assert!(view.editor.doc.selection.is_none());
+                assert!(view.ai.refine.is_none());
+                view.select_from_matte(
+                    Mask::empty(8, 8, 255),
+                    "test",
+                    None,
+                    Combine::Replace,
+                    20.,
+                    235.,
+                    cx,
+                );
+                view.execute(
+                    Command::ImageSize {
+                        width: 16,
+                        height: 16,
+                    },
+                    cx,
+                );
+                view.set_refine(|r| r.grow = 2., cx);
+                assert!(view.ai.refine.is_none());
+                assert_eq!(
+                    view.editor
+                        .doc
+                        .selection
+                        .as_ref()
+                        .map(|m| (m.width(), m.height())),
+                    Some((16, 16))
+                );
+            })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn ai_new_job_cancels_previous_and_cancel_drops_current_job(cx: &mut TestAppContext) {
+        let view = editor(cx);
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                let old = Job::new();
+                let current = Job::new();
+                view.watch_job(old.clone(), cx);
+                view.watch_job(current.clone(), cx);
+                assert!(old.cancelled());
+                assert!(!current.cancelled());
+                view.cancel_ai(cx);
+                assert!(current.cancelled());
+                assert!(view.ai.job.is_none());
+            })
+        });
+    }
 }

@@ -1,6 +1,9 @@
 //! Pen pressure and tilt, read from the tablet beside GPUI.
 //!
-//! GPUI's pointer events carry position only. On Linux the tablet is also
+//! GPUI's pointer events carry position only. macOS uses an AppKit local
+//! event monitor which observes native tablet events and tablet mouse
+//! subtypes before GPUI dispatch, returning every event unchanged.
+//! On Linux the tablet is also
 //! an evdev device, so a background thread opens every device that reports
 //! pen pressure and keeps the latest pressure, tilt and pen-down state. The
 //! brush asks for the pressure that arrived within the last moment of each
@@ -39,18 +42,57 @@ fn state() -> &'static Arc<Mutex<State>> {
 /// How recent a tablet sample must be to pair with a pointer move.
 const FRESH: Duration = Duration::from_millis(120);
 
+fn active_sample(sample: Option<PenSample>, now: Instant) -> Option<PenSample> {
+    sample.filter(|p| {
+        p.down
+            && now.saturating_duration_since(p.at) < FRESH
+            && p.pressure.is_finite()
+            && p.tilt.0.is_finite()
+            && p.tilt.1.is_finite()
+    })
+}
+
 /// The pressure to use for a pointer move happening now, if a pen is
 /// reporting one.
 pub fn pressure() -> Option<f32> {
     let s = state().lock().ok()?;
-    let p = s.latest?;
-    (p.down && p.at.elapsed() < FRESH).then_some(p.pressure)
+    active_sample(s.latest, Instant::now()).map(|p| p.pressure)
 }
 
 pub fn tilt() -> Option<(f32, f32)> {
     let s = state().lock().ok()?;
-    let p = s.latest?;
-    (p.at.elapsed() < FRESH).then_some(p.tilt)
+    active_sample(s.latest, Instant::now()).map(|p| p.tilt)
+}
+
+#[cfg(test)]
+mod sample_tests {
+    use super::*;
+
+    #[test]
+    fn tablet_samples_expire_and_pen_up_restores_speed_fallback() {
+        let now = Instant::now();
+        let pen = PenSample {
+            pressure: 0.35,
+            tilt: (20., -15.),
+            down: true,
+            at: now,
+        };
+        let active = active_sample(Some(pen), now + Duration::from_millis(119)).unwrap();
+        assert_eq!((active.pressure, active.tilt), (0.35, (20., -15.)));
+        assert!(active_sample(Some(pen), now + FRESH).is_none());
+        assert!(active_sample(Some(PenSample { down: false, ..pen }), now).is_none());
+        assert!(active_sample(None, now).is_none());
+        assert!(
+            active_sample(
+                Some(PenSample {
+                    pressure: f32::NAN,
+                    ..pen
+                }),
+                now
+            )
+            .is_none()
+        );
+    }
 }
 
 /// What the status line says about pressure.
@@ -84,10 +126,110 @@ pub fn devices() -> Vec<String> {
 pub fn start() {
     #[cfg(target_os = "linux")]
     linux::start();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    macos::start();
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         if let Ok(mut s) = state().lock() {
             s.scanned = true;
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::*;
+    use block2::RcBlock;
+    use objc2::{MainThreadMarker, rc::Retained, runtime::AnyObject};
+    use objc2_app_kit::{NSEvent, NSEventButtonMask, NSEventMask, NSEventSubtype, NSEventType};
+    use std::cell::RefCell;
+    use std::ptr::NonNull;
+
+    thread_local! {
+        static MONITOR: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn start() {
+        if MainThreadMarker::new().is_none() {
+            return;
+        }
+        MONITOR.with(|monitor| {
+            if monitor.borrow().is_some() {
+                return;
+            }
+            let callback = RcBlock::new(|event: NonNull<NSEvent>| {
+                // SAFETY: AppKit supplies a live NSEvent for the duration of
+                // the callback. Returning this exact pointer never swallows
+                // or replaces events intended for GPUI and text inputs.
+                let e = unsafe { event.as_ref() };
+                observe(e);
+                event.as_ptr()
+            });
+            let mask = NSEventMask::TabletPoint
+                | NSEventMask::TabletProximity
+                | NSEventMask::LeftMouseDown
+                | NSEventMask::LeftMouseUp
+                | NSEventMask::LeftMouseDragged
+                | NSEventMask::MouseMoved
+                | NSEventMask::RightMouseDown
+                | NSEventMask::RightMouseUp
+                | NSEventMask::RightMouseDragged
+                | NSEventMask::OtherMouseDown
+                | NSEventMask::OtherMouseUp
+                | NSEventMask::OtherMouseDragged;
+            // SAFETY: installed on the main thread. AppKit copies the block;
+            // its return value is always the original valid event pointer.
+            *monitor.borrow_mut() =
+                unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &callback) };
+            if let Ok(mut s) = state().lock() {
+                s.scanned = true;
+            }
+        });
+    }
+
+    fn observe(e: &NSEvent) {
+        let kind = e.r#type();
+        let subtype = e.subtype();
+        if kind == NSEventType::TabletProximity || subtype == NSEventSubtype::TabletProximity {
+            if let Ok(mut s) = state().lock() {
+                if e.isEnteringProximity() {
+                    if s.devices.is_empty() {
+                        s.devices.push("macOS tablet".into());
+                    }
+                } else {
+                    s.latest = None;
+                }
+            }
+            return;
+        }
+        if kind == NSEventType::TabletPoint || subtype == NSEventSubtype::TabletPoint {
+            let pressure = e.pressure().clamp(0.0, 1.0);
+            let tilt = e.tilt();
+            let up = matches!(
+                kind,
+                NSEventType::LeftMouseUp | NSEventType::RightMouseUp | NSEventType::OtherMouseUp
+            );
+            let down =
+                !up && (pressure > 0.0 || e.buttonMask().contains(NSEventButtonMask::PenTip));
+            if let Ok(mut s) = state().lock() {
+                if s.devices.is_empty() {
+                    s.devices.push("macOS tablet".into());
+                }
+                s.latest = Some(PenSample {
+                    pressure,
+                    // AppKit normalizes each tilt axis to -1..1 at ±90°.
+                    tilt: (
+                        (tilt.x as f32).clamp(-1.0, 1.0) * 90.0,
+                        (tilt.y as f32).clamp(-1.0, 1.0) * 90.0,
+                    ),
+                    down,
+                    at: Instant::now(),
+                });
+            }
+        } else if let Ok(mut s) = state().lock() {
+            // Switching straight from pen to mouse must not reuse a fresh
+            // pen sample during the 120 ms fallback interval.
+            s.latest = None;
         }
     }
 }

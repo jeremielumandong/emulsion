@@ -31,7 +31,7 @@ use std::io::{Read, Seek};
 use std::sync::Arc;
 use zip::ZipArchive;
 
-pub const HISTORY_VERSION: u32 = 2;
+pub const HISTORY_VERSION: u32 = 3;
 pub(crate) const GRAPH: &str = "history/graph.json";
 const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
 
@@ -518,8 +518,36 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
             };
             let (mw, mh) = match &kind {
                 NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
+                NodeKind::Smart { source, .. } => (source.width(), source.height()),
                 _ => (h.width, h.height),
             };
+            let node_mask = n
+                .mask
+                .map(|i| {
+                    if version < 3
+                        && let NodeKind::Smart { placement, .. } = &kind
+                        && let Some(old) = masks.get(i as usize)
+                        && (old.width(), old.height()) != (mw, mh)
+                        && (old.width(), old.height()) == (h.width, h.height)
+                    {
+                        let to_doc = placement.to_doc(mw, mh);
+                        return Ok(Arc::new(Mask::from_fn(mw, mh, old.fill(), |x, y| {
+                            let p = to_doc
+                                .transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
+                            if p.x < 0.0
+                                || p.y < 0.0
+                                || p.x >= old.width() as f64
+                                || p.y >= old.height() as f64
+                            {
+                                old.fill()
+                            } else {
+                                old.get(p.x.floor() as u32, p.y.floor() as u32)
+                            }
+                        })));
+                    }
+                    mask(i, mw, mh)
+                })
+                .transpose()?;
             doc.nodes.push(Node {
                 id: n.id,
                 name: n.name,
@@ -529,7 +557,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 opacity: n.opacity,
                 blend: n.blend,
                 clip_to: n.clip_to,
-                mask: n.mask.map(|i| mask(i, mw, mh)).transpose()?,
+                mask: node_mask,
                 mask_enabled: n.mask_enabled,
                 styles: n.styles,
                 origin: n.origin,
@@ -621,7 +649,7 @@ mod tests {
         let live_path = serde_json::to_value(paths.add(&geometry).unwrap()).unwrap();
         let mut entries = encode(&original, None, &mut paths).unwrap();
         let manifest: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
-        assert_eq!(manifest["version"], 2);
+        assert_eq!(manifest["version"], HISTORY_VERSION);
         assert!(
             live_path.is_string(),
             "new history uses a compact blob reference"

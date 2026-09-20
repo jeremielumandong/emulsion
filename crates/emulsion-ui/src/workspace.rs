@@ -544,6 +544,9 @@ impl Workspace {
             if emulsion_io::ExportFormat::from_path(&p).is_none() {
                 p.set_extension("png");
             }
+            let flattened_psd = emulsion_io::ExportFormat::from_path(&p)
+                == Some(emulsion_io::ExportFormat::Psd)
+                && emulsion_io::psd::needs_appearance_fallback(&doc);
             let file = p
                 .file_name()
                 .map(|f| f.to_string_lossy().into_owned())
@@ -558,7 +561,14 @@ impl Workspace {
                 .background_spawn(async move { emulsion_io::export(&d, &q, opts) })
                 .await;
             ed.update(cx, |e, cx| match result {
-                Ok(()) => e.set_status(format!("Exported {}", p.display()), false, cx),
+                Ok(()) => {
+                    let note = if flattened_psd {
+                        " — flattened PSD appearance; save ORA to keep editable effects"
+                    } else {
+                        ""
+                    };
+                    e.set_status(format!("Exported {}{note}", p.display()), false, cx)
+                }
                 Err(err) => e.set_status(format!("Export failed: {err}"), true, cx),
             });
         })
@@ -864,6 +874,48 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &DuplicateNode, _, cx| {
                 this.with_editor(cx, |e, cx| e.duplicate_selected(cx))
+            }))
+            .on_action(cx.listener(|this, _: &CopyPixels, _, cx| {
+                this.with_editor(cx, |e, cx| e.copy_pixels(cx))
+            }))
+            .on_action(cx.listener(|this, _: &CutPixels, _, cx| {
+                this.with_editor(cx, |e, cx| e.cut_pixels(cx))
+            }))
+            .on_action(cx.listener(|this, _: &PastePixels, _, cx| {
+                this.with_editor(cx, |e, cx| e.paste_pixels(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ClearPixels, _, cx| {
+                this.with_editor(cx, |e, cx| e.clear_pixels(cx))
+            }))
+            .on_action(cx.listener(|this, _: &CanvasDelete, _, cx| {
+                this.with_editor(cx, |e, cx| e.delete_canvas_pixels(cx))
+            }))
+            .on_action(cx.listener(|this, _: &FreeTransform, _, cx| {
+                this.with_editor(cx, |e, cx| e.transform_pixels(cx))
+            }))
+            .on_action(cx.listener(|this, _: &NudgeLeft, _, cx| {
+                this.with_editor(cx, |e, cx| e.nudge_selected(-1.0, 0.0, cx))
+            }))
+            .on_action(cx.listener(|this, _: &NudgeRight, _, cx| {
+                this.with_editor(cx, |e, cx| e.nudge_selected(1.0, 0.0, cx))
+            }))
+            .on_action(cx.listener(|this, _: &NudgeUp, _, cx| {
+                this.with_editor(cx, |e, cx| e.nudge_selected(0.0, -1.0, cx))
+            }))
+            .on_action(cx.listener(|this, _: &NudgeDown, _, cx| {
+                this.with_editor(cx, |e, cx| e.nudge_selected(0.0, 1.0, cx))
+            }))
+            .on_action(cx.listener(|this, _: &NudgeLeftLarge, _, cx| {
+                this.with_editor(cx, |e, cx| e.nudge_selected(-10.0, 0.0, cx))
+            }))
+            .on_action(cx.listener(|this, _: &NudgeRightLarge, _, cx| {
+                this.with_editor(cx, |e, cx| e.nudge_selected(10.0, 0.0, cx))
+            }))
+            .on_action(cx.listener(|this, _: &NudgeUpLarge, _, cx| {
+                this.with_editor(cx, |e, cx| e.nudge_selected(0.0, -10.0, cx))
+            }))
+            .on_action(cx.listener(|this, _: &NudgeDownLarge, _, cx| {
+                this.with_editor(cx, |e, cx| e.nudge_selected(0.0, 10.0, cx))
             }))
             .on_action(cx.listener(|this, _: &GroupNodes, _, cx| {
                 this.with_editor(cx, |e, cx| e.group_selected(cx))

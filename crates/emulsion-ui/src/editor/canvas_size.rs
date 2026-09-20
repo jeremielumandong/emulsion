@@ -117,13 +117,19 @@ impl EditorView {
         if select::bounds(&hole).is_empty() {
             return;
         }
-        let tree = Arc::new(self.editor.doc.composite_tree());
+        let doc = self.editor.doc.clone();
         self.set_status("Filling the new edges from the image…", false, cx);
+        let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let layer = cx
-                .background_spawn(async move { fill::content_aware_layer(&tree, &hole) })
+                .background_spawn(
+                    async move { fill::content_aware_layer(&doc.composite_tree(), &hole) },
+                )
                 .await;
             this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Edge fill", cx) {
+                    return;
+                }
                 this.status = None;
                 let Some((raster, reg)) = layer else { return };
                 let node = Node::raster(

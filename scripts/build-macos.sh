@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and package Emulsion for the current macOS architecture.
 #
-# Output: target/macos/Emulsion-<version>-<arch>.app
+# Output: target/macos/Emulsion.app
 #         target/macos/Emulsion-<version>-<arch>.dmg
 #
 # Usage:
@@ -52,7 +52,7 @@ BIN="$ROOT_DIR/target/release/emulsion"
 [[ "$(lipo -archs "$BIN")" == "$ARCH" ]] || die "$BIN is not a $ARCH binary"
 
 mkdir -p "$OUT_DIR"
-APP="$OUT_DIR/Emulsion-$VERSION-$ARCH.app"
+APP="$OUT_DIR/Emulsion.app"
 DMG="$OUT_DIR/Emulsion-$VERSION-$ARCH.dmg"
 STAGE="$OUT_DIR/.Emulsion-$VERSION-$ARCH-$$.app"
 ICONSET="$OUT_DIR/.Emulsion-$$.iconset"
@@ -91,6 +91,7 @@ cat >"$STAGE/Contents/Info.plist" <<EOF
   <key>CFBundleIdentifier</key><string>app.emulsion.Emulsion</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Emulsion</string>
+  <key>CFBundleDisplayName</key><string>Emulsion</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
@@ -112,7 +113,7 @@ log "Creating $(basename "$DMG")"
 APP_KIB=$(du -sk "$APP" | awk '{print $1}')
 DMG_KIB=$(( APP_KIB + APP_KIB / 4 + 65536 ))
 hdiutil create -format UDZO -fs HFS+ -size "${DMG_KIB}k" \
-  -srcfolder "$APP" -volname "Emulsion $VERSION" "$DMG_TEMP"
+  -srcfolder "$APP" -volname "Emulsion" "$DMG_TEMP"
 mv -f "$DMG_TEMP" "$DMG"
 log "Built $APP"
 log "Built $DMG"

@@ -82,7 +82,7 @@ impl EditorView {
         }
         let id = self.selected?;
         let n = self.editor.doc.node(id)?;
-        if n.locked || !n.visible {
+        if self.editor.doc.locked_ancestor(id).is_some() || !n.visible {
             return None;
         }
         match &n.kind {
@@ -148,6 +148,13 @@ impl EditorView {
             self.set_status("Select a pixel layer to warp.", true, cx);
             return;
         };
+        if !matches!(
+            self.editor.doc.node(id).map(|n| &n.kind),
+            Some(NodeKind::Raster { .. })
+        ) {
+            self.set_status("Rasterize this Smart layer before using Warp.", true, cx);
+            return;
+        }
         let m = p.to_doc(w, h);
         let (cols, rows) = (3usize, 3usize);
         let mut grid = Vec::with_capacity((cols + 1) * (rows + 1));
@@ -188,6 +195,7 @@ impl EditorView {
         };
         let (raster, mask, id) = (raster.clone(), n.mask.clone(), wst.id);
         self.set_status("Warping…", false, cx);
+        let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -202,6 +210,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Transform", cx) {
+                    return;
+                }
                 this.status = None;
                 let Some((raster, mask, b)) = result else {
                     this.set_status("That warp folds the image over itself.", true, cx);
@@ -269,6 +280,16 @@ impl EditorView {
         if e.modifiers.control
             && let Handle::Corner(corner) = handle
         {
+            if !matches!(
+                self.editor.doc.node(id).map(|n| &n.kind),
+                Some(NodeKind::Raster { .. })
+            ) {
+                self.status = Some((
+                    "Rasterize this Smart layer before using Distort.".into(),
+                    true,
+                ));
+                return true;
+            }
             let quad = self.transform_box().expect("transformable");
             self.drag = Some(Drag::Distort { id, corner, quad });
             return true;
@@ -377,6 +398,7 @@ impl EditorView {
         }
         let (raster, mask) = (raster.clone(), n.mask.clone());
         self.set_status("Distorting…", false, cx);
+        let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -389,6 +411,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Transform", cx) {
+                    return;
+                }
                 this.status = None;
                 let Some((raster, mask, b)) = result else {
                     this.set_status("That shape cannot be distorted to.", true, cx);

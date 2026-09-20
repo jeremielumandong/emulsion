@@ -1,9 +1,8 @@
 //! Photoshop documents through `ag-psd`: layers, groups, opacity, blend
 //! modes, visibility and masks come across in both directions. Reading
-//! turns every pixel layer into a raster node; writing rasterises what
-//! Photoshop has no equivalent for (adjustments, text, paths, smart
-//! layers) into ordinary layers and adds a flattened composite so any
-//! viewer shows the picture.
+//! turns every pixel layer into a raster node; operations that cannot be
+//! reconstructed exactly use an explicitly named flattened appearance layer.
+//! Native Emulsion files retain the editable source document.
 
 use crate::{IoError, Result, write_atomic};
 use ag_psd::psd::{BlendMode as PsdBlend, ColorMode, Layer, LayerMaskData, PixelData, Psd};
@@ -139,6 +138,7 @@ fn add(doc: &mut Document, node: Node, parent: Option<NodeId>) -> Result<NodeId>
 
 fn add_layers(doc: &mut Document, layers: &[Layer], parent: Option<NodeId>) -> Result<()> {
     // ag-psd lists layers bottom to top, as the file does.
+    let mut clip_base = None;
     for l in layers {
         let name = l
             .additional_info
@@ -148,8 +148,22 @@ fn add_layers(doc: &mut Document, layers: &[Layer], parent: Option<NodeId>) -> R
         let mut node = if let Some(children) = &l.children {
             let mut g = Node::group(0, name);
             g.blend = blend_in(l.blend_mode);
+            if let Some(m) = &l.additional_info.mask {
+                g.mask = mask_in(m, 0, 0, doc.width, doc.height);
+                g.mask_enabled = !m.disabled.unwrap_or(false);
+            }
             let id = finish_node(doc, g, l, parent)?;
             add_layers(doc, children, Some(id))?;
+            if l.clipping.unwrap_or(false) {
+                Command::SetClip {
+                    id,
+                    clip_to: clip_base,
+                }
+                .apply(doc)
+                .map_err(|e| IoError::Unsupported(format!("PSD: {e}")))?;
+            } else {
+                clip_base = Some(id);
+            }
             continue;
         } else {
             let px = l.image_data.as_ref().or(l.canvas.as_ref());
@@ -181,7 +195,17 @@ fn add_layers(doc: &mut Document, layers: &[Layer], parent: Option<NodeId>) -> R
             n
         };
         node.blend = blend_in(l.blend_mode);
-        finish_node(doc, node, l, parent)?;
+        let id = finish_node(doc, node, l, parent)?;
+        if l.clipping.unwrap_or(false) {
+            Command::SetClip {
+                id,
+                clip_to: clip_base,
+            }
+            .apply(doc)
+            .map_err(|e| IoError::Unsupported(format!("PSD: {e}")))?;
+        } else {
+            clip_base = Some(id);
+        }
     }
     Ok(())
 }
@@ -194,7 +218,8 @@ fn finish_node(
 ) -> Result<NodeId> {
     node.visible = !l.hidden.unwrap_or(false);
     node.opacity = l.opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32;
-    node.locked = l.transparency_protected.unwrap_or(false) && false;
+    // Transparency protection is not a whole-layer lock.
+    node.locked = false;
     add(doc, node, parent)
 }
 
@@ -203,7 +228,7 @@ pub fn read(path: &Path) -> Result<Document> {
     let bytes = std::fs::read(path)?;
     let opts = ReadOptions {
         skip_thumbnail: Some(true),
-        skip_composite_image_data: Some(true),
+        skip_composite_image_data: Some(false),
         skip_linked_files_data: Some(true),
         use_image_data: Some(true),
         ..Default::default()
@@ -223,8 +248,17 @@ pub fn read(path: &Path) -> Result<Document> {
     }
     let mut doc = Document::new(w, h);
     doc.source_depth = 8;
+    fn needs_composite(layers: &[Layer]) -> bool {
+        layers.iter().any(|l| {
+            l.additional_info.adjustment.is_some()
+                || l.additional_info.effects.is_some()
+                || l.additional_info.vector_mask.is_some()
+                || l.children.as_deref().is_some_and(needs_composite)
+        })
+    }
+    let use_composite = psd.children.as_deref().is_some_and(needs_composite);
     match &psd.children {
-        Some(layers) if !layers.is_empty() => add_layers(&mut doc, layers, None)?,
+        Some(layers) if !layers.is_empty() && !use_composite => add_layers(&mut doc, layers, None)?,
         _ => {
             // A flat file: the composite is the only picture.
             let px = psd
@@ -241,7 +275,16 @@ pub fn read(path: &Path) -> Result<Document> {
             );
             add(
                 &mut doc,
-                Node::raster(0, "Background", Arc::new(r), Placement::default()),
+                Node::raster(
+                    0,
+                    if use_composite {
+                        "PSD appearance (unsupported effects flattened)"
+                    } else {
+                        "Background"
+                    },
+                    Arc::new(r),
+                    Placement::default(),
+                ),
                 None,
             )?;
         }
@@ -280,6 +323,10 @@ fn render_alone(doc: &Document, id: NodeId) -> Raster {
             } else {
                 BlendMode::Normal
             };
+            n.clip_to = None;
+            if n.id != id {
+                n.mask = None;
+            }
         } else if hide.contains(&n.id) {
             n.visible = false;
         }
@@ -341,11 +388,60 @@ fn trimmed(r: &Raster) -> (f64, f64, PixelData) {
     )
 }
 
+fn mask_out(mask: &Mask, x: f64, y: f64, disabled: bool) -> LayerMaskData {
+    LayerMaskData {
+        left: Some(x),
+        top: Some(y),
+        right: Some(x + mask.width() as f64),
+        bottom: Some(y + mask.height() as f64),
+        default_color: Some(mask.fill() as f64),
+        disabled: Some(disabled),
+        image_data: Some(PixelData {
+            width: mask.width(),
+            height: mask.height(),
+            data: mask
+                .to_gray8()
+                .into_iter()
+                .flat_map(|v| [v, v, v, 255])
+                .collect(),
+        }),
+        ..Default::default()
+    }
+}
+
+/// PSD clipping uses contiguous runs over the nearest unclipped base. Emulsion
+/// also allows arbitrary lower siblings; these and backdrop-dependent effects
+/// need an explicit merged appearance instead of a misleading layered export.
+pub fn needs_appearance_fallback(doc: &Document) -> bool {
+    fn unsupported_clips(doc: &Document, parent: Option<NodeId>) -> bool {
+        let mut base = None;
+        for id in doc.children(parent) {
+            let node = doc.node(id).expect("existing child");
+            if let Some(target) = node.clip_to {
+                if base != Some(target) {
+                    return true;
+                }
+            } else {
+                base = Some(id);
+            }
+            if node.kind.is_group() && unsupported_clips(doc, Some(id)) {
+                return true;
+            }
+        }
+        false
+    }
+    doc.nodes
+        .iter()
+        .any(|n| matches!(n.kind, NodeKind::Adjust(_)) || !n.styles.is_empty())
+        || unsupported_clips(doc, None)
+}
+
 fn layer_for(doc: &Document, n: &Node) -> Layer {
     let mut l = Layer {
         blend_mode: Some(blend_out(n.blend)),
         opacity: Some(n.opacity as f64),
         hidden: Some(!n.visible),
+        clipping: Some(n.clip_to.is_some()),
         ..Default::default()
     };
     l.additional_info.name = Some(n.name.clone());
@@ -358,13 +454,18 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
                 .map(|c| layer_for(doc, c))
                 .collect();
             l.children = Some(kids);
+            if let Some(mask) = &n.mask {
+                l.additional_info.mask = Some(mask_out(mask, 0.0, 0.0, !n.mask_enabled));
+            }
         }
         NodeKind::Raster { raster, placement }
             if placement.scale_x == 1.0
                 && placement.scale_y == 1.0
                 && placement.rotation == 0.0
                 && !placement.flip_x
-                && !placement.flip_y =>
+                && !placement.flip_y
+                && placement.x.fract() == 0.0
+                && placement.y.fract() == 0.0 =>
         {
             l.left = Some(placement.x.round());
             l.top = Some(placement.y.round());
@@ -384,7 +485,7 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
                     top: Some(placement.y.round()),
                     right: Some(placement.x.round() + mw as f64),
                     bottom: Some(placement.y.round() + mh as f64),
-                    default_color: Some(255.0),
+                    default_color: Some(m.fill() as f64),
                     disabled: Some(!n.mask_enabled),
                     image_data: Some(PixelData {
                         width: mw,
@@ -411,12 +512,29 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
 /// Write the document as a layered PSD (PSB above 30 000 px).
 pub fn write(doc: &Document, path: &Path) -> Result<()> {
     let flat = flatten(&doc.composite_tree(), 0);
-    let children: Vec<Layer> = doc
-        .children(None)
-        .into_iter()
-        .filter_map(|id| doc.node(id))
-        .map(|n| layer_for(doc, n))
-        .collect();
+    let children: Vec<Layer> = if needs_appearance_fallback(doc) {
+        let mut layer = Layer {
+            left: Some(0.0),
+            top: Some(0.0),
+            right: Some(doc.width as f64),
+            bottom: Some(doc.height as f64),
+            image_data: Some(PixelData {
+                width: doc.width,
+                height: doc.height,
+                data: flat.to_srgba8(),
+            }),
+            ..Default::default()
+        };
+        layer.additional_info.name =
+            Some("Emulsion appearance (unsupported effects flattened)".into());
+        vec![layer]
+    } else {
+        doc.children(None)
+            .into_iter()
+            .filter_map(|id| doc.node(id))
+            .map(|n| layer_for(doc, n))
+            .collect()
+    };
     let psd = Psd {
         width: doc.width as f64,
         height: doc.height as f64,
@@ -453,6 +571,220 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn roundtrip(doc: &Document, name: &str) -> Document {
+        let path =
+            std::env::temp_dir().join(format!("emulsion-psd-{}-{name}.psd", std::process::id()));
+        write(doc, &path).unwrap();
+        let restored = read(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+        restored
+    }
+
+    #[test]
+    fn backdrop_adjustment_export_uses_explicit_appearance_fallback() {
+        let mut doc = Document::new(8, 8);
+        add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Gray",
+                Arc::new(Raster::solid(8, 8, [0.125, 0.125, 0.125, 1.0])),
+                Placement::default(),
+            ),
+            None,
+        )
+        .unwrap();
+        add(
+            &mut doc,
+            Node::adjust(
+                0,
+                emulsion_raster::Adjustment::Exposure {
+                    exposure: 2.0,
+                    offset: 0.0,
+                    gamma: 1.0,
+                },
+            ),
+            None,
+        )
+        .unwrap();
+        let restored = roundtrip(&doc, "adjustment-fidelity");
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&restored.composite_tree(), 0).to_srgba8()
+        );
+        assert_eq!(restored.nodes.len(), 1);
+        assert!(restored.nodes[0].name.contains("flattened"));
+    }
+
+    #[test]
+    fn group_mask_and_contiguous_clip_remain_layered_and_keep_appearance() {
+        let mut doc = Document::new(8, 8);
+        let mut group = Node::group(0, "Masked group");
+        group.mask = Some(Arc::new(Mask::from_fn(8, 8, 0, |_, y| {
+            if y < 4 { 255 } else { 0 }
+        })));
+        let group = add(&mut doc, group, None).unwrap();
+        let base = add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Base",
+                Arc::new(Raster::solid(4, 8, [1.0, 0.0, 0.0, 1.0])),
+                Placement::default(),
+            ),
+            Some(group),
+        )
+        .unwrap();
+        let top = add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Clipped",
+                Arc::new(Raster::solid(8, 8, [0.0, 0.0, 1.0, 1.0])),
+                Placement::default(),
+            ),
+            Some(group),
+        )
+        .unwrap();
+        Command::SetClip {
+            id: top,
+            clip_to: Some(base),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let restored = roundtrip(&doc, "group-clip-fidelity");
+        assert_eq!(restored.nodes.len(), 3);
+        assert!(
+            restored
+                .nodes
+                .iter()
+                .any(|n| n.kind.is_group() && n.mask.is_some())
+        );
+        assert!(restored.nodes.iter().any(|n| n.clip_to.is_some()));
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&restored.composite_tree(), 0).to_srgba8()
+        );
+    }
+
+    #[test]
+    fn fractional_raster_placement_is_baked_without_snapping() {
+        let mut doc = Document::new(12, 12);
+        add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Fractional",
+                Arc::new(Raster::solid(4, 4, [1.0, 0.0, 0.0, 1.0])),
+                Placement::at(2.5, 2.5),
+            ),
+            None,
+        )
+        .unwrap();
+        let restored = roundtrip(&doc, "fractional-placement");
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&restored.composite_tree(), 0).to_srgba8()
+        );
+    }
+
+    #[test]
+    fn styles_and_noncontiguous_clipping_export_preserve_appearance() {
+        let mut doc = Document::new(8, 8);
+        let base = add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Base",
+                Arc::new(Raster::solid(4, 8, [1.0, 0.0, 0.0, 1.0])),
+                Placement::default(),
+            ),
+            None,
+        )
+        .unwrap();
+        add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Between",
+                Arc::new(Raster::solid(2, 8, [0.0, 1.0, 0.0, 1.0])),
+                Placement::at(6.0, 0.0),
+            ),
+            None,
+        )
+        .unwrap();
+        let top = add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Clipped",
+                Arc::new(Raster::solid(8, 8, [0.0, 0.0, 1.0, 1.0])),
+                Placement::default(),
+            ),
+            None,
+        )
+        .unwrap();
+        Command::SetClip {
+            id: top,
+            clip_to: Some(base),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let restored = roundtrip(&doc, "noncontiguous-clip");
+        assert_eq!(restored.nodes.len(), 1);
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&restored.composite_tree(), 0).to_srgba8()
+        );
+        Command::SetClip {
+            id: top,
+            clip_to: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Command::SetStyles {
+            id: top,
+            styles: vec![emulsion_core::styles::LayerStyle::ColorOverlay {
+                color: [255, 200, 20],
+                opacity: 100.0,
+            }],
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let restored = roundtrip(&doc, "style-overlay");
+        assert_eq!(restored.nodes.len(), 1);
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&restored.composite_tree(), 0).to_srgba8()
+        );
+    }
+
+    #[test]
+    fn flat_psd_without_children_uses_its_composite() {
+        let path = std::env::temp_dir().join(format!("emulsion-flat-{}.psd", std::process::id()));
+        let psd = Psd {
+            width: 2.0,
+            height: 2.0,
+            color_mode: Some(ColorMode::Rgb),
+            bits_per_channel: Some(8.0),
+            channels: Some(4.0),
+            image_data: Some(PixelData {
+                width: 2,
+                height: 2,
+                data: [30, 90, 180, 255].repeat(4),
+            }),
+            ..Default::default()
+        };
+        let bytes = ag_psd::write_psd(&psd, &WriteOptions::default());
+        std::fs::write(&path, bytes).unwrap();
+        let restored = read(&path).unwrap();
+        assert_eq!(
+            flatten(&restored.composite_tree(), 0).to_srgba8(),
+            [30, 90, 180, 255].repeat(4)
+        );
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn psd_round_trips_layers_groups_masks_and_blend() {

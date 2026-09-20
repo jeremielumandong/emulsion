@@ -3,7 +3,7 @@
 use crate::server::ToolResult;
 #[cfg(test)]
 use base64::Engine as _;
-use emulsion_core::command::Slot;
+use emulsion_core::command::{AlignTarget, Alignment, Slot};
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
 use emulsion_raster::composite::region;
 use emulsion_raster::paint::{Brush, Ink, Stroke};
@@ -123,7 +123,14 @@ fn resolve_brush(
     settings: Option<&Value>,
     fallback: &Brush,
 ) -> Result<(Brush, String), ToolResult> {
-    let (mut brush, category) = match name.and_then(Value::as_str) {
+    let name = name
+        .map(|v| {
+            v.as_str()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| err("brush must be a nonempty preset name from list_brushes"))
+        })
+        .transpose()?;
+    let (mut brush, category) = match name {
         Some(n) => {
             let p = library::find(n)
                 .or_else(|| {
@@ -170,13 +177,15 @@ pub struct PaintScript {
     pub id: NodeId,
     pub strokes: Vec<ScriptStroke>,
     pub clip: Option<emulsion_raster::paint::Clip>,
+    /// Keep original alpha while changing colour, including translucent edges.
+    pub alpha_lock: bool,
     /// Optional snapshot of visible lower layers, sampled in layer coordinates.
     pub backdrop: Option<emulsion_raster::paint::Backdrop>,
     /// Layer pixels → document pixels.
     pub to_doc: glam::DAffine2,
-    /// Mirror axes through the canvas centre, in layer pixels.
+    /// Mirror axes through the canvas centre, in document pixels.
     pub mirror: (Option<f32>, Option<f32>),
-    /// Rotational symmetry about the canvas centre (layer pixels), copies.
+    /// Rotational symmetry about the canvas centre (document pixels), copies.
     pub radial: Option<((f32, f32), u32)>,
     pub label: String,
     pub message: String,
@@ -186,6 +195,8 @@ impl PaintScript {
     /// Shared stroke setup for immediate rendering and animated UI playback.
     pub fn start_stroke(&self, base: Arc<Raster>, s: &ScriptStroke) -> Stroke {
         let mut stroke = Stroke::new(base, s.brush, s.ink.clone(), self.clip.clone());
+        stroke.set_alpha_lock(self.alpha_lock);
+        stroke.set_symmetry_space(self.to_doc);
         if let Some(backdrop) = &self.backdrop {
             stroke.set_backdrop(backdrop.clone());
         }
@@ -432,34 +443,19 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
                 }
             })
         });
-    let clip = if alpha_lock {
-        // Paint only where the layer already has pixels, at their coverage.
-        let base = raster.clone();
-        let sel = clip;
-        Some(Arc::new(move |x: i32, y: i32| {
-            if x < 0 || y < 0 || x >= base.width() as i32 || y >= base.height() as i32 {
-                return 0.0;
-            }
-            let a = base.get(x as u32, y as u32)[3] as f32 / 65535.0;
-            a * sel.as_ref().map_or(1.0, |c| c(x, y))
-        }) as emulsion_raster::paint::Clip)
-    } else {
-        clip
-    };
-    let centre =
-        to_local.transform_point2(glam::dvec2(doc.width as f64 / 2.0, doc.height as f64 / 2.0));
-    let centre = (centre.x as f32, centre.y as f32);
+    let centre = (doc.width as f32 / 2.0, doc.height as f32 / 2.0);
     let mut out = Vec::with_capacity(strokes.len());
     for (i, s) in strokes.iter().enumerate() {
-        let settings = s.get("settings").or(args.get("settings"));
-        let (mut brush, cat) = if s.get("brush").is_some() {
-            resolve_brush(s.get("brush"), settings, &default_brush)?
+        if !s.is_object() {
+            return Err(err(format!("stroke {i} must be an object")));
+        }
+        let (brush, cat) = if s.get("brush").is_some() {
+            resolve_brush(s.get("brush"), args.get("settings"), &default_brush)?
         } else {
-            (
-                resolve_brush(None, s.get("settings"), &default_brush)?.0,
-                default_cat.clone(),
-            )
+            (default_brush, default_cat.clone())
         };
+        // Named preset, then call settings, then this stroke's overrides.
+        let mut brush = resolve_brush(None, s.get("settings"), &brush)?.0;
         brush.size = (brush.size as f64 / scale) as f32;
         // Stabilizing suits a hand, not computed points.
         brush.stabilizer = 0.0;
@@ -479,8 +475,32 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
             }
         };
         // Points come as [x, y, pressure?] lists or as SVG path data.
+        if s.get("d").is_some() == s.get("points").is_some() {
+            return Err(err(format!(
+                "stroke {i} must give exactly one of d or points"
+            )));
+        }
+        let pressure = |v: &Value| -> Result<f32, ToolResult> {
+            v.as_f64()
+                .filter(|p| p.is_finite() && (0.0..=1.0).contains(p))
+                .map(|p| p as f32)
+                .ok_or_else(|| err(format!("stroke {i} pressure must be a number from 0 to 1")))
+        };
+        let envelope = s
+            .get("pressure")
+            .map(|v| {
+                let env = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| {
+                    err(format!("stroke {i} pressure envelope must be [start, end]"))
+                })?;
+                Ok::<_, ToolResult>((pressure(&env[0])?, pressure(&env[1])?))
+            })
+            .transpose()?;
         let mut subpaths: Vec<Vec<(f64, f64, Option<f32>)>> = Vec::new();
-        if let Some(d) = s.get("d").and_then(Value::as_str) {
+        if let Some(d) = s.get("d") {
+            let d = d
+                .as_str()
+                .filter(|d| !d.trim().is_empty())
+                .ok_or_else(|| err(format!("stroke {i} d must be nonempty SVG path data")))?;
             let path = emulsion_raster::vector::Path::from_svg(d)
                 .map_err(|e| err(format!("stroke {i}: bad path data: {e}")))?;
             for (pts, closed) in path.flatten(0.75) {
@@ -495,14 +515,18 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
             let pts = s
                 .get("points")
                 .and_then(Value::as_array)
-                .ok_or_else(|| err(format!("stroke {i} has neither points nor d")))?;
+                .filter(|p| !p.is_empty() && p.len() <= 2000)
+                .ok_or_else(|| err(format!("stroke {i} points must contain 1 to 2000 points")))?;
             let mut doc_pts = Vec::with_capacity(pts.len());
             for (j, p) in pts.iter().enumerate() {
-                let a = p.as_array().filter(|a| a.len() >= 2).ok_or_else(|| {
-                    err(format!(
-                        "stroke {i} point {j} must be [x, y] or [x, y, pressure]"
-                    ))
-                })?;
+                let a = p
+                    .as_array()
+                    .filter(|a| (2..=3).contains(&a.len()))
+                    .ok_or_else(|| {
+                        err(format!(
+                            "stroke {i} point {j} must be [x, y] or [x, y, pressure]"
+                        ))
+                    })?;
                 let (x, y) = (
                     a[0].as_f64().unwrap_or(f64::NAN),
                     a[1].as_f64().unwrap_or(f64::NAN),
@@ -510,31 +534,21 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
                 if !x.is_finite() || !y.is_finite() {
                     return Err(err(format!("stroke {i} point {j} is not a number")));
                 }
-                doc_pts.push((
-                    x,
-                    y,
-                    a.get(2)
-                        .and_then(Value::as_f64)
-                        .map(|p| p.clamp(0.0, 1.0) as f32),
-                ));
+                doc_pts.push((x, y, a.get(2).map(&pressure).transpose()?));
             }
             subpaths.push(doc_pts);
         }
-        if subpaths.iter().map(Vec::len).sum::<usize>() > 4000 {
+        let count = subpaths.iter().map(Vec::len).sum::<usize>();
+        if count == 0 {
+            return Err(err(format!("stroke {i} has no usable points")));
+        }
+        if count > 4000 {
             return Err(err(format!("stroke {i} has more than 4000 points")));
         }
         // SVG moveto lifts the pen: pressure and taper restart independently.
         for mut doc_pts in subpaths {
             // A pressure envelope [start, end] fills in points without their own.
-            if let Some(env) = s
-                .get("pressure")
-                .and_then(Value::as_array)
-                .filter(|e| e.len() == 2)
-            {
-                let (p0, p1) = (
-                    env[0].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32,
-                    env[1].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32,
-                );
+            if let Some((p0, p1)) = envelope {
                 let total: f64 = doc_pts
                     .windows(2)
                     .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
@@ -562,6 +576,14 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
                     (l.x as f32, l.y as f32, p)
                 })
                 .collect();
+            if points
+                .iter()
+                .any(|(x, y, _)| !x.is_finite() || !y.is_finite())
+            {
+                return Err(err(format!(
+                    "stroke {i} coordinates exceed the layer's finite range"
+                )));
+            }
             out.push(ScriptStroke {
                 brush,
                 ink: ink.clone(),
@@ -575,6 +597,7 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
         id,
         strokes: out,
         clip,
+        alpha_lock,
         backdrop: sample_merged.then(|| lower_layer_backdrop(doc, id, to_doc)),
         to_doc,
         mirror: (mirror_x.then_some(centre.0), mirror_y.then_some(centre.1)),
@@ -1957,6 +1980,60 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             exec(editor, Command::SetAdjustment { id, adjustment: a })?;
             Ok(ToolResult::text(format!(
                 "Updated {}",
+                node_label(&editor.doc, id)
+            )))
+        }
+        "align_node" => {
+            let id = id_arg(args, "node")?;
+            let alignment_name = args
+                .get("alignment")
+                .and_then(Value::as_str)
+                .ok_or_else(|| err("missing string 'alignment'"))?;
+            let alignment = match alignment_name {
+                "left" => Alignment::Left,
+                "horizontal_center" => Alignment::HorizontalCenter,
+                "right" => Alignment::Right,
+                "top" => Alignment::Top,
+                "vertical_center" => Alignment::VerticalCenter,
+                "bottom" => Alignment::Bottom,
+                _ => return Err(err(format!("unknown alignment '{alignment_name}'"))),
+            };
+            let target_name = match args.get("target") {
+                None => "canvas",
+                Some(value) => value
+                    .as_str()
+                    .ok_or_else(|| err("target must be a string"))?,
+            };
+            let target = match target_name {
+                "canvas" => AlignTarget::Canvas,
+                "selection" => AlignTarget::Selection,
+                _ => return Err(err(format!("unknown alignment target '{target_name}'"))),
+            };
+            exec(
+                editor,
+                Command::AlignNode {
+                    id,
+                    alignment,
+                    target,
+                },
+            )?;
+            Ok(ToolResult::text(format!(
+                "Aligned {} {alignment_name} to {target_name}",
+                node_label(&editor.doc, id)
+            )))
+        }
+        "translate_node" => {
+            let id = id_arg(args, "node")?;
+            let offset = |key| {
+                args.get(key)
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| err(format!("missing finite number '{key}'")))
+            };
+            let (dx, dy) = (offset("dx")?, offset("dy")?);
+            exec(editor, Command::TranslateNode { id, dx, dy })?;
+            Ok(ToolResult::text(format!(
+                "Moved {} by ({dx}, {dy}) document pixels",
                 node_label(&editor.doc, id)
             )))
         }
@@ -3484,6 +3561,247 @@ mod tests {
     }
 
     #[test]
+    fn paint_settings_apply_preset_then_call_then_stroke() {
+        let e = editor();
+        let args = json!({"node": 1, "brush": "Sketch pencil", "color": "#000000",
+        "settings": {"size": 6, "flow": 0.2, "opacity": 0.8},
+        "strokes": [
+            {"brush": "G-pen", "settings": {"opacity": 0.5}, "points": [[10,10]]},
+            {"settings": {"size": 9}, "points": [[20,10]]},
+            {"brush": "Hard eraser", "settings": {"opacity": 0.4}, "points": [[30,10]]}
+        ]});
+        let script = paint_script(&e.doc, &args).unwrap();
+        assert_eq!(script.strokes[0].brush.size, 6.0);
+        assert_eq!(script.strokes[0].brush.flow, 0.2);
+        assert_eq!(script.strokes[0].brush.opacity, 0.5);
+        assert_eq!(
+            script.strokes[0].brush.grain,
+            library::find("G-pen").unwrap().brush.grain
+        );
+        assert_eq!(script.strokes[1].brush.size, 9.0);
+        assert_eq!(script.strokes[1].brush.opacity, 0.8);
+        assert_eq!(script.strokes[2].brush.size, 6.0);
+        assert_eq!(script.strokes[2].brush.opacity, 0.4);
+        assert!(matches!(script.strokes[2].ink, Ink::Erase));
+    }
+
+    #[test]
+    fn invalid_paint_arguments_fail_before_any_stroke_or_history_change() {
+        let mut e = editor();
+        let before = e.doc.clone();
+        let revision = e.revision;
+        let steps = e.history.len();
+        let mut invalid = vec![
+            json!(null),
+            json!({}),
+            json!({"points": []}),
+            json!({"points": null}),
+            json!({"points": [[1,2,0.5,4]]}),
+            json!({"points": [[1]]}),
+            json!({"points": [[1,2,"light"]]}),
+            json!({"points": [[1,2,null]]}),
+            json!({"points": [[1,2,-0.1]]}),
+            json!({"points": [[1,2,1.1]]}),
+            json!({"points": [["1",2]]}),
+            json!({"points": [[1e300,2]]}),
+            json!({"d": ""}),
+            json!({"d": "   "}),
+            json!({"d": 1}),
+            json!({"d": "M 1 2 L 3 4", "points": [[1,2]]}),
+            json!({"points": [[1,2]], "pressure": [0.5]}),
+            json!({"points": [[1,2]], "pressure": [0,1,0]}),
+            json!({"points": [[1,2]], "pressure": ["light",1]}),
+            json!({"points": [[1,2]], "pressure": [0,1.1]}),
+            json!({"points": [[1,2]], "pressure": null}),
+            json!({"points": [[1,2]], "brush": 5}),
+            json!({"points": [[1,2]], "brush": null}),
+            json!({"points": [[1,2]], "brush": " "}),
+            json!({"points": [[1,2]], "brush": "nonexistent brush"}),
+            json!({"points": vec![[1,2]; 2001]}),
+        ];
+        let long_svg = format!(
+            "M 0 0 {}",
+            (1..=4000)
+                .map(|i| format!("L {} {}", i % 100, i / 100))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        invalid.push(json!({"d": long_svg}));
+        for stroke in invalid {
+            let result = execute(
+                &mut e,
+                "paint",
+                &json!({"node": 1, "color": "#000000",
+                "strokes": [{"points": [[10,10],[20,10]]}, stroke]}),
+            );
+            assert!(result.is_error, "{}", text(&result));
+            assert_eq!(e.doc, before);
+            assert_eq!(e.revision, revision);
+            assert_eq!(e.history.len(), steps);
+        }
+        for brush in [json!(null), json!(true), json!("")] {
+            let result = execute(
+                &mut e,
+                "paint",
+                &json!({"node": 1, "brush": brush,
+                "color": "#000000", "strokes": [{"points": [[10,10]]}]}),
+            );
+            assert!(result.is_error);
+            assert_eq!(e.doc, before);
+            assert_eq!(e.revision, revision);
+            assert_eq!(e.history.len(), steps);
+        }
+        assert!(
+            paint_script(
+                &e.doc,
+                &json!({"node": 1, "color": "#000000",
+            "strokes": [{"points": vec![[1,2]; 2000], "pressure": [0,1]}]})
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn paint_alpha_lock_preserves_translucent_coverage_and_selection_strength() {
+        let base = Arc::new(Raster::from_fn(32, 32, [0; 4], |x, _| {
+            if x < 4 { [0; 4] } else { [32768, 0, 0, 32768] }
+        }));
+        let mut doc = Document::new(32, 32);
+        let id = Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Translucent",
+                base.clone(),
+                Placement::default(),
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        doc.selection = Some(Arc::new(emulsion_raster::Mask::from_fn(
+            32,
+            32,
+            0,
+            |x, _| {
+                if x < 4 {
+                    255
+                } else if x < 8 {
+                    0
+                } else if x < 16 {
+                    128
+                } else {
+                    255
+                }
+            },
+        )));
+        let mut e = Editor::new(doc, None);
+        let before = e.doc.clone();
+        let args = json!({"node": id, "color": "#0000ff", "alpha_lock": true,
+            "settings": {"size": 128, "hardness": 1, "flow": 1, "opacity": 1},
+            "strokes": [{"points": [[16,16]]}]});
+        let result = execute(&mut e, "paint", &args);
+        assert!(!result.is_error, "{}", text(&result));
+        let NodeKind::Raster { raster, .. } = &e.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        for y in 0..32 {
+            for x in 0..32 {
+                assert_eq!(raster.get(x, y)[3], base.get(x, y)[3], "alpha at {x},{y}");
+            }
+        }
+        assert_eq!(
+            raster.get(2, 16),
+            [0; 4],
+            "empty selected pixels stay empty"
+        );
+        assert_eq!(
+            raster.get(6, 16),
+            base.get(6, 16),
+            "unselected colour stays untouched"
+        );
+        let half = raster.get(12, 16);
+        assert!(
+            (half[0] as i32 - 16320).abs() < 3 && (half[2] as i32 - 16448).abs() < 3,
+            "selection blends colour once without multiplying by base alpha: {half:?}"
+        );
+        assert_eq!(
+            raster.get(24, 16),
+            [0, 0, 32768, 32768],
+            "full selection replaces straight colour"
+        );
+        assert!(e.undo());
+        assert_eq!(e.doc, before);
+        let mut erase = args;
+        erase["brush"] = json!("Hard eraser");
+        let result = execute(&mut e, "paint", &erase);
+        assert!(!result.is_error, "{}", text(&result));
+        assert_eq!(e.doc, before, "erasing cannot alter alpha-locked content");
+    }
+
+    #[test]
+    fn paint_symmetry_uses_document_axes_on_rotated_nonuniform_layers() {
+        let placement = Placement {
+            x: 0.0,
+            y: 64.0,
+            scale_x: 2.0,
+            scale_y: 1.0,
+            rotation: 90.0,
+            ..Default::default()
+        };
+        let mut doc = Document::new(256, 256);
+        let base = Arc::new(Raster::transparent(128, 128));
+        let id = Command::AddNode {
+            node: Box::new(Node::raster(0, "Transformed", base.clone(), placement)),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        let to_local = placement.to_doc(128, 128).inverse();
+        for (option, expected, absent) in [
+            (
+                json!({"mirror": "x"}),
+                vec![(100.0, 116.0), (156.0, 116.0)],
+                (100.0, 140.0),
+            ),
+            (
+                json!({"symmetry": 4}),
+                vec![
+                    (100.0, 116.0),
+                    (140.0, 100.0),
+                    (156.0, 140.0),
+                    (116.0, 156.0),
+                ],
+                (156.0, 116.0),
+            ),
+        ] {
+            let mut args = json!({"node": id, "color": "#000000", "settings": {"size": 8, "hardness": 1},
+                "strokes": [{"points": [[100,116]]}]});
+            args.as_object_mut()
+                .unwrap()
+                .extend(option.as_object().unwrap().clone());
+            let script = paint_script(&doc, &args).unwrap();
+            let (painted, _) = script.render(&base);
+            let coverage = |x, y| {
+                let p = to_local.transform_point2(glam::dvec2(x, y));
+                painted.get(p.x.floor() as u32, p.y.floor() as u32)[3]
+            };
+            for (x, y) in expected {
+                assert!(
+                    coverage(x, y) > 20000,
+                    "{option}: missing document-space copy at {x},{y}"
+                );
+            }
+            assert_eq!(
+                coverage(absent.0, absent.1),
+                0,
+                "{option}: unexpected layer-axis copy"
+            );
+        }
+    }
+
+    #[test]
     fn paint_symmetry_and_alpha_lock() {
         let mut d = Document::new(200, 200);
         Command::AddNode {
@@ -3998,6 +4316,258 @@ mod tests {
             &json!({ "d": "M 0 0 A 5 5 0 0 1 1 1" }),
         );
         assert!(r.is_error);
+    }
+
+    #[test]
+    fn align_node_moves_group_to_canvas_or_selection_with_one_undo() {
+        let mut e = Editor::new(Document::new(128, 128), None);
+        let source = Arc::new(Raster::solid(8, 6, [1.0, 0.0, 0.0, 1.0]));
+        let raster_id = e
+            .execute(Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "Pixels",
+                    source.clone(),
+                    Placement::at(50.0, 60.0),
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        let result = execute(
+            &mut e,
+            "draw_path",
+            &json!({
+                "name": "Editable", "d": "M 20 20 L 40 20 L 40 60 Z", "stroke": "none", "fill": "#000000"
+            }),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        let path_id = e
+            .doc
+            .nodes
+            .iter()
+            .find(|n| n.name == "Editable")
+            .unwrap()
+            .id;
+        let result = execute(
+            &mut e,
+            "group_nodes",
+            &json!({"nodes": [path_id, raster_id]}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        let group = e.doc.node(path_id).unwrap().parent.unwrap();
+        assert_eq!(
+            emulsion_core::geometry::node_bounds(&e.doc, group),
+            Some(IRect::new(20, 20, 38, 46))
+        );
+        for target in ["canvas", "selection"] {
+            if target == "selection" {
+                let result = execute(
+                    &mut e,
+                    "select_rect",
+                    &json!({"x": 10, "y": 12, "width": 61, "height": 71}),
+                );
+                assert!(!result.is_error, "{}", text(&result));
+            }
+            let before = e.doc.clone();
+            // Center ties round to the nearest even whole-pixel offset.
+            let expected = if target == "canvas" {
+                [(0, 20), (45, 20), (90, 20), (20, 0), (20, 41), (20, 82)]
+            } else {
+                [(10, 20), (22, 20), (33, 20), (20, 12), (20, 24), (20, 37)]
+            };
+            for (alignment, (x, y)) in [
+                "left",
+                "horizontal_center",
+                "right",
+                "top",
+                "vertical_center",
+                "bottom",
+            ]
+            .into_iter()
+            .zip(expected)
+            {
+                let steps = e.history.len();
+                let mut args = json!({"node": group, "alignment": alignment});
+                if target == "selection" {
+                    args["target"] = json!(target);
+                }
+                let result = execute(&mut e, "align_node", &args);
+                assert!(!result.is_error, "{args}: {}", text(&result));
+                assert_eq!(
+                    emulsion_core::geometry::node_bounds(&e.doc, group),
+                    Some(IRect::new(x, y, 38, 46))
+                );
+                let NodeKind::Path { path, .. } = &e.doc.node(path_id).unwrap().kind else {
+                    panic!("path flattened")
+                };
+                assert_eq!(path.subpaths[0].anchors[0].p, (x as f64, y as f64));
+                let NodeKind::Raster { raster, placement } = &e.doc.node(raster_id).unwrap().kind
+                else {
+                    panic!("raster missing")
+                };
+                assert!(Arc::ptr_eq(raster, &source));
+                assert_eq!(
+                    (placement.x, placement.y),
+                    (x as f64 + 30.0, y as f64 + 40.0)
+                );
+                assert!(match (&e.doc.selection, &before.selection) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    _ => false,
+                });
+                assert_eq!(e.doc.children(Some(group)), before.children(Some(group)));
+                assert_eq!(e.history.len(), steps + 1);
+                assert!(e.undo());
+                assert_eq!(e.doc, before);
+            }
+        }
+        for args in [
+            json!({"node": group}),
+            json!({"node": group, "alignment": "center"}),
+            json!({"node": group, "alignment": 1}),
+            json!({"node": group, "alignment": "left", "target": "layer"}),
+            json!({"node": group, "alignment": "left", "target": null}),
+            json!({"node": 99999, "alignment": "left"}),
+        ] {
+            let before = e.doc.clone();
+            let revision = e.revision;
+            let steps = e.history.len();
+            let result = execute(&mut e, "align_node", &args);
+            assert!(result.is_error, "{args}: {}", text(&result));
+            assert_eq!(e.doc, before);
+            assert_eq!(e.revision, revision);
+            assert_eq!(e.history.len(), steps);
+        }
+        e.execute(Command::SetSelection { selection: None })
+            .unwrap();
+        for locked in [false, true] {
+            if locked {
+                e.execute(Command::SetLocked {
+                    id: group,
+                    locked: true,
+                })
+                .unwrap();
+            }
+            let before = e.doc.clone();
+            let revision = e.revision;
+            let steps = e.history.len();
+            let target = if locked { "canvas" } else { "selection" };
+            let result = execute(
+                &mut e,
+                "align_node",
+                &json!({"node": group, "alignment": "left", "target": target}),
+            );
+            assert!(result.is_error, "{}", text(&result));
+            assert_eq!(e.doc, before);
+            assert_eq!(e.revision, revision);
+            assert_eq!(e.history.len(), steps);
+        }
+    }
+
+    #[test]
+    fn translate_node_moves_mixed_group_with_one_undo_and_rejects_errors_atomically() {
+        let mut e = Editor::new(Document::new(128, 128), None);
+        let result = execute(
+            &mut e,
+            "draw_path",
+            &json!({"d": "M 20 20 L 40 20 L 40 60 Z", "fill": "#000000"}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        let path_id = e.doc.nodes[0].id;
+        let source = Arc::new(Raster::solid(8, 6, [1.0, 0.0, 0.0, 1.0]));
+        let raster_id = e
+            .execute(Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "Pixels",
+                    source.clone(),
+                    Placement::at(50.0, 60.0),
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        let result = execute(
+            &mut e,
+            "group_nodes",
+            &json!({"nodes": [path_id, raster_id], "name": "Mixed"}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        let group = e.doc.node(path_id).unwrap().parent.unwrap();
+        let before = e.doc.clone();
+        let steps = e.history.len();
+        let result = execute(
+            &mut e,
+            "translate_node",
+            &json!({"node": group, "dx": 3.5, "dy": -4}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        let NodeKind::Path { path, .. } = &e.doc.node(path_id).unwrap().kind else {
+            panic!("path flattened")
+        };
+        assert_eq!(path.subpaths[0].anchors[0].p, (23.5, 16.0));
+        let NodeKind::Raster { raster, placement } = &e.doc.node(raster_id).unwrap().kind else {
+            panic!("raster missing")
+        };
+        assert!(
+            Arc::ptr_eq(raster, &source),
+            "translation must retain source pixels"
+        );
+        assert_eq!((placement.x, placement.y), (53.5, 56.0));
+        assert_eq!(e.doc.children(Some(group)), before.children(Some(group)));
+        assert_eq!((e.doc.width, e.doc.height), (128, 128));
+        assert!(match (&e.doc.selection, &before.selection) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        });
+        assert_eq!(e.history.len(), steps + 1);
+        assert!(e.undo());
+        assert_eq!(e.doc, before);
+
+        for args in [
+            json!({"node": group, "dx": 1}),
+            json!({"node": group, "dy": 1}),
+            json!({"node": group, "dx": "1", "dy": 0}),
+            json!({"node": group, "dx": 0, "dy": null}),
+            json!({"node": 99999, "dx": 1, "dy": 0}),
+        ] {
+            let revision = e.revision;
+            let steps = e.history.len();
+            let result = execute(&mut e, "translate_node", &args);
+            assert!(result.is_error, "{args}: {}", text(&result));
+            assert_eq!(e.doc, before);
+            assert_eq!(e.revision, revision);
+            assert_eq!(e.history.len(), steps);
+        }
+        for locked_id in [group, path_id] {
+            e.execute(Command::SetLocked {
+                id: locked_id,
+                locked: true,
+            })
+            .unwrap();
+            let locked = e.doc.clone();
+            let revision = e.revision;
+            let steps = e.history.len();
+            for target in [group, path_id] {
+                let result = execute(
+                    &mut e,
+                    "translate_node",
+                    &json!({"node": target, "dx": 1, "dy": 2}),
+                );
+                assert!(
+                    result.is_error,
+                    "locked {locked_id}, target {target}: {}",
+                    text(&result)
+                );
+                assert_eq!(e.doc, locked);
+                assert_eq!(e.revision, revision);
+                assert_eq!(e.history.len(), steps);
+            }
+            assert!(e.undo());
+            assert_eq!(e.doc, before);
+        }
     }
 
     #[test]

@@ -14,6 +14,24 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[path = "clipboard_tests.rs"]
+mod clipboard_tests;
+
+#[path = "tool_safety_tests.rs"]
+mod tool_safety_tests;
+
+#[path = "painting_tests.rs"]
+mod painting_tests;
+
+#[path = "filter_gesture_tests.rs"]
+mod filter_gesture_tests;
+
+#[path = "movement_tests.rs"]
+mod movement_tests;
+
+#[path = "alignment_tests.rs"]
+mod alignment_tests;
+
 fn doc(names: &[&str], pixels: Option<Raster>) -> Document {
     let mut d = Document::new(256, 192);
     for name in names {
@@ -271,6 +289,8 @@ mod generated_images {
                     Err(error) => panic!("fixture server did not receive a request: {error}"),
                 }
             };
+            // macOS can inherit the listener's nonblocking flag on accept.
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
@@ -1851,8 +1871,13 @@ mod tools {
         cx.run_until_parked();
         // Bold via the options bar applies to the selected layer.
         cx.update(|_, cx| e.update(cx, |e, cx| e.restyle_text(|s| s.bold = true, cx)));
-        // Move drags the text box.
-        cx.update(|_, cx| e.update(cx, |e, cx| e.set_tool(Tool::Move, cx)));
+        // Check exact pointer displacement without the shared snapping behavior.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.snap = false;
+                e.set_tool(Tool::Move, cx);
+            })
+        });
         cx.run_until_parked();
         drag(&e, cx, (35.0, 30.0), (85.0, 60.0));
         let spec = cx.update(|_, cx| {

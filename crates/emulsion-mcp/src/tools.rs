@@ -264,6 +264,26 @@ pub fn definitions() -> Vec<ToolDef> {
             &["node", "degrees"],
         ),
         def(
+            "translate_node",
+            "Move a node or group by an incremental offset in document pixels, preserving stack order. Positive dx moves right; positive dy moves down. Groups move their contents together; paths and text stay editable and pixel source data is retained. The canvas size and selection stay unchanged. Locked content cannot be moved. Use move_node to reorder the stack instead.",
+            json!({
+                "node": node(),
+                "dx": {"type": "number", "description": "Finite horizontal offset in document pixels."},
+                "dy": {"type": "number", "description": "Finite vertical offset in document pixels."}
+            }),
+            &["node", "dx", "dy"],
+        ),
+        def(
+            "align_node",
+            "Align a node or group by its content pixel bounds to the canvas (default) or the bounds of the active selection. Selection targeting requires a nonempty selection. Groups move together, paths and text remain editable, and pixel sources are retained. Center offsets are rounded to the nearest whole document pixel. Stack order, canvas size, and selection are unchanged. Locked content and unsafe mask or clipping relationships are rejected atomically.",
+            json!({
+                "node": node(),
+                "alignment": {"type": "string", "enum": ["left", "horizontal_center", "right", "top", "vertical_center", "bottom"]},
+                "target": {"type": "string", "enum": ["canvas", "selection"], "default": "canvas"}
+            }),
+            &["node", "alignment"],
+        ),
+        def(
             "select_rect",
             "Select a rectangle in document pixels. mode: replace (default), add, subtract, intersect. feather softens the edge by that many pixels.",
             json!({ "x": { "type": "number" }, "y": { "type": "number" }, "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 }, "mode": mode(), "feather": { "type": "number", "minimum": 0 } }),
@@ -375,7 +395,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "hatch",
-            "Shade an area with parallel strokes: fill rect [x, y, width, height] (or the selection's bounds) with lines at angle (degrees, default 45) every spacing pixels (default 8), with a little jitter (0-1) so they look hand-made; cross=true adds a second direction. Uses a brush and color like paint. One undo step.",
+            "Shade an area with parallel strokes generated across rect [x, y, width, height] (or the selection's bounds), at angle (degrees, default 45) every spacing pixels (default 8), with a little jitter (0-1) so they look hand-made; cross=true adds a second direction. rect bounds the generated centrelines: brush footprints and jitter may extend outside it. Make a selection to enforce an exact painted boundary. Uses a brush and color like paint. One undo step.",
             json!({ "node": node(), "brush": { "type": "string" }, "color": { "type": "string" }, "settings": { "type": "object" }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "angle": { "type": "number" }, "spacing": { "type": "number", "minimum": 1 }, "jitter": { "type": "number", "minimum": 0, "maximum": 1 }, "cross": { "type": "boolean" },
                 "sample_merged": {"type": "boolean", "default": false, "description": "Opt into lower-layer colour pickup for wet/smudge brushes."} }),
             &["node"],
@@ -546,25 +566,27 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "list_brushes",
-            "Discover brushes by name or category, intended uses, actual preset settings and supported ranges. Returns a rendered swatch sheet of up to 12 rows; use offset for further swatches. Preset names are approximations, not proof of material simulation. Use names with paint.",
+            "Discover brushes by name or category, intended uses, actual preset settings and supported ranges. The lightweight catalog indexes all matches; detailed settings and optional rendered swatches are paged together, up to 12 brushes at a time. Use query to narrow the catalog and offset/next_offset for further pages. Preset names are approximations, not proof of material simulation. Use names with paint.",
             json!({"query": {"type": "string", "description": "Case-insensitive name/category substring; default all."},
-                "swatches": {"type": "boolean", "default": true}, "offset": {"type": "integer", "minimum": 0, "description": "First swatch row in the filtered list; metadata includes all matches."}}),
+                "swatches": {"type": "boolean", "default": true}, "offset": {"type": "integer", "minimum": 0, "description": "First brush in the filtered page of detailed settings and swatches; catalog indexes all matches."}}),
             &[],
         ),
         def(
             "paint",
             concat!(
                 "Paint strokes on a pixel layer with a brush from list_brushes. Each stroke is a polyline in document pixels; ",
-                "a stroke gives either points ([x, y] or [x, y, pressure 0-1]) or d (SVG path data: M L C Q Z, absolute or relative) for smooth curves. SVG subpaths preserve pen lifts; the optional pressure envelope [start, end] restarts for each subpath. ",
+                "A stroke must give exactly one of points (1–2000 samples [x, y] or [x, y, pressure 0-1]) or nonempty d (SVG path data: M L C Q Z, absolute or relative) for smooth curves, with at most 4000 flattened points. SVG subpaths preserve pen lifts; the optional pressure envelope [start, end], both numeric 0–1, restarts for each subpath. Invalid pressure is rejected. ",
                 "color is #RRGGBB (ignored by Eraser and Smudge brushes). settings overrides brush fields for the whole call, e.g. ",
-                "{\"size\": 6, \"opacity\": 0.5, \"hardness\": 1, \"flow\": 0.3, \"wetness\": 0.5, \"taper_end\": 20, \"tilt\": 0.5}. ",
+                "{\"size\": 6, \"opacity\": 0.5, \"hardness\": 1, \"flow\": 0.3, \"wetness\": 0.5, \"taper_end\": 20}. ",
+                "Setting precedence is the named brush preset, then call settings, then per-stroke settings, including when a stroke chooses another brush. ",
+                "Scripted strokes have no tablet tilt or timestamps: tilt and speed_thins have no effect, and stabilizer is disabled to preserve the supplied geometry. Use pressure samples/envelopes, taper_start/taper_end, roundness and angle for controlled line character. ",
                 "mirror / symmetry repeat every stroke across or around the canvas centre; alpha_lock keeps paint on existing pixels. ",
                 "Everything in one call is a single undo step. Group marks by the chosen medium's current stage and inspection checkpoints; no fixed number of calls or universal paint order is required. ",
                 "Work on your own layer (add_layer) so the person can hide or mask it."
             ),
             json!({
                 "node": node(),
-                "brush": { "type": "string" },
+                "brush": { "type": "string", "minLength": 1 },
                 "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
                 "settings": { "type": "object" },
                 "sample_merged": {"type": "boolean", "default": false, "description": "Opt into frozen lower-layer colour pickup for wet/smudge brushes. Current and higher layers are excluded from the backdrop; current layer still supplies its own paint."},
@@ -576,14 +598,14 @@ pub fn definitions() -> Vec<ToolDef> {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "d": { "type": "string" },
-                            "pressure": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
-                            "points": { "type": "array", "minItems": 1, "maxItems": 2000, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 } },
-                            "brush": { "type": "string" },
+                            "d": { "type": "string", "minLength": 1 },
+                            "pressure": { "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 }, "minItems": 2, "maxItems": 2 },
+                            "points": { "type": "array", "minItems": 1, "maxItems": 2000, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3, "description": "[x,y] or [x,y,pressure]; optional pressure must be from 0 to 1." } },
+                            "brush": { "type": "string", "minLength": 1 },
                             "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
                             "settings": { "type": "object" }
                         },
-                        "required": []
+                        "oneOf": [{"required": ["d"]}, {"required": ["points"]}]
                     }
                 }
             }),

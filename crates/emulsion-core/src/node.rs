@@ -120,7 +120,7 @@ pub struct Node {
     pub blend: BlendMode,
     /// Clip to the content of a sibling below.
     pub clip_to: Option<NodeId>,
-    /// Coverage mask. For raster nodes it lives in the node's pixel space and
+    /// Coverage mask. For Raster and Smart nodes it lives in source pixel space and
     /// moves with it; otherwise it is in document space.
     pub mask: Option<Arc<Mask>>,
     pub mask_enabled: bool,

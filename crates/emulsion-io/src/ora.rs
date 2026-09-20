@@ -17,8 +17,9 @@
 //!
 //! Emulsion reads `emulsion.json` when present and falls back to `stack.xml`,
 //! so ORA files from Krita, MyPaint or GIMP open too. Other readers see the
-//! raster layers and groups and the correct merged image; adjustment nodes
-//! exist only in the manifest.
+//! raster layers and groups when representable. Documents with masks,
+//! clipping, adjustments, fills, or styles expose a named merged appearance
+//! layer to other readers; their editable originals remain in the manifest.
 //!
 //! Versioning: `version` increments whenever older builds could misread a
 //! file. Builds reject any version above the one they know.
@@ -41,7 +42,7 @@ use std::sync::Arc;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -79,12 +80,18 @@ struct MNode {
     blend: BlendMode,
     clip_to: Option<NodeId>,
     mask: Option<String>,
+    #[serde(default = "default_mask_fill")]
+    mask_fill: u8,
     mask_enabled: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     styles: Vec<emulsion_core::styles::LayerStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<String>,
     kind: MKind,
+}
+
+fn default_mask_fill() -> u8 {
+    255
 }
 
 #[derive(Serialize, Deserialize)]
@@ -342,6 +349,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             blend: n.blend,
             clip_to: n.clip_to,
             mask,
+            mask_fill: n.mask.as_ref().map_or(255, |m| m.fill()),
             mask_enabled: n.mask_enabled,
             styles: n.styles.clone(),
             origin: n.origin.clone(),
@@ -445,6 +453,21 @@ fn fit(w: u32, h: u32, max: u32) -> (u32, u32) {
 }
 
 fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> String {
+    // ORA cannot encode these operations. Other applications must see the
+    // complete picture, while Emulsion keeps every editable node in its
+    // native manifest. Name the fallback explicitly instead of pretending
+    // the standard stack contains the editable original layers.
+    if doc.nodes.iter().any(|n| {
+        matches!(n.kind, NodeKind::Adjust(_) | NodeKind::Fill { .. })
+            || n.clip_to.is_some()
+            || n.mask.is_some()
+            || !n.styles.is_empty()
+    }) {
+        return format!(
+            "<?xml version='1.0' encoding='UTF-8'?>\n<image version=\"0.0.6\" w=\"{}\" h=\"{}\" xres=\"{}\" yres=\"{}\"><stack><layer name=\"Appearance (editable layers in Emulsion)\" src=\"mergedimage.png\" x=\"0\" y=\"0\" opacity=\"1\" visibility=\"visible\" composite-op=\"svg:src-over\"/></stack></image>\n",
+            doc.width, doc.height, doc.resolution as u32, doc.resolution as u32
+        );
+    }
     fn emit(
         doc: &Document,
         parent: Option<NodeId>,
@@ -840,14 +863,42 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                     .map_err(|e| IoError::Manifest(format!("{p}: {e}")))?;
                 let (ew, eh) = match &kind {
                     NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
+                    NodeKind::Smart { source, .. } => (source.width(), source.height()),
                     _ => (m.width, m.height),
+                };
+                let mk = Mask::from_pixels(mk.width(), mk.height(), n.mask_fill, &mk.to_gray8());
+                // v1/v2 UI created document-space masks on smart nodes, but
+                // raster-to-smart conversion retained source-sized masks.
+                // Source dimensions take precedence in the ambiguous equal-
+                // size case, matching the renderer used by those versions.
+                let mk = if m.version < 3
+                    && (mk.width(), mk.height()) != (ew, eh)
+                    && let NodeKind::Smart { placement, .. } = &kind
+                    && (mk.width(), mk.height()) == (m.width, m.height)
+                {
+                    let to_doc = placement.to_doc(ew, eh);
+                    Mask::from_fn(ew, eh, mk.fill(), |x, y| {
+                        let p =
+                            to_doc.transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
+                        if p.x < 0.0
+                            || p.y < 0.0
+                            || p.x >= mk.width() as f64
+                            || p.y >= mk.height() as f64
+                        {
+                            mk.fill()
+                        } else {
+                            mk.get(p.x.floor() as u32, p.y.floor() as u32)
+                        }
+                    })
+                } else {
+                    mk
                 };
                 if mk.width() != ew || mk.height() != eh {
                     return Err(IoError::Manifest(format!(
                         "mask {p} does not match its node's size"
                     )));
                 }
-                Some(Arc::new(mk.clone()))
+                Some(Arc::new(mk))
             }
         };
         doc.nodes.push(Node {
@@ -1166,6 +1217,202 @@ mod tests {
         dir.join(name)
     }
 
+    fn rewrite_archive(path: &Path, mut edit: impl FnMut(&str, Vec<u8>) -> Option<Vec<u8>>) {
+        let mut src = ZipArchive::new(std::io::Cursor::new(std::fs::read(path).unwrap())).unwrap();
+        let mut dst = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..src.len() {
+            let mut entry = src.by_index(i).unwrap();
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if let Some(bytes) = edit(&name, bytes) {
+                dst.start_file(name, SimpleFileOptions::default()).unwrap();
+                dst.write_all(&bytes).unwrap();
+            }
+        }
+        std::fs::write(path, dst.finish().unwrap().into_inner()).unwrap();
+    }
+
+    fn masked_smart_document() -> Document {
+        let mut doc = Document::new(12, 10);
+        let mut node = Node::raster(
+            0,
+            "Small masked source",
+            Arc::new(Raster::solid(4, 4, [1.0, 0.0, 0.0, 1.0])),
+            Placement::at(3.0, 2.0),
+        );
+        node.mask = Some(Arc::new(Mask::from_fn(4, 4, 0, |x, _| {
+            if x < 2 { 255 } else { 0 }
+        })));
+        let id = emulsion_core::Command::AddNode {
+            node: Box::new(node),
+            slot: emulsion_core::command::Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        emulsion_core::Command::ConvertToSmart { id }
+            .apply(&mut doc)
+            .unwrap();
+        doc
+    }
+
+    #[test]
+    fn masked_smart_native_and_legacy_source_masks_reopen_with_history() {
+        let doc = masked_smart_document();
+        let editor = emulsion_core::Editor::new(doc.clone(), None);
+        let path = tmp("smart-mask-history.ora");
+        write_full(&doc, Some(&editor.graph), &path).unwrap();
+        let reopened = read_full(&path).unwrap();
+        assert!(reopened.history_error.is_none());
+        assert!(reopened.graph.is_some());
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&reopened.doc.composite_tree(), 0).to_srgba8()
+        );
+        assert_eq!(reopened.doc.nodes[0].mask.as_ref().unwrap().fill(), 0);
+        // Old ConvertToSmart wrote exactly this smaller source-sized mask.
+        rewrite_archive(&path, |name, bytes| {
+            if name == MANIFEST {
+                let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                value["version"] = 2.into();
+                Some(serde_json::to_vec(&value).unwrap())
+            } else {
+                Some(bytes)
+            }
+        });
+        let legacy = read_full(&path).unwrap();
+        assert!(legacy.history_error.is_none());
+        assert!(legacy.graph.is_some());
+        assert_eq!(legacy.doc.nodes[0].mask.as_ref().unwrap().width(), 4);
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&legacy.doc.composite_tree(), 0).to_srgba8()
+        );
+    }
+
+    #[test]
+    fn legacy_document_sized_smart_masks_migrate_into_source_coordinates() {
+        let doc = masked_smart_document();
+        let path = tmp("smart-legacy-canvas-mask.ora");
+        write(&doc, &path).unwrap();
+        let mask = Mask::from_fn(12, 10, 0, |x, _| if x == 4 { 255 } else { 0 });
+        rewrite_archive(&path, |name, bytes| {
+            if name == MANIFEST {
+                let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                value["version"] = 2.into();
+                Some(serde_json::to_vec(&value).unwrap())
+            } else if name.starts_with("emulsion/mask-") {
+                Some(png_gray(12, 10, &mask.to_gray8()).unwrap())
+            } else {
+                Some(bytes)
+            }
+        });
+        let restored = read(&path).unwrap();
+        let mask = restored.nodes[0].mask.as_ref().unwrap();
+        assert_eq!((mask.width(), mask.height()), (4, 4));
+        assert_eq!(mask.get(0, 0), 0);
+        assert_eq!(mask.get(1, 0), 255);
+        assert_eq!(mask.get(2, 0), 0);
+    }
+
+    #[test]
+    fn legacy_smart_canvas_masks_in_history_are_migrated_without_losing_commits() {
+        let mut doc = masked_smart_document();
+        doc.nodes[0].mask = Some(Arc::new(Mask::white(4, 4)));
+        let editor = emulsion_core::Editor::new(doc.clone(), None);
+        let path = tmp("smart-legacy-history-canvas-mask.ora");
+        write_full(&doc, Some(&editor.graph), &path).unwrap();
+        rewrite_archive(&path, |name, bytes| {
+            if name == MANIFEST {
+                let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                value["version"] = 2.into();
+                Some(serde_json::to_vec(&value).unwrap())
+            } else if name.starts_with("emulsion/mask-") {
+                Some(png_gray(12, 10, &[255; 120]).unwrap())
+            } else if name == crate::history::GRAPH {
+                let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                value["version"] = 2.into();
+                for mask in value["masks"].as_array_mut().unwrap() {
+                    mask["width"] = 12.into();
+                    mask["height"] = 10.into();
+                }
+                Some(serde_json::to_vec(&value).unwrap())
+            } else {
+                Some(bytes)
+            }
+        });
+        let restored = read_full(&path).unwrap();
+        assert!(
+            restored.history_error.is_none(),
+            "{:?}",
+            restored.history_error
+        );
+        let graph = restored.graph.unwrap();
+        assert_eq!(graph.commits().count(), editor.graph.commits().count());
+        for commit in graph.commits() {
+            let mask = commit.doc.nodes[0].mask.as_ref().unwrap();
+            assert_eq!((mask.width(), mask.height()), (4, 4));
+            assert_eq!(mask.get(0, 0), 255);
+            commit.doc.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn standard_ora_fallback_keeps_appearance_and_native_keeps_editability() {
+        let mut doc = masked_smart_document();
+        let fill = Node::new(
+            0,
+            "Fill",
+            NodeKind::Fill {
+                rgba: [0, 100, 200, 128],
+            },
+        );
+        emulsion_core::Command::AddNode {
+            node: Box::new(fill),
+            slot: emulsion_core::command::Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        emulsion_core::Command::AddNode {
+            node: Box::new(Node::adjust(
+                0,
+                Adjustment::Exposure {
+                    exposure: 1.0,
+                    offset: 0.0,
+                    gamma: 1.0,
+                },
+            )),
+            slot: emulsion_core::command::Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let path = tmp("standard-fidelity.ora");
+        write(&doc, &path).unwrap();
+        let native = read(&path).unwrap();
+        assert_eq!(native.nodes.len(), 3);
+        assert!(matches!(native.nodes[0].kind, NodeKind::Smart { .. }));
+        assert!(matches!(native.nodes[2].kind, NodeKind::Adjust(_)));
+        rewrite_archive(&path, |name, bytes| {
+            if name == MANIFEST || name.starts_with("emulsion/") {
+                None
+            } else {
+                Some(bytes)
+            }
+        });
+        let standard = read(&path).unwrap();
+        assert_eq!(standard.nodes.len(), 1);
+        assert!(standard.nodes[0].name.contains("Appearance"));
+        let expected = flatten(&doc.composite_tree(), 0).to_srgba8();
+        let actual = flatten(&standard.composite_tree(), 0).to_srgba8();
+        assert!(
+            expected
+                .iter()
+                .zip(actual)
+                .all(|(&a, b)| a.abs_diff(b) <= 1)
+        );
+    }
+
     #[test]
     fn legacy_manifest_above_four_mib_keeps_editable_paths() {
         let mut doc = Document::new(8, 8);
@@ -1431,8 +1678,15 @@ mod tests {
 
     #[test]
     fn plain_ora_readers_path_works() {
-        // Strip the manifest and read through stack.xml alone.
-        let d = sample_doc();
+        // A representable stack remains layered for ordinary ORA readers.
+        // Advanced operations have a separate appearance-fallback regression.
+        let mut d = sample_doc();
+        d.nodes.retain(|n| !matches!(n.kind, NodeKind::Adjust(_)));
+        for node in &mut d.nodes {
+            node.mask = None;
+            node.clip_to = None;
+        }
+        d.validate().unwrap();
         let p = tmp("plain.ora");
         write(&d, &p).unwrap();
         let mut src = ZipArchive::new(std::fs::File::open(&p).unwrap()).unwrap();
@@ -1451,13 +1705,21 @@ mod tests {
         }
         out.finish().unwrap();
         let back = read(&q).unwrap();
-        // Adjustment nodes are manifest-only; rasters and the group survive.
+        // Rasters, transforms, blend modes, and group structure survive.
         assert_eq!(back.nodes.len(), 4);
         let g = back.nodes.iter().find(|n| n.is_group()).unwrap();
         assert_eq!(g.name, "group");
         assert_eq!(back.children(Some(g.id)).len(), 2);
         let spot = back.nodes.iter().find(|n| n.name == "spot").unwrap();
         assert_eq!(spot.blend, BlendMode::Multiply);
+        let expected = flatten(&d.composite_tree(), 0).to_srgba8();
+        let actual = flatten(&back.composite_tree(), 0).to_srgba8();
+        assert!(
+            expected
+                .iter()
+                .zip(actual)
+                .all(|(&a, b)| a.abs_diff(b) <= 2)
+        );
     }
 
     #[test]

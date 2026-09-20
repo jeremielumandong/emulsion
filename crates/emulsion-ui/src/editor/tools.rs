@@ -129,6 +129,8 @@ pub struct ToolState {
     pub guide: super::guides::GuideState,
     /// What the Liquify brush does.
     pub liquify: emulsion_raster::liquify::Mode,
+    /// Original and latest raster for consecutive liquify strokes on one layer.
+    liquify_session: Option<(NodeId, Arc<Raster>, Arc<Raster>)>,
     /// Saved brush settings (and preset name) for the slots not in use.
     pub kits: std::collections::HashMap<BrushSlot, (Brush, Option<String>)>,
     /// Mask tool: painting reveals (white) or hides (black).
@@ -187,6 +189,7 @@ impl Default for ToolState {
             alpha_lock: false,
             guide: Default::default(),
             liquify: emulsion_raster::liquify::Mode::Push,
+            liquify_session: None,
             kits: Default::default(),
             mask_reveal: true,
             stroke_started: None,
@@ -376,6 +379,11 @@ impl EditorView {
     }
 
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        if tool != self.tool && matches!(self.drag, Some(Drag::Move(_))) {
+            self.drag = None;
+            self.snap_lines.clear();
+            self.editor.end();
+        }
         if tool != Tool::Type {
             self.close_text_field(cx);
         }
@@ -453,6 +461,9 @@ impl EditorView {
     }
 
     pub fn set_paint(&mut self, kind: PaintKind, cx: &mut Context<Self>) {
+        if kind != PaintKind::Liquify {
+            self.tools.liquify_session = None;
+        }
         let from = BrushSlot::of(self.tool, self.tools.paint);
         self.tool = Tool::Brush;
         self.tools.paint = kind;
@@ -465,6 +476,7 @@ impl EditorView {
     }
 
     pub fn set_select(&mut self, shape: SelectShape, cx: &mut Context<Self>) {
+        self.selection_request = self.selection_request.wrapping_add(1);
         self.tool = Tool::Select;
         self.tools.select = shape;
         self.tools.polygon.clear();
@@ -534,7 +546,7 @@ impl EditorView {
         if let Some(id) = self.selected
             && let Some(n) = self.editor.doc.node(id)
         {
-            if n.locked {
+            if self.editor.doc.locked_ancestor(id).is_some() {
                 self.set_status("That node is locked.", true, cx);
                 return None;
             }
@@ -584,6 +596,7 @@ impl EditorView {
         if feather > 0.5 {
             // Feathering a big selection takes a moment: off the UI thread.
             let existing = self.editor.doc.selection.clone();
+            let ticket = self.selection_ticket();
             cx.spawn(async move |this, cx| {
                 let selection = cx
                     .background_spawn(async move {
@@ -593,6 +606,9 @@ impl EditorView {
                     })
                     .await;
                 this.update(cx, |this, cx| {
+                    if !this.selection_is_current(ticket) {
+                        return;
+                    }
                     this.execute(Command::SetSelection { selection }, cx);
                 })
                 .ok();
@@ -635,6 +651,7 @@ impl EditorView {
             return;
         };
         self.set_status("Modifying the selection…", false, cx);
+        let ticket = self.selection_ticket();
         cx.spawn(async move |this, cx| {
             let selection = cx
                 .background_spawn(async move {
@@ -649,6 +666,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !this.selection_is_current(ticket) {
+                    return;
+                }
                 this.status = None;
                 this.execute(Command::SetSelection { selection }, cx);
             })
@@ -670,6 +690,7 @@ impl EditorView {
         };
         match self.tool {
             Tool::Select => {
+                self.selection_request = self.selection_request.wrapping_add(1);
                 let combine = combine_for(&e.modifiers, self.tools.combine);
                 let plain = combine == Combine::Replace
                     && matches!(
@@ -693,12 +714,6 @@ impl EditorView {
                 }
                 match self.tools.select {
                     SelectShape::Quick => {
-                        let combine =
-                            if combine == Combine::Replace && self.editor.doc.selection.is_some() {
-                                Combine::Add
-                            } else {
-                                combine
-                            };
                         self.drag = Some(Drag::Tool(ToolDrag::Quick {
                             pts: vec![d],
                             combine,
@@ -792,15 +807,17 @@ impl EditorView {
                     .tools
                     .clone_offset
                     .get_or_insert((src.0 - d.0, src.1 - d.1));
-                self.start_stroke(d, Ink::Clone { dx: 0.0, dy: 0.0 }, false, "Clone", cx);
-                if let Some(Drag::Tool(ToolDrag::Stroke {
-                    stroke, to_local, ..
-                })) = &mut self.drag
-                {
-                    // Offsets are in layer pixels.
-                    let a = to_local.transform_vector2(dvec2(off.0, off.1));
-                    stroke.set_clone_offset(a.x as f32, a.y as f32);
-                }
+                // start_stroke converts this document-space offset before its first dab.
+                self.start_stroke(
+                    d,
+                    Ink::Clone {
+                        dx: off.0 as f32,
+                        dy: off.1 as f32,
+                    },
+                    false,
+                    "Clone",
+                    cx,
+                );
             }
             Tool::Crop => {
                 let symmetric = e.modifiers.alt || self.tools.crop_centered;
@@ -833,6 +850,10 @@ impl EditorView {
         label: &'static str,
         cx: &mut Context<Self>,
     ) {
+        if heal && self.editor.in_transaction() {
+            self.set_status("Finish the current edit before healing.", false, cx);
+            return;
+        }
         let mask_mode = self.tools.mask_edit && !heal && matches!(ink, Ink::Color(_) | Ink::Erase);
         let (id, raster, to_doc, ink) = if mask_mode {
             let Some((id, m, to_doc)) = self.mask_target(cx) else {
@@ -857,27 +878,25 @@ impl EditorView {
         let scale = to_doc.matrix2.determinant().abs().sqrt().max(1e-6);
         let mut brush = self.tools.brush;
         brush.size = (brush.size as f64 / scale) as f32;
-        let mut clip = self
+        let clip = self
             .editor
             .doc
             .selection
             .clone()
             .map(|m| local_clip(m, to_doc));
-        if self.tools.alpha_lock && !mask_mode {
-            // Paint only where the layer already has pixels, at their
-            // coverage, and inside the selection when there is one.
-            let base = raster.clone();
-            let sel = clip.take();
-            clip = Some(Arc::new(move |x: i32, y: i32| {
-                if x < 0 || y < 0 || x >= base.width() as i32 || y >= base.height() as i32 {
-                    return 0.0;
+        let ink = match ink {
+            Ink::Clone { dx, dy } => {
+                let offset = to_local.transform_vector2(dvec2(dx as f64, dy as f64));
+                Ink::Clone {
+                    dx: offset.x as f32,
+                    dy: offset.y as f32,
                 }
-                let a = base.get(x as u32, y as u32)[3] as f32 / 65535.0;
-                a * sel.as_ref().map_or(1.0, |c| c(x, y))
-            }));
-        }
+            }
+            ink => ink,
+        };
         let wet = brush.wetness > 0.0 || matches!(ink, Ink::Smudge);
         let mut stroke = Stroke::new(raster.clone(), brush, ink, clip);
+        stroke.set_alpha_lock(self.tools.alpha_lock && !mask_mode);
         if wet {
             // Wet media mix with what shows under this layer, not only with it.
             let tree = self.tree.clone();
@@ -892,14 +911,13 @@ impl EditorView {
             }));
         }
         let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
-        let axis = |x: f64, y: f64| to_local.transform_point2(dvec2(x, y));
+        stroke.set_symmetry_space(to_doc);
         stroke.set_mirror(
-            self.tools.mirror_x.then(|| axis(w / 2.0, h / 2.0).x as f32),
-            self.tools.mirror_y.then(|| axis(w / 2.0, h / 2.0).y as f32),
+            self.tools.mirror_x.then_some(w as f32 / 2.0),
+            self.tools.mirror_y.then_some(h as f32 / 2.0),
         );
         if self.tools.symmetry >= 2 {
-            let c = axis(w / 2.0, h / 2.0);
-            stroke.set_radial((c.x as f32, c.y as f32), self.tools.symmetry);
+            stroke.set_radial((w as f32 / 2.0, h as f32 / 2.0), self.tools.symmetry);
         }
         crate::tablet::start();
         self.tools.stroke_started = Some(Instant::now());
@@ -940,10 +958,17 @@ impl EditorView {
         };
         let to_local = to_doc.inverse();
         let p = to_local.transform_point2(dvec2(d.0, d.1));
+        let original = match &self.tools.liquify_session {
+            Some((target, original, latest)) if *target == id && Arc::ptr_eq(latest, &raster) => {
+                original.clone()
+            }
+            _ => raster.clone(),
+        };
+        self.tools.liquify_session = Some((id, original.clone(), raster));
         self.editor.begin("Liquify");
         self.drag = Some(Drag::Tool(ToolDrag::Liquify {
             id,
-            original: raster,
+            original,
             to_local,
             last: (p.x as f32, p.y as f32),
         }));
@@ -970,6 +995,7 @@ impl EditorView {
         let delta = (p.0 - last.0, p.1 - last.1);
         *last = p;
         let scale = to_local.matrix2.determinant().abs().sqrt().max(1e-6);
+        let to_doc = to_local.inverse();
         let Some(NodeKind::Raster { raster, .. }) = self.editor.doc.node(id).map(|n| &n.kind)
         else {
             return;
@@ -984,7 +1010,38 @@ impl EditorView {
             self.tools.brush.flow,
             delta,
         );
+        let r = if let Some(selection) = self.editor.doc.selection.clone() {
+            let clip = local_clip(selection, to_doc);
+            let prior = raster.read_rect(dirty);
+            let pixels: Vec<[u16; 4]> = r
+                .read_rect(dirty)
+                .into_iter()
+                .zip(&prior)
+                .enumerate()
+                .map(|(i, (painted, base))| {
+                    let x = dirty.x + (i % dirty.w as usize) as i32;
+                    let y = dirty.y + (i / dirty.w as usize) as i32;
+                    let coverage = clip(x, y).clamp(0.0, 1.0);
+                    [0, 1, 2, 3].map(|channel| {
+                        (base[channel] as f32
+                            + (painted[channel] as f32 - base[channel] as f32) * coverage)
+                            .round() as u16
+                    })
+                })
+                .collect();
+            if pixels == prior {
+                return;
+            }
+            raster.write_rect(dirty, &pixels)
+        } else {
+            r
+        };
         self.commit_stroke(id, r, dirty, "Liquify", false, cx);
+        if let Some(NodeKind::Raster { raster, .. }) =
+            self.editor.doc.node(id).map(|node| &node.kind)
+        {
+            self.tools.liquify_session = Some((id, original, raster.clone()));
+        }
     }
 
     /// Poll the live stroke for a rest at its end; snap it when found.
@@ -1125,12 +1182,17 @@ impl EditorView {
     fn mask_target(&mut self, cx: &mut Context<Self>) -> Option<(NodeId, Arc<Mask>, DAffine2)> {
         let id = self.selected?;
         let n = self.editor.doc.node(id)?;
-        if n.locked {
+        if self.editor.doc.locked_ancestor(id).is_some() {
             self.set_status("That node is locked.", true, cx);
             return None;
         }
         let (w, h, to_doc) = match &n.kind {
-            NodeKind::Raster { raster, placement } => (
+            NodeKind::Raster { raster, placement }
+            | NodeKind::Smart {
+                source: raster,
+                placement,
+                ..
+            } => (
                 raster.width(),
                 raster.height(),
                 placement.to_doc(raster.width(), raster.height()),
@@ -1167,7 +1229,12 @@ impl EditorView {
             return;
         };
         let (w, h, to_doc) = match &n.kind {
-            NodeKind::Raster { raster, placement } => (
+            NodeKind::Raster { raster, placement }
+            | NodeKind::Smart {
+                source: raster,
+                placement,
+                ..
+            } => (
                 raster.width(),
                 raster.height(),
                 Some(placement.to_doc(raster.width(), raster.height())),
@@ -1517,6 +1584,9 @@ impl EditorView {
 
     /// Escape: cancel what is pending; returns whether anything was.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.cancel_move(cx) {
+            return true;
+        }
         let had = !self.tools.polygon.is_empty()
             || self.tools.crop.is_some()
             || self.tools.picker
@@ -1546,8 +1616,9 @@ impl EditorView {
 
     /// The composite as straight sRGBA8, off the main thread.
     fn composite_srgb8(&self) -> impl std::future::Future<Output = Vec<u8>> + use<> {
-        let tree = self.tree.clone();
+        let doc = self.editor.doc.clone();
         async move {
+            let tree = doc.composite_tree();
             let full = region(
                 &tree,
                 IRect::new(0, 0, tree.width as i32, tree.height as i32),
@@ -1623,6 +1694,7 @@ impl EditorView {
             return;
         }
         let strength = (self.tools.tolerance as f32 / 255.0 * 100.0).max(1.0);
+        let ticket = self.selection_ticket();
         let img = self.composite_srgb8();
         self.set_status("Selecting…", false, cx);
         cx.spawn(async move |this, cx| {
@@ -1633,6 +1705,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !this.selection_is_current(ticket) {
+                    return;
+                }
                 this.status = None;
                 this.apply_selection(m, combine, cx);
             })
@@ -1643,7 +1718,7 @@ impl EditorView {
 
     /// Compute the edge map the magnetic lasso follows, once per revision.
     fn ensure_edges(&mut self, cx: &mut Context<Self>) {
-        let rev = self.editor.revision;
+        let rev = self.operation_epoch;
         if self.tools.edges.as_ref().is_some_and(|(r, _)| *r == rev)
             || self.tools.edges_loading == Some(rev)
         {
@@ -1657,8 +1732,14 @@ impl EditorView {
                 .background_spawn(async move { Arc::new(select::edges(&img.await, w, h)) })
                 .await;
             this.update(cx, |this, _| {
-                this.tools.edges = Some((rev, e));
-                this.tools.edges_loading = None;
+                if this.tools.edges_loading == Some(rev) {
+                    this.tools.edges_loading = None;
+                }
+                if this.operation_epoch == rev
+                    && (this.editor.doc.width, this.editor.doc.height) == (w, h)
+                {
+                    this.tools.edges = Some((rev, e));
+                }
             })
             .ok();
         })
@@ -1700,11 +1781,16 @@ impl EditorView {
         let Some(&last) = self.tools.polygon.last() else {
             return;
         };
-        let Some((_, edges)) = self.tools.edges.clone() else {
+        let Some((epoch, edges)) = self.tools.edges.clone() else {
             self.ensure_edges(cx);
             return;
         };
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        if epoch != self.operation_epoch || edges.len() != w as usize * h as usize {
+            self.tools.magnetic_live.clear();
+            self.ensure_edges(cx);
+            return;
+        }
         let clamp = |p: (f64, f64)| {
             (
                 p.0.clamp(0.0, w as f64 - 1.0) as u32,
@@ -1735,6 +1821,7 @@ impl EditorView {
         }
         let (tol, contiguous) = (self.tools.tolerance, self.tools.contiguous);
         let img = self.composite_srgb8();
+        let ticket = self.selection_ticket();
         self.set_status("Selecting…", false, cx);
         cx.spawn(async move |this, cx| {
             let m = cx
@@ -1744,6 +1831,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !this.selection_is_current(ticket) {
+                    return;
+                }
                 this.status = None;
                 this.apply_selection(m, combine, cx);
             })
@@ -1794,6 +1884,7 @@ impl EditorView {
         let sel = self.editor.doc.selection.clone();
         let img = self.composite_srgb8();
         self.set_status("Filling…", false, cx);
+        let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -1808,6 +1899,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Fill", cx) {
+                    return;
+                }
                 this.status = None;
                 let (r, dirty) = result;
                 this.execute(
@@ -1836,6 +1930,7 @@ impl EditorView {
         };
         let color = premul(self.tools.fg);
         let sel = self.editor.doc.selection.clone();
+        let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let (r, dirty) = cx
                 .background_spawn(async move {
@@ -1849,6 +1944,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Fill", cx) {
+                    return;
+                }
                 this.execute(
                     Command::ReplacePixels {
                         id,
@@ -1870,16 +1968,22 @@ impl EditorView {
             self.set_status("Select the area to fill first.", false, cx);
             return;
         };
-        let tree = self.tree.clone();
+        let doc = self.editor.doc.clone();
         self.set_status("Filling from the surroundings…", false, cx);
+        let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let Some((layer, reg)) = cx
-                .background_spawn(async move { fill::content_aware_layer(&tree, &sel) })
+                .background_spawn(
+                    async move { fill::content_aware_layer(&doc.composite_tree(), &sel) },
+                )
                 .await
             else {
                 return;
             };
             this.update(cx, |this, cx| {
+                if !this.accept_edit_result(ticket, "Fill", cx) {
+                    return;
+                }
                 this.status = None;
                 let node = Node::raster(
                     0,
@@ -1907,9 +2011,14 @@ impl EditorView {
     fn finish_heal(&mut self, id: NodeId, stroke: Stroke, cx: &mut Context<Self>) {
         let hole = stroke.coverage();
         let base = stroke.base().clone();
+        let alpha_lock = self.tools.alpha_lock;
+        // The live colored overlay belongs only to this stroke. Restore it
+        // before dispatch so the worker never owns an open UI transaction.
+        self.editor.cancel();
+        self.after_change(cx);
+        let epoch = self.operation_epoch;
         let b = select::bounds(&hole);
         if b.is_empty() {
-            self.editor.end();
             return;
         }
         let margin = (stroke.brush.size as i32 * 2).max(32);
@@ -1920,6 +2029,7 @@ impl EditorView {
             b.h + 2 * margin,
         )
         .intersect(&base.bounds());
+        let original = base.clone();
         cx.spawn(async move |this, cx| {
             let (raster, dirty) = cx
                 .background_spawn(async move {
@@ -1934,11 +2044,27 @@ impl EditorView {
                         .map(|v| v as f32 / 255.0)
                         .collect();
                     let out = fill::content_aware(&img, &h, reg.w as usize, reg.h as usize, 0x4EA1);
-                    let px: Vec<[u16; 4]> = out.into_iter().map(color::f_to_px).collect();
+                    let px: Vec<[u16; 4]> = out.into_iter().zip(&img).map(|(mut pixel, prior)| {
+                        if alpha_lock {
+                            if pixel[3] > 0.0 {
+                                let scale = prior[3] / pixel[3];
+                                for channel in pixel.iter_mut().take(3) { *channel *= scale; }
+                            } else { pixel = *prior; }
+                            pixel[3] = prior[3];
+                        }
+                        color::f_to_px(pixel)
+                    }).collect();
                     (base.write_rect(reg, &px), reg)
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let unchanged = this.editor.doc.node(id).is_some_and(|node| {
+                    matches!(&node.kind, NodeKind::Raster { raster, .. } if Arc::ptr_eq(raster, &original))
+                });
+                if this.operation_epoch != epoch || this.editor.in_transaction() || !unchanged {
+                    this.set_status("Heal cancelled because the document changed. Paint the area again to retry.", false, cx);
+                    return;
+                }
                 this.execute(
                     Command::ReplacePixels {
                         id,
@@ -1948,9 +2074,6 @@ impl EditorView {
                     },
                     cx,
                 );
-                if this.editor.in_transaction() {
-                    this.editor.end();
-                }
             })
             .ok();
         })
@@ -2825,6 +2948,13 @@ impl EditorView {
                         .on_click(cx.listener(|this, _, _, cx| this.deselect(cx)))
                         .into_any_element(),
                 );
+                if self.editor.doc.selection.is_some() {
+                    v.push(
+                        chip("sel-transform-pixels", "transform pixels", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.transform_pixels(cx)))
+                            .into_any_element(),
+                    );
+                }
                 v.push(
                     chip("sel-inv", "invert", false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.invert_selection(cx)))
@@ -3302,12 +3432,13 @@ impl EditorView {
                 );
             }
             Tool::Move => {
+                v.push(self.alignment_controls(p, cx));
                 let fields = self.transform_field_views(p);
                 if fields.is_empty() {
                     v.push(
                         div()
                             .flex_none()
-                            .child("select a pixel node to move or transform it · H to pan")
+                            .child("drag a layer or group · arrows: 1 px · Shift+arrows: 10 px · Esc: cancel move")
                             .into_any_element(),
                     );
                 } else if self.warp.is_some() {

@@ -107,6 +107,14 @@ impl EditorView {
     /// Show `recipe` on the canvas without committing. Any earlier preview
     /// is taken down first, so recipes never stack while being reviewed.
     pub fn preview_recipe(&mut self, recipe: &Recipe, cx: &mut Context<Self>) {
+        if self.editor.in_transaction() && self.recipes.preview.is_none() {
+            self.set_status(
+                "Finish the current edit before previewing a recipe.",
+                false,
+                cx,
+            );
+            return;
+        }
         if self
             .recipes
             .preview
@@ -180,6 +188,14 @@ impl EditorView {
     /// Apply a recipe above the selected node at once, as one undo step
     /// (the assistant's path, and tests').
     pub fn apply_recipe(&mut self, recipe: &Recipe, cx: &mut Context<Self>) {
+        if self.editor.in_transaction() && self.recipes.preview.is_none() {
+            self.set_status(
+                "Finish the current edit before applying a recipe.",
+                false,
+                cx,
+            );
+            return;
+        }
         self.cancel_preview(cx);
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let compiled = match emulsion_recipes::compile_sized(recipe, w, h) {

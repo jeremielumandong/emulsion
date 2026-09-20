@@ -85,7 +85,7 @@ impl EditorView {
     pub(crate) fn pen_target(&self) -> Option<(NodeId, Arc<Path>, PathStyle)> {
         let id = self.selected?;
         let n = self.editor.doc.node(id)?;
-        if n.locked {
+        if self.editor.doc.locked_ancestor(id).is_some() {
             return None;
         }
         match &n.kind {

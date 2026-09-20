@@ -1820,6 +1820,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-channel",
+ "block2 0.6.2",
  "emulsion-ai",
  "emulsion-assistant",
  "emulsion-core",
@@ -1832,6 +1833,8 @@ dependencies = [
  "glam",
  "gpui-kit",
  "image",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "parking_lot",
  "rayon",
  "serde",

@@ -5,6 +5,7 @@
 //! stack and the tree can be rebuilt from parent pointers alone.
 
 use crate::node::{Node, NodeId, NodeKind};
+use emulsion_raster::Mask;
 use emulsion_raster::blend::BlendSpace;
 use emulsion_raster::color;
 use emulsion_raster::composite::{CompositeNode, CompositeTree, NodeContent};
@@ -174,6 +175,53 @@ impl Document {
         self.nodes.iter().find(|n| n.id == id)
     }
 
+    /// The first lock protecting this node, including its containing groups.
+    /// UI tools can use this before starting a gesture; commands enforce it too.
+    pub fn locked_ancestor(&self, id: NodeId) -> Option<NodeId> {
+        let mut current = Some(id);
+        for _ in 0..=self.nodes.len() {
+            let node = self.node(current?)?;
+            if node.locked {
+                return Some(node.id);
+            }
+            current = node.parent;
+        }
+        None
+    }
+
+    /// Smart masks live in source pixel coordinates, like ordinary raster
+    /// masks. An expanded filter cache needs the same mask shifted by its
+    /// source offset before the compositor samples it through cache placement.
+    pub fn composite_mask(node: &Node) -> Option<Arc<Mask>> {
+        let mask = node.mask_enabled.then_some(node.mask.as_ref()).flatten()?;
+        match &node.kind {
+            NodeKind::Smart { cache, offset, .. }
+                if *offset != (0, 0)
+                    || (mask.width(), mask.height()) != (cache.width(), cache.height()) =>
+            {
+                Some(Arc::new(Mask::from_fn(
+                    cache.width(),
+                    cache.height(),
+                    mask.fill(),
+                    |x, y| {
+                        let sx = x as i64 + offset.0 as i64;
+                        let sy = y as i64 + offset.1 as i64;
+                        if sx < 0
+                            || sy < 0
+                            || sx >= mask.width() as i64
+                            || sy >= mask.height() as i64
+                        {
+                            mask.fill()
+                        } else {
+                            mask.get(sx as u32, sy as u32)
+                        }
+                    },
+                )))
+            }
+            _ => Some(mask.clone()),
+        }
+    }
+
     pub fn node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
         self.nodes.iter_mut().find(|n| n.id == id)
     }
@@ -293,13 +341,24 @@ impl Document {
             if !(0.0..=1.0).contains(&n.opacity) || !n.opacity.is_finite() {
                 return Err(DocumentError::BadValue(n.id, "opacity"));
             }
-            if let NodeKind::Raster { placement, .. } = &n.kind {
+            if let NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } = &n.kind
+            {
                 let p = placement;
                 let finite = [p.x, p.y, p.scale_x, p.scale_y, p.rotation]
                     .iter()
                     .all(|v| v.is_finite());
                 if !finite || p.scale_x.abs() < 1e-6 || p.scale_y.abs() < 1e-6 {
                     return Err(DocumentError::BadValue(n.id, "placement"));
+                }
+            }
+            if let Some(mask) = &n.mask {
+                let expected = match &n.kind {
+                    NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
+                    NodeKind::Smart { source, .. } => (source.width(), source.height()),
+                    _ => (self.width, self.height),
+                };
+                if (mask.width(), mask.height()) != expected {
+                    return Err(DocumentError::BadValue(n.id, "mask size"));
                 }
             }
             if let NodeKind::Adjust(a) = &n.kind
@@ -402,7 +461,7 @@ impl Document {
                             visible: n.visible,
                             opacity: n.opacity,
                             blend: n.blend,
-                            mask: if n.mask_enabled { n.mask.clone() } else { None },
+                            mask: Document::composite_mask(n),
                             clip_to: None,
                             content,
                         },

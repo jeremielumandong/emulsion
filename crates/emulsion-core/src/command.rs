@@ -24,8 +24,34 @@ pub enum CommandError {
     Locked(NodeId),
     #[error("node {0} has no content or mask to rotate")]
     NothingToRotate(NodeId),
+    #[error("node {0} has no movable content or mask")]
+    NothingToMove(NodeId),
+    #[error("This move would clip a document-space mask; enlarge the canvas first.")]
+    MaskWouldClip(NodeId),
+    #[error("Select a nonempty area before aligning to the selection.")]
+    EmptyAlignmentSelection,
+    #[error("preview requires one open transaction (no nested transactions)")]
+    PreviewTransaction,
     #[error("the result is invalid: {0}")]
     Invalid(#[from] crate::document::DocumentError),
+}
+
+/// Which edge or center of the selected artwork to align.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alignment {
+    Left,
+    HorizontalCenter,
+    Right,
+    Top,
+    VerticalCenter,
+    Bottom,
+}
+
+/// The coordinate-space reference for alignment (never other layers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlignTarget {
+    Canvas,
+    Selection,
 }
 
 /// Where a node goes: a parent (None = top level) and an index among that
@@ -103,6 +129,18 @@ pub enum Command {
     RotateNode {
         id: NodeId,
         degrees: f64,
+    },
+    /// Translate a node and all its descendants in document pixels.
+    TranslateNode {
+        id: NodeId,
+        dx: f64,
+        dy: f64,
+    },
+    /// Align artwork bounds by translating its entire subtree in whole pixels.
+    AlignNode {
+        id: NodeId,
+        alignment: Alignment,
+        target: AlignTarget,
     },
     SetClip {
         id: NodeId,
@@ -246,6 +284,16 @@ impl Command {
             Command::SetAdjustment { .. } => "Adjustment".into(),
             Command::SetPlacement { .. } => "Transform".into(),
             Command::RotateNode { .. } => "Rotate node".into(),
+            Command::TranslateNode { .. } => "Move".into(),
+            Command::AlignNode { alignment, .. } => match alignment {
+                Alignment::Left => "Align left",
+                Alignment::HorizontalCenter => "Align horizontal center",
+                Alignment::Right => "Align right",
+                Alignment::Top => "Align top",
+                Alignment::VerticalCenter => "Align vertical center",
+                Alignment::Bottom => "Align bottom",
+            }
+            .into(),
             Command::SetClip { clip_to, .. } => {
                 if clip_to.is_some() { "Clip" } else { "Unclip" }.into()
             }
@@ -352,12 +400,110 @@ impl Command {
     /// Apply to `doc`. Returns the id of a created node, if any. On error the
     /// document is unchanged.
     pub fn apply(&self, doc: &mut Document) -> Result<Option<NodeId>, CommandError> {
+        let has_locks = doc.nodes.iter().any(|n| n.locked);
+        if has_locks {
+            self.check_locks(doc)?;
+        }
         let mut next = doc.clone();
         let created = self.apply_inner(&mut next)?;
+        // Moving/removing a clip base can also clear a different node's clip.
+        // Protect those indirect changes, not only the command's main target.
+        if has_locks
+            && matches!(
+                self,
+                Self::RemoveNode { .. }
+                    | Self::MoveNode { .. }
+                    | Self::Group { .. }
+                    | Self::Ungroup { .. }
+            )
+        {
+            for node in &doc.nodes {
+                if let Some(locked) = doc.locked_ancestor(node.id)
+                    && next.node(node.id) != Some(node)
+                {
+                    return Err(CommandError::Locked(locked));
+                }
+            }
+        }
         next.normalize();
         next.validate()?;
         *doc = next;
         Ok(created)
+    }
+
+    fn check_locks(&self, doc: &Document) -> Result<(), CommandError> {
+        let check = |id: NodeId, subtree: bool| {
+            if let Some(locked) = doc.locked_ancestor(id) {
+                return Err(CommandError::Locked(locked));
+            }
+            if subtree && doc.node(id).is_some_and(|n| n.kind.is_group()) {
+                for locked in doc.nodes.iter().filter(|n| n.locked) {
+                    if doc.is_ancestor(id, locked.id) {
+                        return Err(CommandError::Locked(locked.id));
+                    }
+                }
+            }
+            Ok(())
+        };
+        match self {
+            Self::SetCollapsed { .. }
+            | Self::SetSelection { .. }
+            | Self::SetGuides { .. }
+            | Self::Crop { .. }
+            | Self::ImageSize { .. } => Ok(()),
+            // Unlocking the selected node is allowed. A locked parent must
+            // still be unlocked before its children's lock flags can change.
+            Self::SetLocked { id, .. } => {
+                if let Some(parent) = doc.node(*id).and_then(|n| n.parent) {
+                    check(parent, false)?;
+                }
+                Ok(())
+            }
+            Self::AddNode { slot, .. } => {
+                if let Some(parent) = slot.parent {
+                    check(parent, false)?;
+                }
+                Ok(())
+            }
+            Self::MoveNode { id, slot } => {
+                check(*id, true)?;
+                if let Some(parent) = slot.parent {
+                    check(parent, false)?;
+                }
+                Ok(())
+            }
+            Self::Group { ids, .. } => {
+                for id in ids {
+                    check(*id, true)?;
+                }
+                Ok(())
+            }
+            Self::RemoveNode { id }
+            | Self::DuplicateNode { id }
+            | Self::SetVisible { id, .. }
+            | Self::SetOpacity { id, .. }
+            | Self::SetBlend { id, .. }
+            | Self::Rename { id, .. }
+            | Self::SetParam { id, .. }
+            | Self::SetAdjustment { id, .. }
+            | Self::SetPlacement { id, .. }
+            | Self::RotateNode { id, .. }
+            | Self::TranslateNode { id, .. }
+            | Self::AlignNode { id, .. }
+            | Self::SetClip { id, .. }
+            | Self::SetMaskEnabled { id, .. }
+            | Self::Ungroup { id }
+            | Self::ReplacePixels { id, .. }
+            | Self::SetMask { id, .. }
+            | Self::ReplaceContent { id, .. }
+            | Self::SetPath { id, .. }
+            | Self::SetText { id, .. }
+            | Self::ConvertToSmart { id }
+            | Self::Rasterize { id }
+            | Self::SetFilters { id, .. }
+            | Self::SetSmartCache { id, .. }
+            | Self::SetStyles { id, .. } => check(*id, true),
+        }
     }
 
     fn apply_inner(&self, doc: &mut Document) -> Result<Option<NodeId>, CommandError> {
@@ -532,6 +678,18 @@ impl Command {
                 crate::geometry::rotate_node(doc, *id, *degrees)?;
                 Ok(None)
             }
+            Command::TranslateNode { id, dx, dy } => {
+                crate::geometry::translate_node(doc, *id, *dx, *dy)?;
+                Ok(None)
+            }
+            Command::AlignNode {
+                id,
+                alignment,
+                target,
+            } => {
+                crate::geometry::align_node(doc, *id, *alignment, *target)?;
+                Ok(None)
+            }
             Command::SetClip { id, clip_to } => {
                 need(doc, *id)?;
                 let target = *clip_to;
@@ -624,6 +782,7 @@ impl Command {
                 let n = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 let (w, h) = match &n.kind {
                     NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
+                    NodeKind::Smart { source, .. } => (source.width(), source.height()),
                     _ => (doc.width, doc.height),
                 };
                 if let Some(m) = mask
@@ -682,6 +841,9 @@ impl Command {
             }
             Command::Rasterize { id } => {
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let mut with_mask = n.clone();
+                with_mask.mask_enabled = true;
+                let mask = Document::composite_mask(&with_mask);
                 let NodeKind::Smart {
                     source,
                     placement,
@@ -702,6 +864,7 @@ impl Command {
                     raster: cache.clone(),
                     placement: p,
                 };
+                n.mask = mask;
                 Ok(None)
             }
             Command::SetFilters { id, filters } => {
@@ -907,6 +1070,160 @@ mod tests {
 
     fn names(d: &Document) -> Vec<String> {
         d.nodes.iter().map(|n| n.name.clone()).collect()
+    }
+
+    #[test]
+    fn inherited_locks_reject_edits_atomically_but_allow_canvas_operations_and_undo() {
+        let (mut d, [bottom, _, top]) = doc3();
+        let group = Command::Group {
+            ids: vec![bottom],
+            name: "Protected".into(),
+        }
+        .apply(&mut d)
+        .unwrap()
+        .unwrap();
+        Command::SetLocked {
+            id: group,
+            locked: true,
+        }
+        .apply(&mut d)
+        .unwrap();
+        assert_eq!(d.locked_ancestor(bottom), Some(group));
+        let before = d.clone();
+        for command in [
+            Command::SetOpacity {
+                id: bottom,
+                opacity: 0.5,
+            },
+            Command::SetMask {
+                id: bottom,
+                mask: Some(Arc::new(Mask::white(64, 64))),
+            },
+            Command::ConvertToSmart { id: bottom },
+            Command::RemoveNode { id: group },
+            Command::SetLocked {
+                id: bottom,
+                locked: false,
+            },
+            Command::MoveNode {
+                id: top,
+                slot: Slot::top_of(Some(group)),
+            },
+            Command::AddNode {
+                node: Box::new(Node::new(
+                    0,
+                    "Fill",
+                    NodeKind::Fill {
+                        rgba: [255, 0, 0, 255],
+                    },
+                )),
+                slot: Slot::top_of(Some(group)),
+            },
+        ] {
+            assert!(matches!(command.apply(&mut d), Err(CommandError::Locked(id)) if id == group));
+            assert_eq!(d, before);
+        }
+        let mut editor = crate::Editor::new(d, None);
+        editor
+            .execute(Command::ImageSize {
+                width: 128,
+                height: 128,
+            })
+            .unwrap();
+        assert_eq!(editor.doc.width, 128);
+        assert!(editor.undo());
+        assert_eq!(editor.doc, before);
+        editor
+            .execute(Command::Crop {
+                rect: IRect::new(0, 0, 32, 32),
+                rotation: 0.0,
+            })
+            .unwrap();
+        assert_eq!(editor.doc.width, 32);
+        assert!(editor.undo());
+        editor
+            .execute(Command::SetLocked {
+                id: group,
+                locked: false,
+            })
+            .unwrap();
+        editor
+            .execute(Command::SetOpacity {
+                id: bottom,
+                opacity: 0.5,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn locked_clipped_sibling_prevents_indirect_clip_removal() {
+        let (mut d, [bottom, _, top]) = doc3();
+        Command::SetClip {
+            id: top,
+            clip_to: Some(bottom),
+        }
+        .apply(&mut d)
+        .unwrap();
+        Command::SetLocked {
+            id: top,
+            locked: true,
+        }
+        .apply(&mut d)
+        .unwrap();
+        let before = d.clone();
+        assert!(
+            matches!(Command::RemoveNode { id: bottom }.apply(&mut d), Err(CommandError::Locked(id)) if id == top)
+        );
+        assert_eq!(d, before);
+    }
+
+    #[test]
+    fn smart_source_mask_follows_placement_and_survives_expansion_and_rasterize() {
+        use emulsion_raster::composite::flatten;
+        let mut d = Document::new(24, 20);
+        let source = Arc::new(Raster::solid(8, 6, [1.0, 0.0, 0.0, 1.0]));
+        let mut node = Node::raster(0, "Masked", source, Placement::at(7.0, 5.0));
+        node.mask = Some(Arc::new(Mask::from_fn(8, 6, 0, |x, _| {
+            if x < 4 { 255 } else { 0 }
+        })));
+        let id = Command::AddNode {
+            node: Box::new(node),
+            slot: Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap()
+        .unwrap();
+        let before = flatten(&d.composite_tree(), 0).to_srgba8();
+        Command::ConvertToSmart { id }.apply(&mut d).unwrap();
+        assert_eq!(flatten(&d.composite_tree(), 0).to_srgba8(), before);
+        assert!(
+            Command::SetMask {
+                id,
+                mask: Some(Arc::new(Mask::white(24, 20)))
+            }
+            .apply(&mut d)
+            .is_err()
+        );
+        Command::SetFilters {
+            id,
+            filters: vec![emulsion_filters::Filter::GaussianBlur { radius: 2.0 }],
+        }
+        .apply(&mut d)
+        .unwrap();
+        let filtered = flatten(&d.composite_tree(), 0);
+        assert!(filtered.get(8, 7)[3] > 0);
+        assert_eq!(filtered.get(12, 7)[3], 0);
+        let before = filtered.to_srgba8();
+        Command::Rasterize { id }.apply(&mut d).unwrap();
+        assert_eq!(flatten(&d.composite_tree(), 0).to_srgba8(), before);
+        let NodeKind::Raster { raster, .. } = &d.node(id).unwrap().kind else {
+            panic!("raster")
+        };
+        let mask = d.node(id).unwrap().mask.as_ref().unwrap();
+        assert_eq!(
+            (mask.width(), mask.height()),
+            (raster.width(), raster.height())
+        );
     }
 
     #[test]
