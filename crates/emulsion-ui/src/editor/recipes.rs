@@ -22,7 +22,8 @@ pub(crate) struct RecipeState {
     pub open: bool,
     /// Tag filter, if any.
     pub tag: Option<String>,
-    cache: Option<Vec<(Recipe, Origin)>>,
+    /// The library, shared so a frame does not clone every recipe.
+    cache: Option<Arc<Vec<(Recipe, Origin)>>>,
     /// The recipe shown on the canvas but not yet committed.
     pub preview: Option<Preview>,
     /// Small renders of the picture through each recipe, by name, for the
@@ -301,15 +302,15 @@ impl EditorView {
         cx.notify();
     }
 
-    fn recipe_list(&mut self) -> Vec<(Recipe, Origin)> {
+    fn recipe_list(&mut self) -> Arc<Vec<(Recipe, Origin)>> {
         self.recipes
             .cache
-            .get_or_insert_with(|| store::list(&recipes_dir()))
+            .get_or_insert_with(|| Arc::new(store::list(&recipes_dir())))
             .clone()
     }
 
     pub(super) fn reload_recipes(&mut self) {
-        self.recipes.cache = Some(store::list(&recipes_dir()));
+        self.recipes.cache = Some(Arc::new(store::list(&recipes_dir())));
         self.recipes.thumbs.clear();
         self.recipes.thumbs_rev = None;
     }
@@ -381,7 +382,7 @@ impl EditorView {
         self.selected = Some(p.group);
         let limitations = self
             .recipe_list()
-            .into_iter()
+            .iter()
             .find(|(recipe, _)| recipe.name == p.name)
             .map(|(recipe, _)| recipe.limitations().join(" "))
             .unwrap_or_default();
