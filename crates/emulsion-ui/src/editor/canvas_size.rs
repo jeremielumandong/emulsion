@@ -211,7 +211,9 @@ impl EditorView {
                 let y = -((nh as i64 - oh as i64) * ay / 2);
                 let rect = IRect::new(x as i32, y as i32, nw as i32, nh as i32);
                 let fill = self.tools.fill_edges;
-                self.crop_canvas(rect, 0.0, fill, cx);
+                // Canvas size keeps every pixel: growing it back later
+                // brings the picture back.
+                self.crop_canvas(rect, 0.0, fill, false, cx);
                 self.set_status(format!("Canvas is now {nw}×{nh}."), false, cx);
             }
         }
@@ -225,11 +227,25 @@ impl EditorView {
         rect: IRect,
         rotation: f64,
         fill_edges: bool,
+        delete_outside: bool,
         cx: &mut Context<Self>,
     ) {
         let (ow, oh) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
         let before = self.editor.revision;
-        self.execute(Command::Crop { rect, rotation }, cx);
+        if delete_outside {
+            // One undo step for the crop and the cut together.
+            self.editor.begin(if rotation != 0.0 {
+                "Straighten and crop"
+            } else {
+                "Crop"
+            });
+            self.execute(Command::Crop { rect, rotation }, cx);
+            self.execute(Command::TrimToCanvas, cx);
+            self.editor.end();
+            self.after_change(cx);
+        } else {
+            self.execute(Command::Crop { rect, rotation }, cx);
+        }
         self.fit_pending = true;
         cx.notify();
         if !fill_edges || self.editor.revision == before {

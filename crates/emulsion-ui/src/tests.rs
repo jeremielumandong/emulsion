@@ -1789,6 +1789,7 @@ mod tools {
             let d = &e.read(cx).editor.doc;
             let flat = emulsion_raster::composite::flatten(&d.composite_tree(), 0);
             let names: Vec<String> = d.nodes.iter().map(|n| n.name.clone()).collect();
+                    false,
             (names, flat.get(2, 2)[3])
         });
         assert_eq!(names.last().map(String::as_str), Some("Extended edges"));
@@ -2521,26 +2522,45 @@ mod tools {
     }
 
     #[gpui_kit::test]
-    fn crop_drag_then_enter_resizes_without_resampling(cx: &mut TestAppContext) {
-        let (_, e, cx) = setup(cx, Tool::Crop);
-        drag(&e, cx, (50.0, 40.0), (150.0, 140.0));
-        cx.simulate_keystrokes("enter");
-        cx.run_until_parked();
-        let (w, h, x) = cx.update(|_, cx| {
-            let d = &e.read(cx).editor.doc;
-            let NodeKind::Raster { placement, .. } = &d.nodes[0].kind else {
-                panic!()
-            };
-            (d.width, d.height, placement.x)
-        });
-        assert!(
-            (w as i32 - 100).abs() <= 1 && (h as i32 - 100).abs() <= 1,
-            "{w}×{h}"
-        );
-        assert!(
-            (x + 50.0).abs() <= 1.0,
-            "layer moved, not resampled: x = {x}"
-        );
+    fn crop_cuts_layers_to_the_canvas_by_default_and_only_moves_them_when_asked(
+        cx: &mut TestAppContext,
+    ) {
+        for delete in [true, false] {
+            let (_, e, cx) = setup(cx, Tool::Crop);
+            cx.update(|_, cx| e.update(cx, |e, _| e.tools.crop_delete = delete));
+            drag(&e, cx, (50.0, 40.0), (150.0, 140.0));
+            cx.simulate_keystrokes("enter");
+            cx.run_until_parked();
+            let (w, h, x, lw, steps) = cx.update(|_, cx| {
+                let e = e.read(cx);
+                let d = &e.editor.doc;
+                let NodeKind::Raster { placement, raster } = &d.nodes[0].kind else {
+                    panic!()
+                };
+                (
+                    d.width,
+                    d.height,
+                    placement.x,
+                    raster.width(),
+                    e.editor.history.len(),
+                )
+            });
+            assert!(
+                (w as i32 - 100).abs() <= 1 && (h as i32 - 100).abs() <= 1,
+                "{w}×{h}"
+            );
+            assert_eq!(steps, 1, "crop and cut are one undo step (delete {delete})");
+            if delete {
+                assert!((x.abs()) <= 1.0, "cut layer starts at the canvas: x = {x}");
+                assert!((lw as i32 - 100).abs() <= 1, "layer cut to {lw} px wide");
+            } else {
+                assert!(
+                    (x + 50.0).abs() <= 1.0,
+                    "layer moved, not resampled: x = {x}"
+                );
+                assert_eq!(lw, 256, "layer kept whole");
+            }
+        }
     }
 
     #[gpui_kit::test]

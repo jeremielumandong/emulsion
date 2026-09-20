@@ -536,6 +536,70 @@ pub fn crop(doc: &mut Document, rect: IRect, rotation: f64) {
     transform_all(doc, rect.w.max(1) as u32, rect.h.max(1) as u32, to_new);
 }
 
+/// Trim pixel layers that sit unrotated and unscaled on the canvas down to
+/// the part the canvas shows, mask included; returns how many changed.
+/// Layers wholly inside stay as they are; transformed and smart layers
+/// are left alone, since cutting them would mean resampling.
+pub fn trim_to_canvas(doc: &mut Document) -> usize {
+    let canvas = IRect::new(0, 0, doc.width as i32, doc.height as i32);
+    let mut changed = 0;
+    for n in doc.nodes.iter_mut() {
+        let NodeKind::Raster { raster, placement } = &n.kind else {
+            continue;
+        };
+        if placement.scale_x != 1.0
+            || placement.scale_y != 1.0
+            || placement.rotation != 0.0
+            || placement.flip_x
+            || placement.flip_y
+        {
+            continue;
+        }
+        // The canvas in layer pixels, widened to whole pixels so a
+        // fractional offset never loses an edge column.
+        let (ox, oy) = (placement.x, placement.y);
+        let lx0 = (canvas.x as f64 - ox).floor() as i32;
+        let ly0 = (canvas.y as f64 - oy).floor() as i32;
+        let lx1 = ((canvas.x + canvas.w) as f64 - ox).ceil() as i32;
+        let ly1 = ((canvas.y + canvas.h) as f64 - oy).ceil() as i32;
+        let keep = IRect::new(lx0, ly0, lx1 - lx0, ly1 - ly0).intersect(&raster.bounds());
+        if keep == raster.bounds() {
+            continue;
+        }
+        let (w, h) = (keep.w.max(0) as u32, keep.h.max(0) as u32);
+        let mut placement = *placement;
+        placement.x += keep.x as f64;
+        placement.y += keep.y as f64;
+        let cut = if w == 0 || h == 0 {
+            // Nothing left on the canvas: a single transparent pixel where it was.
+            placement.x = ox;
+            placement.y = oy;
+            Raster::transparent(1, 1)
+        } else {
+            Raster::from_pixels(w, h, raster.fill(), &raster.read_rect(keep))
+        };
+        let mask = n.mask.as_ref().map(|m| {
+            if m.width() == raster.width() && m.height() == raster.height() && w > 0 && h > 0 {
+                Arc::new(emulsion_raster::Mask::from_pixels(
+                    w,
+                    h,
+                    m.fill(),
+                    &m.read_rect(keep),
+                ))
+            } else {
+                m.clone()
+            }
+        });
+        n.kind = NodeKind::Raster {
+            raster: Arc::new(cut),
+            placement,
+        };
+        n.mask = mask;
+        changed += 1;
+    }
+    changed
+}
+
 pub fn resize(doc: &mut Document, width: u32, height: u32) {
     // Uniform scale by width keeps rotated placements exact.
     let s = width as f64 / doc.width as f64;
@@ -545,6 +609,96 @@ pub fn resize(doc: &mut Document, width: u32, height: u32) {
         height.max(1),
         DAffine2::from_scale(dvec2(s, s)),
     );
+}
+
+#[cfg(test)]
+mod trim_tests {
+    use crate::command::Slot;
+    use crate::{Command, Document, Node, NodeKind};
+    use emulsion_raster::composite::flatten;
+    use emulsion_raster::{IRect, Placement, Raster};
+    use std::sync::Arc;
+
+    #[test]
+    fn crop_then_trim_cuts_layers_and_masks_but_keeps_the_picture() {
+        let mut d = Document::new(200, 100);
+        let r = Raster::from_fn(200, 100, [0; 4], |x, _| {
+            if x < 100 {
+                [65535, 0, 0, 65535]
+            } else {
+                [0, 0, 65535, 65535]
+            }
+        });
+        let mut n = Node::raster(0, "img", Arc::new(r), Placement::default());
+        n.mask = Some(Arc::new(emulsion_raster::Mask::from_fn(
+            200,
+            100,
+            255,
+            |x, _| if x < 150 { 255 } else { 0 },
+        )));
+        n.mask_enabled = true;
+        Command::AddNode {
+            node: Box::new(n),
+            slot: Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap();
+        // A rotated layer must be left alone.
+        let mut rotated = Node::raster(
+            0,
+            "tilted",
+            Arc::new(Raster::solid(40, 40, [0.0, 1.0, 0.0, 1.0])),
+            Placement::default(),
+        );
+        if let NodeKind::Raster { placement, .. } = &mut rotated.kind {
+            placement.rotation = 15.0;
+        }
+        Command::AddNode {
+            node: Box::new(rotated),
+            slot: Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap();
+
+        Command::Crop {
+            rect: IRect::new(80, 20, 100, 60),
+            rotation: 0.0,
+        }
+        .apply(&mut d)
+        .unwrap();
+        let before = flatten(&d.composite_tree(), 0);
+        let n = Command::TrimToCanvas.apply(&mut d);
+        assert!(n.is_ok());
+        let after = flatten(&d.composite_tree(), 0);
+        assert_eq!(
+            before.to_srgba8(),
+            after.to_srgba8(),
+            "the picture is unchanged"
+        );
+
+        let NodeKind::Raster { raster, placement } = &d.nodes[0].kind else {
+            panic!("raster");
+        };
+        assert_eq!(
+            (raster.width(), raster.height()),
+            (100, 60),
+            "cut to the canvas"
+        );
+        assert_eq!((placement.x, placement.y), (0.0, 0.0));
+        let m = d.nodes[0].mask.as_ref().unwrap();
+        assert_eq!((m.width(), m.height()), (100, 60), "mask cut with it");
+        // Old x=150 is new x=70: the mask edge survives in place.
+        assert_eq!(m.get(69, 10), 255);
+        assert_eq!(m.get(70, 10), 0);
+        let NodeKind::Raster { raster, .. } = &d.nodes[1].kind else {
+            panic!("raster");
+        };
+        assert_eq!(
+            (raster.width(), raster.height()),
+            (40, 40),
+            "rotated layer untouched"
+        );
+    }
 }
 
 #[cfg(test)]

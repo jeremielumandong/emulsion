@@ -188,6 +188,11 @@ pub enum Command {
         rect: IRect,
         rotation: f64,
     },
+    /// Cut every unrotated, unscaled pixel layer (and its mask) down to
+    /// what the canvas shows, Photoshop's "delete cropped pixels": the
+    /// picture looks the same, and nothing outside the canvas can come
+    /// back when a layer is moved. Transformed and smart layers are left.
+    TrimToCanvas,
     /// Scale the canvas and every placement. Pixel nodes keep their source
     /// pixels, so this is lossless and reversible.
     ImageSize {
@@ -320,6 +325,7 @@ impl Command {
                 "Crop"
             }
             .into(),
+            Command::TrimToCanvas => "Delete cropped pixels".into(),
             Command::ImageSize { .. } => "Image size".into(),
             Command::SetGuides { .. } => "Guides".into(),
             Command::ReplaceContent { label, .. } => label.clone(),
@@ -450,6 +456,7 @@ impl Command {
             | Self::SetSelection { .. }
             | Self::SetGuides { .. }
             | Self::Crop { .. }
+            | Self::TrimToCanvas
             | Self::ImageSize { .. } => Ok(()),
             // Unlocking the selected node is allowed. A locked parent must
             // still be unlocked before its children's lock flags can change.
@@ -796,6 +803,10 @@ impl Command {
             }
             Command::Crop { rect, rotation } => {
                 crate::geometry::crop(doc, *rect, *rotation);
+                Ok(None)
+            }
+            Command::TrimToCanvas => {
+                crate::geometry::trim_to_canvas(doc);
                 Ok(None)
             }
             Command::ImageSize { width, height } => {

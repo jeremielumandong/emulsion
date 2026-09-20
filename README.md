@@ -256,6 +256,14 @@ cargo run --release -p emulsion-assistant --example playbook -- --guide manga --
 
 This writes a PNG and an editable ORA for inspection.
 
+## Cropping
+
+The Crop tool's **delete cropped pixels** option is on by default, as in
+Photoshop: applying a crop cuts every unrotated pixel layer and its mask down to
+the new canvas in the same undo step. Turn it off to keep layers whole beyond
+the edge, where the Move tool can bring them back. Rotated, scaled and smart
+layers are never cut, and Canvas Size always keeps every pixel.
+
 ## Image size and canvas size
 
 Click the dimensions beside the document name (for example **1920×1080 · 8 bit**)

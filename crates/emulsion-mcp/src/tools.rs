@@ -663,8 +663,8 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "crop",
-            "Crop the canvas to a rectangle, optionally straightening by rotating everything clockwise first. The rectangle may extend past the canvas to enlarge it. Layers move; they are never resampled.",
-            json!({ "x": { "type": "integer" }, "y": { "type": "integer" }, "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 }, "rotation": { "type": "number", "minimum": -45, "maximum": 45 } }),
+            "Crop the canvas to a rectangle, optionally straightening by rotating everything clockwise first. The rectangle may extend past the canvas to enlarge it. Layers move; they are never resampled. delete_pixels true also cuts unrotated pixel layers down to the canvas (Photoshop's delete cropped pixels); default false keeps them whole.",
+            json!({ "x": { "type": "integer" }, "y": { "type": "integer" }, "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 }, "rotation": { "type": "number", "minimum": -45, "maximum": 45 }, "delete_pixels": { "type": "boolean", "default": false } }),
             &["x", "y", "width", "height"],
         ),
         def(

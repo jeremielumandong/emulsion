@@ -122,6 +122,9 @@ pub struct ToolState {
     pub crop_centered: bool,
     /// Fill canvas that a crop or canvas-size change adds, from the image.
     pub fill_edges: bool,
+    /// Crop cuts pixel layers down to the canvas (Photoshop's "delete
+    /// cropped pixels"); off keeps them whole beyond the edge.
+    pub crop_delete: bool,
     /// Mirror strokes across the canvas centre.
     pub mirror_x: bool,
     pub mirror_y: bool,
@@ -187,6 +190,7 @@ impl Default for ToolState {
             straighten: 0.0,
             crop_centered: false,
             fill_edges: false,
+            crop_delete: true,
             mirror_x: false,
             mirror_y: false,
             symmetry: 0,
@@ -1675,7 +1679,8 @@ impl EditorView {
                     );
                     let rotation = self.tools.straighten as f64;
                     self.tools.straighten = 0.0;
-                    self.crop_canvas(rect, rotation, self.tools.fill_edges, cx);
+                    let delete = self.tools.crop_delete;
+                    self.crop_canvas(rect, rotation, self.tools.fill_edges, delete, cx);
                 }
             }
             _ => {}
@@ -3434,6 +3439,19 @@ impl EditorView {
                             cx.notify();
                         }))
                         .into_any_element(),
+                );
+                let delete = self.tools.crop_delete;
+                v.push(
+                    crate::widgets::tip(
+                        chip("crop-delete", "delete cropped pixels", delete, p).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.tools.crop_delete = !delete;
+                                cx.notify();
+                            }),
+                        ),
+                        "On: pixel layers are cut to the crop, as in Photoshop. Off: layers stay whole past the edge and can be moved back into view.",
+                    )
+                    .into_any_element(),
                 );
                 let fill = self.tools.fill_edges;
                 v.push(

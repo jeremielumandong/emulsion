@@ -3024,6 +3024,9 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 .unwrap_or(0.0)
                 .clamp(-45.0, 45.0);
             exec(editor, Command::Crop { rect, rotation })?;
+            if args.get("delete_pixels").and_then(Value::as_bool) == Some(true) {
+                exec(editor, Command::TrimToCanvas)?;
+            }
             Ok(ToolResult::text(format!(
                 "Canvas is now {}×{}",
                 editor.doc.width, editor.doc.height
