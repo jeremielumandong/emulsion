@@ -2205,6 +2205,9 @@ pub struct Overlay {
     pub marker: Option<(f64, f64)>,
     /// Free Transform box of the selected node.
     pub transform: Option<[(f64, f64); 4]>,
+    /// Dashed outline of the selected layer's bounds (GIMP's layer
+    /// boundary), shown by every tool except Move, which has its box.
+    pub layer: Option<[(f64, f64); 4]>,
     /// The assistant's brush while it paints: screen position and radius.
     pub ghost: Option<(Point<Pixels>, f32)>,
     pub pen: Option<super::pen::PenOverlay>,
@@ -2233,6 +2236,7 @@ impl EditorView {
             assist,
             vanishing,
             transform: self.transform_box(),
+            layer: self.layer_outline(),
             pen: self.pen_overlay(),
             ghost: self.ghost_brush().and_then(|(d, size)| {
                 let p = self.doc_to_window(d)?;
@@ -2409,6 +2413,20 @@ pub(crate) fn paint_overlay(
         }
         if let Some(q) = o.transform {
             super::transform::paint_box(q, view, bounds, rgb(0x1FB5FF).into(), window);
+        }
+        if let Some(q) = o.layer {
+            let pts: Vec<Point<Pixels>> = q.iter().map(|p| to_screen(*p)).collect();
+            // Light underlay so the dashes read on any picture, then dashes.
+            let mut under = PathBuilder::stroke(px(1.));
+            under.add_polygon(&pts, true);
+            if let Ok(p) = under.build() {
+                window.paint_path(p, gpui_kit::white().opacity(0.7));
+            }
+            let mut dashed = PathBuilder::stroke(px(1.)).dash_array(&[px(6.), px(4.)]);
+            dashed.add_polygon(&pts, true);
+            if let Ok(p) = dashed.build() {
+                window.paint_path(p, accent);
+            }
         }
         if let Some(segs) = &o.ants
             && !segs.is_empty()

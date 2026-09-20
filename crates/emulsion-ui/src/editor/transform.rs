@@ -96,6 +96,45 @@ impl EditorView {
         }
     }
 
+    /// Where the selected layer sits, as a document-space quad, so the
+    /// canvas shows what a click in the Layers panel picked. The Move tool
+    /// draws its own box instead.
+    pub(crate) fn layer_outline(&self) -> Option<[(f64, f64); 4]> {
+        if self.tool == Tool::Move || self.warp.is_some() {
+            return None;
+        }
+        let id = self.selected?;
+        let n = self.editor.doc.node(id)?;
+        let quad = |m: glam::DAffine2, w: f64, h: f64| {
+            local_corners(w, h).map(|c| {
+                let q = m.transform_point2(dvec2(c.0, c.1));
+                (q.x, q.y)
+            })
+        };
+        match &n.kind {
+            NodeKind::Raster { raster, placement } => Some(quad(
+                placement.to_doc(raster.width(), raster.height()),
+                raster.width() as f64,
+                raster.height() as f64,
+            )),
+            NodeKind::Smart {
+                source, placement, ..
+            } => Some(quad(
+                placement.to_doc(source.width(), source.height()),
+                source.width() as f64,
+                source.height() as f64,
+            )),
+            NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } => {
+                let b = cache.tile_bounds();
+                (!b.is_empty()).then(|| {
+                    let (x, y, w, h) = (b.x as f64, b.y as f64, b.w as f64, b.h as f64);
+                    [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// The node's corners in document space, for the overlay.
     pub(crate) fn transform_box(&self) -> Option<[(f64, f64); 4]> {
         if self.warp.is_some() {
