@@ -1785,6 +1785,18 @@ impl EditorView {
                             b,
                             window.scale_factor(),
                         );
+                        if cache.borrow().settle_pending {
+                            // The view is moving: redraw once it has rested so
+                            // the crisp image replaces the GPU tiles.
+                            let w = w1.clone();
+                            cx.spawn(async move |cx| {
+                                cx.background_executor()
+                                    .timer(viewport::SETTLE + std::time::Duration::from_millis(10))
+                                    .await;
+                                w.update(cx, |_, cx| cx.notify()).ok();
+                            })
+                            .detach();
+                        }
                         if !cache.borrow().queue.is_empty() {
                             cx.defer(move |cx| {
                                 w1.update(cx, |this, cx| this.dispatch_render(cx)).ok();

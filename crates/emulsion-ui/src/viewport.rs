@@ -187,7 +187,18 @@ pub struct TileCache {
     screen: Option<(ScreenKey, Arc<RenderImage>)>,
     /// Timing of the last completed batch, for the status line.
     pub last_batch: Option<(usize, std::time::Duration)>,
+    /// The view of the last frame and when it last changed: while the
+    /// view is moving, the crisp CPU screen image is skipped in favour of
+    /// the GPU tiles, and rebuilt once it rests.
+    last_view: Option<View>,
+    view_changed_at: Option<std::time::Instant>,
+    /// The crisp image is due once the view settles; the editor schedules
+    /// a redraw for it.
+    pub settle_pending: bool,
 }
+
+/// How long the view must rest before the crisp screen image is built.
+pub const SETTLE: std::time::Duration = std::time::Duration::from_millis(90);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ScreenKey {
@@ -491,7 +502,16 @@ pub fn prepaint(
     };
 
     let mut draws = Vec::new();
-    if view.needs_screen_path(scale_factor) {
+    if cache.last_view != Some(view) {
+        cache.last_view = Some(view);
+        cache.view_changed_at = Some(std::time::Instant::now());
+    }
+    let moving = cache.view_changed_at.is_some_and(|t| t.elapsed() < SETTLE);
+    let crisp = view.needs_screen_path(scale_factor);
+    // Rotation has no GPU fallback; magnification does (slightly soft).
+    let use_screen = crisp && (!moving || view.rotation.rem_euclid(360.0) != 0.0);
+    cache.settle_pending = crisp && !use_screen;
+    if use_screen {
         if let Some(img) = screen_image(scene, cache, &canvas, scale_factor, level, &tiles) {
             draws.push(Draw {
                 image: img,
