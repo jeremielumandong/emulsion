@@ -2023,7 +2023,7 @@ impl EditorView {
             .map(|a| format!(" · {a}"))
             .unwrap_or_default();
         let right = format!(
-            "non-destructive · {n} node{} · {saved}{autosaved}{render}",
+            "non-destructive · {n} layer{} · {saved}{autosaved}{render}",
             if n == 1 { "" } else { "s" }
         );
         div()
@@ -2760,7 +2760,7 @@ impl EditorView {
             NodeKind::Group { .. } => {
                 let k = self.editor.doc.subtree(id).len() - 1;
                 body = body.child(mono(
-                    format!("{k} node{} inside", if k == 1 { "" } else { "s" }),
+                    format!("{k} layer{} inside", if k == 1 { "" } else { "s" }),
                     10.5,
                     p.muted,
                 ));
@@ -3231,7 +3231,7 @@ mod rendering_tests {
             assert_eq!(
                 this.editor.doc.node(1),
                 before.node(1),
-                "other nodes are untouched"
+                "other layers are untouched"
             );
             assert_eq!(this.editor.history.len(), steps + 1);
             this.undo(cx);

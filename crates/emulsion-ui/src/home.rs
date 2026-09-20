@@ -22,7 +22,7 @@ fn thumbnail_width(viewport_width: f32, scale_factor: f32) -> u32 {
 const FACTS: [(&str, &str); 3] = [
     (
         "Nodes, not layers",
-        "Every adjustment is a node with live parameters. Reopen it next month and change one number.",
+        "Every adjustment is a layer with live parameters. Reopen it next month and change one number.",
     ),
     (
         "Nothing is destroyed",

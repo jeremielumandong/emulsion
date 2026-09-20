@@ -607,7 +607,7 @@ impl EditorView {
             && let Some(n) = self.editor.doc.node(id)
         {
             if self.editor.doc.locked_ancestor(id).is_some() {
-                self.set_status("That node is locked.", true, cx);
+                self.set_status("That layer is locked.", true, cx);
                 return None;
             }
             if matches!(n.kind, NodeKind::Raster { .. }) {
@@ -1269,7 +1269,7 @@ impl EditorView {
         let id = self.selected?;
         let n = self.editor.doc.node(id)?;
         if self.editor.doc.locked_ancestor(id).is_some() {
-            self.set_status("That node is locked.", true, cx);
+            self.set_status("That layer is locked.", true, cx);
             return None;
         }
         let (w, h, to_doc) = match &n.kind {
@@ -1766,7 +1766,7 @@ impl EditorView {
     /// Load the selected node's pixels (or its mask) as the selection.
     pub fn select_from_node(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected else {
-            self.set_status("Select a node first.", false, cx);
+            self.set_status("Select a layer first.", false, cx);
             return;
         };
         match self.editor.doc.node_coverage(id) {
@@ -1774,7 +1774,7 @@ impl EditorView {
                 let combine = self.tools.combine;
                 self.apply_selection(m, combine, cx);
             }
-            None => self.set_status("That node covers nothing to select.", false, cx),
+            None => self.set_status("That layer covers nothing to select.", false, cx),
         }
     }
 
@@ -2136,7 +2136,7 @@ impl EditorView {
                     cx,
                 ) {
                     this.selected = Some(id);
-                    this.set_status("Filled into a new node. Hide it to compare.", false, cx);
+                    this.set_status("Filled into a new layer. Hide it to compare.", false, cx);
                 }
             })
             .ok();
@@ -3156,7 +3156,7 @@ impl EditorView {
                         .into_any_element(),
                 );
                 v.push(
-                    chip("sel-node", "from node", false, p)
+                    chip("sel-node", "from layer", false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.select_from_node(cx)))
                         .into_any_element(),
                 );
@@ -3710,7 +3710,7 @@ impl EditorView {
             Tool::Hand => v.push(
                 div()
                     .flex_none()
-                    .child("drag to pan · ctrl+scroll to zoom · V to move a node")
+                    .child("drag to pan · ctrl+scroll to zoom · V to move a layer")
                     .into_any_element(),
             ),
             Tool::Eyedropper => {

@@ -11,13 +11,13 @@ impl EditorView {
     /// Correct the selected node's lens from its EXIF, or say what is missing.
     pub fn lens_profile_auto(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected else {
-            self.set_status("Select the photo's pixel node first.", false, cx);
+            self.set_status("Select the photo's pixel layer first.", false, cx);
             return;
         };
         let kind = self.editor.doc.node(id).map(|n| n.kind.tag());
         if !matches!(kind, Some("pixels") | Some("smart")) {
             self.set_status(
-                "Lens profiles apply to pixel nodes; select the photo.",
+                "Lens profiles apply to pixel layers; select the photo.",
                 false,
                 cx,
             );
@@ -109,7 +109,7 @@ impl EditorView {
         };
         self.set_status(
             format!(
-                "{}: corrected {what}. Tune the strengths in the node panel.",
+                "{}: corrected {what}. Tune the strengths in the Layers panel.",
                 p.lens
             ),
             false,

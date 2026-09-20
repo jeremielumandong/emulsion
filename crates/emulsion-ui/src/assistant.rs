@@ -247,7 +247,7 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         "set_blend_mode" => format!("{} → {}", n(), input["mode"].as_str().unwrap_or("?")),
         "move_node" => format!("move {}", n()),
         "group_nodes" => format!(
-            "group {} nodes",
+            "group {} layers",
             input["nodes"].as_array().map_or(0, |a| a.len())
         ),
         "ungroup" => format!("ungroup {}", n()),
@@ -1671,7 +1671,7 @@ impl EditorView {
             self.selected = Some(id);
             self.suggestions.remove(i);
             self.set_status(
-                format!("Added {} — tune it in the node panel", s.node_name),
+                format!("Added {} — tune it in the Layers panel", s.node_name),
                 false,
                 cx,
             );

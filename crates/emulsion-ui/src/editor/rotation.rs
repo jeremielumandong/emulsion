@@ -60,7 +60,7 @@ impl EditorView {
         let Some(id) = self.selected else { return };
         if self.warp.is_some() {
             self.set_status(
-                "Apply or cancel the warp before rotating this node.",
+                "Apply or cancel the warp before rotating this layer.",
                 false,
                 cx,
             );
@@ -68,7 +68,7 @@ impl EditorView {
         }
         if self.assistant.running || self.drag.is_some() {
             self.set_status(
-                "Finish the current drawing before rotating this node.",
+                "Finish the current drawing before rotating this layer.",
                 false,
                 cx,
             );
@@ -103,7 +103,7 @@ impl EditorView {
                 .gap(px(6.))
                 .child(mono("ROTATE OBJECT", 9.5, p.muted))
                 .when(node.locked, |d| {
-                    d.child(mono("Unlock this node to rotate it.", 10., p.muted))
+                    d.child(mono("Unlock this layer to rotate it.", 10., p.muted))
                 })
                 .when(!node.locked, |d| {
                     d.child(

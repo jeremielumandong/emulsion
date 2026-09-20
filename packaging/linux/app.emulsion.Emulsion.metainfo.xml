@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>app.emulsion.Emulsion</id>
   <name>Emulsion</name>
-  <summary>Non-destructive image editor with nodes, a branchable history and optional AI</summary>
+  <summary>Non-destructive image editor with layers, a branchable history and optional AI</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-proprietary</project_license>
   <description>

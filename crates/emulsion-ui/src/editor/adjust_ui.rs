@@ -719,7 +719,7 @@ impl EditorView {
             return;
         };
         let Some(id) = self.selected else {
-            self.set_status("Select a pixel node to filter first.", false, cx);
+            self.set_status("Select a pixel layer to filter first.", false, cx);
             return;
         };
         self.select_sidebar(SidebarTab::Properties, cx);
@@ -732,7 +732,11 @@ impl EditorView {
                 self.editor.end();
             }
             Some("smart") => self.add_filter(id, f, cx),
-            _ => self.set_status("Filters apply to pixel nodes; select one first.", false, cx),
+            _ => self.set_status(
+                "Filters apply to pixel layers; select one first.",
+                false,
+                cx,
+            ),
         }
     }
 

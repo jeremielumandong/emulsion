@@ -284,7 +284,7 @@ impl EditorView {
                     cx,
                 ) {
                     this.selected = Some(id);
-                    this.set_status("New edges filled into their own node.", false, cx);
+                    this.set_status("New edges filled into their own layer.", false, cx);
                 }
             })
             .ok();

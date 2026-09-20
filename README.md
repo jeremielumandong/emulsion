@@ -1,13 +1,14 @@
 # Emulsion
 
 An image editor in Rust and [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui).
-Nodes instead of layers, a branchable history, and optional AI that proposes edits instead of
-asking for prompts. Every feature works without AI; local models, a coding-CLI subscription,
+Layers that are all nodes in one graph (pixels, adjustments, masks, text and paths alike), a
+branchable history, and optional AI that proposes edits instead of asking for prompts. Every feature works without AI; local models, a coding-CLI subscription,
 or a decision-model API key each make it better.
 
 ## Status
 
-Phase 0: spikes and skeleton. Nothing here edits images yet.
+Actively developed and used daily. Editing, brushes, recipes, RAW and PSD, batch export, the
+assistant relay and optional local AI models all work; see the sections below for controls.
 
 ## Build
 
@@ -220,7 +221,7 @@ This writes a PNG and an editable ORA for inspection.
 Select a layer and use **Rotate object** in **Properties**. Enter an angle and
 choose **Apply**, or use the 90° buttons. Positive angles turn clockwise.
 Paths and text stay editable; groups rotate together around their content.
-Each rotation can be undone. Locked nodes must be unlocked first.
+Each rotation can be undone. Locked layers must be unlocked first.
 
 ## Layout
 

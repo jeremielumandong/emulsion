@@ -99,7 +99,7 @@ fn pretty_keys(keys: &str) -> String {
         .join("+")
 }
 
-/// "ToggleNodeVisible" → "toggle node visible".
+/// "ToggleNodeVisible" → "toggle layer visible".
 fn humanize(action: &str) -> String {
     let mut out = String::new();
     for (i, c) in action.chars().enumerate() {
@@ -353,7 +353,7 @@ impl Workspace {
             .child(
                 section(&p)
                     .child(tier(3, "Jev decision model", jev.is_some(), if jev.is_some() { "on" } else { "off" }, &p))
-                    .child(body("TypeSafe's Jev answers small typed questions with calibrated confidence. With a key, Ctrl+K requests are planned by Jev, which copes with looser phrasing than the offline planner, and only text leaves the machine: the request and node names, never pixels.", &p))
+                    .child(body("TypeSafe's Jev answers small typed questions with calibrated confidence. With a key, Ctrl+K requests are planned by Jev, which copes with looser phrasing than the offline planner, and only text leaves the machine: the request and layer names, never pixels.", &p))
                     .child(mono(
                         match &jev {
                             Some((_, "environment")) => "key: from TYPESAFE_API_KEY".to_string(),

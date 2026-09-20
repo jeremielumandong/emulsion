@@ -179,7 +179,7 @@ impl EditorView {
                         ) {
                             this.selected = Some(id);
                             this.set_status(
-                                "Generated into a new node. Hide it to compare.",
+                                "Generated into a new layer. Hide it to compare.",
                                 false,
                                 cx,
                             );

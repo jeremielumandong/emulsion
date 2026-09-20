@@ -261,7 +261,7 @@ impl EditorView {
                 .child(row(
                     "document",
                     format!(
-                        "{}×{} · {} nodes",
+                        "{}×{} · {} layers",
                         self.editor.doc.width,
                         self.editor.doc.height,
                         self.editor.doc.nodes.len()

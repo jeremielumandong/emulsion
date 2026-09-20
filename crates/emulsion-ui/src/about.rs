@@ -254,7 +254,7 @@ impl Workspace {
                             .child(mono(env!("CARGO_PKG_VERSION"), 12., p.muted)),
                     )
                     .child(body(
-                        "A non-destructive image editor with layers, masks, adjustment nodes and a history you can branch. Brushes behave like their medium, recipes recreate film and camera looks, and camera RAW and Photoshop files open directly. Every AI feature is optional and runs on your machine unless you point it at a server of your own.",
+                        "A non-destructive image editor with layers, masks, adjustment layers and a history you can branch. Brushes behave like their medium, recipes recreate film and camera looks, and camera RAW and Photoshop files open directly. Every AI feature is optional and runs on your machine unless you point it at a server of your own.",
                         &p,
                     ))
                     .child(heading("licence", &p))

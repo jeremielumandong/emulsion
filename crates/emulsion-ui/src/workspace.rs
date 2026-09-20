@@ -69,7 +69,7 @@ fn stem(path: &Path) -> String {
 
 fn summary(doc: &Document) -> String {
     let n = doc.nodes.len();
-    format!("{n} node{}", if n == 1 { "" } else { "s" })
+    format!("{n} layer{}", if n == 1 { "" } else { "s" })
 }
 
 impl Workspace {

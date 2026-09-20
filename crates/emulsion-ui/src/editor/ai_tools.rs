@@ -334,7 +334,7 @@ impl EditorView {
                         }
                         this.editor.end();
                         this.set_status(
-                            "Background removed into a new node; the original is hidden.",
+                            "Background removed into a new layer; the original is hidden.",
                             false,
                             cx,
                         );
@@ -548,7 +548,7 @@ impl EditorView {
                         ) {
                             this.selected = Some(id);
                             this.set_status(
-                                "Filled into a new node. Hide it to compare.",
+                                "Filled into a new layer. Hide it to compare.",
                                 false,
                                 cx,
                             );
@@ -677,7 +677,7 @@ impl EditorView {
                         this.fit_pending = true;
                         this.set_status(
                             format!(
-                                "Upscaled ×{f}: the canvas grew and the result is the top node."
+                                "Upscaled ×{f}: the canvas grew and the result is the top layer."
                             ),
                             false,
                             cx,
@@ -738,7 +738,7 @@ impl EditorView {
                             this.selected = Some(id);
                             this.set_status(
                             format!(
-                                "Restored {n} face{}: lower the node's opacity to keep it natural.",
+                                "Restored {n} face{}: lower the layer's opacity to keep it natural.",
                                 if n == 1 { "" } else { "s" }
                             ),
                             false,
