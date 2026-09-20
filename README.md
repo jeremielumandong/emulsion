@@ -161,7 +161,9 @@ layer selected opens its existing controls in Properties.
 The **Panels** menu opens Navigator, Info, Recipes, Timeline, History, or Histogram
 in the same dock. Active tool options stay above the canvas.
 Leaving Recipes cancels an unapplied preview; leaving Timeline stops playback
-and returns to the full document.
+and returns to the full document. Timeline also holds **Replay drawing**: the
+picture played back from its history (every step still undoable and every save),
+over the canvas, with a GIF export. Nothing is recorded ahead of time.
 
 Tool buttons and options support Tab navigation and Enter/Space activation.
 Focused sliders accept arrow keys, Shift+arrow for larger steps, and Home/End

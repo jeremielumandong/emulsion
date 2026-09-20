@@ -1389,6 +1389,99 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn replay_plays_the_history_back_and_closes_with_the_timeline(cx: &mut TestAppContext) {
+        let (ws, cx) = open(cx, doc(&["Sketch"], None));
+        let e = editor(&ws, cx);
+        let id = cx.update(|_, cx| e.read(cx).editor.doc.nodes[0].id);
+        // Three edits: the root commit plus the moments before each edit
+        // and the present make four distinct pictures (the first edit's
+        // "before" equals the root and is not repeated).
+        for o in [0.8, 0.6, 0.4] {
+            cx.update(|_, cx| {
+                e.update(cx, |e, cx| {
+                    e.execute(Command::SetOpacity { id, opacity: o }, cx);
+                })
+            });
+        }
+        cx.update(|window, cx| window.click("sidebar-panels-toggle", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("sidebar-timeline", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("replay", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            let r = e.anim.replay.as_ref().expect("replay open");
+            assert_eq!(r.len(), 4);
+            assert!(
+                e.editor.doc.nodes[0].opacity == 0.4,
+                "the document itself is untouched"
+            );
+        });
+        for _ in 0..8 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(400));
+            cx.run_until_parked();
+        }
+        cx.update(|window, cx| {
+            assert!(window.find("replay-overlay").visible());
+            let e = e.read(cx);
+            let r = e.anim.replay.as_ref().expect("still open after playing");
+            assert!(!r.playing, "playback stops at the present");
+            assert_eq!(r.frame, 3);
+        });
+        cx.update(|window, cx| window.click("sidebar-properties", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert!(e.read(cx).anim.replay.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn timeline_frames_are_top_level_layers_and_groups_keep_their_children(
+        cx: &mut TestAppContext,
+    ) {
+        let mut d = doc(&["Loose"], None);
+        let g = Command::AddNode {
+            node: Box::new(Node::group(0, "Scene")),
+            slot: Slot::TOP,
+        }
+        .apply(&mut d)
+        .unwrap()
+        .unwrap();
+        Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Inside",
+                Arc::new(Raster::solid(256, 192, [0.9, 0.1, 0.1, 1.0])),
+                Placement::default(),
+            )),
+            slot: Slot::top_of(Some(g)),
+        }
+        .apply(&mut d)
+        .unwrap();
+        let (ws, cx) = open(cx, d);
+        let e = editor(&ws, cx);
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                assert_eq!(e.frame_count(), 2, "Loose and Scene; Inside is not a frame");
+                e.toggle_animation(cx);
+                e.anim_step(1, cx);
+                let shown = e.render_doc();
+                let by = |name: &str| shown.nodes.iter().find(|n| n.name == name).unwrap().visible;
+                assert!(
+                    by("Scene") && by("Inside"),
+                    "the group shows with its child"
+                );
+                assert!(!by("Loose"));
+                e.anim_step(1, cx);
+                let shown = e.render_doc();
+                let by = |name: &str| shown.nodes.iter().find(|n| n.name == name).unwrap().visible;
+                assert!(by("Loose") && !by("Scene"));
+                assert!(by("Inside"), "children keep their own visibility flag");
+            })
+        });
+    }
+
+    #[gpui_kit::test]
     fn sidebar_layers_scroll_independently_and_keep_reference_open_on_selection(
         cx: &mut TestAppContext,
     ) {

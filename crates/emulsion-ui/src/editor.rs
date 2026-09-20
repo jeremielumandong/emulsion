@@ -491,7 +491,6 @@ impl EditorView {
         {
             self.selected = self.editor.doc.nodes.last().map(|n| n.id);
         }
-        self.timelapse_tick(cx);
         cx.notify();
     }
 
@@ -1751,6 +1750,7 @@ impl EditorView {
     ) -> impl IntoElement + use<> {
         let overlay = self.overlay(window.scale_factor());
         let zoom_cursor = self.zoom_cursor(p, window);
+        let replay = self.replay_overlay(p, cx);
         let accent = p.accent;
         let view_for_overlay = self.view;
         // Fit once the canvas has been laid out.
@@ -1959,6 +1959,7 @@ impl EditorView {
                 .size_full(),
             )
             .children(zoom_cursor)
+            .children(replay)
     }
 
     /// GPUI has no native zoom cursor. Keep a platform-independent magnifier

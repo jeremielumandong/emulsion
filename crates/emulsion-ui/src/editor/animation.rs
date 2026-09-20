@@ -5,9 +5,13 @@
 //! the previous one in), steps through them, and exports a GIF. Nothing
 //! is written to the document: the preview swaps the render tree only.
 //!
-//! Time-lapse: while recording, a small frame of the whole picture is
-//! saved after each change (at most one every couple of seconds) into
-//! the data directory; export assembles them into a GIF.
+//! Replay: the drawing played back from history, like Procreate's
+//! time-lapse but with nothing recorded up front. Every commit on the head
+//! branch (the file's root, each save and export) and every undo step still
+//! held is a moment of the picture; replay renders them small, oldest
+//! first, over the canvas, and can write them as a GIF. It therefore works
+//! for anything drawn this session and for saved projects' commits, and
+//! costs nothing until played.
 
 use super::*;
 use std::path::PathBuf;
@@ -20,18 +24,36 @@ pub struct AnimState {
     pub frame: usize,
     pub onion: bool,
     tick_running: bool,
-    // ── Time-lapse ──
-    pub record: bool,
-    rec_dir: Option<PathBuf>,
-    pub captured: usize,
-    last_capture: Option<Instant>,
-    last_rev: u64,
+    // ── Replay ──
+    pub replay: Option<Replay>,
 }
 
-/// Seconds between time-lapse captures.
-const CAPTURE_GAP: f32 = 2.0;
-/// Longest side of an exported or captured frame.
+/// A replay in progress: which moments, which one shows, and its picture.
+pub struct Replay {
+    /// The picture at each moment, oldest first; the last is the present.
+    docs: Vec<Document>,
+    pub frame: usize,
+    pub playing: bool,
+    /// The rendered frame on screen, with its index.
+    shown: Option<(usize, Arc<RenderImage>)>,
+    /// A frame is being rendered off the UI thread.
+    rendering: bool,
+    /// Bumped when playback starts, so an old loop stops itself.
+    run: u64,
+}
+
+impl Replay {
+    pub fn len(&self) -> usize {
+        self.docs.len()
+    }
+}
+
+/// Longest side of an exported or replayed frame.
 const FRAME_PX: u32 = 800;
+/// Most moments a replay shows; longer histories are thinned evenly.
+const MAX_REPLAY_FRAMES: usize = 240;
+/// Replay speed.
+const REPLAY_FPS: u64 = 6;
 
 /// Mip level at which the longest side fits `FRAME_PX`.
 fn level_for(w: u32, h: u32) -> u32 {
@@ -46,11 +68,14 @@ fn rgba_image(r: &Raster) -> Option<image::RgbaImage> {
     image::RgbaImage::from_raw(r.width(), r.height(), r.to_srgba8())
 }
 
-/// The document with only frame `i` visible (and, with `onion`, the
-/// frame before it at a third of its opacity).
+/// The document with only top-level frame `i` visible (and, with `onion`,
+/// the frame before it at a third of its opacity). A group is one frame
+/// with everything inside it; children keep their own visibility.
 fn frame_doc(doc: &Document, i: usize, onion: bool) -> Document {
     let mut d = doc.clone();
-    for (k, n) in d.nodes.iter_mut().enumerate() {
+    let top = d.children(None);
+    for n in d.nodes.iter_mut().filter(|n| n.parent.is_none()) {
+        let k = top.iter().position(|id| *id == n.id).unwrap_or(usize::MAX);
         if k == i {
             n.visible = true;
         } else if onion && k + 1 == i {
@@ -63,9 +88,26 @@ fn frame_doc(doc: &Document, i: usize, onion: bool) -> Document {
     d
 }
 
+/// A rendered picture as a GPUI image, over white where it is transparent.
+fn display_image(r: &Raster) -> Arc<RenderImage> {
+    let px = r.to_srgba8();
+    let bgra: Vec<u8> = px
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|[r, g, b, a]| {
+            let over = |c: u8| ((c as u32 * *a as u32 + 255 * (255 - *a as u32)) / 255) as u8;
+            [over(*b), over(*g), over(*r), 255]
+        })
+        .collect();
+    Arc::new(crate::viewport::bgra_image(r.width(), r.height(), bgra))
+}
+
+/// Write `frames` as a looping GIF, one frame at a time so a long replay
+/// never holds every picture in memory at once.
 fn encode_gif(
     path: &std::path::Path,
-    frames: Vec<image::RgbaImage>,
+    frames: impl IntoIterator<Item = Result<image::RgbaImage, String>>,
     fps: u32,
 ) -> Result<(), String> {
     use image::codecs::gif::{GifEncoder, Repeat};
@@ -74,17 +116,16 @@ fn encode_gif(
     enc.set_repeat(Repeat::Infinite)
         .map_err(|e| e.to_string())?;
     let delay = image::Delay::from_numer_denom_ms(1000, fps.max(1));
-    enc.encode_frames(
-        frames
-            .into_iter()
-            .map(|f| image::Frame::from_parts(f, 0, 0, delay)),
-    )
-    .map_err(|e| e.to_string())
+    for f in frames {
+        enc.encode_frame(image::Frame::from_parts(f?, 0, 0, delay))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 impl EditorView {
     pub(crate) fn frame_count(&self) -> usize {
-        self.editor.doc.nodes.len()
+        self.editor.doc.children(None).len()
     }
 
     /// The document to render: the animation preview while the panel is
@@ -188,12 +229,11 @@ impl EditorView {
             let result = cx
                 .background_spawn(async move {
                     let level = level_for(doc.width, doc.height);
-                    let mut frames = Vec::with_capacity(n);
-                    for i in 0..n {
+                    let frames = (0..n).map(|i| {
                         let d = frame_doc(&doc, i, false);
                         let r = emulsion_raster::composite::flatten(&d.composite_tree(), level);
-                        frames.push(rgba_image(&r).ok_or("bad frame")?);
-                    }
+                        rgba_image(&r).ok_or_else(|| "bad frame".to_string())
+                    });
                     encode_gif(&out, frames, fps)
                 })
                 .await;
@@ -206,108 +246,314 @@ impl EditorView {
         .detach();
     }
 
-    // ── Time-lapse ──────────────────────────────────────────────────────
+    // ── Replay ──────────────────────────────────────────────────────────
 
-    pub(crate) fn toggle_timelapse(&mut self, cx: &mut Context<Self>) {
-        self.anim.record = !self.anim.record;
-        if self.anim.record && self.anim.rec_dir.is_none() {
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let dir = emulsion_io::recent::data_dir()
-                .join("timelapse")
-                .join(format!("{}-{stamp}", self.name));
-            let _ = std::fs::create_dir_all(&dir);
-            self.anim.rec_dir = Some(dir);
+    /// Every moment of the picture history still knows, oldest first and
+    /// ending with the present: the head branch's commits from the root,
+    /// then the undo steps newer than the newest commit. Thinned evenly to
+    /// `MAX_REPLAY_FRAMES`, always keeping the first and last.
+    pub(crate) fn replay_docs(&self) -> Vec<Document> {
+        let g = &self.editor.graph;
+        let mut commits = Vec::new();
+        let mut at = Some(g.head_branch().tip);
+        while let Some(id) = at {
+            let Some(c) = g.commit(id) else { break };
+            commits.push(c.doc.clone());
+            at = c.parents.first().copied();
         }
-        self.set_status(
-            if self.anim.record {
-                "Time-lapse recording: a frame is kept after each change."
-            } else {
-                "Time-lapse paused."
-            },
-            false,
-            cx,
-        );
+        commits.reverse();
+        let mut docs: Vec<Document> = Vec::new();
+        let push = |d: Document, docs: &mut Vec<Document>| {
+            if docs.last() != Some(&d) {
+                docs.push(d);
+            }
+        };
+        for d in commits {
+            push(d, &mut docs);
+        }
+        // `steps()` is newest first; each holds the picture before it ran.
+        let steps: Vec<&emulsion_core::history::Step> = self.editor.history.steps().collect();
+        for st in steps.into_iter().rev() {
+            push(st.before.clone(), &mut docs);
+        }
+        push(self.editor.doc.clone(), &mut docs);
+        if docs.len() > MAX_REPLAY_FRAMES {
+            let n = docs.len();
+            let keep: Vec<usize> = (0..MAX_REPLAY_FRAMES)
+                .map(|i| i * (n - 1) / (MAX_REPLAY_FRAMES - 1))
+                .collect();
+            docs = docs
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| keep.binary_search(i).is_ok())
+                .map(|(_, d)| d)
+                .collect();
+        }
+        docs
+    }
+
+    /// Open the replay over the canvas and start playing from the first
+    /// moment; while open, play again from wherever it stopped.
+    pub(crate) fn replay_start(&mut self, cx: &mut Context<Self>) {
+        if self.anim.replay.is_none() {
+            let docs = self.replay_docs();
+            if docs.len() < 2 {
+                self.set_status(
+                    "Nothing to replay yet: replay follows the history, so draw or edit first.",
+                    true,
+                    cx,
+                );
+                return;
+            }
+            self.anim.replay = Some(Replay {
+                docs,
+                frame: 0,
+                playing: false,
+                shown: None,
+                rendering: false,
+                run: 0,
+            });
+        }
+        self.replay_play(true, cx);
+    }
+
+    pub(crate) fn replay_close(&mut self, cx: &mut Context<Self>) {
+        self.anim.replay = None;
         cx.notify();
     }
 
-    /// Called after every change: keep a frame now and then while recording.
-    pub(crate) fn timelapse_tick(&mut self, cx: &mut Context<Self>) {
-        if !self.anim.record || self.editor.in_transaction() {
-            return;
-        }
-        if self.editor.revision == self.anim.last_rev {
-            return;
-        }
-        if let Some(t) = self.anim.last_capture
-            && t.elapsed().as_secs_f32() < CAPTURE_GAP
-        {
-            return;
-        }
-        let Some(dir) = self.anim.rec_dir.clone() else {
+    /// Show moment `i` (rendering it off the UI thread) without playing.
+    pub(crate) fn replay_seek(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(r) = &mut self.anim.replay else {
             return;
         };
-        self.anim.last_rev = self.editor.revision;
-        self.anim.last_capture = Some(Instant::now());
-        self.anim.captured += 1;
-        let path = dir.join(format!("{:05}.png", self.anim.captured));
-        let doc = self.editor.doc.clone();
-        cx.background_spawn(async move {
-            let level = level_for(doc.width, doc.height);
-            let r = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
-            if let Some(img) = rgba_image(&r) {
-                let _ = img.save(&path);
+        r.frame = i.min(r.len() - 1);
+        r.playing = false;
+        r.run += 1;
+        self.replay_render_current(cx);
+    }
+
+    fn replay_render_current(&mut self, cx: &mut Context<Self>) {
+        let Some(r) = &mut self.anim.replay else {
+            return;
+        };
+        if r.rendering || r.shown.as_ref().is_some_and(|(i, _)| *i == r.frame) {
+            cx.notify();
+            return;
+        }
+        r.rendering = true;
+        let (i, doc) = (r.frame, r.docs[r.frame].clone());
+        cx.spawn(async move |this, cx| {
+            let img = cx
+                .background_spawn(async move {
+                    let level = level_for(doc.width, doc.height);
+                    let r = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
+                    display_image(&r)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(r) = &mut this.anim.replay {
+                    r.rendering = false;
+                    r.shown = Some((i, img));
+                    if r.frame != i {
+                        this.replay_render_current(cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Play from the current moment to the end at `REPLAY_FPS`, rendering
+    /// each frame as it comes; `false` pauses.
+    pub(crate) fn replay_play(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(r) = &mut self.anim.replay else {
+            return;
+        };
+        r.playing = on;
+        r.run += 1;
+        let run = r.run;
+        if !on {
+            cx.notify();
+            return;
+        }
+        if r.frame + 1 >= r.len() {
+            r.frame = 0;
+            r.shown = None;
+        }
+        let n = r.len();
+        cx.spawn(async move |this, cx| {
+            loop {
+                let Ok(Some((i, doc))) = this.read_with(cx, |this, _| {
+                    this.anim
+                        .replay
+                        .as_ref()
+                        .filter(|r| r.playing && r.run == run)
+                        .map(|r| (r.frame, r.docs[r.frame].clone()))
+                }) else {
+                    return;
+                };
+                let started = Instant::now();
+                let img = cx
+                    .background_spawn(async move {
+                        let level = level_for(doc.width, doc.height);
+                        let r = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
+                        display_image(&r)
+                    })
+                    .await;
+                let more = this.update(cx, |this, cx| {
+                    let Some(r) = &mut this.anim.replay else {
+                        return false;
+                    };
+                    if !r.playing || r.run != run {
+                        return false;
+                    }
+                    r.shown = Some((i, img));
+                    if i + 1 >= n {
+                        r.playing = false;
+                        cx.notify();
+                        return false;
+                    }
+                    r.frame = i + 1;
+                    cx.notify();
+                    true
+                });
+                if !matches!(more, Ok(true)) {
+                    return;
+                }
+                let budget = std::time::Duration::from_millis(1000 / REPLAY_FPS);
+                if let Some(rest) = budget.checked_sub(started.elapsed()) {
+                    cx.background_executor().timer(rest).await;
+                }
             }
         })
         .detach();
+        cx.notify();
     }
 
-    /// Assemble the recorded frames into a GIF.
-    pub(crate) fn export_timelapse_gif(&mut self, cx: &mut Context<Self>) {
-        let Some(dir) = self.anim.rec_dir.clone() else {
-            self.set_status("Start a time-lapse recording first.", true, cx);
-            return;
+    /// Write the whole replay as a GIF where the person chooses.
+    pub(crate) fn export_replay_gif(&mut self, cx: &mut Context<Self>) {
+        let docs = match &self.anim.replay {
+            Some(r) => r.docs.clone(),
+            None => self.replay_docs(),
         };
+        if docs.len() < 2 {
+            self.set_status("Nothing to replay yet: draw or edit first.", true, cx);
+            return;
+        }
         let name = self.name.clone();
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        let rx = cx.prompt_for_new_path(&home, Some(&format!("{name}-timelapse.gif")));
+        let rx = cx.prompt_for_new_path(&home, Some(&format!("{name}-replay.gif")));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
                 return;
             };
             path.set_extension("gif");
             let out = path.clone();
+            this.update(cx, |this, cx| {
+                this.set_status(
+                    format!("Rendering {} replay frames…", docs.len()),
+                    false,
+                    cx,
+                )
+            })
+            .ok();
             let result = cx
                 .background_spawn(async move {
-                    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-                        .map_err(|e| e.to_string())?
-                        .flatten()
-                        .map(|e| e.path())
-                        .filter(|p| p.extension().is_some_and(|e| e == "png"))
-                        .collect();
-                    files.sort();
-                    if files.is_empty() {
-                        return Err("no frames recorded yet".to_string());
-                    }
-                    let mut frames = Vec::with_capacity(files.len());
-                    for f in files {
-                        let img = image::open(&f).map_err(|e| e.to_string())?.to_rgba8();
-                        frames.push(img);
-                    }
-                    encode_gif(&out, frames, 8)
+                    let frames = docs.iter().map(|d| {
+                        let level = level_for(d.width, d.height);
+                        let r = emulsion_raster::composite::flatten(&d.composite_tree(), level);
+                        rgba_image(&r).ok_or_else(|| "bad frame".to_string())
+                    });
+                    encode_gif(&out, frames, REPLAY_FPS as u32)
                 })
                 .await;
             this.update(cx, |this, cx| match result {
                 Ok(()) => this.set_status(format!("Exported {}", path.display()), false, cx),
-                Err(e) => this.set_status(format!("Time-lapse export failed: {e}"), true, cx),
+                Err(e) => this.set_status(format!("Replay export failed: {e}"), true, cx),
             })
             .ok();
         })
         .detach();
+    }
+
+    /// The replay over the canvas: the current moment, its position, and
+    /// controls. None when no replay is open.
+    pub(crate) fn replay_overlay(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let r = self.anim.replay.as_ref()?;
+        let (n, i, playing) = (r.len(), r.frame, r.playing);
+        let picture: AnyElement = match &r.shown {
+            Some((_, picture)) => img(ImageSource::Render(picture.clone()))
+                .max_w_full()
+                .max_h_full()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            None => mono("rendering…", 11., p.chrome_fg).into_any_element(),
+        };
+        let bar = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(10.))
+            .py(px(6.))
+            .bg(p.chrome)
+            .child(
+                chip(
+                    "replay-play",
+                    if playing { "pause" } else { "play" },
+                    playing,
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.replay_play(!playing, cx))),
+            )
+            .child(chip("replay-prev", "◀", false, p).on_click(
+                cx.listener(move |this, _, _, cx| this.replay_seek(i.saturating_sub(1), cx)),
+            ))
+            .child(
+                chip("replay-next", "▶", false, p)
+                    .on_click(cx.listener(move |this, _, _, cx| this.replay_seek(i + 1, cx))),
+            )
+            .child(mono(format!("moment {}/{n}", i + 1), 10.5, p.chrome_fg))
+            .child(div().flex_1())
+            .child(
+                chip("replay-gif", "export GIF", false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.export_replay_gif(cx))),
+            )
+            .child(
+                chip("replay-close", "close", false, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.replay_close(cx))),
+            );
+        Some(
+            deferred(
+                div()
+                    .id("replay-overlay")
+                    .test_support()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .flex_col()
+                    .bg(p.chrome.opacity(0.94))
+                    .child(
+                        div()
+                            .id("replay-picture")
+                            .flex_1()
+                            .min_h_0()
+                            .p(px(16.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(picture),
+                    )
+                    .child(bar),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
     }
 
     /// The animation strip under the scene graph.

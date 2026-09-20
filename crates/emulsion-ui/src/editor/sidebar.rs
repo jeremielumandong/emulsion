@@ -30,6 +30,9 @@ impl EditorView {
             self.seen_rev = u64::MAX;
             self.tree_dirty = emulsion_core::Dirty::All;
         }
+        if tab != SidebarTab::Timeline {
+            self.anim.replay = None;
+        }
         self.sidebar_tab = tab;
         self.sidebar_menu = false;
         self.menu = None;
@@ -110,25 +113,22 @@ impl EditorView {
                         .flex_wrap()
                         .gap(px(6.))
                         .child(
-                            chip(
-                                "timelapse",
-                                if self.anim.record {
-                                    "Stop recording"
-                                } else {
-                                    "Record time-lapse"
-                                },
-                                self.anim.record,
-                                p,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_timelapse(cx))),
+                            chip("replay", "Replay drawing", self.anim.replay.is_some(), p)
+                                .on_click(cx.listener(|this, _, _, cx| this.replay_start(cx)))
+                                .test_support(),
                         )
-                        .when(self.anim.captured > 0, |d| {
-                            d.child(
-                                chip("timelapse-gif", "Export time-lapse GIF", false, p).on_click(
-                                    cx.listener(|this, _, _, cx| this.export_timelapse_gif(cx)),
-                                ),
-                            )
-                        }),
+                        .child(
+                            chip("replay-export", "Export replay GIF", false, p).on_click(
+                                cx.listener(|this, _, _, cx| this.export_replay_gif(cx)),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .text_size(px(10.5))
+                                .text_color(p.muted)
+                                .child("Replay plays the picture back from its history: every step still undoable, and every save."),
+                        ),
                 )
                 .into_any_element(),
             SidebarTab::History => div()
