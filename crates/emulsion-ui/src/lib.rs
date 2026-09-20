@@ -1,6 +1,7 @@
 //! `emulsion-ui` — GPUI views for Emulsion: the workspace, the Home and
 //! Editor screens, the tiled canvas viewport, and design tokens.
 
+mod about;
 pub mod actions;
 pub mod app_state;
 mod assistant;

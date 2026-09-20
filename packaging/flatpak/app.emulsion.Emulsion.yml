@@ -48,6 +48,15 @@ modules:
       - install -Dm644 packaging/linux/app.emulsion.Emulsion.desktop /app/share/applications/app.emulsion.Emulsion.desktop
       - install -Dm644 packaging/linux/app.emulsion.Emulsion.metainfo.xml /app/share/metainfo/app.emulsion.Emulsion.metainfo.xml
       - install -Dm644 assets/icons/emulsion.svg /app/share/icons/hicolor/scalable/apps/app.emulsion.Emulsion.svg
+      - install -Dm644 LICENSE /app/share/doc/emulsion/LICENSE
+      - install -Dm644 THIRD_PARTY_NOTICES.md /app/share/doc/emulsion/THIRD_PARTY_NOTICES.md
+      - install -Dm644 THIRD_PARTY_CRATES.md /app/share/doc/emulsion/THIRD_PARTY_CRATES.md
+      - install -Dm644 vendor/gpui/LICENSING.md /app/share/doc/emulsion/GPUI-LICENSING.md
+      - install -Dm644 vendor/gpui/UPSTREAM.json /app/share/doc/emulsion/GPUI-UPSTREAM.json
+      - install -Dm644 vendor/gpui/gpui-pre/LICENSE-APACHE /app/share/doc/emulsion/licenses/GPUI-ZED-LICENSE-APACHE
+      - install -Dm644 vendor/gpui/gpui-base/LICENSE-APACHE /app/share/doc/emulsion/licenses/GPUI-KIT-LICENSE-APACHE
+      - install -Dm644 vendor/gpui/licenses/MICROSOFT-TERMINAL-MIT.txt /app/share/doc/emulsion/licenses/MICROSOFT-TERMINAL-MIT.txt
+      - install -Dm644 licenses/LGPL-2.1-rawler.txt /app/share/doc/emulsion/licenses/LGPL-2.1-rawler.txt
     sources:
       - type: dir
         path: ../..

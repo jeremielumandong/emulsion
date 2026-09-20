@@ -91,6 +91,16 @@ strip --strip-debug "$APPDIR/usr/bin/emulsion" 2>/dev/null || true
 install -Dm644 "$ROOT_DIR/packaging/linux/$APP_ID.desktop" "$APPDIR/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$ROOT_DIR/packaging/linux/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
 install -Dm644 "$ROOT_DIR/packaging/linux/$APP_ID.metainfo.xml" "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml"
+# Licences and attribution travel with every binary (Apache-2.0 §4, LGPL notices).
+install -Dm644 "$ROOT_DIR/LICENSE" "$APPDIR/usr/share/doc/emulsion/LICENSE"
+install -Dm644 "$ROOT_DIR/THIRD_PARTY_NOTICES.md" "$APPDIR/usr/share/doc/emulsion/THIRD_PARTY_NOTICES.md"
+install -Dm644 "$ROOT_DIR/THIRD_PARTY_CRATES.md" "$APPDIR/usr/share/doc/emulsion/THIRD_PARTY_CRATES.md"
+install -Dm644 "$ROOT_DIR/vendor/gpui/LICENSING.md" "$APPDIR/usr/share/doc/emulsion/GPUI-LICENSING.md"
+install -Dm644 "$ROOT_DIR/vendor/gpui/UPSTREAM.json" "$APPDIR/usr/share/doc/emulsion/GPUI-UPSTREAM.json"
+for f in "$ROOT_DIR"/vendor/gpui/licenses/*; do install -Dm644 "$f" "$APPDIR/usr/share/doc/emulsion/licenses/$(basename "$f")"; done
+install -Dm644 "$ROOT_DIR/vendor/gpui/gpui-pre/LICENSE-APACHE" "$APPDIR/usr/share/doc/emulsion/licenses/GPUI-ZED-LICENSE-APACHE"
+install -Dm644 "$ROOT_DIR/vendor/gpui/gpui-base/LICENSE-APACHE" "$APPDIR/usr/share/doc/emulsion/licenses/GPUI-KIT-LICENSE-APACHE"
+install -Dm644 "$ROOT_DIR/licenses/LGPL-2.1-rawler.txt" "$APPDIR/usr/share/doc/emulsion/licenses/LGPL-2.1-rawler.txt"
 install -Dm644 "$ROOT_DIR/assets/icons/emulsion.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/emulsion.svg"
 
 render_png() {

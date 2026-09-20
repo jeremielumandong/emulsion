@@ -21,3 +21,18 @@ This notice inventories the vendored GPUI family. Other dependencies retain
 their own licenses; this is not an exhaustive inventory of the entire Cargo
 dependency graph. Release packages must also retain notices required by their
 other bundled dependencies and assets.
+
+## RAW decoding (LGPL-2.1)
+
+Camera RAW files are decoded by the `rawler` crate (https://github.com/dnglab/dnglab),
+licensed under the GNU Lesser General Public License v2.1. Emulsion uses it unmodified
+and links it into the binary. Under LGPL §6, you may relink Emulsion against a modified
+`rawler`: the crate's source is available from its repository at the version recorded in
+`THIRD_PARTY_CRATES.md`, and Emulsion's own source is available under MIT so a modified
+build can be produced. The LGPL text ships with release packages.
+
+## Everything else
+
+`THIRD_PARTY_CRATES.md` lists every crate in the build with its declared licence; it is
+generated from `cargo metadata` by `scripts/gen-third-party.py`. The About screen in the
+application shows the same information.

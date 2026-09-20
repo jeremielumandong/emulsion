@@ -19,6 +19,8 @@ pub enum Screen {
     Editor,
     Settings,
     Batch,
+    /// Licence and attribution.
+    About,
 }
 
 pub struct Workspace {
@@ -47,6 +49,8 @@ pub struct Workspace {
     /// Filesystem facts the Settings screen shows, refreshed at most every
     /// couple of seconds instead of on every frame.
     pub(crate) probe: Option<(std::time::Instant, crate::settings_screen::Probe)>,
+    /// About screen: the full crate list is long, so it unfolds on request.
+    pub(crate) about_all_crates: bool,
     pub(crate) model_jobs: crate::settings_models::ModelJobs,
     pub(crate) batch: crate::batch::BatchState,
     /// The landing image, decoded once in the background.
@@ -170,6 +174,7 @@ impl Workspace {
             image_test: None,
             keymap_note: None,
             probe: None,
+            about_all_crates: false,
             model_jobs: Default::default(),
             batch: Default::default(),
             landing,
@@ -889,6 +894,14 @@ impl Workspace {
                     cx.notify();
                 })),
             )
+            .child(
+                tab("tab-about", "ABOUT", self.screen == Screen::About, true).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.screen = Screen::About;
+                        cx.notify();
+                    }),
+                ),
+            )
             .child(div().flex_1().border_l_1().border_color(p.chrome_line))
             .child(
                 div()
@@ -1001,6 +1014,7 @@ impl Render for Workspace {
                 .child(e.clone())
                 .into_any_element(),
             (Screen::Settings, _) => self.settings_screen(window, cx).into_any_element(),
+            (Screen::About, _) => self.about_screen(window, cx).into_any_element(),
             (Screen::Batch, _) => self.batch_screen(window, cx).into_any_element(),
             _ => self.home(window, cx).into_any_element(),
         };
