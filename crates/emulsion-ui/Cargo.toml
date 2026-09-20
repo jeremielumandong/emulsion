@@ -17,7 +17,6 @@ emulsion-mcp = { workspace = true }
 emulsion-recipes = { workspace = true }
 async-channel = { workspace = true }
 serde = { workspace = true }
-evdev = "0.13"
 serde_json = { workspace = true }
 emulsion-io = { workspace = true }
 emulsion-raster = { workspace = true }
@@ -31,6 +30,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 gpui-kit = { workspace = true }
 emulsion-core = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

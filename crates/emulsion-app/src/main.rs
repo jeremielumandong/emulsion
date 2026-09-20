@@ -50,6 +50,8 @@ fn run_editor(file: Option<PathBuf>) {
             app_state::install(cx);
             // Also squares gpui-kit's corners: the design has none but avatars and dots.
             theme::apply_saved(cx);
+            #[cfg(target_os = "linux")]
+            theme::watch_omarchy(cx);
             actions::bind(cx);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {

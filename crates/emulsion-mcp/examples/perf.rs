@@ -239,6 +239,24 @@ fn main() {
             (30.0, 0.0),
         )
     });
+    timed("vector path rasterize (30 anchors, 3000×2000, stroke 4)", || {
+        let mut d = String::from("M 1000 1000");
+        for i in 1..30 {
+            let t = i as f32 / 29.0;
+            d.push_str(&format!(
+                " L {} {}",
+                1000.0 + t * 3000.0,
+                2000.0 + (t * 12.0).sin() * 900.0
+            ));
+        }
+        let path = emulsion_raster::vector::Path::from_svg(&d).unwrap();
+        let style = emulsion_raster::vector::PathStyle {
+            stroke: Some([255, 0, 0, 255]),
+            width: 4.0,
+            fill: None,
+        };
+        path.rasterize(&style, w, h)
+    });
     timed("write_rect 512×512 (stroke commit shape)", || {
         let px = vec![[65535u16, 0, 0, 65535]; 512 * 512];
         base.write_rect(emulsion_raster::IRect::new(1000, 1000, 512, 512), &px)

@@ -33,6 +33,7 @@ pub fn button(
         (p.soft_bg, p.ink)
     };
     let accent = p.accent;
+    let accent_fg = p.accent_fg;
     div()
         .id(id)
         .flex()
@@ -47,11 +48,7 @@ pub fn button(
         .text_size(px(12.5))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
-        .hover(move |s| {
-            s.bg(accent)
-                .border_color(accent)
-                .text_color(gpui_kit::white())
-        })
+        .hover(move |s| s.bg(accent).border_color(accent).text_color(accent_fg))
         .child(text.into())
 }
 

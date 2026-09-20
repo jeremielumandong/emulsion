@@ -231,7 +231,7 @@ impl Workspace {
 
     /// The landing image, full width, with the headline and actions over it.
     fn hero(&self, date: String, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let white = gpui_kit::white();
+        let foreground = p.chrome_fg;
         let image: AnyElement = match &self.landing {
             Some(i) => img(ImageSource::Render(i.clone()))
                 .size_full()
@@ -271,13 +271,13 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(18.))
-                    .child(mono(date.to_uppercase(), 9.5, white.opacity(0.75)))
+                    .child(mono(date.to_uppercase(), 9.5, foreground.opacity(0.75)))
                     .child(
                         div()
                             .text_size(px(64.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .line_height(relative(0.95))
-                            .text_color(white)
+                            .text_color(foreground)
                             .child("Every edit,")
                             .child("still undoable."),
                     )
@@ -346,6 +346,7 @@ impl Workspace {
         let path = r.path.clone();
         let forget = r.path.clone();
         let accent = p.accent;
+        let accent_fg = p.accent_fg;
         div()
             .id(("recent", i))
             .flex()
@@ -388,7 +389,7 @@ impl Workspace {
                             .text_color(gpui_kit::white())
                             .text_size(px(12.))
                             .cursor_pointer()
-                            .hover(move |s| s.bg(accent))
+                            .hover(move |s| s.bg(accent).text_color(accent_fg))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.remove_recent(&forget, cx);

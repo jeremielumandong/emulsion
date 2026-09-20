@@ -73,6 +73,22 @@ The script creates a versioned `.app` and `.dmg` in `target/macos/`. The app is
 signed ad hoc for local use; distributing it requires Developer ID signing and
 notarization.
 
+## Appearance
+
+Use the Light/Dark controls in the top bar to choose Emulsion's built-in palette.
+On Linux, **Follow Omarchy** follows the active Omarchy theme, including changes
+while Emulsion is running (within about one second). Choosing Light or Dark, or
+using the theme toggle shortcut, stops following. Existing preferences are preserved;
+following is off by default. macOS and Windows keep the built-in theme controls.
+
+Emulsion reads `omarchy/current/theme/colors.toml` under `$XDG_STATE_HOME`
+(default `~/.local/state`), with a fallback to `$XDG_CONFIG_HOME` (default
+`~/.config`) for older installations. No hooks or system configuration changes
+are needed. If no valid palette is available, the saved built-in mode is used;
+a failed live reload retains the last valid palette until another valid one appears.
+The canvas surround and transparency checkerboard keep Emulsion's neutral colors
+for the selected light/dark mode; theme colors never alter document pixels.
+
 ## Compact project files
 
 Saving an ORA stores each unique editable path once, shared by the current

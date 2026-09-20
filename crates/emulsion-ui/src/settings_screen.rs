@@ -42,7 +42,7 @@ fn tier(n: u8, title: &str, on: bool, state: &str, p: &Palette) -> Div {
                 .border_1()
                 .border_color(if on { p.accent } else { p.line })
                 .bg(if on { p.accent } else { transparent_black() })
-                .text_color(if on { gpui_kit::white() } else { p.muted })
+                .text_color(if on { p.accent_fg } else { p.muted })
                 .font_family(theme::MONO_FONT)
                 .text_size(px(11.))
                 .child(n.to_string()),

@@ -21,6 +21,8 @@ pub struct Settings {
     pub suggestions: bool,
     /// Light theme instead of the default dark one.
     pub light_mode: bool,
+    /// Follow the current Omarchy palette on Linux, retaining `light_mode` as fallback.
+    pub follow_omarchy: bool,
     /// Apply every assistant change without asking, deletes and merges too.
     pub approve_all: bool,
     /// Play the assistant's brush strokes on the canvas as it paints.
@@ -50,6 +52,7 @@ impl Default for Settings {
             auto_apply: false,
             suggestions: true,
             light_mode: false,
+            follow_omarchy: false,
             approve_all: false,
             show_drawing: true,
             advanced_tools: false,
@@ -139,6 +142,35 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_theme_preferences_do_not_enable_omarchy() {
+        for light_mode in [false, true] {
+            let settings: Settings = serde_json::from_value(serde_json::json!({
+                "light_mode": light_mode
+            }))
+            .unwrap();
+            assert_eq!(settings.light_mode, light_mode);
+            assert!(!settings.follow_omarchy);
+        }
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.light_mode);
+        assert!(!settings.follow_omarchy);
+    }
+
+    #[test]
+    fn omarchy_preference_round_trips_with_explicit_theme_fallback() {
+        for light_mode in [false, true] {
+            let settings = Settings {
+                light_mode,
+                follow_omarchy: true,
+                ..Settings::default()
+            };
+            let restored: Settings =
+                serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+            assert_eq!(restored, settings);
+        }
+    }
 
     #[test]
     fn old_local_settings_load_and_cloud_profiles_round_trip_separately() {

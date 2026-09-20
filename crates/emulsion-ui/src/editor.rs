@@ -2745,6 +2745,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let accent = p.accent;
+        let accent_fg = p.accent_fg;
         div()
             .id(id)
             .flex()
@@ -2766,7 +2767,7 @@ impl EditorView {
                     .py(px(5.))
                     .text_size(px(12.))
                     .cursor_pointer()
-                    .hover(move |s| s.bg(accent).text_color(gpui_kit::white()))
+                    .hover(move |s| s.bg(accent).text_color(accent_fg))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         match &*action {
                             MenuAction::Blend(id, m) => {
@@ -2830,15 +2831,15 @@ impl Render for EditorView {
         let presets = self.presets_view(&p, cx);
         let dock = self.assistant_dock(&p, cx);
         let panel = self.node_panel(&p, window, cx);
-        div()
         let menu_bar = self.menu_bar(&p, cx);
+        div()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
             .track_focus(&self.focus)
-            .child(doc_bar)
             .child(menu_bar)
+            .child(doc_bar)
             .child(
                 div()
                     .flex()

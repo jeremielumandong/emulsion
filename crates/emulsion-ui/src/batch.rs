@@ -996,7 +996,7 @@ impl Workspace {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_color(gpui_kit::white())
+                                    .text_color(p.accent_fg)
                                     .text_size(px(10.))
                                     .font_family(MONO_FONT)
                                     .child(if item.selected { "✓" } else { "" })

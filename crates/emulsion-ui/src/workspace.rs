@@ -402,14 +402,14 @@ impl Workspace {
                                 div()
                                     .text_size(px(40.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(gpui_kit::white())
+                                    .text_color(p.chrome_fg)
                                     .child("Emulsion"),
                             ),
                     )
                     .child(mono(
                         format!("{} · every edit, still undoable", env!("CARGO_PKG_VERSION")),
                         11.,
-                        gpui_kit::white().opacity(0.8),
+                        p.chrome_fg.opacity(0.8),
                     )),
             )
     }
@@ -610,7 +610,7 @@ impl Workspace {
                 .text_size(px(10.))
                 .bg(if on { p.accent } else { transparent_black() })
                 .text_color(if on {
-                    gpui_kit::white()
+                    p.accent_fg
                 } else if enabled {
                     p.nav_fg
                 } else {
@@ -707,17 +707,30 @@ impl Workspace {
                     .px(px(14.))
                     .border_l_1()
                     .border_color(p.chrome_line)
+                    .map(|d| {
+                        #[cfg(target_os = "linux")]
+                        let d = d.child(
+                            theme_btn("omarchy", "Follow Omarchy", theme::following_omarchy(cx))
+                                .w(px(120.))
+                                .on_click(cx.listener(|_, _, _, cx| theme::follow_omarchy(cx))),
+                        );
+                        d
+                    })
                     .child(
-                        theme_btn("light", "☀", !p.dark).on_click(cx.listener(|_, _, _, cx| {
-                            theme::set_dark(false, cx);
-                            cx.refresh_windows();
-                        })),
+                        theme_btn("light", "☀", !p.dark && !theme::following_omarchy(cx)).on_click(
+                            cx.listener(|_, _, _, cx| {
+                                theme::set_dark(false, cx);
+                                cx.refresh_windows();
+                            }),
+                        ),
                     )
                     .child(
-                        theme_btn("dark", "☾", p.dark).on_click(cx.listener(|_, _, _, cx| {
-                            theme::set_dark(true, cx);
-                            cx.refresh_windows();
-                        })),
+                        theme_btn("dark", "☾", p.dark && !theme::following_omarchy(cx)).on_click(
+                            cx.listener(|_, _, _, cx| {
+                                theme::set_dark(true, cx);
+                                cx.refresh_windows();
+                            }),
+                        ),
                     ),
             )
     }
@@ -738,14 +751,14 @@ impl Workspace {
                 .px(px(16.))
                 .py(px(8.))
                 .bg(if err { p.accent } else { p.ink })
-                .text_color(gpui_kit::white())
-                .child(mono(msg, 11., gpui_kit::white()).flex_1())
+                .text_color(if err { p.accent_fg } else { p.paper })
+                .child(mono(msg, 11., if err { p.accent_fg } else { p.paper }).flex_1())
                 .when(err, |d| {
                     d.child(
                         div()
                             .id("dismiss")
                             .cursor_pointer()
-                            .child(mono("dismiss", 10., gpui_kit::white()))
+                            .child(mono("dismiss", 10., p.accent_fg))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.error = None;
                                 cx.notify();
