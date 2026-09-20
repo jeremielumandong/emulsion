@@ -335,6 +335,19 @@ impl EditorView {
         if self.tool == Tool::Pen && self.pen_delete(cx) {
             return;
         }
+        if self.tool == Tool::Select
+            && matches!(
+                self.tools.select,
+                SelectShape::Polygon | SelectShape::Magnetic
+            )
+            && self.tools.polygon.pop().is_some()
+        {
+            // The live magnetic segment starts at the removed point. Drop it
+            // too; the next pointer movement will trace from the new endpoint.
+            self.tools.magnetic_live.clear();
+            cx.notify();
+            return;
+        }
         if self.editor.doc.selection.is_some() {
             self.clear_pixels(cx);
         } else {
@@ -487,3 +500,7 @@ impl EditorView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "selection_delete_tests.rs"]
+mod selection_delete_tests;

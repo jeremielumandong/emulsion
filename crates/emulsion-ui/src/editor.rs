@@ -95,7 +95,7 @@ fn tool_help(tool: Tool) -> &'static str {
         Tool::Eyedropper => {
             "Eyedropper: click to pick the foreground colour; alt-click for background."
         }
-        Tool::Zoom => "Zoom: click to zoom in, alt-click to zoom out, double-click for 100%.",
+        Tool::Zoom => "Zoom: click to zoom in, Shift/Alt-click to zoom out, double-click for 100%.",
     }
 }
 
@@ -297,6 +297,7 @@ pub struct EditorView {
     pub(crate) compare: f32,
     pub(crate) rulers: bool,
     pub(crate) space_held: bool,
+    focus_watchers: Option<(Subscription, Subscription)>,
     pub(crate) renaming: Option<(NodeId, Entity<InputState>, Subscription)>,
     menu: Option<Menu>,
     pub(crate) sidebar_tab: SidebarTab,
@@ -372,8 +373,8 @@ impl EditorView {
             raw: Default::default(),
             generate: Default::default(),
             rail: Default::default(),
-            draw_mode: cx
             export_prefs: Default::default(),
+            draw_mode: cx
                 .try_global::<crate::app_state::AppSettings>()
                 .is_some_and(|s| s.0.draw_mode),
             fit_pending: true,
@@ -395,6 +396,7 @@ impl EditorView {
             compare: 0.0,
             rulers: true,
             space_held: false,
+            focus_watchers: None,
             renaming: None,
             menu: None,
             sidebar_tab: SidebarTab::Properties,
@@ -978,6 +980,7 @@ impl EditorView {
     // ── Pointer ─────────────────────────────────────────────────────────
 
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.drag_shift = e.modifiers.shift;
         // A second button must not replace the move that owns an undo transaction.
         if matches!(self.drag, Some(Drag::Move(_))) {
             return;
@@ -1037,8 +1040,10 @@ impl EditorView {
 
     fn drag_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
         let inside = self.canvas_bounds().is_some_and(|b| b.contains(&pos));
-        let wants_pointer = matches!(self.tool, Tool::Brush | Tool::Heal | Tool::Clone)
-            || !self.tools.polygon.is_empty()
+        let wants_pointer = matches!(
+            self.tool,
+            Tool::Brush | Tool::Heal | Tool::Clone | Tool::Mask | Tool::Zoom
+        ) || !self.tools.polygon.is_empty()
             || (self.tool == Tool::Pen && self.tools.pen.building.is_some());
         let pointer = inside.then_some(pos);
         if inside {
@@ -1234,6 +1239,66 @@ impl EditorView {
         });
     }
 
+    /// Keyboard steps use the same complete edit gesture as pointer sliders,
+    /// including filter flushing and a single undo entry per step.
+    fn slider_key(
+        &mut self,
+        key: SliderKey,
+        norm: f32,
+        spec: (f32, f32, f32),
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let mods = event.keystroke.modifiers;
+        if self.drag.is_some()
+            || self.editor.in_transaction()
+            || mods.control
+            || mods.platform
+            || mods.alt
+        {
+            return;
+        }
+        let (min, max, step) = spec;
+        if max <= min {
+            return;
+        }
+        let current = min + norm.clamp(0., 1.) * (max - min);
+        let step =
+            if step > 0. { step } else { (max - min) / 100. } * if mods.shift { 10. } else { 1. };
+        let next = match event.keystroke.key.as_str() {
+            "left" | "down" => current - step,
+            "right" | "up" => current + step,
+            "home" => min,
+            "end" => max,
+            _ => return,
+        }
+        .clamp(min, max);
+        let Some(bounds) = self.tracks.get(&key).and_then(|track| track.get()) else {
+            return;
+        };
+        cx.stop_propagation();
+        if (next - current).abs() < f32::EPSILON {
+            return;
+        }
+        self.slider_down(
+            key,
+            spec,
+            &MouseDownEvent {
+                button: MouseButton::Left,
+                position: point(
+                    bounds.origin.x + bounds.size.width * ((next - min) / (max - min)),
+                    bounds.center().y,
+                ),
+                modifiers: mods,
+                click_count: 1,
+                first_mouse: false,
+            },
+            cx,
+        );
+        self.drag_end(cx);
+        cx.notify();
+    }
+
     /// Mouse down on a vertical side slider.
     pub(crate) fn vslider_down(
         &mut self,
@@ -1339,6 +1404,10 @@ impl EditorView {
                 cx.notify();
             }
             SliderKey::Raw(name) => self.raw_slider(name, v, cx),
+            SliderKey::ExportQuality => {
+                self.export_prefs.quality = v.round().clamp(1.0, 100.0) as u8;
+                cx.notify();
+            }
             SliderKey::SideSize => self.apply_slider(SliderKey::ToolSize, v, cx),
             SliderKey::SideOpacity => self.apply_slider(SliderKey::ToolOpacity, v, cx),
             SliderKey::ToolPressureCurve => {
@@ -1403,10 +1472,6 @@ impl EditorView {
                     },
                     cx,
                 );
-            }
-            SliderKey::ExportQuality => {
-                self.export_prefs.quality = v.round().clamp(1.0, 100.0) as u8;
-                cx.notify();
             }
             SliderKey::Scale(id) | SliderKey::Rotation(id) => {
                 let Some(NodeKind::Raster { raster, placement }) =
@@ -1572,7 +1637,7 @@ impl EditorView {
     }
 
     fn context_bar(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let tool = rail::tool_name(self.tool);
+        let tool = self.active_tool_name();
         let options = self.tool_options(p, cx);
         let advanced = crate::app_state::settings(cx).advanced_tools;
         let more = if advanced {
@@ -1681,10 +1746,11 @@ impl EditorView {
     fn canvas_area(
         &mut self,
         p: &Palette,
-        scale_factor: f32,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let overlay = self.overlay(scale_factor);
+        let overlay = self.overlay(window.scale_factor());
+        let zoom_cursor = self.zoom_cursor(p, window);
         let accent = p.accent;
         let view_for_overlay = self.view;
         // Fit once the canvas has been laid out.
@@ -1731,6 +1797,8 @@ impl EditorView {
             ) => CursorStyle::ResizeUpDown,
             (_, true) => CursorStyle::OpenHand,
             _ if self.tool == Tool::Hand => CursorStyle::OpenHand,
+            _ if self.tool == Tool::Type => CursorStyle::IBeam,
+            _ if self.tool == Tool::Zoom => CursorStyle::Arrow,
             _ if matches!(self.tool, Tool::Move | Tool::Grade) => CursorStyle::Arrow,
             _ => CursorStyle::Crosshair,
         };
@@ -1742,7 +1810,52 @@ impl EditorView {
             .overflow_hidden()
             .track_focus(&self.canvas_focus)
             .key_context("Canvas")
+            .on_action(
+                cx.listener(|this, _: &crate::actions::ToolEllipseMarquee, _, cx| {
+                    this.set_select(tools::SelectShape::Ellipse, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::actions::ToolPolygonLasso, _, cx| {
+                    this.set_select(tools::SelectShape::Polygon, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::actions::ToolMagneticLasso, _, cx| {
+                    this.set_select(tools::SelectShape::Magnetic, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::actions::ToolQuickSelect, _, cx| {
+                    this.set_select(tools::SelectShape::Quick, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &crate::actions::ToolSmudge, _, cx| {
+                this.set_paint(tools::PaintKind::Smudge, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::ToolLiquify, _, cx| {
+                this.set_paint(tools::PaintKind::Liquify, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::ToolEllipse, _, cx| {
+                this.set_tool(Tool::Shape, cx);
+                this.tools.shape = tools::ShapeKind::Ellipse;
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::ToolShape, _, cx| {
+                this.set_tool(Tool::Shape, cx);
+                this.tools.shape = tools::ShapeKind::Rect;
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::ToolMask, _, cx| {
+                this.set_tool(Tool::Mask, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::actions::ToolGrade, _, cx| {
+                this.set_tool(Tool::Grade, cx)
+            }))
             .cursor(cursor)
+            .on_hover(cx.listener(|this, _, _, cx| {
+                if this.tool == Tool::Zoom {
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)),
@@ -1832,15 +1945,64 @@ impl EditorView {
                                 .ok();
                             }
                         });
-                        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                        window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
                             if phase == DispatchPhase::Bubble {
-                                w3.update(cx, |this, cx| this.drag_end(cx)).ok();
+                                w3.update(cx, |this, cx| {
+                                    this.drag_shift = e.modifiers.shift;
+                                    this.drag_end(cx);
+                                })
+                                .ok();
                             }
                         });
                     },
                 )
                 .size_full(),
             )
+            .children(zoom_cursor)
+    }
+
+    /// GPUI has no native zoom cursor. Keep a platform-independent magnifier
+    /// beside the pointer, using the same modifier predicate as zoom clicks.
+    fn zoom_cursor(&self, p: &Palette, window: &Window) -> Option<AnyElement> {
+        if self.tool != Tool::Zoom || self.space_held || self.drag.is_some() {
+            return None;
+        }
+        let bounds = self.canvas_bounds()?;
+        let position = window.mouse_position();
+        if !bounds.contains(&position) {
+            return None;
+        }
+        let out = tools::zoom_out(window.modifiers());
+        let icon = if out {
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8"/></svg>"#.as_slice()
+        } else {
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8M10 6v8"/></svg>"#.as_slice()
+        };
+        Some(
+            div()
+                .id(if out {
+                    "zoom-cursor-out"
+                } else {
+                    "zoom-cursor-in"
+                })
+                .absolute()
+                .left(
+                    (position.x - bounds.origin.x + px(12.))
+                        .min((bounds.size.width - px(28.)).max(px(0.))),
+                )
+                .top(
+                    (position.y - bounds.origin.y + px(12.))
+                        .min((bounds.size.height - px(28.)).max(px(0.))),
+                )
+                .size(px(28.))
+                .p(px(2.))
+                .bg(p.panel)
+                .border_1()
+                .border_color(p.ink)
+                .child(svg().data(icon).size_full().text_color(p.ink))
+                .test_support()
+                .into_any_element(),
+        )
     }
 
     fn status_strip(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -2634,15 +2796,31 @@ impl EditorView {
                     .child(name.to_string())
                     .child(div().text_color(p.muted).child(display)),
             )
-            .child(slider(
-                id,
-                norm,
-                track,
-                p,
-                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                    this.slider_down(key, spec, e, cx);
-                }),
-            ))
+            .child(
+                slider(
+                    id,
+                    norm,
+                    track,
+                    p,
+                    cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        this.slider_down(key, spec, e, cx);
+                    }),
+                )
+                .tab_index(0)
+                .key_context("Slider")
+                .role(Role::Slider)
+                .aria_label(name.to_string())
+                .aria_value(format!("{}", spec.0 + norm * (spec.1 - spec.0)))
+                .aria_min_numeric_value(spec.0 as f64)
+                .aria_max_numeric_value(spec.1 as f64)
+                .aria_description(
+                    "Arrow keys adjust; Shift adjusts faster; Home and End go to limits",
+                )
+                .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
+                .on_key_down(
+                    cx.listener(move |this, e, _, cx| this.slider_key(key, norm, spec, e, cx)),
+                ),
+            )
     }
 
     fn history_list(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -2810,6 +2988,21 @@ enum MenuAction {
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.focus_watchers.is_none() {
+            let blur = cx.on_focus_out(&self.canvas_focus, window, |this, _, _, cx| {
+                if this.space_held {
+                    this.space_held = false;
+                    cx.notify();
+                }
+            });
+            let activation = cx.observe_window_activation(window, |this, _, cx| {
+                if this.space_held {
+                    this.space_held = false;
+                    cx.notify();
+                }
+            });
+            self.focus_watchers = Some((blur, activation));
+        }
         let p = theme::palette(cx);
         self.sync_trees(cx);
         self.sync_transform_fields(window, cx);
@@ -2830,12 +3023,13 @@ impl Render for EditorView {
         }
         let rail = self.tool_rail(&p, cx);
         let context = self.context_bar(&p, cx);
-        let canvas = self.canvas_area(&p, window.scale_factor(), cx);
+        let canvas = self.canvas_area(&p, window, cx);
         let picker = self.picker(&p, cx);
         self.refresh_suggestions(cx);
         let strip = self.status_strip(&p, cx);
         let ask = self.ask_bar(&p, cx);
         let size_panel = self.size_panel_view(&p, cx);
+        let export_panel = self.export_panel_view(&p, cx);
         let presets = self.presets_view(&p, cx);
         let dock = self.assistant_dock(&p, cx);
         let panel = self.node_panel(&p, window, cx);
@@ -2845,6 +3039,14 @@ impl Render for EditorView {
             .flex_1()
             .min_h_0()
             .track_focus(&self.focus)
+            .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
+                this.drag_shift = event.modifiers.shift;
+                if matches!(this.tool, Tool::Zoom | Tool::Shape)
+                    || matches!(this.drag, Some(Drag::Transform(_)))
+                {
+                    cx.notify();
+                }
+            }))
             .child(doc_bar)
             .child(
                 div()
@@ -2864,6 +3066,7 @@ impl Render for EditorView {
                             .overflow_hidden()
                             .child(context)
                             .children(size_panel)
+                            .children(export_panel)
                             .children(presets)
                             .children(ask)
                             .child(canvas)
@@ -3027,7 +3230,6 @@ mod rendering_tests {
             assert_ne!(this.editor.doc.node(id), before.node(id));
             assert_eq!(
                 this.editor.doc.node(1),
-        let export_panel = self.export_panel_view(&p, cx);
                 before.node(1),
                 "other nodes are untouched"
             );
@@ -3043,4 +3245,3 @@ mod rendering_tests {
         });
     }
 }
-                            .children(export_panel)

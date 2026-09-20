@@ -14,6 +14,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[path = "tool_usability_tests.rs"]
+mod tool_usability_tests;
+
 #[path = "clipboard_tests.rs"]
 mod clipboard_tests;
 
@@ -916,7 +919,7 @@ fn batch_recipe_browser_preserves_photo_selection_and_export_settings(cx: &mut T
                         ..Recipe::default()
                     })
                     .collect(),
-            );
+            ));
             ws.screen = Screen::Batch;
             cx.notify();
         });

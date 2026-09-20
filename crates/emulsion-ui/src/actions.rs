@@ -52,6 +52,15 @@ gpui_kit::actions!(
         ToolShape,
         ToolEyedropper,
         ToolZoom,
+        ToolEllipseMarquee,
+        ToolPolygonLasso,
+        ToolMagneticLasso,
+        ToolQuickSelect,
+        ToolSmudge,
+        ToolLiquify,
+        ToolEllipse,
+        ToolMask,
+        ToolGrade,
         ImageSizeDialog,
         CanvasSizeDialog,
         NextTab,
@@ -112,6 +121,7 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         ToolCrop, ToolShape, ToolEyedropper, ToolZoom, ImageSizeDialog, CanvasSizeDialog, NextTab, PrevTab, CloseTab, SwapColors, DefaultColors, BrushSmaller, BrushLarger, CommitTool,
         SelectAll, Deselect, InvertSelection, FillSelection, ContentAwareFill, ShowSettings,
         CopyPixels, CutPixels, PastePixels, ClearPixels, CanvasDelete, FreeTransform,
+        ToolEllipseMarquee, ToolPolygonLasso, ToolMagneticLasso, ToolQuickSelect, ToolSmudge, ToolLiquify, ToolEllipse, ToolMask, ToolGrade,
         NudgeLeft, NudgeRight, NudgeUp, NudgeDown,
         NudgeLeftLarge, NudgeRightLarge, NudgeUpLarge, NudgeDownLarge,
         Suggestion1, Suggestion2, Suggestion3, Suggestion4, Quit,
@@ -174,6 +184,15 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("canvas", "ToolShape", "u"),
     ("canvas", "ToolEyedropper", "i"),
     ("canvas", "ToolZoom", "z"),
+    ("canvas", "ToolEllipseMarquee", "shift-m"),
+    ("canvas", "ToolPolygonLasso", "shift-l"),
+    ("canvas", "ToolMagneticLasso", "alt-l"),
+    ("canvas", "ToolQuickSelect", "shift-w"),
+    ("canvas", "ToolSmudge", "shift-b"),
+    ("canvas", "ToolLiquify", "shift-j"),
+    ("canvas", "ToolEllipse", "shift-u"),
+    ("canvas", "ToolMask", "q"),
+    ("canvas", "ToolGrade", "shift-q"),
     ("workspace", "ImageSizeDialog", "ctrl-alt-i"),
     ("workspace", "CanvasSizeDialog", "ctrl-alt-c"),
     ("workspace", "NextTab", "ctrl-tab"),
@@ -343,6 +362,16 @@ mod tests {
         }
         assert!(defaults.contains(&("panel".into(), "DeleteNode".into(), "backspace".into())));
         assert!(defaults.contains(&("canvas".into(), "CanvasDelete".into(), "backspace".into())));
+    }
+
+    #[test]
+    fn platform_shortcuts_have_no_context_collisions() {
+        let mut seen = std::collections::HashMap::new();
+        for (context, action, key) in super::platform_defaults() {
+            if let Some(previous) = seen.insert((context.clone(), key.clone()), action.clone()) {
+                assert_eq!(previous, action, "{context}: {key} triggers two actions");
+            }
+        }
     }
 
     #[test]

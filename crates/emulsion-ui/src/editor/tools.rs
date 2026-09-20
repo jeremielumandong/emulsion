@@ -3,12 +3,16 @@
 //! is one undo step and visible to the assistant.
 
 use super::*;
-use crate::widgets::tip;
+use crate::widgets::{chip_action, tip};
 use emulsion_raster::composite::region;
 use emulsion_raster::paint::{Brush, BrushBlend, Clip, GrainKind, Ink, Stroke, fill_color};
 use emulsion_raster::select::{self, Combine};
 use emulsion_raster::{IRect, Mask, fill};
 use glam::{DAffine2, dvec2};
+
+pub(super) fn zoom_out(modifiers: Modifiers) -> bool {
+    modifiers.shift || modifiers.alt
+}
 
 /// Marching-ants outline segments: (x0, y0, x1, y1) in document pixels.
 pub(crate) type Segments = Arc<Vec<(f32, f32, f32, f32)>>;
@@ -315,6 +319,21 @@ fn norm(a: (f64, f64), b: (f64, f64)) -> (f64, f64, f64, f64) {
     )
 }
 
+/// Keep the raw pointer endpoint so releasing Shift restores the free aspect.
+fn shape_rect(start: (f64, f64), end: (f64, f64), constrain: bool) -> (f64, f64, f64, f64) {
+    if !constrain {
+        return norm(start, end);
+    }
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let side = dx.abs().max(dy.abs());
+    let end = (
+        start.0 + if dx < 0.0 { -side } else { side },
+        start.1 + if dy < 0.0 { -side } else { side },
+    );
+    norm(start, end)
+}
+
 pub(crate) fn premul(c: [u8; 4]) -> [f32; 4] {
     color::srgba8_to_premul(c)
 }
@@ -378,18 +397,48 @@ impl EditorView {
         Some(point(px(s.0 as f32), px(s.1 as f32)))
     }
 
-    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
-        if tool != self.tool && matches!(self.drag, Some(Drag::Move(_))) {
+    /// Resolve the old tool before its controls and preview disappear.
+    fn finish_tool_interaction(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.drag, Some(Drag::Move(_) | Drag::Transform(_))) {
             self.drag = None;
             self.snap_lines.clear();
             self.editor.end();
+        } else if matches!(self.drag, Some(Drag::Tool(_))) {
+            let Some(Drag::Tool(drag)) = self.drag.take() else {
+                unreachable!()
+            };
+            // These gestures have already modified the document. Finish their
+            // history step; discard previews which have not changed anything.
+            if matches!(
+                drag,
+                ToolDrag::Stroke { .. }
+                    | ToolDrag::Liquify { .. }
+                    | ToolDrag::MoveSelection { .. }
+                    | ToolDrag::Pen(_)
+            ) {
+                self.tool_up(drag, cx);
+            }
         }
-        if tool != Tool::Type {
-            self.close_text_field(cx);
+        if matches!(self.drag, Some(Drag::Warp(_) | Drag::Distort { .. })) {
+            self.drag = None;
+        }
+        if self.warp.is_some() {
+            self.cancel_warp(cx);
+        }
+        self.tools.polygon.clear();
+        self.tools.magnetic_live.clear();
+        self.tools.crop = None;
+        self.tools.straighten = 0.0;
+        self.pen_cancel();
+        self.close_text_field(cx);
+    }
+
+    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        if tool != self.tool {
+            self.finish_tool_interaction(cx);
         }
         let from = BrushSlot::of(self.tool, self.tools.paint);
         self.tool = tool;
-        self.tools.polygon.clear();
         self.switch_slot(from, BrushSlot::of(tool, self.tools.paint));
         self.tools.mask_edit = tool == Tool::Mask;
         if tool == Tool::Grade {
@@ -461,11 +510,18 @@ impl EditorView {
     }
 
     pub fn set_paint(&mut self, kind: PaintKind, cx: &mut Context<Self>) {
+        // Choosing a different brush or preset while explicitly editing a mask
+        // must keep painting that mask. Leaving the dedicated Mask tool exits it.
+        let mask_edit = self.tool == Tool::Brush && self.tools.mask_edit;
+        if self.tool != Tool::Brush || kind != self.tools.paint {
+            self.finish_tool_interaction(cx);
+        }
         if kind != PaintKind::Liquify {
             self.tools.liquify_session = None;
         }
         let from = BrushSlot::of(self.tool, self.tools.paint);
         self.tool = Tool::Brush;
+        self.tools.mask_edit = mask_edit;
         self.tools.paint = kind;
         self.switch_slot(from, Some(BrushSlot::Paint(kind)));
         cx.notify();
@@ -476,8 +532,12 @@ impl EditorView {
     }
 
     pub fn set_select(&mut self, shape: SelectShape, cx: &mut Context<Self>) {
+        if self.tool == Tool::Select && self.tools.select == shape {
+            return;
+        }
+        self.finish_tool_interaction(cx);
         self.selection_request = self.selection_request.wrapping_add(1);
-        self.tool = Tool::Select;
+        self.set_tool(Tool::Select, cx);
         self.tools.select = shape;
         self.tools.polygon.clear();
         self.tools.magnetic_live.clear();
@@ -849,7 +909,7 @@ impl EditorView {
                     if e.click_count >= 2 {
                         self.zoom_100(cx);
                     } else {
-                        let f = if e.modifiers.alt { 0.5 } else { 2.0 };
+                        let f = if zoom_out(e.modifiers) { 0.5 } else { 2.0 };
                         self.view.zoom_at(f, anchor, &b);
                     }
                     cx.notify();
@@ -1531,7 +1591,7 @@ impl EditorView {
                 end,
                 ellipse,
             } => {
-                let (x, y, rw, rh) = norm(start, end);
+                let (x, y, rw, rh) = shape_rect(start, end, self.drag_shift);
                 if rw < 1.0 || rh < 1.0 {
                     return;
                 }
@@ -1578,6 +1638,9 @@ impl EditorView {
     }
 
     pub fn commit_polygon(&mut self, cx: &mut Context<Self>) {
+        if self.tools.polygon.len() + self.tools.magnetic_live.len() < 3 {
+            return;
+        }
         let mut pts = std::mem::take(&mut self.tools.polygon);
         pts.append(&mut self.tools.magnetic_live);
         if pts.len() >= 3 {
@@ -1591,35 +1654,82 @@ impl EditorView {
 
     /// Enter: commit whatever the tool has pending.
     pub fn tool_commit(&mut self, cx: &mut Context<Self>) {
-        if self.tools.pen.building.is_some() {
-            self.pen_finish(cx);
-        } else if !self.tools.polygon.is_empty() {
-            self.commit_polygon(cx);
-        } else if let Some((x, y, w, h)) = self.tools.crop.take() {
-            let rect = IRect::new(
-                x.round() as i32,
-                y.round() as i32,
-                (w.round() as i32).max(1),
-                (h.round() as i32).max(1),
-            );
-            let rotation = self.tools.straighten as f64;
-            self.tools.straighten = 0.0;
-            self.crop_canvas(rect, rotation, self.tools.fill_edges, cx);
+        match self.tool {
+            Tool::Pen => self.pen_finish(cx),
+            Tool::Select if !self.tools.polygon.is_empty() => self.commit_polygon(cx),
+            Tool::Crop => {
+                if let Some((x, y, w, h)) = self.tools.crop.take() {
+                    let rect = IRect::new(
+                        x.round() as i32,
+                        y.round() as i32,
+                        (w.round() as i32).max(1),
+                        (h.round() as i32).max(1),
+                    );
+                    let rotation = self.tools.straighten as f64;
+                    self.tools.straighten = 0.0;
+                    self.crop_canvas(rect, rotation, self.tools.fill_edges, cx);
+                }
+            }
+            _ => {}
         }
     }
 
-    /// Escape: cancel what is pending; returns whether anything was.
+    /// Escape: cancel the active gesture and all pending tool previews.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.cancel_move(cx) {
+        if self.rail.flyout.take().is_some() {
+            cx.notify();
             return true;
         }
-        let had = !self.tools.polygon.is_empty()
+        let mut had = self.cancel_move(cx);
+        if matches!(self.drag, Some(Drag::Transform(_))) {
+            self.drag = None;
+            self.snap_lines.clear();
+            self.invalidate_pending_edits();
+            self.editor.cancel();
+            self.after_change(cx);
+            had = true;
+        }
+        if matches!(self.drag, Some(Drag::Warp(_) | Drag::Distort { .. })) {
+            // These drags only update preview geometry. Removing the drag also
+            // prevents mouse-up from launching a resampling job.
+            self.drag = None;
+            had = true;
+        }
+        if self.warp.is_some() {
+            self.cancel_warp(cx);
+            had = true;
+        }
+        if matches!(self.drag, Some(Drag::Tool(_))) {
+            let Some(Drag::Tool(drag)) = self.drag.take() else {
+                unreachable!()
+            };
+            had = true;
+            if matches!(
+                drag,
+                ToolDrag::Stroke { .. }
+                    | ToolDrag::Liquify { .. }
+                    | ToolDrag::MoveSelection { .. }
+                    | ToolDrag::Pen(
+                        super::pen::PenDrag::Anchor { .. } | super::pen::PenDrag::Handle { .. }
+                    )
+            ) {
+                self.invalidate_pending_edits();
+                self.editor.cancel();
+                self.after_change(cx);
+            }
+            self.tools.stroke_started = None;
+            self.assist_end();
+        }
+        let pen_pending = self.pen_cancel();
+        had |= !self.tools.polygon.is_empty()
             || self.tools.crop.is_some()
+            || self.tools.straighten != 0.0
             || self.tools.picker
-            || self.pen_cancel();
+            || pen_pending;
         self.tools.polygon.clear();
         self.tools.magnetic_live.clear();
         self.tools.crop = None;
+        self.tools.straighten = 0.0;
         self.tools.picker = false;
         cx.notify();
         had
@@ -2270,7 +2380,11 @@ impl EditorView {
                     end,
                     ellipse,
                 } => {
-                    let (x, y, w, h) = norm(*start, *end);
+                    let (x, y, w, h) = if matches!(t, ToolDrag::Shape { .. }) {
+                        shape_rect(*start, *end, self.drag_shift)
+                    } else {
+                        norm(*start, *end)
+                    };
                     o.lines.push((
                         if *ellipse {
                             ellipse_pts(x, y, w, h)
@@ -2330,9 +2444,12 @@ impl EditorView {
                 o.lines.push((vec![map(x, gy), map(x + w, gy)], false));
             }
         }
-        let brushy = matches!(self.tool, Tool::Heal | Tool::Clone)
+        let brushy = matches!(self.tool, Tool::Heal | Tool::Clone | Tool::Mask)
             || (self.tool == Tool::Brush
-                && matches!(self.tools.paint, PaintKind::Brush | PaintKind::Eraser));
+                && matches!(
+                    self.tools.paint,
+                    PaintKind::Brush | PaintKind::Eraser | PaintKind::Smudge | PaintKind::Liquify
+                ));
         if brushy && let Some(p) = self.tools.pointer {
             o.cursor = Some((
                 p,
@@ -2627,15 +2744,34 @@ impl EditorView {
             .gap(px(6.))
             .flex_none()
             .child(div().child(name.to_string()))
-            .child(div().w(px(84.)).child(slider(
-                SharedString::from(format!("{key:?}")),
-                norm,
-                track,
-                p,
-                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                    this.slider_down(key, spec, e, cx)
-                }),
-            )))
+            .child(
+                div().w(px(84.)).child(
+                    slider(
+                        SharedString::from(format!("{key:?}")),
+                        norm,
+                        track,
+                        p,
+                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                            this.slider_down(key, spec, e, cx)
+                        }),
+                    )
+                    .tab_index(0)
+                    .key_context("Slider")
+                    .role(Role::Slider)
+                    .aria_label(name.to_string())
+                    .aria_value(display.clone())
+                    .aria_min_numeric_value(spec.0 as f64)
+                    .aria_max_numeric_value(spec.1 as f64)
+                    .aria_description(
+                        "Arrow keys adjust; Shift adjusts faster; Home and End go to limits",
+                    )
+                    .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
+                    .on_key_down(
+                        cx.listener(move |this, e, _, cx| this.slider_key(key, norm, spec, e, cx)),
+                    )
+                    .test_support(),
+                ),
+            )
             .child(div().w(px(40.)).text_color(p.ink).child(display))
             .into_any_element()
     }
@@ -2842,8 +2978,8 @@ impl EditorView {
                 for (id, t, c) in [
                     ("cm-new", "new", Combine::Replace),
                     ("cm-add", "add", Combine::Add),
-                    ("cm-sub", "sub", Combine::Subtract),
-                    ("cm-int", "int", Combine::Intersect),
+                    ("cm-sub", "subtract", Combine::Subtract),
+                    ("cm-int", "intersect", Combine::Intersect),
                 ] {
                     v.push(self.mode_chip(id, t, c, cm, p, cx, |e, c, cx| {
                         e.tools.combine = c;
@@ -3308,16 +3444,31 @@ impl EditorView {
                         .into_any_element(),
                 );
                 v.push(
-                    chip("crop-apply", "apply ⏎", self.tools.crop.is_some(), p)
-                        .on_click(cx.listener(|this, _, _, cx| this.tool_commit(cx)))
-                        .into_any_element(),
+                    tip(
+                        chip_action(
+                            "crop-apply",
+                            "apply ⏎",
+                            self.tools.crop.is_some(),
+                            self.tools.crop.is_some(),
+                            p,
+                            cx.listener(|this, _, _, cx| this.tool_commit(cx)),
+                        ),
+                        "Draw a crop rectangle, then apply it (Enter)",
+                    )
+                    .into_any_element(),
                 );
                 v.push(
-                    chip("crop-cancel", "cancel", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| {
+                    chip_action(
+                        "crop-cancel",
+                        "cancel",
+                        false,
+                        self.tools.crop.is_some() || self.tools.straighten != 0.,
+                        p,
+                        cx.listener(|this, _, _, cx| {
                             this.tool_cancel(cx);
-                        }))
-                        .into_any_element(),
+                        }),
+                    )
+                    .into_any_element(),
                 );
                 let (w, h) = (self.editor.doc.width, self.editor.doc.height);
                 v.push(
@@ -3386,43 +3537,78 @@ impl EditorView {
                     );
                 }
                 let building = self.tools.pen.building.is_some();
+                let anchors = self
+                    .tools
+                    .pen
+                    .building
+                    .as_ref()
+                    .map_or(0, |path| path.anchors.len());
+                let target = self.pen_target().is_some();
                 v.push(
-                    chip(
+                    chip_action(
                         "pen-finish",
                         if building { "finish ⏎" } else { "new path" },
                         building,
+                        !building || anchors >= 2,
                         p,
+                        cx.listener(|this, _, _, cx| {
+                            if this.tools.pen.building.is_some() {
+                                this.pen_finish(cx);
+                            } else {
+                                this.selected = None;
+                                this.tools.pen.selected = None;
+                                cx.notify();
+                            }
+                        }),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if this.tools.pen.building.is_some() {
-                            this.pen_finish(cx);
-                        } else {
-                            this.selected = None;
-                            this.tools.pen.selected = None;
-                            cx.notify();
-                        }
-                    }))
                     .into_any_element(),
                 );
                 v.push(
-                    chip("pen-close", "close & finish", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(sp) = &mut this.tools.pen.building {
-                                sp.closed = true;
-                            }
-                            this.pen_finish(cx);
-                        }))
-                        .into_any_element(),
+                    tip(
+                        chip_action(
+                            "pen-close",
+                            "close & finish",
+                            false,
+                            anchors >= 2,
+                            p,
+                            cx.listener(|this, _, _, cx| {
+                                if let Some(sp) = &mut this.tools.pen.building {
+                                    sp.closed = true;
+                                }
+                                this.pen_finish(cx);
+                            }),
+                        ),
+                        "Add at least two anchors before closing the path",
+                    )
+                    .into_any_element(),
                 );
                 v.push(
-                    chip("pen-sel", "to selection", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.pen_to_selection(cx)))
-                        .into_any_element(),
+                    tip(
+                        chip_action(
+                            "pen-sel",
+                            "to selection",
+                            false,
+                            anchors >= 3 || (!building && target),
+                            p,
+                            cx.listener(|this, _, _, cx| this.pen_to_selection(cx)),
+                        ),
+                        "Select an existing path or draw at least three anchors",
+                    )
+                    .into_any_element(),
                 );
                 v.push(
-                    chip("pen-paint", "paint along path", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.pen_paint_along(cx)))
-                        .into_any_element(),
+                    tip(
+                        chip_action(
+                            "pen-paint",
+                            "paint along path",
+                            false,
+                            anchors >= 2 || (!building && target),
+                            p,
+                            cx.listener(|this, _, _, cx| this.pen_paint_along(cx)),
+                        ),
+                        "Select an existing path or draw at least two anchors",
+                    )
+                    .into_any_element(),
                 );
                 if self.tools.pen.selected.is_some() || building {
                     v.push(
@@ -3471,7 +3657,7 @@ impl EditorView {
                 v.push(
                     div()
                         .flex_none()
-                        .child("filled with the foreground colour")
+                        .child("foreground fill · Shift: square / circle · Esc: cancel")
                         .into_any_element(),
                 );
             }
@@ -3562,7 +3748,7 @@ impl EditorView {
                 v.push(
                     div()
                         .flex_none()
-                        .child("click to zoom in · alt-click to zoom out · double-click for 100%")
+                        .child("click to zoom in · Shift/Alt-click to zoom out · double-click for 100%")
                         .into_any_element(),
                 );
             }
@@ -3914,6 +4100,11 @@ impl EditorView {
             .child(
                 div()
                     .id("bg-swatch")
+                    .tab_index(0)
+                    .role(Role::Button)
+                    .aria_label("Swap foreground and background colours")
+                    .focus_visible(|s| s.border_2().border_color(p.accent))
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Swap foreground and background colours (X)").build(w, cx))
                     .absolute()
                     .left(px(14.))
                     .top(px(14.))
@@ -3927,6 +4118,10 @@ impl EditorView {
             .child(
                 div()
                     .id("fg-swatch")
+                    .tab_index(0)
+                    .role(Role::Button)
+                    .aria_label("Choose foreground colour")
+                    .focus_visible(|s| s.border_2().border_color(p.accent))
                     .absolute()
                     .left(px(2.))
                     .top(px(2.))
@@ -4129,3 +4324,7 @@ impl EditorView {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "tool_lifecycle_tests.rs"]
+mod tool_lifecycle_tests;

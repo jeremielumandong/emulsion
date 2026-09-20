@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Paper texture under the brush.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum GrainKind {
     #[default]
     None,
@@ -455,6 +455,39 @@ fn halftone_radius(density: f32) -> f32 {
 
 /// Pixel-area coverage of a page-fixed ink pattern. Apply after accumulating
 /// dabs so overlapping stamps cannot fill antialiased pattern boundaries.
+/// Page-fixed patterns (screentone, hatching) depend only on the pixel
+/// position, so each tile's coverage is computed once and shared across
+/// strokes and pointer moves instead of sixteen samples per pixel per
+/// render. A few hundred tiles are kept; older ones are dropped.
+type PatternKey = (GrainKind, u32, u32, TileCoord);
+
+fn pattern_cache() -> &'static std::sync::Mutex<HashMap<PatternKey, Arc<[f32]>>> {
+    static C: std::sync::OnceLock<std::sync::Mutex<HashMap<PatternKey, Arc<[f32]>>>> =
+        std::sync::OnceLock::new();
+    C.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn pattern_tile(kind: GrainKind, scale: f32, radius: f32, c: TileCoord) -> Arc<[f32]> {
+    let key = (kind, scale.to_bits(), radius.to_bits(), c);
+    if let Some(t) = pattern_cache().lock().unwrap().get(&key) {
+        return t.clone();
+    }
+    let t = TILE as i32;
+    let (ox, oy) = (c.x * t, c.y * t);
+    let tile: Arc<[f32]> = (0..TILE_PX)
+        .map(|i| {
+            let (x, y) = (ox + i as i32 % t, oy + i as i32 / t);
+            pattern_coverage(kind, x as f32, y as f32, scale, radius)
+        })
+        .collect();
+    let mut cache = pattern_cache().lock().unwrap();
+    if cache.len() >= 256 {
+        cache.clear();
+    }
+    cache.insert(key, tile.clone());
+    tile
+}
+
 fn pattern_coverage(kind: GrainKind, x: f32, y: f32, scale: f32, radius: f32) -> f32 {
     if kind == GrainKind::Halftone {
         if radius <= 0.0 {
@@ -1148,6 +1181,7 @@ impl Stroke {
                 .map(|t| t.to_vec())
                 .unwrap_or_else(|| vec![base_fill; TILE_PX]);
             let mut out = src.clone();
+            let pattern = patterned.then(|| pattern_tile(gk, gs, tone_radius, c));
             // Paint thickness of a neighbour inside this tile, compressed so
             // heavy strokes still show ridges; for relief lighting.
             let cov = |i: usize, dx: i32, dy: i32| -> f32 {
@@ -1188,8 +1222,8 @@ impl Stroke {
                 };
                 k *= 1.0 + edge * rim * 0.6;
                 k = k.min(1.0) * opacity;
-                if patterned {
-                    k *= pattern_coverage(gk, x as f32, y as f32, gs, tone_radius);
+                if let Some(pattern) = &pattern {
+                    k *= pattern[i];
                 }
                 if let Some(clip) = &self.clip {
                     k *= clip(x, y);

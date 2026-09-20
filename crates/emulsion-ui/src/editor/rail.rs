@@ -74,15 +74,15 @@ pub const GROUPS: &[&[RailItem]] = &[
     &[item("Move", "✥", "V", Tool::Move)],
     &[
         select("Rectangular marquee", "▭", "M", SelectShape::Rect),
-        select("Elliptical marquee", "◯", "M", SelectShape::Ellipse),
+        select("Elliptical marquee", "◯", "Shift+M", SelectShape::Ellipse),
     ],
     &[
         select("Lasso", "〰", "L", SelectShape::Lasso),
-        select("Polygonal lasso", "⬠", "L", SelectShape::Polygon),
-        select("Magnetic lasso", "⌇", "L", SelectShape::Magnetic),
+        select("Polygonal lasso", "⬠", "Shift+L", SelectShape::Polygon),
+        select("Magnetic lasso", "⌇", "Alt+L", SelectShape::Magnetic),
     ],
     &[
-        select("Quick select (AI)", "✦", "W", SelectShape::Quick),
+        select("Quick select (AI)", "✦", "Shift+W", SelectShape::Quick),
         select("Magic wand", "⚚", "W", SelectShape::Wand),
     ],
     &[item("Crop", "⌗", "C", Tool::Crop)],
@@ -90,23 +90,23 @@ pub const GROUPS: &[&[RailItem]] = &[
     &[item("Heal", "✚", "J", Tool::Heal)],
     &[
         paint("Brush", "✎", "B", PaintKind::Brush),
-        paint("Smudge", "☁", "B", PaintKind::Smudge),
-        paint("Liquify", "≈", "B", PaintKind::Liquify),
+        paint("Smudge", "☁", "Shift+B", PaintKind::Smudge),
+        paint("Liquify", "≈", "Shift+J", PaintKind::Liquify),
     ],
     &[item("Clone stamp", "◎", "S", Tool::Clone)],
     &[paint("Eraser", "◻", "E", PaintKind::Eraser)],
     &[
-        paint("Gradient", "▤", "G", PaintKind::Gradient),
+        paint("Gradient", "▤", "Shift+G", PaintKind::Gradient),
         paint("Paint bucket", "◍", "G", PaintKind::Bucket),
     ],
     &[item("Pen", "✒", "P", Tool::Pen)],
     &[item("Type", "T", "T", Tool::Type)],
     &[
         shape("Rectangle", "◇", "U", ShapeKind::Rect),
-        shape("Ellipse", "○", "U", ShapeKind::Ellipse),
+        shape("Ellipse", "○", "Shift+U", ShapeKind::Ellipse),
     ],
-    &[item("Mask", "◐", "", Tool::Mask)],
-    &[item("Grade", "◑", "", Tool::Grade)],
+    &[item("Mask", "◐", "Q", Tool::Mask)],
+    &[item("Grade", "◑", "Shift+Q", Tool::Grade)],
     &[item("Hand", "✋", "H", Tool::Hand)],
     &[item("Zoom", "⌕", "Z", Tool::Zoom)],
 ];
@@ -115,22 +115,22 @@ pub const GROUPS: &[&[RailItem]] = &[
 pub const DRAW_GROUPS: &[&[RailItem]] = &[
     &[
         paint("Brush", "✎", "B", PaintKind::Brush),
-        paint("Liquify", "≈", "B", PaintKind::Liquify),
+        paint("Liquify", "≈", "Shift+J", PaintKind::Liquify),
     ],
-    &[paint("Smudge", "☁", "B", PaintKind::Smudge)],
+    &[paint("Smudge", "☁", "Shift+B", PaintKind::Smudge)],
     &[paint("Eraser", "◻", "E", PaintKind::Eraser)],
     &[item("Eyedropper", "◔", "I", Tool::Eyedropper)],
     &[
         paint("Paint bucket", "◍", "G", PaintKind::Bucket),
-        paint("Gradient", "▤", "G", PaintKind::Gradient),
+        paint("Gradient", "▤", "Shift+G", PaintKind::Gradient),
     ],
     &[
         select("Lasso", "〰", "L", SelectShape::Lasso),
         select("Rectangular marquee", "▭", "M", SelectShape::Rect),
-        select("Quick select (AI)", "✦", "W", SelectShape::Quick),
+        select("Quick select (AI)", "✦", "Shift+W", SelectShape::Quick),
     ],
     &[item("Move", "✥", "V", Tool::Move)],
-    &[item("Mask", "◐", "", Tool::Mask)],
+    &[item("Mask", "◐", "Q", Tool::Mask)],
     &[item("Hand", "✋", "H", Tool::Hand)],
     &[item("Zoom", "⌕", "Z", Tool::Zoom)],
 ];
@@ -166,6 +166,16 @@ impl EditorView {
     /// The rail's slots for the current mode.
     fn rail_groups(&self) -> &'static [&'static [RailItem]] {
         if self.draw_mode { DRAW_GROUPS } else { GROUPS }
+    }
+
+    /// The selected subtype, used for contextual headings and tool help.
+    pub(crate) fn active_tool_name(&self) -> &'static str {
+        GROUPS
+            .iter()
+            .flat_map(|group| group.iter())
+            .find(|item| self.rail_item_active(item))
+            .map(|item| item.name)
+            .unwrap_or_else(|| tool_name(self.tool))
     }
 
     /// Does the current tool state match this item?
@@ -216,10 +226,13 @@ impl EditorView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let (ink, paper, accent, panel, line, muted) =
-            (p.ink, p.paper, p.accent, p.panel, p.line, p.muted);
+        let (ink, paper, accent, panel, line) = (p.ink, p.paper, p.accent, p.panel, p.line);
+        let accent_fg = p.accent_fg;
         let flyout = self.rail.flyout;
         let mut rail = div()
+            .id("tool-rail")
+            .tab_group()
+            .aria_label("Tools")
             .flex()
             .flex_none()
             .flex_col()
@@ -260,6 +273,7 @@ impl EditorView {
                     .border_1()
                     .border_color(ink)
                     .bg(panel)
+                    .text_color(ink)
                     .py(px(3.))
                     .font_family(MONO_FONT)
                     .text_size(px(11.))
@@ -267,6 +281,20 @@ impl EditorView {
                         let active = self.rail_item_active(m);
                         div()
                             .id(("rail-flyout-item", g * 16 + i))
+                            .focusable()
+                            .tab_index(0)
+                            .aria_label(m.name)
+                            .aria_keyshortcuts(m.key)
+                            .aria_selected(active)
+                            .focus(move |s| s.bg(accent).text_color(accent_fg))
+                            .on_key_down(cx.listener(move |this, e: &KeyDownEvent, window, cx| {
+                                if e.keystroke.key == "escape" {
+                                    this.rail.flyout = None;
+                                    window.focus(&this.canvas_focus, cx);
+                                    cx.notify();
+                                    cx.stop_propagation();
+                                }
+                            }))
                             .flex()
                             .items_center()
                             .gap(px(8.))
@@ -274,18 +302,42 @@ impl EditorView {
                             .py(px(4.))
                             .cursor_pointer()
                             .when(active, |d| d.bg(ink).text_color(paper))
-                            .hover(move |s| s.bg(accent).text_color(paper))
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                            .hover(move |s| s.bg(accent).text_color(accent_fg))
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 this.activate_rail_item(g, i, cx);
+                                window.focus(&this.canvas_focus, cx);
+                                cx.stop_propagation();
                             }))
                             .child(div().w(px(16.)).text_size(px(13.)).child(m.glyph))
                             .child(div().flex_1().child(m.name))
-                            .child(div().text_color(muted).child(m.key))
+                            .child(div().child(m.key))
                     }))
             });
             rail = rail.child(
                 div()
                     .id(SharedString::from(it.name))
+                    .focusable()
+                    .tab_index(0)
+                    .aria_label(it.name)
+                    .aria_keyshortcuts(it.key)
+                    .aria_selected(on)
+                    .focus(move |s| s.border_color(accent))
+                    .on_key_down(cx.listener(move |this, e: &KeyDownEvent, window, cx| {
+                        match e.keystroke.key.as_str() {
+                            "down" if has_more => {
+                                this.rail.flyout = Some(g);
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                            "escape" => {
+                                this.rail.flyout = None;
+                                window.focus(&this.canvas_focus, cx);
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
+                            _ => {}
+                        }
+                    }))
                     .relative()
                     .flex()
                     .items_center()
@@ -300,7 +352,7 @@ impl EditorView {
                     .text_size(px(14.))
                     .when(!on, |d| d.hover(move |s| s.border_color(ink)))
                     .cursor(CursorStyle::PointingHand)
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         // Clicking the tool you already hold opens its group,
                         // the way click-and-hold does in Photoshop.
                         if has_more && on {
@@ -312,6 +364,7 @@ impl EditorView {
                             cx.notify();
                         } else {
                             this.activate_rail_item(g, shown, cx);
+                            window.focus(&this.canvas_focus, cx);
                         }
                     }))
                     .on_mouse_down(
@@ -336,10 +389,16 @@ impl EditorView {
                         d.child(
                             div()
                                 .id(("rail-more", g))
+                                .aria_label("More tools")
                                 .absolute()
-                                .right(px(1.))
+                                .right(px(0.))
                                 .bottom(px(0.))
-                                .text_size(px(7.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(16.))
+                                .h(px(16.))
+                                .text_size(px(8.))
                                 .text_color(if on { paper } else { line })
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -351,6 +410,12 @@ impl EditorView {
                                     cx.stop_propagation();
                                     cx.notify();
                                 }))
+                                .tooltip(|window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(
+                                        "More tools (right-click or focus the tool and press Down)",
+                                    )
+                                    .build(window, cx)
+                                })
                                 .child("◢"),
                         )
                     })
@@ -423,6 +488,16 @@ impl EditorView {
                             this.vslider_down(SliderKey::SideSize, (1.0, 500.0, 1.0), e, cx)
                         }),
                     )
+                    .tab_index(0)
+                    .key_context("Slider")
+                    .role(Role::Slider)
+                    .aria_label("Brush size")
+                    .aria_value(format!("{:.0} pixels", b.size))
+                    .aria_orientation(Orientation::Vertical)
+                    .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
+                    .on_key_down(cx.listener(move |this, e, _, cx| {
+                        this.slider_key(SliderKey::SideSize, size_norm, (1., 500., 1.), e, cx);
+                    }))
                     .into_any_element(),
                 ))
                 .child(column(
@@ -437,6 +512,16 @@ impl EditorView {
                             this.vslider_down(SliderKey::SideOpacity, (1.0, 100.0, 1.0), e, cx)
                         }),
                     )
+                    .tab_index(0)
+                    .key_context("Slider")
+                    .role(Role::Slider)
+                    .aria_label("Brush opacity")
+                    .aria_value(format!("{:.0} percent", b.opacity * 100.))
+                    .aria_orientation(Orientation::Vertical)
+                    .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
+                    .on_key_down(cx.listener(move |this, e, _, cx| {
+                        this.slider_key(SliderKey::SideOpacity, b.opacity, (1., 100., 1.), e, cx);
+                    }))
                     .into_any_element(),
                 ))
                 .into_any_element(),

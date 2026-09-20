@@ -383,7 +383,10 @@ impl Workspace {
 
     fn chosen_recipe(&mut self) -> Option<Recipe> {
         let name = self.batch.recipe.clone()?;
-        self.batch_recipes().into_iter().find(|r| r.name == name)
+        self.batch_recipes()
+            .iter()
+            .find(|r| r.name == name)
+            .cloned()
     }
 
     /// Render the current picture large with the chosen recipe, once per

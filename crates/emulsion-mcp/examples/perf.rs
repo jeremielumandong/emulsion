@@ -97,6 +97,21 @@ fn main() {
         s
     });
     timed("textured soft stroke (render)", || s2.render(&base).0);
+    for name in ["Screentone 20%", "Screentone 40%", "Screentone 60%", "Speed lines", "Maru pen"] {
+        let Some(preset) = emulsion_raster::library::find(name) else { continue };
+        let mut sb = preset.brush;
+        sb.size = 120.0;
+        let mut s3 = timed(&format!("{name} 300 pts size 120 (stamp)"), || {
+            let mut s = Stroke::new(base.clone(), sb, Ink::Color([0.0, 0.0, 0.0, 1.0]), None);
+            for i in 0..300 {
+                let t = i as f32 / 299.0;
+                s.point(200.0 + t * 5000.0, 3000.0 + (t * 20.0).sin() * 600.0);
+            }
+            s.finish();
+            s
+        });
+        timed(&format!("{name} (render)"), || s3.render(&base).0);
+    }
     let sel = timed("select::rect + feather 12 px (full)", || {
         let m = select::rect(w, h, 1000.0, 1000.0, 3000.0, 2000.0);
         select::feather(&m, 12.0)

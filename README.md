@@ -125,6 +125,21 @@ in the same dock. Active tool options stay above the canvas.
 Leaving Recipes cancels an unapplied preview; leaving Timeline stops playback
 and returns to the full document.
 
+Tool buttons and options support Tab navigation and Enter/Space activation.
+Focused sliders accept arrow keys, Shift+arrow for larger steps, and Home/End
+for their limits. Down opens a tool group's flyout; Escape dismisses it.
+Selecting a tool returns keyboard focus to the canvas.
+
+With Zoom selected, hold Shift (or Alt) to zoom out; the magnifier indicator
+changes immediately. Hold Shift while drawing a shape for a square or circle.
+Escape cancels an active tool gesture. Delete/Backspace removes the last point
+of an unfinished polygon or magnetic selection instead of deleting the layer.
+
+Additional canvas shortcuts: Shift-M ellipse marquee, Shift-L polygon lasso,
+Alt-L magnetic lasso, Shift-W quick selection, Shift-B smudge, Shift-J liquify,
+Shift-U ellipse, Q mask, and Shift-Q grade. U selects a rectangle. These keys
+apply while the canvas has focus; text fields retain normal typing behavior.
+
 ## Batch controls
 
 Choose a folder in the top bar, then select photos in the left pane. The centre

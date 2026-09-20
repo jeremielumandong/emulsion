@@ -313,13 +313,18 @@ impl EditorView {
 
     /// Enter: finish the path being drawn as a Path node.
     pub(crate) fn pen_finish(&mut self, cx: &mut Context<Self>) {
+        if self
+            .tools
+            .pen
+            .building
+            .as_ref()
+            .is_none_or(|path| path.anchors.len() < 2)
+        {
+            return;
+        }
         let Some(sp) = self.tools.pen.building.take() else {
             return;
         };
-        if sp.anchors.len() < 2 {
-            cx.notify();
-            return;
-        }
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let path = Path { subpaths: vec![sp] };
         let style = self.pen_style();
@@ -344,7 +349,9 @@ impl EditorView {
 
     /// Escape: drop the path being drawn, or the anchor selection.
     pub(crate) fn pen_cancel(&mut self) -> bool {
-        self.tools.pen.building.take().is_some() || self.tools.pen.selected.take().is_some()
+        let building = self.tools.pen.building.take().is_some();
+        let selected = self.tools.pen.selected.take().is_some();
+        building || selected
     }
 
     /// Backspace: remove the last placed or the selected anchor. Returns
