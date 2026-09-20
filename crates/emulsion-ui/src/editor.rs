@@ -1571,6 +1571,7 @@ fn snap(v: f32, step: f32) -> f32 {
 impl EditorView {
     fn doc_bar(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let d = &self.editor.doc;
+        let ink = p.ink;
         let depth = if d.source_depth == 16 {
             "16 bit"
         } else {
@@ -1596,10 +1597,34 @@ impl EditorView {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(self.name.clone()),
                     )
-                    .child(mono(
-                        format!("{}×{} · {depth}", d.width, d.height),
-                        10.5,
-                        p.muted,
+                    .child(crate::widgets::tip(
+                        // The dimensions are the door to resizing, where
+                        // Photoshop's Image menu would be.
+                        div()
+                            .id("doc-size")
+                            .flex()
+                            .items_baseline()
+                            .gap(px(4.))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .border_1()
+                            .border_color(if self.size_panel.is_some() {
+                                p.ink
+                            } else {
+                                p.line
+                            })
+                            .cursor_pointer()
+                            .hover(|s| s.border_color(ink))
+                            .font_family(MONO_FONT)
+                            .text_size(px(10.5))
+                            .text_color(p.muted)
+                            .child(format!("{}×{} · {depth}", d.width, d.height))
+                            .child(div().text_size(px(8.)).child("▾"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_size_panel(window, cx)
+                            }))
+                            .test_support(),
+                        "Image size (Ctrl-Alt-I) and canvas size (Ctrl-Alt-C): scale the picture, or grow and trim the canvas",
                     )),
             )
             .child(self.branch_badge(p, cx))

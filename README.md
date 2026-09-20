@@ -256,6 +256,14 @@ cargo run --release -p emulsion-assistant --example playbook -- --guide manga --
 
 This writes a PNG and an editable ORA for inspection.
 
+## Image size and canvas size
+
+Click the dimensions beside the document name (for example **1920×1080 · 8 bit**)
+to open the size panel, with **image size** (scale the picture, constrain
+proportions, pixels or percent) and **canvas size** (grow or trim, anchored,
+relative amounts, fill new edges). Ctrl-Alt-I and Ctrl-Alt-C open each directly,
+and the Crop tool's options carry a **size…** chip.
+
 ## Rotating objects
 
 Select a layer and use **Rotate object** in **Properties**. Enter an angle and
