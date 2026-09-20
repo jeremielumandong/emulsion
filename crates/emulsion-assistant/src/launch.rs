@@ -270,6 +270,8 @@ pub fn spec_for(
     prompt: Option<&str>,
 ) -> std::io::Result<LaunchSpec> {
     use crate::provider::McpConfig;
+    let absolute_dir = std::path::absolute(session_dir)?;
+    let session_dir = absolute_dir.as_path();
     let prompt = prompt.unwrap_or_default();
     let mut env = common_env();
     let args = match provider.mcp {
@@ -346,7 +348,7 @@ pub fn write_mcp_config(
 }
 
 /// The argv for a persistent, bidirectional stream-json session.
-pub fn claude_args(mcp_config: &Path, opts: &Options) -> Vec<String> {
+pub fn claude_args(mcp_config: &Path, system_prompt: &Path, opts: &Options) -> Vec<String> {
     let mut a: Vec<String> = [
         "-p",
         "--input-format",
@@ -369,7 +371,10 @@ pub fn claude_args(mcp_config: &Path, opts: &Options) -> Vec<String> {
     a.extend(["--permission-prompt-tool".into(), "stdio".into()]);
     a.push("--allowedTools".into());
     a.push(read_only_tools().join(","));
-    a.extend(["--append-system-prompt".into(), SYSTEM_PROMPT.into()]);
+    a.extend([
+        "--append-system-prompt-file".into(),
+        system_prompt.to_string_lossy().into_owned(),
+    ]);
     if let Some(m) = opts.model.as_ref().filter(|m| !m.is_empty()) {
         a.extend(["--model".into(), m.clone()]);
     }
@@ -387,10 +392,15 @@ pub fn claude(
     relay_env: &[(String, String)],
     opts: &Options,
 ) -> std::io::Result<LaunchSpec> {
-    let config = write_mcp_config(session_dir, exe, relay_env)?;
+    let session_dir = std::path::absolute(session_dir)?;
+    let config = write_mcp_config(&session_dir, exe, relay_env)?;
+    // The studio instructions exceed Windows' command-line limit. Keep the
+    // full prompt in a file, as AgentOps does, instead of putting it in argv.
+    let system_prompt = session_dir.join("system-prompt.md");
+    std::fs::write(&system_prompt, SYSTEM_PROMPT)?;
     Ok(LaunchSpec {
         program,
-        args: claude_args(&config, opts),
+        args: claude_args(&config, &system_prompt, opts),
         env: common_env(),
         cwd: session_dir.to_path_buf(),
     })
@@ -477,6 +487,7 @@ mod tests {
     fn argv_is_scoped_to_emulsion_tools() {
         let a = claude_args(
             Path::new("/tmp/s/mcp.json"),
+            Path::new("/tmp/s/system-prompt.md"),
             &Options {
                 model: Some("sonnet".into()),
                 resume: None,
@@ -537,6 +548,51 @@ mod tests {
 mod provider_tests {
     use super::*;
     use crate::provider;
+
+    #[test]
+    fn relative_session_paths_are_absolute_and_claude_prompt_stays_out_of_argv() {
+        let dir = PathBuf::from(format!(
+            "target/relative assistant session {}",
+            std::process::id()
+        ));
+        for id in ["claude", "codex", "opencode", "kimi"] {
+            let spec = spec_for(
+                provider::by_id(id),
+                PathBuf::from(id),
+                &dir,
+                &std::env::current_exe().unwrap(),
+                &[],
+                &Options::default(),
+                Some("hello"),
+            )
+            .unwrap();
+            assert!(spec.cwd.is_absolute());
+            for (key, value) in &spec.env {
+                if key == "CODEX_HOME" || key == "OPENCODE_CONFIG" {
+                    assert!(Path::new(value).is_absolute(), "{key}: {value}");
+                }
+            }
+            if id == "claude" {
+                for flag in ["--mcp-config", "--append-system-prompt-file"] {
+                    let position = spec.args.iter().position(|arg| arg == flag).unwrap();
+                    let file = Path::new(&spec.args[position + 1]);
+                    assert!(file.is_absolute() && file.is_file());
+                    if flag == "--append-system-prompt-file" {
+                        assert_eq!(std::fs::read_to_string(file).unwrap(), SYSTEM_PROMPT);
+                    }
+                }
+                assert!(
+                    spec.args
+                        .iter()
+                        .map(|arg| arg.encode_utf16().count() + 3)
+                        .sum::<usize>()
+                        < 8000
+                );
+                assert!(!spec.args.iter().any(|arg| arg.contains('\n')));
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn one_shot_argv_and_configs() {

@@ -150,6 +150,25 @@ pub fn extra_dirs() -> Vec<PathBuf> {
     if let Some(appdata) = std::env::var_os("APPDATA") {
         v.push(PathBuf::from(appdata).join("npm"));
     }
+    #[cfg(windows)]
+    {
+        // Explorer can keep the PATH from before Node was installed.
+        for key in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Some(root) = std::env::var_os(key) {
+                v.push(PathBuf::from(root).join("nodejs"));
+            }
+        }
+        for key in ["NVM_SYMLINK", "VOLTA_HOME", "FNM_MULTISHELL_PATH"] {
+            if let Some(root) = std::env::var_os(key) {
+                let root = PathBuf::from(root);
+                v.push(if key == "VOLTA_HOME" {
+                    root.join("bin")
+                } else {
+                    root
+                });
+            }
+        }
+    }
     v
 }
 
