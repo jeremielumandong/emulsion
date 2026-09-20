@@ -19,6 +19,7 @@ mod movement;
 mod panels;
 mod pen;
 mod presets;
+mod rail;
 mod raw_panel;
 mod recipes;
 mod rotation;
@@ -30,6 +31,7 @@ mod styles_ui;
 mod tools;
 mod transform;
 mod type_tool;
+pub use canvas_size::SizeMode;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
 use emulsion_raster::adjust::ParamSpec;
@@ -66,6 +68,10 @@ pub enum Tool {
     Shape,
     /// Vector paths.
     Pen,
+    /// Click to pick the foreground colour from the picture.
+    Eyedropper,
+    /// Click to zoom in, alt-click to zoom out.
+    Zoom,
 }
 
 /// One line on what a rail tool does, for its tooltip.
@@ -85,24 +91,12 @@ fn tool_help(tool: Tool) -> &'static str {
         Tool::Crop => "Crop: drag a frame, Enter to crop.",
         Tool::Shape => "Shape: drag a rectangle or ellipse.",
         Tool::Pen => "Pen: click to place path points; drag for curves.",
+        Tool::Eyedropper => {
+            "Eyedropper: click to pick the foreground colour; alt-click for background."
+        }
+        Tool::Zoom => "Zoom: click to zoom in, alt-click to zoom out, double-click for 100%.",
     }
 }
-
-/// Rail order, glyphs, and whether the tool works yet.
-const TOOLS: [(Tool, &str, &str, bool); 12] = [
-    (Tool::Hand, "Hand", "✋", true),
-    (Tool::Move, "Move", "✥", true),
-    (Tool::Select, "Select", "▢", true),
-    (Tool::Mask, "Mask", "◐", true),
-    (Tool::Brush, "Brush", "✎", true),
-    (Tool::Heal, "Heal", "✚", true),
-    (Tool::Clone, "Clone", "◎", true),
-    (Tool::Grade, "Grade", "◑", true),
-    (Tool::Type, "Type", "T", true),
-    (Tool::Crop, "Crop", "⌗", true),
-    (Tool::Shape, "Shape", "◇", true),
-    (Tool::Pen, "Pen", "✒", true),
-];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum SliderKey {
@@ -268,6 +262,8 @@ pub struct EditorView {
     pub(crate) raw: raw_panel::RawState,
     /// Generative fill prompt and state.
     pub(crate) generate: generate_ui::GenState,
+    /// Tool rail fly-outs and remembered picks.
+    pub(crate) rail: rail::RailState,
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
@@ -364,6 +360,7 @@ impl EditorView {
             anim: Default::default(),
             raw: Default::default(),
             generate: Default::default(),
+            rail: Default::default(),
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
@@ -1498,69 +1495,8 @@ impl EditorView {
             )
     }
 
-    fn tool_rail(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        div()
-            .flex()
-            .flex_none()
-            .flex_col()
-            .items_center()
-            .w(dim::TOOL_RAIL_W)
-            .py(px(8.))
-            .gap(px(2.))
-            .border_r_1()
-            .border_color(p.line)
-            .children(TOOLS.iter().map(|(tool, name, glyph, enabled)| {
-                let on = *tool == self.tool;
-                let (tool, name, enabled) = (*tool, *name, *enabled);
-                let ink = p.ink;
-                div()
-                    .id(SharedString::from(name))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .w(dim::TOOL_BTN_W)
-                    .h(dim::TOOL_BTN_H)
-                    .border_1()
-                    .border_color(if on { p.ink } else { transparent_black() })
-                    .bg(if on { p.ink } else { transparent_black() })
-                    .text_color(if on {
-                        p.paper
-                    } else if enabled {
-                        p.ink
-                    } else {
-                        p.muted.opacity(0.45)
-                    })
-                    .font_family(MONO_FONT)
-                    .text_size(px(14.))
-                    .when(enabled && !on, |d| d.hover(move |s| s.border_color(ink)))
-                    .cursor(if enabled {
-                        CursorStyle::PointingHand
-                    } else {
-                        CursorStyle::Arrow
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if enabled {
-                            this.set_tool(tool, cx);
-                        } else {
-                            this.set_status(format!("{name} is not available yet."), false, cx);
-                        }
-                    }))
-                    .tooltip(move |w, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(tool_help(tool)).build(w, cx)
-                    })
-                    .child(*glyph)
-                    .test_support()
-            }))
-            .child(div().flex_1())
-            .child(self.swatches(p, cx))
-    }
-
     fn context_bar(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let tool = TOOLS
-            .iter()
-            .find(|t| t.0 == self.tool)
-            .map(|t| t.1)
-            .unwrap_or("Move");
+        let tool = rail::tool_name(self.tool);
         let options = self.tool_options(p, cx);
         let advanced = crate::app_state::settings(cx).advanced_tools;
         let more = if advanced {

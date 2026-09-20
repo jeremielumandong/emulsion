@@ -829,6 +829,32 @@ impl EditorView {
             }
             Tool::Pen => self.pen_down(d, e, cx),
             Tool::Type => self.type_down(d, window, cx),
+            Tool::Eyedropper => {
+                if e.modifiers.alt {
+                    let fg = self.tools.fg;
+                    self.eyedropper(d, cx);
+                    self.tools.bg = self.tools.fg;
+                    self.tools.fg = fg;
+                    cx.notify();
+                } else {
+                    self.eyedropper(d, cx);
+                }
+            }
+            Tool::Zoom => {
+                if let Some(b) = self.canvas_bounds() {
+                    let anchor = (
+                        f32::from(e.position.x) as f64,
+                        f32::from(e.position.y) as f64,
+                    );
+                    if e.click_count >= 2 {
+                        self.zoom_100(cx);
+                    } else {
+                        let f = if e.modifiers.alt { 0.5 } else { 2.0 };
+                        self.view.zoom_at(f, anchor, &b);
+                    }
+                    cx.notify();
+                }
+            }
             Tool::Shape => {
                 let ellipse = self.tools.shape == ShapeKind::Ellipse;
                 self.drag = Some(Drag::Tool(ToolDrag::Shape {
@@ -3483,6 +3509,45 @@ impl EditorView {
                     .child("drag to pan · ctrl+scroll to zoom · V to move a node")
                     .into_any_element(),
             ),
+            Tool::Eyedropper => {
+                let [r, g, b, _] = self.tools.fg;
+                v.push(
+                    div()
+                        .flex_none()
+                        .child(format!(
+                            "click picks the foreground colour (#{r:02X}{g:02X}{b:02X}) · alt-click picks the background"
+                        ))
+                        .into_any_element(),
+                );
+            }
+            Tool::Zoom => {
+                v.push(
+                    chip("zoom-in", "zoom in", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.zoom_step(true, cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("zoom-out", "zoom out", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.zoom_step(false, cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("zoom-fit", "fit", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("zoom-100", "100%", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.zoom_100(cx)))
+                        .into_any_element(),
+                );
+                v.push(
+                    div()
+                        .flex_none()
+                        .child("click to zoom in · alt-click to zoom out · double-click for 100%")
+                        .into_any_element(),
+                );
+            }
         }
         v
     }

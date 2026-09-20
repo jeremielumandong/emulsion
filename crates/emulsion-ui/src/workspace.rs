@@ -988,6 +988,26 @@ impl Render for Workspace {
                     e.set_select(next, cx)
                 })
             }))
+            .on_action(cx.listener(|this, _: &ToolEyedropper, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Eyedropper, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolZoom, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Zoom, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ImageSizeDialog, window, cx| {
+                if let Some(e) = &this.editor {
+                    e.update(cx, |e, cx| {
+                        e.open_size_panel(crate::editor::SizeMode::Image, window, cx)
+                    });
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CanvasSizeDialog, window, cx| {
+                if let Some(e) = &this.editor {
+                    e.update(cx, |e, cx| {
+                        e.open_size_panel(crate::editor::SizeMode::Canvas, window, cx)
+                    });
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToolWand, _, cx| {
                 this.with_editor(cx, |e, cx| {
                     e.set_select(crate::editor::SelectShape::Wand, cx)
