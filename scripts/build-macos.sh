@@ -62,6 +62,7 @@ trap 'rm -rf "$STAGE" "$ICONSET"; rm -f "$DMG_TEMP"' EXIT
 log "Assembling $(basename "$APP")"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources" "$ICONSET"
 install -m 755 "$BIN" "$STAGE/Contents/MacOS/emulsion"
+bash "$ROOT_DIR/scripts/stage-licenses.sh" "$STAGE/Contents/Resources/licenses"
 
 render_icon() {
   local size="$1" dest="$2"

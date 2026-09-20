@@ -19,6 +19,25 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Copy-Licenses {
+    param([string]$Repository, [string]$Destination)
+
+    $files = @(Get-Content -LiteralPath (Join-Path $Repository 'packaging/license-files.txt') |
+        Where-Object { $_ -and -not $_.StartsWith('#') })
+    foreach ($file in $files) {
+        $source = Join-Path $Repository $file
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf) -or
+            (Get-Item -LiteralPath $source).Length -eq 0) {
+            throw "Required license or notice is missing or empty: $file"
+        }
+    }
+    foreach ($file in $files) {
+        $target = Join-Path $Destination $file
+        New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $Repository $file) -Destination $target -Force
+    }
+}
+
 function Copy-VcRuntime {
     param([string]$Executable, [string]$Destination)
 
@@ -142,6 +161,7 @@ try {
         } finally { $runtimeStream.Dispose() }
 
         Copy-VcRuntime -Executable $binary -Destination $binaryDir
+        Copy-Licenses -Repository $repoRoot -Destination (Join-Path $binaryDir 'licenses')
 
         $outDir = Join-Path $targetDir 'windows'
         Write-Host 'Creating NSIS installer (downloads NSIS on first use)...'

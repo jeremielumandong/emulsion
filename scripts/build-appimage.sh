@@ -7,7 +7,8 @@
 # The binary links only against libc, libgcc, libm, xcb and xkbcommon; Vulkan,
 # Wayland and fontconfig are loaded at runtime from the system, which is where
 # they must come from anyway (the GPU driver owns Vulkan). So the AppDir holds
-# the binary, the desktop entry and the icons, and nothing is vendored.
+# the binary, the desktop entry, icons and license notices, without bundling
+# these system libraries.
 #
 # appimagetool and the AppImage runtime are downloaded once into the cache,
 # pinned by version and verified by sha256. Nothing else is fetched.
@@ -85,6 +86,7 @@ fetch "$RUNTIME" \
 log "Assembling the AppDir"
 rm -rf "$APPDIR"
 install -Dm755 "$BIN" "$APPDIR/usr/bin/emulsion"
+bash "$ROOT_DIR/scripts/stage-licenses.sh" "$APPDIR/usr/share/licenses/emulsion"
 strip --strip-debug "$APPDIR/usr/bin/emulsion" 2>/dev/null || true
 install -Dm644 "$ROOT_DIR/packaging/linux/$APP_ID.desktop" "$APPDIR/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$ROOT_DIR/packaging/linux/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"

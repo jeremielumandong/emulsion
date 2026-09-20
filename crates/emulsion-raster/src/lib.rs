@@ -14,6 +14,7 @@ pub mod image;
 pub mod library;
 pub mod liquify;
 pub mod paint;
+pub mod paint_accel;
 pub mod quickshape;
 pub mod select;
 pub mod tile;

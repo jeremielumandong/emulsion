@@ -1,0 +1,36 @@
+[package]
+name = "gpui-pre-media"
+version = "0.3.5"
+edition = { workspace = true }
+publish = true
+license = "Apache-2.0"
+description = "Bindings to macos media handling APIs for Zed (gpui-pre snapshot of zed@d89e9c2)"
+repository = "https://github.com/zed-industries/zed"
+
+[package.metadata.gpui-pre]
+zed-crate = "media"
+zed-version = "0.1.0"
+zed-rev = "d89e9c2124b2786a390c7a451c7488601b4da2e1"
+
+[lib]
+path = "src/media.rs"
+doctest = false
+name = "media"
+
+[features]
+
+[dependencies]
+anyhow = { workspace = true }
+
+[build-dependencies]
+bindgen = "0.72"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = { workspace = true }
+foreign-types = { workspace = true }
+metal = { workspace = true }
+core-video = { workspace = true }
+objc = { workspace = true }
+
+[lints]
+workspace = true

@@ -1172,6 +1172,15 @@ impl Stroke {
     /// descend from the stroke's base). Returns the new layer and the
     /// layer-space rectangle that changed.
     pub fn render(&mut self, current: &Raster) -> (Raster, IRect) {
+        self.render_with_compositor(current, crate::paint_accel::compositor())
+    }
+
+    /// Render with an explicit backend for routing and CPU/GPU parity benchmarks.
+    pub fn render_with_compositor(
+        &mut self,
+        current: &Raster,
+        compositor: Option<&dyn crate::paint_accel::PaintCompositor>,
+    ) -> (Raster, IRect) {
         let t = TILE as i32;
         let mut changes = Vec::new();
         let mut dirty = IRect::default();
@@ -1203,6 +1212,52 @@ impl Stroke {
         let edge = self.brush.edge_darken;
         let relief = self.brush.relief;
         let base_fill = self.base.fill();
+        // Batch whole changed tiles once per render, never once per dab. Small
+        // strokes avoid upload/readback overhead; advanced media keep the exact
+        // reference implementation until their kernels have parity coverage.
+        if (4..=32).contains(&self.pending.len())
+            && !textured
+            && !patterned
+            && edge == 0.0
+            && relief == 0.0
+            && !matches!(self.ink, Ink::Clone { .. })
+            && let Some(compositor) = compositor
+        {
+            let tiles: Vec<_> = self
+                .pending
+                .iter()
+                .map(|&coord| (coord, self.paint[&coord].as_slice()))
+                .collect();
+            let batch = crate::paint_accel::PaintBatch {
+                base: &self.base,
+                tiles: &tiles,
+                clip: self.clip.as_ref(),
+                opacity,
+                blend: self.brush.blend,
+                erase: matches!(self.ink, Ink::Erase),
+                alpha_lock: self.alpha_lock,
+            };
+            if let Some(output) = compositor.composite_paint(&batch)
+                && output.len() == tiles.len()
+                && output.iter().all(|tile| tile.len() == TILE_PX)
+            {
+                for ((coord, _), out) in tiles.iter().zip(output) {
+                    let unchanged = current.base_tile(*coord).map_or_else(
+                        || out.iter().all(|p| *p == current.fill()),
+                        |tile| tile.as_ref() == out.as_slice(),
+                    );
+                    if !unchanged {
+                        dirty = dirty.union(&IRect::new(coord.x * t, coord.y * t, t, t));
+                        changes.push((*coord, Some(out)));
+                    }
+                }
+                self.pending.clear();
+                return (
+                    current.with_changes(changes),
+                    dirty.intersect(&current.bounds()),
+                );
+            }
+        }
         for c in std::mem::take(&mut self.pending) {
             let paint = &self.paint[&c];
             let src = self
@@ -1423,6 +1478,66 @@ pub fn fill_color(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn accelerated_paint_failure_is_atomic_and_restoration_uses_current_pixels() {
+        use crate::paint_accel::{PaintBatch, PaintCompositor};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Backend {
+            mode: u8,
+            calls: AtomicUsize,
+        }
+        impl PaintCompositor for Backend {
+            fn composite_paint(&self, batch: &PaintBatch<'_>) -> Option<Vec<Vec<[u16; 4]>>> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                match self.mode {
+                    0 => None,
+                    1 => Some(vec![vec![[0; 4]]]),
+                    _ => Some(vec![vec![batch.base.fill(); TILE_PX]; batch.tiles.len()]),
+                }
+            }
+        }
+        let base = Arc::new(Raster::transparent(512, 512));
+        let make_stroke = || {
+            let mut stroke = Stroke::new(base.clone(), Brush::default(), opaque_red(), None);
+            for y in 0..2 {
+                for x in 0..2 {
+                    let coord = TileCoord { x, y };
+                    let mut paint = vec![[0.0; 6]; TILE_PX];
+                    paint[0] = [1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+                    stroke.paint.insert(coord, paint);
+                    stroke.pending.insert(coord);
+                }
+            }
+            stroke
+        };
+        let (reference, expected_dirty) = make_stroke().render_with_compositor(&base, None);
+        assert!(!expected_dirty.is_empty());
+        for mode in [0, 1] {
+            let backend = Backend {
+                mode,
+                calls: AtomicUsize::new(0),
+            };
+            let mut stroke = make_stroke();
+            let (actual, dirty) = stroke.render_with_compositor(&base, Some(&backend));
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(actual.to_pixels(), reference.to_pixels());
+            assert_eq!(dirty, expected_dirty);
+            assert!(stroke.pending.is_empty());
+        }
+        // A taper replay can restore the initial pixels. GPU output must be
+        // compared with the live image, not discarded as equal to stroke base.
+        let backend = Backend {
+            mode: 2,
+            calls: AtomicUsize::new(0),
+        };
+        let (restored, dirty) = make_stroke().render_with_compositor(&reference, Some(&backend));
+        assert_eq!(restored.to_pixels(), base.to_pixels());
+        assert_eq!(dirty, expected_dirty);
+        let (_, dirty) = make_stroke().render_with_compositor(&base, Some(&backend));
+        assert!(dirty.is_empty(), "GPU no-op must not create an edit");
+    }
+
     use super::*;
 
     #[test]

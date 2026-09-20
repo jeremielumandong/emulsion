@@ -1,0 +1,29 @@
+[package]
+name = "gpui-pre-zlog"
+version = "0.3.5"
+edition = { workspace = true }
+publish = true
+license = "Apache-2.0"
+description = "Zed's `zlog` crate (gpui-pre snapshot of zed@d89e9c2)"
+repository = "https://github.com/zed-industries/zed"
+
+[package.metadata.gpui-pre]
+zed-crate = "zlog"
+zed-version = "0.1.0"
+zed-rev = "d89e9c2124b2786a390c7a451c7488601b4da2e1"
+
+[lib]
+path = "src/zlog.rs"
+name = "zlog"
+
+[features]
+default = []
+
+[dependencies]
+collections = { workspace = true }
+chrono = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
+
+[lints]
+workspace = true

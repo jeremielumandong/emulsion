@@ -1,0 +1,380 @@
+[
+  {
+    "name": "gpui-base",
+    "version": "0.6.4",
+    "archive_sha256": "2ddc2b526ef9a1ee1e02e974df22682ce94cbba25e3adb6b894ac36be009fe82",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/longbridge/gpui-kit",
+    "license": "Apache-2.0",
+    "vcs": {
+      "git": {
+        "sha1": "3c387ae0a3e9b14ee39fe98be2b51a882800aa16"
+      },
+      "path_in_vcs": "crates/base"
+    },
+    "upstream_license_files": {
+      "LICENSE-APACHE": "d1b0449e5478c574ba4f686c2656df7fe77d66821a61f8b6ed3378a58ed9a811"
+    }
+  },
+  {
+    "name": "gpui-component",
+    "version": "0.6.4",
+    "archive_sha256": "1f277b9885206dcad32652714cf50e813dbcaa968e2aec5fa7f4a5d916b92363",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/longbridge/gpui-kit",
+    "license": "Apache-2.0",
+    "vcs": {
+      "git": {
+        "sha1": "3c387ae0a3e9b14ee39fe98be2b51a882800aa16"
+      },
+      "path_in_vcs": "crates/component"
+    },
+    "upstream_license_files": {
+      "LICENSE-APACHE": "d1b0449e5478c574ba4f686c2656df7fe77d66821a61f8b6ed3378a58ed9a811"
+    }
+  },
+  {
+    "name": "gpui-component-macros",
+    "version": "0.6.4",
+    "archive_sha256": "b3e98517401b8c41e359a302f55dd997d00dccd137f8915dd13ef7099f035ee7",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": null,
+    "license": "Apache-2.0",
+    "vcs": {
+      "git": {
+        "sha1": "3c387ae0a3e9b14ee39fe98be2b51a882800aa16"
+      },
+      "path_in_vcs": "crates/component-macros"
+    },
+    "upstream_license_files": {
+      "LICENSE-APACHE": "d1b0449e5478c574ba4f686c2656df7fe77d66821a61f8b6ed3378a58ed9a811"
+    }
+  },
+  {
+    "name": "gpui-kit",
+    "version": "0.6.4",
+    "archive_sha256": "6e45b800ca69375c7fb060ef42f846012d0ce08dccc056e8a30547d345b19343",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/longbridge/gpui-kit",
+    "license": "Apache-2.0",
+    "vcs": {
+      "git": {
+        "sha1": "3c387ae0a3e9b14ee39fe98be2b51a882800aa16"
+      },
+      "path_in_vcs": "crates/kit"
+    },
+    "upstream_license_files": {}
+  },
+  {
+    "name": "gpui-kit-assets",
+    "version": "0.6.4",
+    "archive_sha256": "558ab91ac64ba4fd56cd722fdebcbbd253d6bd49514dbf04ab7c772176be61fd",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/longbridge/gpui-kit",
+    "license": "Apache-2.0",
+    "vcs": {
+      "git": {
+        "sha1": "3c387ae0a3e9b14ee39fe98be2b51a882800aa16"
+      },
+      "path_in_vcs": "crates/assets"
+    },
+    "upstream_license_files": {
+      "LICENSE-LUCIDE": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+    }
+  },
+  {
+    "name": "gpui-pre",
+    "version": "0.3.5",
+    "archive_sha256": "2a9ca98fdcad06276de623c2f48ebd710f1e7724eebef2f2673c583e85dc8335",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-apple",
+    "version": "0.3.5",
+    "archive_sha256": "d3fc4da82c5c2dbb25443655cfbc4305a2e2d1380bc0b815e80664fdfbf4cfdb",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-collections",
+    "version": "0.3.5",
+    "archive_sha256": "626a09f683ff6f3b2f708341bdcea9d479af5b14a6a2fccec9cff935ec0751b7",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-derive-refineable",
+    "version": "0.3.5",
+    "archive_sha256": "56d06116a2b857588f6ea7bfb447b3554ba985e780b5995ae47780252da152f3",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-http-client",
+    "version": "0.3.5",
+    "archive_sha256": "b0d2071c582c1a0f71b8c7c00607a3b9cd18f81fb3510d41845db3447b2a11c9",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-linux",
+    "version": "0.3.5",
+    "archive_sha256": "f6b427589681ec1fed27951fd82edc70a7e288bb2487ede26dbbd07c2ce23d4f",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-macos",
+    "version": "0.3.5",
+    "archive_sha256": "806eac0cb5c0eebc0b032c6450c11d283264f9ac05754dda83fc80d0b86b4ee8",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-macros",
+    "version": "0.3.5",
+    "archive_sha256": "c06139051bf1db51949bfbb4ee338208bd64b4c35340d8c1a6a8200744e28fe1",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-media",
+    "version": "0.3.5",
+    "archive_sha256": "500acb13f818ff234021c1b9eae8592b0cbe017a64e26908c736b7421b1c6213",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-perf",
+    "version": "0.3.5",
+    "archive_sha256": "b0973bbb02bf46940ac0861d9dce0fc03a3109634172b69108d1bc13fa29d76c",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-platform",
+    "version": "0.3.5",
+    "archive_sha256": "b613512e29f1e7b825bfa7e50a447388ff1347044350a475e4c98a892a985c8d",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-refineable",
+    "version": "0.3.5",
+    "archive_sha256": "428f23703ead5601618ffea73c137897b98a94ce8d30e257f22be947732dfbf9",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-reqwest",
+    "version": "0.12.15",
+    "archive_sha256": "05be23908e707966824f8c51a609904b7f30739e8d915e120a53c1b995ba964c",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/seanmonstar/reqwest",
+    "license": "MIT OR Apache-2.0",
+    "vcs": {
+      "git": {
+        "sha1": "68a26f46bb6ed5131f56517a574041d2c4d2aec8",
+        "dirty": true
+      },
+      "path_in_vcs": ""
+    },
+    "upstream_license_files": {
+      "LICENSE-APACHE": "751963a8b88c0e3a9f27e98933079fbcf09b9998b2c13ac49c2e4d58444520d6",
+      "LICENSE-MIT": "47d4e1803702728e03d30f8a848ae2249ba274bbd9f8443e803f7924d83cd371"
+    }
+  },
+  {
+    "name": "gpui-pre-scheduler",
+    "version": "0.3.5",
+    "archive_sha256": "6dd1b7ff2e7bf43302ae982cd786a22c16c52e16682e67b66cfbe2cb2bc3a72d",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-shared-string",
+    "version": "0.3.5",
+    "archive_sha256": "424a4dd6a570473d57acf1df2bfb9f3028d4b568abcaeb9252e0f13047b50c03",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-sum-tree",
+    "version": "0.3.5",
+    "archive_sha256": "4855718e82630d29198b515d2b027361ef63dd19b6021cefe945789dcff82372",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-util",
+    "version": "0.3.5",
+    "archive_sha256": "e973148165346c0f9b3f5072b321d7c2f33807c93daea67fe298c005c0e0c2a8",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-util-macros",
+    "version": "0.3.5",
+    "archive_sha256": "4f71f6212d3772a70988c7d64627c7284dec73c17992ac4f9f0cdfdd46cbb677",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-web",
+    "version": "0.3.5",
+    "archive_sha256": "4f0daada903f106be946d87e25f5bc85ad6cf60d6d82cb8f8aed945417a9c1a3",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-wgpu",
+    "version": "0.3.5",
+    "archive_sha256": "640b666a16ddf9504e2eb3e7a997acb2b2adfaa7859925bdd36fc3acfd8f30a7",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-windows",
+    "version": "0.3.5",
+    "archive_sha256": "c12c7d84ec422feb2f064117d572447998381e5c219fcad69fe19f10d0b7aaea",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-zlog",
+    "version": "0.3.5",
+    "archive_sha256": "98352858fac3d4d05b46d6014ad04bad313652a691d4e21dc55fa96fb4acb7cf",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-ztracing",
+    "version": "0.3.5",
+    "archive_sha256": "5d63a3c7276875b4d7e6d3961e92a138e9233e86a591bf318f2e54df4ad58102",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  },
+  {
+    "name": "gpui-pre-ztracing-macro",
+    "version": "0.3.5",
+    "archive_sha256": "84e2a5ff79002223edfcfa76c6f9f79f4f60f6ec545ccc27832f12bd46348b39",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "repository": "https://github.com/zed-industries/zed",
+    "license": "Apache-2.0",
+    "vcs": null,
+    "upstream_license_files": {
+      "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+    }
+  }
+]

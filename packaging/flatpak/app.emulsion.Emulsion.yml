@@ -44,6 +44,7 @@ modules:
     build-commands:
       - cargo build --release --locked -p emulsion-app
       - install -Dm755 target/release/emulsion /app/bin/emulsion
+      - bash scripts/stage-licenses.sh /app/share/licenses/emulsion
       - install -Dm644 packaging/linux/app.emulsion.Emulsion.desktop /app/share/applications/app.emulsion.Emulsion.desktop
       - install -Dm644 packaging/linux/app.emulsion.Emulsion.metainfo.xml /app/share/metainfo/app.emulsion.Emulsion.metainfo.xml
       - install -Dm644 assets/icons/emulsion.svg /app/share/icons/hicolor/scalable/apps/app.emulsion.Emulsion.svg

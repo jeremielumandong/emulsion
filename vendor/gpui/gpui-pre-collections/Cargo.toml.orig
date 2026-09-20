@@ -1,0 +1,29 @@
+[package]
+name = "gpui-pre-collections"
+version = "0.3.5"
+edition = { workspace = true }
+publish = true
+license = "Apache-2.0"
+description = "Standard collection types used by Zed and GPUI (gpui-pre snapshot of zed@d89e9c2)"
+repository = "https://github.com/zed-industries/zed"
+
+[package.metadata.gpui-pre]
+zed-crate = "collections"
+zed-version = "0.1.0"
+zed-rev = "d89e9c2124b2786a390c7a451c7488601b4da2e1"
+
+[lib]
+path = "src/collections.rs"
+doctest = false
+name = "collections"
+
+[features]
+test-support = []
+
+[dependencies]
+indexmap = { workspace = true }
+rustc-hash = { workspace = true }
+gpui_util = { workspace = true }
+
+[lints]
+workspace = true

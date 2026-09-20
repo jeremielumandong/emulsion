@@ -1,12 +1,13 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor/gpui/*"]
 
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
 rust-version = "1.98"
-license = "TBD"
+license = "MIT"
 
 [workspace.dependencies]
 # internal
@@ -49,6 +50,8 @@ ureq = { version = "3", default-features = false, features = ["rustls", "json"] 
 # pixels / io
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff", "bmp", "gif"] }
 wgpu = "29"            # same major as gpui-pre 0.3.5 so one wgpu is linked (spike 6)
+bytemuck = "1.25"
+pollster = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 quick-xml = { version = "0.42", features = ["serialize"] }
 cosmic-text = "0.19"
@@ -76,3 +79,35 @@ opt-level = 3            # dependencies always optimized; our crates stay fast t
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Editable copies of the exact GPUI packages recorded in vendor/gpui/UPSTREAM.json.
+[patch.crates-io]
+gpui-base = { path = "vendor/gpui/gpui-base" }
+gpui-component = { path = "vendor/gpui/gpui-component" }
+gpui-component-macros = { path = "vendor/gpui/gpui-component-macros" }
+gpui-kit = { path = "vendor/gpui/gpui-kit" }
+gpui-kit-assets = { path = "vendor/gpui/gpui-kit-assets" }
+gpui-pre = { path = "vendor/gpui/gpui-pre" }
+gpui-pre-apple = { path = "vendor/gpui/gpui-pre-apple" }
+gpui-pre-collections = { path = "vendor/gpui/gpui-pre-collections" }
+gpui-pre-derive-refineable = { path = "vendor/gpui/gpui-pre-derive-refineable" }
+gpui-pre-http-client = { path = "vendor/gpui/gpui-pre-http-client" }
+gpui-pre-linux = { path = "vendor/gpui/gpui-pre-linux" }
+gpui-pre-macos = { path = "vendor/gpui/gpui-pre-macos" }
+gpui-pre-macros = { path = "vendor/gpui/gpui-pre-macros" }
+gpui-pre-media = { path = "vendor/gpui/gpui-pre-media" }
+gpui-pre-perf = { path = "vendor/gpui/gpui-pre-perf" }
+gpui-pre-platform = { path = "vendor/gpui/gpui-pre-platform" }
+gpui-pre-refineable = { path = "vendor/gpui/gpui-pre-refineable" }
+gpui-pre-reqwest = { path = "vendor/gpui/gpui-pre-reqwest" }
+gpui-pre-scheduler = { path = "vendor/gpui/gpui-pre-scheduler" }
+gpui-pre-shared-string = { path = "vendor/gpui/gpui-pre-shared-string" }
+gpui-pre-sum-tree = { path = "vendor/gpui/gpui-pre-sum-tree" }
+gpui-pre-util = { path = "vendor/gpui/gpui-pre-util" }
+gpui-pre-util-macros = { path = "vendor/gpui/gpui-pre-util-macros" }
+gpui-pre-web = { path = "vendor/gpui/gpui-pre-web" }
+gpui-pre-wgpu = { path = "vendor/gpui/gpui-pre-wgpu" }
+gpui-pre-windows = { path = "vendor/gpui/gpui-pre-windows" }
+gpui-pre-zlog = { path = "vendor/gpui/gpui-pre-zlog" }
+gpui-pre-ztracing = { path = "vendor/gpui/gpui-pre-ztracing" }
+gpui-pre-ztracing-macro = { path = "vendor/gpui/gpui-pre-ztracing-macro" }

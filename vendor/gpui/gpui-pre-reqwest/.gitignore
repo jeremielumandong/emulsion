@@ -1,0 +1,6 @@
+target
+Cargo.lock
+*.swp
+.idea
+# Modified by Emulsion: retain the published archive's lockfile in our vendored copy.
+!Cargo.lock

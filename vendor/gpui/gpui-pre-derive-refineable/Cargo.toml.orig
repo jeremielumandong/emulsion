@@ -1,0 +1,29 @@
+[package]
+name = "gpui-pre-derive-refineable"
+version = "0.3.5"
+edition = { workspace = true }
+publish = true
+license = "Apache-2.0"
+description = "A derive macro for creating refinement types in Rust (gpui-pre snapshot of zed@d89e9c2)"
+repository = "https://github.com/zed-industries/zed"
+
+[package.metadata.gpui-pre]
+zed-crate = "derive_refineable"
+zed-version = "0.1.0"
+zed-rev = "d89e9c2124b2786a390c7a451c7488601b4da2e1"
+
+[lib]
+path = "src/derive_refineable.rs"
+proc-macro = true
+doctest = false
+name = "derive_refineable"
+
+[features]
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }
+
+[lints]
+workspace = true

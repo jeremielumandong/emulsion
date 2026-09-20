@@ -1,0 +1,41 @@
+[package]
+name = "gpui-pre-http-client"
+version = "0.3.5"
+edition = { workspace = true }
+publish = true
+license = "Apache-2.0"
+description = "A HTTP client library for Zed and GPUI (gpui-pre snapshot of zed@d89e9c2)"
+repository = "https://github.com/zed-industries/zed"
+
+[package.metadata.gpui-pre]
+zed-crate = "http_client"
+zed-version = "0.1.0"
+zed-rev = "d89e9c2124b2786a390c7a451c7488601b4da2e1"
+
+[lib]
+path = "src/http_client.rs"
+doctest = true
+name = "http_client"
+
+[features]
+test-support = []
+
+[dependencies]
+anyhow = { workspace = true }
+async-compression = { workspace = true }
+bytes = { workspace = true }
+derive_more = { workspace = true }
+futures = { workspace = true }
+http-body = { workspace = true }
+http = { workspace = true }
+log = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+
+[lints]
+workspace = true

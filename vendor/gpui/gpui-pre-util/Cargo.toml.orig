@@ -1,0 +1,28 @@
+[package]
+name = "gpui-pre-util"
+version = "0.3.5"
+publish = true
+edition = { workspace = true }
+license = "Apache-2.0"
+description = "Zed's `gpui_util` crate (gpui-pre snapshot of zed@d89e9c2)"
+repository = "https://github.com/zed-industries/zed"
+
+[package.metadata.gpui-pre]
+zed-crate = "gpui_util"
+zed-version = "0.1.0"
+zed-rev = "d89e9c2124b2786a390c7a451c7488601b4da2e1"
+
+[lib]
+name = "gpui_util"
+
+[features]
+
+[dependencies]
+log = { workspace = true }
+anyhow = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+which = { workspace = true }
+
+[lints]
+workspace = true

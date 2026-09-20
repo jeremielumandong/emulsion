@@ -16,6 +16,7 @@ tracing-subscriber = { workspace = true }
 gpui-kit = { workspace = true }
 emulsion-ui = { workspace = true }
 emulsion-core = { workspace = true }
+emulsion-gpu = { workspace = true }
 emulsion-mcp = { workspace = true }
 [[bin]]
 name = "emulsion"
@@ -29,7 +30,10 @@ description = "The Emulsion image editor"
 icons = ["../../assets/icons/emulsion.ico"]
 binaries-dir = "../../target/release"
 # Flatten Cargo's runtime DLLs beside the executable, resolving ort symlinks.
-resources = ["../../target/release/*.dll"]
+resources = [
+    "../../target/release/*.dll",
+    { src = "../../target/release/licenses", target = "licenses" },
+]
 
 [package.metadata.packager.nsis]
 installer-mode = "currentUser"

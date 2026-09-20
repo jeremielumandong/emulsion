@@ -21,7 +21,15 @@ fn main() -> anyhow::Result<()> {
     let file = match args.next() {
         None => None,
         Some(cmd) => match cmd.as_str() {
-            "mcp-serve" => return emulsion_mcp::serve_stdio(),
+            "mcp-serve" => {
+                if let Err(error) = std::thread::Builder::new()
+                    .name("image-compute".into())
+                    .spawn(emulsion_gpu::initialize)
+                {
+                    tracing::warn!(%error, "Compute initialization thread unavailable; using CPU");
+                }
+                return emulsion_mcp::serve_stdio();
+            }
             "--version" | "-V" => {
                 println!("emulsion {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
@@ -48,6 +56,10 @@ fn run_editor(file: Option<PathBuf>) {
             gpui_kit::init(cx);
             theme::install(cx);
             app_state::install(cx);
+            // Device discovery and shader work must not block window creation.
+            cx.background_executor()
+                .spawn(async { emulsion_gpu::initialize() })
+                .detach();
             // Also squares gpui-kit's corners: the design has none but avatars and dots.
             theme::apply_saved(cx);
             #[cfg(target_os = "linux")]
@@ -80,6 +92,13 @@ fn run_editor(file: Option<PathBuf>) {
                     ..Default::default()
                 };
                 cx.open_window(opts, |window, cx| {
+                    if let Some(specs) = window.gpu_specs() {
+                        tracing::info!(
+                            device = %specs.device_name,
+                            software = specs.is_software_emulated,
+                            "graphics renderer initialized"
+                        );
+                    }
                     let ws = cx.new(|cx| Workspace::new(window, cx));
                     if let Some(path) = file {
                         ws.update(cx, |ws, cx| ws.open_path(path, window, cx));

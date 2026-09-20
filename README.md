@@ -12,13 +12,26 @@ Phase 0: spikes and skeleton. Nothing here edits images yet.
 ## Build
 
 Linux needs the GPUI system libraries (`wayland`, `xkbcommon`, `vulkan`, `fontconfig`,
-`freetype` dev packages) and a Vulkan-capable GPU driver.
+`freetype` dev packages) and a working graphics driver. Hardware is preferred;
+CPU-only VMs can use Mesa Lavapipe. Windows falls back to WARP when hardware is
+unavailable. See [rendering and VM support](docs/rendering.md) for driver requirements
+and software-renderer testing.
+
+Image processing uses GPU compute selectively for expensive compositing and
+noise reduction, with CPU fallback. See [GPU coverage and controls](docs/gpu-rendering.md).
 
 ```sh
 cargo run -p emulsion-app                 # open the editor shell
 cargo run -p emulsion-app -- mcp-serve    # stdio MCP server (empty tool set for now)
 cargo test --workspace
 ```
+
+GPUI's exact dependency versions are vendored under `vendor/gpui/` and selected
+through Cargo path patches. See [maintaining GPUI](vendor/gpui/README.md).
+
+Emulsion's original code is [MIT licensed](LICENSE). Vendored code retains its
+upstream licenses; GPUI is primarily Apache-2.0. See
+[third-party notices](THIRD_PARTY_NOTICES.md) for attribution and scope.
 
 ## Install (Linux)
 

@@ -21,6 +21,7 @@ serde_json = { workspace = true }
 emulsion-io = { workspace = true }
 emulsion-raster = { workspace = true }
 emulsion-filters = { workspace = true }
+emulsion-gpu = { workspace = true }
 rayon = { workspace = true }
 smallvec = { workspace = true }
 image = { workspace = true }

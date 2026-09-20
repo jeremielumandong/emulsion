@@ -1,0 +1,35 @@
+[package]
+name = "gpui-pre-sum-tree"
+version = "0.3.5"
+edition = { workspace = true }
+publish = true
+license = "Apache-2.0"
+description = "A sum tree data structure, a concurrency-friendly B-tree (gpui-pre snapshot of zed@d89e9c2)"
+repository = "https://github.com/zed-industries/zed"
+
+[package.metadata.cargo-shear]
+ignored = ["tracing"]
+
+[package.metadata.gpui-pre]
+zed-crate = "sum_tree"
+zed-version = "0.1.0"
+zed-rev = "d89e9c2124b2786a390c7a451c7488601b4da2e1"
+
+[lib]
+path = "src/sum_tree.rs"
+doctest = false
+name = "sum_tree"
+
+[features]
+test-support = ["proptest"]
+
+[dependencies]
+heapless = { workspace = true }
+rayon = { workspace = true }
+log = { workspace = true }
+ztracing = { workspace = true }
+tracing = { workspace = true }
+proptest = { workspace = true, optional = true }
+
+[lints]
+workspace = true

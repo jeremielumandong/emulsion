@@ -1,0 +1,38 @@
+[package]
+name = "gpui-pre-scheduler"
+version = "0.3.5"
+edition = { workspace = true }
+publish = true
+license = "Apache-2.0"
+description = "Zed's `scheduler` crate (gpui-pre snapshot of zed@d89e9c2)"
+repository = "https://github.com/zed-industries/zed"
+
+[package.metadata.gpui-pre]
+zed-crate = "scheduler"
+zed-version = "0.1.0"
+zed-rev = "d89e9c2124b2786a390c7a451c7488601b4da2e1"
+
+[lib]
+path = "src/scheduler.rs"
+doctest = false
+name = "scheduler"
+
+[features]
+test-support = []
+wasm-threads = ["dep:wasm_thread", "flume/spin"]
+
+[dependencies]
+async-task = { workspace = true }
+backtrace = { workspace = true }
+chrono = { workspace = true }
+flume = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+web-time = { workspace = true }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm_thread = { git = "https://github.com/zed-industries/wasm_thread", rev = "0cf96c7708dfb97ccf3da50347e25edcf75d6937", version = "0.3", features = ["es_modules"], optional = true }
+
+[lints]
+workspace = true

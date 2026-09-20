@@ -13,19 +13,64 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Verify vendored GPUI provenance and licenses
+        run: python3 scripts/check-gpui-vendor.py
       - name: GPUI system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libvulkan-dev libfontconfig1-dev libfreetype-dev libxcb1-dev libx11-xcb-dev
+            libvulkan-dev libfontconfig1-dev libfreetype-dev libxcb1-dev libx11-xcb-dev \
+            xvfb xauth mesa-vulkan-drivers fonts-dejavu-core
       - uses: dtolnay/rust-toolchain@1.98
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - run: python3 scripts/test-license-staging.py
+      - run: bash scripts/test-renderer-policy.sh
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - name: Build production compute backend smoke
+        run: cargo build --locked -p emulsion-gpu --example backend_smoke
+      - name: Validate compute shaders and production hooks with Mesa lavapipe
+        shell: bash
+        run: |
+          for candidate in /usr/share/vulkan/icd.d/lvp_icd*.json; do
+            if [[ -f "$candidate" ]]; then
+              export VK_DRIVER_FILES="$candidate"
+              export VK_ICD_FILENAMES="$candidate"
+              break
+            fi
+          done
+          test -n "${VK_DRIVER_FILES:-}"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/emulsion-compute-runtime"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          export EMULSION_GPU=software
+          export EMULSION_REQUIRE_GPU_TESTS=1
+          timeout 180s cargo test --locked -p emulsion-gpu --lib
+          timeout 60s target/debug/examples/backend_smoke
+          timeout 60s env EMULSION_GPU=cpu target/debug/examples/backend_smoke
+      - name: Build real-window renderer smoke
+        run: cargo build --locked -p emulsion-app --example renderer_smoke
+      - name: Draw and present with Mesa software Vulkan
+        shell: bash
+        run: |
+          for candidate in /usr/share/vulkan/icd.d/lvp_icd*.json; do
+            if [[ -f "$candidate" ]]; then
+              export VK_DRIVER_FILES="$candidate"
+              export VK_ICD_FILENAMES="$candidate"
+              break
+            fi
+          done
+          test -n "${VK_DRIVER_FILES:-}"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/emulsion-renderer-runtime"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          timeout 45s xvfb-run -a -s '-screen 0 800x600x24' \
+            env -u WAYLAND_DISPLAY GPUI_FORCE_SOFTWARE_RENDERING=1 \
+            target/debug/examples/renderer_smoke --require-software
 
   platform-check:
     name: Check (${{ matrix.os }})
@@ -39,3 +84,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets --locked
+      # Windows WARP smoke requires an interactive desktop session. The same
+      # renderer_smoke example is compiled here; run it with forced software on
+      # a Windows desktop rather than depending on a hosted runner's display.

@@ -18,7 +18,19 @@ use crate::tile::{FTile, TILE, TILE_PX, ftile};
 use glam::{DAffine2, DVec2, dvec2};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Optional compositor installed by the desktop app. Unsupported scenes and
+/// device failures return `None`, preserving the reference CPU implementation.
+pub trait TileAccelerator: Send + Sync {
+    fn render_tile(&self, tree: &CompositeTree, level: u32, tile: TileCoord) -> Option<FTile>;
+}
+
+static ACCELERATOR: OnceLock<Arc<dyn TileAccelerator>> = OnceLock::new();
+
+pub fn install_accelerator(accelerator: Arc<dyn TileAccelerator>) {
+    let _ = ACCELERATOR.set(accelerator);
+}
 
 /// Non-destructive placement of pixel content in the document. Source pixels
 /// are never resampled; shrinking and re-enlarging a layer is lossless.
@@ -162,6 +174,18 @@ pub fn tiles_at(width: u32, height: u32, level: u32) -> (i32, i32) {
 
 /// Render one output tile. Pixels outside the document are transparent.
 pub fn render_tile(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTile {
+    if let Some(accelerator) = ACCELERATOR.get()
+        && let Some(pixels) = accelerator.render_tile(tree, level, tile)
+        && pixels.len() == TILE_PX
+    {
+        return pixels;
+    }
+    render_tile_cpu(tree, level, tile)
+}
+
+/// Reference renderer, also used for exact source sampling by accelerators.
+/// This entry point never recursively invokes an installed accelerator.
+pub fn render_tile_cpu(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTile {
     let mut acc = ftile();
     let (lw, lh) = level_size(tree.width, tree.height, level);
     let ox = tile.x as i64 * TILE as i64;

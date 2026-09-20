@@ -11,11 +11,32 @@
 use emulsion_raster::{IRect, Raster, color};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, OnceLock};
 
 pub const CRATE: &str = "emulsion-filters";
 
 /// The most a filter may spread past the layer, in pixels.
 pub const MAX_SPREAD: i32 = 250;
+
+/// Optional image accelerator. Pixels are premultiplied, linear RGBA; filters
+/// must preserve their dimensions. Returning `None` uses the CPU implementation.
+pub trait FilterAccelerator: Send + Sync {
+    fn apply(
+        &self,
+        filter: &Filter,
+        width: usize,
+        height: usize,
+        pixels: &[[f32; 4]],
+    ) -> Option<Vec<[f32; 4]>>;
+}
+
+static ACCELERATOR: OnceLock<Arc<dyn FilterAccelerator>> = OnceLock::new();
+
+/// Install the application's accelerator once. CPU-only applications need not
+/// call this; unsupported filters and failed GPU dispatches remain CPU-backed.
+pub fn install_accelerator(accelerator: Arc<dyn FilterAccelerator>) {
+    let _ = ACCELERATOR.set(accelerator);
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -590,6 +611,46 @@ fn on_color(p: [f32; 4], f: impl Fn([f32; 3]) -> [f32; 3]) -> [f32; 4] {
 }
 
 fn apply_one(f: &Filter, img: &Image) -> Image {
+    if let Some(px) = ACCELERATOR
+        .get()
+        .and_then(|accelerator| accelerator.apply(f, img.w, img.h, &img.px))
+        .filter(|px| px.len() == img.px.len() && px.iter().flatten().all(|v| v.is_finite()))
+    {
+        return Image {
+            w: img.w,
+            h: img.h,
+            px,
+        };
+    }
+    apply_one_cpu(f, img)
+}
+
+/// Run the reference CPU kernel on already padded premultiplied linear pixels.
+/// This bypasses installed accelerators for numerical and performance checks.
+#[doc(hidden)]
+pub fn apply_pixels_cpu(
+    filter: &Filter,
+    width: usize,
+    height: usize,
+    pixels: Vec<[f32; 4]>,
+) -> Option<Vec<[f32; 4]>> {
+    if width == 0 || height == 0 || width.checked_mul(height)? != pixels.len() {
+        return None;
+    }
+    Some(
+        apply_one_cpu(
+            filter,
+            &Image {
+                w: width,
+                h: height,
+                px: pixels,
+            },
+        )
+        .px,
+    )
+}
+
+fn apply_one_cpu(f: &Filter, img: &Image) -> Image {
     match f {
         Filter::GaussianBlur { radius } => gaussian(img, *radius),
         Filter::BoxBlur { radius } => box_blur(img, *radius),

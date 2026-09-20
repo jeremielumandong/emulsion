@@ -7,9 +7,9 @@
 //!   `RenderImage`, drawn with `paint_image`. Only changed tiles are
 //!   re-rendered and re-uploaded.
 //! * **Screen** (rotated, or zoomed to 200 % and beyond): GPUI samples images
-//!   with linear filtering, so crisp pixels and rotation are built on the CPU
-//!   into one device-sized image from the cached tiles, with nearest
-//!   sampling.
+//!   with linear filtering, so crisp pixels and rotation are built into one
+//!   device-sized image with nearest sampling. CPU is the default; experimental
+//!   GPU compute uses CPU correction at numerically ambiguous pixel edges.
 //!
 //! Tiles render on the background executor. While a new revision renders,
 //! the previous tiles stay on screen, so slider drags never flash.
@@ -667,12 +667,58 @@ fn screen_image(
         f32::from(canvas.origin.x) as f64,
         f32::from(canvas.origin.y) as f64,
     );
+    let gpu_pixels = emulsion_gpu::screen_context().and_then(|gpu| {
+        // Keep precise CPU correction at nearest-pixel boundaries. All other
+        // viewport sampling (including rotated views and the compare wipe) runs
+        // on the GPU; missing/failed devices retain the reference loop below.
+        let start = view.screen_to_doc(
+            (origin.0 + 0.5 / sf as f64, origin.1 + 0.5 / sf as f64),
+            canvas,
+        );
+        let step_x = view.screen_to_doc(
+            (origin.0 + 1.5 / sf as f64, origin.1 + 0.5 / sf as f64),
+            canvas,
+        );
+        let step_y = view.screen_to_doc(
+            (origin.0 + 0.5 / sf as f64, origin.1 + 1.5 / sf as f64),
+            canvas,
+        );
+        let request = emulsion_gpu::screen::View {
+            size: [dw, dh],
+            document: [lw as u32, lh as u32],
+            origin: [start.0 / ls, start.1 / ls],
+            dx: [(step_x.0 - start.0) / ls, (step_x.1 - start.1) / ls],
+            dy: [(step_y.0 - start.0) / ls, (step_y.1 - start.1) / ls],
+            wipe: wipe.map(|w| w as u32),
+        };
+        let sources: Vec<_> = cur
+            .iter()
+            .map(|(p, img)| (p, img, false))
+            .chain(before.iter().map(|(p, img)| (p, img, true)))
+            .filter_map(|(&(x, y), img, before)| {
+                Some(emulsion_gpu::screen::Tile {
+                    x,
+                    y,
+                    before,
+                    bgra: img.as_bytes(0)?,
+                })
+            })
+            .collect();
+        gpu.sample_screen(&request, &sources)
+    });
     let mut buf = vec![0u8; (dw * dh * 4) as usize];
     let t = TILE as i64;
     buf.par_chunks_mut((dw * 4) as usize)
         .enumerate()
         .for_each(|(row, line)| {
             for col in 0..dw as usize {
+                if let Some(pixels) = &gpu_pixels {
+                    let [pixel, needs_correction] = pixels[row * dw as usize + col];
+                    if needs_correction == 0 {
+                        line[col * 4..col * 4 + 4].copy_from_slice(&pixel.to_le_bytes());
+                        continue;
+                    }
+                }
                 let sx = origin.0 + (col as f64 + 0.5) / sf as f64;
                 let sy = origin.1 + (row as f64 + 0.5) / sf as f64;
                 let d = view.screen_to_doc((sx, sy), canvas);

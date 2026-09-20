@@ -1,0 +1,40 @@
+[package]
+name = "gpui-pre-perf"
+version = "0.3.5"
+publish = true
+edition = { workspace = true }
+license = "Apache-2.0"
+description = "A tool for measuring Zed test performance, with too many Clippy lints (gpui-pre snapshot of zed@d89e9c2)"
+repository = "https://github.com/zed-industries/zed"
+
+[package.metadata.gpui-pre]
+zed-crate = "perf"
+zed-version = "0.1.0"
+zed-rev = "d89e9c2124b2786a390c7a451c7488601b4da2e1"
+
+[lib]
+name = "perf"
+
+[features]
+
+[dependencies]
+collections = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+needless_continue = "allow"
+all = "warn"
+pedantic = "warn"
+style = "warn"
+missing_docs_in_private_items = "warn"
+as_underscore = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+let_underscore_must_use = "forbid"
+undocumented_unsafe_blocks = "forbid"
+missing_safety_doc = "forbid"
+disallowed_methods = { level = "allow", priority = 1 }
