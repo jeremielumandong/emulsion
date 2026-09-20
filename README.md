@@ -120,6 +120,26 @@ To create and verify a separate compact copy:
 cargo run --release -p emulsion-io --example compact_native -- input.ora compact-copy.ora
 ```
 
+## Opening files
+
+Emulsion decodes these itself: its own `.ora`, Photoshop `.psd`/`.psb`, GIMP `.xcf`
+(8-bit layers with names, offsets and opacity), PNG, JPEG, WebP, TIFF, BMP, GIF, SVG
+and `.svgz`, JPEG XL, Targa, PNM/PAM, Windows icons, Radiance HDR, OpenEXR, DDS,
+QOI, farbfeld, and camera RAW from Sony, Canon, Nikon, Adobe DNG, Fujifilm, Olympus,
+Panasonic, Pentax and more. 16-bit and float sources keep their precision.
+
+Like GIMP, the rest goes through a converter already on the machine when one is
+installed: HEIC/HEIF (`heif-convert` from libheif), AVIF (`avifdec` from libavif),
+PDF and PostScript first pages (`pdftoppm` from poppler), and everything ImageMagick
+reads (PCX, Paint Shop Pro, XPM/XBM, SGI, Sun raster, FITS, DICOM, JPEG 2000, ICNS,
+GIMP brushes and patterns). Unknown extensions are tried the same way. Without a
+converter the error names what to install. The Flatpak sandbox cannot see host
+converters, so this path applies to the AppImage and native builds.
+
+```sh
+cargo run --release -p emulsion-io --example open_any -- picture.heic layered.xcf
+```
+
 ## Editor controls
 
 The right dock keeps **Layers** visible, with its own scrolling list and

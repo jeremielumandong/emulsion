@@ -1486,12 +1486,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                     .flatten()
                     .map(|e| e.path())
                     .filter(|p| {
-                        p.is_file()
-                            && p.extension()
-                                .map(|e| e.to_string_lossy().to_ascii_lowercase())
-                                .is_some_and(|e| {
-                                    emulsion_io::OPEN_EXTENSIONS.contains(&e.as_str()) && e != "svg"
-                                })
+                        p.is_file() && !emulsion_io::is_svg(p) && emulsion_io::is_openable(p)
                     })
                     .collect();
                 listed.sort();

@@ -59,7 +59,12 @@ pub fn decode(path: &Path) -> Result<Decoded> {
     if reader.format().is_none() {
         return Err(IoError::Unsupported(path.display().to_string()));
     }
-    let mut decoder = reader.into_decoder()?;
+    decode_with(reader.into_decoder()?)
+}
+
+/// Decode through any `image` decoder (the built-in ones, or JPEG XL),
+/// honouring EXIF orientation and an embedded ICC profile.
+pub fn decode_with(mut decoder: impl ImageDecoder) -> Result<Decoded> {
     let (w, h) = decoder.dimensions();
     check_size(w, h)?;
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
@@ -75,7 +80,12 @@ pub fn decode(path: &Path) -> Result<Decoded> {
 
 /// Import `path` as a new document with one raster node.
 pub fn import(path: &Path) -> Result<Document> {
-    let decoded = decode(path)?;
+    document_from(path, decode(path)?)
+}
+
+/// A one-layer document from `decoded`, named after `path` and carrying
+/// its EXIF facts.
+pub fn document_from(path: &Path, decoded: Decoded) -> Result<Document> {
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())

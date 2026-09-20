@@ -107,13 +107,7 @@ impl BatchState {
 }
 
 fn is_picture(p: &Path) -> bool {
-    p.extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .is_some_and(|e| {
-            emulsion_io::OPEN_EXTENSIONS
-                .iter()
-                .any(|x| *x == e && e != "svg")
-        })
+    !emulsion_io::is_svg(p) && emulsion_io::is_openable(p)
 }
 
 /// Pictures in a folder, sorted by name.

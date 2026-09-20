@@ -11,9 +11,11 @@
 pub mod brushset;
 pub mod exif;
 pub mod export;
+pub mod external;
 pub mod history;
 pub mod icc;
 pub mod import;
+pub mod jxl;
 pub mod lensfun;
 pub mod ora;
 mod path_data;
@@ -23,6 +25,7 @@ pub mod recent;
 pub mod settings;
 pub mod svg;
 pub mod thumb;
+pub mod xcf;
 
 use emulsion_core::Document;
 use std::path::Path;
@@ -55,15 +58,48 @@ pub enum IoError {
 
 pub type Result<T> = std::result::Result<T, IoError>;
 
-/// Extensions `open` understands, for file dialogs.
+/// Extensions `open` decodes by itself, lower case: the native project,
+/// Photoshop and GIMP documents, the common web and print formats, the
+/// `image` crate's wider set (Targa, PNM, icons, Radiance HDR, OpenEXR,
+/// DDS, QOI, farbfeld), JPEG XL, SVG and camera RAW.
 pub const OPEN_EXTENSIONS: &[&str] = &[
-    "ora", "psd", "psb", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "gif", "svg", "arw",
-    "cr2", "cr3", "nef", "dng", "raf", "orf", "rw2", "pef",
+    "ora", "psd", "psb", "xcf", "png", "jpg", "jpeg", "jpe", "jfif", "webp", "tif", "tiff", "bmp",
+    "dib", "gif", "svg", "svgz", "jxl", "tga", "icb", "vda", "vst", "pbm", "pgm", "ppm", "pam",
+    "pnm", "ico", "hdr", "rgbe", "exr", "dds", "qoi", "ff", "arw", "srf", "sr2", "cr2", "cr3",
+    "crw", "nef", "nrw", "dng", "raf", "orf", "rw2", "pef", "erf", "mrw", "3fr", "iiq", "mos",
+    "kdc", "dcr", "x3f",
 ];
+
+/// Everything that opens on this machine right now: `OPEN_EXTENSIONS` plus
+/// the formats an installed converter handles (`external`).
+pub fn openable_extensions() -> Vec<&'static str> {
+    let mut v: Vec<&str> = OPEN_EXTENSIONS.to_vec();
+    v.extend(external::available_extensions());
+    v
+}
+
+/// Whether `path` looks like something `open` can take, by extension.
+pub fn is_openable(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|e| OPEN_EXTENSIONS.contains(&e.as_str()) || external::can_open(path))
+}
 
 pub fn is_svg(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+        .is_some_and(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"))
+}
+
+/// SVG text from `path`, inflating `.svgz`.
+fn read_svg(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path)?;
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        use std::io::Read;
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(&bytes[..]).read_to_string(&mut text)?;
+        return Ok(text);
+    }
+    String::from_utf8(bytes).map_err(|_| IoError::Unsupported("SVG is not UTF-8 text".into()))
 }
 
 pub fn is_native(path: &Path) -> bool {
@@ -73,18 +109,47 @@ pub fn is_native(path: &Path) -> bool {
 
 /// Open a native document or import an image.
 pub fn open(path: &Path) -> Result<Document> {
-    if is_native(path) {
-        ora::read(path)
-    } else if psd::is_psd(path) {
+    Ok(open_full(path)?.doc)
+}
+
+/// Import anything that is not the native format as a fresh document.
+fn import_any(path: &Path) -> Result<Document> {
+    if psd::is_psd(path) {
         psd::read(path)
+    } else if xcf::is_xcf(path) {
+        match xcf::read(path) {
+            Ok(doc) => Ok(doc),
+            // Precisions and modes the XCF crate lacks: flattened through a
+            // converter when one is installed, else the crate's error.
+            Err(e) if external::can_open(path) => {
+                tracing::info!(path = %path.display(), error = %e, "XCF: falling back to converter");
+                external::open(path)
+            }
+            Err(e) => Err(e),
+        }
     } else if is_svg(path) {
-        let text = std::fs::read_to_string(path)?;
-        Ok(svg::import(&text)?.doc)
+        Ok(svg::import(&read_svg(path)?)?.doc)
     } else if raw::is_raw(path) {
         raw::open(path)
+    } else if jxl::is_jxl(path) {
+        jxl::open(path)
+    } else if external::is_external(path) {
+        external::open(path)
     } else {
-        import::import(path)
+        match import::import(path) {
+            // Unknown to `image` but perhaps to a converter on this machine.
+            Err(IoError::Unsupported(_)) | Err(IoError::Image(_)) if !is_known(path) => {
+                external::open(path)
+            }
+            r => r,
+        }
     }
+}
+
+fn is_known(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|e| OPEN_EXTENSIONS.contains(&e.as_str()))
 }
 
 /// Save in the native format.
@@ -98,29 +163,9 @@ pub use ora::Opened;
 pub fn open_full(path: &Path) -> Result<Opened> {
     if is_native(path) {
         ora::read_full(path)
-    } else if psd::is_psd(path) {
-        Ok(Opened {
-            doc: psd::read(path)?,
-            graph: None,
-            history_error: None,
-        })
-    } else if is_svg(path) {
-        let text = std::fs::read_to_string(path)?;
-        let imp = svg::import(&text)?;
-        Ok(Opened {
-            doc: imp.doc,
-            graph: None,
-            history_error: None,
-        })
-    } else if raw::is_raw(path) {
-        Ok(Opened {
-            doc: raw::open(path)?,
-            graph: None,
-            history_error: None,
-        })
     } else {
         Ok(Opened {
-            doc: import::import(path)?,
+            doc: import_any(path)?,
             graph: None,
             history_error: None,
         })

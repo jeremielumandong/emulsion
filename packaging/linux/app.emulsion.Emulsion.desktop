@@ -12,4 +12,4 @@ StartupNotify=true
 StartupWMClass=app.emulsion.Emulsion
 Categories=Graphics;2DGraphics;RasterGraphics;Photography;
 Keywords=photo;image;editor;layers;nodes;openraster;ora;
-MimeType=image/openraster;image/png;image/jpeg;image/webp;image/tiff;image/bmp;image/gif;
+MimeType=image/openraster;image/vnd.adobe.photoshop;image/x-xcf;image/png;image/jpeg;image/webp;image/tiff;image/bmp;image/gif;image/svg+xml;image/svg+xml-compressed;image/jxl;image/x-tga;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/vnd.microsoft.icon;image/vnd.radiance;image/x-exr;image/x-dds;image/qoi;image/x-sony-arw;image/x-canon-cr2;image/x-canon-cr3;image/x-canon-crw;image/x-nikon-nef;image/x-adobe-dng;image/x-fuji-raf;image/x-olympus-orf;image/x-panasonic-rw2;image/x-pentax-pef;image/x-samsung-srw;image/heif;image/heic;image/avif;application/pdf;image/x-pcx;image/x-xpixmap;image/x-xbitmap;image/x-sgi;image/x-sun-raster;image/jp2;image/x-icns;

@@ -17,10 +17,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }
+flate2 = { workspace = true }
 quick-xml = { workspace = true }
 glam = { workspace = true }
 rawler = { workspace = true }
 ag-psd = { workspace = true }
+jxl-oxide = { workspace = true }
+xcf-rs = { workspace = true }
 moxcms = { workspace = true }
 kamadak-exif = { workspace = true }
 ureq = { workspace = true }
@@ -33,3 +36,4 @@ emulsion-color = { workspace = true }
 
 [dev-dependencies]
 emulsion-raster = { workspace = true }
+xcf-rs = { workspace = true }
