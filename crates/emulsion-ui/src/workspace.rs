@@ -276,8 +276,10 @@ impl Workspace {
     }
 
     /// The row of document tabs above the editor.
+    /// One tab per open document, even a single one, so it can always be
+    /// closed; closing the last returns to Home.
     fn tab_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.tabs.len() < 2 {
+        if self.tabs.is_empty() {
             return None;
         }
         let p = crate::theme::palette(cx);
@@ -319,7 +321,7 @@ impl Workspace {
                         cx.listener(move |this, _, window, cx| this.activate_tab(i, window, cx)),
                     )
                     .child(format!("{name}{}", if dirty { " •" } else { "" }))
-                    .child(
+                    .child(crate::widgets::tip(
                         div()
                             .id(("doc-tab-close", i))
                             .px(px(3.))
@@ -330,7 +332,8 @@ impl Workspace {
                                 this.close_tab(i, window, cx)
                             }))
                             .child("×"),
-                    ),
+                        "Close this document (Ctrl-W); the last one closed returns to Home",
+                    )),
             );
         }
         Some(row.into_any_element())
