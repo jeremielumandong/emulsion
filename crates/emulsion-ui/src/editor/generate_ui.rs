@@ -177,7 +177,7 @@ impl EditorView {
                             },
                             cx,
                         ) {
-                            this.selected = Some(id);
+                            this.set_layer_selection(vec![id], Some(id));
                             this.set_status(
                                 "Generated into a new layer. Hide it to compare.",
                                 false,

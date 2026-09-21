@@ -59,7 +59,7 @@ impl EditorView {
         if self.editor.doc.node(id).is_none() {
             return;
         }
-        self.selected = Some(id);
+        self.set_layer_selection(vec![id], Some(id));
         self.styles_ui.menu_for = None;
         self.select_sidebar(SidebarTab::BlendingOptions, cx);
     }

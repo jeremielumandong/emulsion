@@ -127,7 +127,12 @@ impl EditorView {
                 ty.push(guide.pos);
             }
         }
-        for bounds in visible_snap_bounds(doc, id) {
+        let moving = if self.layer_is_selected(id) {
+            self.selected_layer_roots()
+        } else {
+            vec![id]
+        };
+        for bounds in visible_snap_bounds_for(doc, &moving) {
             tx.extend([
                 bounds.x as f64,
                 bounds.x as f64 + bounds.w as f64 / 2.0,
@@ -193,7 +198,12 @@ impl EditorView {
 
 /// Resolve visibility and hierarchy once; group bounds are aggregated once
 /// rather than recursively remeasuring every descendant for every ancestor.
+#[cfg(test)]
 fn visible_snap_bounds(doc: &Document, moving: NodeId) -> Vec<IRect> {
+    visible_snap_bounds_for(doc, &[moving])
+}
+
+fn visible_snap_bounds_for(doc: &Document, moving: &[NodeId]) -> Vec<IRect> {
     let indices: HashMap<_, _> = doc
         .nodes
         .iter()
@@ -213,7 +223,7 @@ fn visible_snap_bounds(doc: &Document, moving: NodeId) -> Vec<IRect> {
         }
     }
     let mut excluded = vec![false; doc.nodes.len()];
-    if let Some(&index) = indices.get(&moving) {
+    for index in moving.iter().filter_map(|id| indices.get(id).copied()) {
         let mut stack = vec![index];
         while let Some(i) = stack.pop() {
             if excluded[i] {
@@ -281,6 +291,21 @@ mod tests {
         );
         node.parent = parent;
         node
+    }
+
+    #[test]
+    fn multiple_moving_roots_do_not_snap_to_one_another() {
+        let mut doc = Document::new(200, 100);
+        doc.nodes = vec![
+            Node::group(1, "Group"),
+            pixels(2, Some(1), 10.),
+            pixels(3, None, 60.),
+            pixels(4, None, 110.),
+        ];
+        assert_eq!(
+            super::visible_snap_bounds_for(&doc, &[1, 3]),
+            vec![IRect::new(110, 20, 10, 10)]
+        );
     }
 
     #[test]

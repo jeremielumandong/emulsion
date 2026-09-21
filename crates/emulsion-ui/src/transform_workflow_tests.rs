@@ -3,6 +3,73 @@ use crate::editor::Tool;
 use emulsion_core::NodeKind;
 
 #[gpui_kit::test]
+fn sparse_raster_handles_resize_ink_without_replacing_source_and_undo(cx: &mut TestAppContext) {
+    let source = Arc::new(Raster::from_fn(400, 300, [0; 4], |x, y| {
+        if (60..100).contains(&x) && (70..100).contains(&y) {
+            [65535; 4]
+        } else {
+            [0; 4]
+        }
+    }));
+    let mut original = Document::new(400, 300);
+    let id = Command::AddNode {
+        node: Box::new(Node::raster(
+            0,
+            "Sparse",
+            source.clone(),
+            Default::default(),
+        )),
+        slot: Slot::TOP,
+    }
+    .apply(&mut original)
+    .unwrap()
+    .unwrap();
+    let (ws, cx) = open(cx, original.clone());
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| {
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![id], Some(id));
+            e.set_tool(Tool::Move, cx);
+            window.focus(&e.canvas_focus, cx);
+        })
+    });
+    cx.run_until_parked();
+    let (start, end) = cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert_eq!(
+            e.transform_box().unwrap(),
+            [(60., 70.), (100., 70.), (100., 100.), (60., 100.)]
+        );
+        (
+            e.doc_to_window((100., 100.)).unwrap(),
+            e.doc_to_window((140., 130.)).unwrap(),
+        )
+    });
+    cx.simulate_mouse_down(start, gpui_kit::MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(end, Some(gpui_kit::MouseButton::Left), Default::default());
+    cx.simulate_mouse_up(end, gpui_kit::MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        let q = e.transform_box().unwrap();
+        for (actual, expected) in
+            q.into_iter()
+                .zip([(60., 70.), (140., 70.), (140., 130.), (60., 130.)])
+        {
+            assert!((actual.0 - expected.0).abs() < 0.1 && (actual.1 - expected.1).abs() < 0.1);
+        }
+        let NodeKind::Raster { raster, .. } = &e.editor.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert!(Arc::ptr_eq(raster, &source));
+        assert_eq!(e.editor.history.len(), 1);
+    });
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original));
+}
+
+#[gpui_kit::test]
 fn vertical_type_shortcut_creates_upright_editable_text(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, Document::new(400, 400));
     let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
@@ -238,4 +305,47 @@ fn free_transform_from_panel_scales_with_canvas_handles_and_undoes(cx: &mut Test
     cx.simulate_keystrokes("ctrl-z");
     cx.run_until_parked();
     cx.update(|_, cx| assert_eq!(e.read(cx).editor.doc, original));
+}
+
+#[gpui_kit::test]
+fn masked_solid_raster_frame_tracks_mask_enabled_without_cropping_source(cx: &mut TestAppContext) {
+    let raster = Arc::new(Raster::solid(300, 200, [1.; 4]));
+    let mut node = Node::raster(0, "Masked shape", raster.clone(), Placement::default());
+    node.mask = Some(Arc::new(emulsion_raster::select::rect(
+        300, 200, 40., 60., 50., 20.,
+    )));
+    let mut doc = Document::new(300, 200);
+    let id = Command::AddNode {
+        node: Box::new(node),
+        slot: Slot::TOP,
+    }
+    .apply(&mut doc)
+    .unwrap()
+    .unwrap();
+    let (ws, cx) = open(cx, doc);
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![id], Some(id));
+            e.set_tool(Tool::Move, cx);
+            assert_eq!(
+                e.transform_box().unwrap(),
+                [(40., 60.), (90., 60.), (90., 80.), (40., 80.)]
+            );
+            e.flip_transform_selection(true, cx);
+            let q = e.transform_box().unwrap();
+            assert_eq!(q, [(90., 60.), (40., 60.), (40., 80.), (90., 80.)]);
+            let NodeKind::Raster { raster: stored, .. } = &e.editor.doc.node(id).unwrap().kind
+            else {
+                panic!()
+            };
+            assert!(Arc::ptr_eq(stored, &raster));
+            e.undo(cx);
+            e.execute(Command::SetMaskEnabled { id, enabled: false }, cx);
+            assert_eq!(
+                e.transform_box().unwrap(),
+                [(0., 0.), (300., 0.), (300., 200.), (0., 200.)]
+            );
+        })
+    });
 }

@@ -712,7 +712,7 @@ impl EditorView {
             },
             cx,
         ) {
-            self.selected = Some(id);
+            self.set_layer_selection(vec![id], Some(id));
             self.set_status("Added adjustment layer — edit it in Properties.", false, cx);
         }
     }

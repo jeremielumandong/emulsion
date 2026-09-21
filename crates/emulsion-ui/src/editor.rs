@@ -18,6 +18,9 @@ mod filters;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
+mod layer_menu;
+mod layer_selection;
+mod layers_panel;
 mod lens;
 mod movement;
 mod panels;
@@ -108,6 +111,8 @@ fn tool_help(tool: Tool) -> &'static str {
 pub(crate) enum SliderKey {
     Opacity(NodeId),
     FillOpacity(NodeId),
+    LayerOpacity(NodeId),
+    LayerFillOpacity(NodeId),
     BlendRange(NodeId, bool, usize),
     Param(NodeId, &'static str),
     Scale(NodeId),
@@ -165,6 +170,8 @@ impl SliderKey {
             self,
             SliderKey::Opacity(_)
                 | SliderKey::FillOpacity(_)
+                | SliderKey::LayerOpacity(_)
+                | SliderKey::LayerFillOpacity(_)
                 | SliderKey::BlendRange(..)
                 | SliderKey::Param(..)
                 | SliderKey::Scale(_)
@@ -182,7 +189,7 @@ impl SliderKey {
 }
 
 /// Bounds for the Layers list height.
-pub(crate) const LAYERS_MIN_H: f32 = 96.0;
+pub(crate) const LAYERS_MIN_H: f32 = 340.0;
 pub(crate) const LAYERS_MAX_H: f32 = 900.0;
 
 enum Drag {
@@ -317,6 +324,7 @@ pub struct EditorView {
     pub(crate) before_gen: u64,
     pub(crate) before_tree: Option<Arc<CompositeTree>>,
     pub selected: Option<NodeId>,
+    pub(crate) layer_selection: layer_selection::LayerSelection,
     pub(crate) tool: Tool,
     drag: Option<Drag>,
     pub(crate) compare: f32,
@@ -333,6 +341,7 @@ pub struct EditorView {
     pub(crate) thumbs: HashMap<usize, Arc<RenderImage>>,
     pub(crate) checker: (u8, u8),
     pub(crate) channels: channels::ChannelState,
+    pub(crate) layer_panel: layers_panel::LayerPanelState,
     pub focus: FocusHandle,
     pub(crate) canvas_focus: FocusHandle,
     pub(crate) panel_focus: FocusHandle,
@@ -421,6 +430,7 @@ impl EditorView {
             before_gen: 0,
             before_tree: None,
             selected,
+            layer_selection: Default::default(),
             tool: Tool::Hand,
             drag: None,
             compare: 0.0,
@@ -437,6 +447,7 @@ impl EditorView {
             thumbs: HashMap::new(),
             checker: theme::palette(cx).checker,
             channels: Default::default(),
+            layer_panel: Default::default(),
             focus: cx.focus_handle(),
             canvas_focus: cx.focus_handle(),
             panel_focus: cx.focus_handle(),
@@ -455,8 +466,14 @@ impl EditorView {
             size_panel: None,
             layers_h: cx
                 .try_global::<crate::app_state::AppSettings>()
-                .map(|s| s.0.layers_height)
-                .unwrap_or(260.0)
+                .map(|s| {
+                    if s.0.layers_height == 260.0 {
+                        400.0
+                    } else {
+                        s.0.layers_height
+                    }
+                })
+                .unwrap_or(400.0)
                 .clamp(LAYERS_MIN_H, LAYERS_MAX_H),
             transform_fields: None,
             rotation_fields: None,
@@ -527,7 +544,8 @@ impl EditorView {
         if let Some(sel) = self.selected
             && self.editor.doc.node(sel).is_none()
         {
-            self.selected = self.editor.doc.nodes.last().map(|n| n.id);
+            let selected = self.editor.doc.nodes.last().map(|n| n.id);
+            self.set_layer_selection(selected.into_iter().collect(), selected);
         }
         cx.notify();
     }
@@ -879,21 +897,32 @@ impl EditorView {
     // ── Node operations ─────────────────────────────────────────────────
 
     pub fn delete_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected {
-            self.execute(Command::RemoveNode { id }, cx);
-        }
+        self.close_text_field(cx);
+        let commands = self
+            .selected_layer_roots()
+            .into_iter()
+            .map(|id| Command::RemoveNode { id })
+            .collect();
+        self.execute_layer_commands("Delete layers", commands, cx);
     }
 
     pub fn duplicate_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected
-            && let Some(new) = self.execute(Command::DuplicateNode { id }, cx)
-        {
-            self.selected = Some(new);
+        self.close_text_field(cx);
+        let commands = self
+            .selected_layer_roots()
+            .into_iter()
+            .map(|id| Command::DuplicateNode { id })
+            .collect();
+        if let Some(ids) = self.execute_layer_commands("Duplicate layers", commands, cx) {
+            let active = ids.last().copied();
+            self.set_layer_selection(ids, active);
         }
     }
 
     pub fn group_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected {
+        self.close_text_field(cx);
+        let ids = self.selected_layer_roots();
+        if !ids.is_empty() {
             let n = self
                 .editor
                 .doc
@@ -904,49 +933,80 @@ impl EditorView {
                 + 1;
             if let Some(g) = self.execute(
                 Command::Group {
-                    ids: vec![id],
+                    ids,
                     name: format!("Group {n}"),
                 },
                 cx,
             ) {
-                self.selected = Some(g);
+                self.set_layer_selection(vec![g], Some(g));
             }
         }
     }
 
     pub fn ungroup_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected
-            && self.editor.doc.node(id).is_some_and(|n| n.is_group())
+        let groups: Vec<_> = self
+            .selected_layer_roots()
+            .into_iter()
+            .filter(|id| self.editor.doc.node(*id).is_some_and(|n| n.is_group()))
+            .collect();
+        let children: Vec<_> = groups
+            .iter()
+            .flat_map(|id| self.editor.doc.children(Some(*id)))
+            .collect();
+        if groups.is_empty() {
+            return;
+        }
+        if self
+            .execute_layer_commands(
+                "Ungroup layers",
+                groups
+                    .into_iter()
+                    .map(|id| Command::Ungroup { id })
+                    .collect(),
+                cx,
+            )
+            .is_some()
         {
-            let first = self.editor.doc.children(Some(id)).last().copied();
-            self.execute(Command::Ungroup { id }, cx);
-            self.selected = first;
+            let active = children.last().copied();
+            self.set_layer_selection(children, active);
         }
     }
 
     /// Move the selection one step up (`up`) or down among its siblings.
     pub fn shift_selected(&mut self, up: bool, cx: &mut Context<Self>) {
-        let Some(id) = self.selected else { return };
-        let Some(n) = self.editor.doc.node(id) else {
-            return;
-        };
-        let sib = self.editor.doc.children(n.parent);
-        let i = sib.iter().position(|s| *s == id).unwrap_or(0);
-        let target = if up { i + 1 } else { i.saturating_sub(1) };
-        if target == i || target >= sib.len() {
-            return;
+        let mut ids = self.selected_layer_roots();
+        let selected = ids.clone();
+        if up {
+            ids.reverse();
         }
-        // Removing first shifts indices above us down by one.
-        self.execute(
-            Command::MoveNode {
+        let mut trial = self.editor.doc.clone();
+        let mut commands = Vec::new();
+        for id in ids {
+            let Some(node) = trial.node(id) else { continue };
+            let siblings = trial.children(node.parent);
+            let index = siblings.iter().position(|other| *other == id).unwrap_or(0);
+            let target = if up {
+                index + 1
+            } else {
+                index.saturating_sub(1)
+            };
+            if target == index || target >= siblings.len() || selected.contains(&siblings[target]) {
+                continue;
+            }
+            let command = Command::MoveNode {
                 id,
                 slot: Slot {
-                    parent: n.parent,
+                    parent: node.parent,
                     index: target,
                 },
-            },
-            cx,
-        );
+            };
+            if let Err(error) = command.clone().apply(&mut trial) {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+            commands.push(command);
+        }
+        self.execute_layer_commands("Reorder layers", commands, cx);
     }
 
     pub fn toggle_selected_visible(&mut self, cx: &mut Context<Self>) {
@@ -954,7 +1014,12 @@ impl EditorView {
             && let Some(n) = self.editor.doc.node(id)
         {
             let visible = !n.visible;
-            self.execute(Command::SetVisible { id, visible }, cx);
+            let commands = self
+                .selected_layer_ids()
+                .into_iter()
+                .map(|id| Command::SetVisible { id, visible })
+                .collect();
+            self.execute_layer_commands("Layer visibility", commands, cx);
         }
     }
 
@@ -979,6 +1044,7 @@ impl EditorView {
     pub(crate) fn deselect_layer(&mut self, cx: &mut Context<Self>) {
         if self.selected.is_some() {
             self.selected = None;
+            self.layer_selection = Default::default();
             self.menu = None;
             cx.notify();
         }
@@ -994,7 +1060,7 @@ impl EditorView {
             },
             cx,
         ) {
-            self.selected = Some(id);
+            self.set_layer_selection(vec![id], Some(id));
         }
         self.menu = None;
     }
@@ -1005,6 +1071,16 @@ impl EditorView {
         if Some(dragged) == target {
             return;
         }
+        if !self.layer_is_selected(dragged) {
+            self.set_layer_selection(vec![dragged], Some(dragged));
+        }
+        let ids = self.selected_layer_roots();
+        if target.is_some_and(|target| {
+            ids.iter()
+                .any(|id| *id == target || self.editor.doc.is_ancestor(*id, target))
+        }) {
+            return;
+        }
         let doc = &self.editor.doc;
         let slot = match target.and_then(|t| doc.node(t)) {
             None => Slot::TOP,
@@ -1013,7 +1089,7 @@ impl EditorView {
                 let sib: Vec<NodeId> = doc
                     .children(t.parent)
                     .into_iter()
-                    .filter(|s| *s != dragged)
+                    .filter(|s| !ids.contains(s))
                     .collect();
                 let i = sib.iter().position(|s| *s == t.id).unwrap_or(sib.len());
                 Slot {
@@ -1022,8 +1098,39 @@ impl EditorView {
                 }
             }
         };
-        self.execute(Command::MoveNode { id: dragged, slot }, cx);
-        self.selected = Some(dragged);
+        // Move bottom-to-top to a fixed anchor; recompute indices after removal.
+        let mut trial = self.editor.doc.clone();
+        let mut commands = Vec::new();
+        let mut anchor = target.filter(|target| trial.node(*target).is_some_and(|n| !n.is_group()));
+        for id in ids {
+            let next_slot = if let Some(anchor) = anchor {
+                let siblings: Vec<_> = trial
+                    .children(slot.parent)
+                    .into_iter()
+                    .filter(|other| *other != id)
+                    .collect();
+                Slot {
+                    parent: slot.parent,
+                    index: siblings
+                        .iter()
+                        .position(|other| *other == anchor)
+                        .map_or(siblings.len(), |i| i + 1),
+                }
+            } else {
+                Slot::top_of(slot.parent)
+            };
+            let command = Command::MoveNode {
+                id,
+                slot: next_slot,
+            };
+            if let Err(error) = command.clone().apply(&mut trial) {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+            commands.push(command);
+            anchor = Some(id);
+        }
+        self.execute_layer_commands("Reorder layers", commands, cx);
     }
 
     fn start_rename(&mut self, id: NodeId, window: &mut Window, cx: &mut Context<Self>) {
@@ -1203,7 +1310,12 @@ impl EditorView {
             Drag::Navigator => self.nav_click(pos, cx),
             Drag::LayersSplit { start_y, start_h } => {
                 let dy: f32 = (pos.y - *start_y).into();
-                self.layers_h = (*start_h - dy).clamp(LAYERS_MIN_H, LAYERS_MAX_H);
+                if self.layer_panel.compact && !self.layer_panel.controls_open {
+                    self.layer_panel.compact_height =
+                        Some((*start_h - dy).clamp(150., LAYERS_MAX_H));
+                } else {
+                    self.layers_h = (*start_h - dy).clamp(LAYERS_MIN_H, LAYERS_MAX_H);
+                }
                 cx.notify();
             }
             Drag::Transform(g) => {
@@ -1347,8 +1459,8 @@ impl EditorView {
         if key.edits_document() {
             self.close_text_field(cx);
             let name = match key {
-                SliderKey::Opacity(_) => "Opacity".to_string(),
-                SliderKey::FillOpacity(_) => "Fill opacity".into(),
+                SliderKey::Opacity(_) | SliderKey::LayerOpacity(_) => "Opacity".to_string(),
+                SliderKey::FillOpacity(_) | SliderKey::LayerFillOpacity(_) => "Fill opacity".into(),
                 SliderKey::BlendRange(..) => "Blend If".into(),
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
@@ -1571,8 +1683,23 @@ impl EditorView {
             SliderKey::Curve(_) => {}
             SliderKey::Filter(id, idx, key) => self.set_filter_param(id, idx, key, v, false, cx),
             SliderKey::Style(id, idx, key) => self.set_style_param(id, idx, key, v, cx),
-            SliderKey::FillOpacity(id) => {
-                self.set_blending(id, |options| options.fill_opacity = v / 100., cx)
+            SliderKey::FillOpacity(id) | SliderKey::LayerFillOpacity(id) => {
+                let ids = if self.layer_is_selected(id) {
+                    self.selected_layer_ids()
+                } else {
+                    vec![id]
+                };
+                let commands = ids
+                    .into_iter()
+                    .filter_map(|id| {
+                        self.editor.doc.node(id).map(|node| {
+                            let mut options = node.blending;
+                            options.fill_opacity = v / 100.;
+                            Command::SetBlendingOptions { id, options }
+                        })
+                    })
+                    .collect();
+                self.execute_layer_commands("Layer fill", commands, cx);
             }
             SliderKey::BlendRange(id, backdrop, index) => {
                 self.set_blend_range(id, backdrop, index, v / 255., cx)
@@ -1598,12 +1725,20 @@ impl EditorView {
                 self.compare = v / 100.0;
                 cx.notify();
             }
-            SliderKey::Opacity(id) => {
-                self.execute(
-                    Command::SetOpacity {
-                        id,
-                        opacity: v / 100.0,
-                    },
+            SliderKey::Opacity(id) | SliderKey::LayerOpacity(id) => {
+                let ids = if self.layer_is_selected(id) {
+                    self.selected_layer_ids()
+                } else {
+                    vec![id]
+                };
+                self.execute_layer_commands(
+                    "Layer opacity",
+                    ids.into_iter()
+                        .map(|id| Command::SetOpacity {
+                            id,
+                            opacity: v / 100.0,
+                        })
+                        .collect(),
                     cx,
                 );
             }
@@ -2314,15 +2449,17 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        self.ensure_layer_search(window, cx);
         self.sidebar(p, window, cx)
     }
 
     fn scene_graph(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let rows = self.editor.doc.panel_rows();
+        let rows = self.filtered_layer_rows();
         let accent = p.accent;
         let header = div()
             .id("graph-header")
             .flex()
+            .flex_none()
             .items_center()
             .gap(px(6.))
             .pb(px(6.))
@@ -2330,6 +2467,21 @@ impl EditorView {
             .on_drop(cx.listener(|this, d: &DraggedNode, _, cx| this.drop_on(d.id, None, cx)))
             .child(label("Layers", p))
             .child(div().flex_1())
+            .when(self.layer_panel.compact, |header| {
+                header.child(
+                    chip(
+                        "layer-controls-toggle",
+                        "Controls",
+                        self.layer_panel.controls_open,
+                        p,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.layer_panel.controls_open = !this.layer_panel.controls_open;
+                        cx.notify();
+                    }))
+                    .test_support(),
+                )
+            })
             .child(
                 chip("sidebar-panels-toggle", "Panels ▾", self.sidebar_menu, p)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -2340,6 +2492,7 @@ impl EditorView {
             );
         let actions = div()
             .flex()
+            .flex_none()
             .flex_wrap()
             .gap(px(5.))
             .pt(px(6.))
@@ -2405,6 +2558,19 @@ impl EditorView {
             self.menu_list("add-menu", list, p, cx)
         });
 
+        let controls = (!self.layer_panel.compact || self.layer_panel.controls_open).then(|| {
+            div()
+                .id("layer-controls")
+                .flex()
+                .flex_col()
+                .flex_none()
+                .when(self.layer_panel.compact, |controls| {
+                    controls.max_h_40().overflow_y_scroll()
+                })
+                .child(self.layer_filter_controls(p, cx))
+                .children(self.layer_blend_controls(p, cx))
+                .children(self.layer_lock_controls(p, cx))
+        });
         let row_els: Vec<AnyElement> = rows
             .iter()
             .map(|r| self.node_row(r.id, r.depth, p, cx).into_any_element())
@@ -2412,7 +2578,7 @@ impl EditorView {
         div()
             .flex()
             .flex_col()
-            .h_full()
+            .flex_1()
             .min_h_0()
             .gap(px(2.))
             .px(px(10.))
@@ -2421,9 +2587,18 @@ impl EditorView {
             .border_b_1()
             .border_color(p.line)
             .child(header)
+            .children(controls)
             .children(self.sidebar_panel_menu(p, cx))
             .when(rows.is_empty(), |d| {
-                d.child(mono("empty document", 10., p.muted))
+                d.child(mono(
+                    if self.editor.doc.nodes.is_empty() {
+                        "Empty document"
+                    } else {
+                        "No matching layers"
+                    },
+                    10.,
+                    p.muted,
+                ))
             })
             .child(
                 div()
@@ -2460,13 +2635,15 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let n = self.editor.doc.node(id).expect("row node").clone();
-        let on = self.selected == Some(id);
+        let on = self.layer_is_selected(id);
         let (fg, bg, border) = if on {
             (p.paper, p.ink, p.ink)
         } else {
             (p.ink, transparent_black(), p.line)
         };
         let meta_fg = if on { p.paper } else { p.muted };
+        let mask_active = self.selected == Some(id) && self.tools.mask_edit;
+        let mask_thumb = n.mask.as_ref().map(|mask| self.mask_thumbnail(id, mask));
         let chip_el: AnyElement = match &n.kind {
             NodeKind::Raster { raster, .. } => {
                 let t = self.thumb(raster);
@@ -2565,9 +2742,6 @@ impl EditorView {
         if n.clip_to.is_some() {
             meta = format!("↓ {meta}");
         }
-        if n.mask.is_some() {
-            meta = format!("{meta} · m");
-        }
         let ai_badge = n.model_id().map(|_| {
             div()
                 .flex_none()
@@ -2603,6 +2777,7 @@ impl EditorView {
         div()
             .id(("row", id))
             .flex()
+            .flex_none()
             .items_center()
             .gap(px(8.))
             .pl(px(6. + depth as f32 * 14.))
@@ -2617,27 +2792,14 @@ impl EditorView {
                 cx.stop_propagation();
                 window.focus(&this.panel_focus, cx);
                 this.menu = None;
+                this.select_layer_row(
+                    id,
+                    e.modifiers().control || e.modifiers().platform,
+                    e.modifiers().shift,
+                    cx,
+                );
                 if e.click_count() >= 2 {
                     this.start_rename(id, window, cx);
-                } else if this.selected == Some(id)
-                    && (e.modifiers().control || e.modifiers().shift)
-                {
-                    // Ctrl- or Shift-click on the selected layer deselects it
-                    // (GIMP's habit; Photoshop uses Ctrl-click too).
-                    this.deselect_layer(cx);
-                } else {
-                    if !matches!(
-                        this.sidebar_tab,
-                        SidebarTab::Reference
-                            | SidebarTab::History
-                            | SidebarTab::BrushSettings
-                            | SidebarTab::BrushPresets
-                            | SidebarTab::BlendingOptions
-                    ) {
-                        this.select_sidebar(SidebarTab::Properties, cx);
-                    }
-                    this.selected = this.editor.doc.node(id).map(|_| id);
-                    cx.notify();
                 }
             }))
             .on_drag(dragged, |d, _, _, cx| cx.new(|_| d.clone()))
@@ -2646,8 +2808,7 @@ impl EditorView {
                     if event.button == MouseButton::Right {
                         window.focus(&this.panel_focus, cx);
                         this.menu = None;
-                        this.selected = this.editor.doc.node(id).map(|_| id);
-                        cx.notify();
+                        this.select_layer_context(id, cx);
                     }
                 }),
             )
@@ -2656,6 +2817,16 @@ impl EditorView {
             })
             .on_drop(
                 cx.listener(move |this, d: &DraggedNode, _, cx| this.drop_on(d.id, Some(id), cx)),
+            )
+            .child(
+                div()
+                    .id(("layer-color", id))
+                    .w_1()
+                    .h_6()
+                    .flex_none()
+                    .bg(layers_panel::label_color(n.color_label, p))
+                    .aria_label(format!("{} color label", n.color_label.label()))
+                    .test_support(),
             )
             .child(
                 div()
@@ -2672,10 +2843,73 @@ impl EditorView {
                         this.execute(Command::SetVisible { id, visible }, cx);
                     })),
             )
-            .child(chip_el)
+            .child(
+                div()
+                    .id(("layer-content", id))
+                    .flex_none()
+                    .p_0p5()
+                    .border_1()
+                    .border_color(if on && !mask_active { p.accent } else { p.line })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.select_layer_content(id, cx);
+                        window.focus(&this.panel_focus, cx);
+                    }))
+                    .child(chip_el)
+                    .test_support(),
+            )
+            .children(mask_thumb.map(|thumb| {
+                div()
+                    .id(("layer-mask", id))
+                    .flex_none()
+                    .p_0p5()
+                    .border_1()
+                    .border_color(if mask_active { p.accent } else { p.line })
+                    .opacity(if n.mask_enabled { 1. } else { 0.45 })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.select_layer_mask(id, cx);
+                        window.focus(&this.panel_focus, cx);
+                    }))
+                    .child(
+                        img(ImageSource::Render(thumb))
+                            .size_5()
+                            .object_fit(ObjectFit::Contain),
+                    )
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new("Edit layer mask")
+                            .build(window, cx)
+                    })
+                    .test_support()
+            }))
             .child(name_el)
             .children(ai_badge)
-            .child(mono(meta, 9.5, meta_fg).flex_none())
+            .child(
+                mono(meta, 9.5, meta_fg)
+                    .flex_none()
+                    .max_w_20()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap(),
+            )
+            .when(
+                n.locked || n.locks.pixels || n.locks.position || n.locks.transparency,
+                |row| {
+                    row.child(
+                        div()
+                            .id(("layer-lock-state", id))
+                            .text_xs()
+                            .text_color(meta_fg)
+                            .child("🔒")
+                            .tooltip(|window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(
+                                    "Layer has locks enabled",
+                                )
+                                .build(window, cx)
+                            }),
+                    )
+                },
+            )
             .test_support()
             .context_menu({
                 let editor = cx.weak_entity();
@@ -2684,24 +2918,7 @@ impl EditorView {
                     let Some(editor) = editor.upgrade() else {
                         return menu;
                     };
-                    let menu = editor.update(cx, |editor, cx| {
-                        editor.clipboard_menu(menu, focus.clone(), cx)
-                    });
-                    let menu = clipboard::transform_menu(menu, &editor, focus.clone(), window, cx);
-                    let target = editor.downgrade();
-                    menu.separator().item(
-                        gpui_kit::component::menu::PopupMenuItem::new("Blending Options…")
-                            .on_click(move |_, window, cx| {
-                                target
-                                    .update(cx, |this, cx| {
-                                        this.open_blending_options(id, cx);
-                                        cx.defer_in(window, |this, window, cx| {
-                                            window.focus(&this.panel_focus, cx);
-                                        });
-                                    })
-                                    .ok();
-                            }),
-                    )
+                    layer_menu::layer_context_menu(menu, &editor, id, focus.clone(), window, cx)
                 }
             })
     }
@@ -3140,6 +3357,7 @@ impl EditorView {
                 .key_context("Slider")
                 .role(Role::Slider)
                 .aria_label(name.to_string())
+                .test_support()
                 .aria_value(format!("{}", spec.0 + norm * (spec.1 - spec.0)))
                 .aria_min_numeric_value(spec.0 as f64)
                 .aria_max_numeric_value(spec.1 as f64)

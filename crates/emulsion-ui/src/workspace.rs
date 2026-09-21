@@ -1254,6 +1254,15 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Ungroup, _, cx| {
                 this.with_editor(cx, |e, cx| e.ungroup_selected(cx))
             }))
+            .on_action(cx.listener(|this, _: &RenameLayer, window, cx| {
+                this.with_editor(cx, |e, cx| e.rename_layer(window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &MergeLayers, _, cx| {
+                this.with_editor(cx, |e, cx| e.merge_layers(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &MergeVisible, _, cx| {
+                this.with_editor(cx, |e, cx| e.merge_layers(true, cx))
+            }))
             .on_action(cx.listener(|this, _: &MoveNodeUp, _, cx| {
                 this.with_editor(cx, |e, cx| e.shift_selected(true, cx))
             }))

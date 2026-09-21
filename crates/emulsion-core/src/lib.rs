@@ -19,3 +19,5 @@ pub use history::{Editor, History};
 pub use node::{Node, NodeId, NodeKind};
 
 pub use emulsion_raster as raster;
+
+mod layer_locks;

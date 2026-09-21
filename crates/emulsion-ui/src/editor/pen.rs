@@ -487,7 +487,7 @@ impl EditorView {
             },
             cx,
         ) {
-            self.selected = Some(id);
+            self.set_layer_selection(vec![id], Some(id));
             self.tools.pen.selected = None;
             self.set_status(
                 "Path added. Drag anchors to edit; alt-click one to make it a corner or a curve.",

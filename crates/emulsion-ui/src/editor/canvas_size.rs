@@ -299,7 +299,7 @@ impl EditorView {
                     },
                     cx,
                 ) {
-                    this.selected = Some(id);
+                    this.set_layer_selection(vec![id], Some(id));
                     this.set_status("New edges filled into their own layer.", false, cx);
                 }
             })

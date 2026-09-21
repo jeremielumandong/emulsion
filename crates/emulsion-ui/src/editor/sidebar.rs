@@ -56,6 +56,8 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        self.layer_panel.compact = f32::from(window.viewport_size().height) < 700.;
+        let dock_bounds = self.layer_panel.dock_bounds.clone();
         let tabs = div()
             .flex()
             .flex_none()
@@ -231,6 +233,7 @@ impl EditorView {
                 d.child(crate::widgets::tip(
                     div()
                         .id("layers-resize")
+                        .test_support()
                         .flex_none()
                         .h(px(7.))
                         .w_full()
@@ -244,7 +247,12 @@ impl EditorView {
                             cx.listener(|this, e: &MouseDownEvent, _, cx| {
                                 this.drag = Some(Drag::LayersSplit {
                                     start_y: e.position.y,
-                                    start_h: this.layers_h,
+                                    start_h: this
+                                        .layer_panel
+                                        .dock_bounds
+                                        .get()
+                                        .map(|bounds| f32::from(bounds.size.height))
+                                        .unwrap_or(this.layers_h),
                                 });
                                 cx.stop_propagation();
                                 cx.notify();
@@ -257,11 +265,33 @@ impl EditorView {
             .child(
                 div()
                     .id("sidebar-layers-dock")
+                    .relative()
                     .flex()
                     .flex_col()
                     .flex_none()
-                    .h(px(self.layers_h))
+                    .h(px(
+                        if self.layer_panel.compact && !self.layer_panel.controls_open {
+                            self.layer_panel.compact_height.unwrap_or(260.)
+                        } else {
+                            self.layers_h
+                        },
+                    ))
+                    .max_h(relative(
+                        if self.layer_panel.compact && !self.layer_panel.controls_open {
+                            0.60
+                        } else {
+                            0.80
+                        },
+                    ))
                     .min_h_0()
+                    .child(
+                        canvas(
+                            move |bounds, _, _| dock_bounds.set(Some(bounds)),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
                     .child(dock_tabs)
                     .child(dock_content)
                     .test_support(),
@@ -299,7 +329,7 @@ impl EditorView {
                 chip(("path-row", id), name, self.selected == Some(id), p)
                     .aria_selected(self.selected == Some(id))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.selected = Some(id);
+                        this.set_layer_selection(vec![id], Some(id));
                         this.set_pen_mode(PenMode::Pen, cx);
                         window.focus(&this.canvas_focus, cx);
                         cx.notify();

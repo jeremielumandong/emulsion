@@ -330,7 +330,7 @@ impl EditorView {
                                     cx,
                                 );
                             }
-                            this.selected = Some(id);
+                            this.set_layer_selection(vec![id], Some(id));
                         }
                         this.editor.end();
                         this.set_status(
@@ -546,7 +546,7 @@ impl EditorView {
                             },
                             cx,
                         ) {
-                            this.selected = Some(id);
+                            this.set_layer_selection(vec![id], Some(id));
                             this.set_status(
                                 "Filled into a new layer. Hide it to compare.",
                                 false,
@@ -596,7 +596,7 @@ impl EditorView {
                         },
                         cx,
                     ) {
-                        this.selected = Some(id);
+                        this.set_layer_selection(vec![id], Some(id));
                         this.set_status(
                             "Depth map added: near is bright. Use it as a mask for depth of field or fog.",
                             false,
@@ -671,7 +671,7 @@ impl EditorView {
                             },
                             cx,
                         ) {
-                            this.selected = Some(id);
+                            this.set_layer_selection(vec![id], Some(id));
                         }
                         this.editor.end();
                         this.fit_pending = true;
@@ -735,7 +735,7 @@ impl EditorView {
                             },
                             cx,
                         ) {
-                            this.selected = Some(id);
+                            this.set_layer_selection(vec![id], Some(id));
                             this.set_status(
                             format!(
                                 "Restored {n} face{}: lower the layer's opacity to keep it natural.",

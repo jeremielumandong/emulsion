@@ -152,6 +152,15 @@ impl EditorView {
             self.set_status("That layer or its group is locked.", true, cx);
             return;
         }
+        let locks = self.editor.doc.layer_locks(id);
+        if locks.pixels || locks.transparency {
+            self.set_status(
+                "Unlock image pixels and transparency before applying filters.",
+                true,
+                cx,
+            );
+            return;
+        }
         let (source, convert) = match self.editor.doc.node(id).map(|n| &n.kind) {
             Some(NodeKind::Smart { source, .. }) => (source.clone(), false),
             Some(NodeKind::Raster { raster, .. }) => (raster.clone(), true),

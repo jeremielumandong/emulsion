@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 /// Tight source-space bounds for sparse drawing/text pixels. Solid source
 /// images use their full extent; a local mask can narrow that extent.
-fn ink_bounds(raster: &Raster, mask: Option<&Mask>) -> IRect {
+pub fn ink_bounds(raster: &Raster, mask: Option<&Mask>) -> IRect {
     if raster.fill()[3] > 0 {
         return mask.map_or_else(
             || raster.bounds(),

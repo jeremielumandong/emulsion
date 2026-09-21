@@ -1665,7 +1665,7 @@ pub fn fill_color(
             let mut out = base
                 .base_tile(c)
                 .map(|t| t.to_vec())
-                .unwrap_or_else(|| vec![[0u16; 4]; TILE_PX]);
+                .unwrap_or_else(|| vec![base.fill(); TILE_PX]);
             let tr = IRect::new(c.x * t, c.y * t, t, t).intersect(&region);
             for y in tr.y..tr.bottom() {
                 for x in tr.x..tr.right() {
@@ -2026,6 +2026,21 @@ mod tests {
             &cpu.render_with_compositor(&base, None).0,
         );
         assert!(!accelerated.uses_persistent());
+    }
+
+    #[test]
+    fn partial_fill_keeps_implicit_solid_pixels_outside_selection() {
+        let base = Raster::solid(300, 200, [1.0, 0.0, 0.0, 1.0]);
+        let (filled, _) = fill_color(
+            &base,
+            IRect::new(20, 20, 30, 30),
+            &|x, _| if x < 35 { 1.0 } else { 0.0 },
+            [0.0, 0.0, 1.0, 1.0],
+        );
+        assert_eq!(filled.get(25, 25), [0, 0, 65535, 65535]);
+        assert_eq!(filled.get(40, 25), base.get(40, 25));
+        assert_eq!(filled.get(10, 10), base.get(10, 10));
+        assert_eq!(filled.get(290, 190), base.get(290, 190));
     }
 
     #[test]

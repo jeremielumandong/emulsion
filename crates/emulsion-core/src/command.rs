@@ -96,6 +96,19 @@ pub enum Command {
         id: NodeId,
         visible: bool,
     },
+    SetLayerLocks {
+        id: NodeId,
+        locks: crate::node::LayerLocks,
+    },
+    /// Recolor a solid fill without replacing its editable node or mask.
+    SetFillColor {
+        id: NodeId,
+        rgba: [u8; 4],
+    },
+    SetColorLabel {
+        id: NodeId,
+        color: crate::node::LayerColor,
+    },
     SetLocked {
         id: NodeId,
         locked: bool,
@@ -131,6 +144,12 @@ pub enum Command {
         degrees: f64,
     },
     /// Translate a node and all its descendants in document pixels.
+    /// Move selected roots atomically; descendants of another selected root move once.
+    TranslateNodes {
+        ids: Vec<NodeId>,
+        dx: f64,
+        dy: f64,
+    },
     TranslateNode {
         id: NodeId,
         dx: f64,
@@ -289,6 +308,9 @@ impl Command {
             Command::MoveNode { .. } => "Reorder".into(),
             Command::DuplicateNode { .. } => "Duplicate".into(),
             Command::SetVisible { visible, .. } => if *visible { "Show" } else { "Hide" }.into(),
+            Command::SetLayerLocks { .. } => "Layer locks".into(),
+            Command::SetFillColor { .. } => "Fill color".into(),
+            Command::SetColorLabel { .. } => "Layer color".into(),
             Command::SetLocked { locked, .. } => if *locked { "Lock" } else { "Unlock" }.into(),
             Command::SetOpacity { .. } => "Opacity".into(),
             Command::SetBlend { blend, .. } => format!("Blend: {}", blend.label()),
@@ -297,6 +319,7 @@ impl Command {
             Command::SetAdjustment { .. } => "Adjustment".into(),
             Command::SetPlacement { .. } => "Transform".into(),
             Command::RotateNode { .. } => "Rotate node".into(),
+            Command::TranslateNodes { .. } => "Move layers".into(),
             Command::TranslateNode { .. } => "Move".into(),
             Command::AlignNode { alignment, .. } => match alignment {
                 Alignment::Left => "Align left",
@@ -362,6 +385,8 @@ impl Command {
             Command::SetSelection { .. }
             | Command::SetGuides { .. }
             | Command::SetCollapsed { .. }
+            | Command::SetLayerLocks { .. }
+            | Command::SetColorLabel { .. }
             | Command::SetLocked { .. }
             | Command::Rename { .. } => Dirty::Nothing,
             Command::SetPath { id, path, style } => match before.node(*id).map(|n| &n.kind) {
@@ -420,6 +445,7 @@ impl Command {
         if has_locks {
             self.check_locks(doc)?;
         }
+        crate::layer_locks::check(self, doc)?;
         let mut next = doc.clone();
         let created = self.apply_inner(&mut next)?;
         // Moving/removing a clip base can also clear a different node's clip.
@@ -462,6 +488,13 @@ impl Command {
             Ok(())
         };
         match self {
+            Self::TranslateNodes { ids, .. } => {
+                for id in ids {
+                    check(*id, true)?;
+                }
+                Ok(())
+            }
+
             Self::SetCollapsed { .. }
             | Self::SetSelection { .. }
             | Self::SetGuides { .. }
@@ -470,7 +503,7 @@ impl Command {
             | Self::ImageSize { .. } => Ok(()),
             // Unlocking the selected node is allowed. A locked parent must
             // still be unlocked before its children's lock flags can change.
-            Self::SetLocked { id, .. } => {
+            Self::SetLocked { id, .. } | Self::SetLayerLocks { id, .. } => {
                 if let Some(parent) = doc.node(*id).and_then(|n| n.parent) {
                     check(parent, false)?;
                 }
@@ -501,6 +534,8 @@ impl Command {
             | Self::SetOpacity { id, .. }
             | Self::SetBlend { id, .. }
             | Self::Rename { id, .. }
+            | Self::SetColorLabel { id, .. }
+            | Self::SetFillColor { id, .. }
             | Self::SetParam { id, .. }
             | Self::SetAdjustment { id, .. }
             | Self::SetPlacement { id, .. }
@@ -530,6 +565,28 @@ impl Command {
             doc.node(id).map(|_| ()).ok_or(CommandError::NoSuchNode(id))
         };
         match self {
+            Command::TranslateNodes { ids, dx, dy } => {
+                let roots: Vec<_> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        !ids.iter()
+                            .any(|other| id != other && doc.is_ancestor(*other, *id))
+                    })
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                for id in roots {
+                    Command::TranslateNode {
+                        id,
+                        dx: *dx,
+                        dy: *dy,
+                    }
+                    .apply(doc)?;
+                }
+                Ok(None)
+            }
+
             Command::AddNode { node, slot } => {
                 if let Some(p) = slot.parent {
                     need(doc, p)?;
@@ -637,6 +694,16 @@ impl Command {
                 Ok(Some(map[id]))
             }
             Command::SetVisible { id, visible } => set(doc, *id, |n| n.visible = *visible),
+            Command::SetLayerLocks { id, locks } => set(doc, *id, |n| n.locks = *locks),
+            Command::SetFillColor { id, rgba } => {
+                let node = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let NodeKind::Fill { rgba: color } = &mut node.kind else {
+                    return Err(CommandError::NoSuchParam(*id, "fill color".into()));
+                };
+                *color = *rgba;
+                Ok(None)
+            }
+            Command::SetColorLabel { id, color } => set(doc, *id, |n| n.color_label = *color),
             Command::SetLocked { id, locked } => set(doc, *id, |n| n.locked = *locked),
             Command::SetBlendingOptions { id, options } => {
                 if !options.valid() {
@@ -796,10 +863,15 @@ impl Command {
                 Ok(None)
             }
             Command::ReplacePixels { id, raster, .. } => {
+                let alpha_locked = doc.layer_locks(*id).transparency;
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 match &mut n.kind {
                     NodeKind::Raster { raster: r, .. } => {
-                        *r = raster.clone();
+                        *r = if alpha_locked {
+                            Arc::new(crate::layer_locks::preserve_alpha(r, raster))
+                        } else {
+                            raster.clone()
+                        };
                         Ok(None)
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "pixels".into())),
@@ -960,7 +1032,18 @@ impl Command {
                 Ok(None)
             }
             Command::Rasterize { id } => {
+                let (width, height) = (doc.width, doc.height);
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                if let NodeKind::Fill { rgba } = n.kind {
+                    let pixel = emulsion_raster::color::f_to_px(
+                        emulsion_raster::color::srgba8_to_premul(rgba),
+                    );
+                    n.kind = NodeKind::Raster {
+                        raster: Arc::new(Raster::empty(width, height, pixel)),
+                        placement: Placement::default(),
+                    };
+                    return Ok(None);
+                }
                 if let NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } = &n.kind {
                     n.kind = NodeKind::Raster {
                         raster: cache.clone(),

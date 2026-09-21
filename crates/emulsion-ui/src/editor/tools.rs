@@ -11,6 +11,9 @@ use emulsion_raster::select::{self, Combine};
 use emulsion_raster::{IRect, Mask, fill};
 use glam::{DAffine2, dvec2};
 
+#[path = "shape_fill.rs"]
+mod shape_fill;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum BrushSettingsSection {
     #[default]
@@ -575,8 +578,10 @@ impl EditorView {
 
     pub fn set_paint(&mut self, kind: PaintKind, cx: &mut Context<Self>) {
         // Choosing a different brush or preset while explicitly editing a mask
-        // must keep painting that mask. Leaving the dedicated Mask tool exits it.
-        let mask_edit = self.tool == Tool::Brush && self.tools.mask_edit;
+        // must keep painting that mask. Bucket also keeps the mask selected
+        // through the dedicated Mask tool or the Layers thumbnail.
+        let mask_edit =
+            self.tools.mask_edit && (self.tool == Tool::Brush || kind == PaintKind::Bucket);
         if self.tool != Tool::Brush || kind != self.tools.paint {
             self.finish_tool_interaction(cx);
         }
@@ -710,7 +715,7 @@ impl EditorView {
             },
             cx,
         )?;
-        self.selected = Some(id);
+        self.set_layer_selection(vec![id], Some(id));
         Some(id)
     }
 
@@ -743,7 +748,8 @@ impl EditorView {
                         return;
                     }
                     if selection.is_some() && this.selected.is_none() {
-                        this.selected = this.editor.doc.nodes.last().map(|node| node.id);
+                        let selected = this.editor.doc.nodes.last().map(|node| node.id);
+                        this.set_layer_selection(selected.into_iter().collect(), selected);
                     }
                     this.execute(Command::SetSelection { selection }, cx);
                 })
@@ -755,7 +761,8 @@ impl EditorView {
         let combined = select::combine(self.editor.doc.selection.as_deref(), &new, combine);
         let selection = (!select::bounds(&combined).is_empty()).then(|| Arc::new(combined));
         if selection.is_some() && self.selected.is_none() {
-            self.selected = self.editor.doc.nodes.last().map(|node| node.id);
+            let selected = self.editor.doc.nodes.last().map(|node| node.id);
+            self.set_layer_selection(selected.into_iter().collect(), selected);
         }
         self.execute(Command::SetSelection { selection }, cx);
     }
@@ -764,7 +771,8 @@ impl EditorView {
         // Restore an active layer after clicking empty space, so Select All
         // followed by Copy works just as it does when a document first opens.
         if self.selected.is_none() {
-            self.selected = self.editor.doc.nodes.last().map(|node| node.id);
+            let selected = self.editor.doc.nodes.last().map(|node| node.id);
+            self.set_layer_selection(selected.into_iter().collect(), selected);
         }
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         self.execute(
@@ -1725,7 +1733,7 @@ impl EditorView {
                     },
                     cx,
                 ) {
-                    self.selected = Some(id);
+                    self.set_layer_selection(vec![id], Some(id));
                 }
             }
             ToolDrag::PickSv { .. } | ToolDrag::PickHue { .. } => {
@@ -2134,8 +2142,7 @@ impl EditorView {
     }
 
     fn bucket(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
-        let color = premul(self.tools.fg);
-        self.fill_at(d, color, "Fill", cx);
+        self.fill_at(d, self.tools.fg, "Fill", cx);
     }
 
     /// ColorDrop: the swatch was dropped on the canvas at window `pos`;
@@ -2149,7 +2156,7 @@ impl EditorView {
         let Some(d) = self.doc_point(pos) else {
             return;
         };
-        self.fill_at(d, premul(color), "ColorDrop", cx);
+        self.fill_at(d, color, "ColorDrop", cx);
     }
 
     /// Flood-fill the area of similar colour at document point `d` on the
@@ -2157,7 +2164,7 @@ impl EditorView {
     fn fill_at(
         &mut self,
         d: (f64, f64),
-        color: [f32; 4],
+        color: [u8; 4],
         label: &'static str,
         cx: &mut Context<Self>,
     ) {
@@ -2165,6 +2172,10 @@ impl EditorView {
         if d.0 < 0.0 || d.1 < 0.0 || d.0 >= w as f64 || d.1 >= h as f64 {
             return;
         }
+        if self.fill_object_or_mask(Some(d), color, cx) {
+            return;
+        }
+        let color = premul(color);
         let Some(id) = self.paint_target(cx) else {
             return;
         };
@@ -2213,6 +2224,9 @@ impl EditorView {
     /// Fill the selection (or everything) on the target layer with the
     /// foreground colour.
     pub fn fill_selection(&mut self, cx: &mut Context<Self>) {
+        if self.fill_object_or_mask(None, self.tools.fg, cx) {
+            return;
+        }
         let Some(id) = self.paint_target(cx) else {
             return;
         };
@@ -2290,7 +2304,7 @@ impl EditorView {
                     },
                     cx,
                 ) {
-                    this.selected = Some(id);
+                    this.set_layer_selection(vec![id], Some(id));
                     this.set_status("Filled into a new layer. Hide it to compare.", false, cx);
                 }
             })
@@ -2410,7 +2424,7 @@ impl EditorView {
             },
             cx,
         ) {
-            self.selected = Some(id);
+            self.set_layer_selection(vec![id], Some(id));
         }
         let _ = fill::gradient; // the dense variant serves the MCP tools
     }
@@ -3723,7 +3737,7 @@ impl EditorView {
                             if this.tools.pen.building.is_some() {
                                 this.pen_finish(cx);
                             } else {
-                                this.selected = None;
+                                this.set_layer_selection(Vec::new(), None);
                                 this.tools.pen.selected = None;
                                 cx.notify();
                             }

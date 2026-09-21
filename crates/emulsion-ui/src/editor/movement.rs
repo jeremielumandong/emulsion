@@ -12,20 +12,20 @@ pub(crate) struct MoveGesture {
 }
 
 impl EditorView {
-    fn move_target(&self) -> Result<(NodeId, IRect), &'static str> {
-        let id = self.selected.ok_or("Select a layer or group to move.")?;
+    fn move_target_for(&self, id: NodeId) -> Result<IRect, &'static str> {
         let node = self
             .editor
             .doc
             .node(id)
             .ok_or("That layer no longer exists.")?;
         if self.editor.doc.locked_ancestor(id).is_some()
+            || self.editor.doc.layer_locks(id).position
             || self
                 .editor
                 .doc
                 .nodes
                 .iter()
-                .any(|n| n.locked && self.editor.doc.is_ancestor(id, n.id))
+                .any(|n| (n.locked || n.locks.position) && self.editor.doc.is_ancestor(id, n.id))
         {
             return Err("That layer, its group, or a layer inside it is locked.");
         }
@@ -49,7 +49,17 @@ impl EditorView {
             }),
         }
         .ok_or("That layer or group has no content to move.")?;
-        Ok((id, bounds))
+        Ok(bounds)
+    }
+
+    fn move_target(&self) -> Result<(NodeId, IRect), &'static str> {
+        let id = self.selected.ok_or("Select a layer or group to move.")?;
+        let mut bounds: Option<IRect> = None;
+        for member in self.selected_layer_roots() {
+            let rect = self.move_target_for(member)?;
+            bounds = Some(bounds.map_or(rect, |bounds| bounds.union(&rect)));
+        }
+        Ok((id, bounds.ok_or("Select a layer or group to move.")?))
     }
 
     pub(super) fn begin_move(&mut self, point: (f64, f64), cx: &mut Context<Self>) {
@@ -69,6 +79,7 @@ impl EditorView {
             }
         };
         self.editor.begin("Move");
+        self.layer_selection.move_ids = self.selected_layer_roots();
         self.drag = Some(Drag::Move(MoveGesture {
             id,
             start_doc: point,
@@ -120,8 +131,8 @@ impl EditorView {
         if delta == gesture.delta {
             return;
         }
-        match self.editor.preview(Command::TranslateNode {
-            id: gesture.id,
+        match self.editor.preview(Command::TranslateNodes {
+            ids: self.layer_selection.move_ids.clone(),
             dx: delta.0,
             dy: delta.1,
         }) {
@@ -166,14 +177,21 @@ impl EditorView {
             self.set_status("Finish the current edit before nudging artwork.", false, cx);
             return;
         }
-        let id = match self.move_target() {
-            Ok((id, _)) => id,
+        match self.move_target() {
+            Ok(_) => {}
             Err(message) => {
                 self.set_status(message, false, cx);
                 return;
             }
-        };
+        }
         self.snap_lines.clear();
-        self.execute(Command::TranslateNode { id, dx, dy }, cx);
+        self.execute(
+            Command::TranslateNodes {
+                ids: self.selected_layer_roots(),
+                dx,
+                dy,
+            },
+            cx,
+        );
     }
 }

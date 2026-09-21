@@ -462,6 +462,20 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
     if x.clip_to != y.clip_to {
         out.push(("clipping", "before".into(), "changed".into()));
     }
+    if x.locks != y.locks {
+        out.push((
+            "layer locks",
+            format!("{:?}", x.locks),
+            format!("{:?}", y.locks),
+        ));
+    }
+    if x.color_label != y.color_label {
+        out.push((
+            "layer color",
+            x.color_label.label().into(),
+            y.color_label.label().into(),
+        ));
+    }
     if x.locked != y.locked {
         out.push(("lock", x.locked.to_string(), y.locked.to_string()));
     }
@@ -630,6 +644,10 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
         parent: pick(&b.parent, &o.parent, &t.parent, |x, y| x == y)?,
         visible: pick(&b.visible, &o.visible, &t.visible, |x, y| x == y)?,
         locked: pick(&b.locked, &o.locked, &t.locked, |x, y| x == y)?,
+        locks: pick(&b.locks, &o.locks, &t.locks, |x, y| x == y)?,
+        color_label: pick(&b.color_label, &o.color_label, &t.color_label, |x, y| {
+            x == y
+        })?,
         opacity: pick(&b.opacity, &o.opacity, &t.opacity, |x, y| x == y)?,
         blending: pick(&b.blending, &o.blending, &t.blending, |x, y| x == y)?,
         blend: pick(&b.blend, &o.blend, &t.blend, |x, y| x == y)?,
@@ -1097,5 +1115,26 @@ mod tests {
         g.set_head(MAIN).unwrap();
         g.delete_branch("retouch").unwrap();
         assert!(g.commit(c2).is_none(), "unreachable commits are dropped");
+    }
+
+    #[test]
+    fn layer_lock_and_color_edits_merge_as_independent_properties() {
+        use crate::node::{LayerColor, LayerLocks};
+        let base = doc();
+        let locks = LayerLocks {
+            position: true,
+            ..Default::default()
+        };
+        let ours = apply(&base, Command::SetLayerLocks { id: 1, locks });
+        let theirs = apply(
+            &base,
+            Command::SetColorLabel {
+                id: 1,
+                color: LayerColor::Green,
+            },
+        );
+        let merged = merged(merge(&base, &ours, &theirs, &HashMap::new()).unwrap());
+        assert_eq!(merged.node(1).unwrap().locks, locks);
+        assert_eq!(merged.node(1).unwrap().color_label, LayerColor::Green);
     }
 }

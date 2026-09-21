@@ -379,7 +379,7 @@ impl EditorView {
             return;
         };
         self.editor.end();
-        self.selected = Some(p.group);
+        self.set_layer_selection(vec![p.group], Some(p.group));
         let limitations = self
             .recipe_list()
             .iter()
@@ -429,7 +429,7 @@ impl EditorView {
         let slot = self.insertion_slot();
         match store::add_to(&mut self.editor, compiled, slot) {
             Ok(gid) => {
-                self.selected = Some(gid);
+                self.set_layer_selection(vec![gid], Some(gid));
                 self.set_status(
                     format!(
                         "Applied {}. Open the group to tune each stage. {}",

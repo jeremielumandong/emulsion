@@ -95,7 +95,7 @@ impl EditorView {
             vignette: 100.0,
         };
         self.editor.begin("Lens profile");
-        self.selected = Some(id);
+        self.set_layer_selection(vec![id], Some(id));
         if self.editor.doc.node(id).map(|n| n.kind.tag()) == Some("pixels") {
             self.convert_smart(cx);
         }

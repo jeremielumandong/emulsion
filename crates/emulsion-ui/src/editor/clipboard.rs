@@ -29,11 +29,17 @@ pub(super) fn transform_menu(
     cx: &mut Context<gpui_kit::component::menu::PopupMenu>,
 ) -> gpui_kit::component::menu::PopupMenu {
     let e = editor.read(cx);
-    let ready =
-        !e.assistant.running && e.drag.is_none() && !e.editor.in_transaction() && e.warp.is_none();
+    let ready = !e.assistant.running
+        && e.drag.is_none()
+        && !e.editor.in_transaction()
+        && e.warp.is_none()
+        && e.selected_layer_ids().len() == 1;
     let node = e.selected.and_then(|id| e.editor.doc.node(id));
-    let unlocked =
-        node.is_some_and(|node| node.visible && e.editor.doc.locked_ancestor(node.id).is_none());
+    let unlocked = node.is_some_and(|node| {
+        node.visible
+            && e.editor.doc.locked_ancestor(node.id).is_none()
+            && !e.editor.doc.layer_locks(node.id).position
+    });
     let raster = node.is_some_and(|node| matches!(node.kind, NodeKind::Raster { .. }));
     let smart = node.is_some_and(|node| matches!(node.kind, NodeKind::Smart { .. }));
     let text = node.is_some_and(|node| matches!(node.kind, NodeKind::Text { .. }));
@@ -139,10 +145,11 @@ impl EditorView {
             && !self.editor.in_transaction()
             && self.warp.is_none();
         let copy = ready
-            && self.selected.is_some_and(|id| {
-                emulsion_core::geometry::node_bounds(&self.editor.doc, id).is_some()
-            });
-        let cut = copy && self.pixel_target().is_ok();
+            && self
+                .selected_layer_roots()
+                .iter()
+                .any(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, *id).is_some());
+        let cut = copy && self.selected_pixel_targets().is_ok();
         let paste = ready
             && self.clipboard_slot().is_ok()
             && cx.read_from_clipboard().is_some_and(|item| {
@@ -159,6 +166,7 @@ impl EditorView {
         if !canvas {
             let node = self.selected.and_then(|id| self.editor.doc.node(id));
             let editable = ready
+                && self.selected_layer_ids().len() == 1
                 && node.is_some_and(|node| self.editor.doc.locked_ancestor(node.id).is_none());
             let can_smart = editable
                 && node.is_some_and(|node| {
@@ -247,8 +255,9 @@ impl EditorView {
 
     fn pixel_target(&self) -> Result<(NodeId, Arc<Raster>, Placement), String> {
         let id = self.selected.ok_or("Select a pixel layer first")?;
-        if self.editor.doc.locked_ancestor(id).is_some() {
-            return Err("That layer or its group is locked".into());
+        let locks = self.editor.doc.layer_locks(id);
+        if self.editor.doc.locked_ancestor(id).is_some() || locks.pixels || locks.transparency {
+            return Err("That layer or its pixels are locked".into());
         }
         if self.tools.mask_edit {
             return Err("Switch from mask editing to the layer pixels first".into());
@@ -268,26 +277,52 @@ impl EditorView {
         }
     }
 
+    fn selected_pixel_targets(&self) -> Result<Vec<(NodeId, Arc<Raster>, Placement)>, String> {
+        if self.tools.mask_edit {
+            return Err("Switch from mask editing to layer pixels first".into());
+        }
+        let ids = self.selected_layer_roots();
+        if ids.is_empty() {
+            return Err("Select a pixel layer first".into());
+        }
+        ids.into_iter().map(|id| {
+            let locks = self.editor.doc.layer_locks(id);
+            if self.editor.doc.locked_ancestor(id).is_some() || locks.pixels || locks.transparency {
+                return Err("A selected layer or its pixels are locked".into());
+            }
+            match &self.editor.doc.node(id).ok_or("The layer no longer exists")?.kind {
+                NodeKind::Raster { raster, placement } => Ok((id, raster.clone(), *placement)),
+                _ => Err("Select pixel layers; rasterize editable objects before cutting their pixels".into()),
+            }
+        }).collect()
+    }
+
     /// Copy the selected layer/subtree as seen in document coordinates,
     /// including its placement, layer mask and opacity, clipped by selection.
     fn selected_pixels(&self) -> Result<(Raster, IRect), String> {
         let doc = &self.editor.doc;
-        let id = self.selected.ok_or("Select a layer to copy")?;
+        let roots = self.selected_layer_roots();
+        if roots.is_empty() {
+            return Err("Select a layer to copy".into());
+        }
         let rect = if let Some(selection) = &doc.selection {
             select::bounds(selection)
         } else {
-            emulsion_core::geometry::node_bounds(doc, id)
-                .ok_or("That layer has no pixels to copy")?
+            roots
+                .iter()
+                .filter_map(|id| emulsion_core::geometry::node_bounds(doc, *id))
+                .reduce(|a, b| a.union(&b))
+                .ok_or("Those layers have no pixels to copy")?
         }
         .intersect(&IRect::new(0, 0, doc.width as i32, doc.height as i32));
         if rect.is_empty() {
             return Err("There are no selected pixels to copy".into());
         }
-        let ids = doc.subtree(id);
+        let ids: Vec<_> = roots.iter().flat_map(|id| doc.subtree(*id)).collect();
         let mut isolated = doc.clone();
         isolated.nodes.retain(|n| ids.contains(&n.id));
         for node in &mut isolated.nodes {
-            if node.id == id {
+            if roots.contains(&node.id) {
                 node.parent = None;
                 node.visible = true;
             }
@@ -463,60 +498,56 @@ impl EditorView {
         (raster.with_changes(changes), bounds)
     }
 
+    fn clear_selected_pixel_commands(&self, label: &str) -> Result<Vec<Command>, String> {
+        self.selected_pixel_targets()?
+            .into_iter()
+            .map(|(id, source, placement)| {
+                let (cleared, dirty) = self.cleared_pixels(&source, placement);
+                Ok(Command::ReplacePixels {
+                    id,
+                    raster: Arc::new(cleared),
+                    dirty,
+                    label: label.into(),
+                })
+            })
+            .collect()
+    }
+
     pub fn cut_pixels(&mut self, cx: &mut Context<Self>) {
         if !self.clipboard_ready(cx) {
             return;
         }
-        let (id, source, placement) = match self.pixel_target() {
-            Ok(target) => target,
-            Err(e) => {
-                self.set_status(e, true, cx);
+        let prepared = (|| {
+            let commands = self.clear_selected_pixel_commands("Cut pixels")?;
+            let mut trial = self.editor.doc.clone();
+            for command in &commands {
+                command.apply(&mut trial).map_err(|e| e.to_string())?;
+            }
+            let (pixels, rect) = self.selected_pixels()?;
+            Ok::<_, String>((commands, pixels, rect))
+        })();
+        let (commands, pixels, rect) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.set_status(error, true, cx);
                 return;
             }
         };
-        let (pixels, rect) = match self.selected_pixels() {
-            Ok(pixels) => pixels,
-            Err(e) => {
-                self.set_status(e, true, cx);
-                return;
-            }
-        };
-        let (cleared, dirty) = self.cleared_pixels(&source, placement);
-        if !self.put_pixels_on_clipboard(&pixels, rect, cx) {
-            return;
+        if self.put_pixels_on_clipboard(&pixels, rect, cx) {
+            self.execute_layer_commands("Cut pixels", commands, cx);
         }
-        self.execute(
-            Command::ReplacePixels {
-                id,
-                raster: Arc::new(cleared),
-                dirty,
-                label: "Cut pixels".into(),
-            },
-            cx,
-        );
     }
 
     pub fn clear_pixels(&mut self, cx: &mut Context<Self>) {
         if !self.clipboard_ready(cx) {
             return;
         }
-        let (id, source, placement) = match self.pixel_target() {
-            Ok(target) => target,
-            Err(e) => {
-                self.set_status(e, true, cx);
-                return;
+        match self.clear_selected_pixel_commands("Clear pixels") {
+            Ok(commands) => {
+                self.execute_layer_commands("Clear pixels", commands, cx);
             }
-        };
-        let (cleared, dirty) = self.cleared_pixels(&source, placement);
-        self.execute(
-            Command::ReplacePixels {
-                id,
-                raster: Arc::new(cleared),
-                dirty,
-                label: "Clear pixels".into(),
-            },
-            cx,
-        );
+            Err(error) => self.set_status(error, true, cx),
+        }
     }
 
     pub fn delete_canvas_pixels(&mut self, cx: &mut Context<Self>) {
@@ -655,7 +686,8 @@ impl EditorView {
             return false;
         }
         self.editor.history = lift.history;
-        self.selected = lift.selected;
+        let selected = lift.selected;
+        self.set_layer_selection(selected.into_iter().collect(), selected);
         self.after_change(cx);
         true
     }
@@ -665,6 +697,14 @@ impl EditorView {
         transform: impl FnOnce(NodeId, &emulsion_core::Document) -> Option<Command>,
         cx: &mut Context<Self>,
     ) {
+        if self.selected_layer_ids().len() > 1 {
+            self.set_status(
+                "Select one layer to transform. Multiple layers can be moved together.",
+                true,
+                cx,
+            );
+            return;
+        }
         if !self.clipboard_ready(cx) {
             return;
         }
@@ -732,7 +772,7 @@ impl EditorView {
         match result {
             Ok(Some(id)) => {
                 self.editor.end();
-                self.selected = Some(id);
+                self.set_layer_selection(vec![id], Some(id));
                 self.set_tool(Tool::Move, cx);
                 self.select_sidebar(SidebarTab::Properties, cx);
                 self.after_change(cx);

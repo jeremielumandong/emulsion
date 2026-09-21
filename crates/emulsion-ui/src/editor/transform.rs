@@ -94,7 +94,30 @@ fn text_transform_frame(spec: &emulsion_core::text::TextSpec) -> (u32, u32, Plac
     (w, h, placement)
 }
 
-fn placement_command(node: &Node, placement: Placement) -> Command {
+fn raster_frame(
+    raster: &emulsion_raster::Raster,
+    placement: Placement,
+    mask: Option<&emulsion_raster::Mask>,
+) -> (emulsion_raster::IRect, Placement) {
+    let bounds = emulsion_core::geometry::ink_bounds(raster, mask);
+    let bounds = if bounds.is_empty() {
+        raster.bounds()
+    } else {
+        bounds
+    };
+    let origin = placement
+        .to_doc(raster.width(), raster.height())
+        .transform_point2(dvec2(bounds.x as f64, bounds.y as f64));
+    let mut frame = placement;
+    let local = frame
+        .to_doc(bounds.w as u32, bounds.h as u32)
+        .transform_point2(dvec2(0., 0.));
+    frame.x += origin.x - local.x;
+    frame.y += origin.y - local.y;
+    (bounds, frame)
+}
+
+fn placement_command(node: &Node, mut placement: Placement) -> Command {
     if let NodeKind::Text { spec, .. } = &node.kind {
         let (w, h, _) = text_transform_frame(spec);
         let origin = placement.to_doc(w, h).transform_point2(dvec2(0., 0.));
@@ -109,6 +132,25 @@ fn placement_command(node: &Node, placement: Placement) -> Command {
             spec: Box::new(spec),
         }
     } else {
+        if let NodeKind::Raster {
+            raster,
+            placement: old,
+        } = &node.kind
+        {
+            let (bounds, _) = raster_frame(
+                raster,
+                *old,
+                node.mask_enabled.then_some(node.mask.as_deref()).flatten(),
+            );
+            let origin = placement
+                .to_doc(bounds.w as u32, bounds.h as u32)
+                .transform_point2(dvec2(0., 0.));
+            let source_origin = placement
+                .to_doc(raster.width(), raster.height())
+                .transform_point2(dvec2(bounds.x as f64, bounds.y as f64));
+            placement.x += origin.x - source_origin.x;
+            placement.y += origin.y - source_origin.y;
+        }
         Command::SetPlacement {
             id: node.id,
             placement,
@@ -168,9 +210,15 @@ impl EditorView {
             |id, doc| {
                 let node = doc.node(id)?;
                 let mut placement = match &node.kind {
-                    NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } => {
-                        *placement
+                    NodeKind::Raster { raster, placement } => {
+                        raster_frame(
+                            raster,
+                            *placement,
+                            node.mask_enabled.then_some(node.mask.as_deref()).flatten(),
+                        )
+                        .1
                     }
+                    NodeKind::Smart { placement, .. } => *placement,
                     NodeKind::Text { spec, .. } => text_transform_frame(spec).2,
                     _ => return None,
                 };
@@ -187,17 +235,25 @@ impl EditorView {
 
     /// The selected node when it is a pixel node the Move tool can transform.
     pub(crate) fn transformable(&self) -> Option<(NodeId, u32, u32, Placement)> {
-        if self.tool != Tool::Move {
+        if self.tool != Tool::Move || self.selected_layer_ids().len() != 1 {
             return None;
         }
         let id = self.selected?;
         let n = self.editor.doc.node(id)?;
-        if self.editor.doc.locked_ancestor(id).is_some() || !n.visible {
+        if self.editor.doc.locked_ancestor(id).is_some()
+            || self.editor.doc.layer_locks(id).position
+            || !n.visible
+        {
             return None;
         }
         match &n.kind {
             NodeKind::Raster { raster, placement } => {
-                Some((id, raster.width(), raster.height(), *placement))
+                let (bounds, frame) = raster_frame(
+                    raster,
+                    *placement,
+                    n.mask_enabled.then_some(n.mask.as_deref()).flatten(),
+                );
+                Some((id, bounds.w as u32, bounds.h as u32, frame))
             }
             NodeKind::Smart {
                 source, placement, ..
@@ -214,6 +270,37 @@ impl EditorView {
     /// canvas shows what a click in the Layers panel picked. The Move tool
     /// draws its own box instead.
     pub(crate) fn layer_outline(&self) -> Option<[(f64, f64); 4]> {
+        if self.selected_layer_ids().len() == 1
+            && self.warp.is_none()
+            && let Some(id) = self.selected
+            && self
+                .editor
+                .doc
+                .node(id)
+                .is_some_and(|node| matches!(node.kind, NodeKind::Fill { .. }))
+        {
+            let b = emulsion_core::geometry::node_bounds(&self.editor.doc, id)?;
+            return Some([
+                (b.x as f64, b.y as f64),
+                (b.right() as f64, b.y as f64),
+                (b.right() as f64, b.bottom() as f64),
+                (b.x as f64, b.bottom() as f64),
+            ]);
+        }
+        if self.selected_layer_ids().len() > 1 && self.warp.is_none() {
+            let bounds = self
+                .selected_layer_roots()
+                .into_iter()
+                .filter_map(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, id))
+                .reduce(|a, b| a.union(&b))?;
+            let (x, y, right, bottom) = (
+                bounds.x as f64,
+                bounds.y as f64,
+                bounds.right() as f64,
+                bounds.bottom() as f64,
+            );
+            return Some([(x, y), (right, y), (right, bottom), (x, bottom)]);
+        }
         if self.tool == Tool::Move || self.warp.is_some() {
             return None;
         }
@@ -226,11 +313,18 @@ impl EditorView {
             })
         };
         match &n.kind {
-            NodeKind::Raster { raster, placement } => Some(quad(
-                placement.to_doc(raster.width(), raster.height()),
-                raster.width() as f64,
-                raster.height() as f64,
-            )),
+            NodeKind::Raster { raster, placement } => {
+                let (bounds, frame) = raster_frame(
+                    raster,
+                    *placement,
+                    n.mask_enabled.then_some(n.mask.as_deref()).flatten(),
+                );
+                Some(quad(
+                    frame.to_doc(bounds.w as u32, bounds.h as u32),
+                    bounds.w as f64,
+                    bounds.h as f64,
+                ))
+            }
             NodeKind::Smart {
                 source, placement, ..
             } => Some(quad(
@@ -312,6 +406,12 @@ impl EditorView {
             self.set_status("Rasterize this Smart layer before using Warp.", true, cx);
             return;
         }
+        // Mesh resampling consumes the full stored source, including its mask.
+        // Keep this lattice in that source frame rather than the tight handles.
+        let (w, h, p) = match &self.editor.doc.node(id).expect("selected raster").kind {
+            NodeKind::Raster { raster, placement } => (raster.width(), raster.height(), *placement),
+            _ => (w, h, p),
+        };
         let m = p.to_doc(w, h);
         let (cols, rows) = (3usize, 3usize);
         let mut grid = Vec::with_capacity((cols + 1) * (rows + 1));
@@ -542,10 +642,15 @@ impl EditorView {
         let NodeKind::Raster { raster, placement } = &n.kind else {
             return;
         };
-        let (w, h) = (raster.width(), raster.height());
+        let (bounds, frame) = raster_frame(
+            raster,
+            *placement,
+            n.mask_enabled.then_some(n.mask.as_deref()).flatten(),
+        );
+        let (w, h) = (bounds.w as u32, bounds.h as u32);
         // The quad is in document space; map it back through the placement's
         // rotation/scale-free frame by warping the source directly.
-        let untouched = placement.to_doc(w, h);
+        let untouched = frame.to_doc(w, h);
         let same = local_corners(w as f64, h as f64)
             .iter()
             .zip(&quad)
@@ -556,6 +661,26 @@ impl EditorView {
         if same {
             return;
         }
+        // Extend the tight handle mapping to the full source rectangle. The
+        // original pixel and mask buffers must share exactly the same mapping.
+        let source = local_corners(w as f64, h as f64)
+            .map(|(x, y)| (x + bounds.x as f64, y + bounds.y as f64));
+        let Some(mapping) = warp::homography(source, quad) else {
+            return;
+        };
+        let full_source = local_corners(raster.width() as f64, raster.height() as f64);
+        let denominators = full_source.map(|(x, y)| mapping[6] * x + mapping[7] * y + mapping[8]);
+        if !denominators.iter().all(|v| v.is_finite() && *v > 1e-9)
+            && !denominators.iter().all(|v| v.is_finite() && *v < -1e-9)
+        {
+            self.set_status(
+                "That distortion crosses the source image's perspective horizon.",
+                true,
+                cx,
+            );
+            return;
+        }
+        let quad = full_source.map(|point| warp::apply(&mapping, point));
         let (raster, mask) = (raster.clone(), n.mask.clone());
         self.set_status("Distorting…", false, cx);
         let ticket = self.begin_edit_job();
@@ -781,5 +906,70 @@ pub(crate) fn paint_box(
             .border_widths(px(1.))
             .border_color(ink),
         );
+    }
+}
+
+#[cfg(test)]
+mod sparse_frame_tests {
+    use super::{local_corners, placement_command, raster_frame};
+    use emulsion_core::{Command, Node};
+    use emulsion_raster::Placement;
+    use glam::dvec2;
+    use std::sync::Arc;
+
+    #[test]
+    fn tight_frame_maps_flipped_rotated_source_without_losing_pixels() {
+        let raster = Arc::new(emulsion_raster::Raster::from_fn(
+            300,
+            200,
+            [0; 4],
+            |x, y| {
+                if (40..90).contains(&x) && (60..80).contains(&y) {
+                    [65535; 4]
+                } else {
+                    [0; 4]
+                }
+            },
+        ));
+        let original = Placement {
+            x: 25.,
+            y: 13.,
+            scale_x: 1.5,
+            scale_y: 2.,
+            rotation: 37.,
+            flip_x: true,
+            ..Default::default()
+        };
+        let node = Node::raster(1, "Sparse", raster.clone(), original);
+        let (bounds, frame) = raster_frame(&raster, original, None);
+        assert_eq!((bounds.x, bounds.y, bounds.w, bounds.h), (40, 60, 50, 20));
+        for change in [
+            frame,
+            Placement {
+                x: frame.x + 17.,
+                y: frame.y - 10.,
+                rotation: 85.,
+                scale_x: 3.,
+                flip_x: false,
+                flip_y: true,
+                ..frame
+            },
+        ] {
+            let Command::SetPlacement { placement, .. } = placement_command(&node, change) else {
+                panic!()
+            };
+            for (x, y) in local_corners(50., 20.) {
+                let actual = placement
+                    .to_doc(300, 200)
+                    .transform_point2(dvec2(x + 40., y + 60.));
+                let expected = change.to_doc(50, 20).transform_point2(dvec2(x, y));
+                assert!((actual - expected).length() < 1e-8);
+            }
+        }
+        let Command::SetPlacement { placement, .. } = placement_command(&node, frame) else {
+            panic!()
+        };
+        assert!((placement.x - original.x).abs() < 1e-8);
+        assert!((placement.y - original.y).abs() < 1e-8);
     }
 }

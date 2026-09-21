@@ -141,6 +141,10 @@ struct HNode {
     parent: Option<NodeId>,
     visible: bool,
     locked: bool,
+    #[serde(default)]
+    locks: emulsion_core::node::LayerLocks,
+    #[serde(default)]
+    color_label: emulsion_core::node::LayerColor,
     opacity: f32,
     blend: BlendMode,
     #[serde(default)]
@@ -281,6 +285,8 @@ pub(crate) fn encode(
                     parent: n.parent,
                     visible: n.visible,
                     locked: n.locked,
+                    locks: n.locks,
+                    color_label: n.color_label,
                     opacity: n.opacity,
                     blend: n.blend,
                     blending: n.blending,
@@ -584,6 +590,8 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 parent: n.parent,
                 visible: n.visible,
                 locked: n.locked,
+                locks: n.locks,
+                color_label: n.color_label,
                 opacity: n.opacity,
                 blend: n.blend,
                 blending: n.blending,

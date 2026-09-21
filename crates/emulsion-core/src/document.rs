@@ -302,6 +302,22 @@ impl Document {
         self.nodes = out;
     }
 
+    /// Effective granular locks, including parent groups.
+    pub fn layer_locks(&self, id: NodeId) -> crate::node::LayerLocks {
+        let mut locks = crate::node::LayerLocks::default();
+        let mut current = Some(id);
+        for _ in 0..=self.nodes.len() {
+            let Some(node) = current.and_then(|id| self.node(id)) else {
+                break;
+            };
+            locks.transparency |= node.locks.transparency;
+            locks.pixels |= node.locks.pixels;
+            locks.position |= node.locks.position;
+            current = node.parent;
+        }
+        locks
+    }
+
     pub fn validate(&self) -> Result<(), DocumentError> {
         if self.guides.len() > MAX_GUIDES
             || self

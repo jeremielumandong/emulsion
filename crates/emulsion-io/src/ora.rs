@@ -76,6 +76,10 @@ struct MNode {
     parent: Option<NodeId>,
     visible: bool,
     locked: bool,
+    #[serde(default)]
+    locks: emulsion_core::node::LayerLocks,
+    #[serde(default)]
+    color_label: emulsion_core::node::LayerColor,
     opacity: f32,
     blend: BlendMode,
     #[serde(default)]
@@ -352,6 +356,8 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             parent: n.parent,
             visible: n.visible,
             locked: n.locked,
+            locks: n.locks,
+            color_label: n.color_label,
             opacity: n.opacity,
             blend: n.blend,
             blending: n.blending,
@@ -952,6 +958,8 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             parent: n.parent,
             visible: n.visible,
             locked: n.locked,
+            locks: n.locks,
+            color_label: n.color_label,
             opacity: n.opacity,
             blend: n.blend,
             blending: n.blending,
@@ -2106,6 +2114,52 @@ mod tests {
         assert!(
             matches!(&opened.doc.node(id).unwrap().kind, NodeKind::Text { spec, .. } if spec.text == "Editable")
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn layer_locks_and_color_survive_native_and_version_roundtrip() {
+        use emulsion_core::{
+            Command,
+            node::{LayerColor, LayerLocks},
+        };
+        let mut editor = emulsion_core::history::Editor::new(Document::new(4, 4), None);
+        let id = editor
+            .execute(Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "Locked",
+                    Arc::new(Raster::transparent(4, 4)),
+                    Placement::default(),
+                )),
+                slot: emulsion_core::command::Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        let locks = LayerLocks {
+            transparency: true,
+            pixels: true,
+            position: true,
+        };
+        editor
+            .execute(Command::SetLayerLocks { id, locks })
+            .unwrap();
+        editor
+            .execute(Command::SetColorLabel {
+                id,
+                color: LayerColor::Violet,
+            })
+            .unwrap();
+        editor.create_version("Labeled locks");
+        let path = tmp("layer-lock-label.ora");
+        crate::save_full(&editor.doc, &editor.graph, &path).unwrap();
+        let opened = read_full(&path).unwrap();
+        assert_eq!(opened.doc.node(id).unwrap().locks, locks);
+        assert_eq!(opened.doc.node(id).unwrap().color_label, LayerColor::Violet);
+        let version = opened.graph.unwrap();
+        let last = version.commits().last().unwrap();
+        assert_eq!(last.doc.node(id).unwrap().locks, locks);
+        assert_eq!(last.doc.node(id).unwrap().color_label, LayerColor::Violet);
         let _ = std::fs::remove_file(path);
     }
 }

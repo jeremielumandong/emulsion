@@ -6,6 +6,53 @@ use std::sync::Arc;
 
 pub type NodeId = u64;
 
+/// Independently protected parts of a layer. Group locks are inherited.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LayerLocks {
+    pub transparency: bool,
+    pub pixels: bool,
+    pub position: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LayerColor {
+    #[default]
+    None,
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Blue,
+    Violet,
+    Gray,
+}
+impl LayerColor {
+    pub const ALL: [Self; 8] = [
+        Self::None,
+        Self::Red,
+        Self::Orange,
+        Self::Yellow,
+        Self::Green,
+        Self::Blue,
+        Self::Violet,
+        Self::Gray,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Red => "Red",
+            Self::Orange => "Orange",
+            Self::Yellow => "Yellow",
+            Self::Green => "Green",
+            Self::Blue => "Blue",
+            Self::Violet => "Violet",
+            Self::Gray => "Gray",
+        }
+    }
+}
+
 /// Original editable content retained by a Smart Object.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -127,6 +174,8 @@ pub struct Node {
     pub parent: Option<NodeId>,
     pub visible: bool,
     pub locked: bool,
+    pub locks: LayerLocks,
+    pub color_label: LayerColor,
     pub opacity: f32,
     pub blend: BlendMode,
     pub blending: emulsion_raster::composite::BlendingOptions,
@@ -150,6 +199,8 @@ impl PartialEq for Node {
             && self.parent == o.parent
             && self.visible == o.visible
             && self.locked == o.locked
+            && self.locks == o.locks
+            && self.color_label == o.color_label
             && self.opacity == o.opacity
             && self.blend == o.blend
             && self.blending == o.blending
@@ -179,6 +230,8 @@ impl Node {
             parent: None,
             visible: true,
             locked: false,
+            locks: LayerLocks::default(),
+            color_label: LayerColor::None,
             opacity: 1.0,
             blend,
             blending: Default::default(),

@@ -100,7 +100,7 @@ impl Default for Settings {
             follow_omarchy: false,
             approve_all: false,
             compact_chrome: false,
-            layers_height: 260.0,
+            layers_height: 400.0,
             show_drawing: true,
             drawing_pace: DrawingPace::Natural,
             advanced_tools: false,

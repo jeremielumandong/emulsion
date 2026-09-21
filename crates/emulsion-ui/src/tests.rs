@@ -71,6 +71,18 @@ mod painting_tests;
 #[path = "layer_tests.rs"]
 mod layer_tests;
 
+#[path = "layer_selection_tests.rs"]
+mod layer_selection_tests;
+
+#[path = "shape_fill_tests.rs"]
+mod shape_fill_tests;
+
+#[path = "layer_panel_workflow_tests.rs"]
+mod layer_panel_workflow_tests;
+
+#[path = "layer_menu_tests.rs"]
+mod layer_menu_tests;
+
 #[path = "filter_gesture_tests.rs"]
 mod filter_gesture_tests;
 

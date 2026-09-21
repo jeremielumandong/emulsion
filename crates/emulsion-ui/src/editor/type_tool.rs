@@ -109,7 +109,7 @@ impl EditorView {
                 .selected
                 .is_some_and(|id| self.editor.doc.node(id).is_none())
             {
-                self.selected = None;
+                self.set_layer_selection(Vec::new(), None);
             }
             self.after_change(cx);
         }
@@ -174,7 +174,7 @@ impl EditorView {
                 };
                 (id, true)
             };
-            self.selected = Some(id);
+            self.set_layer_selection(vec![id], Some(id));
             let Some((_, spec)) = self.text_target() else {
                 return;
             };
