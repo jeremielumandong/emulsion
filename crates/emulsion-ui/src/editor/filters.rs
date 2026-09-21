@@ -1,0 +1,247 @@
+//! Image and Filter menus backed by the same editable effects as Properties.
+use super::*;
+use emulsion_filters::Filter;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+
+pub(super) struct LastFilter(pub Filter);
+impl Global for LastFilter {}
+
+const FILTER_GROUPS: &[(&str, &[&str])] = &[
+    (
+        "Blur",
+        &["gaussian_blur", "box_blur", "motion_blur", "lens_blur"],
+    ),
+    ("Sharpen", &["unsharp_mask", "smart_sharpen"]),
+    ("Noise", &["add_noise", "reduce_noise"]),
+    ("Distort", &["pinch", "twirl", "wave"]),
+    ("Stylize", &["emboss", "find_edges"]),
+    ("Other", &["high_pass"]),
+];
+
+impl EditorView {
+    pub(super) fn effects_ready(&self) -> bool {
+        !self.assistant.running
+            && self.drag.is_none()
+            && self.warp.is_none()
+            && !self.editor.in_transaction()
+    }
+
+    pub(super) fn can_filter(&self) -> bool {
+        self.effects_ready()
+            && self.selected.is_some_and(|id| {
+                self.editor.doc.locked_ancestor(id).is_none()
+                    && self.editor.doc.node(id).is_some_and(|node| {
+                        matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. })
+                    })
+            })
+    }
+
+    pub(crate) fn repeat_last_filter(&mut self, cx: &mut Context<Self>) {
+        let Some(filter) = cx.try_global::<LastFilter>().map(|last| last.0.clone()) else {
+            self.set_status("Choose a filter before repeating it.", false, cx);
+            return;
+        };
+        self.apply_filter(filter, cx);
+    }
+
+    pub(super) fn apply_filter(&mut self, filter: Filter, cx: &mut Context<Self>) {
+        if !self.can_filter() {
+            self.set_status(
+                "Select an unlocked pixel or smart layer and finish the current edit first.",
+                false,
+                cx,
+            );
+            return;
+        }
+        let id = self.selected.unwrap();
+        self.select_sidebar(SidebarTab::Properties, cx);
+        self.add_filter(id, filter, cx);
+        self.set_status(
+            "Applying an editable filter to the whole layer; tune it in Properties.",
+            false,
+            cx,
+        );
+    }
+
+    pub(super) fn effect_menus(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+        let image_editor = cx.entity().downgrade();
+        let filter_editor = image_editor.clone();
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .flex_none()
+            .child(
+                div().id("image-menu").test_support().child(
+                    Button::new("image-menu-button")
+                        .label("Image")
+                        .small()
+                        .ghost()
+                        .text_color(p.ink)
+                        .dropdown_menu(move |menu, window, cx| {
+                            let Some(editor) = image_editor.upgrade() else {
+                                return menu;
+                            };
+                            let enabled = editor.read(cx).effects_ready();
+                            let adjustment_editor = image_editor.clone();
+                            let menu = menu
+                                .submenu("Adjustments", window, cx, move |mut menu, _, _| {
+                                    for adjustment in Adjustment::catalogue() {
+                                        let editor = adjustment_editor.clone();
+                                        let key = adjustment.key();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(adjustment.label())
+                                                .disabled(!enabled)
+                                                .on_click(move |_, window, cx| {
+                                                    editor
+                                                        .update(cx, |view, cx| {
+                                                            view.quick_adjust(key, cx);
+                                                            view.restore_effect_focus(window, cx);
+                                                        })
+                                                        .ok();
+                                                }),
+                                        );
+                                    }
+                                    menu
+                                })
+                                .separator();
+                            let size_editor = image_editor.clone();
+                            let canvas_editor = image_editor.clone();
+                            menu.item(
+                                PopupMenuItem::new("Image size…")
+                                    .disabled(!enabled)
+                                    .on_click(move |_, window, cx| {
+                                        size_editor
+                                            .update(cx, |view, cx| {
+                                                view.open_size_panel(SizeMode::Image, window, cx)
+                                            })
+                                            .ok();
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("Canvas size…")
+                                    .disabled(!enabled)
+                                    .on_click(move |_, window, cx| {
+                                        canvas_editor
+                                            .update(cx, |view, cx| {
+                                                view.open_size_panel(SizeMode::Canvas, window, cx)
+                                            })
+                                            .ok();
+                                    }),
+                            )
+                        }),
+                ),
+            )
+            .child(
+                div().id("filter-menu").test_support().child(
+                    Button::new("filter-menu-button")
+                        .label("Filter")
+                        .small()
+                        .ghost()
+                        .text_color(p.ink)
+                        .dropdown_menu(move |menu, window, cx| {
+                            let Some(editor) = filter_editor.upgrade() else {
+                                return menu;
+                            };
+                            let enabled = editor.read(cx).can_filter();
+                            let last = cx.try_global::<LastFilter>().map(|last| last.0.label());
+                            let repeat_editor = filter_editor.clone();
+                            let mut menu = menu
+                                .item(
+                                    PopupMenuItem::new(
+                                        last.map(|label| format!("Repeat {label}"))
+                                            .unwrap_or_else(|| "Repeat last filter".into()),
+                                    )
+                                    .disabled(!enabled || last.is_none())
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            repeat_editor
+                                                .update(cx, |view, cx| {
+                                                    view.repeat_last_filter(cx);
+                                                    view.restore_effect_focus(window, cx);
+                                                })
+                                                .ok();
+                                        },
+                                    ),
+                                )
+                                .separator();
+                            for (group, keys) in FILTER_GROUPS {
+                                let group_editor = filter_editor.clone();
+                                menu = menu.submenu(*group, window, cx, move |mut menu, _, _| {
+                                    for filter in Filter::catalogue()
+                                        .into_iter()
+                                        .filter(|f| keys.contains(&f.key()))
+                                    {
+                                        let editor = group_editor.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(filter.label())
+                                                .disabled(!enabled)
+                                                .on_click(move |_, window, cx| {
+                                                    editor
+                                                        .update(cx, |view, cx| {
+                                                            view.apply_filter(filter.clone(), cx);
+                                                            view.restore_effect_focus(window, cx);
+                                                        })
+                                                        .ok();
+                                                }),
+                                        );
+                                    }
+                                    menu
+                                });
+                            }
+                            menu = menu.separator();
+                            for filter in Filter::catalogue().into_iter().filter(|f| {
+                                matches!(
+                                    f,
+                                    Filter::LensCorrection { .. } | Filter::LensProfile { .. }
+                                )
+                            }) {
+                                let editor = filter_editor.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(filter.label())
+                                        .disabled(!enabled)
+                                        .on_click(move |_, window, cx| {
+                                            editor
+                                                .update(cx, |view, cx| {
+                                                    view.apply_filter(filter.clone(), cx);
+                                                    view.restore_effect_focus(window, cx);
+                                                })
+                                                .ok();
+                                        }),
+                                );
+                            }
+                            let liquify_enabled = editor.read(cx).can_liquify();
+                            let liquify_editor = filter_editor.clone();
+                            menu.separator().item(PopupMenuItem::new("Liquify…")
+                                .disabled(!liquify_enabled)
+                                .on_click(move |_, window, cx| {
+                                    liquify_editor.update(cx, |view, cx| {
+                                        if view.can_liquify() {
+                                            view.set_paint(PaintKind::Liquify, cx);
+                                            view.set_status("Liquify: drag on the selected pixel layer; undo restores the stroke.", false, cx);
+                                            view.restore_effect_focus(window, cx);
+                                        }
+                                    }).ok();
+                                }))
+                        }),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn can_liquify(&self) -> bool {
+        self.can_filter()
+            && self
+                .selected
+                .and_then(|id| self.editor.doc.node(id))
+                .is_some_and(|node| matches!(node.kind, NodeKind::Raster { .. }))
+    }
+
+    fn restore_effect_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.defer_in(window, |view, window, cx| {
+            window.focus(&view.canvas_focus, cx)
+        });
+    }
+}

@@ -22,6 +22,8 @@ pub struct RailItem {
     pub paint: Option<PaintKind>,
     pub select: Option<SelectShape>,
     pub shape: Option<ShapeKind>,
+    pub pen: Option<PenMode>,
+    pub rotate_view: bool,
 }
 
 const fn item(name: &'static str, glyph: &'static str, key: &'static str, tool: Tool) -> RailItem {
@@ -33,6 +35,8 @@ const fn item(name: &'static str, glyph: &'static str, key: &'static str, tool: 
         paint: None,
         select: None,
         shape: None,
+        pen: None,
+        rotate_view: false,
     }
 }
 
@@ -69,6 +73,22 @@ const fn shape(
     RailItem {
         shape: Some(s),
         ..item(name, glyph, key, Tool::Shape)
+    }
+}
+
+const fn pen(name: &'static str, glyph: &'static str, mode: PenMode) -> RailItem {
+    RailItem {
+        pen: Some(mode),
+        ..item(
+            name,
+            glyph,
+            if matches!(mode, PenMode::Pen) {
+                "P"
+            } else {
+                ""
+            },
+            Tool::Pen,
+        )
     }
 }
 
@@ -127,7 +147,14 @@ pub const GROUPS: &[&[RailItem]] = &[
         ),
         paint("Paint bucket", "paint-bucket", "G", PaintKind::Bucket),
     ],
-    &[item("Pen", "pen-tool", "P", Tool::Pen)],
+    &[
+        pen("Pen", "pen-tool", PenMode::Pen),
+        pen("Free Pen", "pencil", PenMode::Free),
+        pen("Curvature Pen", "spline", PenMode::Curvature),
+        pen("Add Anchor Point", "plus", PenMode::AddAnchor),
+        pen("Delete Anchor Point", "minus", PenMode::DeleteAnchor),
+        pen("Convert Point", "corner-down-right", PenMode::ConvertPoint),
+    ],
     &[item("Type", "type", "T", Tool::Type)],
     &[
         shape("Rectangle", "square", "U", ShapeKind::Rect),
@@ -135,7 +162,13 @@ pub const GROUPS: &[&[RailItem]] = &[
     ],
     &[item("Mask", "emulsion-mask", "Q", Tool::Mask)],
     &[item("Grade", "contrast", "Shift+Q", Tool::Grade)],
-    &[item("Hand", "hand", "H", Tool::Hand)],
+    &[
+        item("Hand", "hand", "H", Tool::Hand),
+        RailItem {
+            rotate_view: true,
+            ..item("Rotate View", "rotate-cw", "R", Tool::Hand)
+        },
+    ],
     &[item("Zoom", "zoom-in", "Z", Tool::Zoom)],
 ];
 
@@ -163,13 +196,13 @@ pub const DRAW_GROUPS: &[&[RailItem]] = &[
         ),
     ],
     &[
-        select("Lasso", "lasso", "L", SelectShape::Lasso),
         select(
             "Rectangular marquee",
             "square-dashed",
             "M",
             SelectShape::Rect,
         ),
+        select("Lasso", "lasso", "L", SelectShape::Lasso),
         select(
             "Quick select (AI)",
             "wand-sparkles",
@@ -179,7 +212,13 @@ pub const DRAW_GROUPS: &[&[RailItem]] = &[
     ],
     &[item("Move", "move", "V", Tool::Move)],
     &[item("Mask", "emulsion-mask", "Q", Tool::Mask)],
-    &[item("Hand", "hand", "H", Tool::Hand)],
+    &[
+        item("Hand", "hand", "H", Tool::Hand),
+        RailItem {
+            rotate_view: true,
+            ..item("Rotate View", "rotate-cw", "R", Tool::Hand)
+        },
+    ],
     &[item("Zoom", "zoom-in", "Z", Tool::Zoom)],
 ];
 
@@ -195,6 +234,20 @@ const LIQUIFY_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
 /// kit at build time, or one of the drawings above.
 fn icon_bytes(id: &str) -> &'static [u8] {
     match id {
+        "rotate-cw" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/rotate-cw.svg")
+        }
+        "pencil" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/pencil.svg")
+        }
+        "spline" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/spline.svg")
+        }
+        "plus" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/plus.svg"),
+        "minus" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/minus.svg"),
+        "corner-down-right" => include_bytes!(
+            "../../../../vendor/gpui/gpui-kit-assets/assets/icons/corner-down-right.svg"
+        ),
         "move" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/move.svg"),
         "square-dashed" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/square-dashed.svg")
@@ -333,6 +386,12 @@ impl EditorView {
         if self.tool != it.tool {
             return false;
         }
+        if it.tool == Tool::Hand {
+            return self.tools.rotate_view == it.rotate_view;
+        }
+        if let Some(mode) = it.pen {
+            return self.tools.pen.mode == mode;
+        }
         match (it.paint, it.select, it.shape) {
             (Some(k), _, _) => self.tools.paint == k,
             (_, Some(s), _) => self.tools.select == s,
@@ -359,6 +418,14 @@ impl EditorView {
         let it = self.rail_groups()[g][i];
         self.rail.pick.insert(g, i);
         self.rail.flyout = None;
+        if it.tool == Tool::Hand {
+            self.set_hand_mode(it.rotate_view, cx);
+            return;
+        }
+        if let Some(mode) = it.pen {
+            self.set_pen_mode(mode, cx);
+            return;
+        }
         match (it.paint, it.select, it.shape) {
             (Some(k), _, _) => self.set_paint(k, cx),
             (_, Some(s), _) => self.set_select(s, cx),
@@ -412,10 +479,22 @@ impl EditorView {
             let it = group[shown];
             let on = self.rail_item_active(&it) || (self.tool == it.tool && group.len() == 1);
             let has_more = group.len() > 1;
-            let tip_text = if it.key.is_empty() {
-                format!("{} — {}", it.name, tool_help(it.tool))
+            let tool_label = match it.select {
+                Some(SelectShape::Rect) => "Rectangle selection (Rectangular marquee)",
+                Some(SelectShape::Ellipse) => "Ellipse selection (Elliptical marquee)",
+                _ => it.name,
+            };
+            let help = if it.rotate_view {
+                "Drag to rotate the view. Shift snaps to 15°; Reset view restores the angle."
             } else {
-                format!("{} ({}) — {}", it.name, it.key, tool_help(it.tool))
+                it.pen
+                    .map(PenMode::help)
+                    .unwrap_or_else(|| tool_help(it.tool))
+            };
+            let tip_text = if it.key.is_empty() {
+                format!("{} — {}", tool_label, help)
+            } else {
+                format!("{} ({}) — {}", tool_label, it.key, help)
             };
             let tip: SharedString = tip_text.into();
             let open = flyout == Some(g);

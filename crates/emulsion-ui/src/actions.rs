@@ -37,6 +37,8 @@ gpui_kit::actions!(
         ToggleNodeVisible,
         Ask,
         ToolHand,
+        ToolRotateView,
+        RepeatFilter,
         ToolMove,
         ToolPen,
         ToolType,
@@ -83,6 +85,15 @@ gpui_kit::actions!(
         ClearPixels,
         CanvasDelete,
         FreeTransform,
+        TransformScale,
+        TransformRotate,
+        TransformDistort,
+        TransformWarp,
+        RotateLayer180,
+        RotateLayer90Cw,
+        RotateLayer90Ccw,
+        FlipLayerHorizontal,
+        FlipLayerVertical,
         NudgeLeft,
         NudgeRight,
         NudgeUp,
@@ -117,11 +128,13 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         NewDocument, Open, Save, SaveAs, Export, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
         Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleTheme, ShowHome,
         ShowEditor, DeleteNode, NewLayer, DuplicateNode, GroupNodes, Ungroup, MoveNodeUp, MoveNodeDown,
-        ToggleNodeVisible, Ask, ToolHand, ToolMove, ToolPen, ToolType, ToolMarquee, ToolLasso,
+        ToggleNodeVisible, Ask, ToolHand, ToolRotateView, RepeatFilter, ToolMove, ToolPen, ToolType, ToolMarquee, ToolLasso,
         ToolWand, ToolBrush, ToolEraser, ToolBucket, ToolGradient, ToolHeal, ToolClone,
         ToolCrop, ToolShape, ToolEyedropper, ToolZoom, ImageSizeDialog, CanvasSizeDialog, NextTab, PrevTab, CloseTab, SwapColors, DefaultColors, BrushSmaller, BrushLarger, CommitTool,
         SelectAll, Deselect, InvertSelection, FillSelection, ContentAwareFill, ShowSettings,
         CopyPixels, CutPixels, PastePixels, ClearPixels, CanvasDelete, FreeTransform,
+        TransformScale, TransformRotate, TransformDistort, TransformWarp,
+        RotateLayer180, RotateLayer90Cw, RotateLayer90Ccw, FlipLayerHorizontal, FlipLayerVertical,
         ToolEllipseMarquee, ToolPolygonLasso, ToolMagneticLasso, ToolQuickSelect, ToolSmudge, ToolLiquify, ToolEllipse, ToolMask, ToolGrade,
         NudgeLeft, NudgeRight, NudgeUp, NudgeDown,
         NudgeLeftLarge, NudgeRightLarge, NudgeUpLarge, NudgeDownLarge,
@@ -166,7 +179,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "Suggestion2", "alt-2"),
     ("workspace", "Suggestion3", "alt-3"),
     ("workspace", "Suggestion4", "alt-4"),
-    ("workspace", "SelectAll", "ctrl-a"),
+    ("canvas", "SelectAll", "ctrl-a"),
     ("workspace", "Deselect", "ctrl-d"),
     ("workspace", "InvertSelection", "ctrl-shift-i"),
     ("canvas", "ToolHand", "h"),
@@ -219,13 +232,20 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("canvas", "NudgeRightLarge", "shift-right"),
     ("canvas", "NudgeUpLarge", "shift-up"),
     ("canvas", "NudgeDownLarge", "shift-down"),
-    ("canvas", "RotateCw", "r"),
+    ("canvas", "ToolRotateView", "r"),
+    ("canvas", "RotateCw", "alt-r"),
+    ("canvas", "RepeatFilter", "ctrl-f"),
     ("canvas", "RotateCcw", "shift-r"),
     ("canvas", "ResetRotation", "escape"),
     ("canvas", "CanvasDelete", "delete"),
     ("canvas", "CanvasDelete", "backspace"),
     ("panel", "DeleteNode", "delete"),
     ("panel", "DeleteNode", "backspace"),
+    ("panel", "CopyPixels", "ctrl-c"),
+    ("panel", "CutPixels", "ctrl-x"),
+    ("panel", "PastePixels", "ctrl-v"),
+    ("panel", "SelectAll", "ctrl-a"),
+    ("panel", "FreeTransform", "ctrl-t"),
 ];
 
 fn platform_defaults() -> Vec<(String, String, String)> {
@@ -343,9 +363,10 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_bindings_are_canvas_scoped_and_mac_aliases_keep_control() {
+    fn clipboard_bindings_are_editor_scoped_and_mac_aliases_keep_control() {
         let defaults = super::platform_defaults();
         for (action, key) in [
+            ("SelectAll", "a"),
             ("CopyPixels", "c"),
             ("CutPixels", "x"),
             ("PastePixels", "v"),
@@ -355,11 +376,21 @@ mod tests {
             if cfg!(target_os = "macos") {
                 assert!(defaults.contains(&("canvas".into(), action.into(), format!("cmd-{key}"))));
             }
+            {
+                assert!(defaults.contains(&("panel".into(), action.into(), format!("ctrl-{key}"))));
+                if cfg!(target_os = "macos") {
+                    assert!(defaults.contains(&(
+                        "panel".into(),
+                        action.into(),
+                        format!("cmd-{key}")
+                    )));
+                }
+            }
             assert!(
                 defaults
                     .iter()
                     .filter(|(_, a, _)| a == action)
-                    .all(|(c, _, _)| c == "canvas")
+                    .all(|(c, _, _)| c == "canvas" || c == "panel")
             );
         }
         assert!(defaults.contains(&("panel".into(), "DeleteNode".into(), "backspace".into())));

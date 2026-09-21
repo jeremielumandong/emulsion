@@ -691,6 +691,14 @@ const QUICK_FILTERS: &[&str] = &[
 impl EditorView {
     /// Add an adjustment above the selection and show its sliders.
     pub fn quick_adjust(&mut self, key: &str, cx: &mut Context<Self>) {
+        if !self.effects_ready() {
+            self.set_status(
+                "Finish the current edit before adding an adjustment.",
+                false,
+                cx,
+            );
+            return;
+        }
         let Some(a) = Adjustment::catalogue().into_iter().find(|a| a.key() == key) else {
             return;
         };
@@ -718,26 +726,7 @@ impl EditorView {
         else {
             return;
         };
-        let Some(id) = self.selected else {
-            self.set_status("Select a pixel layer to filter first.", false, cx);
-            return;
-        };
-        self.select_sidebar(SidebarTab::Properties, cx);
-        let kind = self.editor.doc.node(id).map(|n| n.kind.tag());
-        match kind {
-            Some("pixels") => {
-                self.editor.begin(format!("{} filter", f.label()));
-                self.convert_smart(cx);
-                self.add_filter(id, f, cx);
-                self.editor.end();
-            }
-            Some("smart") => self.add_filter(id, f, cx),
-            _ => self.set_status(
-                "Filters apply to pixel layers; select one first.",
-                false,
-                cx,
-            ),
-        }
+        self.apply_filter(f, cx);
     }
 
     pub(crate) fn quick_adjust_view(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {

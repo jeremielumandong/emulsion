@@ -4,7 +4,7 @@ use anyhow::Result;
 use collections::FxHashMap;
 use itertools::Itertools;
 use windows::Win32::{
-    Foundation::{HANDLE, HGLOBAL},
+    Foundation::{HANDLE, HGLOBAL, HWND},
     System::{
         DataExchange::{
             CloseClipboard, CountClipboardFormats, EmptyClipboard, EnumClipboardFormats,
@@ -67,8 +67,9 @@ fn get_clipboard_data(format: u32) -> Option<LockedGlobal> {
     LockedGlobal::lock(global)
 }
 
-pub(crate) fn write_to_clipboard(item: ClipboardItem) {
-    let Some(_clip) = ClipboardGuard::open() else {
+pub(crate) fn write_to_clipboard(item: ClipboardItem, owner: HWND) {
+    // EmptyClipboard requires a window owner for subsequent SetClipboardData calls.
+    let Some(_clip) = ClipboardGuard::open(Some(owner)) else {
         return;
     };
 
@@ -90,7 +91,7 @@ pub(crate) fn write_to_clipboard(item: ClipboardItem) {
 }
 
 pub(crate) fn read_from_clipboard() -> Option<ClipboardItem> {
-    let _clip = ClipboardGuard::open()?;
+    let _clip = ClipboardGuard::open(None)?;
 
     let mut entries = Vec::new();
     let mut have_text = false;
@@ -248,7 +249,12 @@ fn read_image(format: u32) -> Option<ClipboardEntry> {
         (convert_dib_to_bmp(locked.as_bytes())?, ImageFormat::Bmp)
     } else {
         let image_format = *IMAGE_FORMATS_MAP.get(&format)?;
-        (locked.as_bytes().to_vec(), image_format)
+        let bytes = if image_format == ImageFormat::Png {
+            png_payload(locked.as_bytes())
+        } else {
+            locked.as_bytes()
+        };
+        (bytes.to_vec(), image_format)
     };
     let id = hash(&bytes);
     Some(ClipboardEntry::Image(Image {
@@ -256,6 +262,31 @@ fn read_image(format: u32) -> Option<ClipboardEntry> {
         bytes,
         id,
     }))
+}
+
+/// GlobalSize can include allocation padding, which must not change a PNG's identity.
+fn png_payload(bytes: &[u8]) -> &[u8] {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return bytes;
+    }
+    let mut offset = 8usize;
+    while let Some(header) = bytes.get(offset..).and_then(|tail| tail.get(..8)) {
+        let length = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
+        let Some(end) = offset
+            .checked_add(12)
+            .and_then(|start| start.checked_add(length))
+        else {
+            return bytes;
+        };
+        if end > bytes.len() {
+            return bytes;
+        }
+        if &header[4..8] == b"IEND" && length == 0 {
+            return &bytes[..end];
+        }
+        offset = end;
+    }
+    bytes
 }
 
 fn read_files() -> Option<ClipboardEntry> {
@@ -337,8 +368,8 @@ fn gpui_to_image_format(value: ImageFormat) -> Option<image::ImageFormat> {
 struct ClipboardGuard;
 
 impl ClipboardGuard {
-    fn open() -> Option<Self> {
-        match unsafe { OpenClipboard(None) } {
+    fn open(owner: Option<HWND>) -> Option<Self> {
+        match unsafe { OpenClipboard(owner) } {
             Ok(()) => Some(Self),
             Err(e) => {
                 log::error!("Failed to open clipboard: {e}");
@@ -384,5 +415,35 @@ impl LockedGlobal {
 impl Drop for LockedGlobal {
     fn drop(&mut self) {
         unsafe { GlobalUnlock(self.global).ok() };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::png_payload;
+
+    #[test]
+    fn png_payload_excludes_global_allocation_padding() {
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::new(1, 1)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let png = encoded.into_inner();
+        let mut allocation = png.clone();
+        allocation.extend_from_slice(&[0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44]);
+        assert_eq!(png_payload(&allocation), png);
+        assert_eq!(png_payload(&png), png);
+    }
+
+    #[test]
+    fn png_payload_leaves_incomplete_or_invalid_data_untouched() {
+        for bytes in [
+            b"not a png".as_slice(),
+            b"\x89PNG\r\n\x1a\n\0\0\0".as_slice(),
+            b"\x89PNG\r\n\x1a\n\xff\xff\xff\xffIDAT".as_slice(),
+            b"\x89PNG\r\n\x1a\n\0\0\0\0IEND".as_slice(),
+        ] {
+            assert_eq!(png_payload(bytes), bytes);
+        }
     }
 }

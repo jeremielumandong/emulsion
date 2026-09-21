@@ -5,13 +5,102 @@ use image::{DynamicImage, ImageDecoder, ImageReader};
 use std::io::Cursor;
 
 /// The OS clipboard keeps a portable PNG; placement stays local to Emulsion.
-/// Match the image ID before reusing it, so external copies cannot inherit
-/// an unrelated placement.
+/// Reuse placement only in the source document with a matching image ID;
+/// other documents center the pasted pixels so they remain on the canvas.
 struct ClipboardOrigin {
     image_id: u64,
+    editor_id: EntityId,
     rect: IRect,
 }
 impl Global for ClipboardOrigin {}
+
+/// A newly lifted selection remains cancellable until a transform is committed.
+pub(crate) struct TransformLift {
+    revision: u64,
+    selected: Option<NodeId>,
+    history: emulsion_core::History,
+}
+
+pub(super) fn transform_menu(
+    menu: gpui_kit::component::menu::PopupMenu,
+    editor: &Entity<EditorView>,
+    focus: FocusHandle,
+    window: &mut Window,
+    cx: &mut Context<gpui_kit::component::menu::PopupMenu>,
+) -> gpui_kit::component::menu::PopupMenu {
+    let e = editor.read(cx);
+    let ready =
+        !e.assistant.running && e.drag.is_none() && !e.editor.in_transaction() && e.warp.is_none();
+    let node = e.selected.and_then(|id| e.editor.doc.node(id));
+    let unlocked =
+        node.is_some_and(|node| node.visible && e.editor.doc.locked_ancestor(node.id).is_none());
+    let raster = node.is_some_and(|node| matches!(node.kind, NodeKind::Raster { .. }));
+    let smart = node.is_some_and(|node| matches!(node.kind, NodeKind::Smart { .. }));
+    let enabled = ready
+        && unlocked
+        && !e.tools.mask_edit
+        && (raster || smart)
+        && (e.editor.doc.selection.is_none() || raster);
+    let rotate_enabled = ready
+        && unlocked
+        && !e.tools.mask_edit
+        && node.is_some_and(|node| {
+            emulsion_core::geometry::node_bounds(&e.editor.doc, node.id).is_some()
+        })
+        && (e.editor.doc.selection.is_none() || raster);
+    menu.separator()
+        .menu_with_disabled(
+            "Free transform",
+            Box::new(crate::actions::FreeTransform),
+            !enabled,
+        )
+        .submenu("Transform", window, cx, move |menu, _, _| {
+            menu.action_context(focus.clone())
+                .menu_with_disabled("Scale", Box::new(crate::actions::TransformScale), !enabled)
+                .menu_with_disabled(
+                    "Rotate",
+                    Box::new(crate::actions::TransformRotate),
+                    !enabled,
+                )
+                .menu_with_disabled(
+                    "Distort",
+                    Box::new(crate::actions::TransformDistort),
+                    !enabled || !raster,
+                )
+                .menu_with_disabled(
+                    "Warp",
+                    Box::new(crate::actions::TransformWarp),
+                    !enabled || !raster,
+                )
+                .separator()
+                .menu_with_disabled(
+                    "Rotate 180°",
+                    Box::new(crate::actions::RotateLayer180),
+                    !rotate_enabled,
+                )
+                .menu_with_disabled(
+                    "Rotate 90° clockwise",
+                    Box::new(crate::actions::RotateLayer90Cw),
+                    !rotate_enabled,
+                )
+                .menu_with_disabled(
+                    "Rotate 90° counterclockwise",
+                    Box::new(crate::actions::RotateLayer90Ccw),
+                    !rotate_enabled,
+                )
+                .separator()
+                .menu_with_disabled(
+                    "Flip horizontal",
+                    Box::new(crate::actions::FlipLayerHorizontal),
+                    !enabled,
+                )
+                .menu_with_disabled(
+                    "Flip vertical",
+                    Box::new(crate::actions::FlipLayerVertical),
+                    !enabled,
+                )
+        })
+}
 
 fn png_image(raster: &Raster) -> Result<Image, String> {
     let bytes = emulsion_io::export::png16(raster.width(), raster.height(), &raster.to_srgba16())
@@ -38,6 +127,72 @@ fn clipboard_raster(image: &Image) -> Result<Raster, String> {
 }
 
 impl EditorView {
+    pub(super) fn clipboard_menu(
+        &self,
+        menu: gpui_kit::component::menu::PopupMenu,
+        focus: FocusHandle,
+        cx: &mut App,
+    ) -> gpui_kit::component::menu::PopupMenu {
+        let ready = !self.assistant.running
+            && self.drag.is_none()
+            && !self.editor.in_transaction()
+            && self.warp.is_none();
+        let copy = ready
+            && self.selected.is_some_and(|id| {
+                emulsion_core::geometry::node_bounds(&self.editor.doc, id).is_some()
+            });
+        let cut = copy && self.pixel_target().is_ok();
+        let paste = ready
+            && self.clipboard_slot().is_ok()
+            && cx.read_from_clipboard().is_some_and(|item| {
+                item.entries
+                    .iter()
+                    .any(|entry| matches!(entry, ClipboardEntry::Image(_)))
+            });
+        let canvas = focus == self.canvas_focus;
+        let menu = menu
+            .action_context(focus)
+            .menu_with_disabled("Cut", Box::new(crate::actions::CutPixels), !cut)
+            .menu_with_disabled("Copy", Box::new(crate::actions::CopyPixels), !copy)
+            .menu_with_disabled("Paste", Box::new(crate::actions::PastePixels), !paste);
+        if !canvas {
+            return menu;
+        }
+        menu.separator()
+            .menu_with_disabled(
+                "Rectangle selection",
+                Box::new(crate::actions::ToolMarquee),
+                !ready,
+            )
+            .menu_with_disabled("Select all", Box::new(crate::actions::SelectAll), !ready)
+            .menu_with_disabled(
+                "Deselect",
+                Box::new(crate::actions::Deselect),
+                !ready || self.editor.doc.selection.is_none(),
+            )
+            .menu_with_disabled(
+                "Invert selection",
+                Box::new(crate::actions::InvertSelection),
+                !ready || self.editor.doc.selection.is_none(),
+            )
+            .menu_with_disabled(
+                "Delete selected pixels",
+                Box::new(crate::actions::ClearPixels),
+                !cut || self.editor.doc.selection.is_none(),
+            )
+            .separator()
+            .menu_with_disabled(
+                "Undo",
+                Box::new(crate::actions::Undo),
+                !ready || !self.editor.history.can_undo(),
+            )
+            .menu_with_disabled(
+                "Redo",
+                Box::new(crate::actions::Redo),
+                !ready || !self.editor.history.can_redo(),
+            )
+    }
+
     fn clipboard_ready(&mut self, cx: &mut Context<Self>) -> bool {
         if self.assistant.running
             || self.drag.is_some()
@@ -157,6 +312,7 @@ impl EditorView {
         }
         cx.set_global(ClipboardOrigin {
             image_id: image.id,
+            editor_id: cx.entity_id(),
             rect,
         });
         true
@@ -399,7 +555,7 @@ impl EditorView {
         };
         let placement = cx
             .try_global::<ClipboardOrigin>()
-            .filter(|origin| origin.image_id == image.id)
+            .filter(|origin| origin.image_id == image.id && origin.editor_id == cx.entity_id())
             .map(|origin| Placement::at(origin.rect.x as f64, origin.rect.y as f64))
             .unwrap_or_else(|| {
                 Placement::at(
@@ -430,10 +586,58 @@ impl EditorView {
     /// Lift into a new layer so the existing Move handles transform the
     /// selected pixels. This never reads or writes the OS clipboard.
     pub fn transform_pixels(&mut self, cx: &mut Context<Self>) {
+        let before = self.editor.doc.selection.as_ref().map(|_| {
+            (
+                self.selected,
+                self.editor.history.clone(),
+                self.editor.revision,
+            )
+        });
+        self.transform_pixels_with(|_, _| None, cx);
+        if let Some((selected, history, revision)) = before
+            && self.editor.doc.selection.is_none()
+            && self.editor.revision != revision
+        {
+            self.tools.transform_lift = Some(TransformLift {
+                revision: self.editor.revision,
+                selected,
+                history,
+            });
+        }
+    }
+
+    pub(super) fn cancel_transform_lift(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(lift) = self.tools.transform_lift.take() else {
+            return false;
+        };
+        // Undo only our lift, never a later committed edit or another document's history.
+        if self.editor.in_transaction() || self.editor.revision != lift.revision {
+            return false;
+        }
+        self.invalidate_pending_edits();
+        if !self.editor.undo() {
+            return false;
+        }
+        self.editor.history = lift.history;
+        self.selected = lift.selected;
+        self.after_change(cx);
+        true
+    }
+
+    pub(crate) fn transform_pixels_with(
+        &mut self,
+        transform: impl FnOnce(NodeId, &emulsion_core::Document) -> Option<Command>,
+        cx: &mut Context<Self>,
+    ) {
         if !self.clipboard_ready(cx) {
             return;
         }
         if self.editor.doc.selection.is_none() {
+            if let Some(id) = self.selected
+                && let Some(command) = transform(id, &self.editor.doc)
+            {
+                self.execute(command, cx);
+            }
             self.set_tool(Tool::Move, cx);
             return;
         }
@@ -474,6 +678,11 @@ impl EditorView {
             .and_then(|id| {
                 self.editor
                     .execute(Command::SetSelection { selection: None })?;
+                if let Some(id) = id
+                    && let Some(command) = transform(id, &self.editor.doc)
+                {
+                    self.editor.execute(command)?;
+                }
                 Ok(id)
             });
         self.finish_pixel_transaction(result, cx);

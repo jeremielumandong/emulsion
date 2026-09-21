@@ -1,5 +1,12 @@
-//! Layers occupy the main right dock; task controls stay in a compact lower panel.
+//! History and task controls above the Layers, Channels and Paths dock.
 use super::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DockTab {
+    Layers,
+    Channels,
+    Paths,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SidebarTab {
@@ -54,6 +61,7 @@ impl EditorView {
             .border_color(p.line)
             .children(
                 [
+                    (SidebarTab::History, "sidebar-history-top", "History"),
                     (SidebarTab::Properties, "sidebar-properties", "Properties"),
                     (
                         SidebarTab::Adjustments,
@@ -67,6 +75,11 @@ impl EditorView {
                     let active = self.sidebar_tab == tab;
                     div()
                         .id(id)
+                        .role(gpui_kit::Role::Button)
+                        .aria_label(title)
+                        .aria_selected(active)
+                        .focusable()
+                        .tab_index(0)
                         .flex_1()
                         .min_w_0()
                         .flex()
@@ -138,13 +151,45 @@ impl EditorView {
                 .into_any_element(),
             SidebarTab::History => div()
                 .id("sidebar-history-content")
-                .child(self.history_list(p, cx))
+                .child(self.compact_history(p, cx))
                 .test_support()
                 .into_any_element(),
             SidebarTab::Histogram => div()
                 .p(px(15.))
                 .child(self.histogram_view(p, cx))
                 .into_any_element(),
+        };
+        let dock_tabs = div()
+            .flex()
+            .flex_none()
+            .gap_1()
+            .p_1()
+            .border_b_1()
+            .border_color(p.line)
+            .children(
+                [
+                    (DockTab::Layers, "dock-layers", "Layers"),
+                    (DockTab::Channels, "dock-channels", "Channels"),
+                    (DockTab::Paths, "dock-paths", "Paths"),
+                ]
+                .into_iter()
+                .map(|(tab, id, title)| {
+                    chip(id, title, self.dock_tab == tab, p)
+                        .aria_selected(self.dock_tab == tab)
+                        .flex_1()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.dock_tab = tab;
+                            this.menu = None;
+                            window.focus(&this.panel_focus, cx);
+                            cx.notify();
+                        }))
+                        .test_support()
+                }),
+            );
+        let dock_content = match self.dock_tab {
+            DockTab::Layers => self.scene_graph(p, cx).into_any_element(),
+            DockTab::Channels => self.channels_panel(p, cx),
+            DockTab::Paths => self.paths_panel(p, cx),
         };
         div()
             .id("node-panel")
@@ -163,18 +208,17 @@ impl EditorView {
                     cx.stop_propagation();
                 }
             }))
+            .child(tabs)
             .child(
                 div()
-                    .id("sidebar-layers-dock")
+                    .id(("sidebar-content", self.sidebar_tab as usize))
+                    .flex_1()
                     .min_h_0()
-                    // The person sets this height with the handle below; in
-                    // Draw mode the list has the panel to itself.
-                    .when(!self.draw_mode, |d| d.flex_none().h(px(self.layers_h)))
-                    .when(self.draw_mode, |d| d.flex_1())
-                    .child(self.scene_graph(p, cx))
+                    .overflow_y_scroll()
+                    .child(content)
                     .test_support(),
             )
-            .when(!self.draw_mode, |d| {
+            .map(|d| {
                 let line = p.line;
                 let accent = p.accent;
                 d.child(crate::widgets::tip(
@@ -202,18 +246,61 @@ impl EditorView {
                         .child(div().w(px(36.)).h(px(2.)).bg(line)),
                     "Drag to give the Layers list more or less room",
                 ))
-                .child(tabs)
-                .child(
-                    div()
-                        .id(("sidebar-content", self.sidebar_tab as usize))
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .child(content)
-                        .test_support(),
-                )
             })
+            .child(
+                div()
+                    .id("sidebar-layers-dock")
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .h(px(self.layers_h))
+                    .min_h_0()
+                    .child(dock_tabs)
+                    .child(dock_content)
+                    .test_support(),
+            )
             .test_support()
+    }
+
+    fn paths_panel(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let paths: Vec<_> = self
+            .editor
+            .doc
+            .nodes
+            .iter()
+            .rev()
+            .filter(|node| matches!(node.kind, NodeKind::Path { .. }))
+            .map(|node| (node.id, node.name.clone()))
+            .collect();
+        div()
+            .id("sidebar-paths-content")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .p_2()
+            .gap_1()
+            .overflow_y_scroll()
+            .when(paths.is_empty(), |d| {
+                d.child(mono(
+                    "No paths. Draw with the Pen tool to create one.",
+                    11.,
+                    p.muted,
+                ))
+            })
+            .children(paths.into_iter().map(|(id, name)| {
+                chip(("path-row", id), name, self.selected == Some(id), p)
+                    .aria_selected(self.selected == Some(id))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.selected = Some(id);
+                        this.set_pen_mode(PenMode::Pen, cx);
+                        window.focus(&this.canvas_focus, cx);
+                        cx.notify();
+                    }))
+                    .test_support()
+            }))
+            .test_support()
+            .into_any_element()
     }
 
     pub(super) fn sidebar_panel_menu(

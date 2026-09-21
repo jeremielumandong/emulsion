@@ -13,6 +13,7 @@ pub(crate) struct SmartUi {
     /// Bumped per request so stale renders are dropped.
     render_gen: u64,
     requests: HashMap<NodeId, (u64, Vec<Filter>)>,
+    edited_filter: Option<(NodeId, usize)>,
 }
 
 impl SmartUi {
@@ -29,6 +30,7 @@ impl EditorView {
         }
         match &self.editor.doc.node(id)?.kind {
             NodeKind::Smart { filters, .. } => Some(filters.clone()),
+            NodeKind::Raster { .. } => Some(Vec::new()),
             _ => None,
         }
     }
@@ -59,8 +61,12 @@ impl EditorView {
         let Some(mut filters) = self.requested_filters(id) else {
             return;
         };
-        filters.push(f);
-        self.set_filters_async(id, filters, cx);
+        if filters.len() >= 32 {
+            self.set_status("A smart layer supports up to 32 filters.", false, cx);
+            return;
+        }
+        filters.push(f.clone());
+        self.set_filters_async(id, filters, Some(f), cx);
         self.smart.menu_for = None;
     }
 
@@ -70,7 +76,7 @@ impl EditorView {
         };
         if idx < filters.len() {
             filters.remove(idx);
-            self.set_filters_async(id, filters, cx);
+            self.set_filters_async(id, filters, None, cx);
         }
     }
 
@@ -85,6 +91,7 @@ impl EditorView {
         final_step: bool,
         cx: &mut Context<Self>,
     ) {
+        self.smart.edited_filter = Some((id, idx));
         let throttled = self
             .smart
             .last_apply
@@ -101,21 +108,29 @@ impl EditorView {
             && f.set_param(key, v)
         {
             self.smart.last_apply = Some(Instant::now());
-            self.set_filters_async(id, filters, cx);
+            let repeat = f.clone();
+            self.set_filters_async(id, filters, Some(repeat), cx);
         }
     }
 
     /// Render the stack off the UI thread, then set filters and cache in
     /// one undoable step. A newer request supersedes an older one.
-    fn set_filters_async(&mut self, id: NodeId, filters: Vec<Filter>, cx: &mut Context<Self>) {
+    fn set_filters_async(
+        &mut self,
+        id: NodeId,
+        filters: Vec<Filter>,
+        repeat: Option<Filter>,
+        cx: &mut Context<Self>,
+    ) {
         if self.editor.doc.locked_ancestor(id).is_some() {
             self.set_status("That layer or its group is locked.", true, cx);
             return;
         }
-        let Some(NodeKind::Smart { source, .. }) = self.editor.doc.node(id).map(|n| &n.kind) else {
-            return;
+        let (source, convert) = match self.editor.doc.node(id).map(|n| &n.kind) {
+            Some(NodeKind::Smart { source, .. }) => (source.clone(), false),
+            Some(NodeKind::Raster { raster, .. }) => (raster.clone(), true),
+            _ => return,
         };
-        let source = source.clone();
         let original = self.editor.doc.node(id).cloned();
         let history_epoch = self.history_epoch;
         self.smart.render_gen += 1;
@@ -150,7 +165,20 @@ impl EditorView {
                     }
                     this.smart.requests.remove(&id);
                     let (filters, cache, offset) = ready.take().expect("one filter result");
+                    if convert {
+                        this.editor.begin("Apply filter");
+                        this.execute(Command::ConvertToSmart { id }, cx);
+                    }
+                    let before = this.editor.revision;
                     this.execute(Command::SetSmartCache { id, filters, cache, offset }, cx);
+                    if convert {
+                        this.editor.end();
+                        this.after_change(cx);
+                    }
+                    if this.editor.revision != before && !this.editor.in_transaction()
+                        && let Some(filter) = &repeat {
+                        cx.set_global(super::filters::LastFilter(filter.clone()));
+                    }
                     true
                 }).unwrap_or(true);
                 if done { break; }
@@ -181,7 +209,12 @@ impl EditorView {
         self.editor.cancel();
         self.after_change(cx);
         if let Some(filters) = filters {
-            self.set_filters_async(id, filters, cx);
+            let repeat = self
+                .smart
+                .edited_filter
+                .filter(|(node, _)| *node == id)
+                .and_then(|(_, idx)| filters.get(idx).cloned());
+            self.set_filters_async(id, filters, repeat, cx);
         }
     }
 

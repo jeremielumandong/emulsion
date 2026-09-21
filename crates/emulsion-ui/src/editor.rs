@@ -10,8 +10,11 @@ mod ai_tools;
 mod alignment;
 mod animation;
 mod canvas_size;
+pub(crate) mod channels;
 mod clipboard;
+pub(crate) mod crop;
 pub(crate) mod export_ui;
+mod filters;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
@@ -19,13 +22,14 @@ mod lens;
 mod movement;
 mod panels;
 mod pen;
+pub(crate) use pen::PenMode;
 mod presets;
 mod rail;
 mod raw_panel;
 mod recipes;
 mod rotation;
 mod sidebar;
-pub(crate) use sidebar::SidebarTab;
+pub(crate) use sidebar::{DockTab, SidebarTab};
 mod smart;
 mod snap;
 mod styles_ui;
@@ -39,6 +43,7 @@ use emulsion_raster::adjust::ParamSpec;
 use emulsion_raster::composite::{CompositeTree, level_size, render_tile, tile_to_bgra8};
 use emulsion_raster::{Adjustment, BlendMode, Placement, Raster, TileCoord, color};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 pub(crate) use history::doc_thumb;
@@ -188,6 +193,11 @@ enum Drag {
     Pan {
         last: Point<Pixels>,
     },
+    RotateView {
+        center: Point<Pixels>,
+        angle: f64,
+        rotation: f64,
+    },
     Move(movement::MoveGesture),
     Slider {
         key: SliderKey,
@@ -312,10 +322,12 @@ pub struct EditorView {
     pub(crate) renaming: Option<(NodeId, Entity<InputState>, Subscription)>,
     menu: Option<Menu>,
     pub(crate) sidebar_tab: SidebarTab,
+    pub(crate) dock_tab: DockTab,
     sidebar_menu: bool,
     tracks: HashMap<SliderKey, TrackBounds>,
     pub(crate) thumbs: HashMap<usize, Arc<RenderImage>>,
     pub(crate) checker: (u8, u8),
+    pub(crate) channels: channels::ChannelState,
     pub focus: FocusHandle,
     pub(crate) canvas_focus: FocusHandle,
     pub(crate) panel_focus: FocusHandle,
@@ -412,11 +424,13 @@ impl EditorView {
             focus_watchers: None,
             renaming: None,
             menu: None,
-            sidebar_tab: SidebarTab::Properties,
+            sidebar_tab: SidebarTab::History,
+            dock_tab: DockTab::Layers,
             sidebar_menu: false,
             tracks: HashMap::new(),
             thumbs: HashMap::new(),
             checker: theme::palette(cx).checker,
+            channels: Default::default(),
             focus: cx.focus_handle(),
             canvas_focus: cx.focus_handle(),
             panel_focus: cx.focus_handle(),
@@ -513,6 +527,7 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
+        self.tools.transform_lift = None;
         self.invalidate_pending_edits();
         self.drag = None;
         self.warp = None;
@@ -522,6 +537,7 @@ impl EditorView {
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
+        self.tools.transform_lift = None;
         self.invalidate_pending_edits();
         self.drag = None;
         self.warp = None;
@@ -531,6 +547,7 @@ impl EditorView {
     }
 
     fn undo_to(&mut self, steps: usize, cx: &mut Context<Self>) {
+        self.tools.transform_lift = None;
         self.invalidate_pending_edits();
         self.drag = None;
         self.warp = None;
@@ -724,6 +741,7 @@ impl EditorView {
         let cur = self.tree.clone();
         let before = self.before_tree.clone();
         let (light, dark) = self.checker;
+        let channel = self.channels.view;
         cx.spawn(async move |this, cx| {
             let started = Instant::now();
             let n = batch.len();
@@ -740,7 +758,9 @@ impl EditorView {
                                 render_tile(tree, r.key.level, TileCoord::new(r.key.x, r.key.y));
                             let lsz = level_size(tree.width, tree.height, r.key.level);
                             let origin = (r.key.x as i64 * 256, r.key.y as i64 * 256);
-                            Some((r, tile_to_bgra8(&t, origin, lsz, 8, light, dark)))
+                            let mut bytes = tile_to_bgra8(&t, origin, lsz, 8, light, dark);
+                            channel.apply(&mut bytes);
+                            Some((r, bytes))
                         })
                         .collect()
                 })
@@ -751,6 +771,11 @@ impl EditorView {
                 {
                     let mut c = this.cache.borrow_mut();
                     for (r, bytes) in out {
+                        // Switching channels clears pending tiles; an older
+                        // background batch must not put its colors back.
+                        if this.channels.view != channel {
+                            continue;
+                        }
                         c.insert(
                             r.key,
                             r.rev,
@@ -825,6 +850,15 @@ impl EditorView {
         } else {
             (self.view.rotation + degrees).rem_euclid(360.0)
         };
+        cx.notify();
+    }
+
+    pub(crate) fn set_hand_mode(&mut self, rotate: bool, cx: &mut Context<Self>) {
+        if matches!(self.drag, Some(Drag::Pan { .. } | Drag::RotateView { .. })) {
+            self.drag = None;
+        }
+        self.set_tool(Tool::Hand, cx);
+        self.tools.rotate_view = rotate;
         cx.notify();
     }
 
@@ -1016,6 +1050,24 @@ impl EditorView {
         }
         window.focus(&self.canvas_focus, cx);
         self.menu = None;
+        if e.button == MouseButton::Left
+            && !self.space_held
+            && self.tool == Tool::Hand
+            && self.tools.rotate_view
+        {
+            if let Some(bounds) = self.canvas_bounds() {
+                let center = bounds.center();
+                let delta = e.position - center;
+                let angle = f64::from(f32::from(delta.y)).atan2(f64::from(f32::from(delta.x)));
+                self.drag = Some(Drag::RotateView {
+                    center,
+                    angle,
+                    rotation: self.view.rotation,
+                });
+                cx.notify();
+            }
+            return;
+        }
         if e.button == MouseButton::Left && !self.space_held {
             if let Some(vertical) = self.ruler_hit(e.position) {
                 self.drag = Some(Drag::Guide {
@@ -1091,6 +1143,22 @@ impl EditorView {
         let Some(drag) = &self.drag else { return };
         match drag {
             Drag::Tool(_) => self.tool_move(pos, cx),
+            Drag::RotateView {
+                center,
+                angle,
+                rotation,
+            } => {
+                let delta = pos - *center;
+                let next = f64::from(f32::from(delta.y)).atan2(f64::from(f32::from(delta.x)));
+                let degrees = rotation + (next - angle).to_degrees();
+                self.view.rotation = if self.drag_shift {
+                    (degrees / 15.0).round() * 15.0
+                } else {
+                    degrees
+                }
+                .rem_euclid(360.0);
+                cx.notify();
+            }
             Drag::Pan { last } => {
                 let d = pos - *last;
                 self.view.pan(f32::from(d.x) as f64, f32::from(d.y) as f64);
@@ -1110,7 +1178,7 @@ impl EditorView {
             Drag::Navigator => self.nav_click(pos, cx),
             Drag::LayersSplit { start_y, start_h } => {
                 let dy: f32 = (pos.y - *start_y).into();
-                self.layers_h = (*start_h + dy).clamp(LAYERS_MIN_H, LAYERS_MAX_H);
+                self.layers_h = (*start_h - dy).clamp(LAYERS_MIN_H, LAYERS_MAX_H);
                 cx.notify();
             }
             Drag::Transform(g) => {
@@ -1201,6 +1269,7 @@ impl EditorView {
                 crate::app_state::update_settings(cx, |s| s.layers_height = h);
             }
             Some(Drag::Pan { .. })
+            | Some(Drag::RotateView { .. })
             | Some(Drag::Navigator)
             | Some(Drag::Vanishing(_))
             | Some(Drag::Warp(_)) => {}
@@ -1626,6 +1695,7 @@ impl EditorView {
             .py(if compact { px(3.) } else { px(5.) })
             .border_b_1()
             .border_color(p.line)
+            .child(self.effect_menus(p, cx))
             .child(
                 div()
                     .flex()
@@ -1682,7 +1752,7 @@ impl EditorView {
                 crate::widgets::tip(
                     chip("draw-mode", "Draw", self.draw_mode, p)
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_draw_mode(cx))),
-                    "Draw mode: only the painting tools and the Layers dock, like Procreate. Click again for the full photo shell.",
+                    "Draw mode: a compact painting toolbar with History and Layers. Click again for the full photo toolbar.",
                 ),
             )
             .child(
@@ -1801,7 +1871,7 @@ impl EditorView {
         let weak = cx.entity().downgrade();
         let (w1, w2, w3) = (weak.clone(), weak.clone(), weak.clone());
         let cursor = match (&self.drag, self.space_held) {
-            (Some(Drag::Pan { .. }), _) => CursorStyle::ClosedHand,
+            (Some(Drag::Pan { .. } | Drag::RotateView { .. }), _) => CursorStyle::ClosedHand,
             (Some(Drag::Guide { vertical: true, .. }), _) => CursorStyle::ResizeLeftRight,
             (
                 Some(Drag::Guide {
@@ -1824,6 +1894,11 @@ impl EditorView {
             .overflow_hidden()
             .track_focus(&self.canvas_focus)
             .key_context("Canvas")
+            .on_action(
+                cx.listener(|this, _: &crate::actions::RepeatFilter, _, cx| {
+                    this.repeat_last_filter(cx)
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &crate::actions::ToolEllipseMarquee, _, cx| {
                     this.set_select(tools::SelectShape::Ellipse, cx)
@@ -1878,6 +1953,11 @@ impl EditorView {
                 MouseButton::Middle,
                 cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)),
             )
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if event.button == MouseButton::Right {
+                    window.focus(&this.canvas_focus, cx);
+                }
+            }))
             .on_scroll_wheel(cx.listener(|this, e, _, cx| this.scroll(e, cx)))
             .on_drop(cx.listener(|this, d: &DraggedColor, window, cx| {
                 let pos = window.mouse_position();
@@ -1974,6 +2054,19 @@ impl EditorView {
             )
             .children(zoom_cursor)
             .children(replay)
+            .context_menu({
+                let editor = cx.weak_entity();
+                let focus = self.canvas_focus.clone();
+                move |menu, window, cx| {
+                    let Some(editor) = editor.upgrade() else {
+                        return menu;
+                    };
+                    let menu = editor.update(cx, |editor, cx| {
+                        editor.clipboard_menu(menu, focus.clone(), cx)
+                    });
+                    clipboard::transform_menu(menu, &editor, focus.clone(), window, cx)
+                }
+            })
     }
 
     /// GPUI has no native zoom cursor. Keep a platform-independent magnifier
@@ -2492,7 +2585,10 @@ impl EditorView {
                     // (GIMP's habit; Photoshop uses Ctrl-click too).
                     this.deselect_layer(cx);
                 } else {
-                    if this.sidebar_tab != SidebarTab::Reference {
+                    if !matches!(
+                        this.sidebar_tab,
+                        SidebarTab::Reference | SidebarTab::History
+                    ) {
                         this.select_sidebar(SidebarTab::Properties, cx);
                     }
                     this.selected = this.editor.doc.node(id).map(|_| id);
@@ -2500,6 +2596,16 @@ impl EditorView {
                 }
             }))
             .on_drag(dragged, |d, _, _, cx| cx.new(|_| d.clone()))
+            .capture_any_mouse_down(
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    if event.button == MouseButton::Right {
+                        window.focus(&this.panel_focus, cx);
+                        this.menu = None;
+                        this.selected = this.editor.doc.node(id).map(|_| id);
+                        cx.notify();
+                    }
+                }),
+            )
             .drag_over::<DraggedNode>(move |s, _, _, _| {
                 s.border_color(accent).bg(accent.opacity(0.12))
             })
@@ -2526,6 +2632,19 @@ impl EditorView {
             .children(ai_badge)
             .child(mono(meta, 9.5, meta_fg).flex_none())
             .test_support()
+            .context_menu({
+                let editor = cx.weak_entity();
+                let focus = self.panel_focus.clone();
+                move |menu, window, cx| {
+                    let Some(editor) = editor.upgrade() else {
+                        return menu;
+                    };
+                    let menu = editor.update(cx, |editor, cx| {
+                        editor.clipboard_menu(menu, focus.clone(), cx)
+                    });
+                    clipboard::transform_menu(menu, &editor, focus.clone(), window, cx)
+                }
+            })
     }
 
     fn inspector(
@@ -2973,106 +3092,6 @@ impl EditorView {
                     cx.listener(move |this, e, _, cx| this.slider_key(key, norm, spec, e, cx)),
                 ),
             )
-    }
-
-    fn history_list(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let steps: Vec<String> = self
-            .editor
-            .history
-            .steps()
-            .map(|s| s.name.clone())
-            .take(14)
-            .collect();
-        let total = self.editor.history.len();
-        let can_redo = self.editor.history.can_redo();
-        let mut list = div().flex().flex_col();
-        for (i, name) in steps.iter().enumerate() {
-            let dot = if i == 0 { p.accent } else { p.muted };
-            list = list.child(
-                div()
-                    .id(("hist", i))
-                    .flex()
-                    .gap(px(10.))
-                    .pb(px(8.))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.undo_to(i, cx)))
-                    .child(
-                        div()
-                            .size(px(7.))
-                            .mt(px(5.))
-                            .rounded_full()
-                            .flex_none()
-                            .bg(dot),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .text_size(px(12.5))
-                                    .text_color(p.ink)
-                                    .child(name.clone()),
-                            )
-                            .child(mono(format!("step {}", total - i), 9.5, p.muted)),
-                    ),
-            );
-        }
-        list = list.child(
-            div()
-                .id("hist-open")
-                .flex()
-                .gap(px(10.))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| this.undo_to(total, cx)))
-                .child(
-                    div()
-                        .size(px(7.))
-                        .mt(px(5.))
-                        .rounded_full()
-                        .flex_none()
-                        .bg(if total == 0 { p.accent } else { p.muted }),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .text_color(p.ink)
-                                .child(format!("Open {}", self.name)),
-                        )
-                        .child(mono("start", 9.5, p.muted)),
-                ),
-        );
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .px(px(15.))
-            .py(px(13.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(label("History", p))
-                    .child(div().flex_1())
-                    .child(
-                        chip("graph", "graph →", false, p)
-                            .on_click(cx.listener(|this, _, _, cx| this.open_history(cx))),
-                    )
-                    .child(
-                        chip("undo", "undo", false, p)
-                            .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
-                    )
-                    .child(
-                        chip("redo", if can_redo { "redo" } else { "redo –" }, false, p)
-                            .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
-                    ),
-            )
-            .child(list)
     }
 
     fn menu_list(

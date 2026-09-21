@@ -11,6 +11,97 @@
 //! removes the recovery copy.
 
 use super::*;
+
+impl EditorView {
+    pub(crate) fn compact_history(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let count = self.editor.history.len();
+        let rows = self
+            .editor
+            .history
+            .steps()
+            .enumerate()
+            .map(|(index, step)| {
+                chip(
+                    ("history-step", step.revision_before),
+                    step.name.clone(),
+                    index == 0,
+                    p,
+                )
+                .w_full()
+                .justify_start()
+                .aria_selected(index == 0)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.undo_to(index, cx);
+                    window.focus(&this.canvas_focus, cx);
+                }))
+                .test_support()
+            });
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        crate::widgets::chip_action(
+                            "history-undo",
+                            "Undo",
+                            false,
+                            self.editor.history.can_undo(),
+                            p,
+                            cx.listener(|this, _, window, cx| {
+                                this.undo(cx);
+                                window.focus(&this.canvas_focus, cx);
+                            }),
+                        )
+                        .test_support(),
+                    )
+                    .child(
+                        crate::widgets::chip_action(
+                            "history-redo",
+                            "Redo",
+                            false,
+                            self.editor.history.can_redo(),
+                            p,
+                            cx.listener(|this, _, window, cx| {
+                                this.redo(cx);
+                                window.focus(&this.canvas_focus, cx);
+                            }),
+                        )
+                        .test_support(),
+                    )
+                    .child(
+                        chip("history-versions", "Versions", false, p)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_history(cx))),
+                    ),
+            )
+            .children(rows)
+            .child(
+                chip(
+                    "history-initial",
+                    if count == 0 {
+                        "Current state"
+                    } else {
+                        "Earlier state"
+                    },
+                    count == 0,
+                    p,
+                )
+                .justify_start()
+                .aria_selected(count == 0)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.undo_to(count, cx);
+                    window.focus(&this.canvas_focus, cx);
+                }))
+                .test_support(),
+            )
+            .into_any_element()
+    }
+}
+
 use emulsion_core::graph::{
     CommitId, Conflict, ConflictKey, DiffRow, MAIN, MergeOutcome, Side, compare,
 };

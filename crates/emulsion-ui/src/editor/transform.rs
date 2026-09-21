@@ -75,6 +75,69 @@ fn fmt(v: f64) -> String {
 }
 
 impl EditorView {
+    pub(crate) fn begin_transform_action(&mut self, mode: &str, cx: &mut Context<Self>) {
+        if self.drag.is_some()
+            || self.warp.is_some()
+            || self.editor.in_transaction()
+            || self.assistant.running
+        {
+            self.set_status("Finish the current edit before transforming.", true, cx);
+            return;
+        }
+        self.transform_pixels(cx);
+        if self.editor.doc.selection.is_some() || self.transformable().is_none() {
+            return;
+        }
+        if mode == "warp" {
+            self.start_warp(cx);
+            return;
+        }
+        self.set_status(
+            match mode {
+                "scale" => "Drag a corner to scale; drag an edge to change one dimension.",
+                "rotate" => "Drag just outside a corner to rotate. Hold Shift to snap to 15°.",
+                _ => "Hold Ctrl and drag a corner to distort the selected pixels.",
+            },
+            false,
+            cx,
+        );
+    }
+
+    pub(crate) fn rotate_transform_selection(&mut self, degrees: f64, cx: &mut Context<Self>) {
+        self.transform_pixels_with(|id, _| Some(Command::RotateNode { id, degrees }), cx);
+    }
+
+    pub(crate) fn flip_transform_selection(&mut self, horizontal: bool, cx: &mut Context<Self>) {
+        if !self
+            .selected
+            .and_then(|id| self.editor.doc.node(id))
+            .is_some_and(|node| {
+                matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. })
+            })
+        {
+            self.set_status("Select a pixel or Smart layer to flip.", true, cx);
+            return;
+        }
+        self.transform_pixels_with(
+            |id, doc| {
+                let node = doc.node(id)?;
+                let (NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. }) =
+                    &node.kind
+                else {
+                    return None;
+                };
+                let mut placement = *placement;
+                if horizontal {
+                    placement.flip_x = !placement.flip_x;
+                } else {
+                    placement.flip_y = !placement.flip_y;
+                }
+                Some(Command::SetPlacement { id, placement })
+            },
+            cx,
+        );
+    }
+
     /// The selected node when it is a pixel node the Move tool can transform.
     pub(crate) fn transformable(&self) -> Option<(NodeId, u32, u32, Placement)> {
         if self.tool != Tool::Move {
@@ -218,6 +281,7 @@ impl EditorView {
 
     pub(crate) fn cancel_warp(&mut self, cx: &mut Context<Self>) {
         self.warp = None;
+        self.cancel_transform_lift(cx);
         cx.notify();
     }
 

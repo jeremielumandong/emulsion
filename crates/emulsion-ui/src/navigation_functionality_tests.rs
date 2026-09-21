@@ -59,6 +59,100 @@ fn hand_and_temporary_pan_move_the_view_without_editing_artwork(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn rotate_view_shortcut_drag_reset_and_hand_do_not_edit_artwork(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, None);
+    let original = cx.update(|_, cx| editor.read(cx).editor.doc.clone());
+    cx.simulate_keystrokes("r");
+    cx.run_until_parked();
+    let center = cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_eq!(e.tool, Tool::Hand);
+        assert!(e.tools.rotate_view);
+        assert_eq!(e.view.rotation, 0.0);
+        e.canvas_bounds.get().unwrap().center()
+    });
+    let start = center + point(px(90.), px(0.));
+    let end = center + point(px(0.), px(90.));
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!((editor.read(cx).view.rotation - 90.).abs() < 0.001);
+        window.click("reset-view-rotation", cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("h");
+    cx.run_until_parked();
+    let before = cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert!(!e.tools.rotate_view);
+        assert_eq!(e.view.rotation, 0.0);
+        e.view.center
+    });
+    cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        center + point(px(30.), px(10.)),
+        Some(MouseButton::Left),
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        center + point(px(30.), px(10.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_ne!(e.view.center, before);
+        assert_eq!(e.editor.doc, original);
+        assert!(e.editor.history.is_empty());
+    });
+}
+
+#[gpui_kit::test]
+fn rotate_view_rail_group_snaps_and_escape_cancels_rotation(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, None);
+    // Give the navigation tools enough vertical space to remain visible.
+    cx.simulate_resize(gpui_kit::size(px(1000.), px(1000.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("Hand", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("rail-flyout-item", 16usize * 16 + 1), cx));
+    cx.run_until_parked();
+    let center = cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert!(e.tools.rotate_view);
+        e.canvas_bounds.get().unwrap().center()
+    });
+    let shift = Modifiers {
+        shift: true,
+        ..Modifiers::none()
+    };
+    cx.simulate_mouse_down(center + point(px(100.), px(0.)), MouseButton::Left, shift);
+    cx.simulate_mouse_move(
+        center + point(px(100.), px(40.)),
+        Some(MouseButton::Left),
+        shift,
+    );
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).view.rotation, 15.));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.simulate_mouse_up(
+        center + point(px(100.), px(40.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_eq!(e.view.rotation, 0.);
+        assert!(e.editor.history.is_empty());
+    });
+}
+
+#[gpui_kit::test]
 fn eyedropper_samples_foreground_background_and_ignores_transparency(cx: &mut TestAppContext) {
     let raster = Raster::from_fn(256, 192, [0; 4], |x, _| match x {
         0..64 => [65535, 0, 0, 65535],

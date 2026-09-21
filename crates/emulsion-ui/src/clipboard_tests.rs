@@ -3,10 +3,362 @@ use super::*;
 use crate::editor::{EditorView, Tool};
 use emulsion_core::NodeKind;
 use emulsion_raster::{Mask, select};
+use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ClipboardEntry, ClipboardItem};
 
 fn editor(ws: &Entity<Workspace>, cx: &mut VisualTestContext) -> Entity<EditorView> {
     cx.update(|_, cx| ws.read(cx).editor.clone().unwrap())
+}
+
+#[gpui_kit::test]
+fn clipboard_shortcuts_work_after_opening_and_switching_tabs(cx: &mut TestAppContext) {
+    let source_doc = doc(&["Source"], None);
+    let source_id = source_doc.nodes[0].id;
+    let (ws, cx) = open(cx, source_doc.clone());
+    let source = editor(&ws, cx);
+    cx.update(|_, cx| source.update(cx, |e, _| e.selected = Some(source_id)));
+    let copy = if cfg!(target_os = "macos") {
+        "cmd-c"
+    } else {
+        "ctrl-c"
+    };
+    let paste = if cfg!(target_os = "macos") {
+        "cmd-v"
+    } else {
+        "ctrl-v"
+    };
+    let undo = if cfg!(target_os = "macos") {
+        "cmd-z"
+    } else {
+        "ctrl-z"
+    };
+    cx.simulate_keystrokes(copy);
+    cx.run_until_parked();
+    let target_doc = Document::new(256, 192);
+    cx.update(|window, cx| {
+        ws.update(cx, |w, cx| {
+            w.install(
+                target_doc.clone(),
+                None,
+                None,
+                None,
+                "Target".into(),
+                window,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    let target = editor(&ws, cx);
+    cx.simulate_keystrokes(paste);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(target.read(cx).editor.doc.nodes.len(), 1);
+        assert_eq!(target.read(cx).editor.history.len(), 1);
+        assert_eq!(source.read(cx).editor.doc, source_doc);
+    });
+    cx.simulate_keystrokes(undo);
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(target.read(cx).editor.doc, target_doc));
+
+    // Switching away and back must restore canvas shortcuts without a canvas click.
+    for index in [0, 1] {
+        cx.simulate_keystrokes("ctrl-tab");
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(ws.read(cx).active_tab(), Some(index)));
+    }
+    cx.simulate_keystrokes(paste);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(target.read(cx).editor.doc.nodes.len(), 1);
+        assert_eq!(source.read(cx).editor.doc, source_doc);
+        assert_eq!(source.read(cx).editor.history.len(), 0);
+    });
+    cx.simulate_keystrokes(undo);
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(target.read(cx).editor.doc, target_doc));
+}
+
+#[gpui_kit::test]
+fn clipboard_selection_buttons_restore_canvas_shortcuts(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, doc(&["Source"], None));
+    let source = editor(&ws, cx);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(800.), gpui_kit::px(600.)));
+    cx.simulate_keystrokes("m");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("sel-all", cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-c");
+    cx.run_until_parked();
+    let selected_doc = cx.update(|_, cx| {
+        assert!(matches!(
+            cx.read_from_clipboard().unwrap().entries[0],
+            ClipboardEntry::Image(_)
+        ));
+        let e = source.read(cx);
+        assert!(e.editor.doc.selection.is_some());
+        e.editor.doc.clone()
+    });
+    cx.update(|window, cx| window.click("sel-none", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(source.read(cx).editor.doc.selection.is_none()));
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(source.read(cx).editor.doc, selected_doc));
+}
+
+#[gpui_kit::test]
+fn clipboard_rectangle_selection_deselect_and_undo_across_tabs(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, doc(&["Source"], None));
+    let source = editor(&ws, cx);
+    cx.update(|_, cx| source.update(cx, |e, _| e.selected = None));
+    cx.simulate_keystrokes("m m");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(source.read(cx).tool, Tool::Select);
+        assert_eq!(
+            source.read(cx).select_shape(),
+            crate::editor::SelectShape::Rect
+        );
+    });
+    let start = cx.update(|_, cx| source.read(cx).doc_to_window((20., 20.)).unwrap());
+    let end = cx.update(|_, cx| source.read(cx).doc_to_window((100., 80.)).unwrap());
+    cx.simulate_mouse_down(
+        start,
+        gpui_kit::MouseButton::Left,
+        gpui_kit::Modifiers::none(),
+    );
+    cx.simulate_mouse_move(
+        end,
+        Some(gpui_kit::MouseButton::Left),
+        gpui_kit::Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        end,
+        gpui_kit::MouseButton::Left,
+        gpui_kit::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    let selected_doc = cx.update(|_, cx| {
+        let e = source.read(cx);
+        let mask = e.editor.doc.selection.as_ref().unwrap();
+        assert_eq!(mask.get(25, 25), 255, "rectangle includes its corner");
+        assert_eq!(mask.get(150, 100), 0);
+        e.editor.doc.clone()
+    });
+    cx.simulate_keystrokes("ctrl-c ctrl-d");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(source.read(cx).editor.doc.selection.is_none()));
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(source.read(cx).editor.doc, selected_doc));
+    cx.simulate_keystrokes("ctrl-shift-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(source.read(cx).editor.doc.selection.is_none()));
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(source.read(cx).editor.doc, selected_doc));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(source.read(cx).editor.doc.selection.is_none()));
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(source.read(cx).editor.doc, selected_doc));
+    let target_doc = Document::new(256, 192);
+    cx.update(|window, cx| {
+        ws.update(cx, |w, cx| {
+            w.install(
+                target_doc.clone(),
+                None,
+                None,
+                None,
+                "Target".into(),
+                window,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    let target = editor(&ws, cx);
+    cx.simulate_keystrokes("ctrl-v");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = target.read(cx);
+        let NodeKind::Raster { raster, .. } = &e.editor.doc.node(e.selected.unwrap()).unwrap().kind
+        else {
+            panic!()
+        };
+        assert!((raster.width() as i32 - 80).abs() <= 2);
+        assert!((raster.height() as i32 - 60).abs() <= 2);
+        assert_eq!(source.read(cx).editor.doc, selected_doc);
+    });
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(target.read(cx).editor.doc, target_doc));
+    cx.simulate_keystrokes("ctrl-tab ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(ws.read(cx).active_tab(), Some(0));
+        assert!(source.read(cx).editor.doc.selection.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn clipboard_select_all_without_active_layer_copies_across_tabs(cx: &mut TestAppContext) {
+    let source_doc = doc(&["Source"], None);
+    let source_id = source_doc.nodes[0].id;
+    let (ws, cx) = open(cx, source_doc);
+    let source = editor(&ws, cx);
+    for panel in [false, true] {
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string("replace me".into()));
+            source.update(cx, |e, cx| {
+                e.selected = None;
+                window.focus(
+                    if panel {
+                        &e.panel_focus
+                    } else {
+                        &e.canvas_focus
+                    },
+                    cx,
+                );
+            });
+        });
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a cmd-c"
+        } else {
+            "ctrl-a ctrl-c"
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = source.read(cx);
+            assert_eq!(e.selected, Some(source_id));
+            assert!(e.editor.doc.selection.is_some());
+            assert!(matches!(
+                cx.read_from_clipboard().unwrap().entries[0],
+                ClipboardEntry::Image(_)
+            ));
+        });
+    }
+    let selected_doc = cx.update(|_, cx| source.read(cx).editor.doc.clone());
+    cx.update(|window, cx| {
+        ws.update(cx, |w, cx| {
+            w.install(
+                Document::new(256, 192),
+                None,
+                None,
+                None,
+                "Target".into(),
+                window,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    let target = editor(&ws, cx);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-v"
+    } else {
+        "ctrl-v"
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(target.read(cx).editor.doc.nodes.len(), 1);
+        assert_eq!(source.read(cx).editor.doc, selected_doc);
+    });
+}
+
+#[gpui_kit::test]
+fn clipboard_layer_panel_shortcuts_copy_cut_and_paste(cx: &mut TestAppContext) {
+    let source_doc = doc(&["Source"], None);
+    let source_id = source_doc.nodes[0].id;
+    let (ws, cx) = open(cx, source_doc.clone());
+    let e = editor(&ws, cx);
+    cx.update(|window, cx| {
+        e.update(cx, |e, cx| {
+            e.selected = Some(source_id);
+            window.focus(&e.panel_focus, cx);
+        })
+    });
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-c cmd-v"
+    } else {
+        "ctrl-c ctrl-v"
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(e.read(cx).editor.doc.nodes.len(), 2));
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-z"
+    } else {
+        "ctrl-z"
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| e.update(cx, |e, _| e.selected = Some(source_id)));
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-x"
+    } else {
+        "ctrl-x"
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = e.read(cx);
+        let NodeKind::Raster { raster, .. } = &e.editor.doc.node(source_id).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(raster.get(0, 0)[3], 0);
+    });
+}
+
+#[gpui_kit::test]
+fn clipboard_cross_tab_paste_centers_in_smaller_document(cx: &mut TestAppContext) {
+    let mut source_doc = Document::new(256, 192);
+    let source_id = Command::AddNode {
+        node: Box::new(Node::raster(
+            0,
+            "Source",
+            Arc::new(Raster::solid(8, 12, [1., 0., 0., 1.])),
+            Placement::at(100., 100.),
+        )),
+        slot: Slot::TOP,
+    }
+    .apply(&mut source_doc)
+    .unwrap()
+    .unwrap();
+    let (ws, cx) = open(cx, source_doc.clone());
+    let source = editor(&ws, cx);
+    cx.update(|_, cx| {
+        source.update(cx, |e, cx| {
+            e.selected = Some(source_id);
+            e.copy_pixels(cx);
+        })
+    });
+    cx.update(|window, cx| {
+        ws.update(cx, |w, cx| {
+            w.install(
+                Document::new(32, 32),
+                None,
+                None,
+                None,
+                "Small target".into(),
+                window,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    let target = editor(&ws, cx);
+    cx.update(|_, cx| target.update(cx, |e, cx| e.paste_pixels(cx)));
+    cx.update(|_, cx| {
+        let e = target.read(cx);
+        let NodeKind::Raster { raster, placement } =
+            &e.editor.doc.node(e.selected.unwrap()).unwrap().kind
+        else {
+            panic!()
+        };
+        assert_eq!(*placement, Placement::at(12., 10.));
+        assert_eq!((raster.width(), raster.height()), (8, 12));
+        assert_eq!(source.read(cx).editor.doc, source_doc);
+    });
 }
 
 #[gpui_kit::test]

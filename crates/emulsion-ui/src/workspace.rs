@@ -209,7 +209,14 @@ impl Workspace {
         {
             old.update(cx, |e, _| e.cache.borrow_mut().clear());
         }
-        let focus = ed.read(cx).focus.clone();
+        let focus = {
+            let editor = ed.read(cx);
+            if editor.history.open {
+                editor.focus.clone()
+            } else {
+                editor.canvas_focus.clone()
+            }
+        };
         self.editor = Some(ed);
         self.screen = Screen::Editor;
         focus.focus(window, cx);
@@ -396,7 +403,7 @@ impl Workspace {
             old.update(cx, |e, _| e.cache.borrow_mut().clear());
         }
         let ed = cx.new(|cx| EditorView::new(doc, graph, path, source, name, cx));
-        let focus = ed.read(cx).focus.clone();
+        let focus = ed.read(cx).canvas_focus.clone();
         self.tabs.push(ed.clone());
         self.editor = Some(ed);
         self.screen = Screen::Editor;
@@ -1136,7 +1143,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ResetRotation, _, cx| {
                 this.with_editor(cx, |e, cx| {
                     if !e.tool_cancel(cx) {
-                        e.rotate(0.0, cx)
+                        if e.editor.doc.selection.is_some() {
+                            e.deselect(cx)
+                        } else {
+                            e.rotate(0.0, cx)
+                        }
                     }
                 })
             }))
@@ -1173,8 +1184,50 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CanvasDelete, _, cx| {
                 this.with_editor(cx, |e, cx| e.delete_canvas_pixels(cx))
             }))
-            .on_action(cx.listener(|this, _: &FreeTransform, _, cx| {
-                this.with_editor(cx, |e, cx| e.transform_pixels(cx))
+            .on_action(cx.listener(|this, _: &FreeTransform, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.transform_pixels(cx);
+                    window.focus(&e.canvas_focus, cx);
+                })
+            }))
+            .on_action(cx.listener(|this, _: &TransformScale, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.begin_transform_action("scale", cx);
+                    window.focus(&e.canvas_focus, cx);
+                })
+            }))
+            .on_action(cx.listener(|this, _: &TransformRotate, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.begin_transform_action("rotate", cx);
+                    window.focus(&e.canvas_focus, cx);
+                })
+            }))
+            .on_action(cx.listener(|this, _: &TransformDistort, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.begin_transform_action("distort", cx);
+                    window.focus(&e.canvas_focus, cx);
+                })
+            }))
+            .on_action(cx.listener(|this, _: &TransformWarp, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.begin_transform_action("warp", cx);
+                    window.focus(&e.canvas_focus, cx);
+                })
+            }))
+            .on_action(cx.listener(|this, _: &RotateLayer180, _, cx| {
+                this.with_editor(cx, |e, cx| e.rotate_transform_selection(180., cx))
+            }))
+            .on_action(cx.listener(|this, _: &RotateLayer90Cw, _, cx| {
+                this.with_editor(cx, |e, cx| e.rotate_transform_selection(90., cx))
+            }))
+            .on_action(cx.listener(|this, _: &RotateLayer90Ccw, _, cx| {
+                this.with_editor(cx, |e, cx| e.rotate_transform_selection(-90., cx))
+            }))
+            .on_action(cx.listener(|this, _: &FlipLayerHorizontal, _, cx| {
+                this.with_editor(cx, |e, cx| e.flip_transform_selection(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &FlipLayerVertical, _, cx| {
+                this.with_editor(cx, |e, cx| e.flip_transform_selection(false, cx))
             }))
             .on_action(cx.listener(|this, _: &NudgeLeft, _, cx| {
                 this.with_editor(cx, |e, cx| e.nudge_selected(-1.0, 0.0, cx))
@@ -1223,27 +1276,23 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToolPen, _, cx| {
-                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Pen, cx))
+                this.with_editor(cx, |e, cx| e.set_pen_mode(crate::editor::PenMode::Pen, cx))
             }))
             .on_action(cx.listener(|this, _: &ToolType, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Type, cx))
             }))
             .on_action(cx.listener(|this, _: &ToolHand, _, cx| {
-                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Hand, cx))
+                this.with_editor(cx, |e, cx| e.set_hand_mode(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolRotateView, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_hand_mode(true, cx))
             }))
             .on_action(cx.listener(|this, _: &ToolMove, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Move, cx))
             }))
             .on_action(cx.listener(|this, _: &ToolMarquee, _, cx| {
                 this.with_editor(cx, |e, cx| {
-                    let next = if e.tool == crate::editor::Tool::Select
-                        && e.select_shape() == crate::editor::SelectShape::Rect
-                    {
-                        crate::editor::SelectShape::Ellipse
-                    } else {
-                        crate::editor::SelectShape::Rect
-                    };
-                    e.set_select(next, cx)
+                    e.set_select(crate::editor::SelectShape::Rect, cx)
                 })
             }))
             .on_action(cx.listener(|this, _: &ToolLasso, _, cx| {

@@ -895,7 +895,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn write_to_clipboard(&self, item: ClipboardItem) {
-        write_to_clipboard(item);
+        write_to_clipboard(item, self.handle);
     }
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
@@ -1660,17 +1660,58 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes to the system clipboard; run explicitly in an isolated desktop session"]
     fn test_clipboard() {
+        use windows::{
+            Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
+            },
+            core::w,
+        };
+
+        let owner = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("GPUI clipboard test"),
+                WINDOW_STYLE::default(),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap();
         let item = ClipboardItem::new_string("你好，我是张小白".to_string());
-        write_to_clipboard(item.clone());
+        write_to_clipboard(item.clone(), owner);
         assert_eq!(read_from_clipboard(), Some(item));
 
         let item = ClipboardItem::new_string("12345".to_string());
-        write_to_clipboard(item.clone());
+        write_to_clipboard(item.clone(), owner);
         assert_eq!(read_from_clipboard(), Some(item));
 
         let item = ClipboardItem::new_string_with_json_metadata("abcdef".to_string(), vec![3, 4]);
-        write_to_clipboard(item.clone());
+        write_to_clipboard(item.clone(), owner);
         assert_eq!(read_from_clipboard(), Some(item));
+
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::new(1, 1)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let bytes = png.into_inner();
+        let item = ClipboardItem {
+            entries: vec![gpui::ClipboardEntry::Image(gpui::Image {
+                id: gpui::hash(&bytes),
+                bytes,
+                format: gpui::ImageFormat::Png,
+            })],
+        };
+        write_to_clipboard(item.clone(), owner);
+        assert_eq!(read_from_clipboard(), Some(item));
+        unsafe { DestroyWindow(owner).unwrap() };
     }
 }

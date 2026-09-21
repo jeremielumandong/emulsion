@@ -2,6 +2,7 @@
 //! and the colour picker. Every result lands through the Command API, so it
 //! is one undo step and visible to the assistant.
 
+use super::crop::{CropOptions, crop_rect};
 use super::*;
 use crate::widgets::{chip_action, tip};
 use emulsion_raster::composite::{PixelSampler, region};
@@ -100,6 +101,8 @@ pub enum ShapeKind {
 }
 
 pub struct ToolState {
+    pub transform_lift: Option<super::clipboard::TransformLift>,
+    pub rotate_view: bool,
     pub select: SelectShape,
     pub combine: Combine,
     pub feather: f32,
@@ -117,6 +120,7 @@ pub struct ToolState {
     polygon_combine: Combine,
     /// Pending crop rectangle in document pixels, until Enter.
     pub crop: Option<(f64, f64, f64, f64)>,
+    pub crop_options: CropOptions,
     pub straighten: f32,
     /// Crops grow from their centre.
     pub crop_centered: bool,
@@ -172,6 +176,8 @@ pub struct ToolState {
 impl Default for ToolState {
     fn default() -> Self {
         Self {
+            transform_lift: None,
+            rotate_view: false,
             select: SelectShape::Rect,
             combine: Combine::Replace,
             feather: 0.0,
@@ -188,6 +194,7 @@ impl Default for ToolState {
             polygon: Vec::new(),
             polygon_combine: Combine::Replace,
             crop: None,
+            crop_options: CropOptions::default(),
             straighten: 0.0,
             crop_centered: false,
             fill_edges: false,
@@ -307,15 +314,6 @@ fn combine_for(m: &Modifiers, default: Combine) -> Combine {
     }
 }
 
-/// The crop rectangle a drag describes; symmetric drags grow from `a`.
-fn crop_rect(a: (f64, f64), b: (f64, f64), symmetric: bool) -> (f64, f64, f64, f64) {
-    if symmetric {
-        norm((2.0 * a.0 - b.0, 2.0 * a.1 - b.1), b)
-    } else {
-        norm(a, b)
-    }
-}
-
 fn norm(a: (f64, f64), b: (f64, f64)) -> (f64, f64, f64, f64) {
     (
         a.0.min(b.0),
@@ -404,7 +402,11 @@ impl EditorView {
     }
 
     /// Resolve the old tool before its controls and preview disappear.
-    fn finish_tool_interaction(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn finish_tool_interaction(&mut self, cx: &mut Context<Self>) {
+        self.tools.transform_lift = None;
+        if matches!(self.drag, Some(Drag::Pan { .. } | Drag::RotateView { .. })) {
+            self.drag = None;
+        }
         if matches!(self.drag, Some(Drag::Move(_) | Drag::Transform(_))) {
             self.drag = None;
             self.snap_lines.clear();
@@ -683,6 +685,9 @@ impl EditorView {
                     if !this.selection_is_current(ticket) {
                         return;
                     }
+                    if selection.is_some() && this.selected.is_none() {
+                        this.selected = this.editor.doc.nodes.last().map(|node| node.id);
+                    }
                     this.execute(Command::SetSelection { selection }, cx);
                 })
                 .ok();
@@ -692,10 +697,18 @@ impl EditorView {
         }
         let combined = select::combine(self.editor.doc.selection.as_deref(), &new, combine);
         let selection = (!select::bounds(&combined).is_empty()).then(|| Arc::new(combined));
+        if selection.is_some() && self.selected.is_none() {
+            self.selected = self.editor.doc.nodes.last().map(|node| node.id);
+        }
         self.execute(Command::SetSelection { selection }, cx);
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        // Restore an active layer after clicking empty space, so Select All
+        // followed by Copy works just as it does when a document first opens.
+        if self.selected.is_none() {
+            self.selected = self.editor.doc.nodes.last().map(|node| node.id);
+        }
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         self.execute(
             Command::SetSelection {
@@ -894,6 +907,14 @@ impl EditorView {
                 );
             }
             Tool::Crop => {
+                if !self.tools.crop_options.valid {
+                    self.set_status(
+                        "Enter valid crop dimensions before drawing a crop.",
+                        false,
+                        cx,
+                    );
+                    return;
+                }
                 let symmetric = e.modifiers.alt || self.tools.crop_centered;
                 self.drag = Some(Drag::Tool(ToolDrag::Crop {
                     start: d,
@@ -1607,7 +1628,13 @@ impl EditorView {
                 end,
                 symmetric,
             } => {
-                let (x, y, rw, rh) = crop_rect(start, end, symmetric);
+                let (x, y, rw, rh) = crop_rect(
+                    start,
+                    end,
+                    symmetric,
+                    self.crop_constraint(),
+                    self.drag_shift,
+                );
                 self.tools.crop = (rw >= 1.0 && rh >= 1.0).then_some((x, y, rw, rh));
                 cx.notify();
             }
@@ -1657,7 +1684,7 @@ impl EditorView {
                     self.quick_select(pts, combine, cx)
                 }
             }
-            ToolDrag::Pen(pd) => self.pen_up(pd),
+            ToolDrag::Pen(pd) => self.pen_up(pd, cx),
         }
         cx.notify();
     }
@@ -1679,11 +1706,39 @@ impl EditorView {
 
     /// Enter: commit whatever the tool has pending.
     pub fn tool_commit(&mut self, cx: &mut Context<Self>) {
+        if self.warp.is_none() {
+            self.tools.transform_lift = None;
+        }
         match self.tool {
+            Tool::Move if self.warp.is_some() => self.finish_warp(cx),
             Tool::Pen => self.pen_finish(cx),
             Tool::Select if !self.tools.polygon.is_empty() => self.commit_polygon(cx),
             Tool::Crop => {
-                if let Some((x, y, w, h)) = self.tools.crop.take() {
+                if !self.tools.crop_options.valid {
+                    self.set_status(
+                        "Enter valid crop dimensions before applying the crop.",
+                        false,
+                        cx,
+                    );
+                    return;
+                }
+                if let Some((x, y, w, h)) = self.tools.crop {
+                    if ![x, y, w, h].iter().all(|v| v.is_finite())
+                        || x < i32::MIN as f64
+                        || y < i32::MIN as f64
+                        || x + w > i32::MAX as f64
+                        || y + h > i32::MAX as f64
+                        || emulsion_io::import::check_size(w.round() as u32, h.round() as u32)
+                            .is_err()
+                    {
+                        self.set_status(
+                            "Crop dimensions exceed the supported canvas size.",
+                            true,
+                            cx,
+                        );
+                        return;
+                    }
+                    self.tools.crop = None;
                     let rect = IRect::new(
                         x.round() as i32,
                         y.round() as i32,
@@ -1702,6 +1757,12 @@ impl EditorView {
 
     /// Escape: cancel the active gesture and all pending tool previews.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(Drag::RotateView { rotation, .. }) = self.drag.as_ref() {
+            self.view.rotation = *rotation;
+            self.drag = None;
+            cx.notify();
+            return true;
+        }
         if self.rail.flyout.take().is_some() {
             cx.notify();
             return true;
@@ -1748,6 +1809,7 @@ impl EditorView {
             self.assist_end();
         }
         let pen_pending = self.pen_cancel();
+        had |= self.cancel_transform_lift(cx);
         had |= !self.tools.polygon.is_empty()
             || self.tools.crop.is_some()
             || self.tools.straighten != 0.0
@@ -2430,7 +2492,15 @@ impl EditorView {
                     start,
                     end,
                     symmetric,
-                } => o.crop = Some(crop_rect(*start, *end, *symmetric)),
+                } => {
+                    o.crop = Some(crop_rect(
+                        *start,
+                        *end,
+                        *symmetric,
+                        self.crop_constraint(),
+                        self.drag_shift,
+                    ))
+                }
                 _ => {}
             }
         }
@@ -2992,9 +3062,27 @@ impl EditorView {
                 );
             }
             Tool::Select => {
+                v.push(
+                    chip("sel-all", "Select all", false, p)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.select_all(cx);
+                            window.focus(&this.canvas_focus, cx);
+                        }))
+                        .test_support()
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("sel-none", "Deselect", false, p)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.deselect(cx);
+                            window.focus(&this.canvas_focus, cx);
+                        }))
+                        .test_support()
+                        .into_any_element(),
+                );
                 let cur = self.tools.select;
                 for (id, t, s) in [
-                    ("sel-rect", "rect", SelectShape::Rect),
+                    ("sel-rect", "Rectangle", SelectShape::Rect),
                     ("sel-ell", "ellipse", SelectShape::Ellipse),
                     ("sel-lasso", "lasso", SelectShape::Lasso),
                     ("sel-poly", "polygon", SelectShape::Polygon),
@@ -3148,16 +3236,6 @@ impl EditorView {
                         cx,
                     ));
                 }
-                v.push(
-                    chip("sel-all", "all", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.select_all(cx)))
-                        .into_any_element(),
-                );
-                v.push(
-                    chip("sel-none", "none", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.deselect(cx)))
-                        .into_any_element(),
-                );
                 if self.editor.doc.selection.is_some() {
                     v.push(
                         chip("sel-transform-pixels", "transform pixels", false, p)
@@ -3423,6 +3501,36 @@ impl EditorView {
                 v.push(div().flex_none().child(hint).into_any_element());
             }
             Tool::Crop => {
+                v.push(
+                    tip(
+                        chip_action(
+                            "crop-apply",
+                            "Apply",
+                            self.tools.crop.is_some(),
+                            self.tools.crop.is_some() && self.tools.crop_options.valid,
+                            p,
+                            cx.listener(|this, _, _, cx| this.tool_commit(cx)),
+                        )
+                        .test_support(),
+                        "Draw a crop rectangle, then apply it (Enter)",
+                    )
+                    .into_any_element(),
+                );
+                v.push(
+                    chip_action(
+                        "crop-cancel",
+                        "Cancel",
+                        false,
+                        self.tools.crop.is_some() || self.tools.straighten != 0.,
+                        p,
+                        cx.listener(|this, _, _, cx| {
+                            this.tool_cancel(cx);
+                        }),
+                    )
+                    .test_support()
+                    .into_any_element(),
+                );
+                v.push(self.crop_options(p, cx));
                 match self.tools.crop {
                     Some((_, _, w, h)) => v.push(
                         div()
@@ -3485,33 +3593,6 @@ impl EditorView {
                             cx.listener(|this, _, window, cx| this.toggle_size_panel(window, cx)),
                         )
                         .into_any_element(),
-                );
-                v.push(
-                    tip(
-                        chip_action(
-                            "crop-apply",
-                            "apply ⏎",
-                            self.tools.crop.is_some(),
-                            self.tools.crop.is_some(),
-                            p,
-                            cx.listener(|this, _, _, cx| this.tool_commit(cx)),
-                        ),
-                        "Draw a crop rectangle, then apply it (Enter)",
-                    )
-                    .into_any_element(),
-                );
-                v.push(
-                    chip_action(
-                        "crop-cancel",
-                        "cancel",
-                        false,
-                        self.tools.crop.is_some() || self.tools.straighten != 0.,
-                        p,
-                        cx.listener(|this, _, _, cx| {
-                            this.tool_cancel(cx);
-                        }),
-                    )
-                    .into_any_element(),
                 );
                 let (w, h) = (self.editor.doc.width, self.editor.doc.height);
                 v.push(
@@ -3717,12 +3798,12 @@ impl EditorView {
                 } else if self.warp.is_some() {
                     v.push(self.group("warp", p));
                     v.push(
-                        chip("warp-apply", "apply", true, p)
+                        chip("warp-apply", "Apply", true, p)
                             .on_click(cx.listener(|this, _, _, cx| this.finish_warp(cx)))
                             .into_any_element(),
                     );
                     v.push(
-                        chip("warp-cancel", "cancel", false, p)
+                        chip("warp-cancel", "Cancel", false, p)
                             .on_click(cx.listener(|this, _, _, cx| this.cancel_warp(cx)))
                             .into_any_element(),
                     );
@@ -3750,12 +3831,27 @@ impl EditorView {
                     );
                 }
             }
-            Tool::Hand => v.push(
-                div()
-                    .flex_none()
-                    .child("drag to pan · ctrl+scroll to zoom · V to move a layer")
-                    .into_any_element(),
-            ),
+            Tool::Hand => {
+                v.push(
+                    div()
+                        .flex_none()
+                        .child(if self.tools.rotate_view {
+                            "drag to rotate the view · Shift snaps to 15° · H to pan"
+                        } else {
+                            "drag to pan · ctrl+scroll to zoom · R to rotate the view"
+                        })
+                        .into_any_element(),
+                );
+                v.push(
+                    chip("reset-view-rotation", "Reset view", false, p)
+                        .test_support()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.rotate(0.0, cx);
+                            window.focus(&this.canvas_focus, cx);
+                        }))
+                        .into_any_element(),
+                );
+            }
             Tool::Eyedropper => {
                 let [r, g, b, _] = self.tools.fg;
                 v.push(

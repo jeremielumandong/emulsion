@@ -17,8 +17,41 @@ use glam::dvec2;
 /// Grab distance in screen pixels.
 const GRAB_PX: f64 = 7.0;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PenMode {
+    #[default]
+    Pen,
+    Free,
+    Curvature,
+    AddAnchor,
+    DeleteAnchor,
+    ConvertPoint,
+}
+
+impl PenMode {
+    pub(crate) fn help(self) -> &'static str {
+        match self {
+            Self::Pen => {
+                "Click to place anchors; drag to set curve handles. Enter finishes; Escape cancels."
+            }
+            Self::Free => "Drag to draw a freehand path. Release to finish; Escape cancels.",
+            Self::Curvature => {
+                "Click to place points; curves flow smoothly through them. Enter finishes; Escape cancels."
+            }
+            Self::AddAnchor => {
+                "Select a path layer, then click its outline to add an anchor point."
+            }
+            Self::DeleteAnchor => "Select a path layer, then click an anchor point to remove it.",
+            Self::ConvertPoint => {
+                "Select a path layer, then click an anchor to switch between a corner and a smooth curve."
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct PenState {
+    pub mode: PenMode,
     /// The subpath being drawn, in document pixels.
     pub building: Option<SubPath>,
     /// Anchor picked on the selected Path node: (subpath, index).
@@ -31,6 +64,7 @@ pub struct PenState {
 impl PenState {
     pub(crate) fn fresh() -> Self {
         Self {
+            mode: PenMode::Pen,
             building: None,
             selected: None,
             width: 3.0,
@@ -43,6 +77,8 @@ impl PenState {
 /// Pen drags.
 #[derive(Clone, Debug)]
 pub enum PenDrag {
+    /// A continuous freehand path, committed on release.
+    Free,
     /// Pulling handles out of the anchor just placed.
     New { idx: usize, start: Pt },
     /// Moving an anchor of the selected node with its handles.
@@ -80,7 +116,46 @@ fn along(center: Pt, dir_from: Pt, len: f64) -> Pt {
     (center.0 + dx / d * len, center.1 + dy / d * len)
 }
 
+/// Catmull–Rom tangents expressed as editable cubic Bezier handles.
+fn smooth_subpath(path: &mut SubPath) {
+    let positions: Vec<_> = path.anchors.iter().map(|anchor| anchor.p).collect();
+    let len = positions.len();
+    if len < 2 {
+        return;
+    }
+    for (index, anchor) in path.anchors.iter_mut().enumerate() {
+        let previous = if index > 0 {
+            positions[index - 1]
+        } else if path.closed {
+            positions[len - 1]
+        } else {
+            positions[0]
+        };
+        let next = if index + 1 < len {
+            positions[index + 1]
+        } else if path.closed {
+            positions[0]
+        } else {
+            positions[len - 1]
+        };
+        let tangent = ((next.0 - previous.0) / 6.0, (next.1 - previous.1) / 6.0);
+        anchor.h_in = (anchor.p.0 - tangent.0, anchor.p.1 - tangent.1);
+        anchor.h_out = (anchor.p.0 + tangent.0, anchor.p.1 + tangent.1);
+        anchor.smooth = true;
+    }
+}
+
 impl EditorView {
+    pub(crate) fn set_pen_mode(&mut self, mode: PenMode, cx: &mut Context<Self>) {
+        if self.tools.pen.mode != mode {
+            self.finish_tool_interaction(cx);
+        }
+        self.set_tool(Tool::Pen, cx);
+        self.tools.pen.mode = mode;
+        self.set_status(mode.help(), false, cx);
+        cx.notify();
+    }
+
     /// The Path node the pen is editing, when one is selected.
     pub(crate) fn pen_target(&self) -> Option<(NodeId, Arc<Path>, PathStyle)> {
         let id = self.selected?;
@@ -121,14 +196,72 @@ impl EditorView {
 
     pub(crate) fn pen_down(&mut self, d: Pt, e: &MouseDownEvent, cx: &mut Context<Self>) {
         let tol = self.grab_tol();
+        let mode = self.tools.pen.mode;
+        if matches!(
+            mode,
+            PenMode::AddAnchor | PenMode::DeleteAnchor | PenMode::ConvertPoint
+        ) {
+            let Some((id, path, style)) = self.pen_target() else {
+                self.set_status(
+                    "Select an unlocked path layer to edit its anchor points.",
+                    true,
+                    cx,
+                );
+                return;
+            };
+            if mode == PenMode::AddAnchor {
+                if matches!(path.hit(d, tol), Some(Hit::Anchor(..))) {
+                    return;
+                }
+                if let Some((si, segment, t)) = path.nearest_on_curve(d, tol) {
+                    let mut path = (*path).clone();
+                    if let Some(ai) = path.insert_at(si, segment, t) {
+                        self.editor.begin("Add anchor");
+                        self.set_path(id, path, style, cx);
+                        self.tools.pen.selected = Some((si, ai));
+                        self.drag = Some(Drag::Tool(ToolDrag::Pen(PenDrag::Anchor {
+                            si,
+                            ai,
+                            last: d,
+                        })));
+                    }
+                }
+            } else if let Some(Hit::Anchor(si, ai)) = path.hit(d, tol) {
+                self.tools.pen.selected = Some((si, ai));
+                if mode == PenMode::DeleteAnchor {
+                    self.pen_delete(cx);
+                } else {
+                    self.pen_toggle_smooth(id, &path, style, si, ai, cx);
+                }
+            }
+            return;
+        }
+        if mode == PenMode::Free {
+            self.tools.pen.selected = None;
+            self.tools.pen.building = Some(SubPath {
+                anchors: vec![Anchor::corner(d)],
+                closed: false,
+            });
+            self.drag = Some(Drag::Tool(ToolDrag::Pen(PenDrag::Free)));
+            cx.notify();
+            return;
+        }
         if let Some(sp) = &mut self.tools.pen.building {
             let first = sp.anchors.first().map(|a| a.p);
             if sp.anchors.len() >= 2 && first.is_some_and(|f| (f.0 - d.0).hypot(f.1 - d.1) <= tol) {
                 sp.closed = true;
+                if mode == PenMode::Curvature {
+                    smooth_subpath(sp);
+                }
                 self.pen_finish(cx);
                 return;
             }
             sp.anchors.push(Anchor::corner(d));
+            if mode == PenMode::Curvature {
+                smooth_subpath(sp);
+                cx.notify();
+                return;
+            }
             let idx = sp.anchors.len() - 1;
             self.drag = Some(Drag::Tool(ToolDrag::Pen(PenDrag::New { idx, start: d })));
             cx.notify();
@@ -193,6 +326,16 @@ impl EditorView {
 
     pub(crate) fn pen_move(&mut self, d: Pt, drag: PenDrag, cx: &mut Context<Self>) {
         match drag {
+            PenDrag::Free => {
+                if let Some(path) = &mut self.tools.pen.building
+                    && path.anchors.last().is_some_and(|anchor| {
+                        (anchor.p.0 - d.0).hypot(anchor.p.1 - d.1) * self.view.zoom >= 2.0
+                    })
+                {
+                    path.anchors.push(Anchor::corner(d));
+                    cx.notify();
+                }
+            }
             PenDrag::New { idx, start } => {
                 let far = (d.0 - start.0).hypot(d.1 - start.1) * self.view.zoom > 3.0;
                 if let Some(sp) = &mut self.tools.pen.building
@@ -248,8 +391,15 @@ impl EditorView {
         }
     }
 
-    pub(crate) fn pen_up(&mut self, drag: PenDrag) {
+    pub(crate) fn pen_up(&mut self, drag: PenDrag, cx: &mut Context<Self>) {
         match drag {
+            PenDrag::Free => {
+                if let Some(path) = &mut self.tools.pen.building {
+                    smooth_subpath(path);
+                }
+                self.pen_finish(cx);
+                self.pen_cancel();
+            }
             PenDrag::New { .. } => {}
             PenDrag::Anchor { .. } | PenDrag::Handle { .. } => {
                 if self.editor.in_transaction() {

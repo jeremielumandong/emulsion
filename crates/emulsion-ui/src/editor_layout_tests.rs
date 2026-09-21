@@ -3,6 +3,61 @@ use super::*;
 use gpui_kit::test::TestWindowExt;
 
 #[gpui_kit::test]
+fn history_and_paths_docks_work_without_changing_the_document(cx: &mut TestAppContext) {
+    let mut original = doc(&["Photo"], None);
+    let path_id = Command::AddNode {
+        node: Box::new(Node::path(
+            0,
+            "Triangle",
+            Arc::new(emulsion_raster::vector::Path::from_svg("M 10 10 L 80 10 L 20 60 Z").unwrap()),
+            Default::default(),
+            256,
+            192,
+        )),
+        slot: Slot::TOP,
+    }
+    .apply(&mut original)
+    .unwrap()
+    .unwrap();
+    let (ws, cx) = open(cx, original.clone());
+    let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.execute(
+                Command::SetOpacity {
+                    id: path_id,
+                    opacity: 0.5,
+                },
+                cx,
+            );
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("history-initial", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(e.read(cx).editor.doc, original));
+    cx.update(|window, cx| window.click("history-redo", cx));
+    cx.run_until_parked();
+    let edited = cx.update(|_, cx| e.read(cx).editor.doc.clone());
+    assert_ne!(edited, original);
+    cx.update(|window, cx| window.click("dock-paths", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("path-row", path_id), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("sidebar-paths-content").visible());
+        assert!(window.find("sidebar-history-content").visible());
+        let e = e.read(cx);
+        assert_eq!(e.selected, Some(path_id));
+        assert_eq!(e.tool, crate::editor::Tool::Pen);
+        assert_eq!(e.editor.doc, edited);
+    });
+    cx.update(|window, cx| window.click("dock-layers", cx));
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(window.find(("row", path_id)).visible()));
+}
+
+#[gpui_kit::test]
 fn editor_keeps_tools_left_layers_right_and_options_above_canvas(cx: &mut TestAppContext) {
     let (_ws, cx) = open(cx, doc(&["Photo", "Paint", "Details"], None));
     for (width, height) in [(1000., 720.), (800., 600.), (720., 540.)] {
@@ -24,7 +79,12 @@ fn editor_keeps_tools_left_layers_right_and_options_above_canvas(cx: &mut TestAp
             let canvas = window.find("editor-canvas-column").bounds();
             let dock = window.find("node-panel").bounds();
             let layers = window.find("sidebar-layers-dock").bounds();
-            let inspector = window.find(("sidebar-content", 0usize)).bounds();
+            let inspector = window
+                .find((
+                    "sidebar-content",
+                    crate::editor::SidebarTab::History as usize,
+                ))
+                .bounds();
             assert!(
                 rail.size.width <= gpui_kit::px(64.),
                 "tools should use a narrow rail"
@@ -44,6 +104,11 @@ fn editor_keeps_tools_left_layers_right_and_options_above_canvas(cx: &mut TestAp
                 layers.size.height > inspector.size.height,
                 "Layers should be the main dock at {width}×{height}: {layers:?}, {inspector:?}"
             );
+            assert!(inspector.origin.y + inspector.size.height <= layers.origin.y);
+            assert!(window.find("sidebar-history-content").visible());
+            assert!(window.find("dock-layers").visible());
+            assert!(window.find("dock-channels").visible());
+            assert!(window.find("dock-paths").visible());
             assert!(window.find(("row", 3u64)).visible());
             assert!(window.find("sidebar-properties").visible());
         });

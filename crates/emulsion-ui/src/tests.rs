@@ -32,6 +32,24 @@ mod geometry_functionality_tests;
 #[path = "clipboard_tests.rs"]
 mod clipboard_tests;
 
+#[path = "crop_workflow_tests.rs"]
+mod crop_workflow_tests;
+
+#[path = "transform_workflow_tests.rs"]
+mod transform_workflow_tests;
+
+#[path = "context_menu_tests.rs"]
+mod context_menu_tests;
+
+#[path = "pen_workflow_tests.rs"]
+mod pen_workflow_tests;
+
+#[path = "channel_workflow_tests.rs"]
+mod channel_workflow_tests;
+
+#[path = "filter_menu_tests.rs"]
+mod filter_menu_tests;
+
 #[path = "tool_safety_tests.rs"]
 mod tool_safety_tests;
 
@@ -1194,7 +1212,7 @@ mod tools {
             )
         });
         cx.update(|window, _| {
-            assert!(window.find("sidebar-properties-content").visible());
+            assert!(window.find("sidebar-history-content").visible());
             assert!(window.try_find("sidebar-adjustments-content").is_none());
             assert!(window.try_find("reference-panel").is_none());
             assert!(window.find(("row", 3u64)).visible());
@@ -2285,6 +2303,8 @@ mod tools {
         cx.update(|_, cx| e.update(cx, |e, _| e.selected = Some(id)));
         cx.run_until_parked();
         // The editor square records its bounds during layout.
+        cx.update(|window, cx| window.click("sidebar-properties", cx));
+        cx.run_until_parked();
         let bounds =
             cx.update(|_, cx| e.read(cx).curve_bounds(id).expect("curves editor laid out"));
         let at = |fx: f32, fy: f32| {
