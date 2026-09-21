@@ -647,6 +647,48 @@ fn sample_mask(mask: &Mask, placement: &Placement, ctx: Ctx) -> Vec<f32> {
     out
 }
 
+/// Repeated pixel sampling from an immutable document snapshot. Wet brushes
+/// take several nearby samples per dab; rendering a tile for every sample
+/// makes their cost proportional to tile area instead of stroke movement.
+pub struct PixelSampler {
+    tree: Arc<CompositeTree>,
+    // Most recently used last. Bound retained float pixels to 16 MiB even on
+    // large documents and long strokes.
+    tiles: parking_lot::Mutex<Vec<(TileCoord, FTile)>>,
+}
+
+impl PixelSampler {
+    const CAPACITY: usize = 16;
+
+    pub fn new(tree: Arc<CompositeTree>) -> Self {
+        Self {
+            tree,
+            tiles: parking_lot::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn get(&self, x: i32, y: i32) -> [f32; 4] {
+        if x < 0 || y < 0 || x as u32 >= self.tree.width || y as u32 >= self.tree.height {
+            return [0.0; 4];
+        }
+        let t = TILE as i32;
+        let coord = TileCoord::new(x / t, y / t);
+        let mut tiles = self.tiles.lock();
+        let tile = match tiles.iter().position(|(c, _)| *c == coord) {
+            Some(i) => tiles.remove(i),
+            None => {
+                if tiles.len() == Self::CAPACITY {
+                    tiles.remove(0);
+                }
+                (coord, render_tile(&self.tree, 0, coord))
+            }
+        };
+        let pixel = tile.1[((y % t) * t + x % t) as usize];
+        tiles.push(tile);
+        pixel
+    }
+}
+
 /// Render one document-space region at full resolution, row-major. Pixels
 /// outside the canvas are transparent.
 pub fn region(tree: &CompositeTree, rect: IRect) -> Vec<[f32; 4]> {
@@ -747,6 +789,38 @@ pub fn tile_to_bgra8(
 mod tests {
     use super::*;
     use crate::adjust::Adjustment;
+
+    #[test]
+    fn pixel_sampler_preserves_composition_and_bounds_its_cache() {
+        let mut top = layer(2, Raster::solid(300, 300, [0.25, 0.0, 0.0, 0.5]));
+        top.opacity = 0.7;
+        top.blend = BlendMode::Multiply;
+        if let NodeContent::Pixels { placement, .. } = &mut top.content {
+            placement.x = 250.0;
+            placement.y = 2.0;
+        }
+        let mut scene = tree(vec![layer(1, Raster::solid(600, 300, [0.5; 4])), top]);
+        scene.width = 20 * TILE;
+        let scene = Arc::new(scene);
+        let sampler = PixelSampler::new(scene.clone());
+        for (x, y) in [(0, 0), (255, 3), (256, 3), (300, 25), (-1, 0), (5120, 0)] {
+            assert_eq!(sampler.get(x, y), region(&scene, IRect::new(x, y, 1, 1))[0]);
+        }
+        // Reading again keeps the actual rendered tile allocation.
+        sampler.get(0, 0);
+        let original = sampler.tiles.lock().last().unwrap().1.as_ptr();
+        sampler.get(1, 1);
+        assert_eq!(sampler.tiles.lock().last().unwrap().1.as_ptr(), original);
+        for x in 0..20 {
+            sampler.get(x * TILE as i32, 0);
+        }
+        assert_eq!(sampler.tiles.lock().len(), PixelSampler::CAPACITY);
+        // Eviction and subsequent rerender do not alter pixels.
+        assert_eq!(
+            sampler.get(255, 3),
+            region(&scene, IRect::new(255, 3, 1, 1))[0]
+        );
+    }
 
     fn px(n: &CompositeNode) -> CompositeNode {
         CompositeNode {

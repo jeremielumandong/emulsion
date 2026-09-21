@@ -746,6 +746,7 @@ impl EditorView {
                 })
                 .await;
             let elapsed = started.elapsed();
+            tracing::debug!(target: "emulsion_ui::paint_timing", tiles = n, elapsed_us = elapsed.as_micros() as u64, "viewport tile batch completed");
             this.update(cx, |this, cx| {
                 {
                     let mut c = this.cache.borrow_mut();
@@ -3150,6 +3151,7 @@ enum MenuAction {
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.flush_live_stroke(cx);
         if self.focus_watchers.is_none() {
             let blur = cx.on_focus_out(&self.canvas_focus, window, |this, _, _, cx| {
                 if this.space_held {

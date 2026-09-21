@@ -281,3 +281,146 @@ fn shift_shape_preview_and_commit_agree_and_releasing_shift_restores_aspect(
         }
     });
 }
+
+#[gpui_kit::test]
+fn brush_samples_coalesce_and_pointer_up_flushes_before_undo(cx: &mut TestAppContext) {
+    use emulsion_raster::paint::{Brush, Ink, Stroke};
+    let v = view(cx);
+    v.update(cx, |v, cx| {
+        let base = Arc::new(Raster::solid(64, 64, [0.; 4]));
+        let id = v
+            .execute(
+                Command::AddNode {
+                    node: Box::new(Node::raster(0, "Paint", base.clone(), Placement::default())),
+                    slot: Slot::TOP,
+                },
+                cx,
+            )
+            .unwrap();
+        v.canvas_bounds.set(Some(Bounds::new(
+            point(px(0.), px(0.)),
+            size(px(64.), px(64.)),
+        )));
+        v.view = viewport::View {
+            zoom: 1.,
+            center: (32., 32.),
+            rotation: 0.,
+        };
+        let brush = Brush {
+            size: 6.,
+            stabilizer: 0.,
+            taper_end: 0.,
+            ..Default::default()
+        };
+        v.editor.begin("Brush stroke");
+        v.drag = Some(Drag::Tool(ToolDrag::Stroke {
+            id,
+            stroke: Box::new(Stroke::new(base, brush, Ink::Color([0., 0., 0., 1.]), None)),
+            to_local: glam::DAffine2::IDENTITY,
+            heal: false,
+            label: "Brush stroke",
+            mask: false,
+            mask_raster: None,
+        }));
+        let rev = v.editor.revision;
+        for x in [8., 16., 24.] {
+            v.tool_move(point(px(x), px(24.)), cx);
+        }
+        assert_eq!(
+            v.editor.revision, rev,
+            "input samples must not compose separate previews"
+        );
+        v.flush_live_stroke(cx);
+        assert_eq!(v.editor.revision, rev + 1);
+        let NodeKind::Raster { raster, .. } = &v.editor.doc.node(id).unwrap().kind else {
+            panic!("raster")
+        };
+        assert!(raster.get(16, 24)[3] > 0, "intermediate samples preserved");
+        v.flush_live_stroke(cx);
+        assert_eq!(v.editor.revision, rev + 1, "no duplicate preview");
+        v.tool_move(point(px(40.), px(24.)), cx);
+        let Some(Drag::Tool(drag)) = v.drag.take() else {
+            panic!("stroke")
+        };
+        v.tool_up(drag, cx);
+        let NodeKind::Raster { raster, .. } = &v.editor.doc.node(id).unwrap().kind else {
+            panic!("raster")
+        };
+        assert!(
+            raster.get(39, 24)[3] > 0,
+            "pointer-up must publish pending samples even without taper"
+        );
+        assert!(!v.editor.in_transaction());
+        assert!(v.editor.undo());
+        let NodeKind::Raster { raster, .. } = &v.editor.doc.node(id).unwrap().kind else {
+            panic!("raster")
+        };
+        assert_eq!(raster.get(16, 24)[3], 0);
+        assert_eq!(raster.get(39, 24)[3], 0);
+        let base = raster.clone();
+        v.editor.begin("Brush stroke");
+        v.drag = Some(Drag::Tool(ToolDrag::Stroke {
+            id,
+            stroke: Box::new(Stroke::new(
+                base,
+                Brush::default(),
+                Ink::Color([0., 0., 0., 1.]),
+                None,
+            )),
+            to_local: glam::DAffine2::IDENTITY,
+            heal: false,
+            label: "Brush stroke",
+            mask: false,
+            mask_raster: None,
+        }));
+        v.tool_move(point(px(16.), px(24.)), cx);
+        assert!(v.tool_cancel(cx));
+        v.flush_live_stroke(cx);
+        let NodeKind::Raster { raster, .. } = &v.editor.doc.node(id).unwrap().kind else {
+            panic!("raster")
+        };
+        assert_eq!(
+            raster.get(16, 24)[3],
+            0,
+            "canceled pending samples must never appear"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn choosing_a_medium_activates_its_brush_and_preserves_active_adjustments(cx: &mut TestAppContext) {
+    use emulsion_raster::library;
+    let v = view(cx);
+    v.update(cx, |v, cx| {
+        v.set_paint(PaintKind::Brush, cx);
+        for category in ["Oil", "Ink", "Airbrush", "Eraser", "Smudge", "Chalk"] {
+            let expected = library::library()
+                .into_iter()
+                .find(|p| p.category == category)
+                .unwrap();
+            v.select_brush_category(category, cx);
+            assert_eq!(v.presets.category.as_deref(), Some(category));
+            assert_eq!(v.presets.current.as_deref(), Some(expected.name.as_str()));
+            assert_eq!(v.tools.brush, expected.brush.sanitized());
+            assert_eq!(
+                v.tools.paint,
+                match category {
+                    "Eraser" => PaintKind::Eraser,
+                    "Smudge" => PaintKind::Smudge,
+                    _ => PaintKind::Brush,
+                }
+            );
+        }
+        v.select_brush_category("Airbrush", cx);
+        assert_eq!(v.tools.brush.hardness, 0.);
+        assert_eq!(v.tools.brush.flow, 0.08);
+        v.apply_preset_named("Fine spray", cx);
+        v.tools.brush.size = 73.;
+        v.select_brush_category("Airbrush", cx);
+        assert_eq!(v.presets.current.as_deref(), Some("Fine spray"));
+        assert_eq!(
+            v.tools.brush.size, 73.,
+            "reselecting must preserve adjustments"
+        );
+    });
+}

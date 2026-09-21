@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::widgets::{chip_action, tip};
-use emulsion_raster::composite::region;
+use emulsion_raster::composite::{PixelSampler, region};
 use emulsion_raster::paint::{Brush, BrushBlend, Clip, GrainKind, Ink, Stroke, fill_color};
 use emulsion_raster::select::{self, Combine};
 use emulsion_raster::{IRect, Mask, fill};
@@ -144,6 +144,7 @@ pub struct ToolState {
     pub mask_reveal: bool,
     /// When the current stroke started, for speed dynamics.
     pub stroke_started: Option<Instant>,
+    pub(crate) stroke_preview_pending: bool,
     /// QuickShape: holding the pointer still at the end of a stroke snaps
     /// it to the line, polygon, circle or ellipse it was aiming for.
     pub quick_shape: bool,
@@ -201,6 +202,7 @@ impl Default for ToolState {
             kits: Default::default(),
             mask_reveal: true,
             stroke_started: None,
+            stroke_preview_pending: false,
             quick_shape: true,
             pen: super::pen::PenState::fresh(),
             mask_edit: false,
@@ -1000,15 +1002,12 @@ impl EditorView {
         stroke.set_alpha_lock(self.tools.alpha_lock && !mask_mode);
         if wet {
             // Wet media mix with what shows under this layer, not only with it.
-            let tree = self.tree.clone();
+            let backdrop = PixelSampler::new(self.tree.clone());
             let td = to_doc;
             stroke.set_backdrop(Arc::new(move |x: i32, y: i32| {
                 let p = td.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
                 let (dx, dy) = (p.x.floor() as i32, p.y.floor() as i32);
-                if dx < 0 || dy < 0 || dx >= tree.width as i32 || dy >= tree.height as i32 {
-                    return [0.0; 4];
-                }
-                region(&tree, IRect::new(dx, dy, 1, 1))[0]
+                backdrop.get(dx, dy)
             }));
         }
         let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
@@ -1022,6 +1021,7 @@ impl EditorView {
         }
         crate::tablet::start();
         self.tools.stroke_started = Some(Instant::now());
+        self.tools.stroke_preview_pending = false;
         self.assist_begin(d);
         let p = to_local.transform_point2(dvec2(d.0, d.1));
         stroke.point_full(
@@ -1420,6 +1420,41 @@ impl EditorView {
         self.apply_selection(m, combine, cx);
     }
 
+    /// Publish accumulated brush samples at the frame boundary.
+    pub(crate) fn flush_live_stroke(&mut self, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.tools.stroke_preview_pending) {
+            return;
+        }
+        let Some(Drag::Tool(ToolDrag::Stroke {
+            id,
+            stroke,
+            label,
+            mask,
+            mask_raster,
+            ..
+        })) = &mut self.drag
+        else {
+            return;
+        };
+        let current = if *mask {
+            mask_raster.clone()
+        } else {
+            match self.editor.doc.node(*id).map(|n| &n.kind) {
+                Some(NodeKind::Raster { raster, .. }) => Some(raster.clone()),
+                _ => None,
+            }
+        };
+        let Some(current) = current else { return };
+        let started = Instant::now();
+        let (r, dirty) = stroke.render(&current);
+        if *mask {
+            *mask_raster = Some(Arc::new(r.clone()));
+        }
+        let (id, label, mask) = (*id, *label, *mask);
+        self.commit_stroke(id, r, dirty, label, mask, cx);
+        tracing::debug!(target: "emulsion_ui::paint_timing", elapsed_us = started.elapsed().as_micros() as u64, "brush preview published");
+    }
+
     pub(crate) fn tool_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(d) = self.doc_point(pos) else { return };
         let d = if matches!(self.drag, Some(Drag::Tool(ToolDrag::Stroke { .. }))) {
@@ -1432,21 +1467,15 @@ impl EditorView {
         };
         match t {
             ToolDrag::Stroke {
-                id,
-                stroke,
-                to_local,
-                label,
-                mask,
-                mask_raster,
-                ..
+                stroke, to_local, ..
             } => {
-                let mask = *mask;
-                let mask_current = mask_raster.clone();
                 let p = to_local.transform_point2(dvec2(d.0, d.1));
                 let t = self
                     .tools
                     .stroke_started
                     .map(|s| s.elapsed().as_secs_f64() * 1000.0);
+                // Keep every input sample, but compose tiles only once per displayed frame.
+                let started = Instant::now();
                 stroke.point_full(
                     p.x as f32,
                     p.y as f32,
@@ -1454,31 +1483,9 @@ impl EditorView {
                     crate::tablet::tilt(),
                     t,
                 );
-                let (id, label) = (*id, *label);
-                let current = if mask {
-                    match mask_current {
-                        Some(m) => m,
-                        None => return,
-                    }
-                } else {
-                    match self.editor.doc.node(id).map(|n| &n.kind) {
-                        Some(NodeKind::Raster { raster, .. }) => raster.clone(),
-                        _ => return,
-                    }
-                };
-                let Some(Drag::Tool(ToolDrag::Stroke {
-                    stroke,
-                    mask_raster,
-                    ..
-                })) = &mut self.drag
-                else {
-                    return;
-                };
-                let (r, dirty) = stroke.render(&current);
-                if mask {
-                    *mask_raster = Some(Arc::new(r.clone()));
-                }
-                self.commit_stroke(id, r, dirty, label, mask, cx);
+                tracing::debug!(target: "emulsion_ui::paint_timing", elapsed_us = started.elapsed().as_micros() as u64, size = stroke.brush.size, wetness = stroke.brush.wetness, "brush input processed");
+                self.tools.stroke_preview_pending = true;
+                cx.notify();
             }
             ToolDrag::Liquify { .. } => self.liquify_to(d, cx),
             ToolDrag::Marquee { end, .. }
@@ -1536,7 +1543,9 @@ impl EditorView {
                 ..
             } => {
                 // Catch the stabilizer up and taper the end.
-                if stroke.finish() {
+                let finished = stroke.finish();
+                let pending = std::mem::take(&mut self.tools.stroke_preview_pending);
+                if finished || pending {
                     let current = if mask {
                         mask_raster
                     } else {
@@ -1551,6 +1560,7 @@ impl EditorView {
                     }
                 }
                 self.tools.stroke_started = None;
+                self.tools.stroke_preview_pending = false;
                 self.assist_end();
                 if heal {
                     self.finish_heal(id, *stroke, cx);
@@ -1734,6 +1744,7 @@ impl EditorView {
                 self.after_change(cx);
             }
             self.tools.stroke_started = None;
+            self.tools.stroke_preview_pending = false;
             self.assist_end();
         }
         let pen_pending = self.pen_cancel();

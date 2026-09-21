@@ -124,6 +124,25 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Selecting a medium also selects a brush, rather than merely filtering
+    /// the list while silently leaving the previous medium active.
+    pub(crate) fn select_brush_category(&mut self, category: &str, cx: &mut Context<Self>) {
+        let presets: Vec<_> = library::library()
+            .into_iter()
+            .filter(|p| p.category == category)
+            .collect();
+        let Some(first) = presets.first() else { return };
+        self.presets.category = Some(category.into());
+        // Reopening the active medium must preserve the user's adjustments.
+        let already_active = presets
+            .iter()
+            .any(|p| self.presets.current.as_deref() == Some(p.name.as_str()));
+        if !already_active {
+            self.apply_preset(first, cx);
+        }
+        cx.notify();
+    }
+
     /// Pick a brush by name, built-in or saved.
     pub fn apply_preset_named(&mut self, name: &str, cx: &mut Context<Self>) -> bool {
         let found = library::find(name).or_else(|| {
@@ -318,8 +337,7 @@ impl EditorView {
             let name: String = (*c).into();
             tabs = tabs.child(chip(("bcat", ci), *c, on, p).on_click(cx.listener(
                 move |this, _, _, cx| {
-                    this.presets.category = Some(name.clone());
-                    cx.notify();
+                    this.select_brush_category(&name, cx);
                 },
             )));
         }

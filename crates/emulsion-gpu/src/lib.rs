@@ -1,5 +1,7 @@
 //! Selective GPU image operations with the existing CPU algorithms as fallback.
 //! CPU documents remain authoritative for undo, saving, and recovery.
+#[cfg(test)]
+mod atlas_sampling_tests;
 pub mod brush_backend;
 mod compositor;
 mod context;
