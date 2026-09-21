@@ -33,12 +33,20 @@ fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
         }
         // The standard ORA thumbnail is only 256px. Larger gallery cards need
         // the saved full composite, not an enlargement of that small preview.
-        match crate::ora::read_entry(&mut z, "mergedimage.png", 1 << 30).and_then(|bytes| {
-            decode(ImageReader::with_format(
-                Cursor::new(bytes),
-                image::ImageFormat::Png,
-            ))
-        }) {
+        if let Ok(image) =
+            crate::ora::read_entry(&mut z, "mergedimage.png", 1 << 30).and_then(|bytes| {
+                decode(ImageReader::with_format(
+                    Cursor::new(bytes),
+                    image::ImageFormat::Png,
+                ))
+            })
+        {
+            return Ok(image);
+        }
+        // Compact saves leave the merged image out: composite the layers
+        // themselves, at the mip level that still covers the card.
+        drop(z);
+        match composite_document(path, width, height) {
             Ok(image) => Ok(image),
             Err(error) => embedded.or(Err(error)),
         }
@@ -55,6 +63,45 @@ fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
     }
 }
 
+/// Open a native document and flatten it at the coarsest mip level whose
+/// long side still reaches `width`/`height`, so the card gets real detail
+/// without rendering the whole picture at full size.
+fn composite_document(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
+    let doc = crate::ora::read(path)?;
+    let long = doc.width.max(doc.height);
+    let need = width.max(height).max(1);
+    let mut level = 0;
+    while level < 8 && (long >> (level + 1)) >= need {
+        level += 1;
+    }
+    let r = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
+    image::RgbaImage::from_raw(r.width(), r.height(), r.to_srgba8())
+        .map(DynamicImage::ImageRgba8)
+        .ok_or_else(|| crate::IoError::Unsupported("composite thumbnail".into()))
+}
+
+/// Where finished gallery crops are kept between launches, keyed by the
+/// file's path, size and modification time and the requested size.
+fn cache_path(path: &Path, width: u32, height: u32) -> Option<std::path::PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let meta = std::fs::metadata(path).ok()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    "thumb-v1".hash(&mut h);
+    path.hash(&mut h);
+    meta.len().hash(&mut h);
+    meta.modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .hash(&mut h);
+    (width, height).hash(&mut h);
+    Some(
+        crate::recent::data_dir()
+            .join("thumbs")
+            .join(format!("{:016x}.png", h.finish())),
+    )
+}
+
 /// Straight-alpha sRGBA8 thumbnail no larger than `max` on either side.
 pub fn thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
     import::check_size(max, max)?;
@@ -68,6 +115,26 @@ pub fn thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
 /// Small sources keep their native resolution; no detail is invented.
 pub fn thumbnail_cover(path: &Path, width: u32, height: u32) -> Result<(u32, u32, Vec<u8>)> {
     import::check_size(width, height)?;
+    let cache = cache_path(path, width, height);
+    if let Some(c) = &cache
+        && let Ok(bytes) = std::fs::read(c)
+        && let Ok(img) = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+    {
+        let t = img.into_rgba8();
+        return Ok((t.width(), t.height(), t.into_raw()));
+    }
+    let (w, h, px) = thumbnail_cover_uncached(path, width, height)?;
+    if let Some(c) = cache
+        && let Some(dir) = c.parent()
+        && std::fs::create_dir_all(dir).is_ok()
+        && let Ok(bytes) = crate::export::png8(w, h, &px)
+    {
+        let _ = std::fs::write(c, bytes);
+    }
+    Ok((w, h, px))
+}
+
+fn thumbnail_cover_uncached(path: &Path, width: u32, height: u32) -> Result<(u32, u32, Vec<u8>)> {
     let img = source(path, width, height)?;
     let ratio = width as f64 / height as f64;
     let (cw, ch) = if img.width() as f64 / img.height() as f64 > ratio {

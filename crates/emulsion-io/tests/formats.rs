@@ -307,3 +307,54 @@ fn exportable_extensions_lists_in_process_formats_first() {
     assert_eq!(&v[..5], &["png", "jpg", "webp", "tif", "psd"]);
     assert!(v.contains(&"xcf") && v.contains(&"exr") && v.contains(&"qoi"));
 }
+
+#[test]
+fn ora_without_a_merged_image_still_gets_a_sharp_gallery_thumbnail() {
+    use emulsion_core::command::Slot;
+    use emulsion_core::{Command, Document, Node};
+    use emulsion_raster::{Placement, Raster};
+    use std::sync::Arc;
+    // One untouched layer: the compact writer leaves mergedimage.png out.
+    let mut d = Document::new(1200, 900);
+    let r = Raster::from_fn(1200, 900, [0; 4], |x, _| {
+        if x < 600 {
+            [65535, 0, 0, 65535]
+        } else {
+            [0, 0, 65535, 65535]
+        }
+    });
+    Command::AddNode {
+        node: Box::new(Node::raster(0, "Photo", Arc::new(r), Placement::default())),
+        slot: Slot::TOP,
+    }
+    .apply(&mut d)
+    .unwrap();
+    let p = scratch("compact.ora");
+    emulsion_io::save(&d, &p).unwrap();
+    let names: Vec<String> = {
+        let mut z = zip::ZipArchive::new(std::fs::File::open(&p).unwrap()).unwrap();
+        (0..z.len())
+            .map(|i| z.by_index(i).unwrap().name().to_string())
+            .collect()
+    };
+    assert!(
+        !names.iter().any(|n| n == "mergedimage.png"),
+        "this test wants the compact case: {names:?}"
+    );
+    let (w, h, px) = emulsion_io::thumb::thumbnail_cover(&p, 800, 600).unwrap();
+    assert_eq!(
+        (w, h),
+        (800, 600),
+        "full card size, not the 256 px spec thumbnail"
+    );
+    let at = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2], px[i + 3]]
+    };
+    assert_eq!(at(100, 300), [255, 0, 0, 255]);
+    assert_eq!(at(700, 300), [0, 0, 255, 255]);
+    // The second call is served from the disk cache and agrees.
+    let again = emulsion_io::thumb::thumbnail_cover(&p, 800, 600).unwrap();
+    assert_eq!(again.0, 800);
+    assert_eq!(again.2[..64], px[..64]);
+}
