@@ -83,7 +83,7 @@ const DATA_SOURCES: [(&str, &str, &str); 3] = [
     (
         "Home screen picture",
         "Emulsion (MIT)",
-        "Red and blue liquid, generated for this project with OpenAI's image model (content credentials recorded it as AI-generated) and embedded as a JPEG.",
+        "A portrait in red and blue ink and water, generated for this project with OpenAI's image model and embedded as a JPEG.",
     ),
     (
         "lensfun database",

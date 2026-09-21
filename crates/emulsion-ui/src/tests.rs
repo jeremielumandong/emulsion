@@ -884,7 +884,7 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
             e.editor.doc.nodes.len(),
         )
     });
-    assert_eq!((name.as_str(), size, nodes), ("landing", (1672, 941), 1));
+    assert_eq!((name.as_str(), size, nodes), ("landing", (1586, 992), 1));
 }
 
 // ── Phase 3 tools, driven through real pointer and key events ────────────
