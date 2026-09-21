@@ -528,13 +528,11 @@ impl EditorView {
                     .h(BTN_H)
                     .flex_none()
                     .border_1()
-                    .border_color(if on {
-                        ink.opacity(0.14)
-                    } else {
-                        transparent_black()
-                    })
+                    // The active tool in the accent, as the nav's active
+                    // tab: unmistakable in any theme.
+                    .border_color(if on { accent } else { transparent_black() })
                     .rounded_md()
-                    .bg(if on { selected_bg } else { transparent_black() })
+                    .bg(if on { accent } else { transparent_black() })
                     .text_color(ink)
                     .font_family(MONO_FONT)
                     .text_size(px(14.))
@@ -572,7 +570,7 @@ impl EditorView {
                         gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
                     })
                     .child(tool_icon(it.glyph).size(px(18.)).text_color(if on {
-                        p.paper
+                        accent_fg
                     } else {
                         ink
                     }))
