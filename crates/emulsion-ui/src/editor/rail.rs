@@ -12,6 +12,9 @@ use std::collections::HashMap;
 #[derive(Clone, Copy)]
 pub struct RailItem {
     pub name: &'static str,
+    /// Icon: a Lucide name (`icons/<name>.svg` in the UI kit's assets) or
+    /// one of the `emulsion-*` drawings below. Photoshop's silhouettes, so
+    /// the rail reads at a glance.
     pub glyph: &'static str,
     /// Default shortcut, for the tooltip and fly-out.
     pub key: &'static str,
@@ -71,44 +74,69 @@ const fn shape(
 
 /// Rail slots top to bottom; each is a group of one or more items.
 pub const GROUPS: &[&[RailItem]] = &[
-    &[item("Move", "✥", "V", Tool::Move)],
+    &[item("Move", "move", "V", Tool::Move)],
     &[
-        select("Rectangular marquee", "▭", "M", SelectShape::Rect),
-        select("Elliptical marquee", "◯", "Shift+M", SelectShape::Ellipse),
+        select(
+            "Rectangular marquee",
+            "square-dashed",
+            "M",
+            SelectShape::Rect,
+        ),
+        select(
+            "Elliptical marquee",
+            "circle-dashed",
+            "Shift+M",
+            SelectShape::Ellipse,
+        ),
     ],
     &[
-        select("Lasso", "〰", "L", SelectShape::Lasso),
-        select("Polygonal lasso", "⬠", "Shift+L", SelectShape::Polygon),
-        select("Magnetic lasso", "⌇", "Alt+L", SelectShape::Magnetic),
+        select("Lasso", "lasso", "L", SelectShape::Lasso),
+        select(
+            "Polygonal lasso",
+            "lasso-select",
+            "Shift+L",
+            SelectShape::Polygon,
+        ),
+        select("Magnetic lasso", "magnet", "Alt+L", SelectShape::Magnetic),
     ],
     &[
-        select("Quick select (AI)", "✦", "Shift+W", SelectShape::Quick),
-        select("Magic wand", "⚚", "W", SelectShape::Wand),
+        select(
+            "Quick select (AI)",
+            "wand-sparkles",
+            "Shift+W",
+            SelectShape::Quick,
+        ),
+        select("Magic wand", "wand", "W", SelectShape::Wand),
     ],
-    &[item("Crop", "⌗", "C", Tool::Crop)],
-    &[item("Eyedropper", "◔", "I", Tool::Eyedropper)],
-    &[item("Heal", "✚", "J", Tool::Heal)],
+    &[item("Crop", "crop", "C", Tool::Crop)],
+    &[item("Eyedropper", "pipette", "I", Tool::Eyedropper)],
+    &[item("Heal", "bandage", "J", Tool::Heal)],
     &[
-        paint("Brush", "✎", "B", PaintKind::Brush),
-        paint("Smudge", "☁", "Shift+B", PaintKind::Smudge),
-        paint("Liquify", "≈", "Shift+J", PaintKind::Liquify),
+        paint("Brush", "brush", "B", PaintKind::Brush),
+        paint("Smudge", "pointer", "Shift+B", PaintKind::Smudge),
+        paint("Liquify", "emulsion-liquify", "Shift+J", PaintKind::Liquify),
     ],
-    &[item("Clone stamp", "◎", "S", Tool::Clone)],
-    &[paint("Eraser", "◻", "E", PaintKind::Eraser)],
+    &[item("Clone stamp", "stamp", "S", Tool::Clone)],
+    &[paint("Eraser", "eraser", "E", PaintKind::Eraser)],
     &[
-        paint("Gradient", "▤", "Shift+G", PaintKind::Gradient),
-        paint("Paint bucket", "◍", "G", PaintKind::Bucket),
+        paint(
+            "Gradient",
+            "emulsion-gradient",
+            "Shift+G",
+            PaintKind::Gradient,
+        ),
+        paint("Paint bucket", "paint-bucket", "G", PaintKind::Bucket),
     ],
-    &[item("Pen", "✒", "P", Tool::Pen)],
-    &[item("Type", "T", "T", Tool::Type)],
+    &[item("Pen", "pen-tool", "P", Tool::Pen)],
+    &[item("Type", "type", "T", Tool::Type)],
     &[
-        shape("Rectangle", "◇", "U", ShapeKind::Rect),
-        shape("Ellipse", "○", "Shift+U", ShapeKind::Ellipse),
+        shape("Rectangle", "square", "U", ShapeKind::Rect),
+        shape("Ellipse", "circle", "Shift+U", ShapeKind::Ellipse),
     ],
-    &[item("Mask", "◐", "Q", Tool::Mask)],
-    &[item("Grade", "◑", "Shift+Q", Tool::Grade)],
-    &[item("Hand", "✋", "H", Tool::Hand)],
-    &[item("Zoom", "⌕", "Z", Tool::Zoom)],
+    &[item("Mask", "emulsion-mask", "Q", Tool::Mask)],
+    &[item("Grade", "contrast", "Shift+Q", Tool::Grade)],
+    &[item("Hand", "hand", "H", Tool::Hand)],
+    &[item("Zoom", "zoom-in", "Z", Tool::Zoom)],
 ];
 
 /// Small gaps after these `GROUPS` slots, Photoshop's clusters: move ·
@@ -119,29 +147,143 @@ pub const DIVIDERS: &[usize] = &[0, 3, 5, 10, 13, 15];
 /// Draw mode: the painter's rail, in the order Procreate users reach for.
 pub const DRAW_GROUPS: &[&[RailItem]] = &[
     &[
-        paint("Brush", "✎", "B", PaintKind::Brush),
-        paint("Liquify", "≈", "Shift+J", PaintKind::Liquify),
+        paint("Brush", "brush", "B", PaintKind::Brush),
+        paint("Liquify", "emulsion-liquify", "Shift+J", PaintKind::Liquify),
     ],
-    &[paint("Smudge", "☁", "Shift+B", PaintKind::Smudge)],
-    &[paint("Eraser", "◻", "E", PaintKind::Eraser)],
-    &[item("Eyedropper", "◔", "I", Tool::Eyedropper)],
+    &[paint("Smudge", "pointer", "Shift+B", PaintKind::Smudge)],
+    &[paint("Eraser", "eraser", "E", PaintKind::Eraser)],
+    &[item("Eyedropper", "pipette", "I", Tool::Eyedropper)],
     &[
-        paint("Paint bucket", "◍", "G", PaintKind::Bucket),
-        paint("Gradient", "▤", "Shift+G", PaintKind::Gradient),
+        paint("Paint bucket", "paint-bucket", "G", PaintKind::Bucket),
+        paint(
+            "Gradient",
+            "emulsion-gradient",
+            "Shift+G",
+            PaintKind::Gradient,
+        ),
     ],
     &[
-        select("Lasso", "〰", "L", SelectShape::Lasso),
-        select("Rectangular marquee", "▭", "M", SelectShape::Rect),
-        select("Quick select (AI)", "✦", "Shift+W", SelectShape::Quick),
+        select("Lasso", "lasso", "L", SelectShape::Lasso),
+        select(
+            "Rectangular marquee",
+            "square-dashed",
+            "M",
+            SelectShape::Rect,
+        ),
+        select(
+            "Quick select (AI)",
+            "wand-sparkles",
+            "Shift+W",
+            SelectShape::Quick,
+        ),
     ],
-    &[item("Move", "✥", "V", Tool::Move)],
-    &[item("Mask", "◐", "Q", Tool::Mask)],
-    &[item("Hand", "✋", "H", Tool::Hand)],
-    &[item("Zoom", "⌕", "Z", Tool::Zoom)],
+    &[item("Move", "move", "V", Tool::Move)],
+    &[item("Mask", "emulsion-mask", "Q", Tool::Mask)],
+    &[item("Hand", "hand", "H", Tool::Hand)],
+    &[item("Zoom", "zoom-in", "Z", Tool::Zoom)],
 ];
 
 /// Group spacing for `DRAW_GROUPS`: paint · fill · select and move · navigation.
 pub const DRAW_DIVIDERS: &[usize] = &[3, 4, 7];
+
+/// Tools Lucide has no icon for, drawn in its 24-grid, 2 px stroke style.
+const GRADIENT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="currentColor"/><stop offset="1" stop-color="currentColor" stop-opacity="0.05"/></linearGradient></defs><rect x="3" y="4" width="18" height="16" rx="1" fill="url(#g)"/><rect x="3" y="4" width="18" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/></svg>"##;
+const MASK_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="4.5" fill="currentColor"/></svg>"##;
+const LIQUIFY_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8c2.5-3 5-3 7.5 0s5 3 7.5 0 3-3 3-3"/><path d="M3 14c2.5-3 5-3 7.5 0s5 3 7.5 0 3-3 3-3"/><path d="M3 20c2.5-3 5-3 7.5 0s5 3 7.5 0 3-3 3-3"/></svg>"##;
+
+/// The bytes of a rail icon: Lucide's file, embedded from the vendored UI
+/// kit at build time, or one of the drawings above.
+fn icon_bytes(id: &str) -> &'static [u8] {
+    match id {
+        "move" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/move.svg"),
+        "square-dashed" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/square-dashed.svg")
+        }
+        "circle-dashed" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/circle-dashed.svg")
+        }
+        "lasso" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/lasso.svg"),
+        "lasso-select" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/lasso-select.svg")
+        }
+        "magnet" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/magnet.svg")
+        }
+        "wand-sparkles" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/wand-sparkles.svg")
+        }
+        "wand" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/wand.svg"),
+        "crop" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/crop.svg"),
+        "pipette" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/pipette.svg")
+        }
+        "bandage" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/bandage.svg")
+        }
+        "brush" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/brush.svg"),
+        "pointer" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/pointer.svg")
+        }
+        "stamp" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/stamp.svg"),
+        "eraser" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/eraser.svg")
+        }
+        "paint-bucket" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/paint-bucket.svg")
+        }
+        "pen-tool" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/pen-tool.svg")
+        }
+        "type" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/type.svg"),
+        "square" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/square.svg")
+        }
+        "circle" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/circle.svg")
+        }
+        "contrast" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/contrast.svg")
+        }
+        "hand" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/hand.svg"),
+        "zoom-in" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/zoom-in.svg")
+        }
+        "emulsion-gradient" => GRADIENT_SVG.as_bytes(),
+        "emulsion-mask" => MASK_SVG.as_bytes(),
+        "emulsion-liquify" => LIQUIFY_SVG.as_bytes(),
+        _ => include_bytes!(
+            "../../../../vendor/gpui/gpui-kit-assets/assets/icons/circle-question-mark.svg"
+        ),
+    }
+}
+
+/// The SVG element for a rail icon id.
+pub(crate) fn tool_icon(id: &'static str) -> Svg {
+    svg().data(icon_bytes(id))
+}
+
+#[cfg(test)]
+mod icon_tests {
+    #[test]
+    fn every_rail_icon_is_a_real_drawing() {
+        for group in super::GROUPS.iter().chain(super::DRAW_GROUPS.iter()) {
+            for it in group.iter() {
+                let bytes = super::icon_bytes(it.glyph);
+                assert!(
+                    std::str::from_utf8(bytes).is_ok_and(|s| s.contains("<svg")),
+                    "{} has no icon",
+                    it.name
+                );
+                assert_ne!(
+                    bytes,
+                    super::icon_bytes("nothing-like-this"),
+                    "{} falls back to the placeholder",
+                    it.name
+                );
+            }
+        }
+    }
+}
 
 /// Rail button height; a little tighter than the old rail so eighteen
 /// slots and the swatches fit a 720 px window.
@@ -342,7 +484,13 @@ impl EditorView {
                                 window.focus(&this.canvas_focus, cx);
                                 cx.stop_propagation();
                             }))
-                            .child(div().w(px(16.)).text_size(px(13.)).child(m.glyph))
+                            .child(
+                                div()
+                                    .w(px(16.))
+                                    .flex()
+                                    .items_center()
+                                    .child(tool_icon(m.glyph).size(px(14.)).text_color(ink)),
+                            )
                             .child(div().flex_1().child(m.name))
                             .child(div().child(m.key))
                     }))
@@ -423,7 +571,11 @@ impl EditorView {
                     .tooltip(move |w, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
                     })
-                    .child(it.glyph)
+                    .child(tool_icon(it.glyph).size(px(18.)).text_color(if on {
+                        p.paper
+                    } else {
+                        ink
+                    }))
                     .when(has_more, |d| {
                         // Corner mark: this slot holds more tools (right-click).
                         d.child(
