@@ -13,6 +13,10 @@ together. Connect a supported coding CLI and ask the assistant to carry out edit
 using Emulsion's MCP tools, directly in your document. Everyday drawing and editing
 work without an AI account or subscription.
 
+The application website lives in [`site/`](site/README.md) in this repository.
+Run `cd site && npm ci && npm run dev` to work on it, or `npm run build` from
+that directory to produce the static site.
+
 ## Why Emulsion?
 
 - **Make room for experimentation.** Undo and redo edits, explore history branches,
