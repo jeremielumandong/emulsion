@@ -1142,6 +1142,20 @@ impl Workspace {
     }
 }
 
+/// The output extension for a batch format setting; anything unknown is JPEG.
+pub(crate) fn batch_ext(format: &str) -> &'static str {
+    let f = format.trim_start_matches('.').to_ascii_lowercase();
+    let f = match f.as_str() {
+        "jpeg" => "jpg",
+        "tiff" => "tif",
+        other => other,
+    };
+    emulsion_io::export::ExportFormat::exportable_extensions()
+        .into_iter()
+        .find(|e| *e == f)
+        .unwrap_or("jpg")
+}
+
 #[cfg(test)]
 mod export_safety_tests {
     use super::{BatchStage, publish_batch_file};
@@ -1345,18 +1359,4 @@ mod export_safety_tests {
         drop(stage);
         std::fs::remove_dir_all(dir).unwrap();
     }
-}
-
-/// The output extension for a batch format setting; anything unknown is JPEG.
-pub(crate) fn batch_ext(format: &str) -> &'static str {
-    let f = format.trim_start_matches('.').to_ascii_lowercase();
-    let f = match f.as_str() {
-        "jpeg" => "jpg",
-        "tiff" => "tif",
-        other => other,
-    };
-    emulsion_io::export::ExportFormat::exportable_extensions()
-        .into_iter()
-        .find(|e| *e == f)
-        .unwrap_or("jpg")
 }

@@ -17,6 +17,15 @@ use std::sync::Arc;
 #[path = "tool_usability_tests.rs"]
 mod tool_usability_tests;
 
+#[path = "navigation_functionality_tests.rs"]
+mod navigation_functionality_tests;
+
+#[path = "paint_functionality_tests.rs"]
+mod paint_functionality_tests;
+
+#[path = "geometry_functionality_tests.rs"]
+mod geometry_functionality_tests;
+
 #[path = "clipboard_tests.rs"]
 mod clipboard_tests;
 
@@ -1780,6 +1789,7 @@ mod tools {
                     emulsion_raster::IRect::new(-20, -20, w as i32 + 40, h as i32 + 40),
                     0.0,
                     true,
+                    false,
                     cx,
                 )
             })
@@ -1789,7 +1799,6 @@ mod tools {
             let d = &e.read(cx).editor.doc;
             let flat = emulsion_raster::composite::flatten(&d.composite_tree(), 0);
             let names: Vec<String> = d.nodes.iter().map(|n| n.name.clone()).collect();
-                    false,
             (names, flat.get(2, 2)[3])
         });
         assert_eq!(names.last().map(String::as_str), Some("Extended edges"));

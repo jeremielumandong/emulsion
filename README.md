@@ -1,14 +1,100 @@
 # Emulsion
 
-An image editor in Rust and [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui).
-Layers that are all nodes in one graph (pixels, adjustments, masks, text and paths alike), a
-branchable history, and optional AI that proposes edits instead of asking for prompts. Every feature works without AI; local models, a coding-CLI subscription,
-or a decision-model API key each make it better.
+**Undo any edit.**
+
+Paint, retouch, and explore new looks with Emulsion—an open-source desktop image
+editor for Linux, macOS, and Windows. Combine photos, brushwork, editable text,
+vector paths, masks, and colour adjustments in one workspace. Try a different
+direction with branchable history, then return to an earlier edit when you need to.
+
+Built in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui),
+Emulsion brings manual editing, reusable recipes, and an integrated AI assistant
+together. Connect a supported coding CLI and ask the assistant to carry out edits
+using Emulsion's MCP tools, directly in your document. Everyday drawing and editing
+work without an AI account or subscription.
+
+## Why Emulsion?
+
+- **Make room for experimentation.** Undo and redo edits, explore history branches,
+  and keep adjustments, text, and paths editable in your project.
+- **Paint and retouch in the same app.** Use brushes, erasers, smudge, clone, heal,
+  gradients, and liquify, with selections and masks to control where changes land.
+- **Build a look, then reuse it.** Combine exposure, curves, colour adjustments,
+  filters, and recipes; apply a recipe across a folder with batch export.
+- **Bring your existing work.** Open common image formats, camera RAW, layered
+  PSD/PSB, and supported GIMP XCF files. Save editable projects as OpenRaster
+  and export images for sharing. See [format support](#opening-files) for details.
+- **Describe the work. Let the assistant do it.** The integrated assistant can
+  inspect your canvas, paint, build layers, adjust colours, and carry out editing
+  workflows through MCP. Review its proposed changes, watch approved edits appear,
+  and keep working on the result yourself.
+- **Choose your AI setup.** Connect a supported coding CLI, or use local and cloud
+  image-generation providers. Generated images arrive as separate layers you can
+  hide or undo.
+- **Fit your desktop.** Choose light or dark mode, or follow your Omarchy theme
+  on Linux. Keyboard shortcuts and adjustable tool controls keep common actions
+  close at hand.
+- **Open source, yours to build on.** Emulsion's original code is MIT licensed.
+  Inspect it, modify it, and help shape its development.
+
+For photographers refining a look, illustrators building a drawing, and anyone
+who wants to try another version before deciding, Emulsion keeps the tools and
+the edit history together.
+
+## An assistant that works on your canvas
+
+Ask for an outcome: “Give this photo a warmer look with editable adjustments,”
+“Draw from my reference on a new layer,” or “Apply this recipe to a folder of
+photos.” The assistant can inspect the image, choose tools, execute approved
+operations, and inspect the result. Its edits appear in the same document you
+work on manually, with editable layers and document history.
+
+Emulsion includes the assistant interface and MCP integration. It connects to an
+installed, authenticated **Claude Code, Codex, OpenCode, or Kimi Code** CLI; a
+model or provider subscription is not bundled. Open **Ctrl-K → Assistant** to
+work with the connected provider. Proposed document changes have **Apply/Skip**
+controls, so you can review what the assistant is about to do.
+
+### 83 MCP tools for editing and automation
+
+The [MCP tool catalog](crates/emulsion-mcp/src/tools.rs) exposes operations for:
+
+- **Seeing the work:** document structure, rendered canvas regions, and attached
+  reference images.
+- **Building artwork:** layers and groups, brush strokes, erasing and smudging,
+  vector paths, hatching, editable text, and liquify.
+- **Refining an image:** selections, masks, adjustments, blend modes, filters,
+  layer styles, transforms, crop, and image/canvas sizing.
+- **Managing workflows:** recipes, batch export, project saving, image export,
+  history inspection, branches, undo, and redo.
+- **Optional AI processing:** subject selection, background removal, inpainting,
+  image generation, face restoration, and upscaling, with the required models or
+  providers configured.
+
+These are callable editing operations, not simulated clicks. The catalog defines
+available arguments and requirements; it does not imply that every UI gesture
+has a separate MCP tool. Emulsion launches the server with a connection to the
+active app. Running `emulsion mcp-serve` alone lists the tools but cannot edit an
+open document without that connection.
+
+## Automated checks included
+
+The repository includes [GitHub Actions CI](.github/workflows/ci.yml). Pushes to
+`main` and pull requests run formatting, linting, workspace tests, vendored-license
+checks, and software GPU/rendering checks on Linux, plus compilation checks on
+macOS and Windows. See [tool behavior coverage](docs/tool-testing.md) for the
+editing behaviors tested automatically.
 
 ## Status
 
-Actively developed and used daily. Editing, brushes, recipes, RAW and PSD, batch export, the
-assistant relay and optional local AI models all work; see the sections below for controls.
+Emulsion is actively developed. The editor includes painting and retouching,
+layered composition, recipes, RAW import, batch export, and optional assistant
+and image-generation integrations. Platform build instructions, format limits,
+and provider setup are documented below.
+
+Canvas rendering uses GPUI, while selected image-processing operations use GPU
+compute with CPU fallback. Persistent GPU brush painting is experimental and
+opt-in; see [GPU coverage and controls](docs/gpu-rendering.md).
 
 ## Build
 
@@ -23,9 +109,12 @@ noise reduction, with CPU fallback. See [GPU coverage and controls](docs/gpu-ren
 
 ```sh
 cargo run -p emulsion-app                 # open the editor shell
-cargo run -p emulsion-app -- mcp-serve    # stdio MCP server (empty tool set for now)
-cargo test --workspace
+cargo run -p emulsion-app -- mcp-serve    # stdio MCP server for editing tools
+cargo test --workspace -- --test-threads=1
 ```
+
+See [tool behavior coverage](docs/tool-testing.md) for the unit and headless UI
+tests, expected results, and checks that still require real hardware.
 
 GPUI's exact dependency versions are vendored under `vendor/gpui/` and selected
 through Cargo path patches. See [maintaining GPUI](vendor/gpui/README.md).
@@ -88,6 +177,11 @@ signed ad hoc for local use; distributing it requires Developer ID signing and
 notarization.
 
 ## Appearance
+
+**Settings › Layout › compact chrome** removes the client title bar and tightens
+the top bars, leaving more height for the canvas; the window then moves through
+the desktop (Super-drag on Omarchy) and Ctrl-Q quits. Omarchy desktops start
+compact. The assistant panel under the canvas folds to one line with its ▾ chip.
 
 Use the Light/Dark controls in the top bar to choose Emulsion's built-in palette.
 On Linux, the **◆ omarchy** control beside them takes the colours of the active
@@ -164,6 +258,8 @@ the home screen starts a document with one empty layer instead of a white
 background. Below the layer list:
 
 - **Properties** edits the selected layer, including transforms, blending, and masks.
+  To deselect, press Escape with the panel focused, Ctrl-click the selected row,
+  or click empty space under the list; the next stroke then starts a new layer.
 - **Adjustments** adds adjustment layers and filters, then opens their Properties.
 - **Reference** keeps an attached image beside the canvas while selecting layers.
 
@@ -178,11 +274,6 @@ Leaving Recipes cancels an unapplied preview; leaving Timeline stops playback
 and returns to the full document. Timeline also holds **Replay drawing**: the
 picture played back from its history (every step still undoable and every save),
 over the canvas, with a GIF export. Nothing is recorded ahead of time.
-**Settings › Layout › compact chrome** removes the client title bar and tightens
-the top bars, leaving more height for the canvas; the window then moves through
-the desktop (Super-drag on Omarchy) and Ctrl-Q quits. Omarchy desktops start
-compact. The assistant panel under the canvas folds to one line with its ▾ chip.
-
 
 Tool buttons and options support Tab navigation and Enter/Space activation.
 Focused sliders accept arrow keys, Shift+arrow for larger steps, and Home/End
@@ -258,8 +349,6 @@ To render the manga guide's example locally, without an assistant provider:
 ```sh
 cargo run --release -p emulsion-assistant --example playbook -- --guide manga --out target/manga-studies
 ```
-  To deselect, press Escape with the panel focused, Ctrl-click the selected row,
-  or click empty space under the list; the next stroke then starts a new layer.
 
 This writes a PNG and an editable ORA for inspection.
 
@@ -294,7 +383,7 @@ Each rotation can be undone. Locked layers must be unlocked first.
 | `crates/emulsion-ui` | GPUI views and design tokens |
 | `crates/emulsion-core` | Document model, Command API, history graph |
 | `crates/emulsion-raster`, `-gpu`, `-filters`, `-color` | Pixels, compositing, adjustments, color |
-| `crates/emulsion-tools` | Interactive tools |
+| `crates/emulsion-tools` | Reserved tool crate; current tools live in `emulsion-ui` and `emulsion-raster` |
 | `crates/emulsion-io` | File formats |
 | `crates/emulsion-recipes` | Recipes and film recipes |
 | `crates/emulsion-ai`, `-mcp`, `-assistant` | Optional AI: local models, MCP server, coding-CLI bridge |
@@ -303,4 +392,7 @@ Each rotation can be undone. Locked layers must be unlocked first.
 
 ## License
 
-Not chosen yet.
+Emulsion's original code is available under the [MIT License](LICENSE).
+Vendored libraries keep their own licenses and attribution requirements;
+see [third-party notices](THIRD_PARTY_NOTICES.md) and the
+[GPUI vendoring notes](vendor/gpui/README.md).

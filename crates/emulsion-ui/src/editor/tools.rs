@@ -904,9 +904,12 @@ impl EditorView {
             Tool::Eyedropper => {
                 if e.modifiers.alt {
                     let fg = self.tools.fg;
-                    self.eyedropper(d, cx);
-                    self.tools.bg = self.tools.fg;
+                    let hue = self.tools.hue;
+                    if self.eyedropper(d, cx) {
+                        self.tools.bg = self.tools.fg;
+                    }
                     self.tools.fg = fg;
+                    self.tools.hue = hue;
                     cx.notify();
                 } else {
                     self.eyedropper(d, cx);
@@ -1750,7 +1753,7 @@ impl EditorView {
 
     // ── One-shot operations ─────────────────────────────────────────────
 
-    fn eyedropper(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
+    fn eyedropper(&mut self, d: (f64, f64), cx: &mut Context<Self>) -> bool {
         let px = region(
             &self.tree,
             IRect::new(d.0.floor() as i32, d.1.floor() as i32, 1, 1),
@@ -1760,6 +1763,9 @@ impl EditorView {
             self.tools.fg = [c[0], c[1], c[2], 255];
             self.tools.hue = rgb_to_hsv(self.tools.fg).0;
             cx.notify();
+            true
+        } else {
+            false
         }
     }
 

@@ -30,7 +30,8 @@ jobs:
       - run: bash scripts/test-renderer-policy.sh
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      # UI fixtures update process environment; run test cases serially.
+      - run: cargo test --workspace --locked -- --test-threads=1
       - name: Build production compute backend smoke
         run: cargo build --locked -p emulsion-gpu --example backend_smoke
       - name: Validate compute shaders and production hooks with Mesa lavapipe

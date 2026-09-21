@@ -191,6 +191,175 @@ pub fn dab(
 mod tests {
     use super::*;
 
+    fn marker() -> Raster {
+        let mut pixels = vec![[0; 4]; 65 * 65];
+        for y in 31..=33 {
+            for x in 41..=43 {
+                pixels[y * 65 + x] = [65535, 0, 0, 65535];
+            }
+        }
+        Raster::from_pixels(65, 65, [0; 4], &pixels)
+    }
+
+    fn red_centroid(image: &Raster) -> (f64, f64) {
+        let mut weighted = (0.0, 0.0);
+        let mut total = 0.0;
+        for (index, pixel) in image.to_pixels().iter().enumerate() {
+            let weight = f64::from(pixel[0]);
+            weighted.0 += (index % image.width() as usize) as f64 * weight;
+            weighted.1 += (index / image.width() as usize) as f64 * weight;
+            total += weight;
+        }
+        assert!(total > 0.0, "the marker must remain visible");
+        (weighted.0 / total, weighted.1 / total)
+    }
+
+    #[test]
+    fn twirl_directions_move_a_marker_clockwise_and_counterclockwise() {
+        let original = marker();
+        for clockwise in [true, false] {
+            let mut image = original.clone();
+            for _ in 0..8 {
+                image = dab(
+                    &image,
+                    &original,
+                    Mode::Twirl { cw: clockwise },
+                    (32.5, 32.5),
+                    24.0,
+                    1.0,
+                    (0.0, 0.0),
+                )
+                .0;
+            }
+            let (x, y) = red_centroid(&image);
+            // Image Y grows downward: a marker to the right must turn down
+            // clockwise and up counterclockwise, remaining on the right.
+            assert!(x > 32.0 && x < 41.0, "marker rotated inward in X: {x}, {y}");
+            if clockwise {
+                assert!(y > 35.0, "clockwise moved down: {x}, {y}");
+            } else {
+                assert!(y < 29.0, "counterclockwise moved up: {x}, {y}");
+            }
+        }
+    }
+
+    #[test]
+    fn pinch_and_expand_move_a_marker_in_opposite_radial_directions() {
+        let original = marker();
+        for mode in [Mode::Pinch, Mode::Expand] {
+            let mut image = original.clone();
+            for _ in 0..8 {
+                image = dab(&image, &original, mode, (32.5, 32.5), 24.0, 1.0, (0.0, 0.0)).0;
+            }
+            let (x, y) = red_centroid(&image);
+            assert!(
+                (y - 32.0).abs() < 0.01,
+                "radial operation must not rotate the marker"
+            );
+            match mode {
+                Mode::Pinch => assert!(x > 32.0 && x < 39.0, "pinch pulled inward: {x}"),
+                Mode::Expand => assert!(x > 45.0, "expand pushed outward: {x}"),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn push_at_canvas_edge_pulls_transparency_without_color_fringes() {
+        let red = [65535, 0, 0, 65535];
+        let original = Raster::from_pixels(16, 16, [0; 4], &[red; 256]);
+        let (image, dirty) = dab(
+            &original,
+            &original,
+            Mode::Push,
+            (1.5, 8.5),
+            6.0,
+            1.0,
+            (4.0, 0.0),
+        );
+        assert_eq!(
+            image.get(1, 8),
+            [0; 4],
+            "off-canvas source pixels must be transparent"
+        );
+        assert_eq!(
+            image.get(15, 8),
+            red,
+            "pixels beyond the brush remain untouched"
+        );
+        assert_eq!(dirty.intersect(&original.bounds()), dirty);
+        for pixel in image.to_pixels() {
+            assert_eq!(
+                pixel[0], pixel[3],
+                "resampling must preserve premultiplied red"
+            );
+            assert_eq!([pixel[1], pixel[2]], [0, 0]);
+        }
+    }
+
+    #[test]
+    fn restore_recovers_original_color_and_alpha_only_under_the_brush() {
+        let target = [16000, 0, 0, 16000];
+        let blue = [0, 0, 65535, 65535];
+        let original = Raster::from_pixels(16, 16, [0; 4], &[target; 256]);
+        let mut image = Raster::from_pixels(16, 16, [0; 4], &[blue; 256]);
+        let mut last = blue;
+        for _ in 0..12 {
+            image = dab(
+                &image,
+                &original,
+                Mode::Restore,
+                (8.5, 8.5),
+                5.0,
+                1.0,
+                (0.0, 0.0),
+            )
+            .0;
+            let next = image.get(8, 8);
+            assert!(next[0] >= last[0] && next[0] <= target[0]);
+            assert!(next[2] <= last[2] && next[3] <= last[3] && next[3] >= target[3]);
+            assert_eq!(
+                image.get(0, 0),
+                blue,
+                "restore must not replace the whole layer"
+            );
+            last = next;
+        }
+        for (actual, expected) in last.into_iter().zip(target) {
+            assert!(
+                actual.abs_diff(expected) < 500,
+                "restored color and opacity converge"
+            );
+        }
+    }
+
+    #[test]
+    fn every_mode_is_a_noop_at_zero_strength_or_outside_the_layer() {
+        let original = marker();
+        for mode in [
+            Mode::Push,
+            Mode::Twirl { cw: true },
+            Mode::Twirl { cw: false },
+            Mode::Pinch,
+            Mode::Expand,
+            Mode::Restore,
+        ] {
+            for (center, strength) in [((32.5, 32.5), 0.0), ((-100.0, -100.0), 1.0)] {
+                let (image, dirty) = dab(
+                    &original,
+                    &original,
+                    mode,
+                    center,
+                    8.0,
+                    strength,
+                    (5.0, 2.0),
+                );
+                assert!(dirty.is_empty(), "{mode:?} should not invalidate pixels");
+                assert_eq!(image.to_pixels(), original.to_pixels(), "{mode:?}");
+            }
+        }
+    }
+
     fn stripes() -> Raster {
         let mut px = vec![[0u16, 0, 0, 65535]; 100 * 100];
         for y in 0..100 {

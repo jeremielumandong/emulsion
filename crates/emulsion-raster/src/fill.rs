@@ -249,6 +249,111 @@ mod tests {
     use super::*;
 
     #[test]
+    fn linear_gradient_projects_on_drag_axis_and_clamps_both_ends() {
+        let pixels = gradient(
+            7,
+            3,
+            (2.5, 1.5),
+            (4.5, 1.5),
+            [0, 0, 0, 255],
+            [255, 255, 255, 255],
+            false,
+        );
+        for row in pixels.as_chunks::<7>().0 {
+            assert_eq!(row[0], [0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(row[2], [0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(
+                row[3],
+                [0.5, 0.5, 0.5, 1.0],
+                "midpoint is linear light, not encoded sRGB"
+            );
+            assert_eq!(row[4], [1.0; 4]);
+            assert_eq!(row[6], [1.0; 4]);
+        }
+        let reversed = gradient(
+            7,
+            3,
+            (4.5, 1.5),
+            (2.5, 1.5),
+            [0, 0, 0, 255],
+            [255, 255, 255, 255],
+            false,
+        );
+        assert_eq!(reversed[2], [1.0; 4]);
+        assert_eq!(reversed[4], [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn radial_gradient_is_circular_and_clamped_beyond_its_radius() {
+        let pixels = gradient(
+            9,
+            9,
+            (4.5, 4.5),
+            (8.5, 4.5),
+            [0, 0, 0, 255],
+            [255, 255, 255, 255],
+            true,
+        );
+        let pixel = |x: usize, y: usize| pixels[y * 9 + x];
+        assert_eq!(pixel(4, 4), [0.0, 0.0, 0.0, 1.0]);
+        for (x, y) in [(2, 4), (6, 4), (4, 2), (4, 6)] {
+            assert_eq!(
+                pixel(x, y),
+                [0.5, 0.5, 0.5, 1.0],
+                "equal distances give equal colors"
+            );
+        }
+        assert_eq!(pixel(8, 4), [1.0; 4]);
+        assert_eq!(pixel(0, 0), [1.0; 4]);
+    }
+
+    #[test]
+    fn gradients_interpolate_premultiplied_alpha_without_transparent_color_bleed() {
+        for radial in [false, true] {
+            let pixels = gradient(
+                3,
+                1,
+                (0.5, 0.5),
+                (2.5, 0.5),
+                [255, 0, 0, 255],
+                [0, 0, 255, 0],
+                radial,
+            );
+            assert_eq!(pixels[0], [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(
+                pixels[1],
+                [0.5, 0.0, 0.0, 0.5],
+                "invisible blue must not tint translucent red"
+            );
+            assert_eq!(pixels[2], [0.0; 4]);
+        }
+    }
+
+    #[test]
+    fn gradients_handle_empty_regions_and_zero_length_drags() {
+        for radial in [false, true] {
+            assert!(gradient(0, 3, (0.0, 0.0), (1.0, 1.0), [0; 4], [255; 4], radial).is_empty());
+            assert!(gradient(3, 0, (0.0, 0.0), (1.0, 1.0), [0; 4], [255; 4], radial).is_empty());
+            let pixels = gradient(
+                3,
+                3,
+                (1.5, 1.5),
+                (1.5, 1.5),
+                [255, 0, 0, 255],
+                [0, 0, 255, 255],
+                radial,
+            );
+            assert_eq!(pixels[4], [1.0, 0.0, 0.0, 1.0]);
+            assert!(
+                pixels
+                    .iter()
+                    .flatten()
+                    .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            );
+        }
+    }
+
+    #[test]
     fn fills_a_hole_in_stripes_with_stripe_colours() {
         // Vertical stripes 4 px wide; a square hole in the middle.
         let (w, h) = (64, 64);

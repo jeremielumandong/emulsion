@@ -993,12 +993,11 @@ pub fn curve_at(points: &[[f32; 2]], x: f32) -> f32 {
     if x >= points[n - 1][0] {
         return points[n - 1][1];
     }
-    // Fritsch–Carlson tangents.
-    let mut d = vec![0.0f32; n];
+    // Only the two tangents bounding the sample contribute to interpolation.
     let secant =
         |i: usize| (points[i + 1][1] - points[i][1]) / (points[i + 1][0] - points[i][0]).max(1e-6);
-    for (i, di) in d.iter_mut().enumerate() {
-        *di = if i == 0 {
+    let tangent = |i: usize| {
+        if i == 0 {
             secant(0)
         } else if i == n - 1 {
             secant(n - 2)
@@ -1009,8 +1008,8 @@ pub fn curve_at(points: &[[f32; 2]], x: f32) -> f32 {
             } else {
                 2.0 / (1.0 / a + 1.0 / b)
             }
-        };
-    }
+        }
+    };
     let i = (0..n - 1).find(|&i| x < points[i + 1][0]).unwrap_or(n - 2);
     let (x0, y0, x1, y1) = (
         points[i][0],
@@ -1027,7 +1026,7 @@ pub fn curve_at(points: &[[f32; 2]], x: f32) -> f32 {
         -2.0 * t3 + 3.0 * t2,
         t3 - t2,
     );
-    (h00 * y0 + h10 * h * d[i] + h01 * y1 + h11 * h * d[i + 1]).clamp(0.0, 255.0)
+    (h00 * y0 + h10 * h * tangent(i) + h01 * y1 + h11 * h * tangent(i + 1)).clamp(0.0, 255.0)
 }
 
 fn gradient_at(stops: &[Stop], t: f32) -> [f32; 3] {
@@ -1532,6 +1531,44 @@ mod tests {
         let dark = s_curve.apply([0.05; 3])[0];
         let light = s_curve.apply([0.6; 3])[0];
         assert!(dark < 0.05 && light > 0.6, "contrast: {dark} {light}");
+    }
+
+    #[test]
+    fn curves_preserve_empty_singleton_and_endpoint_behavior() {
+        assert_eq!(curve_at(&[], -3.0), -3.0);
+        assert_eq!(curve_at(&[[10.0, 42.0]], 200.0), 42.0);
+        let points = [[10.0, -20.0], [20.0, 300.0]];
+        assert_eq!(curve_at(&points, 0.0), -20.0);
+        assert_eq!(curve_at(&points, 30.0), 300.0);
+        let repeated = [[0.0, 0.0], [64.0, 30.0], [64.0, 60.0], [255.0, 255.0]];
+        assert_eq!(curve_at(&repeated, 64.0), 60.0);
+    }
+
+    #[test]
+    fn curves_preserve_turning_points_and_plateaus_exactly() {
+        let points = [
+            [0.0, 255.0],
+            [80.0, 20.0],
+            [120.0, 20.0],
+            [200.0, 230.0],
+            [255.0, 0.0],
+        ];
+        // Bit patterns captured from the original full-tangent interpolation.
+        for (x, expected) in [
+            (0.0, 1132396544),
+            (1.0, 1132201655),
+            (40.0, 1121468416),
+            (79.0, 1101043068),
+            (80.0, 1101004800),
+            (100.0, 1101004800),
+            (120.0, 1101004800),
+            (160.0, 1123680256),
+            (200.0, 1130758144),
+            (230.0, 1124235072),
+            (255.0, 0),
+        ] {
+            assert_eq!(curve_at(&points, x).to_bits(), expected, "at {x}");
+        }
     }
 
     #[test]

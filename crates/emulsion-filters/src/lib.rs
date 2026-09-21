@@ -518,9 +518,15 @@ fn gaussian_kernel(radius: f32) -> Vec<f32> {
 }
 
 fn convolve_1d(img: &Image, kernel: &[f32], horizontal: bool) -> Image {
-    let r = kernel.len() / 2;
     let (w, h) = (img.w, img.h);
     let mut px = vec![[0.0f32; 4]; w * h];
+    convolve_1d_into(img, kernel, horizontal, &mut px);
+    Image { w, h, px }
+}
+
+fn convolve_1d_into(img: &Image, kernel: &[f32], horizontal: bool, px: &mut [[f32; 4]]) {
+    let r = kernel.len() / 2;
+    let (w, h) = (img.w, img.h);
     if horizontal {
         px.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
             let row = &img.px[y * w..(y + 1) * w];
@@ -555,7 +561,6 @@ fn convolve_1d(img: &Image, kernel: &[f32], horizontal: bool) -> Image {
             }
         });
     }
-    Image { w, h, px }
 }
 
 fn gaussian(img: &Image, radius: f32) -> Image {
@@ -610,7 +615,7 @@ fn on_color(p: [f32; 4], f: impl Fn([f32; 3]) -> [f32; 3]) -> [f32; 4] {
     ]
 }
 
-fn apply_one(f: &Filter, img: &Image) -> Image {
+fn apply_one(f: &Filter, img: Image) -> Image {
     if let Some(px) = ACCELERATOR
         .get()
         .and_then(|accelerator| accelerator.apply(f, img.w, img.h, &img.px))
@@ -622,7 +627,24 @@ fn apply_one(f: &Filter, img: &Image) -> Image {
             px,
         };
     }
-    apply_one_cpu(f, img)
+    apply_one_cpu_owned(f, img)
+}
+
+fn apply_one_cpu_owned(f: &Filter, mut img: Image) -> Image {
+    if let Filter::GaussianBlur { radius } = f {
+        if *radius <= 0.05 {
+            return img;
+        }
+        let kernel = gaussian_kernel(*radius);
+        let horizontal = convolve_1d(&img, &kernel, true);
+        // The horizontal pass has consumed the input; reuse its storage
+        // for the vertical result instead of keeping three full images alive.
+        img.px.par_iter_mut().for_each(|p| *p = [0.0; 4]);
+        convolve_1d_into(&horizontal, &kernel, false, &mut img.px);
+        img
+    } else {
+        apply_one_cpu(f, &img)
+    }
 }
 
 /// Run the reference CPU kernel on already padded premultiplied linear pixels.
@@ -638,9 +660,9 @@ pub fn apply_pixels_cpu(
         return None;
     }
     Some(
-        apply_one_cpu(
+        apply_one_cpu_owned(
             filter,
-            &Image {
+            Image {
                 w: width,
                 h: height,
                 px: pixels,
@@ -1003,7 +1025,7 @@ pub fn apply_stack(source: &Raster, stack: &[Filter]) -> (Raster, (i32, i32)) {
     });
     let mut img = Image { w, h, px }.pad(spread as usize);
     for f in stack {
-        img = apply_one(f, &img);
+        img = apply_one(f, img);
     }
     let out: Vec<[u16; 4]> = img
         .px
@@ -1033,7 +1055,7 @@ pub fn apply_region(source: &Raster, stack: &[Filter], region: IRect) -> Raster 
         px,
     };
     for f in stack {
-        img = apply_one(f, &img);
+        img = apply_one(f, img);
     }
     let out: Vec<[u16; 4]> = img
         .px
@@ -1055,6 +1077,82 @@ mod tests {
                 [0; 4]
             }
         })
+    }
+
+    #[test]
+    fn owned_gaussian_matches_reference_at_edges_and_reuses_input() {
+        for (w, h) in [(1, 1), (1, 9), (11, 1), (3, 5), (33, 27)] {
+            for radius in [-1.0, 0.0, 0.05, 0.1, 1.0, 5.0, 20.0, f32::NAN] {
+                let px = (0..w * h)
+                    .map(|i| {
+                        let a = (i % 7) as f32 / 6.0;
+                        [a * 0.2, a * 0.5, a * 0.8, a]
+                    })
+                    .collect();
+                let img = Image { w, h, px };
+                let expected = gaussian(&img, radius);
+                let allocation = img.px.as_ptr();
+                let actual = apply_one_cpu_owned(&Filter::GaussianBlur { radius }, img);
+                assert_eq!(actual.px.as_ptr(), allocation);
+                assert_eq!(actual.px, expected.px, "{w}x{h}, radius {radius}");
+            }
+        }
+    }
+
+    #[test]
+    fn gaussian_stack_and_region_match_borrowed_reference() {
+        let source = dot();
+        let stack = [
+            Filter::GaussianBlur { radius: 2.0 },
+            Filter::BoxBlur { radius: 1.0 },
+            Filter::GaussianBlur { radius: 5.0 },
+        ];
+        let spread = stack.iter().map(Filter::spread).sum::<i32>();
+        let mut reference = Image {
+            w: 40,
+            h: 40,
+            px: source
+                .read_rect(source.bounds())
+                .into_iter()
+                .map(color::px_to_f)
+                .collect(),
+        }
+        .pad(spread as usize);
+        for filter in &stack {
+            reference = apply_one_cpu(filter, &reference);
+        }
+        let expected: Vec<_> = reference
+            .px
+            .iter()
+            .map(|p| color::f_to_px(p.map(|v| v.clamp(0.0, 1.0))))
+            .collect();
+        let (actual, offset) = apply_stack(&source, &stack);
+        assert_eq!(offset, (-spread, -spread));
+        assert_eq!(actual.read_rect(actual.bounds()), expected);
+        let region = IRect::new(5, 7, 13, 11);
+        let mut reference = Image {
+            w: 13,
+            h: 11,
+            px: source
+                .read_rect(region)
+                .into_iter()
+                .map(color::px_to_f)
+                .collect(),
+        };
+        for filter in &stack {
+            reference = apply_one_cpu(filter, &reference);
+        }
+        let expected: Vec<_> = reference
+            .px
+            .iter()
+            .map(|p| color::f_to_px(p.map(|v| v.clamp(0.0, 1.0))))
+            .collect();
+        let expected = source.write_rect(region, &expected);
+        let actual = apply_region(&source, &stack, region);
+        assert_eq!(
+            actual.read_rect(actual.bounds()),
+            expected.read_rect(expected.bounds())
+        );
     }
 
     #[test]
