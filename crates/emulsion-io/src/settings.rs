@@ -41,6 +41,9 @@ pub struct Settings {
     /// Super-drag moves the window) and shorter bars, for small screens
     /// and tiling desktops.
     pub compact_chrome: bool,
+    /// Height of the Layers list in the side panel, in logical pixels;
+    /// dragged by its handle.
+    pub layers_height: f32,
     /// Play the assistant's brush strokes on the canvas as it paints.
     pub show_drawing: bool,
     /// How fast those strokes play.
@@ -97,6 +100,7 @@ impl Default for Settings {
             follow_omarchy: false,
             approve_all: false,
             compact_chrome: false,
+            layers_height: 260.0,
             show_drawing: true,
             drawing_pace: DrawingPace::Natural,
             advanced_tools: false,

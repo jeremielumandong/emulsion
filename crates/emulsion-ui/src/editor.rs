@@ -172,8 +172,17 @@ impl SliderKey {
     }
 }
 
+/// Bounds for the Layers list height.
+pub(crate) const LAYERS_MIN_H: f32 = 96.0;
+pub(crate) const LAYERS_MAX_H: f32 = 900.0;
+
 enum Drag {
     Tool(tools::ToolDrag),
+    /// Dragging the handle under the Layers list.
+    LayersSplit {
+        start_y: Pixels,
+        start_h: f32,
+    },
     /// Dragging a perspective guide's vanishing point.
     Vanishing(usize),
     Pan {
@@ -326,6 +335,8 @@ pub struct EditorView {
     pub(crate) snap_bypass: bool,
     pub(crate) snap_lines: Vec<(bool, f64)>,
     pub(crate) size_panel: Option<canvas_size::SizePanel>,
+    /// Height of the Layers list, from settings until the handle is dragged.
+    pub(crate) layers_h: f32,
     pub(crate) transform_fields: Option<transform::TransformFields>,
     pub(crate) rotation_fields: Option<rotation::RotationFields>,
     pub(crate) presets: presets::PresetState,
@@ -422,6 +433,11 @@ impl EditorView {
             snap_bypass: false,
             snap_lines: Vec::new(),
             size_panel: None,
+            layers_h: cx
+                .try_global::<crate::app_state::AppSettings>()
+                .map(|s| s.0.layers_height)
+                .unwrap_or(260.0)
+                .clamp(LAYERS_MIN_H, LAYERS_MAX_H),
             transform_fields: None,
             rotation_fields: None,
             presets: Default::default(),
@@ -1091,6 +1107,11 @@ impl EditorView {
                 self.curve_move(&d, pos, cx);
             }
             Drag::Navigator => self.nav_click(pos, cx),
+            Drag::LayersSplit { start_y, start_h } => {
+                let dy: f32 = (pos.y - *start_y).into();
+                self.layers_h = (*start_h + dy).clamp(LAYERS_MIN_H, LAYERS_MAX_H);
+                cx.notify();
+            }
             Drag::Transform(g) => {
                 let g = *g;
                 if let Some(d) = self.doc_point(pos) {
@@ -1173,6 +1194,10 @@ impl EditorView {
                 if self.editor.in_transaction() {
                     self.editor.end();
                 }
+            }
+            Some(Drag::LayersSplit { .. }) => {
+                let h = self.layers_h;
+                crate::app_state::update_settings(cx, |s| s.layers_height = h);
             }
             Some(Drag::Pan { .. })
             | Some(Drag::Navigator)

@@ -45,15 +45,6 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        // Selecting a task panel or an adjustment is an explicit request to
-        // edit its controls. Give that task room without hiding the layers.
-        let expanded = self.sidebar_tab != SidebarTab::Properties
-            || self
-                .selected
-                .and_then(|id| self.editor.doc.node(id))
-                .is_some_and(|node| {
-                    matches!(node.kind, NodeKind::Adjust(_) | NodeKind::Smart { .. })
-                });
         let tabs = div()
             .flex()
             .flex_none()
@@ -176,23 +167,46 @@ impl EditorView {
                 div()
                     .id("sidebar-layers-dock")
                     .min_h_0()
-                    .when(expanded && !self.draw_mode, |d| {
-                        d.flex_none().h(relative(0.25)).max_h(px(160.))
-                    })
-                    .when(!expanded || self.draw_mode, |d| d.flex_1())
+                    // The person sets this height with the handle below; in
+                    // Draw mode the list has the panel to itself.
+                    .when(!self.draw_mode, |d| d.flex_none().h(px(self.layers_h)))
+                    .when(self.draw_mode, |d| d.flex_1())
                     .child(self.scene_graph(p, cx))
                     .test_support(),
             )
             .when(!self.draw_mode, |d| {
-                d.child(tabs).child(
+                let line = p.line;
+                let accent = p.accent;
+                d.child(crate::widgets::tip(
+                    div()
+                        .id("layers-resize")
+                        .flex_none()
+                        .h(px(7.))
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor(CursorStyle::ResizeUpDown)
+                        .hover(move |s| s.bg(accent.opacity(0.25)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                                this.drag = Some(Drag::LayersSplit {
+                                    start_y: e.position.y,
+                                    start_h: this.layers_h,
+                                });
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        )
+                        .child(div().w(px(36.)).h(px(2.)).bg(line)),
+                    "Drag to give the Layers list more or less room",
+                ))
+                .child(tabs)
+                .child(
                     div()
                         .id(("sidebar-content", self.sidebar_tab as usize))
-                        // Keep Layers dominant on tall windows while making
-                        // the inspector proportional on shorter displays.
-                        .when(expanded, |d| d.flex_1())
-                        .when(!expanded, |d| {
-                            d.flex_none().h(relative(0.38)).max_h(px(260.))
-                        })
+                        .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
                         .child(content)
