@@ -1,5 +1,8 @@
 //! Layer commands share the document selection and the same undoable actions as shortcuts.
 use super::*;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 
 fn item(
@@ -64,6 +67,12 @@ pub(super) fn layer_context_menu(
         });
     let merge = e.merge_layer_ids().is_some();
     let merge_visible = e.merge_visible_ids().is_some();
+    let flatten = e.can_flatten_image();
+    let link = e.can_link_layers(true);
+    let unlink = e.can_link_layers(false);
+    let mask_linked = node.is_some_and(|node| node.mask_linked);
+    let paste_style = editable && e.can_paste_layer_style(cx);
+    let apply_mask = ready && e.can_apply_layer_mask();
     let roots = e.selected_layer_roots();
     let parent = roots
         .first()
@@ -206,6 +215,27 @@ pub(super) fn layer_context_menu(
             editable && single && mask,
             |e, _, cx| e.remove_mask(cx),
         ))
+        .item(item(&target, "Apply Layer Mask", apply_mask, |e, _, cx| {
+            e.apply_layer_mask(cx)
+        }))
+        .item(item(
+            &target,
+            if mask_linked {
+                "Unlink Layer Mask"
+            } else {
+                "Link Layer Mask"
+            },
+            editable && single && mask,
+            move |e, _, cx| {
+                e.execute(
+                    Command::SetMaskLinked {
+                        id,
+                        linked: !mask_linked,
+                    },
+                    cx,
+                );
+            },
+        ))
     });
     let target = editor.clone();
     let menu = menu.submenu("Layer Effects", window, cx, move |menu, _, _| {
@@ -229,9 +259,21 @@ pub(super) fn layer_context_menu(
                 );
             },
         ))
+        .item(item(
+            &target,
+            "Copy Layer Style",
+            single && ready,
+            |e, _, cx| e.copy_layer_style(cx),
+        ))
+        .item(item(
+            &target,
+            "Paste Layer Style",
+            paste_style,
+            |e, _, cx| e.paste_layer_style(cx),
+        ))
     });
     let target = editor.clone();
-    menu.submenu("Color", window, cx, move |mut menu, _, _| {
+    let menu = menu.submenu("Color", window, cx, move |mut menu, _, _| {
         for label in emulsion_core::node::LayerColor::ALL {
             let entry = item(&target, label.label(), editable, move |e, _, cx| {
                 let commands = e
@@ -245,10 +287,42 @@ pub(super) fn layer_context_menu(
             menu = menu.item(entry);
         }
         menu
-    })
+    });
+    menu.separator()
+        .menu_with_disabled("Link Layers", Box::new(crate::actions::LinkLayers), !link)
+        .menu_with_disabled(
+            "Unlink Layers",
+            Box::new(crate::actions::UnlinkLayers),
+            !unlink,
+        )
+        .menu_with_disabled(
+            "Flatten Image",
+            Box::new(crate::actions::FlattenImage),
+            !flatten,
+        )
 }
 
 impl EditorView {
+    pub(super) fn layer_menu_button(&self, cx: &Context<Self>) -> AnyElement {
+        let editor = cx.entity().downgrade();
+        Button::new("layer-menu-button")
+            .label("Layer")
+            .small()
+            .ghost()
+            .dropdown_menu(move |menu, window, cx| {
+                let Some(editor) = editor.upgrade() else {
+                    return menu;
+                };
+                let e = editor.read(cx);
+                let focus = e.panel_focus.clone();
+                if let Some(id) = e.selected {
+                    layer_context_menu(menu, &editor, id, focus, window, cx)
+                } else {
+                    menu.menu("New Layer", Box::new(crate::actions::NewLayer))
+                }
+            })
+            .into_any_element()
+    }
     fn layer_menu_ready(&self) -> bool {
         !self.assistant.running
             && self.drag.is_none()
@@ -263,8 +337,8 @@ impl EditorView {
         index.checked_sub(1).map(|i| siblings[i])
     }
 
-    /// Partial merges must be independent of the remaining backdrop. More
-    /// complex blend stacks can be baked faithfully using Merge Visible.
+    /// Merge complete sibling subtrees. Clipping relationships crossing the
+    /// merge boundary cannot be represented by the resulting pixel layer.
     fn merge_layer_ids(&self) -> Option<Vec<NodeId>> {
         if !self.layer_menu_ready() {
             return None;
@@ -277,21 +351,23 @@ impl EditorView {
             return None;
         }
         let first = self.editor.doc.node(ids[0])?;
-        let siblings = self.editor.doc.children(first.parent);
-        let start = siblings.iter().position(|id| *id == ids[0])?;
-        if siblings.get(start..start + ids.len()) != Some(ids.as_slice()) {
+        if ids.iter().any(|id| {
+            self.editor
+                .doc
+                .node(*id)
+                .is_none_or(|node| node.parent != first.parent)
+        }) {
             return None;
         }
-        for id in &ids {
+        let members: Vec<_> = ids
+            .iter()
+            .flat_map(|id| self.editor.doc.subtree(*id))
+            .collect();
+        for id in &members {
             let n = self.editor.doc.node(*id)?;
             if self.editor.doc.locked_ancestor(*id).is_some()
                 || self.editor.doc.layer_locks(*id) != Default::default()
-                || !n.visible
-                || matches!(n.kind, NodeKind::Group { .. } | NodeKind::Adjust(_))
-                || n.blend != BlendMode::Normal
-                || n.blending != Default::default()
-                || n.clip_to.is_some()
-                || !n.styles.is_empty()
+                || n.clip_to.is_some_and(|base| !members.contains(&base))
             {
                 return None;
             }
@@ -301,7 +377,7 @@ impl EditorView {
             .doc
             .nodes
             .iter()
-            .any(|n| !ids.contains(&n.id) && n.clip_to.is_some_and(|id| ids.contains(&id)))
+            .any(|n| !members.contains(&n.id) && n.clip_to.is_some_and(|id| members.contains(&id)))
         {
             return None;
         }
@@ -362,11 +438,16 @@ impl EditorView {
         };
         let doc = &self.editor.doc;
         let parent = doc.node(ids[0]).unwrap().parent;
-        let index = doc
-            .children(parent)
+        // Keep the merged result at the top selected layer's stack position.
+        let siblings = doc.children(parent);
+        let top = siblings
             .iter()
-            .position(|id| *id == ids[0])
+            .position(|id| Some(id) == ids.last())
             .unwrap();
+        let index = siblings[..top]
+            .iter()
+            .filter(|id| !ids.contains(id))
+            .count();
         let name = if visible {
             "Merged visible".into()
         } else {
@@ -377,11 +458,16 @@ impl EditorView {
         if visible {
             source = doc.clone();
         } else {
-            source.nodes = ids
+            let members: Vec<_> = ids.iter().flat_map(|id| doc.subtree(*id)).collect();
+            source.nodes = doc
+                .nodes
                 .iter()
-                .filter_map(|id| doc.node(*id).cloned())
+                .filter(|node| members.contains(&node.id))
+                .cloned()
                 .map(|mut n| {
-                    n.parent = None;
+                    if ids.contains(&n.id) {
+                        n.parent = None;
+                    }
                     n
                 })
                 .collect();
@@ -391,13 +477,25 @@ impl EditorView {
             .iter()
             .map(|id| Command::RemoveNode { id: *id })
             .collect();
+        let mut merged = Node::raster(0, name, Arc::new(raster), Placement::default());
+        // Keep an existing link only when every merged root belongs to it.
+        let common_link = doc.node(ids[0]).and_then(|node| node.link_group);
+        let merged_members: Vec<_> = ids.iter().flat_map(|id| doc.subtree(*id)).collect();
+        let has_external_partner = doc
+            .nodes
+            .iter()
+            .any(|node| !merged_members.contains(&node.id) && node.link_group == common_link);
+        if common_link.is_some()
+            && has_external_partner
+            && ids.iter().all(|id| {
+                doc.node(*id)
+                    .is_some_and(|node| node.link_group == common_link)
+            })
+        {
+            merged.link_group = common_link;
+        }
         commands.push(Command::AddNode {
-            node: Box::new(Node::raster(
-                0,
-                name,
-                Arc::new(raster),
-                Placement::default(),
-            )),
+            node: Box::new(merged),
             slot: Slot { parent, index },
         });
         if let Some(created) = self.execute_layer_commands(
@@ -409,6 +507,55 @@ impl EditorView {
             commands,
             cx,
         ) && let Some(id) = created.last().copied()
+        {
+            self.set_layer_selection(vec![id], Some(id));
+            self.tools.mask_edit = false;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn can_flatten_image(&self) -> bool {
+        self.layer_menu_ready()
+            && !self.editor.doc.nodes.is_empty()
+            && self.editor.doc.nodes.iter().all(|node| {
+                self.editor.doc.locked_ancestor(node.id).is_none()
+                    && self.editor.doc.layer_locks(node.id) == Default::default()
+            })
+    }
+
+    /// Flatten is deliberately distinct from Merge Visible: hidden layers are
+    /// discarded and transparency is composited on an opaque white background.
+    pub(crate) fn flatten_image(&mut self, cx: &mut Context<Self>) {
+        if !self.can_flatten_image() {
+            return;
+        }
+        let doc = &self.editor.doc;
+        let mut source = doc.clone();
+        let mut background = Node::new(
+            source.next_id,
+            "Background",
+            NodeKind::Fill { rgba: [255; 4] },
+        );
+        background.parent = None;
+        source.nodes.insert(0, background);
+        let raster = emulsion_raster::composite::flatten(&source.composite_tree(), 0);
+        let mut commands: Vec<_> = doc
+            .nodes
+            .iter()
+            .filter(|node| node.parent.is_none())
+            .map(|node| Command::RemoveNode { id: node.id })
+            .collect();
+        commands.push(Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Background",
+                Arc::new(raster),
+                Placement::default(),
+            )),
+            slot: Slot::TOP,
+        });
+        if let Some(created) = self.execute_layer_commands("Flatten image", commands, cx)
+            && let Some(id) = created.last().copied()
         {
             self.set_layer_selection(vec![id], Some(id));
             self.tools.mask_edit = false;

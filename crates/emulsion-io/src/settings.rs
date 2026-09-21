@@ -19,6 +19,8 @@ pub enum DrawingPace {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
+    /// Per-effect defaults used when adding a layer style.
+    pub layer_style_defaults: Vec<emulsion_core::styles::LayerStyle>,
     /// Which coding CLI drives the assistant: "claude", "codex", "opencode", "kimi".
     pub provider: String,
     /// Explicit path to the coding CLI; otherwise it is searched for.
@@ -93,6 +95,7 @@ impl Default for Settings {
             provider: "claude".into(),
             cli_path: None,
             model: None,
+            layer_style_defaults: Vec::new(),
             jev_api_key: None,
             auto_apply: false,
             suggestions: true,

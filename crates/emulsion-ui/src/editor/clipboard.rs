@@ -29,11 +29,9 @@ pub(super) fn transform_menu(
     cx: &mut Context<gpui_kit::component::menu::PopupMenu>,
 ) -> gpui_kit::component::menu::PopupMenu {
     let e = editor.read(cx);
-    let ready = !e.assistant.running
-        && e.drag.is_none()
-        && !e.editor.in_transaction()
-        && e.warp.is_none()
-        && e.selected_layer_ids().len() == 1;
+    let ready =
+        !e.assistant.running && e.drag.is_none() && !e.editor.in_transaction() && e.warp.is_none();
+    let single = e.selected_layer_ids().len() == 1;
     let node = e.selected.and_then(|id| e.editor.doc.node(id));
     let unlocked = node.is_some_and(|node| {
         node.visible
@@ -41,20 +39,24 @@ pub(super) fn transform_menu(
             && !e.editor.doc.layer_locks(node.id).position
     });
     let raster = node.is_some_and(|node| matches!(node.kind, NodeKind::Raster { .. }));
-    let smart = node.is_some_and(|node| matches!(node.kind, NodeKind::Smart { .. }));
-    let text = node.is_some_and(|node| matches!(node.kind, NodeKind::Text { .. }));
+    let roots = e.movement_layer_roots();
+    let spatial = !roots.is_empty()
+        && roots.iter().all(|id| {
+            emulsion_core::geometry::node_bounds(&e.editor.doc, *id).is_some()
+                && e.editor.doc.subtree(*id).into_iter().all(|member| {
+                    e.editor.doc.locked_ancestor(member).is_none()
+                        && !e.editor.doc.layer_locks(member).position
+                })
+        });
     let enabled = ready
         && unlocked
-        && !e.tools.mask_edit
-        && (raster || smart || text)
-        && (e.editor.doc.selection.is_none() || raster);
-    let rotate_enabled = ready
-        && unlocked
-        && !e.tools.mask_edit
-        && node.is_some_and(|node| {
-            emulsion_core::geometry::node_bounds(&e.editor.doc, node.id).is_some()
-        })
-        && (e.editor.doc.selection.is_none() || raster);
+        && if e.editor.doc.selection.is_some() {
+            single && raster && !e.tools.mask_edit
+        } else {
+            spatial || e.mask_transform_target().is_some()
+        };
+    let rotate_enabled = enabled;
+    let distort = enabled && single && roots.len() == 1 && raster && !e.tools.mask_edit;
     menu.separator()
         .menu_with_disabled(
             "Free transform",
@@ -72,13 +74,9 @@ pub(super) fn transform_menu(
                 .menu_with_disabled(
                     "Distort",
                     Box::new(crate::actions::TransformDistort),
-                    !enabled || !raster,
+                    !distort,
                 )
-                .menu_with_disabled(
-                    "Warp",
-                    Box::new(crate::actions::TransformWarp),
-                    !enabled || !raster,
-                )
+                .menu_with_disabled("Warp", Box::new(crate::actions::TransformWarp), !distort)
                 .separator()
                 .menu_with_disabled(
                     "Rotate 180°",
@@ -653,6 +651,19 @@ impl EditorView {
     /// selected pixels. This never reads or writes the OS clipboard.
     pub fn transform_pixels(&mut self, cx: &mut Context<Self>) {
         self.close_text_field(cx);
+        if self.editor.doc.selection.is_none()
+            && (self.selected_layer_ids().len() > 1
+                || self
+                    .selected
+                    .and_then(|id| self.editor.doc.node(id))
+                    .is_some_and(|n| n.is_group())
+                || self.tools.mask_edit)
+        {
+            let mask_edit = self.tools.mask_edit;
+            self.set_tool(Tool::Move, cx);
+            self.tools.mask_edit = mask_edit;
+            return;
+        }
         let before = self.editor.doc.selection.as_ref().map(|_| {
             (
                 self.selected,

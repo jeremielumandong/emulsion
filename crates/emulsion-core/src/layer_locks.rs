@@ -23,6 +23,10 @@ pub(crate) fn check(command: &Command, doc: &Document) -> Result<(), CommandErro
             }
             (*id, true, false, false)
         }
+        Command::ApplyLayerMask { id } => (*id, true, false, true),
+        Command::SetMaskTransform { id, .. } | Command::SetMaskLinked { id, .. } => {
+            (*id, false, true, false)
+        }
         Command::ReplaceContent { id, .. } => (*id, true, true, true),
         Command::SetPlacement { id, .. }
         | Command::RotateNode { id, .. }

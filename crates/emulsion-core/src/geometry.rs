@@ -77,7 +77,8 @@ fn mapped_bounds(rect: IRect, transform: DAffine2) -> IRect {
 /// Hidden content is included because it must move with the selected subtree.
 pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
     let node = doc.node(id)?;
-    let mask = node.mask_enabled.then_some(node.mask.as_deref()).flatten();
+    let composite_mask = Document::composite_mask(node);
+    let mask = composite_mask.as_deref();
     let bounds = match &node.kind {
         NodeKind::Raster { raster, placement } => {
             return Some(mapped_bounds(
@@ -258,7 +259,10 @@ pub(crate) fn translate_node(
         if matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. }) {
             continue;
         }
-        if let Some(mask) = &node.mask {
+        if let Some(mask) = &node.mask
+            && node.mask_linked
+            && node.mask_transform == crate::node::default_mask_transform()
+        {
             let bounds = mask_detail_bounds(mask);
             // Floor/ceil include the extra edge samples introduced by a
             // fractional bilinear translation. Disabled masks retain their
@@ -278,10 +282,16 @@ pub(crate) fn translate_node(
         if !ids.contains(&node.id) {
             continue;
         }
+        let old_mask = crate::transform::mask_to_document(node);
         match &mut node.kind {
             NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } => {
                 placement.x += dx;
                 placement.y += dy;
+                if !node.mask_linked && node.mask.is_some() {
+                    node.mask_transform = (crate::transform::local_to_document(node).inverse()
+                        * old_mask)
+                        .to_cols_array();
+                }
                 // Source-space masks move through placement with the pixels.
                 continue;
             }
@@ -309,6 +319,15 @@ pub(crate) fn translate_node(
                 *spec = Arc::new(updated);
             }
             NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
+        }
+        if !node.mask_linked {
+            continue;
+        }
+        if node.mask_transform != crate::node::default_mask_transform() {
+            node.mask_transform = (inverse.inverse()
+                * DAffine2::from_cols_array(&node.mask_transform))
+            .to_cols_array();
+            continue;
         }
         if let Some(mask) = &node.mask {
             let translated = if dx.abs() >= w as f64 || dy.abs() >= h as f64 {
@@ -358,6 +377,7 @@ pub(crate) fn rotate_node(
         if !ids.contains(&node.id) {
             continue;
         }
+        let old_mask = crate::transform::mask_to_document(node);
         match &mut node.kind {
             NodeKind::Raster { raster, placement }
             | NodeKind::Smart {
@@ -373,6 +393,11 @@ pub(crate) fn rotate_node(
                 placement.x = centre.x - half.x;
                 placement.y = centre.y - half.y;
                 placement.rotation = (placement.rotation + degrees) % 360.0;
+                if !node.mask_linked && node.mask.is_some() {
+                    node.mask_transform = (crate::transform::local_to_document(node).inverse()
+                        * old_mask)
+                        .to_cols_array();
+                }
                 // Pixel masks live in layer coordinates and follow placement.
                 continue;
             }
@@ -393,6 +418,14 @@ pub(crate) fn rotate_node(
                 *spec = Arc::new(updated);
             }
             NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
+        }
+        if !node.mask_linked {
+            continue;
+        }
+        if node.mask_transform != crate::node::default_mask_transform() {
+            node.mask_transform =
+                (transform * DAffine2::from_cols_array(&node.mask_transform)).to_cols_array();
+            continue;
         }
         if let Some(mask) = &node.mask {
             node.mask = Some(Arc::new(remap(mask, w, h, inverse)));
@@ -442,6 +475,10 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
     let scale = to_new.matrix2.x_axis.length();
     let inv = to_new.inverse();
     for n in &mut doc.nodes {
+        // Document-space masks are baked once into the resized canvas. Pixel
+        // masks keep source coordinates and follow their layer placement.
+        let mask_inv = DAffine2::from_cols_array(&n.mask_transform).inverse() * inv;
+        let document_mask = !matches!(n.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. });
         match &mut n.kind {
             NodeKind::Raster { raster, placement } => {
                 // Placements rotate about the content centre: move the centre,
@@ -480,7 +517,7 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 *cache = Arc::new(p.rasterize(style, w, h));
                 *path = Arc::new(p);
                 if let Some(m) = &n.mask {
-                    n.mask = Some(Arc::new(remap(m, w, h, inv)));
+                    n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
                 }
             }
             NodeKind::Text { spec, cache } => {
@@ -496,14 +533,17 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 *cache = Arc::new(crate::text::rasterize(&s, w, h));
                 *spec = Arc::new(s);
                 if let Some(m) = &n.mask {
-                    n.mask = Some(Arc::new(remap(m, w, h, inv)));
+                    n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
                 }
             }
             _ => {
                 if let Some(m) = &n.mask {
-                    n.mask = Some(Arc::new(remap(m, w, h, inv)));
+                    n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
                 }
             }
+        }
+        if document_mask {
+            n.mask_transform = crate::node::default_mask_transform();
         }
     }
     // Guides stay straight only when nothing rotates; otherwise they go.
@@ -579,22 +619,16 @@ pub fn trim_to_canvas(doc: &mut Document) -> usize {
             Raster::from_pixels(w, h, raster.fill(), &raster.read_rect(keep))
         };
         let mask = n.mask.as_ref().map(|m| {
-            if m.width() == raster.width() && m.height() == raster.height() && w > 0 && h > 0 {
-                Arc::new(emulsion_raster::Mask::from_pixels(
-                    w,
-                    h,
-                    m.fill(),
-                    &m.read_rect(keep),
-                ))
-            } else {
-                m.clone()
-            }
+            let inverse = DAffine2::from_cols_array(&n.mask_transform).inverse()
+                * DAffine2::from_translation(dvec2(keep.x as f64, keep.y as f64));
+            Arc::new(remap(m, cut.width(), cut.height(), inverse))
         });
         n.kind = NodeKind::Raster {
             raster: Arc::new(cut),
             placement,
         };
         n.mask = mask;
+        n.mask_transform = crate::node::default_mask_transform();
         changed += 1;
     }
     changed

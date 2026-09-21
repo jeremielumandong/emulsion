@@ -9,6 +9,7 @@ pub(crate) struct MoveGesture {
     bounds: IRect,
     revision: u64,
     delta: (f64, f64),
+    mask_start: Option<(glam::DAffine2, [f64; 6])>,
 }
 
 impl EditorView {
@@ -53,9 +54,12 @@ impl EditorView {
     }
 
     fn move_target(&self) -> Result<(NodeId, IRect), &'static str> {
+        if let Some(target) = self.mask_transform_target() {
+            return Ok(target);
+        }
         let id = self.selected.ok_or("Select a layer or group to move.")?;
         let mut bounds: Option<IRect> = None;
-        for member in self.selected_layer_roots() {
+        for member in self.movement_layer_roots() {
             let rect = self.move_target_for(member)?;
             bounds = Some(bounds.map_or(rect, |bounds| bounds.union(&rect)));
         }
@@ -78,14 +82,28 @@ impl EditorView {
                 return;
             }
         };
-        self.editor.begin("Move");
-        self.layer_selection.move_ids = self.selected_layer_roots();
+        let mask_start = self
+            .mask_transform_target()
+            .and_then(|(id, _)| self.editor.doc.node(id))
+            .map(|node| {
+                (
+                    emulsion_core::transform::local_to_document(node),
+                    node.mask_transform,
+                )
+            });
+        self.editor.begin(if mask_start.is_some() {
+            "Move layer mask"
+        } else {
+            "Move"
+        });
+        self.layer_selection.move_ids = self.movement_layer_roots();
         self.drag = Some(Drag::Move(MoveGesture {
             id,
             start_doc: point,
             bounds,
             revision: self.editor.revision,
             delta: (0., 0.),
+            mask_start,
         }));
         cx.notify();
     }
@@ -131,11 +149,24 @@ impl EditorView {
         if delta == gesture.delta {
             return;
         }
-        match self.editor.preview(Command::TranslateNodes {
-            ids: self.layer_selection.move_ids.clone(),
-            dx: delta.0,
-            dy: delta.1,
-        }) {
+        let command = if let Some((local_to_doc, initial)) = gesture.mask_start {
+            let delta = glam::DAffine2::from_translation(glam::dvec2(delta.0, delta.1));
+            Command::SetMaskTransform {
+                id: gesture.id,
+                transform: (local_to_doc.inverse()
+                    * delta
+                    * local_to_doc
+                    * glam::DAffine2::from_cols_array(&initial))
+                .to_cols_array(),
+            }
+        } else {
+            Command::TranslateNodes {
+                ids: self.layer_selection.move_ids.clone(),
+                dx: delta.0,
+                dy: delta.1,
+            }
+        };
+        match self.editor.preview(command) {
             Ok(_) => {
                 self.status = None;
                 self.drag = Some(Drag::Move(MoveGesture {
@@ -185,13 +216,13 @@ impl EditorView {
             }
         }
         self.snap_lines.clear();
-        self.execute(
-            Command::TranslateNodes {
-                ids: self.selected_layer_roots(),
+        let command = self
+            .mask_transform_command(glam::DAffine2::from_translation(glam::dvec2(dx, dy)))
+            .unwrap_or_else(|| Command::TranslateNodes {
+                ids: self.movement_layer_roots(),
                 dx,
                 dy,
-            },
-            cx,
-        );
+            });
+        self.execute(command, cx);
     }
 }

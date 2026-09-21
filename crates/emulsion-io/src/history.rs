@@ -145,6 +145,8 @@ struct HNode {
     locks: emulsion_core::node::LayerLocks,
     #[serde(default)]
     color_label: emulsion_core::node::LayerColor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link_group: Option<NodeId>,
     opacity: f32,
     blend: BlendMode,
     #[serde(default)]
@@ -152,6 +154,10 @@ struct HNode {
     clip_to: Option<NodeId>,
     mask: Option<u32>,
     mask_enabled: bool,
+    #[serde(default = "emulsion_core::node::default_mask_linked")]
+    mask_linked: bool,
+    #[serde(default = "emulsion_core::node::default_mask_transform")]
+    mask_transform: [f64; 6],
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     styles: Vec<emulsion_core::styles::LayerStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,12 +293,15 @@ pub(crate) fn encode(
                     locked: n.locked,
                     locks: n.locks,
                     color_label: n.color_label,
+                    link_group: n.link_group,
                     opacity: n.opacity,
                     blend: n.blend,
                     blending: n.blending,
                     clip_to: n.clip_to,
                     mask: n.mask.as_ref().map(|m| masks.add(m)),
                     mask_enabled: n.mask_enabled,
+                    mask_linked: n.mask_linked,
+                    mask_transform: n.mask_transform,
                     styles: n.styles.clone(),
                     origin: n.origin.clone(),
                     kind: match &n.kind {
@@ -592,12 +601,15 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 locked: n.locked,
                 locks: n.locks,
                 color_label: n.color_label,
+                link_group: n.link_group,
                 opacity: n.opacity,
                 blend: n.blend,
                 blending: n.blending,
                 clip_to: n.clip_to,
                 mask: node_mask,
                 mask_enabled: n.mask_enabled,
+                mask_linked: n.mask_linked,
+                mask_transform: n.mask_transform,
                 styles: n.styles,
                 origin: n.origin,
                 kind,

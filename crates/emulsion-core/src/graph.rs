@@ -453,7 +453,11 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
         (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
         _ => false,
     };
-    if !mask_same || x.mask_enabled != y.mask_enabled {
+    if !mask_same
+        || x.mask_enabled != y.mask_enabled
+        || x.mask_linked != y.mask_linked
+        || x.mask_transform != y.mask_transform
+    {
         out.push(("mask", "before".into(), "edited".into()));
     }
     if x.styles != y.styles {
@@ -467,6 +471,13 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
             "layer locks",
             format!("{:?}", x.locks),
             format!("{:?}", y.locks),
+        ));
+    }
+    if x.link_group != y.link_group {
+        out.push((
+            "linked layers",
+            format!("{:?}", x.link_group),
+            format!("{:?}", y.link_group),
         ));
     }
     if x.color_label != y.color_label {
@@ -648,6 +659,16 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
         color_label: pick(&b.color_label, &o.color_label, &t.color_label, |x, y| {
             x == y
         })?,
+        link_group: pick(&b.link_group, &o.link_group, &t.link_group, |x, y| x == y)?,
+        mask_linked: pick(&b.mask_linked, &o.mask_linked, &t.mask_linked, |x, y| {
+            x == y
+        })?,
+        mask_transform: pick(
+            &b.mask_transform,
+            &o.mask_transform,
+            &t.mask_transform,
+            |x, y| x == y,
+        )?,
         opacity: pick(&b.opacity, &o.opacity, &t.opacity, |x, y| x == y)?,
         blending: pick(&b.blending, &o.blending, &t.blending, |x, y| x == y)?,
         blend: pick(&b.blend, &o.blend, &t.blend, |x, y| x == y)?,
@@ -672,8 +693,40 @@ fn remap_collisions(base: &Document, ours: &Document, theirs: &Document) -> Docu
             next += 1;
         }
     }
-    if map.is_empty() {
-        return t;
+    // Link tokens have their own namespace. Independently created link sets
+    // on two branches must not become one set merely because tokens coincide.
+    let base_links: std::collections::HashSet<_> =
+        base.nodes.iter().filter_map(|n| n.link_group).collect();
+    let mut used: std::collections::HashSet<_> = ours
+        .nodes
+        .iter()
+        .chain(theirs.nodes.iter())
+        .filter_map(|n| n.link_group)
+        .collect();
+    let mut link_map = HashMap::new();
+    for token in theirs.nodes.iter().filter_map(|n| n.link_group) {
+        if base_links.contains(&token) || link_map.contains_key(&token) {
+            continue;
+        }
+        let ours_members: std::collections::HashSet<_> = ours
+            .nodes
+            .iter()
+            .filter(|n| n.link_group == Some(token))
+            .map(|n| n.id)
+            .collect();
+        let theirs_members: std::collections::HashSet<_> = theirs
+            .nodes
+            .iter()
+            .filter(|n| n.link_group == Some(token))
+            .map(|n| map.get(&n.id).copied().unwrap_or(n.id))
+            .collect();
+        if !ours_members.is_empty() && ours_members != theirs_members {
+            let fresh = (0..)
+                .find(|id| !used.contains(id))
+                .expect("available link token");
+            used.insert(fresh);
+            link_map.insert(token, fresh);
+        }
     }
     let fix = |id: &mut NodeId| {
         if let Some(n) = map.get(id) {
@@ -687,6 +740,11 @@ fn remap_collisions(base: &Document, ours: &Document, theirs: &Document) -> Docu
         }
         if let Some(c) = &mut n.clip_to {
             fix(c);
+        }
+        if let Some(group) = &mut n.link_group
+            && let Some(fresh) = link_map.get(group)
+        {
+            *group = *fresh;
         }
     }
     t.next_id = next;
@@ -907,6 +965,54 @@ mod tests {
             MergeOutcome::Merged(d) => d,
             MergeOutcome::Conflicts(c) => panic!("unexpected conflicts {c:?}"),
         }
+    }
+
+    #[test]
+    fn independent_branch_link_tokens_remain_separate() {
+        let base = doc();
+        let mut ours = base.clone();
+        let mut theirs = base.clone();
+        for branch in [&mut ours, &mut theirs] {
+            let first = Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "one",
+                    Arc::new(Raster::transparent(2, 2)),
+                    Placement::default(),
+                )),
+                slot: Slot::TOP,
+            }
+            .apply(branch)
+            .unwrap()
+            .unwrap();
+            let second = Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "two",
+                    Arc::new(Raster::transparent(2, 2)),
+                    Placement::default(),
+                )),
+                slot: Slot::TOP,
+            }
+            .apply(branch)
+            .unwrap()
+            .unwrap();
+            Command::SetLayerLinks {
+                ids: vec![first, second],
+                linked: true,
+            }
+            .apply(branch)
+            .unwrap();
+        }
+        let result = merged(merge(&base, &ours, &theirs, &HashMap::new()).unwrap());
+        let mut groups = HashMap::new();
+        for node in result.nodes {
+            if let Some(token) = node.link_group {
+                *groups.entry(token).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(groups.len(), 2);
+        assert!(groups.values().all(|n| *n == 2));
     }
 
     #[test]

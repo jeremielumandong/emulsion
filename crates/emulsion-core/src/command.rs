@@ -145,6 +145,30 @@ pub enum Command {
     },
     /// Translate a node and all its descendants in document pixels.
     /// Move selected roots atomically; descendants of another selected root move once.
+    SetLayerLinks {
+        ids: Vec<NodeId>,
+        linked: bool,
+    },
+    ArrangeLayers {
+        ids: Vec<NodeId>,
+        operation: crate::layer_links::Arrange,
+        target: crate::layer_links::ArrangeTarget,
+    },
+    TransformNodes {
+        ids: Vec<NodeId>,
+        transform: [f64; 6],
+    },
+    SetMaskLinked {
+        id: NodeId,
+        linked: bool,
+    },
+    SetMaskTransform {
+        id: NodeId,
+        transform: [f64; 6],
+    },
+    ApplyLayerMask {
+        id: NodeId,
+    },
     TranslateNodes {
         ids: Vec<NodeId>,
         dx: f64,
@@ -319,6 +343,22 @@ impl Command {
             Command::SetAdjustment { .. } => "Adjustment".into(),
             Command::SetPlacement { .. } => "Transform".into(),
             Command::RotateNode { .. } => "Rotate node".into(),
+            Command::SetLayerLinks { linked, .. } => if *linked {
+                "Link layers"
+            } else {
+                "Unlink layers"
+            }
+            .into(),
+            Command::ArrangeLayers { operation, .. } => operation.label().into(),
+            Command::TransformNodes { .. } => "Transform layers".into(),
+            Command::SetMaskLinked { linked, .. } => if *linked {
+                "Link layer mask"
+            } else {
+                "Unlink layer mask"
+            }
+            .into(),
+            Command::SetMaskTransform { .. } => "Transform layer mask".into(),
+            Command::ApplyLayerMask { .. } => "Apply layer mask".into(),
             Command::TranslateNodes { .. } => "Move layers".into(),
             Command::TranslateNode { .. } => "Move".into(),
             Command::AlignNode { alignment, .. } => match alignment {
@@ -387,6 +427,8 @@ impl Command {
             | Command::SetCollapsed { .. }
             | Command::SetLayerLocks { .. }
             | Command::SetColorLabel { .. }
+            | Command::SetLayerLinks { .. }
+            | Command::SetMaskLinked { .. }
             | Command::SetLocked { .. }
             | Command::Rename { .. } => Dirty::Nothing,
             Command::SetPath { id, path, style } => match before.node(*id).map(|n| &n.kind) {
@@ -488,7 +530,10 @@ impl Command {
             Ok(())
         };
         match self {
-            Self::TranslateNodes { ids, .. } => {
+            Self::TranslateNodes { ids, .. }
+            | Self::TransformNodes { ids, .. }
+            | Self::ArrangeLayers { ids, .. }
+            | Self::SetLayerLinks { ids, .. } => {
                 for id in ids {
                     check(*id, true)?;
                 }
@@ -529,6 +574,9 @@ impl Command {
                 Ok(())
             }
             Self::RemoveNode { id }
+            | Self::ApplyLayerMask { id }
+            | Self::SetMaskLinked { id, .. }
+            | Self::SetMaskTransform { id, .. }
             | Self::DuplicateNode { id }
             | Self::SetVisible { id, .. }
             | Self::SetOpacity { id, .. }
@@ -565,26 +613,26 @@ impl Command {
             doc.node(id).map(|_| ()).ok_or(CommandError::NoSuchNode(id))
         };
         match self {
+            Command::SetLayerLinks { ids, linked } => {
+                crate::layer_links::set_links(doc, ids, *linked)
+            }
+            Command::ArrangeLayers {
+                ids,
+                operation,
+                target,
+            } => crate::layer_links::arrange(doc, ids, *operation, *target),
+            Command::TransformNodes { ids, transform } => {
+                crate::transform::transform_nodes(doc, ids, *transform)
+            }
+            Command::SetMaskTransform { id, transform } => {
+                crate::transform::set_mask_transform(doc, *id, *transform)
+            }
+            Command::SetMaskLinked { id, linked } => {
+                set(doc, *id, |node| node.mask_linked = *linked)
+            }
+            Command::ApplyLayerMask { id } => crate::layer_mask::apply(doc, *id),
             Command::TranslateNodes { ids, dx, dy } => {
-                let roots: Vec<_> = ids
-                    .iter()
-                    .copied()
-                    .filter(|id| {
-                        !ids.iter()
-                            .any(|other| id != other && doc.is_ancestor(*other, *id))
-                    })
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
-                for id in roots {
-                    Command::TranslateNode {
-                        id,
-                        dx: *dx,
-                        dy: *dy,
-                    }
-                    .apply(doc)?;
-                }
-                Ok(None)
+                crate::layer_links::translate(doc, ids, *dx, *dy)
             }
 
             Command::AddNode { node, slot } => {
@@ -671,6 +719,7 @@ impl Command {
                     .cloned()
                     .collect();
                 for n in &mut copies {
+                    n.link_group = None;
                     n.id = map[&n.id];
                     if n.id == map[id] {
                         n.name = format!("{} copy", n.name);
@@ -758,23 +807,14 @@ impl Command {
                 }
             }
             Command::SetPlacement { id, placement } => {
-                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
-                match &mut n.kind {
-                    NodeKind::Raster { placement: p, .. }
-                    | NodeKind::Smart { placement: p, .. } => {
-                        *p = *placement;
-                        Ok(None)
-                    }
-                    _ => Err(CommandError::NoSuchParam(*id, "placement".into())),
-                }
+                crate::transform::set_placement(doc, *id, *placement)
             }
             Command::RotateNode { id, degrees } => {
                 crate::geometry::rotate_node(doc, *id, *degrees)?;
                 Ok(None)
             }
             Command::TranslateNode { id, dx, dy } => {
-                crate::geometry::translate_node(doc, *id, *dx, *dy)?;
-                Ok(None)
+                crate::layer_links::translate(doc, &[*id], *dx, *dy)
             }
             Command::AlignNode {
                 id,
@@ -891,7 +931,13 @@ impl Command {
                         crate::document::DocumentError::BadValue(*id, "mask size"),
                     ));
                 }
-                set(doc, *id, |n| n.mask = mask.clone())
+                set(doc, *id, |n| {
+                    if n.mask.is_none() || mask.is_none() {
+                        n.mask_transform = crate::node::default_mask_transform();
+                        n.mask_enabled = true;
+                    }
+                    n.mask = mask.clone();
+                })
             }
             Command::Crop { rect, rotation } => {
                 crate::geometry::crop(doc, *rect, *rotation);
@@ -1180,6 +1226,7 @@ impl Command {
                         *r = raster.clone();
                         *p = *placement;
                         n.mask = mask.clone();
+                        n.mask_transform = crate::node::default_mask_transform();
                         Ok(None)
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "pixels".into())),

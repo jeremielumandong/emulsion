@@ -186,6 +186,15 @@ impl EditorView {
                 DAffine2::IDENTITY,
             ),
         };
+        let (w, h, to_doc) = if let Some(mask) = &node.mask {
+            (
+                mask.width(),
+                mask.height(),
+                emulsion_core::transform::mask_to_document(node),
+            )
+        } else {
+            (w, h, to_doc)
+        };
         let point = point.map(|(x, y)| to_doc.inverse().transform_point2(dvec2(x, y)));
         if point.is_some_and(|p| p.x < 0.0 || p.y < 0.0 || p.x >= w as f64 || p.y >= h as f64) {
             return;

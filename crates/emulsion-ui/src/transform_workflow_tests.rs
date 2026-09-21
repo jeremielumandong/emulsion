@@ -349,3 +349,170 @@ fn masked_solid_raster_frame_tracks_mask_enabled_without_cropping_source(cx: &mu
         })
     });
 }
+
+#[gpui_kit::test]
+fn multiple_layer_transform_drag_is_shared_and_undo_cancel_are_atomic(cx: &mut TestAppContext) {
+    let mut doc = Document::new(320, 240);
+    doc.nodes = vec![
+        Node::raster(
+            1,
+            "Left",
+            Arc::new(Raster::solid(20, 20, [1.; 4])),
+            Placement::at(40., 40.),
+        ),
+        Node::raster(
+            2,
+            "Right",
+            Arc::new(Raster::solid(20, 20, [1.; 4])),
+            Placement::at(100., 40.),
+        ),
+    ];
+    let original = doc.clone();
+    let (ws, cx) = open(cx, doc);
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| {
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![1, 2], Some(2));
+            window.focus(&e.canvas_focus, cx);
+        })
+    });
+    cx.simulate_keystrokes("ctrl-t");
+    cx.run_until_parked();
+    for cancel in [false, true] {
+        let (start, end) = cx.update(|_, cx| {
+            let e = view.read(cx);
+            assert_eq!(
+                e.transform_box().unwrap(),
+                [(40., 40.), (120., 40.), (120., 60.), (40., 60.)]
+            );
+            (
+                e.doc_to_window((120., 60.)).unwrap(),
+                e.doc_to_window((200., 80.)).unwrap(),
+            )
+        });
+        cx.simulate_mouse_down(start, gpui_kit::MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(end, Some(gpui_kit::MouseButton::Left), Default::default());
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = view.read(cx);
+            for (id, x) in [(1, 40.), (2, 160.)] {
+                let NodeKind::Raster { placement, raster } = &e.editor.doc.node(id).unwrap().kind
+                else {
+                    panic!()
+                };
+                assert!((placement.x - x).abs() < 0.1);
+                assert!((placement.scale_x - 2.).abs() < 0.01);
+                let NodeKind::Raster { raster: old, .. } = &original.node(id).unwrap().kind else {
+                    panic!()
+                };
+                assert!(Arc::ptr_eq(raster, old));
+            }
+        });
+        if cancel {
+            cx.simulate_keystrokes("escape");
+        } else {
+            cx.simulate_mouse_up(end, gpui_kit::MouseButton::Left, Default::default());
+            cx.run_until_parked();
+            cx.update(|_, cx| assert_eq!(view.read(cx).editor.history.len(), 1));
+            cx.simulate_keystrokes("ctrl-z");
+        }
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert_eq!(view.read(cx).editor.doc, original);
+            assert!(!view.read(cx).editor.in_transaction());
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn unlinked_mask_transform_handles_resize_only_mask_and_undo(cx: &mut TestAppContext) {
+    let mut doc = Document::new(240, 200);
+    let mut node = Node::raster(
+        1,
+        "Mask",
+        Arc::new(Raster::solid(120, 100, [1.; 4])),
+        Placement::default(),
+    );
+    node.mask = Some(Arc::new(emulsion_raster::select::rect(
+        120, 100, 30., 30., 20., 20.,
+    )));
+    node.mask_linked = false;
+    doc.nodes.push(node);
+    let original = doc.clone();
+    let (ws, cx) = open(cx, doc);
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| {
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![1], Some(1));
+            e.tools.mask_edit = true;
+            window.focus(&e.canvas_focus, cx);
+        })
+    });
+    cx.simulate_keystrokes("ctrl-t");
+    cx.run_until_parked();
+    let (start, end) = cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert!(e.tools.mask_edit);
+        assert_eq!(
+            e.transform_box().unwrap(),
+            [(30., 30.), (50., 30.), (50., 50.), (30., 50.)]
+        );
+        (
+            e.doc_to_window((50., 50.)).unwrap(),
+            e.doc_to_window((70., 70.)).unwrap(),
+        )
+    });
+    cx.simulate_mouse_down(start, gpui_kit::MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(end, Some(gpui_kit::MouseButton::Left), Default::default());
+    cx.simulate_mouse_up(end, gpui_kit::MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        let n = e.editor.doc.node(1).unwrap();
+        assert_eq!(n.kind, original.nodes[0].kind);
+        assert!(Arc::ptr_eq(
+            n.mask.as_ref().unwrap(),
+            original.nodes[0].mask.as_ref().unwrap()
+        ));
+        assert_eq!(e.editor.history.len(), 1);
+        let b = emulsion_core::transform::mask_bounds(n).unwrap();
+        assert!((b.w - 40).abs() <= 1);
+        assert!((b.x - 30).abs() <= 1);
+    });
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original));
+}
+
+#[gpui_kit::test]
+fn empty_unlinked_mask_nudge_never_moves_layer_content(cx: &mut TestAppContext) {
+    let mut doc = Document::new(100, 80);
+    let mut node = Node::raster(
+        1,
+        "Hidden",
+        Arc::new(Raster::solid(60, 40, [1.; 4])),
+        Placement::at(10., 10.),
+    );
+    node.mask = Some(Arc::new(emulsion_raster::Mask::empty(60, 40, 0)));
+    node.mask_linked = false;
+    doc.nodes.push(node);
+    let original = doc.clone();
+    let (ws, cx) = open(cx, doc);
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![1], Some(1));
+            e.set_tool(Tool::Move, cx);
+            e.tools.mask_edit = true;
+            assert!(e.mask_transform_target().is_some());
+            e.nudge_selected(5., 3., cx);
+            assert_eq!(e.editor.doc.nodes[0].kind, original.nodes[0].kind);
+            assert_ne!(
+                e.editor.doc.nodes[0].mask_transform,
+                original.nodes[0].mask_transform
+            );
+            e.undo(cx);
+            assert_eq!(e.editor.doc, original);
+        })
+    });
+}

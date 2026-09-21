@@ -194,6 +194,26 @@ impl Document {
     /// source offset before the compositor samples it through cache placement.
     pub fn composite_mask(node: &Node) -> Option<Arc<Mask>> {
         let mask = node.mask_enabled.then_some(node.mask.as_ref()).flatten()?;
+        if node.mask_transform != crate::node::default_mask_transform() {
+            let (w, h, offset) = match &node.kind {
+                NodeKind::Raster { raster, .. } => (raster.width(), raster.height(), (0, 0)),
+                NodeKind::Smart { cache, offset, .. } => (cache.width(), cache.height(), *offset),
+                NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } => {
+                    (cache.width(), cache.height(), (0, 0))
+                }
+                _ => (mask.width(), mask.height(), (0, 0)),
+            };
+            let inverse = glam::DAffine2::from_cols_array(&node.mask_transform).inverse();
+            return Some(Arc::new(Mask::from_fn(w, h, mask.fill(), |x, y| {
+                crate::transform::sample_mask(
+                    mask,
+                    inverse.transform_point2(glam::dvec2(
+                        x as f64 + offset.0 as f64 + 0.5,
+                        y as f64 + offset.1 as f64 + 0.5,
+                    )),
+                )
+            })));
+        }
         match &node.kind {
             NodeKind::Smart { cache, offset, .. }
                 if *offset != (0, 0)
@@ -353,6 +373,12 @@ impl Document {
                     }
                     _ => {}
                 }
+            }
+            let mask_affine = glam::DAffine2::from_cols_array(&n.mask_transform);
+            if !n.mask_transform.iter().all(|v| v.is_finite())
+                || mask_affine.matrix2.determinant().abs() < 1e-12
+            {
+                return Err(DocumentError::BadValue(n.id, "mask transform"));
             }
             if !n.blending.valid() {
                 return Err(DocumentError::BadValue(n.id, "blending options"));
@@ -568,7 +594,7 @@ impl Document {
                 | NodeKind::Smart { .. }
         ) {
             // Mask-only nodes: the mask is already in document space.
-            return n.mask.as_ref().map(|m| (**m).clone());
+            return Document::composite_mask(n).map(|m| (*m).clone());
         }
         let mut solo = Document::new(self.width, self.height);
         let mut node = n.clone();

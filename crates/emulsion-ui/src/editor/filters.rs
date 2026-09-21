@@ -135,6 +135,7 @@ impl EditorView {
                         }),
                 ),
             )
+            .child(self.layer_menu_button(cx))
             .child(
                 div().id("filter-menu").test_support().child(
                     Button::new("filter-menu-button")

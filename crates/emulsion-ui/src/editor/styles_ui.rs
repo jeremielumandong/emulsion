@@ -10,7 +10,222 @@ pub(crate) struct StylesUi {
     pub blend_if_open: bool,
 }
 
+#[derive(Clone)]
+struct StyleBundle {
+    effects: Vec<LayerStyle>,
+    blend: BlendMode,
+    opacity: f32,
+    blending: BlendingOptions,
+}
+impl StyleBundle {
+    fn from_node(node: &Node) -> Self {
+        Self {
+            effects: node.styles.clone(),
+            blend: node.blend,
+            opacity: node.opacity,
+            blending: node.blending,
+        }
+    }
+    fn commands(&self, id: NodeId) -> Vec<Command> {
+        vec![
+            Command::SetStyles {
+                id,
+                styles: self.effects.clone(),
+            },
+            Command::SetBlend {
+                id,
+                blend: self.blend,
+            },
+            Command::SetOpacity {
+                id,
+                opacity: self.opacity,
+            },
+            Command::SetBlendingOptions {
+                id,
+                options: self.blending,
+            },
+        ]
+    }
+}
+#[derive(Clone)]
+struct StyleClipboard(StyleBundle);
+impl Global for StyleClipboard {}
+
 impl EditorView {
+    fn style_action_ready(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.assistant.running
+            || self.drag.is_some()
+            || self.editor.in_transaction()
+            || self.warp.is_some()
+        {
+            self.set_status(
+                "Finish the current edit before changing layer styles or applying a mask.",
+                false,
+                cx,
+            );
+            return false;
+        }
+        true
+    }
+
+    pub(crate) fn copy_layer_style(&mut self, cx: &mut Context<Self>) {
+        let Some(node) = self.selected.and_then(|id| self.editor.doc.node(id)) else {
+            return;
+        };
+        cx.set_global(StyleClipboard(StyleBundle::from_node(node)));
+        self.set_status("Layer style and blending copied.", false, cx);
+    }
+
+    pub(crate) fn can_paste_layer_style(&self, cx: &App) -> bool {
+        cx.try_global::<StyleClipboard>().is_some() && !self.selected_layer_ids().is_empty()
+    }
+
+    pub(crate) fn paste_layer_style(&mut self, cx: &mut Context<Self>) {
+        if !self.style_action_ready(cx) {
+            return;
+        }
+        let Some(StyleClipboard(styles)) = cx.try_global::<StyleClipboard>().cloned() else {
+            return;
+        };
+        self.close_text_field(cx);
+        let commands = self
+            .selected_layer_ids()
+            .into_iter()
+            .flat_map(|id| styles.commands(id))
+            .collect();
+        self.execute_layer_commands("Paste layer style", commands, cx);
+    }
+
+    pub(crate) fn transfer_layer_style(
+        &mut self,
+        source: NodeId,
+        target: NodeId,
+        copy: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if source == target || !self.style_action_ready(cx) {
+            return;
+        }
+        let Some(styles) = self.editor.doc.node(source).map(StyleBundle::from_node) else {
+            return;
+        };
+        let mut commands = styles.commands(target);
+        if !copy {
+            commands.extend(
+                StyleBundle {
+                    effects: Vec::new(),
+                    blend: BlendMode::Normal,
+                    opacity: 1.0,
+                    blending: BlendingOptions::default(),
+                }
+                .commands(source),
+            );
+        }
+        self.close_text_field(cx);
+        self.execute_layer_commands(
+            if copy {
+                "Copy layer style"
+            } else {
+                "Move layer style"
+            },
+            commands,
+            cx,
+        );
+    }
+
+    pub(crate) fn can_apply_layer_mask(&self) -> bool {
+        let ids = self.selected_layer_ids();
+        !ids.is_empty()
+            && ids.into_iter().all(|id| {
+                self.editor.doc.node(id).is_some_and(|node| {
+                    let locks = self.editor.doc.layer_locks(id);
+                    node.mask.is_some()
+                        && self.editor.doc.locked_ancestor(id).is_none()
+                        && !locks.pixels
+                        && !locks.transparency
+                        && matches!(
+                            node.kind,
+                            NodeKind::Raster { .. }
+                                | NodeKind::Smart { .. }
+                                | NodeKind::Text { .. }
+                                | NodeKind::Path { .. }
+                                | NodeKind::Fill { .. }
+                        )
+                })
+            })
+    }
+
+    pub(crate) fn apply_layer_mask(&mut self, cx: &mut Context<Self>) {
+        if !self.style_action_ready(cx) {
+            return;
+        }
+        if !self.can_apply_layer_mask() {
+            self.set_status("Apply Layer Mask needs unlocked pixel, text, path, fill, or Smart content. Group and adjustment masks remain editable.", false, cx);
+            return;
+        }
+        self.close_text_field(cx);
+        let commands = self
+            .selected_layer_ids()
+            .into_iter()
+            .filter(|id| {
+                self.editor
+                    .doc
+                    .node(*id)
+                    .is_some_and(|node| node.mask.is_some())
+            })
+            .map(|id| Command::ApplyLayerMask { id })
+            .collect();
+        if self
+            .execute_layer_commands("Apply layer mask", commands, cx)
+            .is_some()
+        {
+            self.tools.mask_edit = false;
+        }
+    }
+
+    pub(crate) fn save_style_default(&mut self, id: NodeId, index: usize, cx: &mut Context<Self>) {
+        let Some(style) = self
+            .editor
+            .doc
+            .node(id)
+            .and_then(|node| node.styles.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        crate::app_state::update_settings(cx, |settings| {
+            settings
+                .layer_style_defaults
+                .retain(|saved| saved.key() != style.key());
+            settings.layer_style_defaults.push(style);
+        });
+        self.set_status("Effect saved as its default.", false, cx);
+    }
+
+    pub(crate) fn reset_style_default(&mut self, id: NodeId, index: usize, cx: &mut Context<Self>) {
+        let Some(node) = self.editor.doc.node(id) else {
+            return;
+        };
+        let Some(style) = node.styles.get(index) else {
+            return;
+        };
+        let key = style.key();
+        let Some(factory) = LayerStyle::catalogue()
+            .into_iter()
+            .find(|candidate| candidate.key() == key)
+        else {
+            return;
+        };
+        let mut styles = node.styles.clone();
+        styles[index] = factory;
+        self.set_styles(id, styles, cx);
+        crate::app_state::update_settings(cx, |settings| {
+            settings
+                .layer_style_defaults
+                .retain(|saved| saved.key() != key)
+        });
+    }
+
     pub(crate) fn set_blending(
         &mut self,
         id: NodeId,
@@ -286,14 +501,24 @@ impl EditorView {
         let Some(n) = self.editor.doc.node(id) else {
             return;
         };
-        // New effects take the foreground colour, except shadows.
-        if !matches!(
-            s,
-            LayerStyle::DropShadow { .. }
-                | LayerStyle::InnerShadow { .. }
-                | LayerStyle::BevelEmboss { .. }
-                | LayerStyle::Satin { .. }
-        ) {
+        let saved = crate::app_state::settings(cx)
+            .layer_style_defaults
+            .iter()
+            .find(|saved| saved.key() == s.key())
+            .cloned();
+        if let Some(saved) = &saved {
+            s = saved.clone();
+        }
+        // New effects take the foreground colour only without a custom default.
+        if saved.is_none()
+            && !matches!(
+                s,
+                LayerStyle::DropShadow { .. }
+                    | LayerStyle::InnerShadow { .. }
+                    | LayerStyle::BevelEmboss { .. }
+                    | LayerStyle::Satin { .. }
+            )
+        {
             let fg = self.tools.fg;
             s.set_color([fg[0], fg[1], fg[2]], false);
         }
@@ -443,6 +668,26 @@ impl EditorView {
                         )),
                     );
             v.push(row.into_any_element());
+            v.push(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        chip(("style-save-default", idx), "Save default", false, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.save_style_default(id, idx, cx)
+                            }))
+                            .test_support(),
+                    )
+                    .child(
+                        chip(("style-reset-default", idx), "Reset default", false, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.reset_style_default(id, idx, cx)
+                            }))
+                            .test_support(),
+                    )
+                    .into_any_element(),
+            );
             for spec in s.params() {
                 let norm = (spec.value - spec.min) / (spec.max - spec.min).max(1e-6);
                 v.push(

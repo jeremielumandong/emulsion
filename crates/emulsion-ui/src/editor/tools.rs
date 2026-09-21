@@ -465,7 +465,9 @@ impl EditorView {
         if self.sidebar_tab == SidebarTab::BrushSettings && !self.brushy() {
             self.select_sidebar(SidebarTab::History, cx);
         }
-        self.tools.mask_edit = tool == Tool::Mask;
+        self.tools.mask_edit = tool == Tool::Mask
+            || (self.tools.mask_edit
+                && matches!(tool, Tool::Move | Tool::Brush | Tool::Clone | Tool::Heal));
         if tool == Tool::Grade {
             // Open the selected adjustment for editing, or offer new layers.
             let tab = if self
@@ -580,8 +582,7 @@ impl EditorView {
         // Choosing a different brush or preset while explicitly editing a mask
         // must keep painting that mask. Bucket also keeps the mask selected
         // through the dedicated Mask tool or the Layers thumbnail.
-        let mask_edit =
-            self.tools.mask_edit && (self.tool == Tool::Brush || kind == PaintKind::Bucket);
+        let mask_edit = self.tools.mask_edit;
         if self.tool != Tool::Brush || kind != self.tools.paint {
             self.finish_tool_interaction(cx);
         }
@@ -929,11 +930,7 @@ impl EditorView {
             }
             Tool::Mask => {
                 self.tools.mask_edit = true;
-                let ink = if self.tools.mask_reveal {
-                    Ink::Color([1.0, 1.0, 1.0, 1.0])
-                } else {
-                    Ink::Erase
-                };
+                let ink = Ink::Color(premul(self.tools.fg));
                 self.start_stroke(d, ink, false, "Paint mask", cx);
             }
             Tool::Heal => self.start_stroke(
@@ -1043,7 +1040,15 @@ impl EditorView {
             self.set_status("Finish the current edit before healing.", false, cx);
             return;
         }
-        let mask_mode = self.tools.mask_edit && !heal && matches!(ink, Ink::Color(_) | Ink::Erase);
+        if heal && self.tools.mask_edit {
+            self.set_status(
+                "Use Brush, Eraser, Smudge, or Clone to edit the layer mask.",
+                false,
+                cx,
+            );
+            return;
+        }
+        let mask_mode = self.tools.mask_edit;
         let (id, raster, to_doc, ink) = if mask_mode {
             let Some((id, m, to_doc)) = self.mask_target(cx) else {
                 return;
@@ -1051,7 +1056,11 @@ impl EditorView {
             // White reveals, black hides; the eraser hides.
             let ink = match ink {
                 Ink::Erase => Ink::Color([0.0, 0.0, 0.0, 1.0]),
-                _ => Ink::Color([1.0, 1.0, 1.0, 1.0]),
+                Ink::Color(c) => {
+                    let gray = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+                    Ink::Color([gray, gray, gray, c[3]])
+                }
+                other => other,
             };
             (id, Arc::new(mask_to_raster(&m)), to_doc, ink)
         } else {
@@ -1086,7 +1095,7 @@ impl EditorView {
         let wet = brush.wetness > 0.0 || matches!(ink, Ink::Smudge);
         let mut stroke = Stroke::new(raster.clone(), brush, ink, clip);
         stroke.set_alpha_lock(self.tools.alpha_lock && !mask_mode);
-        if wet {
+        if wet && !mask_mode {
             // Wet media mix with what shows under this layer, not only with it.
             let backdrop = PixelSampler::new(self.tree.clone());
             let td = to_doc;
@@ -1137,6 +1146,10 @@ impl EditorView {
     }
 
     fn start_liquify(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
+        if self.tools.mask_edit {
+            self.set_status("Use Brush or Smudge to edit the layer mask.", false, cx);
+            return;
+        }
         let Some(id) = self.paint_target(cx) else {
             return;
         };
@@ -1390,6 +1403,11 @@ impl EditorView {
                 DAffine2::IDENTITY,
             ),
         };
+        let to_doc = if n.mask.is_some() {
+            to_doc * DAffine2::from_cols_array(&n.mask_transform)
+        } else {
+            to_doc
+        };
         let mask = match &n.mask {
             Some(m) => m.clone(),
             None => {
@@ -1447,13 +1465,19 @@ impl EditorView {
             },
             None => Mask::white(w, h),
         };
-        self.execute(
+        let commands = vec![
+            Command::SetMask { id, mask: None },
             Command::SetMask {
                 id,
                 mask: Some(Arc::new(m)),
             },
-            cx,
-        );
+        ];
+        if self
+            .execute_layer_commands("Mask from selection", commands, cx)
+            .is_none()
+        {
+            return;
+        }
         self.set_status(
             "Mask added. Turn on \"edit mask\" to paint it: white reveals, black hides.",
             false,
@@ -1498,12 +1522,26 @@ impl EditorView {
 
     /// Load the mask as the selection.
     pub fn mask_to_selection(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected else { return };
-        let Some(m) = self.editor.doc.node_coverage(id) else {
+        let Some(node) = self.selected.and_then(|id| self.editor.doc.node(id)) else {
             return;
         };
-        let combine = self.tools.combine;
-        self.apply_selection(m, combine, cx);
+        let Some(mask) = node.mask.clone() else {
+            return;
+        };
+        let inverse = emulsion_core::transform::mask_to_document(node).inverse();
+        let selection = Mask::from_fn(self.editor.doc.width, self.editor.doc.height, 0, |x, y| {
+            let point = inverse.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
+            if point.x < 0.0
+                || point.y < 0.0
+                || point.x >= mask.width() as f64
+                || point.y >= mask.height() as f64
+            {
+                0
+            } else {
+                emulsion_core::transform::sample_mask(&mask, point)
+            }
+        });
+        self.apply_selection(selection, self.tools.combine, cx);
     }
 
     /// Publish accumulated brush samples at the frame boundary.
@@ -2389,6 +2427,51 @@ impl EditorView {
         if ((a.0 - b.0) * self.view.zoom).hypot((a.1 - b.1) * self.view.zoom) < 3.0 {
             return;
         }
+        if self.tools.mask_edit {
+            let Some((id, mask, to_doc)) = self.mask_target(cx) else {
+                return;
+            };
+            let gray =
+                |c: [u8; 4]| 0.2126 * c[0] as f64 + 0.7152 * c[1] as f64 + 0.0722 * c[2] as f64;
+            let (from, to) = (gray(self.tools.fg), gray(self.tools.bg));
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let len2 = (dx * dx + dy * dy).max(1e-6);
+            let radial = self.tools.radial;
+            let selection = self.editor.doc.selection.clone();
+            let result = Mask::from_fn(mask.width(), mask.height(), mask.fill(), |x, y| {
+                let point = to_doc.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
+                let (px, py) = (point.x - a.0, point.y - a.1);
+                let t = if radial {
+                    (px * px + py * py).sqrt() / len2.sqrt()
+                } else {
+                    (px * dx + py * dy) / len2
+                }
+                .clamp(0.0, 1.0);
+                let coverage = selection.as_ref().map_or(1.0, |selection| {
+                    if point.x < 0.0
+                        || point.y < 0.0
+                        || point.x >= selection.width() as f64
+                        || point.y >= selection.height() as f64
+                    {
+                        0.0
+                    } else {
+                        selection.get(point.x as u32, point.y as u32) as f64 / 255.0
+                    }
+                });
+                let old = mask.get(x, y) as f64;
+                (old + ((from + (to - from) * t) - old) * coverage)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            });
+            self.execute(
+                Command::SetMask {
+                    id,
+                    mask: Some(Arc::new(result)),
+                },
+                cx,
+            );
+            return;
+        }
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let (c0, c1) = (premul(self.tools.fg), premul(self.tools.bg));
         let radial = self.tools.radial;
@@ -3102,6 +3185,7 @@ impl EditorView {
                     v.push(
                         self.mode_chip_tip(id, t, help, r, reveal, p, cx, |e, r, cx| {
                             e.tools.mask_reveal = r;
+                            e.tools.fg = if r { [255; 4] } else { [0, 0, 0, 255] };
                             cx.notify();
                         }),
                     );
@@ -3551,7 +3635,9 @@ impl EditorView {
                     _ if self.tools.paint == PaintKind::Gradient => {
                         "drag from one colour to the other"
                     }
-                    _ if self.tools.mask_edit => "painting the mask: brush reveals, eraser hides",
+                    _ if self.tools.mask_edit => {
+                        "painting the mask: white reveals, black hides, gray partially reveals"
+                    }
                     _ => "alt-click picks a colour",
                 };
                 if matches!(self.tool, Tool::Clone | Tool::Heal) || self.tools.mask_edit {

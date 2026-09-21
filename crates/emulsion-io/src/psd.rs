@@ -438,6 +438,11 @@ pub fn needs_appearance_fallback(doc: &Document) -> bool {
 }
 
 fn layer_for(doc: &Document, n: &Node) -> Layer {
+    // PSD stores a rasterized mask in layer space. Bake its affine placement
+    // for this export while retaining disabled-mask data in its own channel.
+    let mut mask_node = n.clone();
+    mask_node.mask_enabled = true;
+    let export_mask = Document::composite_mask(&mask_node);
     let mut l = Layer {
         blend_mode: Some(blend_out(n.blend)),
         opacity: Some(n.opacity as f64),
@@ -455,7 +460,7 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
                 .map(|c| layer_for(doc, c))
                 .collect();
             l.children = Some(kids);
-            if let Some(mask) = &n.mask {
+            if let Some(mask) = &export_mask {
                 l.additional_info.mask = Some(mask_out(mask, 0.0, 0.0, !n.mask_enabled));
             }
         }
@@ -477,7 +482,7 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
                 height: raster.height(),
                 data: raster.to_srgba8(),
             });
-            if let Some(m) = &n.mask {
+            if let Some(m) = &export_mask {
                 let (mw, mh) = (m.width(), m.height());
                 let bytes: Vec<u8> = m.read_rect(m.bounds());
                 let rgba: Vec<u8> = bytes.iter().flat_map(|v| [*v, *v, *v, 255]).collect();

@@ -451,6 +451,9 @@ fn key_for(n: &Node) -> Option<Key> {
         ph = ph.rotate_left(13) ^ v.to_bits();
     }
     ph ^= (placement.flip_x as u64) << 1 | placement.flip_y as u64 | (n.mask_enabled as u64) << 2;
+    for value in n.mask_transform {
+        ph = ph.rotate_left(13) ^ value.to_bits();
+    }
     Some((
         content,
         mask,

@@ -18,6 +18,7 @@ mod filters;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
+mod layer_links_ui;
 mod layer_menu;
 mod layer_selection;
 mod layers_panel;
@@ -2759,6 +2760,7 @@ impl EditorView {
                 .bordered(false)
                 .into_any_element(),
             _ => div()
+                .id(("layer-name", id))
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
@@ -2767,6 +2769,13 @@ impl EditorView {
                 .text_size(px(12.5))
                 .when(!n.visible, |d| d.opacity(0.45))
                 .child(n.name.clone())
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    if e.click_count() >= 2 {
+                        cx.stop_propagation();
+                        this.select_layer_row(id, false, false, cx);
+                        this.start_rename(id, window, cx);
+                    }
+                }))
                 .into_any_element(),
         };
         let accent = p.accent;
@@ -2799,7 +2808,7 @@ impl EditorView {
                     cx,
                 );
                 if e.click_count() >= 2 {
-                    this.start_rename(id, window, cx);
+                    this.open_blending_options(id, cx);
                 }
             }))
             .on_drag(dragged, |d, _, _, cx| cx.new(|_| d.clone()))
@@ -2815,9 +2824,13 @@ impl EditorView {
             .drag_over::<DraggedNode>(move |s, _, _, _| {
                 s.border_color(accent).bg(accent.opacity(0.12))
             })
-            .on_drop(
-                cx.listener(move |this, d: &DraggedNode, _, cx| this.drop_on(d.id, Some(id), cx)),
-            )
+            .on_drop(cx.listener(move |this, d: &DraggedNode, window, cx| {
+                if window.modifiers().alt {
+                    this.transfer_layer_style(d.id, id, true, cx);
+                } else {
+                    this.drop_on(d.id, Some(id), cx);
+                }
+            }))
             .child(
                 div()
                     .id(("layer-color", id))
@@ -2858,6 +2871,33 @@ impl EditorView {
                     .child(chip_el)
                     .test_support(),
             )
+            .when(n.mask.is_some(), |row| {
+                use gpui_kit::component::button::{Button, ButtonVariants};
+                use gpui_kit::component::{Disableable, Sizable};
+                let linked = n.mask_linked;
+                row.child(
+                    Button::new(("mask-link", id))
+                        .label(if linked { "↔" } else { "·" })
+                        .xsmall()
+                        .ghost()
+                        .disabled(self.editor.doc.locked_ancestor(id).is_some())
+                        .tooltip(if linked {
+                            "Unlink mask from layer"
+                        } else {
+                            "Link mask to layer"
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.execute(
+                                Command::SetMaskLinked {
+                                    id,
+                                    linked: !linked,
+                                },
+                                cx,
+                            );
+                        })),
+                )
+            })
             .children(mask_thumb.map(|thumb| {
                 div()
                     .id(("layer-mask", id))
@@ -2883,6 +2923,20 @@ impl EditorView {
                     .test_support()
             }))
             .child(name_el)
+            .when(self.layer_is_linked(id), |row| {
+                row.child(
+                    div()
+                        .id(("layer-link-state", id))
+                        .text_xs()
+                        .child("↔")
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(
+                                "Linked layers move and transform together",
+                            )
+                            .build(window, cx)
+                        }),
+                )
+            })
             .children(ai_badge)
             .child(
                 mono(meta, 9.5, meta_fg)

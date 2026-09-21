@@ -83,6 +83,9 @@ mod layer_panel_workflow_tests;
 #[path = "layer_menu_tests.rs"]
 mod layer_menu_tests;
 
+#[path = "mask_style_workflow_tests.rs"]
+mod mask_style_workflow_tests;
+
 #[path = "filter_gesture_tests.rs"]
 mod filter_gesture_tests;
 

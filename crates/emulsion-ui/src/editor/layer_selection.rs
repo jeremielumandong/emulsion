@@ -125,14 +125,8 @@ impl EditorView {
 
     /// Selected parents already include their descendants for structural edits.
     pub(crate) fn selected_layer_roots(&self) -> Vec<NodeId> {
-        let ids = self.selected_layer_ids();
-        ids.iter()
-            .copied()
-            .filter(|id| {
-                !ids.iter()
-                    .any(|parent| parent != id && self.editor.doc.is_ancestor(*parent, *id))
-            })
-            .collect()
+        emulsion_core::layer_links::selected_roots(&self.editor.doc, &self.selected_layer_ids())
+            .unwrap_or_default()
     }
 
     /// Validate the whole operation before changing anything, including inside

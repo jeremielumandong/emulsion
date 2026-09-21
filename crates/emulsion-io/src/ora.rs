@@ -80,6 +80,8 @@ struct MNode {
     locks: emulsion_core::node::LayerLocks,
     #[serde(default)]
     color_label: emulsion_core::node::LayerColor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link_group: Option<NodeId>,
     opacity: f32,
     blend: BlendMode,
     #[serde(default)]
@@ -89,6 +91,10 @@ struct MNode {
     #[serde(default = "default_mask_fill")]
     mask_fill: u8,
     mask_enabled: bool,
+    #[serde(default = "emulsion_core::node::default_mask_linked")]
+    mask_linked: bool,
+    #[serde(default = "emulsion_core::node::default_mask_transform")]
+    mask_transform: [f64; 6],
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     styles: Vec<emulsion_core::styles::LayerStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -358,6 +364,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             locked: n.locked,
             locks: n.locks,
             color_label: n.color_label,
+            link_group: n.link_group,
             opacity: n.opacity,
             blend: n.blend,
             blending: n.blending,
@@ -365,6 +372,8 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             mask,
             mask_fill: n.mask.as_ref().map_or(255, |m| m.fill()),
             mask_enabled: n.mask_enabled,
+            mask_linked: n.mask_linked,
+            mask_transform: n.mask_transform,
             styles: n.styles.clone(),
             origin: n.origin.clone(),
             kind,
@@ -960,12 +969,15 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             locked: n.locked,
             locks: n.locks,
             color_label: n.color_label,
+            link_group: n.link_group,
             opacity: n.opacity,
             blend: n.blend,
             blending: n.blending,
             clip_to: n.clip_to,
             mask,
             mask_enabled: n.mask_enabled,
+            mask_linked: n.mask_linked,
+            mask_transform: n.mask_transform,
             styles: n.styles,
             origin: n.origin,
             kind,
@@ -1285,6 +1297,96 @@ mod tests {
             }
         }
         std::fs::write(path, dst.finish().unwrap().into_inner()).unwrap();
+    }
+
+    #[test]
+    fn native_layer_links_and_independent_mask_transform_roundtrip() {
+        let mut doc = Document::new(12, 10);
+        for id in 1..=2 {
+            let mut node = Node::raster(
+                id,
+                "Linked",
+                Arc::new(Raster::solid(4, 4, [1.; 4])),
+                Placement::default(),
+            );
+            node.link_group = Some(19);
+            node.mask = Some(Arc::new(Mask::from_fn(4, 4, 0, |x, _| {
+                if x < 2 { 255 } else { 0 }
+            })));
+            node.mask_linked = false;
+            node.mask_transform = [1., 0., 0.25, 1., 2., 1.];
+            doc.nodes.push(node);
+        }
+        doc.next_id = 3;
+        let editor = emulsion_core::Editor::new(doc.clone(), None);
+        let path = tmp("layer-links-mask-affine.ora");
+        write_full(&doc, Some(&editor.graph), &path).unwrap();
+        let reopened = read_full(&path).unwrap();
+        assert!(reopened.history_error.is_none());
+        assert_eq!(reopened.graph.as_ref().unwrap().len(), editor.graph.len());
+        assert_eq!(reopened.doc.nodes.len(), doc.nodes.len());
+        for (actual, expected) in reopened.doc.nodes.iter().zip(&doc.nodes) {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(actual.link_group, expected.link_group);
+            assert_eq!(actual.mask_linked, expected.mask_linked);
+            assert_eq!(actual.mask_enabled, expected.mask_enabled);
+            assert_eq!(actual.mask_transform, expected.mask_transform);
+            let (
+                NodeKind::Raster {
+                    raster: a,
+                    placement: ap,
+                },
+                NodeKind::Raster {
+                    raster: b,
+                    placement: bp,
+                },
+            ) = (&actual.kind, &expected.kind)
+            else {
+                panic!("raster layers");
+            };
+            assert_eq!(ap, bp);
+            for y in 0..4 {
+                for x in 0..4 {
+                    assert_eq!(a.get(x, y), b.get(x, y));
+                    assert_eq!(
+                        actual.mask.as_ref().unwrap().get(x, y),
+                        expected.mask.as_ref().unwrap().get(x, y)
+                    );
+                }
+            }
+        }
+        // Plain native loading also retains metadata without the history sidecar.
+        write_full(&doc, None, &path).unwrap();
+        let plain = read_full(&path).unwrap();
+        assert_eq!(
+            plain.doc.nodes[0].mask_transform,
+            doc.nodes[0].mask_transform
+        );
+        assert_eq!(plain.doc.nodes[0].link_group, Some(19));
+        assert!(!plain.doc.nodes[0].mask_linked);
+        assert_eq!(
+            flatten(&plain.doc.composite_tree(), 0).to_srgba8(),
+            flatten(&doc.composite_tree(), 0).to_srgba8()
+        );
+        rewrite_archive(&path, |name, bytes| {
+            if name != MANIFEST {
+                return Some(bytes);
+            }
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            for node in value["nodes"].as_array_mut().unwrap() {
+                let node = node.as_object_mut().unwrap();
+                node.remove("link_group");
+                node.remove("mask_linked");
+                node.remove("mask_transform");
+            }
+            Some(serde_json::to_vec(&value).unwrap())
+        });
+        let legacy = read_full(&path).unwrap();
+        assert!(legacy.doc.nodes.iter().all(|n| n.link_group.is_none()
+            && n.mask_linked
+            && n.mask_transform == emulsion_core::node::default_mask_transform()));
+        let _ = std::fs::remove_file(path);
     }
 
     fn masked_smart_document() -> Document {

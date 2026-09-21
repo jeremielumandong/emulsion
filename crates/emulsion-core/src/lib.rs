@@ -8,10 +8,12 @@ pub mod document;
 pub mod geometry;
 pub mod graph;
 pub mod history;
+pub mod layer_links;
 pub mod node;
 pub mod smart;
 pub mod styles;
 pub mod text;
+pub mod transform;
 
 pub use command::{Command, CommandError, Dirty};
 pub use document::{Document, DocumentError, PanelRow};
@@ -21,3 +23,4 @@ pub use node::{Node, NodeId, NodeKind};
 pub use emulsion_raster as raster;
 
 mod layer_locks;
+mod layer_mask;

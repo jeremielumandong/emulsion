@@ -1263,6 +1263,24 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MergeVisible, _, cx| {
                 this.with_editor(cx, |e, cx| e.merge_layers(true, cx))
             }))
+            .on_action(cx.listener(|this, _: &FlattenImage, _, cx| {
+                this.with_editor(cx, |e, cx| e.flatten_image(cx))
+            }))
+            .on_action(cx.listener(|this, _: &LinkLayers, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_layer_links(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &UnlinkLayers, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_layer_links(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &CopyLayerStyle, _, cx| {
+                this.with_editor(cx, |e, cx| e.copy_layer_style(cx))
+            }))
+            .on_action(cx.listener(|this, _: &PasteLayerStyle, _, cx| {
+                this.with_editor(cx, |e, cx| e.paste_layer_style(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ApplyLayerMask, _, cx| {
+                this.with_editor(cx, |e, cx| e.apply_layer_mask(cx))
+            }))
             .on_action(cx.listener(|this, _: &MoveNodeUp, _, cx| {
                 this.with_editor(cx, |e, cx| e.shift_selected(true, cx))
             }))

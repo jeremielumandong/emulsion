@@ -179,6 +179,9 @@ fn escape_transform_restores_placement_and_preserves_committed_history(cx: &mut 
             cx,
         );
         v.drag = Some(Drag::Transform(super::super::transform::Grab {
+            collective: false,
+            current: Placement::default(),
+            mask: None,
             id,
             start: Placement::default(),
             handle: super::super::transform::Handle::Corner(0),

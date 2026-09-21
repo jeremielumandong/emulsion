@@ -167,6 +167,13 @@ impl PartialEq for NodeKind {
     }
 }
 
+pub fn default_mask_linked() -> bool {
+    true
+}
+pub fn default_mask_transform() -> [f64; 6] {
+    [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+}
+
 #[derive(Clone, Debug)]
 pub struct Node {
     pub id: NodeId,
@@ -176,6 +183,8 @@ pub struct Node {
     pub locked: bool,
     pub locks: LayerLocks,
     pub color_label: LayerColor,
+    /// Persistent movement relationship, independent of group hierarchy.
+    pub link_group: Option<NodeId>,
     pub opacity: f32,
     pub blend: BlendMode,
     pub blending: emulsion_raster::composite::BlendingOptions,
@@ -185,6 +194,9 @@ pub struct Node {
     /// moves with it; otherwise it is in document space.
     pub mask: Option<Arc<Mask>>,
     pub mask_enabled: bool,
+    pub mask_linked: bool,
+    /// Mask-source to layer-local affine, in DAffine2 column-array order.
+    pub mask_transform: [f64; 6],
     /// Effects drawn from the node's alpha (shadows, glow, stroke, overlays).
     pub styles: Vec<crate::styles::LayerStyle>,
     /// Provenance for content a model produced: `ai:<model id>`.
@@ -201,6 +213,7 @@ impl PartialEq for Node {
             && self.locked == o.locked
             && self.locks == o.locks
             && self.color_label == o.color_label
+            && self.link_group == o.link_group
             && self.opacity == o.opacity
             && self.blend == o.blend
             && self.blending == o.blending
@@ -211,6 +224,8 @@ impl PartialEq for Node {
                 _ => false,
             }
             && self.mask_enabled == o.mask_enabled
+            && self.mask_linked == o.mask_linked
+            && self.mask_transform == o.mask_transform
             && self.styles == o.styles
             && self.origin == o.origin
             && self.kind == o.kind
@@ -232,12 +247,15 @@ impl Node {
             locked: false,
             locks: LayerLocks::default(),
             color_label: LayerColor::None,
+            link_group: None,
             opacity: 1.0,
             blend,
             blending: Default::default(),
             clip_to: None,
             mask: None,
             mask_enabled: true,
+            mask_linked: true,
+            mask_transform: default_mask_transform(),
             styles: Vec::new(),
             origin: None,
             kind,

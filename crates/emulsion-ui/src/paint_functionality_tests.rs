@@ -230,7 +230,7 @@ fn mask_hide_and_reveal_change_mask_without_replacing_layer_pixels(cx: &mut Test
                 hardness: 1.,
                 ..Brush::default()
             };
-            e.tools.mask_reveal = false;
+            e.set_fg([0, 0, 0, 255], cx);
         })
     });
     cx.run_until_parked();
@@ -242,7 +242,7 @@ fn mask_hide_and_reveal_change_mask_without_replacing_layer_pixels(cx: &mut Test
         assert_eq!(mask.get(180, 96), 255);
     });
     assert!(Arc::ptr_eq(&original, &pixels(&e, cx)));
-    cx.update(|_, cx| e.update(cx, |e, _| e.tools.mask_reveal = true));
+    cx.update(|_, cx| e.update(cx, |e, cx| e.set_fg([255; 4], cx)));
     click(&e, cx, (100., 96.));
     cx.update(|_, cx| {
         e.update(cx, |e, cx| {
