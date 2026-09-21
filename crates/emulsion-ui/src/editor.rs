@@ -107,6 +107,8 @@ fn tool_help(tool: Tool) -> &'static str {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum SliderKey {
     Opacity(NodeId),
+    FillOpacity(NodeId),
+    BlendRange(NodeId, bool, usize),
     Param(NodeId, &'static str),
     Scale(NodeId),
     Rotation(NodeId),
@@ -162,6 +164,8 @@ impl SliderKey {
         matches!(
             self,
             SliderKey::Opacity(_)
+                | SliderKey::FillOpacity(_)
+                | SliderKey::BlendRange(..)
                 | SliderKey::Param(..)
                 | SliderKey::Scale(_)
                 | SliderKey::Rotation(_)
@@ -322,6 +326,7 @@ pub struct EditorView {
     pub(crate) renaming: Option<(NodeId, Entity<InputState>, Subscription)>,
     menu: Option<Menu>,
     pub(crate) sidebar_tab: SidebarTab,
+    pub(crate) brush_settings_section: tools::BrushSettingsSection,
     pub(crate) dock_tab: DockTab,
     sidebar_menu: bool,
     tracks: HashMap<SliderKey, TrackBounds>,
@@ -425,6 +430,7 @@ impl EditorView {
             renaming: None,
             menu: None,
             sidebar_tab: SidebarTab::History,
+            brush_settings_section: Default::default(),
             dock_tab: DockTab::Layers,
             sidebar_menu: false,
             tracks: HashMap::new(),
@@ -527,6 +533,7 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
+        self.close_text_field(cx);
         self.tools.transform_lift = None;
         self.invalidate_pending_edits();
         self.drag = None;
@@ -537,6 +544,7 @@ impl EditorView {
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
+        self.close_text_field(cx);
         self.tools.transform_lift = None;
         self.invalidate_pending_edits();
         self.drag = None;
@@ -547,6 +555,7 @@ impl EditorView {
     }
 
     fn undo_to(&mut self, steps: usize, cx: &mut Context<Self>) {
+        self.close_text_field(cx);
         self.tools.transform_lift = None;
         self.invalidate_pending_edits();
         self.drag = None;
@@ -1106,6 +1115,19 @@ impl EditorView {
         if e.button != MouseButton::Left {
             return;
         }
+        if self.tool == Tool::Move
+            && e.click_count >= 2
+            && let Some(d) = self.doc_point(e.position)
+            && self.try_edit_text_at(d, e.click_count, window, cx)
+        {
+            return;
+        }
+        if self.tool == Tool::Type {
+            if let Some(d) = self.doc_point(e.position) {
+                self.type_pointer_down(d, e.click_count, e.modifiers.shift, window, cx);
+            }
+            return;
+        }
         if self.tool != Tool::Move {
             self.tool_down(e, window, cx);
             return;
@@ -1120,6 +1142,9 @@ impl EditorView {
     }
 
     fn drag_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.text_pointer_move(pos, cx) {
+            return;
+        }
         let inside = self.canvas_bounds().is_some_and(|b| b.contains(&pos));
         let wants_pointer = matches!(
             self.tool,
@@ -1245,6 +1270,9 @@ impl EditorView {
     }
 
     fn drag_end(&mut self, cx: &mut Context<Self>) {
+        if let Some(field) = &mut self.type_tool.field {
+            field.selecting = false;
+        }
         self.snap_lines.clear();
         match self.drag.take() {
             None => return,
@@ -1317,8 +1345,11 @@ impl EditorView {
         let track = self.tracks.entry(key).or_default().clone();
         let (min, max, step) = spec;
         if key.edits_document() {
+            self.close_text_field(cx);
             let name = match key {
                 SliderKey::Opacity(_) => "Opacity".to_string(),
+                SliderKey::FillOpacity(_) => "Fill opacity".into(),
+                SliderKey::BlendRange(..) => "Blend If".into(),
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
                 SliderKey::PenWidth => "Stroke width".into(),
@@ -1540,6 +1571,12 @@ impl EditorView {
             SliderKey::Curve(_) => {}
             SliderKey::Filter(id, idx, key) => self.set_filter_param(id, idx, key, v, false, cx),
             SliderKey::Style(id, idx, key) => self.set_style_param(id, idx, key, v, cx),
+            SliderKey::FillOpacity(id) => {
+                self.set_blending(id, |options| options.fill_opacity = v / 100., cx)
+            }
+            SliderKey::BlendRange(id, backdrop, index) => {
+                self.set_blend_range(id, backdrop, index, v / 255., cx)
+            }
             SliderKey::Tolerance => {
                 self.tools.tolerance = v as u8;
                 cx.notify();
@@ -1769,12 +1806,6 @@ impl EditorView {
     fn context_bar(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let tool = self.active_tool_name();
         let options = self.tool_options(p, cx);
-        let advanced = crate::app_state::settings(cx).advanced_tools;
-        let more = if advanced {
-            self.tool_options_advanced(p, cx)
-        } else {
-            Vec::new()
-        };
         let row = |p: &Palette| {
             div()
                 .flex()
@@ -1788,15 +1819,6 @@ impl EditorView {
                 .text_size(px(10.5))
                 .text_color(p.muted)
         };
-        let second = (!more.is_empty()).then(|| {
-            row(p)
-                .py(px(6.))
-                .bg(p.soft_bg.opacity(0.5))
-                .border_b_1()
-                .border_color(p.line)
-                .child(div().text_color(p.muted).child("ADVANCED"))
-                .children(more)
-        });
         let compact = crate::app_state::settings(cx).compact_chrome;
         let first = row(p)
             .py(if compact { px(4.) } else { px(6.) })
@@ -1804,15 +1826,7 @@ impl EditorView {
             .border_color(p.line)
             .child(div().text_color(p.ink).child(tool))
             .children(options)
-            .child(div().flex_1().min_w(px(8.)))
-            .child(crate::widgets::tip(
-                chip("advanced", "More", advanced, p).on_click(cx.listener(
-                    move |_, _, _, cx| {
-                        crate::app_state::update_settings(cx, |s| s.advanced_tools = !advanced);
-                    },
-                )),
-                "Power-user controls: a second row of tool options (dynamics, symmetry, guides) and the rarer layer properties",
-            ));
+            .child(div().flex_1().min_w(px(8.)));
         let font_picker = self.font_picker(p, cx);
         div()
             .id("editor-tool-options")
@@ -1822,7 +1836,6 @@ impl EditorView {
             .flex_col()
             .flex_none()
             .child(first)
-            .children(second)
             .children(font_picker)
     }
 
@@ -1869,7 +1882,7 @@ impl EditorView {
         let bounds_cell = self.canvas_bounds.clone();
         let fit_pending = self.fit_pending;
         let weak = cx.entity().downgrade();
-        let (w1, w2, w3) = (weak.clone(), weak.clone(), weak.clone());
+        let (w1, w2, w3, w4) = (weak.clone(), weak.clone(), weak.clone(), weak.clone());
         let cursor = match (&self.drag, self.space_held) {
             (Some(Drag::Pan { .. } | Drag::RotateView { .. }), _) => CursorStyle::ClosedHand,
             (Some(Drag::Guide { vertical: true, .. }), _) => CursorStyle::ResizeLeftRight,
@@ -1893,7 +1906,23 @@ impl EditorView {
             .min_h_0()
             .overflow_hidden()
             .track_focus(&self.canvas_focus)
-            .key_context("Canvas")
+            .key_context(if self.type_tool.field.is_some() {
+                "CanvasText"
+            } else {
+                "Canvas"
+            })
+            .when(self.type_tool.field.is_some(), |d| {
+                d.on_action(cx.listener(|this, _: &crate::actions::Undo, _, cx| {
+                    this.close_text_field(cx);
+                    this.undo(cx);
+                }))
+                .on_action(cx.listener(
+                    |this, _: &crate::actions::Redo, _, cx| {
+                        this.close_text_field(cx);
+                        this.redo(cx);
+                    },
+                ))
+            })
             .on_action(
                 cx.listener(|this, _: &crate::actions::RepeatFilter, _, cx| {
                     this.repeat_last_filter(cx)
@@ -1976,7 +2005,14 @@ impl EditorView {
                     cx.notify();
                 }
             }))
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if this.text_key_down(e, window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+                if this.type_tool.field.is_some() {
+                    return;
+                }
                 if e.keystroke.key == "space" && !this.space_held {
                     this.space_held = true;
                     cx.notify();
@@ -2028,6 +2064,11 @@ impl EditorView {
                             viewport::paint(plan, &scene2, &cache2, window, cx);
                         }
                         tools::paint_overlay(&overlay, &view_for_overlay, bounds, accent, window);
+                        if let Some(editor) = w4.upgrade() {
+                            editor
+                                .read(cx)
+                                .paint_text_editing(bounds, window, cx, editor.clone());
+                        }
                         // Drags continue outside the canvas, so listen window-wide.
                         window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
                             if phase == DispatchPhase::Bubble {
@@ -2587,7 +2628,11 @@ impl EditorView {
                 } else {
                     if !matches!(
                         this.sidebar_tab,
-                        SidebarTab::Reference | SidebarTab::History
+                        SidebarTab::Reference
+                            | SidebarTab::History
+                            | SidebarTab::BrushSettings
+                            | SidebarTab::BrushPresets
+                            | SidebarTab::BlendingOptions
                     ) {
                         this.select_sidebar(SidebarTab::Properties, cx);
                     }
@@ -2642,7 +2687,21 @@ impl EditorView {
                     let menu = editor.update(cx, |editor, cx| {
                         editor.clipboard_menu(menu, focus.clone(), cx)
                     });
-                    clipboard::transform_menu(menu, &editor, focus.clone(), window, cx)
+                    let menu = clipboard::transform_menu(menu, &editor, focus.clone(), window, cx);
+                    let target = editor.downgrade();
+                    menu.separator().item(
+                        gpui_kit::component::menu::PopupMenuItem::new("Blending Options…")
+                            .on_click(move |_, window, cx| {
+                                target
+                                    .update(cx, |this, cx| {
+                                        this.open_blending_options(id, cx);
+                                        cx.defer_in(window, |this, window, cx| {
+                                            window.focus(&this.panel_focus, cx);
+                                        });
+                                    })
+                                    .ok();
+                            }),
+                    )
                 }
             })
     }
@@ -2977,8 +3036,8 @@ impl EditorView {
             }
         }
 
-        // The rarer controls, behind the same "advanced" switch as the
-        // options bar's second row: layer styles, Smart Object conversion,
+        // The rarer layer controls, behind the inspector's "advanced" switch.
+        // These include layer styles, Smart Object conversion,
         // rotating the object by an angle, the model that made it.
         let styled = matches!(
             n.kind,
@@ -3213,7 +3272,6 @@ impl Render for EditorView {
         let ask = self.ask_bar(&p, cx);
         let size_panel = self.size_panel_view(&p, cx);
         let export_panel = self.export_panel_view(&p, cx);
-        let presets = self.presets_view(&p, cx);
         let dock = self.assistant_dock(&p, cx);
         let panel = self.node_panel(&p, window, cx);
         div()
@@ -3254,7 +3312,6 @@ impl Render for EditorView {
                             .overflow_hidden()
                             .children(size_panel)
                             .children(export_panel)
-                            .children(presets)
                             .children(ask)
                             .child(canvas)
                             .children(dock),

@@ -41,6 +41,18 @@ mod transform_workflow_tests;
 #[path = "context_menu_tests.rs"]
 mod context_menu_tests;
 
+#[path = "blending_workflow_tests.rs"]
+mod blending_workflow_tests;
+
+#[path = "versioning_workflow_tests.rs"]
+mod versioning_workflow_tests;
+
+#[path = "text_color_workflow_tests.rs"]
+mod text_color_workflow_tests;
+
+#[path = "on_canvas_text_tests.rs"]
+mod on_canvas_text_tests;
+
 #[path = "pen_workflow_tests.rs"]
 mod pen_workflow_tests;
 
@@ -2002,7 +2014,7 @@ mod tools {
         });
         assert_eq!(text, "Hi");
         assert_eq!(name, "Hi", "layer named after its first line");
-        cx.simulate_keystrokes("enter");
+        cx.simulate_keystrokes("ctrl-enter");
         cx.run_until_parked();
         // Bold via the options bar applies to the selected layer.
         cx.update(|_, cx| e.update(cx, |e, cx| e.restyle_text(|s| s.bold = true, cx)));

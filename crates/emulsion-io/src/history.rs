@@ -8,7 +8,7 @@
 //! ```
 //!
 //! Commits share pixels the way they do in memory: each distinct tile is
-//! stored once however many commits use it, and each distinct plane
+//! stored once however many commits or the current working copy use it, and each distinct plane
 //! (raster, mask, selection) is listed once and referenced by index. On
 //! reading, shared entries become shared buffers again, so unchanged nodes
 //! still compare equal across commits and merges stay precise.
@@ -78,9 +78,18 @@ struct HFile {
     /// Hash of the file's emulsion.json when the live document is the head
     /// tip, so a reader can take the exact tip instead of re-decoded PNGs.
     live: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    working: Option<HWorking>,
     rasters: Vec<HPlane<[u16; 4]>>,
     masks: Vec<HPlane<u8>>,
     commits: Vec<HCommit>,
+}
+
+/// The current saved work, independent of deliberately created versions.
+#[derive(Serialize, Deserialize)]
+struct HWorking {
+    live: String,
+    doc: HDoc,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -134,6 +143,8 @@ struct HNode {
     locked: bool,
     opacity: f32,
     blend: BlendMode,
+    #[serde(default)]
+    blending: emulsion_raster::composite::BlendingOptions,
     clip_to: Option<NodeId>,
     mask: Option<u32>,
     mask_enabled: bool,
@@ -168,6 +179,8 @@ enum HKind {
         spec: emulsion_core::text::TextSpec,
     },
     Smart {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        editable: Option<emulsion_core::node::SmartEditable>,
         source: u32,
         cache: u32,
         offset: (i32, i32),
@@ -247,71 +260,89 @@ pub(crate) fn fingerprint(bytes: &[u8]) -> String {
 }
 
 /// Encode `graph`. `live` is the manifest fingerprint when the saved
-/// document equals the head branch's tip.
+/// document equals the head branch's tip. Otherwise `working` preserves the
+/// exact current document and its own fingerprint without creating a commit.
 pub(crate) fn encode(
     graph: &Graph,
     live: Option<String>,
+    working: Option<(&Document, String)>,
     paths: &mut PathPool,
 ) -> Result<Vec<(String, Vec<u8>)>> {
     let mut rasters = Pool::<[u16; 4]>::new();
     let mut masks = Pool::<u8>::new();
+    let mut encode_doc = |d: &Document| -> Result<HDoc> {
+        let nodes = d
+            .nodes
+            .iter()
+            .map(|n| {
+                Ok(HNode {
+                    id: n.id,
+                    name: n.name.clone(),
+                    parent: n.parent,
+                    visible: n.visible,
+                    locked: n.locked,
+                    opacity: n.opacity,
+                    blend: n.blend,
+                    blending: n.blending,
+                    clip_to: n.clip_to,
+                    mask: n.mask.as_ref().map(|m| masks.add(m)),
+                    mask_enabled: n.mask_enabled,
+                    styles: n.styles.clone(),
+                    origin: n.origin.clone(),
+                    kind: match &n.kind {
+                        NodeKind::Raster { raster, placement } => HKind::Raster {
+                            raster: rasters.add(raster),
+                            placement: *placement,
+                        },
+                        NodeKind::Group { collapsed } => HKind::Group {
+                            collapsed: *collapsed,
+                        },
+                        NodeKind::Adjust(a) => HKind::Adjust {
+                            adjustment: a.clone(),
+                        },
+                        NodeKind::Fill { rgba } => HKind::Fill { rgba: *rgba },
+                        NodeKind::Smart {
+                            editable,
+                            source,
+                            filters,
+                            placement,
+                            cache,
+                            offset,
+                        } => HKind::Smart {
+                            editable: editable.clone(),
+                            source: rasters.add(source),
+                            cache: rasters.add(cache),
+                            offset: *offset,
+                            filters: filters.clone(),
+                            placement: *placement,
+                        },
+                        NodeKind::Path { path, style, .. } => HKind::Path {
+                            path: paths.add(path)?,
+                            style: *style,
+                        },
+                        NodeKind::Text { spec, .. } => HKind::Text {
+                            spec: (**spec).clone(),
+                        },
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(HDoc {
+            width: d.width,
+            height: d.height,
+            resolution: d.resolution,
+            source_depth: d.source_depth,
+            blend_space: d.blend_space,
+            next_id: d.next_id,
+            selection: d.selection.as_ref().map(|s| masks.add(s)),
+            nodes,
+            guides: d.guides.clone(),
+            info: d.info.clone(),
+        })
+    };
     let commits = graph
         .commits()
         .map(|c| {
-            let d = &c.doc;
-            let nodes = d
-                .nodes
-                .iter()
-                .map(|n| {
-                    Ok(HNode {
-                        id: n.id,
-                        name: n.name.clone(),
-                        parent: n.parent,
-                        visible: n.visible,
-                        locked: n.locked,
-                        opacity: n.opacity,
-                        blend: n.blend,
-                        clip_to: n.clip_to,
-                        mask: n.mask.as_ref().map(|m| masks.add(m)),
-                        mask_enabled: n.mask_enabled,
-                        styles: n.styles.clone(),
-                        origin: n.origin.clone(),
-                        kind: match &n.kind {
-                            NodeKind::Raster { raster, placement } => HKind::Raster {
-                                raster: rasters.add(raster),
-                                placement: *placement,
-                            },
-                            NodeKind::Group { collapsed } => HKind::Group {
-                                collapsed: *collapsed,
-                            },
-                            NodeKind::Adjust(a) => HKind::Adjust {
-                                adjustment: a.clone(),
-                            },
-                            NodeKind::Fill { rgba } => HKind::Fill { rgba: *rgba },
-                            NodeKind::Smart {
-                                source,
-                                filters,
-                                placement,
-                                cache,
-                                offset,
-                            } => HKind::Smart {
-                                source: rasters.add(source),
-                                cache: rasters.add(cache),
-                                offset: *offset,
-                                filters: filters.clone(),
-                                placement: *placement,
-                            },
-                            NodeKind::Path { path, style, .. } => HKind::Path {
-                                path: paths.add(path)?,
-                                style: *style,
-                            },
-                            NodeKind::Text { spec, .. } => HKind::Text {
-                                spec: (**spec).clone(),
-                            },
-                        },
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
             Ok(HCommit {
                 id: c.id,
                 parents: c.parents.clone(),
@@ -319,21 +350,18 @@ pub(crate) fn encode(
                 time: c.time,
                 auto: c.auto,
                 branch: c.branch.clone(),
-                doc: HDoc {
-                    width: d.width,
-                    height: d.height,
-                    resolution: d.resolution,
-                    source_depth: d.source_depth,
-                    blend_space: d.blend_space,
-                    next_id: d.next_id,
-                    selection: d.selection.as_ref().map(|s| masks.add(s)),
-                    nodes,
-                    guides: d.guides.clone(),
-                    info: d.info.clone(),
-                },
+                doc: encode_doc(&c.doc)?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let working = working
+        .map(|(doc, live)| {
+            Ok::<_, IoError>(HWorking {
+                live,
+                doc: encode_doc(doc)?,
+            })
+        })
+        .transpose()?;
     let mut entries = rasters.entries();
     entries.extend(masks.entries());
     let file = HFile {
@@ -354,6 +382,7 @@ pub(crate) fn encode(
             })
             .collect(),
         live,
+        working,
         rasters: rasters.list,
         masks: masks.list,
         commits,
@@ -405,6 +434,7 @@ pub(crate) struct ReadGraph {
     pub graph: Graph,
     /// Manifest fingerprint recorded when the live document was the tip.
     pub live: Option<String>,
+    pub working: Option<(String, Document)>,
 }
 
 /// Read the graph if the file has one. Every reference is checked.
@@ -455,10 +485,8 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         Ok(m)
     };
 
-    let mut commits = Vec::with_capacity(f.commits.len());
     let mut paths = PathReader::default();
-    for c in f.commits {
-        let h = c.doc;
+    let mut decode_doc = |h: HDoc| -> Result<Document> {
         crate::import::check_size(h.width, h.height)?;
         if h.nodes.len() > emulsion_core::document::MAX_NODES {
             return Err(IoError::Manifest("too many nodes".into()));
@@ -486,12 +514,14 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 HKind::Adjust { adjustment } => NodeKind::Adjust(adjustment),
                 HKind::Fill { rgba } => NodeKind::Fill { rgba },
                 HKind::Smart {
+                    editable,
                     source,
                     cache,
                     offset,
                     filters,
                     placement,
                 } => NodeKind::Smart {
+                    editable,
                     source: raster(source)?,
                     cache: raster(cache)?,
                     offset,
@@ -556,6 +586,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 locked: n.locked,
                 opacity: n.opacity,
                 blend: n.blend,
+                blending: n.blending,
                 clip_to: n.clip_to,
                 mask: node_mask,
                 mask_enabled: n.mask_enabled,
@@ -566,6 +597,12 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         }
         let max_id = doc.nodes.iter().map(|n| n.id).max().unwrap_or(0);
         doc.next_id = h.next_id.max(max_id + 1);
+        doc.validate()?;
+        Ok(doc)
+    };
+    let mut commits = Vec::with_capacity(f.commits.len());
+    for c in f.commits {
+        let doc = decode_doc(c.doc)?;
         commits.push(Commit {
             id: c.id,
             parents: c.parents,
@@ -576,6 +613,10 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
             doc,
         });
     }
+    let working = f
+        .working
+        .map(|w| Ok::<_, IoError>((w.live, decode_doc(w.doc)?)))
+        .transpose()?;
     let branches = f
         .branches
         .into_iter()
@@ -594,6 +635,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
     Ok(Some(ReadGraph {
         graph,
         live: f.live,
+        working,
     }))
 }
 
@@ -647,7 +689,7 @@ mod tests {
         let mut paths = PathPool::default();
         // The caller first collects the live document into this same pool.
         let live_path = serde_json::to_value(paths.add(&geometry).unwrap()).unwrap();
-        let mut entries = encode(&original, None, &mut paths).unwrap();
+        let mut entries = encode(&original, None, None, &mut paths).unwrap();
         let manifest: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
         assert_eq!(manifest["version"], HISTORY_VERSION);
         assert!(
@@ -691,7 +733,7 @@ mod tests {
     fn legacy_history_inline_paths_remain_readable_without_blobs() {
         let (original, geometry) = path_graph();
         let mut paths = PathPool::default();
-        let mut entries = encode(&original, None, &mut paths).unwrap();
+        let mut entries = encode(&original, None, None, &mut paths).unwrap();
         let mut manifest: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
         manifest["version"] = serde_json::json!(1);
         for commit in manifest["commits"].as_array_mut().unwrap() {
@@ -712,6 +754,7 @@ mod tests {
         let entries = encode(
             &original,
             Some("live-fingerprint".into()),
+            None,
             &mut PathPool::default(),
         )
         .unwrap();

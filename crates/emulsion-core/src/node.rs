@@ -6,6 +6,14 @@ use std::sync::Arc;
 
 pub type NodeId = u64;
 
+/// Original editable content retained by a Smart Object.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum SmartEditable {
+    Text { spec: Arc<crate::text::TextSpec> },
+    Path { path: Arc<Path>, style: PathStyle },
+}
+
 #[derive(Clone, Debug)]
 pub enum NodeKind {
     /// Pixels, placed non-destructively.
@@ -34,6 +42,7 @@ pub enum NodeKind {
     /// Source pixels with an editable filter stack, rendered into `cache`,
     /// whose top-left sits at `offset` in source pixels (see `smart`).
     Smart {
+        editable: Option<SmartEditable>,
         source: Arc<Raster>,
         filters: Vec<emulsion_filters::Filter>,
         placement: Placement,
@@ -93,17 +102,19 @@ impl PartialEq for NodeKind {
             (
                 NodeKind::Smart {
                     source: a,
+                    editable: ea,
                     filters: fa,
                     placement: pa,
                     ..
                 },
                 NodeKind::Smart {
                     source: b,
+                    editable: eb,
                     filters: fb,
                     placement: pb,
                     ..
                 },
-            ) => Arc::ptr_eq(a, b) && fa == fb && pa == pb,
+            ) => Arc::ptr_eq(a, b) && ea == eb && fa == fb && pa == pb,
             _ => false,
         }
     }
@@ -118,6 +129,7 @@ pub struct Node {
     pub locked: bool,
     pub opacity: f32,
     pub blend: BlendMode,
+    pub blending: emulsion_raster::composite::BlendingOptions,
     /// Clip to the content of a sibling below.
     pub clip_to: Option<NodeId>,
     /// Coverage mask. For Raster and Smart nodes it lives in source pixel space and
@@ -140,6 +152,7 @@ impl PartialEq for Node {
             && self.locked == o.locked
             && self.opacity == o.opacity
             && self.blend == o.blend
+            && self.blending == o.blending
             && self.clip_to == o.clip_to
             && match (&self.mask, &o.mask) {
                 (None, None) => true,
@@ -168,6 +181,7 @@ impl Node {
             locked: false,
             opacity: 1.0,
             blend,
+            blending: Default::default(),
             clip_to: None,
             mask: None,
             mask_enabled: true,
@@ -244,6 +258,7 @@ impl Node {
             id,
             name,
             NodeKind::Smart {
+                editable: None,
                 source,
                 filters,
                 placement,

@@ -1457,6 +1457,7 @@ mod tests {
             let mut node = Node::raster(1, "object", source.clone(), placement);
             if smart {
                 node.kind = NodeKind::Smart {
+                    editable: None,
                     source: source.clone(),
                     cache: source.clone(),
                     offset: (0, 0),

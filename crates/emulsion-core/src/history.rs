@@ -293,6 +293,16 @@ impl Editor {
         self.graph.record(&self.doc, name, auto)
     }
 
+    /// Explicit checkpoint, persisted on the next save without adding an undo step.
+    pub fn create_version(&mut self, name: impl Into<String>) -> Option<CommitId> {
+        let id = self.commit(name, false)?;
+        self.bump();
+        // Undo only restores artwork. It cannot discard the new graph entry,
+        // so returning to a previously saved artwork revision is still modified.
+        self.saved_revision = 0;
+        Some(id)
+    }
+
     /// Whether the document differs from the head branch's newest commit.
     pub fn uncommitted(&self) -> bool {
         self.graph
@@ -490,6 +500,50 @@ mod tests {
         .unwrap()
         .unwrap();
         (Editor::new(d, None), id)
+    }
+
+    #[test]
+    fn explicit_version_preserves_undo_and_marks_saved_artwork_modified() {
+        let (mut e, id) = editor();
+        e.execute(Command::SetOpacity { id, opacity: 0.5 }).unwrap();
+        e.mark_saved(PathBuf::from("sample.ora"), e.revision);
+        assert!(!e.is_modified());
+        let steps = e.history.len();
+        let version = e.create_version("Colour study").unwrap();
+        assert_eq!(e.graph.commit(version).unwrap().name, "Colour study");
+        assert!(e.is_modified());
+        assert_eq!(e.history.len(), steps);
+        assert!(e.create_version("Duplicate").is_none());
+        e.undo();
+        assert_eq!(e.doc.node(id).unwrap().opacity, 1.0);
+        assert!(e.is_modified());
+        assert!(e.graph.commit(version).is_some());
+    }
+
+    #[test]
+    fn blending_options_undo_redo_and_invalid_values() {
+        let (mut e, id) = editor();
+        let options = emulsion_raster::composite::BlendingOptions {
+            fill_opacity: 0.2,
+            channels: [false, true, true],
+            ..Default::default()
+        };
+        e.execute(Command::SetBlendingOptions { id, options })
+            .unwrap();
+        assert_eq!(e.doc.node(id).unwrap().blending, options);
+        e.undo();
+        assert_eq!(e.doc.node(id).unwrap().blending, Default::default());
+        e.redo();
+        assert_eq!(e.doc.node(id).unwrap().blending, options);
+        let bad = emulsion_raster::composite::BlendingOptions {
+            fill_opacity: f32::NAN,
+            ..options
+        };
+        assert!(
+            e.execute(Command::SetBlendingOptions { id, options: bad })
+                .is_err()
+        );
+        assert_eq!(e.doc.node(id).unwrap().blending, options);
     }
 
     #[test]

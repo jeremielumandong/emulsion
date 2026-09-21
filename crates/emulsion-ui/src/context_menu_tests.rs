@@ -10,6 +10,55 @@ fn click_menu_item(cx: &mut VisualTestContext, index: usize) {
 }
 
 #[gpui_kit::test]
+fn layer_context_menu_opens_blending_for_clicked_layer(cx: &mut TestAppContext) {
+    let original = doc(&["First", "Second"], None);
+    let first = original.nodes[0].id;
+    let second = original.nodes[1].id;
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(1200.)));
+    cx.run_until_parked();
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| editor.update(cx, |e, _| e.selected = Some(first)));
+    let position = cx.update(|window, _| window.find(("row", second)).bounds().center());
+    cx.simulate_mouse_down(position, MouseButton::Right, Default::default());
+    cx.run_until_parked();
+    click_menu_item(cx, 11);
+    cx.update(|window, cx| {
+        assert!(window.find("layer-blending-panel").visible());
+        assert_eq!(editor.read(cx).selected, Some(second));
+        assert_eq!(editor.read(cx).editor.doc, original);
+        assert!(editor.read(cx).editor.history.is_empty());
+    });
+    cx.update(|window, cx| window.click(("style-kind", 0usize), cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(
+            editor
+                .read(cx)
+                .editor
+                .doc
+                .node(second)
+                .unwrap()
+                .styles
+                .len(),
+            1
+        );
+        assert!(
+            editor
+                .read(cx)
+                .editor
+                .doc
+                .node(first)
+                .unwrap()
+                .styles
+                .is_empty()
+        );
+        editor.update(cx, |e, cx| e.undo(cx));
+        assert_eq!(editor.read(cx).editor.doc, original);
+    });
+}
+
+#[gpui_kit::test]
 fn context_menu_copies_clicked_layer_and_pastes_into_other_tab(cx: &mut TestAppContext) {
     let mut source_doc = doc(&["First", "Second"], None);
     if let emulsion_core::NodeKind::Raster { raster, .. } = &mut source_doc.nodes[1].kind {
@@ -109,8 +158,7 @@ fn context_menu_cut_is_one_undoable_edit(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         _ = window.draw(cx);
     });
-    cx.simulate_keystrokes("down enter");
-    cx.run_until_parked();
+    click_menu_item(cx, 0);
     cx.update(|_, cx| {
         let e = editor.read(cx);
         assert_eq!(e.editor.history.len(), 1);
@@ -166,7 +214,7 @@ fn context_menu_transform_rotates_and_flips_clicked_layer(cx: &mut TestAppContex
         cx.run_until_parked();
         cx.update(|window, cx| {
             _ = window.draw(cx);
-            window.within("popup-menu").hover(5usize, cx);
+            window.within("popup-menu").hover(9usize, cx);
         });
         cx.run_until_parked();
         cx.simulate_keystrokes("right");

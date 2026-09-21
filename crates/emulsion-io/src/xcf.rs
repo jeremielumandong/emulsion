@@ -124,6 +124,33 @@ pub fn read(path: &Path) -> Result<Document> {
 /// Write `doc` as a layered 8-bit XCF (GIMP 2.10+ format, version 11).
 /// Hidden layers are left out, since the writer cannot mark them hidden.
 pub fn write(doc: &Document, path: &Path) -> Result<()> {
+    // Advanced blending depends on the backdrop. The XCF writer cannot
+    // encode it, so preserve the complete appearance in a named merged layer.
+    let mut appearance;
+    let doc = if doc
+        .nodes
+        .iter()
+        .any(|node| node.blending != Default::default())
+    {
+        appearance = Document::new(doc.width, doc.height);
+        Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Appearance (advanced blending)",
+                Arc::new(emulsion_raster::composite::flatten(
+                    &doc.composite_tree(),
+                    0,
+                )),
+                Placement::default(),
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut appearance)
+        .map_err(|e| IoError::Unsupported(format!("XCF: {e}")))?;
+        &appearance
+    } else {
+        doc
+    };
     use xcf_rs::create::XcfCreator;
     use xcf_rs::data::color::ColorType;
     use xcf_rs::data::layer::Layer;

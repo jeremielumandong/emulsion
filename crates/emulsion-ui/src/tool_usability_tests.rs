@@ -139,3 +139,59 @@ fn leaving_canvas_focus_releases_temporary_pan(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(!cx.update(|_, cx| editor.read(cx).space_held));
 }
+
+#[gpui_kit::test]
+fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, Tool::Brush);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(800.), gpui_kit::px(600.)));
+    cx.update(|_, cx| crate::app_state::update_settings(cx, |s| s.advanced_tools = true));
+    cx.run_until_parked();
+    let before = cx.update(|window, cx| {
+        assert!(window.try_find("advanced").is_none());
+        assert!(window.try_find("brush-settings-panel").is_none());
+        let bar = window.find("editor-tool-options").bounds();
+        assert!(f32::from(bar.size.height) < 100.);
+        let before = (
+            window.find("editor-canvas-column").bounds(),
+            editor.read(cx).editor.doc.clone(),
+        );
+        window.click("brush-settings", cx);
+        before
+    });
+    cx.run_until_parked();
+    for tab in [
+        "brush-settings-tip",
+        "brush-settings-texture",
+        "brush-settings-dynamics",
+        "brush-settings-drawing",
+    ] {
+        cx.update(|window, cx| window.click(tab, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("brush-settings-panel").visible());
+            assert_eq!(window.find("editor-canvas-column").bounds(), before.0);
+            assert_eq!(editor.read(cx).editor.doc, before.1);
+        });
+    }
+    cx.update(|window, cx| window.click("brush-settings-close", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("sidebar-history-content").visible());
+        window.click("presets", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let library = window.find("brush-presets-panel").bounds();
+        let dock = window.find("node-panel").bounds();
+        assert!(library.origin.x >= dock.origin.x);
+        assert!(library.right() <= dock.right());
+        assert_eq!(window.find("editor-canvas-column").bounds(), before.0);
+        window.click("preset-close", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("sidebar-history-content").visible());
+        assert_eq!(editor.read(cx).editor.doc, before.1);
+        assert!(editor.read(cx).editor.history.is_empty());
+    });
+}

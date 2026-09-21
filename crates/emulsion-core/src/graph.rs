@@ -1,8 +1,9 @@
 //! The history graph: named commits on branches, and three-way merge.
 //!
 //! Steps (see [`crate::history`]) are the fine-grained undo stack of one
-//! branch. Commits are the coarse points worth keeping: the opened file, a
-//! save, an export, a branch or merge, and an autosave every few seconds.
+//! branch. Commits are the coarse points worth keeping: the opened file,
+//! explicit named versions, and branch or merge checkpoints. Recovery saves
+//! preserve the working document separately without recording new commits.
 //! A commit holds a whole [`Document`] snapshot; snapshots share pixel tiles
 //! through `Arc`, so a commit costs little beyond the tiles it changed.
 //!
@@ -434,6 +435,13 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
     if x.opacity != y.opacity {
         out.push(("opacity", pct(x.opacity), pct(y.opacity)));
     }
+    if x.blending != y.blending {
+        out.push((
+            "blending options",
+            format!("{:?}", x.blending),
+            format!("{:?}", y.blending),
+        ));
+    }
     if x.blend != y.blend {
         out.push(("blend", format!("{:?}", x.blend), format!("{:?}", y.blend)));
     }
@@ -623,6 +631,7 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
         visible: pick(&b.visible, &o.visible, &t.visible, |x, y| x == y)?,
         locked: pick(&b.locked, &o.locked, &t.locked, |x, y| x == y)?,
         opacity: pick(&b.opacity, &o.opacity, &t.opacity, |x, y| x == y)?,
+        blending: pick(&b.blending, &o.blending, &t.blending, |x, y| x == y)?,
         blend: pick(&b.blend, &o.blend, &t.blend, |x, y| x == y)?,
         clip_to: pick(&b.clip_to, &o.clip_to, &t.clip_to, |x, y| x == y)?,
         mask,

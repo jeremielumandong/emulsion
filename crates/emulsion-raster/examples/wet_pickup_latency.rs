@@ -24,6 +24,7 @@ fn main() {
                     visible: true,
                     opacity: 1.,
                     blend: emulsion_raster::BlendMode::Normal,
+                    blending: Default::default(),
                     mask: None,
                     clip_to: None,
                     content: emulsion_raster::NodeContent::Fill([1.; 4]),

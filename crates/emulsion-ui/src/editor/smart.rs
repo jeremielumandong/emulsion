@@ -41,20 +41,46 @@ impl EditorView {
             return;
         };
         match &n.kind {
-            NodeKind::Raster { .. } => {
+            NodeKind::Raster { .. } | NodeKind::Text { .. } | NodeKind::Path { .. } => {
+                self.finish_tool_interaction(cx);
+                self.close_text_field(cx);
                 self.execute(Command::ConvertToSmart { id }, cx);
-                self.set_status(
-                    "Smart layer: filters stay editable. Painting goes on a new layer.",
-                    false,
-                    cx,
-                );
+                if self
+                    .editor
+                    .doc
+                    .node(id)
+                    .is_some_and(|node| matches!(node.kind, NodeKind::Smart { .. }))
+                {
+                    self.set_status(
+                        "Smart Object: editable source retained. Filters stay editable.",
+                        false,
+                        cx,
+                    );
+                }
             }
             NodeKind::Smart { .. } => {
-                self.execute(Command::Rasterize { id }, cx);
-                self.set_status("Rasterized: the filters are baked in.", false, cx);
+                self.set_status("This layer is already a Smart Object.", false, cx);
             }
-            _ => self.set_status("Select a pixel layer to make it smart.", false, cx),
+            _ => self.set_status(
+                "Select a pixel, text, or path layer to make it smart.",
+                false,
+                cx,
+            ),
         }
+    }
+
+    pub fn rasterize_layer(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected else { return };
+        self.finish_tool_interaction(cx);
+        self.close_text_field(cx);
+        self.execute(Command::Rasterize { id }, cx);
+    }
+
+    pub fn convert_smart_to_layers(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected else { return };
+        self.finish_tool_interaction(cx);
+        self.close_text_field(cx);
+        self.execute(Command::ConvertToLayers { id }, cx);
     }
 
     pub fn add_filter(&mut self, id: NodeId, f: Filter, cx: &mut Context<Self>) {
@@ -248,7 +274,7 @@ impl EditorView {
                 )
                 .child(
                     chip("smart-raster", "rasterize", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.convert_smart(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.rasterize_layer(cx))),
                 )
                 .into_any_element(),
         );

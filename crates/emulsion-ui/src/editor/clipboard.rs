@@ -36,10 +36,11 @@ pub(super) fn transform_menu(
         node.is_some_and(|node| node.visible && e.editor.doc.locked_ancestor(node.id).is_none());
     let raster = node.is_some_and(|node| matches!(node.kind, NodeKind::Raster { .. }));
     let smart = node.is_some_and(|node| matches!(node.kind, NodeKind::Smart { .. }));
+    let text = node.is_some_and(|node| matches!(node.kind, NodeKind::Text { .. }));
     let enabled = ready
         && unlocked
         && !e.tools.mask_edit
-        && (raster || smart)
+        && (raster || smart || text)
         && (e.editor.doc.selection.is_none() || raster);
     let rotate_enabled = ready
         && unlocked
@@ -156,7 +157,41 @@ impl EditorView {
             .menu_with_disabled("Copy", Box::new(crate::actions::CopyPixels), !copy)
             .menu_with_disabled("Paste", Box::new(crate::actions::PastePixels), !paste);
         if !canvas {
-            return menu;
+            let node = self.selected.and_then(|id| self.editor.doc.node(id));
+            let editable = ready
+                && node.is_some_and(|node| self.editor.doc.locked_ancestor(node.id).is_none());
+            let can_smart = editable
+                && node.is_some_and(|node| {
+                    matches!(
+                        node.kind,
+                        NodeKind::Raster { .. } | NodeKind::Text { .. } | NodeKind::Path { .. }
+                    )
+                });
+            let smart = node.is_some_and(|node| matches!(node.kind, NodeKind::Smart { .. }));
+            let rasterize = editable
+                && node.is_some_and(|node| {
+                    matches!(
+                        node.kind,
+                        NodeKind::Smart { .. } | NodeKind::Text { .. } | NodeKind::Path { .. }
+                    )
+                });
+            return menu
+                .separator()
+                .menu_with_disabled(
+                    "Convert to Smart Object",
+                    Box::new(crate::actions::ConvertToSmartObject),
+                    !can_smart,
+                )
+                .menu_with_disabled(
+                    "Convert to Layers (remove Smart filters)",
+                    Box::new(crate::actions::ConvertSmartToLayers),
+                    !editable || !smart,
+                )
+                .menu_with_disabled(
+                    "Rasterize",
+                    Box::new(crate::actions::RasterizeLayer),
+                    !rasterize,
+                );
         }
         menu.separator()
             .menu_with_disabled(
@@ -586,6 +621,7 @@ impl EditorView {
     /// Lift into a new layer so the existing Move handles transform the
     /// selected pixels. This never reads or writes the OS clipboard.
     pub fn transform_pixels(&mut self, cx: &mut Context<Self>) {
+        self.close_text_field(cx);
         let before = self.editor.doc.selection.as_ref().map(|_| {
             (
                 self.selected,

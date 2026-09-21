@@ -58,8 +58,10 @@ fn supported(nodes: &[CompositeNode], depth: usize, count: &mut usize) -> bool {
         if !node.visible || node.clip_to.is_some_and(|j| j < i && !nodes[j].visible) {
             return true;
         }
-        mode(node.blend).is_some()
+        node.blending == Default::default()
+            && mode(node.blend).is_some()
             && match &node.content {
+                NodeContent::StyledGroup { .. } => false,
                 NodeContent::Adjust(op) => supported_adjust(op, 0),
                 NodeContent::Group(children) => supported(children, depth + 1, count),
                 _ => true,
@@ -115,6 +117,7 @@ impl Program<'_> {
                     visible: true,
                     opacity: 1.0,
                     blend: BlendMode::Normal,
+                    blending: Default::default(),
                     mask: node.mask.clone(),
                     clip_to: None,
                     content,
@@ -263,6 +266,7 @@ impl Program<'_> {
                         .push([6, blend, slot, clip, mask, opacity.to_bits(), 0, 0]);
                     continue;
                 }
+                NodeContent::StyledGroup { .. } => return None,
                 NodeContent::Group(children) => {
                     let pass = node.blend == BlendMode::PassThrough;
                     let mask = if node.mask.is_some() {
@@ -344,6 +348,7 @@ fn worthwhile(tree: &CompositeTree) -> bool {
                 continue;
             }
             match &node.content {
+                NodeContent::StyledGroup { .. } => return (MAX_NODES, 0),
                 NodeContent::Pixels { .. } | NodeContent::Fill(_) => sources += 1,
                 NodeContent::Group(children) => {
                     let (child_sources, child_costly) = count(children, space, depth + 1);
@@ -484,6 +489,7 @@ mod tests {
             visible: true,
             opacity: 1.0,
             blend: BlendMode::Normal,
+            blending: Default::default(),
             mask: None,
             clip_to: None,
             content,

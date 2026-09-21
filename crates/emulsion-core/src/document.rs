@@ -338,6 +338,9 @@ impl Document {
                     _ => {}
                 }
             }
+            if !n.blending.valid() {
+                return Err(DocumentError::BadValue(n.id, "blending options"));
+            }
             if !(0.0..=1.0).contains(&n.opacity) || !n.opacity.is_finite() {
                 return Err(DocumentError::BadValue(n.id, "opacity"));
             }
@@ -461,6 +464,7 @@ impl Document {
                             visible: n.visible,
                             opacity: n.opacity,
                             blend: n.blend,
+                            blending: n.blending,
                             mask: Document::composite_mask(n),
                             clip_to: None,
                             content,
@@ -469,78 +473,60 @@ impl Document {
                 })
                 .collect::<Vec<_>>()
                 .into_iter()
-                .flat_map(|(n, node)| {
-                    // Layer styles become pixel layers beside the node.
-                    let mut out: Vec<(Option<NodeId>, CompositeNode)> = Vec::with_capacity(3);
-                    let fx = if n.visible {
-                        crate::styles::render(doc, n)
-                    } else {
-                        None
-                    };
-                    if let Some(r) = &fx
-                        && let Some((raster, rect)) = &r.below
-                    {
-                        out.push((
-                            None,
-                            crate::styles::effect_node(n.id ^ (1 << 62), raster.clone(), *rect, n),
-                        ));
+                .map(|(n, mut node)| {
+                    // Composite the complete styled appearance once against the real
+                    // backdrop. Fill affects content only; layer opacity, channels,
+                    // blend mode and tonal gates affect content and effects together.
+                    if let Some(fx) = n.visible.then(|| crate::styles::render(doc, n)).flatten() {
+                        let mut clip_source = node.clone();
+                        clip_source.opacity = 1.0;
+                        clip_source.blend = emulsion_raster::BlendMode::Normal;
+                        clip_source.blending = Default::default();
+                        let mut children = Vec::with_capacity(3);
+                        let effect = |id, raster: Arc<emulsion_raster::Raster>, rect| {
+                            let mut effect = crate::styles::effect_node(id, raster, rect, n);
+                            effect.opacity = 1.0;
+                            effect.blending = Default::default();
+                            effect
+                        };
+                        if let Some((raster, rect)) = &fx.below {
+                            children.push(effect(n.id ^ (1 << 62), raster.clone(), *rect));
+                        }
+                        node.opacity = 1.0;
+                        node.blend = emulsion_raster::BlendMode::Normal;
+                        node.blending = emulsion_raster::composite::BlendingOptions {
+                            fill_opacity: n.blending.fill_opacity,
+                            ..Default::default()
+                        };
+                        children.push(node);
+                        if let Some((raster, rect)) = &fx.above {
+                            children.push(effect(n.id ^ (1 << 63), raster.clone(), *rect));
+                        }
+                        node = CompositeNode {
+                            id: n.id,
+                            visible: n.visible,
+                            opacity: n.opacity,
+                            blend: if n.blend == emulsion_raster::BlendMode::PassThrough {
+                                emulsion_raster::BlendMode::Normal
+                            } else {
+                                n.blend
+                            },
+                            blending: emulsion_raster::composite::BlendingOptions {
+                                fill_opacity: 1.0,
+                                ..n.blending
+                            },
+                            mask: None,
+                            clip_to: None,
+                            content: NodeContent::StyledGroup {
+                                children,
+                                clip_source: Box::new(clip_source),
+                            },
+                        };
                     }
-                    out.push((Some(n.id), node));
-                    if let Some(r) = &fx
-                        && let Some((raster, rect)) = &r.above
-                    {
-                        out.push((
-                            None,
-                            crate::styles::effect_node(n.id ^ (1 << 63), raster.clone(), *rect, n),
-                        ));
-                    }
-                    out
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
-                .enumerate()
-                .map(|(i, (owner, mut node))| {
-                    // Clip targets are positions in this list, which effects shifted.
-                    (i, owner, node.clip_to.take(), node)
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|(_, owner, _, mut node)| {
-                    if let Some(id) = owner
-                        && let Some(c) = doc.node(id).and_then(|n| n.clip_to)
-                    {
-                        node.clip_to = positions_of(doc, parent, c);
-                    }
+                    node.clip_to = n.clip_to.and_then(|c| ids.iter().position(|id| *id == c));
                     node
                 })
                 .collect()
-        }
-        /// Position of node `c`'s own entry in the composite list of `parent`.
-        fn positions_of(doc: &Document, parent: Option<NodeId>, c: NodeId) -> Option<usize> {
-            let mut i = 0;
-            for id in doc.children(parent) {
-                let n = doc.node(id).expect("child exists");
-                let fx = if n.visible {
-                    crate::styles::render(doc, n)
-                } else {
-                    None
-                };
-                if let Some(r) = &fx
-                    && r.below.is_some()
-                {
-                    i += 1;
-                }
-                if id == c {
-                    return Some(i);
-                }
-                i += 1;
-                if let Some(r) = &fx
-                    && r.above.is_some()
-                {
-                    i += 1;
-                }
-            }
-            None
         }
         CompositeTree {
             width: self.width,
@@ -617,5 +603,124 @@ impl Document {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod styled_blending_tests {
+    use super::*;
+    use crate::styles::LayerStyle;
+    use emulsion_raster::composite::{BlendIfChannel, flatten};
+    use emulsion_raster::{Placement, Raster};
+    fn styled() -> Document {
+        let mut doc = Document::new(4, 4);
+        let mut node = Node::raster(
+            1,
+            "styled",
+            Arc::new(Raster::from_fn(4, 4, [0; 4], |_, _| {
+                [65535, 65535, 65535, 65535]
+            })),
+            Placement::default(),
+        );
+        node.styles = vec![LayerStyle::ColorOverlay {
+            color: [255, 0, 0],
+            opacity: 100.0,
+        }];
+        doc.nodes.push(node);
+        doc
+    }
+    #[test]
+    fn styled_clipping_uses_original_shape_even_at_zero_fill() {
+        let mut doc = Document::new(32, 16);
+        let mut base = Node::raster(
+            1,
+            "shape",
+            Arc::new(Raster::from_fn(32, 16, [0; 4], |x, y| {
+                if (4..12).contains(&x) && (4..12).contains(&y) {
+                    [65535; 4]
+                } else {
+                    [0; 4]
+                }
+            })),
+            Placement::default(),
+        );
+        base.blending.fill_opacity = 0.0;
+        base.styles = vec![LayerStyle::DropShadow {
+            color: [0, 0, 0],
+            opacity: 100.0,
+            angle: 180.0,
+            distance: 12.0,
+            size: 0.0,
+        }];
+        doc.nodes.push(base);
+        let mut clipped = Node::raster(
+            2,
+            "clipped red",
+            Arc::new(Raster::from_fn(32, 16, [0; 4], |_, _| [65535, 0, 0, 65535])),
+            Placement::default(),
+        );
+        clipped.clip_to = Some(1);
+        doc.nodes.push(clipped);
+        let flat = flatten(&doc.composite_tree(), 0);
+        assert_eq!(
+            flat.get(8, 8),
+            [65535, 0, 0, 65535],
+            "Fill zero must retain base clipping shape"
+        );
+        assert_eq!(
+            flat.get(20, 8),
+            [0, 0, 0, 65535],
+            "shadow must remain black and not receive clipped red layer"
+        );
+        assert_eq!(flat.get(28, 8), [0; 4]);
+    }
+
+    #[test]
+    fn styled_opacity_is_applied_once_to_complete_appearance() {
+        let mut doc = styled();
+        doc.nodes[0].opacity = 0.5;
+        let px = flatten(&doc.composite_tree(), 0).get(1, 1);
+        assert!((px[3] as i32 - 32768).abs() <= 1, "{px:?}");
+        assert!((px[0] as i32 - 32768).abs() <= 1, "{px:?}");
+        assert_eq!(px[1], 0);
+        doc.nodes[0].blending.fill_opacity = 0.0;
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).get(1, 1),
+            px,
+            "Fill zero retains the overlay with layer opacity applied once"
+        );
+    }
+    #[test]
+    fn styled_blend_if_uses_original_backdrop_for_effects() {
+        let mut doc = styled();
+        let top = &mut doc.nodes[0];
+        top.blending.blend_if.channel = BlendIfChannel::Red;
+        top.blending.blend_if.backdrop.white = 0.5;
+        top.blending.blend_if.backdrop.white_fade = 0.5;
+        doc.nodes.insert(
+            0,
+            Node::raster(
+                2,
+                "black",
+                Arc::new(Raster::from_fn(4, 4, [0; 4], |_, _| [0, 0, 0, 65535])),
+                Placement::default(),
+            ),
+        );
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).get(1, 1),
+            [65535, 0, 0, 65535],
+            "red overlay uses black backdrop, not its own white content"
+        );
+        doc.nodes[0] = Node::raster(
+            2,
+            "white",
+            Arc::new(Raster::from_fn(4, 4, [0; 4], |_, _| [65535; 4])),
+            Placement::default(),
+        );
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).get(1, 1),
+            [65535; 4],
+            "white backdrop hides complete styled layer"
+        );
     }
 }

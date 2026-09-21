@@ -3,6 +3,112 @@ use crate::editor::Tool;
 use emulsion_core::NodeKind;
 
 #[gpui_kit::test]
+fn vertical_type_shortcut_creates_upright_editable_text(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(400, 400));
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| {
+        let focus = view.read(cx).canvas_focus.clone();
+        window.focus(&focus, cx);
+    });
+    cx.simulate_keystrokes("shift-t");
+    cx.run_until_parked();
+    let position = cx.update(|_, cx| view.read(cx).doc_to_window((80., 40.)).unwrap());
+    cx.simulate_click(position, Default::default());
+    cx.simulate_keystrokes("A B C ctrl-enter");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        let NodeKind::Text { spec, .. } = &e.editor.doc.nodes[0].kind else {
+            panic!("editable text expected")
+        };
+        assert_eq!(spec.text, "ABC");
+        assert!(spec.vertical);
+        assert_eq!(spec.rotation, 0.);
+        let bounds = emulsion_core::text::bounds(spec);
+        assert!(bounds.h > bounds.w);
+        assert_eq!(e.editor.history.len(), 1);
+    });
+}
+
+#[gpui_kit::test]
+fn text_free_transform_scales_editable_horizontal_and_vertical_type(cx: &mut TestAppContext) {
+    let mut original = Document::new(600, 600);
+    Command::AddNode {
+        node: Box::new(Node::text(
+            0,
+            "Type",
+            emulsion_core::text::TextSpec {
+                text: "Ab".into(),
+                x: 60.,
+                y: 60.,
+                size: 32.,
+                ..Default::default()
+            },
+            600,
+            600,
+        )),
+        slot: Slot::TOP,
+    }
+    .apply(&mut original)
+    .unwrap();
+    let (ws, cx) = open(cx, original.clone());
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    for vertical in [false, true] {
+        cx.update(|window, cx| {
+            view.update(cx, |e, cx| {
+                let id = e.editor.doc.nodes[0].id;
+                let NodeKind::Text { spec, .. } = &e.editor.doc.nodes[0].kind else {
+                    panic!()
+                };
+                let mut spec = (**spec).clone();
+                spec.vertical = vertical;
+                e.execute(
+                    Command::SetText {
+                        id,
+                        spec: Box::new(spec),
+                    },
+                    cx,
+                );
+                e.selected = Some(id);
+                window.focus(&e.panel_focus, cx);
+            })
+        });
+        let before = cx.update(|_, cx| view.read(cx).editor.doc.clone());
+        cx.simulate_keystrokes("ctrl-t");
+        cx.run_until_parked();
+        let (start, end) = cx.update(|_, cx| {
+            let e = view.read(cx);
+            let q = e.transform_box().expect("text handles");
+            (
+                e.doc_to_window(q[2]).unwrap(),
+                e.doc_to_window((
+                    q[0].0 + 2. * (q[2].0 - q[0].0),
+                    q[0].1 + 2. * (q[2].1 - q[0].1),
+                ))
+                .unwrap(),
+            )
+        });
+        cx.simulate_mouse_down(start, gpui_kit::MouseButton::Left, Default::default());
+        cx.simulate_mouse_move(end, Some(gpui_kit::MouseButton::Left), Default::default());
+        cx.simulate_mouse_up(end, gpui_kit::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = view.read(cx);
+            let NodeKind::Text { spec, .. } = &e.editor.doc.nodes[0].kind else {
+                panic!("text must stay editable")
+            };
+            assert_eq!(spec.text, "Ab");
+            assert_eq!(spec.vertical, vertical);
+            assert!((spec.scale_x - 2.).abs() < 0.05);
+            assert!((spec.scale_y - 2.).abs() < 0.05);
+        });
+        cx.simulate_keystrokes("ctrl-z");
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, before));
+    }
+}
+
+#[gpui_kit::test]
 fn rotate_action_preserves_editable_path_and_undoes(cx: &mut TestAppContext) {
     let mut original = Document::new(64, 64);
     let id = Command::AddNode {

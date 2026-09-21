@@ -5,10 +5,9 @@
 //! (for another branch's commit) merged. A merge that touches the same
 //! property on both sides stops and asks, one choice per conflict.
 //!
-//! Autosave commits the document every few seconds when it changed, so the
-//! graph always holds recent work, and writes a recovery copy (document and
-//! graph) to the data directory about once a minute. Saving or discarding
-//! removes the recovery copy.
+//! Autosave updates a recovery copy (working document and graph) about once
+//! a minute. Versions are explicit named checkpoints or branch operations;
+//! ordinary edits remain in Undo. Saving or discarding removes recovery.
 
 use super::*;
 
@@ -105,6 +104,7 @@ impl EditorView {
 use emulsion_core::graph::{
     CommitId, Conflict, ConflictKey, DiffRow, MAIN, MergeOutcome, Side, compare,
 };
+use gpui_kit::component::button::Button;
 use std::collections::HashSet;
 
 pub(crate) const AUTOSAVE_SECS: u64 = 10;
@@ -123,12 +123,14 @@ pub(crate) struct HistoryState {
     current: Option<(u64, Arc<RenderImage>)>,
     current_loading: Option<u64>,
     pub(crate) new_branch: Option<(Entity<InputState>, Subscription)>,
+    pub(crate) new_version: Option<(Entity<InputState>, Subscription)>,
     pub(crate) merge: Option<PendingMerge>,
     pub(crate) last_autosave: Option<Instant>,
-    recovery: Option<PathBuf>,
-    recovery_rev: u64,
-    recovery_busy: bool,
-    last_recovery: Option<Instant>,
+    pub(crate) recovery: Option<PathBuf>,
+    pub(crate) recovery_rev: u64,
+    pub(crate) recovery_busy: bool,
+    recovery_generation: u64,
+    pub(crate) last_recovery: Option<Instant>,
 }
 
 /// A merge waiting for the person's choices.
@@ -189,14 +191,10 @@ impl EditorView {
         .detach();
     }
 
-    /// Commit recent work, and now and then write a recovery copy.
+    /// Write the latest working state without adding a visible version.
     pub(crate) fn autosave(&mut self, cx: &mut Context<Self>) {
         if self.editor.in_transaction() || self.drag.is_some() {
             return;
-        }
-        if self.editor.uncommitted() && self.editor.commit("Autosave", true).is_some() {
-            self.history.last_autosave = Some(Instant::now());
-            cx.notify();
         }
         let due = self
             .history
@@ -209,6 +207,8 @@ impl EditorView {
         {
             return;
         }
+        let generation = self.history.recovery_generation;
+        let editor_id = cx.entity_id().as_u64();
         let path = self
             .history
             .recovery
@@ -226,7 +226,7 @@ impl EditorView {
                     .take(48)
                     .collect();
                 recovery_dir().join(format!(
-                    "{safe}-{}-{}.ora",
+                    "{safe}-{}-{}-{editor_id}-{generation}.ora",
                     std::process::id(),
                     emulsion_io::recent::now()
                 ))
@@ -239,17 +239,32 @@ impl EditorView {
         );
         self.history.recovery_busy = true;
         cx.spawn(async move |this, cx| {
+            let write_path = path.clone();
             let result = cx
                 .background_spawn(async move {
-                    std::fs::create_dir_all(recovery_dir())?;
-                    emulsion_io::save_full(&doc, &graph, &path).map_err(std::io::Error::other)
+                    if let Some(parent) = write_path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    emulsion_io::save_full(&doc, &graph, &write_path).map_err(std::io::Error::other)
                 })
                 .await;
-            this.update(cx, |this, _| {
+            this.update(cx, |this, cx| {
                 this.history.recovery_busy = false;
+                // A save/discard can finish while the recovery write runs.
+                // Do not recreate its recovery entry or announce it as current.
+                if generation != this.history.recovery_generation {
+                    if result.is_ok() {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    return;
+                }
                 this.history.last_recovery = Some(Instant::now());
                 match result {
-                    Ok(()) => this.history.recovery_rev = rev,
+                    Ok(()) => {
+                        this.history.recovery_rev = rev;
+                        this.history.last_autosave = Some(Instant::now());
+                        cx.notify();
+                    }
                     Err(e) => tracing::warn!("recovery copy failed: {e}"),
                 }
             })
@@ -260,10 +275,13 @@ impl EditorView {
 
     /// Remove the recovery copy (after a save, or when the work is discarded).
     pub fn discard_recovery(&mut self) {
+        self.history.recovery_generation = self.history.recovery_generation.wrapping_add(1);
         if let Some(p) = self.history.recovery.take() {
             let _ = std::fs::remove_file(p);
         }
         self.history.recovery_rev = 0;
+        self.history.last_recovery = None;
+        self.history.last_autosave = None;
     }
 
     /// Short status text: "autosaved 12s ago".
@@ -287,6 +305,7 @@ impl EditorView {
     pub fn close_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.history.open = false;
         self.history.new_branch = None;
+        self.history.new_version = None;
         window.focus(&self.canvas_focus, cx);
         cx.notify();
     }
@@ -401,6 +420,7 @@ impl EditorView {
     }
 
     fn start_new_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.history.new_version = None;
         let at = self.history.selected;
         let state =
             cx.new(|cx| InputState::new(window, cx).placeholder("branch name, e.g. warm-grade"));
@@ -415,6 +435,42 @@ impl EditorView {
             }
         });
         self.history.new_branch = Some((state, sub));
+        cx.notify();
+    }
+
+    fn start_new_version(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_tool_interaction(cx);
+        self.close_text_field(cx);
+        self.history.new_branch = None;
+        let state =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Version name, e.g. Warm grade"));
+        state.update(cx, |s, cx| s.focus(window, cx));
+        let sub = cx.subscribe_in(&state, window, |this, _, ev: &InputEvent, window, cx| {
+            if matches!(ev, InputEvent::PressEnter { .. }) {
+                this.finish_new_version(window, cx);
+            }
+        });
+        self.history.new_version = Some((state, sub));
+        cx.notify();
+    }
+
+    fn finish_new_version(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((state, _)) = &self.history.new_version else {
+            return;
+        };
+        let name = state.read(cx).value().trim().to_string();
+        if name.is_empty() {
+            self.set_status("Enter a name for this version.", true, cx);
+            return;
+        }
+        if let Some(id) = self.editor.create_version(&name) {
+            self.history.selected = Some(id);
+            self.set_status(format!("Created version \"{name}\"."), false, cx);
+        } else {
+            self.set_status("No changes since the latest version.", false, cx);
+        }
+        self.history.new_version = None;
+        window.focus(&self.panel_focus, cx);
         cx.notify();
     }
 
@@ -497,7 +553,7 @@ impl EditorView {
         let meta = if head == MAIN {
             let n = g.branches().len() - 1;
             match n {
-                0 => "history".to_string(),
+                0 => "versions".to_string(),
                 1 => "1 other branch".to_string(),
                 n => format!("{n} other branches"),
             }
@@ -702,6 +758,36 @@ impl EditorView {
             columns = columns.child(col);
         }
 
+        let new_version: AnyElement = match &self.history.new_version {
+            Some((state, _)) => div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .child(div().w_64().child(Input::new(state)))
+                .child(
+                    Button::new("confirm-version")
+                        .label("Create version")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.finish_new_version(window, cx)),
+                        ),
+                )
+                .child(
+                    Button::new("cancel-version")
+                        .label("Cancel")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.history.new_version = None;
+                            window.focus(&this.panel_focus, cx);
+                            cx.notify();
+                        })),
+                )
+                .into_any_element(),
+            None => Button::new("create-version")
+                .label("Create version…")
+                .on_click(cx.listener(|this, _, window, cx| this.start_new_version(window, cx)))
+                .into_any_element(),
+        };
+
         let new_branch: AnyElement = match &self.history.new_branch {
             Some((state, _)) => div()
                 .flex()
@@ -739,7 +825,7 @@ impl EditorView {
                 div()
                     .flex()
                     .items_center()
-                    .child(label("History · branch anything", p))
+                    .child(label("Versions · branches", p))
                     .child(div().flex_1())
                     .child(chip("back-to-canvas", "back to canvas", false, p).on_click(
                         cx.listener(|this, _, window, cx| this.close_history(window, cx)),
@@ -753,12 +839,22 @@ impl EditorView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.name.clone()),
             )
-            .child(div().mb(px(22.)).child(new_branch))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .mb_5()
+                    .child(mono("Autosave protects current work. Create versions for milestones you want to keep.", 10., p.muted))
+                    .child(new_version)
+                    .child(new_branch),
+            )
             .child(columns);
 
         let right = self.compare_pane(selected, p, cx);
         div()
             .id("history-page")
+            .track_focus(&self.panel_focus)
             .flex()
             .flex_1()
             .min_h_0()
@@ -767,7 +863,11 @@ impl EditorView {
             .bg(p.paper)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 if e.keystroke.key == "escape" {
-                    if this.history.new_branch.is_some() {
+                    if this.history.new_version.is_some() {
+                        this.history.new_version = None;
+                        window.focus(&this.panel_focus, cx);
+                        cx.notify();
+                    } else if this.history.new_branch.is_some() {
                         this.history.new_branch = None;
                         cx.notify();
                     } else {

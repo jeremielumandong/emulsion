@@ -112,6 +112,107 @@ impl Placement {
     }
 }
 
+/// A tonal gate in display (sRGB) space. Split endpoints produce smooth fades.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlendRange {
+    pub black: f32,
+    pub black_fade: f32,
+    pub white_fade: f32,
+    pub white: f32,
+}
+impl Default for BlendRange {
+    fn default() -> Self {
+        Self {
+            black: 0.0,
+            black_fade: 0.0,
+            white_fade: 1.0,
+            white: 1.0,
+        }
+    }
+}
+impl BlendRange {
+    pub fn valid(&self) -> bool {
+        [self.black, self.black_fade, self.white_fade, self.white]
+            .iter()
+            .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            && self.black <= self.black_fade
+            && self.black_fade <= self.white_fade
+            && self.white_fade <= self.white
+    }
+    fn coverage(&self, v: f32) -> f32 {
+        if v < self.black || v > self.white {
+            return 0.0;
+        }
+        let lo = if self.black_fade > self.black {
+            ((v - self.black) / (self.black_fade - self.black)).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let hi = if self.white > self.white_fade {
+            ((self.white - v) / (self.white - self.white_fade)).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        lo * hi
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlendIfChannel {
+    #[default]
+    Gray,
+    Red,
+    Green,
+    Blue,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlendIf {
+    pub channel: BlendIfChannel,
+    pub source: BlendRange,
+    pub backdrop: BlendRange,
+}
+impl BlendIf {
+    fn value(&self, p: [f32; 4]) -> f32 {
+        let rgb = if p[3] > 0.0 {
+            [p[0] / p[3], p[1] / p[3], p[2] / p[3]].map(color::linear_to_srgb)
+        } else {
+            [0.0; 3]
+        };
+        match self.channel {
+            BlendIfChannel::Gray => 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2],
+            BlendIfChannel::Red => rgb[0],
+            BlendIfChannel::Green => rgb[1],
+            BlendIfChannel::Blue => rgb[2],
+        }
+    }
+}
+/// Non-destructive advanced layer blending; defaults preserve older documents.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlendingOptions {
+    pub fill_opacity: f32,
+    pub channels: [bool; 3],
+    pub blend_if: BlendIf,
+}
+impl Default for BlendingOptions {
+    fn default() -> Self {
+        Self {
+            fill_opacity: 1.0,
+            channels: [true; 3],
+            blend_if: BlendIf::default(),
+        }
+    }
+}
+impl BlendingOptions {
+    pub fn valid(&self) -> bool {
+        self.fill_opacity.is_finite()
+            && (0.0..=1.0).contains(&self.fill_opacity)
+            && self.blend_if.source.valid()
+            && self.blend_if.backdrop.valid()
+    }
+}
+
 /// A render-ready description of a document.
 pub struct CompositeTree {
     pub width: u32,
@@ -121,12 +222,14 @@ pub struct CompositeTree {
     pub nodes: Vec<CompositeNode>,
 }
 
+#[derive(Clone)]
 pub struct CompositeNode {
     /// Stable id; seeds Dissolve noise.
     pub id: u64,
     pub visible: bool,
     pub opacity: f32,
     pub blend: BlendMode,
+    pub blending: BlendingOptions,
     /// For pixel content the mask lives in the layer's own pixel space and
     /// moves with it; for everything else it is in document space.
     pub mask: Option<Arc<Mask>>,
@@ -135,6 +238,7 @@ pub struct CompositeNode {
     pub content: NodeContent,
 }
 
+#[derive(Clone)]
 pub enum NodeContent {
     Pixels {
         raster: Arc<Raster>,
@@ -143,6 +247,11 @@ pub enum NodeContent {
     /// Solid premultiplied linear colour over the whole document.
     Fill([f32; 4]),
     Group(Vec<CompositeNode>),
+    /// Isolated layer appearance, with an independent unfilled shape for clipping.
+    StyledGroup {
+        children: Vec<CompositeNode>,
+        clip_source: Box<CompositeNode>,
+    },
     Adjust(Arc<Prepared>),
 }
 
@@ -231,6 +340,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
         n.visible
             && matches!(n.content, NodeContent::Adjust(_))
             && n.opacity >= 1.0
+            && n.blending == BlendingOptions::default()
             && n.mask.is_none()
             && n.clip_to.is_none()
             && matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)
@@ -279,10 +389,11 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
 
         // Coverage = opacity × mask × clip, per pixel.
         let coverage = |mask: Option<&Vec<f32>>| -> Option<Vec<f32>> {
-            if node.opacity >= 1.0 && mask.is_none() && clip.is_none() {
+            if node.opacity * node.blending.fill_opacity >= 1.0 && mask.is_none() && clip.is_none()
+            {
                 return None;
             }
-            let mut c = vec![node.opacity; TILE_PX];
+            let mut c = vec![node.opacity * node.blending.fill_opacity; TILE_PX];
             if let Some(m) = mask {
                 c.iter_mut().zip(m).for_each(|(c, m)| *c *= m);
             }
@@ -329,7 +440,9 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
             }
             NodeContent::Group(children) => {
                 let mask = mask_doc(&node.mask);
-                if node.blend == BlendMode::PassThrough {
+                if node.blend == BlendMode::PassThrough
+                    && node.blending == BlendingOptions::default()
+                {
                     match coverage(mask.as_ref()) {
                         None => render_list(children, acc, ctx),
                         Some(cov) => {
@@ -357,10 +470,50 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                     composite_into(acc, &mut sub, cov.as_deref(), node, ctx);
                 }
             }
+            NodeContent::StyledGroup {
+                children,
+                clip_source,
+            } => {
+                let mut sub = ftile();
+                render_list(children, &mut sub, ctx);
+                if is_source[i] {
+                    let mut shape = ftile();
+                    render_list(std::slice::from_ref(clip_source.as_ref()), &mut shape, ctx);
+                    alphas[i] = Some(shape.iter().map(|p| p[3]).collect());
+                }
+                let cov = coverage(None);
+                composite_into(acc, &mut sub, cov.as_deref(), node, ctx);
+            }
             NodeContent::Adjust(op) => {
                 let mask = mask_doc(&node.mask);
                 let cov = coverage(mask.as_ref());
-                apply_adjust(acc, op, cov.as_deref(), node.blend, ctx.space, ctx);
+                if node.blending.channels == [true; 3]
+                    && node.blending.blend_if == BlendIf::default()
+                {
+                    apply_adjust(acc, op, cov.as_deref(), node.blend, ctx.space, ctx);
+                } else {
+                    let before = acc.clone();
+                    apply_adjust(acc, op, cov.as_deref(), node.blend, ctx.space, ctx);
+                    for (a, b) in acc.iter_mut().zip(before) {
+                        let gate = node
+                            .blending
+                            .blend_if
+                            .source
+                            .coverage(node.blending.blend_if.value(*a))
+                            * node
+                                .blending
+                                .blend_if
+                                .backdrop
+                                .coverage(node.blending.blend_if.value(b));
+                        for c in 0..3 {
+                            a[c] = if node.blending.channels[c] {
+                                b[c] + (a[c] - b[c]) * gate
+                            } else {
+                                b[c]
+                            };
+                        }
+                    }
+                }
             }
         }
     }
@@ -397,7 +550,34 @@ fn composite_into(
         } else {
             0.0
         };
-        *a = blend_px(mode, ctx.space, *a, *s, noise);
+        if node.blending.blend_if != BlendIf::default() {
+            let gate = node
+                .blending
+                .blend_if
+                .source
+                .coverage(node.blending.blend_if.value(*s))
+                * node
+                    .blending
+                    .blend_if
+                    .backdrop
+                    .coverage(node.blending.blend_if.value(*a));
+            s.iter_mut().for_each(|v| *v *= gate);
+        }
+        let before = *a;
+        let mut out = blend_px(mode, ctx.space, before, *s, noise);
+        if !node.blending.channels.iter().any(|enabled| *enabled) {
+            continue;
+        }
+        for c in 0..3 {
+            if !node.blending.channels[c] {
+                out[c] = if before[3] > 0.0 {
+                    before[c] / before[3] * out[3]
+                } else {
+                    0.0
+                };
+            }
+        }
+        *a = out;
     }
 }
 
@@ -828,6 +1008,7 @@ mod tests {
             visible: n.visible,
             opacity: n.opacity,
             blend: n.blend,
+            blending: n.blending,
             mask: n.mask.clone(),
             clip_to: n.clip_to,
             content: match &n.content {
@@ -846,6 +1027,7 @@ mod tests {
             visible: true,
             opacity: 1.0,
             blend: BlendMode::Normal,
+            blending: Default::default(),
             mask: None,
             clip_to: None,
             content: NodeContent::Pixels {
@@ -938,6 +1120,7 @@ mod tests {
             visible: true,
             opacity: 1.0,
             blend: BlendMode::Normal,
+            blending: Default::default(),
             mask: None,
             clip_to: None,
             content: NodeContent::Adjust(Arc::new(
@@ -984,6 +1167,7 @@ mod tests {
             visible: true,
             opacity: 1.0,
             blend,
+            blending: Default::default(),
             mask: None,
             clip_to: None,
             content: NodeContent::Group(vec![px(&mul)]),
@@ -1019,5 +1203,80 @@ mod tests {
         let out = render_tile(&tree(vec![n]), 0, TileCoord::new(0, 0));
         assert!(at(&out, 100, 100)[1] > 0.99);
         assert_eq!(at(&out, 251, 100)[3], 0.0);
+    }
+}
+
+#[cfg(test)]
+mod blending_tests {
+    use super::*;
+    fn pixel(bottom: [f32; 4], top: [f32; 4], options: BlendingOptions) -> [f32; 4] {
+        let node = |id, color, blending| CompositeNode {
+            id,
+            visible: true,
+            opacity: 1.0,
+            blend: BlendMode::Normal,
+            blending,
+            mask: None,
+            clip_to: None,
+            content: NodeContent::Fill(color),
+        };
+        render_tile_cpu(
+            &CompositeTree {
+                width: 1,
+                height: 1,
+                space: BlendSpace::Linear,
+                nodes: vec![node(1, bottom, Default::default()), node(2, top, options)],
+            },
+            0,
+            TileCoord { x: 0, y: 0 },
+        )[0]
+    }
+    #[test]
+    fn fill_and_disabled_channels_change_actual_composite() {
+        let mut options = BlendingOptions {
+            fill_opacity: 0.5,
+            ..Default::default()
+        };
+        assert_eq!(
+            pixel([0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 0.0, 1.0], options),
+            [0.5, 0.0, 0.5, 1.0]
+        );
+        options.fill_opacity = 1.0;
+        options.channels = [false, true, true];
+        assert_eq!(
+            pixel([0.3, 0.2, 0.1, 1.0], [1.0, 0.8, 0.9, 1.0], options),
+            [0.3, 0.8, 0.9, 1.0]
+        );
+        options.channels = [false; 3];
+        assert_eq!(
+            pixel([0.3, 0.2, 0.1, 1.0], [1.0; 4], options),
+            [0.3, 0.2, 0.1, 1.0]
+        );
+    }
+    #[test]
+    fn blend_if_source_backdrop_and_split_fade() {
+        let mut options = BlendingOptions::default();
+        options.blend_if.channel = BlendIfChannel::Red;
+        options.blend_if.source.white = 0.5;
+        options.blend_if.source.white_fade = 0.5;
+        assert_eq!(
+            pixel([0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 0.0, 1.0], options),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+        options.blend_if.source = Default::default();
+        options.blend_if.backdrop.black = 0.1;
+        options.blend_if.backdrop.black_fade = 0.1;
+        assert_eq!(
+            pixel([0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 0.0, 1.0], options),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+        let range = BlendRange {
+            black: 0.0,
+            black_fade: 0.5,
+            white_fade: 0.5,
+            white: 1.0,
+        };
+        assert_eq!(range.coverage(0.25), 0.5);
+        assert_eq!(range.coverage(0.75), 0.5);
     }
 }

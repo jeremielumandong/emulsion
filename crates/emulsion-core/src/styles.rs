@@ -52,6 +52,36 @@ pub enum LayerStyle {
         angle: f32,
         opacity: f32,
     },
+    BevelEmboss {
+        highlight: [u8; 3],
+        shadow: [u8; 3],
+        opacity: f32,
+        angle: f32,
+        size: f32,
+        depth: f32,
+        contour: f32,
+        texture: f32,
+        texture_scale: f32,
+    },
+    InnerGlow {
+        color: [u8; 3],
+        opacity: f32,
+        size: f32,
+    },
+    Satin {
+        color: [u8; 3],
+        opacity: f32,
+        angle: f32,
+        distance: f32,
+        size: f32,
+    },
+    PatternOverlay {
+        from: [u8; 3],
+        to: [u8; 3],
+        opacity: f32,
+        scale: f32,
+        angle: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +143,36 @@ impl LayerStyle {
                 angle: 90.0,
                 opacity: 100.0,
             },
+            LayerStyle::BevelEmboss {
+                highlight: [255; 3],
+                shadow: [0; 3],
+                opacity: 75.0,
+                angle: 120.0,
+                size: 6.0,
+                depth: 150.0,
+                contour: 100.0,
+                texture: 0.0,
+                texture_scale: 12.0,
+            },
+            LayerStyle::InnerGlow {
+                color: [255, 240, 170],
+                opacity: 70.0,
+                size: 12.0,
+            },
+            LayerStyle::Satin {
+                color: [30, 10, 50],
+                opacity: 60.0,
+                angle: 25.0,
+                distance: 12.0,
+                size: 10.0,
+            },
+            LayerStyle::PatternOverlay {
+                from: [235; 3],
+                to: [70; 3],
+                opacity: 50.0,
+                scale: 12.0,
+                angle: 0.0,
+            },
         ]
     }
 
@@ -124,6 +184,10 @@ impl LayerStyle {
             LayerStyle::Stroke { .. } => "Stroke",
             LayerStyle::ColorOverlay { .. } => "Color overlay",
             LayerStyle::GradientOverlay { .. } => "Gradient overlay",
+            LayerStyle::BevelEmboss { .. } => "Bevel and emboss",
+            LayerStyle::InnerGlow { .. } => "Inner glow",
+            LayerStyle::Satin { .. } => "Satin",
+            LayerStyle::PatternOverlay { .. } => "Pattern overlay",
         }
     }
 
@@ -135,6 +199,10 @@ impl LayerStyle {
             LayerStyle::Stroke { .. } => "stroke",
             LayerStyle::ColorOverlay { .. } => "color_overlay",
             LayerStyle::GradientOverlay { .. } => "gradient_overlay",
+            LayerStyle::BevelEmboss { .. } => "bevel_emboss",
+            LayerStyle::InnerGlow { .. } => "inner_glow",
+            LayerStyle::Satin { .. } => "satin",
+            LayerStyle::PatternOverlay { .. } => "pattern_overlay",
         }
     }
 
@@ -149,7 +217,14 @@ impl LayerStyle {
             unit,
         };
         match self {
-            LayerStyle::DropShadow {
+            LayerStyle::Satin {
+                opacity,
+                angle,
+                distance,
+                size,
+                ..
+            }
+            | LayerStyle::DropShadow {
                 opacity,
                 angle,
                 distance,
@@ -168,7 +243,8 @@ impl LayerStyle {
                 p("distance", "distance", 0.0, 100.0, 1.0, *distance, "px"),
                 p("size", "size", 0.0, 60.0, 1.0, *size, "px"),
             ],
-            LayerStyle::OuterGlow { opacity, size, .. } => vec![
+            LayerStyle::OuterGlow { opacity, size, .. }
+            | LayerStyle::InnerGlow { opacity, size, .. } => vec![
                 p("opacity", "opacity", 0.0, 100.0, 1.0, *opacity, "%"),
                 p("size", "size", 0.0, 80.0, 1.0, *size, "px"),
             ],
@@ -179,6 +255,42 @@ impl LayerStyle {
             LayerStyle::ColorOverlay { opacity, .. } => {
                 vec![p("opacity", "opacity", 0.0, 100.0, 1.0, *opacity, "%")]
             }
+            LayerStyle::BevelEmboss {
+                opacity,
+                angle,
+                size,
+                depth,
+                contour,
+                texture,
+                texture_scale,
+                ..
+            } => vec![
+                p("opacity", "opacity", 0.0, 100.0, 1.0, *opacity, "%"),
+                p("angle", "light angle", -180.0, 180.0, 1.0, *angle, "\u{b0}"),
+                p("size", "size", 1.0, 60.0, 1.0, *size, "px"),
+                p("depth", "depth", 0.0, 500.0, 5.0, *depth, "%"),
+                p("contour", "contour", 25.0, 400.0, 5.0, *contour, "%"),
+                p("texture", "texture depth", 0.0, 100.0, 1.0, *texture, "%"),
+                p(
+                    "texture_scale",
+                    "texture size",
+                    2.0,
+                    100.0,
+                    1.0,
+                    *texture_scale,
+                    "px",
+                ),
+            ],
+            LayerStyle::PatternOverlay {
+                opacity,
+                scale,
+                angle,
+                ..
+            } => vec![
+                p("opacity", "opacity", 0.0, 100.0, 1.0, *opacity, "%"),
+                p("scale", "tile size", 2.0, 200.0, 1.0, *scale, "px"),
+                p("angle", "angle", -180.0, 180.0, 1.0, *angle, "\u{b0}"),
+            ],
             LayerStyle::GradientOverlay { angle, opacity, .. } => vec![
                 p("angle", "angle", -180.0, 180.0, 1.0, *angle, "°"),
                 p("opacity", "opacity", 0.0, 100.0, 1.0, *opacity, "%"),
@@ -187,6 +299,9 @@ impl LayerStyle {
     }
 
     pub fn set_param(&mut self, key: &str, value: f32) -> bool {
+        if !value.is_finite() {
+            return false;
+        }
         let Some(spec) = self.params().into_iter().find(|s| s.key == key) else {
             return false;
         };
@@ -198,26 +313,43 @@ impl LayerStyle {
                 | LayerStyle::OuterGlow { opacity, .. }
                 | LayerStyle::Stroke { opacity, .. }
                 | LayerStyle::ColorOverlay { opacity, .. }
-                | LayerStyle::GradientOverlay { opacity, .. },
+                | LayerStyle::GradientOverlay { opacity, .. }
+                | LayerStyle::InnerGlow { opacity, .. }
+                | LayerStyle::Satin { opacity, .. }
+                | LayerStyle::BevelEmboss { opacity, .. }
+                | LayerStyle::PatternOverlay { opacity, .. },
                 "opacity",
             ) => opacity,
             (
                 LayerStyle::DropShadow { angle, .. }
                 | LayerStyle::InnerShadow { angle, .. }
-                | LayerStyle::GradientOverlay { angle, .. },
+                | LayerStyle::GradientOverlay { angle, .. }
+                | LayerStyle::Satin { angle, .. }
+                | LayerStyle::BevelEmboss { angle, .. }
+                | LayerStyle::PatternOverlay { angle, .. },
                 "angle",
             ) => angle,
             (
-                LayerStyle::DropShadow { distance, .. } | LayerStyle::InnerShadow { distance, .. },
+                LayerStyle::DropShadow { distance, .. }
+                | LayerStyle::InnerShadow { distance, .. }
+                | LayerStyle::Satin { distance, .. },
                 "distance",
             ) => distance,
             (
                 LayerStyle::DropShadow { size, .. }
                 | LayerStyle::InnerShadow { size, .. }
                 | LayerStyle::OuterGlow { size, .. }
-                | LayerStyle::Stroke { size, .. },
+                | LayerStyle::Stroke { size, .. }
+                | LayerStyle::Satin { size, .. }
+                | LayerStyle::InnerGlow { size, .. }
+                | LayerStyle::BevelEmboss { size, .. },
                 "size",
             ) => size,
+            (LayerStyle::BevelEmboss { depth, .. }, "depth") => depth,
+            (LayerStyle::BevelEmboss { contour, .. }, "contour") => contour,
+            (LayerStyle::BevelEmboss { texture, .. }, "texture") => texture,
+            (LayerStyle::BevelEmboss { texture_scale, .. }, "texture_scale") => texture_scale,
+            (LayerStyle::PatternOverlay { scale, .. }, "scale") => scale,
             _ => return false,
         };
         *slot = v;
@@ -231,8 +363,16 @@ impl LayerStyle {
             | LayerStyle::InnerShadow { color, .. }
             | LayerStyle::OuterGlow { color, .. }
             | LayerStyle::Stroke { color, .. }
+            | LayerStyle::InnerGlow { color, .. }
+            | LayerStyle::Satin { color, .. }
             | LayerStyle::ColorOverlay { color, .. } => *color = c,
-            LayerStyle::GradientOverlay { from, to, .. } => {
+            LayerStyle::GradientOverlay { from, to, .. }
+            | LayerStyle::PatternOverlay { from, to, .. }
+            | LayerStyle::BevelEmboss {
+                highlight: from,
+                shadow: to,
+                ..
+            } => {
                 if second {
                     *to = c
                 } else {
@@ -248,8 +388,16 @@ impl LayerStyle {
             | LayerStyle::InnerShadow { color, .. }
             | LayerStyle::OuterGlow { color, .. }
             | LayerStyle::Stroke { color, .. }
+            | LayerStyle::InnerGlow { color, .. }
+            | LayerStyle::Satin { color, .. }
             | LayerStyle::ColorOverlay { color, .. } => vec![*color],
-            LayerStyle::GradientOverlay { from, to, .. } => vec![*from, *to],
+            LayerStyle::GradientOverlay { from, to, .. }
+            | LayerStyle::PatternOverlay { from, to, .. }
+            | LayerStyle::BevelEmboss {
+                highlight: from,
+                shadow: to,
+                ..
+            } => vec![*from, *to],
         }
     }
 
@@ -321,6 +469,7 @@ fn alpha_of(doc: &Document, n: &Node, pad: i32) -> Option<(Vec<f32>, IRect)> {
     node.opacity = 1.0;
     node.blend = BlendMode::Normal;
     node.styles.clear();
+    node.blending = Default::default();
     solo.nodes.push(node);
     let full = flatten(&solo.composite_tree(), 0);
     let b = full.tile_bounds();
@@ -510,6 +659,116 @@ pub fn render(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
                 over(&mut above, &alpha, lin(*color), opacity / 100.0);
                 any_above = true;
             }
+            LayerStyle::InnerGlow {
+                color,
+                opacity,
+                size,
+            } => {
+                let soft = blur(&alpha, w, h, *size);
+                let cov: Vec<f32> = alpha
+                    .iter()
+                    .zip(soft)
+                    .map(|(a, b)| a * (1.0 - b) * 2.0)
+                    .collect();
+                over(&mut above, &cov, lin(*color), opacity / 100.0);
+                any_above = true;
+            }
+            LayerStyle::Satin {
+                color,
+                opacity,
+                angle,
+                distance,
+                size,
+            } => {
+                let soft = blur(&alpha, w, h, *size);
+                let (dx, dy) = offset(*angle, *distance);
+                let left = shift(&soft, w, h, dx, dy);
+                let right = shift(&soft, w, h, -dx, -dy);
+                let cov: Vec<f32> = left
+                    .iter()
+                    .zip(right)
+                    .zip(&alpha)
+                    .map(|((a, b), mask)| (a - b).abs() * mask)
+                    .collect();
+                over(&mut above, &cov, lin(*color), opacity / 100.0);
+                any_above = true;
+            }
+            LayerStyle::BevelEmboss {
+                highlight,
+                shadow,
+                opacity,
+                angle,
+                size,
+                depth,
+                contour,
+                texture,
+                texture_scale,
+            } => {
+                // A softened alpha height field lights the object's edges; a
+                // periodic relief adds an optional woven surface texture.
+                let height = blur(&alpha, w, h, *size);
+                let (ly, lx) = angle.to_radians().sin_cos();
+                let mut light = vec![0.0; w * h];
+                let mut dark = vec![0.0; w * h];
+                let period = texture_scale.max(2.0);
+                let frequency = std::f32::consts::TAU / period;
+                for y in 0..h {
+                    for x in 0..w {
+                        let i = y * w + x;
+                        let gx = height[y * w + (x + 1).min(w - 1)]
+                            - height[y * w + x.saturating_sub(1)];
+                        let gy = height[(y + 1).min(h - 1) * w + x]
+                            - height[y.saturating_sub(1) * w + x];
+                        let tx = (x as f32 + r.x as f32) * frequency;
+                        let ty = (y as f32 + r.y as f32) * frequency;
+                        let relief =
+                            (tx.cos() * ty.sin() * lx - tx.sin() * ty.cos() * ly) * texture / 100.0;
+                        let shade = ((gx * lx - gy * ly) * size.max(1.0) + relief) * depth / 100.0;
+                        let strength = shade
+                            .abs()
+                            .clamp(0.0, 1.0)
+                            .powf((contour / 100.0).max(0.25))
+                            * alpha[i];
+                        if shade >= 0.0 {
+                            light[i] = strength;
+                        } else {
+                            dark[i] = strength;
+                        }
+                    }
+                }
+                over(&mut above, &dark, lin(*shadow), opacity / 100.0);
+                over(&mut above, &light, lin(*highlight), opacity / 100.0);
+                any_above = true;
+            }
+            LayerStyle::PatternOverlay {
+                from,
+                to,
+                opacity,
+                scale,
+                angle,
+            } => {
+                // Two-colour checker tiles, anchored in document coordinates.
+                let (sn, cs) = angle.to_radians().sin_cos();
+                let period = scale.max(2.0);
+                let colors = [lin(*from), lin(*to)];
+                for y in 0..h {
+                    for x in 0..w {
+                        let i = y * w + x;
+                        let px = x as f32 + r.x as f32;
+                        let py = y as f32 + r.y as f32;
+                        let u = ((px * cs - py * sn) / period).floor() as i64;
+                        let v = ((px * sn + py * cs) / period).floor() as i64;
+                        let col = colors[(u + v).rem_euclid(2) as usize];
+                        let a = (alpha[i] * opacity / 100.0).clamp(0.0, 1.0);
+                        let d = &mut above[i];
+                        for k in 0..3 {
+                            d[k] = col[k] * a + d[k] * (1.0 - a);
+                        }
+                        d[3] = a + d[3] * (1.0 - a);
+                    }
+                }
+                any_above = true;
+            }
             LayerStyle::GradientOverlay {
                 from,
                 to,
@@ -543,10 +802,7 @@ pub fn render(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
         }
     }
     let to_raster = |px: Vec<[f32; 4]>| {
-        let out: Vec<[u16; 4]> = px
-            .into_iter()
-            .map(|p| color::f_to_px([p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]))
-            .collect();
+        let out: Vec<[u16; 4]> = px.into_iter().map(color::f_to_px).collect();
         Arc::new(Raster::from_pixels(w as u32, h as u32, [0; 4], &out))
     };
     let rendered = Arc::new(Rendered {
@@ -568,6 +824,10 @@ pub fn effect_node(id: u64, raster: Arc<Raster>, r: IRect, n: &Node) -> Composit
         visible: n.visible,
         opacity: n.opacity,
         blend: BlendMode::Normal,
+        blending: emulsion_raster::composite::BlendingOptions {
+            fill_opacity: 1.0,
+            ..n.blending
+        },
         mask: None,
         clip_to: None,
         content: NodeContent::Pixels {
@@ -634,5 +894,128 @@ mod tests {
         let a = render(&d, n).unwrap();
         let b = render(&d, n).unwrap();
         assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    fn shape_document() -> Document {
+        let mut doc = Document::new(64, 64);
+        let raster = Raster::from_fn(64, 64, [0; 4], |x, y| {
+            if (12..52).contains(&x) && (12..52).contains(&y) {
+                [12000, 22000, 32000, 65535]
+            } else {
+                [0; 4]
+            }
+        });
+        doc.nodes.push(Node::raster(
+            1,
+            "shape",
+            Arc::new(raster),
+            Placement::default(),
+        ));
+        doc
+    }
+
+    #[test]
+    fn new_effects_render_inside_shape_and_roundtrip_with_undo() {
+        use crate::history::Editor;
+        for style in LayerStyle::catalogue().into_iter().skip(6) {
+            let doc = shape_document();
+            let original = flatten(&doc.composite_tree(), 0).read_rect(IRect::new(0, 0, 64, 64));
+            let mut editor = Editor::new(doc, None);
+            editor
+                .execute(Command::SetStyles {
+                    id: 1,
+                    styles: vec![style.clone()],
+                })
+                .unwrap();
+            let rendered = flatten(&editor.doc.composite_tree(), 0);
+            assert_ne!(
+                rendered.read_rect(IRect::new(0, 0, 64, 64)),
+                original,
+                "{} changes shape",
+                style.label()
+            );
+            assert_eq!(
+                rendered.get(4, 4),
+                [0; 4],
+                "{} stays inside alpha",
+                style.label()
+            );
+            assert_eq!(rendered.get(32, 32)[3], 65535);
+            let encoded = serde_json::to_string(&style).unwrap();
+            assert_eq!(serde_json::from_str::<LayerStyle>(&encoded).unwrap(), style);
+            assert!(editor.undo());
+            assert!(editor.doc.nodes[0].styles.is_empty());
+            assert_eq!(
+                flatten(&editor.doc.composite_tree(), 0).read_rect(IRect::new(0, 0, 64, 64)),
+                original
+            );
+            assert!(editor.redo());
+            assert_eq!(editor.doc.nodes[0].styles, vec![style]);
+        }
+    }
+
+    #[test]
+    fn effect_parameters_reject_nan_and_invalidate_memo() {
+        let mut doc = shape_document();
+        for mut style in LayerStyle::catalogue().into_iter().skip(6) {
+            assert!(!style.set_param("opacity", f32::NAN));
+            assert!(!style.set_param("opacity", f32::INFINITY));
+            doc.nodes[0].styles = vec![style.clone()];
+            let first = render(&doc, &doc.nodes[0]).unwrap();
+            assert!(style.set_param("opacity", 0.0));
+            doc.nodes[0].styles = vec![style];
+            let second = render(&doc, &doc.nodes[0]).unwrap();
+            assert!(!Arc::ptr_eq(&first, &second));
+            assert_eq!(second.above.as_ref().unwrap().0.get(32, 32), [0; 4]);
+        }
+    }
+
+    #[test]
+    fn translucent_overlay_is_premultiplied_once() {
+        let mut doc = shape_document();
+        doc.nodes[0].styles = vec![LayerStyle::ColorOverlay {
+            color: [255, 0, 0],
+            opacity: 50.0,
+        }];
+        let effects = render(&doc, &doc.nodes[0]).unwrap();
+        let pixel = effects.above.as_ref().unwrap().0.get(32, 32);
+        assert!(
+            (pixel[0] as i32 - 32768).abs() <= 1,
+            "red should equal alpha for translucent red: {pixel:?}"
+        );
+        assert_eq!(pixel[0], pixel[3]);
+    }
+
+    #[test]
+    fn bevel_texture_changes_interior_and_pattern_alternates() {
+        let mut doc = shape_document();
+        let mut bevel = LayerStyle::catalogue()[6].clone();
+        doc.nodes[0].styles = vec![bevel.clone()];
+        let plain = flatten(&doc.composite_tree(), 0).read_rect(IRect::new(24, 24, 16, 16));
+        bevel.set_param("texture", 80.0);
+        doc.nodes[0].styles = vec![bevel];
+        assert_ne!(
+            flatten(&doc.composite_tree(), 0).read_rect(IRect::new(24, 24, 16, 16)),
+            plain
+        );
+        let mut pattern = LayerStyle::catalogue()[9].clone();
+        pattern.set_param("opacity", 100.0);
+        doc.nodes[0].styles = vec![pattern];
+        let rendered = flatten(&doc.composite_tree(), 0);
+        assert_ne!(rendered.get(25, 25), rendered.get(37, 25));
+    }
+
+    #[test]
+    fn zero_fill_hides_content_and_preserves_style_shape() {
+        let mut doc = shape_document();
+        doc.nodes[0].blending.fill_opacity = 0.0;
+        assert_eq!(flatten(&doc.composite_tree(), 0).get(32, 32), [0; 4]);
+        doc.nodes[0].styles = vec![LayerStyle::ColorOverlay {
+            color: [255, 0, 0],
+            opacity: 100.0,
+        }];
+        let styled = flatten(&doc.composite_tree(), 0);
+        assert_eq!(styled.get(32, 32), [65535, 0, 0, 65535]);
+        assert_eq!(styled.get(4, 4), [0; 4]);
     }
 }

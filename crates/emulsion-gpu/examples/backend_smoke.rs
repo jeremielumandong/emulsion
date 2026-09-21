@@ -18,6 +18,7 @@ fn node(id: u64, content: NodeContent) -> CompositeNode {
         visible: true,
         opacity: 1.0,
         blend: BlendMode::Normal,
+        blending: Default::default(),
         mask: None,
         clip_to: None,
         content,

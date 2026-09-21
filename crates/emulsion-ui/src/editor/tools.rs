@@ -11,6 +11,15 @@ use emulsion_raster::select::{self, Combine};
 use emulsion_raster::{IRect, Mask, fill};
 use glam::{DAffine2, dvec2};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BrushSettingsSection {
+    #[default]
+    Tip,
+    Texture,
+    Dynamics,
+    Drawing,
+}
+
 pub(super) fn zoom_out(modifiers: Modifiers) -> bool {
     modifiers.shift || modifiers.alt
 }
@@ -422,6 +431,8 @@ impl EditorView {
                 ToolDrag::Stroke { .. }
                     | ToolDrag::Liquify { .. }
                     | ToolDrag::MoveSelection { .. }
+                    | ToolDrag::PickSv { .. }
+                    | ToolDrag::PickHue { .. }
                     | ToolDrag::Pen(_)
             ) {
                 self.tool_up(drag, cx);
@@ -448,6 +459,9 @@ impl EditorView {
         let from = BrushSlot::of(self.tool, self.tools.paint);
         self.tool = tool;
         self.switch_slot(from, BrushSlot::of(tool, self.tools.paint));
+        if self.sidebar_tab == SidebarTab::BrushSettings && !self.brushy() {
+            self.select_sidebar(SidebarTab::History, cx);
+        }
         self.tools.mask_edit = tool == Tool::Mask;
         if tool == Tool::Grade {
             // Open the selected adjustment for editing, or offer new layers.
@@ -512,8 +526,50 @@ impl EditorView {
     }
 
     pub fn set_fg(&mut self, rgba: [u8; 4], cx: &mut Context<Self>) {
-        self.tools.fg = rgba;
         self.tools.hue = rgb_to_hsv(rgba).0;
+        self.apply_foreground(rgba, cx);
+    }
+
+    pub(crate) fn set_type_mode(&mut self, vertical: bool, cx: &mut Context<Self>) {
+        self.finish_tool_interaction(cx);
+        self.close_text_field(cx);
+        self.set_tool(Tool::Type, cx);
+        self.type_tool.spec.vertical = vertical;
+        cx.notify();
+    }
+
+    fn foreground_edits_text(&self) -> bool {
+        matches!(self.tool, Tool::Type | Tool::Move)
+            && self
+                .text_target()
+                .is_some_and(|(id, _)| self.editor.doc.locked_ancestor(id).is_none())
+    }
+
+    // HSV drags preserve the chosen hue even at zero saturation/value.
+    fn apply_foreground(&mut self, rgba: [u8; 4], cx: &mut Context<Self>) {
+        self.tools.fg = rgba;
+        if self.foreground_edits_text() {
+            self.restyle_text(|spec| spec.color = rgba, cx);
+        }
+        cx.notify();
+    }
+
+    fn begin_colour_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_text_field(cx);
+        window.focus(&self.canvas_focus, cx);
+        if self.foreground_edits_text() {
+            self.editor.begin("Text colour");
+        }
+    }
+
+    pub(crate) fn open_text_colour(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_text_field(cx);
+        if let Some((_, spec)) = self.text_target() {
+            self.tools.fg = spec.color;
+        }
+        self.tools.hue = rgb_to_hsv(self.tools.fg).0;
+        self.tools.picker = true;
+        window.focus(&self.canvas_focus, cx);
         cx.notify();
     }
 
@@ -532,6 +588,9 @@ impl EditorView {
         self.tools.mask_edit = mask_edit;
         self.tools.paint = kind;
         self.switch_slot(from, Some(BrushSlot::Paint(kind)));
+        if self.sidebar_tab == SidebarTab::BrushSettings && !self.brushy() {
+            self.select_sidebar(SidebarTab::History, cx);
+        }
         cx.notify();
     }
 
@@ -557,14 +616,12 @@ impl EditorView {
 
     pub fn swap_colors(&mut self, cx: &mut Context<Self>) {
         std::mem::swap(&mut self.tools.fg, &mut self.tools.bg);
-        self.tools.hue = rgb_to_hsv(self.tools.fg).0;
-        cx.notify();
+        self.set_fg(self.tools.fg, cx);
     }
 
     pub fn default_colors(&mut self, cx: &mut Context<Self>) {
-        self.tools.fg = [10, 10, 11, 255];
         self.tools.bg = [255, 255, 255, 255];
-        cx.notify();
+        self.set_fg([10, 10, 11, 255], cx);
     }
 
     pub fn brush_size(&mut self, larger: bool, cx: &mut Context<Self>) {
@@ -1671,7 +1728,11 @@ impl EditorView {
                     self.selected = Some(id);
                 }
             }
-            ToolDrag::PickSv { .. } | ToolDrag::PickHue { .. } => {}
+            ToolDrag::PickSv { .. } | ToolDrag::PickHue { .. } => {
+                if self.editor.in_transaction() {
+                    self.editor.end();
+                }
+            }
             ToolDrag::MoveSelection { .. } => {
                 if self.editor.in_transaction() {
                     self.editor.end();
@@ -1796,6 +1857,8 @@ impl EditorView {
                 ToolDrag::Stroke { .. }
                     | ToolDrag::Liquify { .. }
                     | ToolDrag::MoveSelection { .. }
+                    | ToolDrag::PickSv { .. }
+                    | ToolDrag::PickHue { .. }
                     | ToolDrag::Pen(
                         super::pen::PenDrag::Anchor { .. } | super::pen::PenDrag::Handle { .. }
                     )
@@ -2359,8 +2422,7 @@ impl EditorView {
         let s = (f32::from(pos.x - b.origin.x) / f32::from(b.size.width)).clamp(0.0, 1.0);
         let v = 1.0 - (f32::from(pos.y - b.origin.y) / f32::from(b.size.height)).clamp(0.0, 1.0);
         let [r, g, bl] = hsv_to_rgb(self.tools.hue, s, v);
-        self.tools.fg = [r, g, bl, 255];
-        cx.notify();
+        self.apply_foreground([r, g, bl, 255], cx);
     }
 
     fn pick_hue(&mut self, track: &TrackBounds, pos: Point<Pixels>, cx: &mut Context<Self>) {
@@ -2370,8 +2432,7 @@ impl EditorView {
         self.tools.hue = f.min(0.9999);
         let (_, s, v) = rgb_to_hsv(self.tools.fg);
         let [r, g, b] = hsv_to_rgb(self.tools.hue, s.max(0.05), v.max(0.05));
-        self.tools.fg = [r, g, b, 255];
-        cx.notify();
+        self.apply_foreground([r, g, b, 255], cx);
     }
 
     /// Marching-ants segments for the current selection, cached.
@@ -2968,6 +3029,26 @@ impl EditorView {
     pub(crate) fn tool_options(&mut self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut v: Vec<AnyElement> = Vec::new();
         let b = self.tools.brush;
+        if self.brushy() {
+            v.push(
+                chip(
+                    "brush-settings",
+                    "Brush settings",
+                    self.sidebar_tab == SidebarTab::BrushSettings,
+                    p,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let tab = if this.sidebar_tab == SidebarTab::BrushSettings {
+                        SidebarTab::History
+                    } else {
+                        SidebarTab::BrushSettings
+                    };
+                    this.select_sidebar(tab, cx);
+                }))
+                .test_support()
+                .into_any_element(),
+            );
+        }
         match self.tool {
             Tool::Grade => {
                 v.push(self.group("add adjustment", p));
@@ -3298,58 +3379,27 @@ impl EditorView {
             }
             Tool::Brush | Tool::Heal | Tool::Clone => {
                 let open = self.presets.open;
-                v.push(
-                    tip(
-                        chip("presets", "presets", open, p)
+                if self.brushy() {
+                    v.push(
+                        tip(
+                            chip(
+                                "presets",
+                                self.presets
+                                    .current
+                                    .clone()
+                                    .unwrap_or_else(|| "Brush presets".into()),
+                                open,
+                                p,
+                            )
+                            .test_support()
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_presets(cx))),
-                        "Brush library: pencils, inks, paints, erasers and imported brushes",
-                    )
-                    .into_any_element(),
-                );
+                            "Brush library: pencils, inks, paints, erasers and imported brushes",
+                        )
+                        .into_any_element(),
+                    );
+                }
                 if self.tool == Tool::Brush {
                     let cur = self.tools.paint;
-                    for (id, t, help, k) in [
-                        (
-                            "pk-brush",
-                            "brush",
-                            "Paint with the foreground colour",
-                            PaintKind::Brush,
-                        ),
-                        (
-                            "pk-eraser",
-                            "eraser",
-                            "Erase to transparent",
-                            PaintKind::Eraser,
-                        ),
-                        (
-                            "pk-smudge",
-                            "smudge",
-                            "Drag the colour already on the layer",
-                            PaintKind::Smudge,
-                        ),
-                        (
-                            "pk-bucket",
-                            "bucket",
-                            "Fill a similar-coloured area",
-                            PaintKind::Bucket,
-                        ),
-                        (
-                            "pk-grad",
-                            "gradient",
-                            "Drag a gradient from foreground to background colour",
-                            PaintKind::Gradient,
-                        ),
-                        (
-                            "pk-liquify",
-                            "liquify",
-                            "Push, twirl, pinch or expand the pixels",
-                            PaintKind::Liquify,
-                        ),
-                    ] {
-                        v.push(self.mode_chip_tip(id, t, help, k, cur, p, cx, |e, k, cx| {
-                            e.set_paint(k, cx)
-                        }));
-                    }
                     if cur == PaintKind::Liquify {
                         use emulsion_raster::liquify::Mode;
                         let m = self.tools.liquify;
@@ -3393,14 +3443,6 @@ impl EditorView {
                     }
                 }
                 if self.brushy() {
-                    v.push(self.group("brush", p));
-                    if let Some(name) = &self.presets.current {
-                        v.push(
-                            mono(name.clone(), 10.5, p.ink)
-                                .flex_none()
-                                .into_any_element(),
-                        );
-                    }
                     v.push(self.opt_slider(
                         SliderKey::ToolSize,
                         "size",
@@ -3498,7 +3540,9 @@ impl EditorView {
                     _ if self.tools.mask_edit => "painting the mask: brush reveals, eraser hides",
                     _ => "alt-click picks a colour",
                 };
-                v.push(div().flex_none().child(hint).into_any_element());
+                if matches!(self.tool, Tool::Clone | Tool::Heal) || self.tools.mask_edit {
+                    v.push(div().flex_none().child(hint).into_any_element());
+                }
             }
             Tool::Crop => {
                 v.push(
@@ -3896,7 +3940,7 @@ impl EditorView {
     }
 
     /// Is a brush being used (as opposed to bucket, gradient or liquify)?
-    fn brushy(&self) -> bool {
+    pub(crate) fn brushy(&self) -> bool {
         match self.tool {
             Tool::Brush => matches!(
                 self.tools.paint,
@@ -3907,20 +3951,85 @@ impl EditorView {
         }
     }
 
-    /// The power-user row under the tool options: brush dynamics,
-    /// symmetry, guides and stroke options. Empty for tools without any.
-    pub(crate) fn tool_options_advanced(
+    pub(crate) fn brush_settings_panel(
         &mut self,
         p: &Palette,
         cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
+    ) -> AnyElement {
+        let current = self.brush_settings_section;
+        let navigation = div().flex().flex_wrap().gap_1().children(
+            [
+                (BrushSettingsSection::Tip, "brush-settings-tip", "Tip"),
+                (
+                    BrushSettingsSection::Texture,
+                    "brush-settings-texture",
+                    "Texture",
+                ),
+                (
+                    BrushSettingsSection::Dynamics,
+                    "brush-settings-dynamics",
+                    "Dynamics",
+                ),
+                (
+                    BrushSettingsSection::Drawing,
+                    "brush-settings-drawing",
+                    "Drawing",
+                ),
+            ]
+            .into_iter()
+            .map(|(section, id, label)| {
+                chip(id, label, current == section, p)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.brush_settings_section = section;
+                        cx.notify();
+                    }))
+                    .test_support()
+            }),
+        );
+        let controls = self.brush_settings_controls(p, cx);
+        div()
+            .id("brush-settings-panel")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_3()
+            .w_full()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(mono("Brush settings", 12., p.ink))
+                    .child(
+                        chip("brush-settings-close", "Close", false, p)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.select_sidebar(SidebarTab::History, cx);
+                                window.focus(&this.canvas_focus, cx);
+                            }))
+                            .test_support(),
+                    ),
+            )
+            .child(navigation)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap_3()
+                    .children(controls),
+            )
+            .into_any_element()
+    }
+
+    /// Settings for the selected brush category.
+    fn brush_settings_controls(&mut self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut v: Vec<AnyElement> = Vec::new();
         if !self.brushy() {
             return v;
         }
         let b = self.tools.brush;
-        v.push(self.group("dynamics", p));
-        if self.tool != Tool::Heal {
+        if self.brush_settings_section == BrushSettingsSection::Tip && self.tool != Tool::Heal {
             v.push(self.opt_slider(
                 SliderKey::ToolFlow,
                 "flow",
@@ -3932,7 +4041,7 @@ impl EditorView {
             ));
         }
         v.extend(self.brush_more_options(p, cx));
-        if self.tool == Tool::Mask {
+        if self.brush_settings_section != BrushSettingsSection::Drawing || self.tool == Tool::Mask {
             return v;
         }
         v.push(self.group("symmetry", p));
@@ -4062,170 +4171,174 @@ impl EditorView {
                 v.push(self.opt_slider($key, $name, $display, $norm, $spec, p, cx));
             };
         }
-        sl!(
-            SliderKey::ToolSpacing,
-            "spacing",
-            format!("{:.0}%", b.spacing * 100.0),
-            ((b.spacing - 0.02) / 1.98).sqrt(),
-            (2.0, 200.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolRoundness,
-            "round",
-            format!("{:.0}%", b.roundness * 100.0),
-            (b.roundness - 0.05) / 0.95,
-            (5.0, 100.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolAngle,
-            "angle",
-            format!("{:.0}°", b.angle),
-            b.angle / 360.0,
-            (0.0, 360.0, 1.0)
-        );
-        let fp = b.follow_path;
-        v.push(
-            chip("follow-path", "follow path", fp, p)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.tools.brush.follow_path = !fp;
-                    cx.notify();
-                }))
-                .into_any_element(),
-        );
-        for (id, t, k) in [
-            ("gr-none", "no grain", GrainKind::None),
-            ("gr-paper", "paper", GrainKind::Paper),
-            ("gr-canvas", "canvas", GrainKind::Canvas),
-            ("gr-chalk", "chalk", GrainKind::Chalk),
-            ("gr-speck", "speckle", GrainKind::Speckle),
-            ("gr-bristle", "bristle", GrainKind::Bristle),
-            ("gr-tone", "screentone", GrainKind::Halftone),
-            ("gr-hatch", "hatch", GrainKind::Hatch),
-            ("gr-cross", "cross hatch", GrainKind::CrossHatch),
-        ] {
-            v.push(self.mode_chip(id, t, k, b.grain, p, cx, |e, k, cx| {
-                e.tools.brush.grain = k;
-                if k != GrainKind::None && e.tools.brush.grain_strength == 0.0 {
-                    e.tools.brush.grain_strength = 0.7;
-                }
-                cx.notify();
-            }));
-        }
-        if b.grain != GrainKind::None {
+        if self.brush_settings_section == BrushSettingsSection::Tip {
             sl!(
-                SliderKey::ToolGrainScale,
-                "grain size",
-                format!("{:.0}px", b.grain_scale),
-                ((b.grain_scale - 1.0) / 63.0).sqrt(),
-                (1.0, 64.0, 1.0)
+                SliderKey::ToolSpacing,
+                "spacing",
+                format!("{:.0}%", b.spacing * 100.0),
+                ((b.spacing - 0.02) / 1.98).sqrt(),
+                (2.0, 200.0, 1.0)
             );
             sl!(
-                SliderKey::ToolGrainStrength,
-                "grain",
-                format!("{:.0}%", b.grain_strength * 100.0),
-                b.grain_strength,
+                SliderKey::ToolRoundness,
+                "round",
+                format!("{:.0}%", b.roundness * 100.0),
+                (b.roundness - 0.05) / 0.95,
+                (5.0, 100.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolAngle,
+                "angle",
+                format!("{:.0}°", b.angle),
+                b.angle / 360.0,
+                (0.0, 360.0, 1.0)
+            );
+            let fp = b.follow_path;
+            v.push(
+                chip("follow-path", "follow path", fp, p)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.tools.brush.follow_path = !fp;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
+        if self.brush_settings_section == BrushSettingsSection::Texture {
+            for (id, t, k) in [
+                ("gr-none", "no grain", GrainKind::None),
+                ("gr-paper", "paper", GrainKind::Paper),
+                ("gr-canvas", "canvas", GrainKind::Canvas),
+                ("gr-chalk", "chalk", GrainKind::Chalk),
+                ("gr-speck", "speckle", GrainKind::Speckle),
+                ("gr-bristle", "bristle", GrainKind::Bristle),
+                ("gr-tone", "screentone", GrainKind::Halftone),
+                ("gr-hatch", "hatch", GrainKind::Hatch),
+                ("gr-cross", "cross hatch", GrainKind::CrossHatch),
+            ] {
+                v.push(self.mode_chip(id, t, k, b.grain, p, cx, |e, k, cx| {
+                    e.tools.brush.grain = k;
+                    if k != GrainKind::None && e.tools.brush.grain_strength == 0.0 {
+                        e.tools.brush.grain_strength = 0.7;
+                    }
+                    cx.notify();
+                }));
+            }
+            if b.grain != GrainKind::None {
+                sl!(
+                    SliderKey::ToolGrainScale,
+                    "grain size",
+                    format!("{:.0}px", b.grain_scale),
+                    ((b.grain_scale - 1.0) / 63.0).sqrt(),
+                    (1.0, 64.0, 1.0)
+                );
+                sl!(
+                    SliderKey::ToolGrainStrength,
+                    "grain",
+                    format!("{:.0}%", b.grain_strength * 100.0),
+                    b.grain_strength,
+                    (0.0, 100.0, 1.0)
+                );
+            }
+            sl!(
+                SliderKey::ToolWetness,
+                "wet",
+                format!("{:.0}%", b.wetness * 100.0),
+                b.wetness,
                 (0.0, 100.0, 1.0)
             );
         }
-        sl!(
-            SliderKey::ToolWetness,
-            "wet",
-            format!("{:.0}%", b.wetness * 100.0),
-            b.wetness,
-            (0.0, 100.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolStabilizer,
-            "steady",
-            format!("{:.0}%", b.stabilizer * 100.0),
-            b.stabilizer,
-            (0.0, 100.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolTaper,
-            "taper",
-            format!("{:.0}px", b.taper_end),
-            (b.taper_end / 300.0).sqrt(),
-            (0.0, 300.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolPressureSize,
-            "pressure→size",
-            format!("{:.0}%", b.size_pressure * 100.0),
-            b.size_pressure,
-            (0.0, 100.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolPressureFlow,
-            "pressure→flow",
-            format!("{:.0}%", b.flow_pressure * 100.0),
-            b.flow_pressure,
-            (0.0, 100.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolSpeed,
-            "speed thins",
-            format!("{:.0}%", b.speed_thins * 100.0),
-            b.speed_thins,
-            (0.0, 100.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolScatter,
-            "scatter",
-            format!("{:.0}%", b.scatter * 100.0),
-            b.scatter,
-            (0.0, 100.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolSizeJitter,
-            "size jitter",
-            format!("{:.0}%", b.size_jitter * 100.0),
-            b.size_jitter,
-            (0.0, 100.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolColorJitter,
-            "colour jitter",
-            format!("{:.0}%", b.color_jitter * 100.0),
-            b.color_jitter,
-            (0.0, 100.0, 1.0)
-        );
-        sl!(
-            SliderKey::ToolTilt,
-            "tilt",
-            format!("{:.0}%", b.tilt * 100.0),
-            b.tilt,
-            (0.0, 100.0, 1.0)
-        );
-        // Pressure curve on a log scale: soft (0.25) … linear (1) … firm (4).
-        sl!(
-            SliderKey::ToolPressureCurve,
-            "pressure curve",
-            if (b.pressure_curve - 1.0).abs() < 0.05 {
-                "linear".to_string()
-            } else if b.pressure_curve < 1.0 {
-                format!("soft {:.2}", b.pressure_curve)
-            } else {
-                format!("firm {:.2}", b.pressure_curve)
-            },
-            (b.pressure_curve.log2() + 2.0) / 4.0,
-            (0.0, 100.0, 1.0)
-        );
-        for (id, t, k) in [
-            ("bl-normal", "normal", BrushBlend::Normal),
-            ("bl-mult", "multiply", BrushBlend::Multiply),
-            ("bl-behind", "behind", BrushBlend::Behind),
-        ] {
-            v.push(self.mode_chip(id, t, k, b.blend, p, cx, |e, k, cx| {
-                e.tools.brush.blend = k;
-                cx.notify();
-            }));
+        if self.brush_settings_section == BrushSettingsSection::Dynamics {
+            sl!(
+                SliderKey::ToolStabilizer,
+                "steady",
+                format!("{:.0}%", b.stabilizer * 100.0),
+                b.stabilizer,
+                (0.0, 100.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolTaper,
+                "taper",
+                format!("{:.0}px", b.taper_end),
+                (b.taper_end / 300.0).sqrt(),
+                (0.0, 300.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolPressureSize,
+                "pressure→size",
+                format!("{:.0}%", b.size_pressure * 100.0),
+                b.size_pressure,
+                (0.0, 100.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolPressureFlow,
+                "pressure→flow",
+                format!("{:.0}%", b.flow_pressure * 100.0),
+                b.flow_pressure,
+                (0.0, 100.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolSpeed,
+                "speed thins",
+                format!("{:.0}%", b.speed_thins * 100.0),
+                b.speed_thins,
+                (0.0, 100.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolScatter,
+                "scatter",
+                format!("{:.0}%", b.scatter * 100.0),
+                b.scatter,
+                (0.0, 100.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolSizeJitter,
+                "size jitter",
+                format!("{:.0}%", b.size_jitter * 100.0),
+                b.size_jitter,
+                (0.0, 100.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolColorJitter,
+                "colour jitter",
+                format!("{:.0}%", b.color_jitter * 100.0),
+                b.color_jitter,
+                (0.0, 100.0, 1.0)
+            );
+            sl!(
+                SliderKey::ToolTilt,
+                "tilt",
+                format!("{:.0}%", b.tilt * 100.0),
+                b.tilt,
+                (0.0, 100.0, 1.0)
+            );
+            // Pressure curve on a log scale: soft (0.25) … linear (1) … firm (4).
+            sl!(
+                SliderKey::ToolPressureCurve,
+                "pressure curve",
+                if (b.pressure_curve - 1.0).abs() < 0.05 {
+                    "linear".to_string()
+                } else if b.pressure_curve < 1.0 {
+                    format!("soft {:.2}", b.pressure_curve)
+                } else {
+                    format!("firm {:.2}", b.pressure_curve)
+                },
+                (b.pressure_curve.log2() + 2.0) / 4.0,
+                (0.0, 100.0, 1.0)
+            );
+            v.push(mono(crate::tablet::status(), 10., p.muted).into_any_element());
         }
-        v.push(
-            mono(crate::tablet::status(), 10., p.muted)
-                .flex_none()
-                .into_any_element(),
-        );
+        if self.brush_settings_section == BrushSettingsSection::Drawing {
+            for (id, t, k) in [
+                ("bl-normal", "normal", BrushBlend::Normal),
+                ("bl-mult", "multiply", BrushBlend::Multiply),
+                ("bl-behind", "behind", BrushBlend::Behind),
+            ] {
+                v.push(self.mode_chip(id, t, k, b.blend, p, cx, |e, k, cx| {
+                    e.tools.brush.blend = k;
+                    cx.notify();
+                }));
+            }
+        }
         v
     }
 
@@ -4257,6 +4370,8 @@ impl EditorView {
             .child(
                 div()
                     .id("fg-swatch")
+                    .test_support()
+                    .occlude()
                     .tab_index(0)
                     .role(Role::Button)
                     .aria_label("Choose foreground colour")
@@ -4279,7 +4394,11 @@ impl EditorView {
                         )
                         .build(w, cx)
                     })
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if !this.tools.picker && this.foreground_edits_text() {
+                            this.open_text_colour(window, cx);
+                            return;
+                        }
                         this.tools.picker = !this.tools.picker;
                         this.tools.hue = rgb_to_hsv(this.tools.fg).0;
                         cx.notify();
@@ -4349,6 +4468,7 @@ impl EditorView {
                             .child(
                                 div()
                                     .id("picker-sv")
+                                    .test_support()
                                     .relative()
                                     .w(px(190.))
                                     .h(px(150.))
@@ -4356,7 +4476,8 @@ impl EditorView {
                                     .cursor(CursorStyle::Crosshair)
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                            this.begin_colour_drag(window, cx);
                                             this.pick_sv(&t1, e.position, cx);
                                             this.drag = Some(Drag::Tool(ToolDrag::PickSv {
                                                 track: t1.clone(),
@@ -4399,6 +4520,7 @@ impl EditorView {
                             .child(
                                 div()
                                     .id("picker-hue")
+                                    .test_support()
                                     .relative()
                                     .flex()
                                     .w(px(190.))
@@ -4406,7 +4528,8 @@ impl EditorView {
                                     .cursor(CursorStyle::PointingHand)
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                            this.begin_colour_drag(window, cx);
                                             this.pick_hue(&t2, e.position, cx);
                                             this.drag = Some(Drag::Tool(ToolDrag::PickHue {
                                                 track: t2.clone(),
@@ -4442,16 +4565,19 @@ impl EditorView {
                                     let c = *c;
                                     div()
                                         .id(("sw", i))
+                                        .test_support()
                                         .size(px(15.))
                                         .border_1()
                                         .border_color(p.line)
                                         .bg(rgb(c))
                                         .cursor_pointer()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.tools.fg =
-                                                [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
-                                            this.tools.hue = rgb_to_hsv(this.tools.fg).0;
-                                            cx.notify();
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.close_text_field(cx);
+                                            window.focus(&this.canvas_focus, cx);
+                                            this.set_fg(
+                                                [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255],
+                                                cx,
+                                            );
                                         }))
                                 }),
                             ))

@@ -1,6 +1,7 @@
 //! Image and Filter menus backed by the same editable effects as Properties.
 use super::*;
 use emulsion_filters::Filter;
+use gpui_kit::base::Selectable;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -227,6 +228,19 @@ impl EditorView {
                                 }))
                         }),
                 ),
+            )
+            .child(
+                Button::new("recipes-menu")
+                    .label("Recipes")
+                    .small()
+                    .ghost()
+                    .selected(self.sidebar_tab == SidebarTab::Recipes)
+                    .text_color(p.ink)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.recipes.open = true;
+                        this.select_sidebar(SidebarTab::Recipes, cx);
+                        window.focus(&this.panel_focus, cx);
+                    })),
             )
             .into_any_element()
     }

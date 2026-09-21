@@ -74,8 +74,51 @@ fn fmt(v: f64) -> String {
     }
 }
 
+/// Text uses an anchor rotation while pixel placements rotate about the box
+/// centre. Translate between them without rasterizing the editable glyphs.
+fn text_transform_frame(spec: &emulsion_core::text::TextSpec) -> (u32, u32, Placement) {
+    let bounds = emulsion_core::text::layout(spec).bounds();
+    let w = (bounds.x + bounds.width).ceil().max(1.0) as u32;
+    let h = (bounds.y + bounds.height).ceil().max(1.0) as u32;
+    let mut placement = Placement {
+        scale_x: f64::from(spec.scale_x.abs()),
+        scale_y: f64::from(spec.scale_y.abs()),
+        rotation: f64::from(spec.rotation),
+        flip_x: spec.scale_x < 0.0,
+        flip_y: spec.scale_y < 0.0,
+        ..Default::default()
+    };
+    let offset = placement.to_doc(w, h).transform_point2(dvec2(0., 0.));
+    placement.x = f64::from(spec.x) - offset.x;
+    placement.y = f64::from(spec.y) - offset.y;
+    (w, h, placement)
+}
+
+fn placement_command(node: &Node, placement: Placement) -> Command {
+    if let NodeKind::Text { spec, .. } = &node.kind {
+        let (w, h, _) = text_transform_frame(spec);
+        let origin = placement.to_doc(w, h).transform_point2(dvec2(0., 0.));
+        let mut spec = (**spec).clone();
+        spec.x = origin.x as f32;
+        spec.y = origin.y as f32;
+        spec.rotation = placement.rotation as f32;
+        spec.scale_x = (placement.scale_x * if placement.flip_x { -1. } else { 1. }) as f32;
+        spec.scale_y = (placement.scale_y * if placement.flip_y { -1. } else { 1. }) as f32;
+        Command::SetText {
+            id: node.id,
+            spec: Box::new(spec),
+        }
+    } else {
+        Command::SetPlacement {
+            id: node.id,
+            placement,
+        }
+    }
+}
+
 impl EditorView {
     pub(crate) fn begin_transform_action(&mut self, mode: &str, cx: &mut Context<Self>) {
+        self.close_text_field(cx);
         if self.drag.is_some()
             || self.warp.is_some()
             || self.editor.in_transaction()
@@ -112,27 +155,31 @@ impl EditorView {
             .selected
             .and_then(|id| self.editor.doc.node(id))
             .is_some_and(|node| {
-                matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. })
+                matches!(
+                    node.kind,
+                    NodeKind::Raster { .. } | NodeKind::Smart { .. } | NodeKind::Text { .. }
+                )
             })
         {
-            self.set_status("Select a pixel or Smart layer to flip.", true, cx);
+            self.set_status("Select a pixel, text or Smart layer to flip.", true, cx);
             return;
         }
         self.transform_pixels_with(
             |id, doc| {
                 let node = doc.node(id)?;
-                let (NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. }) =
-                    &node.kind
-                else {
-                    return None;
+                let mut placement = match &node.kind {
+                    NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } => {
+                        *placement
+                    }
+                    NodeKind::Text { spec, .. } => text_transform_frame(spec).2,
+                    _ => return None,
                 };
-                let mut placement = *placement;
                 if horizontal {
                     placement.flip_x = !placement.flip_x;
                 } else {
                     placement.flip_y = !placement.flip_y;
                 }
-                Some(Command::SetPlacement { id, placement })
+                Some(placement_command(node, placement))
             },
             cx,
         );
@@ -155,6 +202,10 @@ impl EditorView {
             NodeKind::Smart {
                 source, placement, ..
             } => Some((id, source.width(), source.height(), *placement)),
+            NodeKind::Text { spec, .. } => {
+                let (w, h, placement) = text_transform_frame(spec);
+                Some((id, w, h, placement))
+            }
             _ => None,
         }
     }
@@ -187,7 +238,11 @@ impl EditorView {
                 source.width() as f64,
                 source.height() as f64,
             )),
-            NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } => {
+            NodeKind::Text { spec, .. } => {
+                let (w, h, placement) = text_transform_frame(spec);
+                Some(quad(placement.to_doc(w, h), w as f64, h as f64))
+            }
+            NodeKind::Path { cache, .. } => {
                 let b = cache.tile_bounds();
                 (!b.is_empty()).then(|| {
                     let (x, y, w, h) = (b.x as f64, b.y as f64, b.w as f64, b.h as f64);
@@ -469,7 +524,9 @@ impl EditorView {
                 p.y += fixed.y - moved.y;
             }
         }
-        self.execute(Command::SetPlacement { id, placement: p }, cx);
+        if let Some(node) = self.editor.doc.node(id) {
+            self.execute(placement_command(node, p), cx);
+        }
     }
 
     /// Finish a distort: re-project the pixels (and mask) onto the quad.
@@ -649,8 +706,10 @@ impl EditorView {
         p.scale_x = nw / w as f64;
         p.scale_y = nh / h as f64;
         p.rotation = (angle + 180.0).rem_euclid(360.0) - 180.0;
-        if p != start {
-            self.execute(Command::SetPlacement { id, placement: p }, cx);
+        if p != start
+            && let Some(node) = self.editor.doc.node(id)
+        {
+            self.execute(placement_command(node, p), cx);
         }
     }
 

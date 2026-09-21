@@ -19,6 +19,9 @@ pub(crate) enum SidebarTab {
     Timeline,
     History,
     Histogram,
+    BrushSettings,
+    BrushPresets,
+    BlendingOptions,
 }
 
 impl EditorView {
@@ -41,6 +44,7 @@ impl EditorView {
             self.anim.replay = None;
         }
         self.sidebar_tab = tab;
+        self.presets.open = tab == SidebarTab::BrushPresets;
         self.sidebar_menu = false;
         self.menu = None;
         cx.notify();
@@ -104,6 +108,9 @@ impl EditorView {
                 }),
             );
         let content = match self.sidebar_tab {
+            SidebarTab::BlendingOptions => self.blending_options_panel(p, cx),
+            SidebarTab::BrushSettings => self.brush_settings_panel(p, cx),
+            SidebarTab::BrushPresets => div().children(self.presets_view(p, cx)).into_any_element(),
             SidebarTab::Properties => div()
                 .id("sidebar-properties-content")
                 .child(self.inspector(p, window, cx))
@@ -145,7 +152,7 @@ impl EditorView {
                                 .w_full()
                                 .text_size(px(10.5))
                                 .text_color(p.muted)
-                                .child("Replay plays the picture back from its history: every step still undoable, and every save."),
+                                .child("Replay shows saved versions and the editing steps still available in Undo."),
                         ),
                 )
                 .into_any_element(),

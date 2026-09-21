@@ -24,6 +24,7 @@ pub struct RailItem {
     pub shape: Option<ShapeKind>,
     pub pen: Option<PenMode>,
     pub rotate_view: bool,
+    pub vertical_type: bool,
 }
 
 const fn item(name: &'static str, glyph: &'static str, key: &'static str, tool: Tool) -> RailItem {
@@ -37,6 +38,7 @@ const fn item(name: &'static str, glyph: &'static str, key: &'static str, tool: 
         shape: None,
         pen: None,
         rotate_view: false,
+        vertical_type: false,
     }
 }
 
@@ -155,7 +157,18 @@ pub const GROUPS: &[&[RailItem]] = &[
         pen("Delete Anchor Point", "minus", PenMode::DeleteAnchor),
         pen("Convert Point", "corner-down-right", PenMode::ConvertPoint),
     ],
-    &[item("Type", "type", "T", Tool::Type)],
+    &[
+        item("Type Tool", "type", "T", Tool::Type),
+        RailItem {
+            vertical_type: true,
+            ..item(
+                "Vertical Type Tool",
+                "emulsion-vertical-type",
+                "Shift+T",
+                Tool::Type,
+            )
+        },
+    ],
     &[
         shape("Rectangle", "square", "U", ShapeKind::Rect),
         shape("Ellipse", "circle", "Shift+U", ShapeKind::Ellipse),
@@ -228,6 +241,7 @@ pub const DRAW_DIVIDERS: &[usize] = &[3, 4, 7];
 /// Tools Lucide has no icon for, drawn in its 24-grid, 2 px stroke style.
 const GRADIENT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="currentColor"/><stop offset="1" stop-color="currentColor" stop-opacity="0.05"/></linearGradient></defs><rect x="3" y="4" width="18" height="16" rx="1" fill="url(#g)"/><rect x="3" y="4" width="18" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/></svg>"##;
 const MASK_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="4.5" fill="currentColor"/></svg>"##;
+const VERTICAL_TYPE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 4h12M15 4v16M12 20h6M4 4v16M2 17l2 3 2-3"/></svg>"##;
 const LIQUIFY_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8c2.5-3 5-3 7.5 0s5 3 7.5 0 3-3 3-3"/><path d="M3 14c2.5-3 5-3 7.5 0s5 3 7.5 0 3-3 3-3"/><path d="M3 20c2.5-3 5-3 7.5 0s5 3 7.5 0 3-3 3-3"/></svg>"##;
 
 /// The bytes of a rail icon: Lucide's file, embedded from the vendored UI
@@ -303,6 +317,7 @@ fn icon_bytes(id: &str) -> &'static [u8] {
         }
         "emulsion-gradient" => GRADIENT_SVG.as_bytes(),
         "emulsion-mask" => MASK_SVG.as_bytes(),
+        "emulsion-vertical-type" => VERTICAL_TYPE_SVG.as_bytes(),
         "emulsion-liquify" => LIQUIFY_SVG.as_bytes(),
         _ => include_bytes!(
             "../../../../vendor/gpui/gpui-kit-assets/assets/icons/circle-question-mark.svg"
@@ -389,6 +404,9 @@ impl EditorView {
         if it.tool == Tool::Hand {
             return self.tools.rotate_view == it.rotate_view;
         }
+        if it.tool == Tool::Type {
+            return self.type_tool.spec.vertical == it.vertical_type;
+        }
         if let Some(mode) = it.pen {
             return self.tools.pen.mode == mode;
         }
@@ -420,6 +438,10 @@ impl EditorView {
         self.rail.flyout = None;
         if it.tool == Tool::Hand {
             self.set_hand_mode(it.rotate_view, cx);
+            return;
+        }
+        if it.tool == Tool::Type {
+            self.set_type_mode(it.vertical_type, cx);
             return;
         }
         if let Some(mode) = it.pen {

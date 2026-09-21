@@ -92,7 +92,13 @@ pub(crate) struct PresetState {
 
 impl EditorView {
     pub fn toggle_presets(&mut self, cx: &mut Context<Self>) {
-        self.presets.open = !self.presets.open;
+        let tab = if self.sidebar_tab == SidebarTab::BrushPresets {
+            SidebarTab::History
+        } else {
+            SidebarTab::BrushPresets
+        };
+        self.select_sidebar(tab, cx);
+        self.presets.open = tab == SidebarTab::BrushPresets;
         if self.presets.saved.is_none() {
             self.presets.saved = Some(load());
         }
@@ -111,6 +117,9 @@ impl EditorView {
     /// Switch to a brush. Erasers and smudges also switch the paint kind,
     /// so picking "Soft eraser" erases without another click.
     pub fn apply_preset(&mut self, p: &BrushPreset, cx: &mut Context<Self>) {
+        if !matches!(self.tool, Tool::Brush | Tool::Heal | Tool::Clone) {
+            self.set_tool(Tool::Brush, cx);
+        }
         if self.tool == Tool::Brush {
             let kind = match p.category.as_str() {
                 "Eraser" => PaintKind::Eraser,
@@ -227,6 +236,7 @@ impl EditorView {
                 }
                 this.presets.category = None;
                 this.presets.open = true;
+                this.select_sidebar(SidebarTab::BrushPresets, cx);
                 if errors.is_empty() {
                     this.set_status(
                         format!(
@@ -317,34 +327,25 @@ impl EditorView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
-        let brushy = matches!(self.tool, Tool::Brush | Tool::Heal | Tool::Clone)
-            && !(self.tool == Tool::Brush
-                && matches!(self.tools.paint, PaintKind::Bucket | PaintKind::Gradient));
-        if !self.presets.open || !brushy {
+        if !self.presets.open {
             return None;
         }
         let b = self.tools.brush;
         let saved = self.presets.saved.clone().unwrap_or_default();
         let cat = self.presets.category.clone();
-        let mut tabs = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(6.))
-            .child(label("Brushes", p));
+        let mut tabs = div().flex().flex_wrap().items_center().gap_1();
         for (ci, c) in CATEGORIES.iter().enumerate() {
             let on = cat.as_deref() == Some(c);
             let name: String = (*c).into();
-            tabs = tabs.child(chip(("bcat", ci), *c, on, p).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    this.select_brush_category(&name, cx);
-                },
-            )));
+            tabs = tabs.child(
+                chip(("bcat", ci), *c, on, p)
+                    .test_support()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select_brush_category(&name, cx);
+                        window.focus(&this.canvas_focus, cx);
+                    })),
+            );
         }
-        tabs = tabs.child(
-            chip("bcat-import", "Import…", false, p)
-                .on_click(cx.listener(|this, _, _, cx| this.import_brushes(cx))),
-        );
         tabs = tabs.child(
             chip(
                 "bcat-mine",
@@ -357,7 +358,7 @@ impl EditorView {
                 cx.notify();
             })),
         );
-        let mut row = div().flex().flex_wrap().items_center().gap(px(6.));
+        let mut row = div().flex().flex_col().w_full().gap_1();
         let shown: Vec<(usize, BrushPreset, bool)> = match &cat {
             Some(c) => library::library()
                 .into_iter()
@@ -386,40 +387,69 @@ impl EditorView {
             }
             let text = preset.name.clone();
             let apply = preset.clone();
-            row = row.child(
+            let mut entry = div().flex().items_center().gap_1().child(
                 chip((if mine { "preset-u" } else { "preset-b" }, i), text, on, p)
-                    .on_click(cx.listener(move |this, _, _, cx| this.apply_preset(&apply, cx))),
+                    .flex_1()
+                    .test_support()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.apply_preset(&apply, cx);
+                        window.focus(&this.canvas_focus, cx);
+                    })),
             );
             if mine {
-                row = row.child(
-                    chip(("preset-del", i), "×", false, p)
-                        .on_click(cx.listener(move |this, _, _, cx| this.delete_preset(i, cx))),
-                );
+                entry =
+                    entry
+                        .child(chip(("preset-del", i), "×", false, p).on_click(
+                            cx.listener(move |this, _, _, cx| this.delete_preset(i, cx)),
+                        ));
             }
+            row = row.child(entry);
         }
         Some(
             div()
+                .id("brush-presets-panel")
                 .flex()
                 .flex_col()
-                .gap(px(8.))
-                .px(px(16.))
-                .py(px(8.))
-                .border_b_1()
-                .border_color(p.line)
+                .min_w_0()
+                .w_full()
+                .gap_3()
+                .p_3()
                 .bg(p.panel)
-                .child(tabs)
                 .child(
                     div()
                         .flex()
-                        .items_start()
-                        .gap(px(10.))
-                        .child(row.flex_1())
+                        .items_center()
+                        .justify_between()
+                        .child(label("Brush presets", p))
+                        .child(
+                            button("preset-close", "Close", false, p)
+                                .test_support()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.select_sidebar(SidebarTab::History, cx);
+                                    this.presets.open = false;
+                                    window.focus(&this.canvas_focus, cx);
+                                })),
+                        ),
+                )
+                .child(tabs)
+                .child(row)
+                .children(note.map(|n| mono(n, 10., p.muted)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
                         .child(
                             button("preset-save", "Save current", false, p)
                                 .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
+                        )
+                        .child(
+                            button("bcat-import", "Import…", false, p)
+                                .on_click(cx.listener(|this, _, _, cx| this.import_brushes(cx))),
                         ),
                 )
-                .children(note.map(|n| mono(n, 10., p.muted))),
+                .test_support(),
         )
     }
 }

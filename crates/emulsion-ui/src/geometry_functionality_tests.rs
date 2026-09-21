@@ -205,13 +205,11 @@ fn pen_enter_commits_open_path_once_and_escape_discards_next_draft(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn typing_session_undo_restores_text_then_removes_layer_and_redo_restores_it(
-    cx: &mut TestAppContext,
-) {
+fn typing_session_undo_removes_layer_and_redo_restores_it(cx: &mut TestAppContext) {
     let (e, cx) = setup(cx, Tool::Type);
     let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
     click(&e, cx, (40., 40.));
-    cx.simulate_keystrokes("H e l l o enter");
+    cx.simulate_keystrokes("H e l l o ctrl-enter");
     cx.run_until_parked();
     let typed = cx.update(|_, cx| {
         let e = e.read(cx);
@@ -223,23 +221,13 @@ fn typing_session_undo_restores_text_then_removes_layer_and_redo_restores_it(
         assert_eq!(n.name, "Hello");
         assert_eq!(
             e.editor.history.len(),
-            2,
-            "creation plus whole typing session"
+            1,
+            "creation and typing form one session"
         );
         e.editor.doc.clone()
     });
     cx.simulate_keystrokes("ctrl-z");
-    cx.update(|_, cx| {
-        let e = e.read(cx);
-        let n = e.editor.doc.nodes.last().unwrap();
-        let NodeKind::Text { spec, .. } = &n.kind else {
-            panic!("text layer remains")
-        };
-        assert_eq!(spec.text, "Text");
-        assert_eq!(n.name, "Text");
-    });
-    cx.simulate_keystrokes("ctrl-z");
     assert_eq!(cx.update(|_, cx| e.read(cx).editor.doc.clone()), before);
-    cx.simulate_keystrokes("ctrl-shift-z ctrl-shift-z");
+    cx.simulate_keystrokes("ctrl-shift-z");
     assert_eq!(cx.update(|_, cx| e.read(cx).editor.doc.clone()), typed);
 }

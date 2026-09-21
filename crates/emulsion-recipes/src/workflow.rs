@@ -184,9 +184,13 @@ pub fn capture_adjustments(
     }
     let captured: HashSet<_> = ids.iter().copied().chain([id]).collect();
     for n in doc.nodes.iter().filter(|n| captured.contains(&n.id)) {
-        if n.mask.is_some() || n.clip_to.is_some() || !n.styles.is_empty() {
+        if n.mask.is_some()
+            || n.clip_to.is_some()
+            || !n.styles.is_empty()
+            || n.blending != Default::default()
+        {
             return Err(invalid(format!(
-                "{} has a mask, clipping or layer styles; these cannot be saved as an adjustment recipe",
+                "{} has a mask, clipping, layer styles or advanced blending; these cannot be saved as an adjustment recipe",
                 n.name
             )));
         }
@@ -344,6 +348,9 @@ mod tests {
         ed.doc.node_mut(eid).unwrap().mask_enabled = false;
         assert!(capture_adjustments(&ed.doc, gid, "Masked", &[]).is_err());
         ed.doc.node_mut(eid).unwrap().mask = None;
+        ed.doc.node_mut(eid).unwrap().blending.fill_opacity = 0.5;
+        assert!(capture_adjustments(&ed.doc, gid, "Advanced blending", &[]).is_err());
+        ed.doc.node_mut(eid).unwrap().blending = Default::default();
         let external = add(&mut ed, Node::adjust(0, Adjustment::Invert), None);
         ed.doc.node_mut(external).unwrap().clip_to = Some(gid);
         assert!(capture_adjustments(&ed.doc, gid, "External clip", &[]).is_err());

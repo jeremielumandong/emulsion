@@ -203,7 +203,7 @@ fn smart_warp_is_explicitly_unavailable_and_stale_distort_does_not_commit(cx: &m
             e.start_warp(cx);
             assert!(e.warp.is_none());
             assert!(e.status.as_ref().unwrap().0.contains("Rasterize"));
-            e.convert_smart(cx);
+            e.rasterize_layer(cx);
             let id = e.selected.unwrap();
             e.finish_distort(id, [(0., 0.), (250., 20.), (230., 190.), (10., 180.)], cx);
             e.execute(

@@ -699,11 +699,9 @@ impl Workspace {
         }
     }
 
-    /// Save the document as it is now, with its history, committing first
-    /// so the file's newest commit is exactly what was written.
+    /// Save current work and existing versions without creating a checkpoint.
     fn write(&mut self, ed: Entity<EditorView>, path: PathBuf, cx: &mut Context<Self>) {
         let (doc, rev, graph) = ed.update(cx, |e, cx| {
-            e.editor.commit("Saved", false);
             e.set_status(format!("Saving {}…", path.display()), false, cx);
             (
                 e.editor.doc.clone(),
@@ -724,7 +722,9 @@ impl Workspace {
                     );
                     ed.update(cx, |e, cx| {
                         e.editor.mark_saved(path.clone(), rev);
-                        e.discard_recovery();
+                        if e.editor.revision == rev {
+                            e.discard_recovery();
+                        }
                         e.name = stem(&path);
                         e.source = Some(path.clone());
                         e.set_status(format!("Saved {}", path.display()), false, cx);
@@ -769,12 +769,7 @@ impl Workspace {
             let flattened_psd = emulsion_io::ExportFormat::from_path(&p)
                 == Some(emulsion_io::ExportFormat::Psd)
                 && emulsion_io::psd::needs_appearance_fallback(&doc);
-            let file = p
-                .file_name()
-                .map(|f| f.to_string_lossy().into_owned())
-                .unwrap_or_default();
             ed.update(cx, |e, cx| {
-                e.editor.commit(format!("Exported {file}"), false);
                 e.set_status(format!("Exporting {}…", p.display()), false, cx)
             });
             let (q, d) = (p.clone(), doc.clone());
@@ -1279,7 +1274,19 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.set_pen_mode(crate::editor::PenMode::Pen, cx))
             }))
             .on_action(cx.listener(|this, _: &ToolType, _, cx| {
-                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Type, cx))
+                this.with_editor(cx, |e, cx| e.set_type_mode(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolVerticalType, _, cx| {
+                this.with_editor(cx, |e, cx| e.set_type_mode(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ConvertToSmartObject, _, cx| {
+                this.with_editor(cx, |e, cx| e.convert_smart(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ConvertSmartToLayers, _, cx| {
+                this.with_editor(cx, |e, cx| e.convert_smart_to_layers(cx))
+            }))
+            .on_action(cx.listener(|this, _: &RasterizeLayer, _, cx| {
+                this.with_editor(cx, |e, cx| e.rasterize_layer(cx))
             }))
             .on_action(cx.listener(|this, _: &ToolHand, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_hand_mode(false, cx))

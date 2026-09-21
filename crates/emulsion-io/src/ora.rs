@@ -78,6 +78,8 @@ struct MNode {
     locked: bool,
     opacity: f32,
     blend: BlendMode,
+    #[serde(default)]
+    blending: emulsion_raster::composite::BlendingOptions,
     clip_to: Option<NodeId>,
     mask: Option<String>,
     #[serde(default = "default_mask_fill")]
@@ -124,6 +126,8 @@ enum MKind {
         src: String,
     },
     Smart {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        editable: Option<emulsion_core::node::SmartEditable>,
         /// Source pixels.
         src: String,
         width: u32,
@@ -178,6 +182,7 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
             visible: true,
             opacity: 1.0,
             blend: BlendMode::Normal,
+            blending: Default::default(),
             mask: None,
             clip_to: None,
             content: NodeContent::Pixels {
@@ -272,6 +277,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             },
             NodeKind::Fill { rgba } => MKind::Fill { rgba: *rgba },
             NodeKind::Smart {
+                editable,
                 source,
                 filters,
                 placement,
@@ -306,6 +312,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                     });
                 }
                 MKind::Smart {
+                    editable: editable.clone(),
                     src,
                     width: source.width(),
                     height: source.height(),
@@ -347,6 +354,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             locked: n.locked,
             opacity: n.opacity,
             blend: n.blend,
+            blending: n.blending,
             clip_to: n.clip_to,
             mask,
             mask_fill: n.mask.as_ref().map_or(255, |m| m.fill()),
@@ -471,6 +479,7 @@ fn merged_is_redundant(doc: &Document) -> bool {
         && n.blend == emulsion_raster::BlendMode::Normal
         && n.mask.is_none()
         && n.styles.is_empty()
+        && n.blending == Default::default()
         && *placement == Placement::default()
         && raster.width() == doc.width
         && raster.height() == doc.height
@@ -486,6 +495,7 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
             || n.clip_to.is_some()
             || n.mask.is_some()
             || !n.styles.is_empty()
+            || n.blending != Default::default()
     }) {
         return format!(
             "<?xml version='1.0' encoding='UTF-8'?>\n<image version=\"0.0.6\" w=\"{}\" h=\"{}\" xres=\"{}\" yres=\"{}\"><stack><layer name=\"Appearance (editable layers in Emulsion)\" src=\"mergedimage.png\" x=\"0\" y=\"0\" opacity=\"1\" visibility=\"visible\" composite-op=\"svg:src-over\"/></stack></image>\n",
@@ -572,7 +582,10 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
         Some(g) => {
             let tip = g.commit(g.head_branch().tip).map(|c| &c.doc);
             let live = (tip == Some(doc)).then(|| crate::history::fingerprint(&manifest));
-            crate::history::encode(g, live, &mut paths)?
+            let working = live
+                .is_none()
+                .then(|| (doc, crate::history::fingerprint(&manifest)));
+            crate::history::encode(g, live, working, &mut paths)?
         }
         None => Vec::new(),
     };
@@ -677,15 +690,21 @@ pub fn read_full(path: &Path) -> Result<Opened> {
             history_error: None,
         }),
         Ok(Some(h)) => {
-            // Use the exact tip (16-bit, buffers shared with older commits)
-            // when this file's live stack was written from it.
+            // Recover the exact current work (16-bit, shared buffers) only
+            // when its fingerprint matches this file's live stack. Older files
+            // and documents saved directly at a version use the tip instead.
             let same = h.live.is_some() && h.live == manifest;
             let tip = h
                 .graph
                 .commit(h.graph.head_branch().tip)
                 .map(|c| c.doc.clone());
-            let doc = match tip {
-                Some(t) if same && t.width == doc.width && t.height == doc.height => t,
+            let exact = h
+                .working
+                .filter(|(fingerprint, _)| Some(fingerprint) == manifest.as_ref())
+                .map(|(_, doc)| doc)
+                .or_else(|| same.then_some(tip).flatten());
+            let doc = match exact {
+                Some(t) if t.width == doc.width && t.height == doc.height => t,
                 _ => doc,
             };
             Ok(Opened {
@@ -825,6 +844,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             MKind::Adjust { adjustment } => NodeKind::Adjust(adjustment),
             MKind::Fill { rgba } => NodeKind::Fill { rgba },
             MKind::Smart {
+                editable,
                 src,
                 width,
                 height,
@@ -854,6 +874,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 }
                 let (cache, offset) = emulsion_core::smart::render(&r, &filters);
                 NodeKind::Smart {
+                    editable,
                     source: r,
                     filters,
                     placement,
@@ -933,6 +954,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             locked: n.locked,
             opacity: n.opacity,
             blend: n.blend,
+            blending: n.blending,
             clip_to: n.clip_to,
             mask,
             mask_enabled: n.mask_enabled,
@@ -1313,6 +1335,45 @@ mod tests {
             flatten(&doc.composite_tree(), 0).to_srgba8(),
             flatten(&legacy.doc.composite_tree(), 0).to_srgba8()
         );
+    }
+
+    #[test]
+    fn advanced_blending_round_trips_with_history_and_legacy_defaults() {
+        let mut doc = masked_smart_document();
+        doc.nodes[0].blending.fill_opacity = 0.35;
+        doc.nodes[0].blending.channels = [true, false, true];
+        doc.nodes[0].blending.blend_if.source.black_fade = 0.2;
+        let expected = doc.nodes[0].blending;
+        let editor = emulsion_core::Editor::new(doc.clone(), None);
+        let path = tmp("advanced-blending.ora");
+        write_full(&doc, Some(&editor.graph), &path).unwrap();
+        let reopened = read_full(&path).unwrap();
+        assert_eq!(reopened.doc.nodes[0].blending, expected);
+        assert!(reopened.history_error.is_none());
+        for commit in reopened.graph.unwrap().commits() {
+            assert_eq!(commit.doc.nodes[0].blending, expected);
+        }
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&reopened.doc.composite_tree(), 0).to_srgba8()
+        );
+        assert!(stack_xml(&doc, &HashMap::new()).contains("Appearance"));
+        rewrite_archive(&path, |name, bytes| {
+            if name == MANIFEST {
+                let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                for node in value["nodes"].as_array_mut().unwrap() {
+                    node.as_object_mut().unwrap().remove("blending");
+                }
+                Some(serde_json::to_vec(&value).unwrap())
+            } else {
+                Some(bytes)
+            }
+        });
+        assert_eq!(
+            read_full(&path).unwrap().doc.nodes[0].blending,
+            Default::default()
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -1841,6 +1902,144 @@ mod tests {
     }
 
     #[test]
+    fn working_snapshot_preserves_unsaved_version_edits_without_growing_history() {
+        use emulsion_core::{Editor, text::TextSpec};
+        use emulsion_raster::{IRect, TileCoord};
+        let mut doc = Document::new(520, 64);
+        let original = Arc::new(Raster::from_fn(520, 64, [0; 4], |x, _| {
+            [1234 + x as u16, 2345, 3456, 54321]
+        }));
+        doc.nodes.push(Node::raster(
+            1,
+            "Pixels",
+            original.clone(),
+            Placement::default(),
+        ));
+        doc.nodes.push(Node::text(
+            2,
+            "Caption",
+            TextSpec {
+                text: "Before".into(),
+                size: 18.0,
+                ..Default::default()
+            },
+            520,
+            64,
+        ));
+        doc.next_id = 3;
+        let mut editor = Editor::new(doc, None);
+        let version_count = editor.graph.len();
+        let changed =
+            Arc::new(original.write_rect(IRect::new(0, 0, 1, 1), &[[1111, 2222, 3333, 44444]]));
+        editor
+            .execute(Command::ReplacePixels {
+                id: 1,
+                raster: changed.clone(),
+                dirty: IRect::new(0, 0, 1, 1),
+                label: "Paint".into(),
+            })
+            .unwrap();
+        let text = TextSpec {
+            text: "Current work".into(),
+            color: [191, 40, 80, 255],
+            size: 18.0,
+            ..Default::default()
+        };
+        editor
+            .execute(Command::SetText {
+                id: 2,
+                spec: Box::new(text.clone()),
+            })
+            .unwrap();
+        let selection = Arc::new(Mask::from_fn(520, 64, 0, |x, y| {
+            if x < 30 && y < 20 { 123 } else { 0 }
+        }));
+        editor
+            .execute(Command::SetSelection {
+                selection: Some(selection.clone()),
+            })
+            .unwrap();
+        let path = tmp("working-snapshot.ora");
+        let mut tile_sizes = None;
+        for _ in 0..3 {
+            write_full(&editor.doc, Some(&editor.graph), &path).unwrap();
+            // Compressed JSON size can vary with tile ordering. Compare the
+            // stored tile payload instead: repeated saves must not accumulate it.
+            let mut archive = ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+            let mut sizes: Vec<_> = (0..archive.len())
+                .filter_map(|i| {
+                    let entry = archive.by_index(i).unwrap();
+                    entry
+                        .name()
+                        .starts_with("history/tiles/")
+                        .then_some(entry.size())
+                })
+                .collect();
+            sizes.sort_unstable();
+            assert_eq!(
+                tile_sizes.get_or_insert_with(|| sizes.clone()),
+                &sizes,
+                "saving replaces the working snapshot"
+            );
+            let opened = read_full(&path).unwrap();
+            assert!(opened.history_error.is_none());
+            let graph = opened.graph.unwrap();
+            assert_eq!(graph.len(), version_count);
+            let NodeKind::Raster { raster, .. } = &opened.doc.node(1).unwrap().kind else {
+                panic!("raster");
+            };
+            for y in 0..64 {
+                for x in 0..520 {
+                    assert_eq!(raster.get(x, y), changed.get(x, y));
+                }
+            }
+            let NodeKind::Text { spec, .. } = &opened.doc.node(2).unwrap().kind else {
+                panic!("editable text");
+            };
+            assert_eq!(**spec, text);
+            let restored_selection = opened.doc.selection.as_ref().unwrap();
+            for y in 0..64 {
+                for x in 0..520 {
+                    assert_eq!(restored_selection.get(x, y), selection.get(x, y));
+                }
+            }
+            let tip = &graph.commit(graph.head_branch().tip).unwrap().doc;
+            let NodeKind::Raster {
+                raster: checkpoint, ..
+            } = &tip.node(1).unwrap().kind
+            else {
+                panic!("checkpoint raster");
+            };
+            assert_eq!(checkpoint.get(0, 0), original.get(0, 0));
+            // The untouched second tile is shared by the working copy and the checkpoint.
+            let tile = |image: &Raster| {
+                image
+                    .base_tiles()
+                    .find(|(coord, _)| **coord == TileCoord::new(1, 0))
+                    .unwrap()
+                    .1
+                    .as_ptr()
+            };
+            assert_eq!(tile(raster), tile(checkpoint));
+            editor = Editor::with_graph(opened.doc, Some(path.clone()), graph);
+        }
+        // An external manifest edit must never resurrect a stale working copy.
+        rewrite_archive(&path, |name, data| {
+            if name == MANIFEST {
+                let mut manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+                manifest["nodes"][1]["name"] = serde_json::json!("Externally renamed");
+                Some(serde_json::to_vec(&manifest).unwrap())
+            } else {
+                Some(data)
+            }
+        });
+        let opened = read_full(&path).unwrap();
+        assert!(opened.history_error.is_none());
+        assert_eq!(opened.doc.nodes[1].name, "Externally renamed");
+        assert_eq!(opened.graph.unwrap().len(), version_count);
+    }
+
+    #[test]
     fn damaged_history_still_opens_the_document() {
         let doc = sample_doc();
         let e = emulsion_core::Editor::new(doc.clone(), None);
@@ -1866,5 +2065,47 @@ mod tests {
         assert!(o.graph.is_none());
         assert!(o.history_error.is_some());
         assert_eq!(o.doc.nodes.len(), doc.nodes.len());
+    }
+
+    #[test]
+    fn smart_text_retains_editable_source_in_live_document_and_versions() {
+        use emulsion_core::{Command, text::TextSpec};
+        let mut editor = emulsion_core::history::Editor::new(Document::new(100, 60), None);
+        let id = editor
+            .execute(Command::AddNode {
+                node: Box::new(Node::text(
+                    0,
+                    "Type",
+                    TextSpec {
+                        text: "Editable".into(),
+                        size: 14.0,
+                        ..Default::default()
+                    },
+                    100,
+                    60,
+                )),
+                slot: emulsion_core::command::Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        editor.execute(Command::ConvertToSmart { id }).unwrap();
+        editor.create_version("Smart type");
+        let path = tmp("smart-editable-text.ora");
+        crate::save_full(&editor.doc, &editor.graph, &path).unwrap();
+        let mut opened = read_full(&path).unwrap();
+        assert!(
+            matches!(&opened.doc.node(id).unwrap().kind, NodeKind::Smart { editable: Some(emulsion_core::node::SmartEditable::Text { spec }), .. } if spec.text == "Editable")
+        );
+        let saved = opened.graph.as_ref().unwrap().commits().last().unwrap();
+        assert!(
+            matches!(&saved.doc.node(id).unwrap().kind, NodeKind::Smart { editable: Some(emulsion_core::node::SmartEditable::Text { spec }), .. } if spec.text == "Editable")
+        );
+        Command::ConvertToLayers { id }
+            .apply(&mut opened.doc)
+            .unwrap();
+        assert!(
+            matches!(&opened.doc.node(id).unwrap().kind, NodeKind::Text { spec, .. } if spec.text == "Editable")
+        );
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -430,10 +430,11 @@ pub fn needs_appearance_fallback(doc: &Document) -> bool {
         }
         false
     }
-    doc.nodes
-        .iter()
-        .any(|n| matches!(n.kind, NodeKind::Adjust(_)) || !n.styles.is_empty())
-        || unsupported_clips(doc, None)
+    doc.nodes.iter().any(|n| {
+        matches!(n.kind, NodeKind::Adjust(_))
+            || !n.styles.is_empty()
+            || n.blending != Default::default()
+    }) || unsupported_clips(doc, None)
 }
 
 fn layer_for(doc: &Document, n: &Node) -> Layer {
@@ -754,6 +755,25 @@ mod tests {
         .unwrap();
         let restored = roundtrip(&doc, "style-overlay");
         assert_eq!(restored.nodes.len(), 1);
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            flatten(&restored.composite_tree(), 0).to_srgba8()
+        );
+    }
+
+    #[test]
+    fn advanced_blending_export_preserves_appearance() {
+        let mut doc = Document::new(8, 8);
+        let mut layer = Node::raster(
+            0,
+            "Blended",
+            Arc::new(Raster::solid(8, 8, [0.8, 0.3, 0.1, 1.])),
+            Placement::default(),
+        );
+        layer.blending.fill_opacity = 0.4;
+        layer.blending.channels = [false, true, true];
+        add(&mut doc, layer, None).unwrap();
+        let restored = roundtrip(&doc, "advanced-blending");
         assert_eq!(
             flatten(&doc.composite_tree(), 0).to_srgba8(),
             flatten(&restored.composite_tree(), 0).to_srgba8()

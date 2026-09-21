@@ -224,6 +224,10 @@ pub enum Command {
     ConvertToSmart {
         id: NodeId,
     },
+    /// Restore the editable source, removing Smart filters.
+    ConvertToLayers {
+        id: NodeId,
+    },
     /// Bake a smart layer's filters into pixels.
     Rasterize {
         id: NodeId,
@@ -239,6 +243,10 @@ pub enum Command {
         filters: Vec<emulsion_filters::Filter>,
         cache: Arc<emulsion_raster::Raster>,
         offset: (i32, i32),
+    },
+    SetBlendingOptions {
+        id: NodeId,
+        options: emulsion_raster::composite::BlendingOptions,
     },
     /// Replace a node's layer styles.
     SetStyles {
@@ -331,11 +339,13 @@ impl Command {
             Command::ReplaceContent { label, .. } => label.clone(),
             Command::SetPath { .. } => "Edit path".into(),
             Command::SetText { .. } => "Edit text".into(),
+            Command::SetBlendingOptions { .. } => "Blending options".into(),
             Command::SetStyles { styles, .. } => match styles.last() {
                 Some(s) => s.label().to_string(),
                 None => "Layer styles".into(),
             },
             Command::ConvertToSmart { .. } => "Smart layer".into(),
+            Command::ConvertToLayers { .. } => "Convert to layers".into(),
             Command::Rasterize { .. } => "Rasterize".into(),
             Command::SetFilters { filters, .. } | Command::SetSmartCache { filters, .. } => {
                 match filters.last() {
@@ -506,10 +516,12 @@ impl Command {
             | Self::SetPath { id, .. }
             | Self::SetText { id, .. }
             | Self::ConvertToSmart { id }
+            | Self::ConvertToLayers { id }
             | Self::Rasterize { id }
             | Self::SetFilters { id, .. }
             | Self::SetSmartCache { id, .. }
-            | Self::SetStyles { id, .. } => check(*id, true),
+            | Self::SetStyles { id, .. }
+            | Self::SetBlendingOptions { id, .. } => check(*id, true),
         }
     }
 
@@ -626,6 +638,14 @@ impl Command {
             }
             Command::SetVisible { id, visible } => set(doc, *id, |n| n.visible = *visible),
             Command::SetLocked { id, locked } => set(doc, *id, |n| n.locked = *locked),
+            Command::SetBlendingOptions { id, options } => {
+                if !options.valid() {
+                    return Err(CommandError::Invalid(
+                        crate::document::DocumentError::BadValue(*id, "blending options"),
+                    ));
+                }
+                set(doc, *id, |n| n.blending = *options)
+            }
             Command::SetOpacity { id, opacity } => {
                 set(doc, *id, |n| n.opacity = opacity.clamp(0.0, 1.0))
             }
@@ -818,6 +838,15 @@ impl Command {
                 Ok(None)
             }
             Command::SetStyles { id, styles } => {
+                if styles
+                    .iter()
+                    .flat_map(|s| s.params())
+                    .any(|p| !p.value.is_finite() || p.value < p.min || p.value > p.max)
+                {
+                    return Err(CommandError::Invalid(
+                        crate::document::DocumentError::BadValue(*id, "style parameter"),
+                    ));
+                }
                 if styles.len() > crate::styles::MAX_STYLES {
                     return Err(CommandError::Invalid(
                         crate::document::DocumentError::BadValue(*id, "too many styles"),
@@ -838,20 +867,107 @@ impl Command {
             }
             Command::ConvertToSmart { id } => {
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
-                let NodeKind::Raster { raster, placement } = &n.kind else {
-                    return Err(CommandError::NoSuchParam(*id, "pixels".into()));
+                use crate::node::SmartEditable;
+                let (source, placement, editable) = match &n.kind {
+                    NodeKind::Raster { raster, placement } => (raster.clone(), *placement, None),
+                    NodeKind::Text { spec, .. } if n.mask.is_none() => {
+                        let b = crate::text::bounds(spec);
+                        let b = IRect::new(
+                            b.x.saturating_sub(2),
+                            b.y.saturating_sub(2),
+                            b.w.saturating_add(4),
+                            b.h.saturating_add(4),
+                        );
+                        if b.w <= 0
+                            || b.h <= 0
+                            || b.w as u32 > crate::document::MAX_SIDE
+                            || b.h as u32 > crate::document::MAX_SIDE
+                            || b.w as u64 * b.h as u64 > crate::document::MAX_PIXELS
+                        {
+                            return Err(CommandError::NoSuchParam(
+                                *id,
+                                "text bounds are too large for a Smart Object".into(),
+                            ));
+                        }
+                        let mut local = (**spec).clone();
+                        local.x -= b.x as f32;
+                        local.y -= b.y as f32;
+                        let raster =
+                            Arc::new(crate::text::rasterize(&local, b.w as u32, b.h as u32));
+                        (
+                            raster,
+                            Placement::at(b.x as f64, b.y as f64),
+                            Some(SmartEditable::Text {
+                                spec: Arc::new(local),
+                            }),
+                        )
+                    }
+                    NodeKind::Path { path, style, .. } if n.mask.is_none() => {
+                        let b = path.bounds(style);
+                        if b.w <= 0
+                            || b.h <= 0
+                            || b.w as u32 > crate::document::MAX_SIDE
+                            || b.h as u32 > crate::document::MAX_SIDE
+                            || b.w as u64 * b.h as u64 > crate::document::MAX_PIXELS
+                        {
+                            return Err(CommandError::NoSuchParam(
+                                *id,
+                                "path bounds are empty or too large for a Smart Object".into(),
+                            ));
+                        }
+                        let mut local = (**path).clone();
+                        local.translate(-(b.x as f64), -(b.y as f64));
+                        let raster = Arc::new(local.rasterize(style, b.w as u32, b.h as u32));
+                        (
+                            raster,
+                            Placement::at(b.x as f64, b.y as f64),
+                            Some(SmartEditable::Path {
+                                path: Arc::new(local),
+                                style: *style,
+                            }),
+                        )
+                    }
+                    NodeKind::Text { spec, cache } => (
+                        cache.clone(),
+                        Placement::default(),
+                        Some(SmartEditable::Text { spec: spec.clone() }),
+                    ),
+                    NodeKind::Path { path, style, cache } => (
+                        cache.clone(),
+                        Placement::default(),
+                        Some(SmartEditable::Path {
+                            path: path.clone(),
+                            style: *style,
+                        }),
+                    ),
+                    _ => return Err(CommandError::NoSuchParam(*id, "smart source".into())),
                 };
                 n.kind = NodeKind::Smart {
-                    source: raster.clone(),
+                    editable,
+                    source: source.clone(),
                     filters: Vec::new(),
-                    placement: *placement,
-                    cache: raster.clone(),
+                    placement,
+                    cache: source,
                     offset: (0, 0),
                 };
                 Ok(None)
             }
+            Command::ConvertToLayers { id } => {
+                let node = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let kind = crate::smart::restore_source(node, doc.width, doc.height)
+                    .map_err(|message| CommandError::NoSuchParam(*id, message.into()))?;
+                doc.node_mut(*id).unwrap().kind = kind;
+                Ok(None)
+            }
             Command::Rasterize { id } => {
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                if let NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } = &n.kind {
+                    n.kind = NodeKind::Raster {
+                        raster: cache.clone(),
+                        placement: Placement::default(),
+                    };
+                    return Ok(None);
+                }
                 let mut with_mask = n.clone();
                 with_mask.mask_enabled = true;
                 let mask = Document::composite_mask(&with_mask);
