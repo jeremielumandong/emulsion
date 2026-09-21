@@ -1,4 +1,4 @@
-//! A fixed Layers dock and a separately scrolling panel for the current task.
+//! Layers occupy the main right dock; task controls stay in a compact lower panel.
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,9 +45,20 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        // Selecting a task panel or an adjustment is an explicit request to
+        // edit its controls. Give that task room without hiding the layers.
+        let expanded = self.sidebar_tab != SidebarTab::Properties
+            || self
+                .selected
+                .and_then(|id| self.editor.doc.node(id))
+                .is_some_and(|node| {
+                    matches!(node.kind, NodeKind::Adjust(_) | NodeKind::Smart { .. })
+                });
         let tabs = div()
             .flex()
             .flex_none()
+            .h(px(34.))
+            .border_t_1()
             .border_b_1()
             .border_color(p.line)
             .children(
@@ -67,7 +78,10 @@ impl EditorView {
                         .id(id)
                         .flex_1()
                         .min_w_0()
-                        .py(px(10.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .h_full()
                         .text_center()
                         .text_size(px(11.))
                         .text_color(if active { p.ink } else { p.muted })
@@ -158,17 +172,34 @@ impl EditorView {
                     cx.stop_propagation();
                 }
             }))
-            .child(div().flex_none().child(self.scene_graph(p, cx)))
+            .child(
+                div()
+                    .id("sidebar-layers-dock")
+                    .min_h_0()
+                    .when(expanded && !self.draw_mode, |d| {
+                        d.flex_none().h(relative(0.25)).max_h(px(160.))
+                    })
+                    .when(!expanded || self.draw_mode, |d| d.flex_1())
+                    .child(self.scene_graph(p, cx))
+                    .test_support(),
+            )
             .when(!self.draw_mode, |d| {
                 d.child(tabs).child(
                     div()
                         .id(("sidebar-content", self.sidebar_tab as usize))
-                        .flex_1()
+                        // Keep Layers dominant on tall windows while making
+                        // the inspector proportional on shorter displays.
+                        .when(expanded, |d| d.flex_1())
+                        .when(!expanded, |d| {
+                            d.flex_none().h(relative(0.38)).max_h(px(260.))
+                        })
                         .min_h_0()
                         .overflow_y_scroll()
-                        .child(content),
+                        .child(content)
+                        .test_support(),
                 )
             })
+            .test_support()
     }
 
     pub(super) fn sidebar_panel_menu(

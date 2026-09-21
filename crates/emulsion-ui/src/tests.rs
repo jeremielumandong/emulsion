@@ -14,6 +14,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[path = "editor_layout_tests.rs"]
+mod editor_layout_tests;
+
 #[path = "tool_usability_tests.rs"]
 mod tool_usability_tests;
 
@@ -351,8 +354,9 @@ mod generated_images {
 
     #[gpui_kit::test]
     fn generated_image_is_a_separate_layer_with_provenance_and_undo(cx: &mut TestAppContext) {
-        let (cfg, server) = image_server();
         let (ws, cx) = open(cx, doc(&["Photo"], None));
+        // Start the request deadline after potentially slow window initialization.
+        let (cfg, server) = image_server();
         let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
         let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
         cx.update(|_, cx| {
@@ -389,8 +393,9 @@ mod generated_images {
 
     #[gpui_kit::test]
     fn generated_image_waiting_for_an_edit_can_still_be_cancelled(cx: &mut TestAppContext) {
-        let (cfg, server) = image_server();
         let (ws, cx) = open(cx, doc(&["Photo"], None));
+        // Start the request deadline after potentially slow window initialization.
+        let (cfg, server) = image_server();
         let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
         let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
         cx.update(|_, cx| {

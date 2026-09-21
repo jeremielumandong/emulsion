@@ -111,7 +111,7 @@ pub const GROUPS: &[&[RailItem]] = &[
     &[item("Zoom", "⌕", "Z", Tool::Zoom)],
 ];
 
-/// Thin lines after these `GROUPS` slots, Photoshop's clusters: move ·
+/// Small gaps after these `GROUPS` slots, Photoshop's clusters: move ·
 /// selection · crop and sampling · retouch and paint · vector · Emulsion's
 /// mask and grade · navigation.
 pub const DIVIDERS: &[usize] = &[0, 3, 5, 10, 13, 15];
@@ -140,7 +140,7 @@ pub const DRAW_GROUPS: &[&[RailItem]] = &[
     &[item("Zoom", "⌕", "Z", Tool::Zoom)],
 ];
 
-/// Dividers for `DRAW_GROUPS`: paint · fill · select and move · navigation.
+/// Group spacing for `DRAW_GROUPS`: paint · fill · select and move · navigation.
 pub const DRAW_DIVIDERS: &[usize] = &[3, 4, 7];
 
 /// Rail button height; a little tighter than the old rail so eighteen
@@ -234,28 +234,36 @@ impl EditorView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let (ink, paper, accent, panel, line) = (p.ink, p.paper, p.accent, p.panel, p.line);
+        let (ink, accent, panel, line) = (p.ink, p.accent, p.panel, p.line);
+        let selected_bg = ink.opacity(0.10);
+        let hover_bg = ink.opacity(0.06);
         let accent_fg = p.accent_fg;
         let flyout = self.rail.flyout;
-        let mut rail = div()
+        let rail = div()
             .id("tool-rail")
             .tab_group()
             .aria_label("Tools")
             .flex()
             .flex_none()
             .flex_col()
+            .min_h_0()
             .items_center()
             .w(dim::TOOL_RAIL_W)
-            .py(px(6.))
-            .gap(px(1.))
             .border_r_1()
-            .border_color(p.line)
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                if this.rail.flyout.is_some() {
-                    this.rail.flyout = None;
-                    cx.notify();
-                }
-            }));
+            .border_color(p.line);
+        // Keep every tool at its normal target size on short windows. Flyouts
+        // are deferred, so they paint outside this scrolling content mask.
+        let mut tools = div()
+            .id("tool-rail-scroll")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .items_center()
+            .py(px(8.))
+            .gap(px(2.))
+            .overflow_y_scroll();
         let groups = self.rail_groups();
         for (g, group) in groups.iter().enumerate() {
             let shown = self.rail_shown(g);
@@ -269,9 +277,25 @@ impl EditorView {
             };
             let tip: SharedString = tip_text.into();
             let open = flyout == Some(g);
+            let trigger_bounds = std::rc::Rc::new(std::cell::Cell::new(None::<Bounds<Pixels>>));
+            let dismiss_trigger = trigger_bounds.clone();
             let list = open.then(|| {
                 div()
                     .id(("rail-flyout", g))
+                    .test_support()
+                    // Dismiss against the menu's bounds, not the narrow rail:
+                    // menu items deliberately extend onto the canvas.
+                    .on_mouse_down_out(cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        // Let the trigger's own click toggle the menu, rather
+                        // than dismissing on down and reopening on click.
+                        if !dismiss_trigger
+                            .get()
+                            .is_some_and(|bounds| bounds.contains(&event.position))
+                        {
+                            this.rail.flyout = None;
+                            cx.notify();
+                        }
+                    }))
                     .absolute()
                     .left(dim::TOOL_BTN_W)
                     .top_0()
@@ -279,7 +303,8 @@ impl EditorView {
                     .flex_col()
                     .min_w(px(200.))
                     .border_1()
-                    .border_color(ink)
+                    .border_color(line)
+                    .rounded_md()
                     .bg(panel)
                     .text_color(ink)
                     .py(px(3.))
@@ -289,6 +314,7 @@ impl EditorView {
                         let active = self.rail_item_active(m);
                         div()
                             .id(("rail-flyout-item", g * 16 + i))
+                            .test_support()
                             .focusable()
                             .tab_index(0)
                             .aria_label(m.name)
@@ -309,7 +335,7 @@ impl EditorView {
                             .px(px(10.))
                             .py(px(4.))
                             .cursor_pointer()
-                            .when(active, |d| d.bg(ink).text_color(paper))
+                            .when(active, |d| d.bg(selected_bg))
                             .hover(move |s| s.bg(accent).text_color(accent_fg))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.activate_rail_item(g, i, cx);
@@ -321,7 +347,7 @@ impl EditorView {
                             .child(div().child(m.key))
                     }))
             });
-            rail = rail.child(
+            tools = tools.child(
                 div()
                     .id(SharedString::from(it.name))
                     .focusable()
@@ -352,13 +378,19 @@ impl EditorView {
                     .justify_center()
                     .w(dim::TOOL_BTN_W)
                     .h(BTN_H)
+                    .flex_none()
                     .border_1()
-                    .border_color(if on { ink } else { transparent_black() })
-                    .bg(if on { ink } else { transparent_black() })
-                    .text_color(if on { paper } else { ink })
+                    .border_color(if on {
+                        ink.opacity(0.14)
+                    } else {
+                        transparent_black()
+                    })
+                    .rounded_md()
+                    .bg(if on { selected_bg } else { transparent_black() })
+                    .text_color(ink)
                     .font_family(MONO_FONT)
                     .text_size(px(14.))
-                    .when(!on, |d| d.hover(move |s| s.border_color(ink)))
+                    .when(!on, |d| d.hover(move |s| s.bg(hover_bg)))
                     .cursor(CursorStyle::PointingHand)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         // Clicking the tool you already hold opens its group,
@@ -407,7 +439,7 @@ impl EditorView {
                                 .w(px(16.))
                                 .h(px(16.))
                                 .text_size(px(8.))
-                                .text_color(if on { paper } else { line })
+                                .text_color(ink.opacity(0.65))
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.rail.flyout = if this.rail.flyout == Some(g) {
@@ -427,6 +459,14 @@ impl EditorView {
                                 .child("◢"),
                         )
                     })
+                    .children(open.then(|| {
+                        canvas(
+                            move |bounds, _, _| trigger_bounds.set(Some(bounds)),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full()
+                    }))
                     // Painted after the canvas, so the list is not covered.
                     .children(list.map(|l| deferred(l).with_priority(1)))
                     .test_support(),
@@ -437,10 +477,19 @@ impl EditorView {
                 DIVIDERS
             };
             if dividers.contains(&g) && g + 1 < groups.len() {
-                rail = rail.child(div().w(px(18.)).h(px(1.)).my(px(3.)).bg(line.opacity(0.9)));
+                tools = tools.child(div().h(px(3.)).flex_none());
             }
         }
-        rail.child(div().flex_1()).child(self.swatches(p, cx))
+        rail.child(tools.test_support())
+            .child(
+                div()
+                    .id("tool-rail-swatches")
+                    .flex_none()
+                    .py(px(8.))
+                    .child(self.swatches(p, cx))
+                    .test_support(),
+            )
+            .test_support()
     }
 }
 

@@ -1590,12 +1590,14 @@ impl EditorView {
             "8 bit"
         };
         div()
+            .id("editor-document-bar")
+            .test_support()
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(13.))
-            .px(px(16.))
-            .py(if compact { px(4.) } else { px(10.) })
+            .gap(px(8.))
+            .px(px(10.))
+            .py(if compact { px(3.) } else { px(5.) })
             .border_b_1()
             .border_color(p.line)
             .child(
@@ -1643,10 +1645,10 @@ impl EditorView {
                         .px(px(9.))
                         .py(px(4.))
                         .border_1()
-                        .border_color(p.ink)
+                        .border_color(transparent_black())
                         .bg(p.panel)
                         .child(div().size(px(6.)).rounded_full().bg(p.accent))
-                        .child(mono("unsaved changes", 10., p.ink)),
+                        .child(mono("Modified", 10., p.muted)),
                 )
             })
             .child(div().flex_1())
@@ -1684,8 +1686,8 @@ impl EditorView {
                 .flex_wrap()
                 .overflow_hidden()
                 .items_center()
-                .gap(px(10.))
-                .px(px(16.))
+                .gap(px(8.))
+                .px(px(10.))
                 .font_family(MONO_FONT)
                 .text_size(px(10.5))
                 .text_color(p.muted)
@@ -1701,14 +1703,14 @@ impl EditorView {
         });
         let compact = crate::app_state::settings(cx).compact_chrome;
         let first = row(p)
-            .py(if compact { px(4.) } else { px(8.) })
+            .py(if compact { px(4.) } else { px(6.) })
             .border_b_1()
             .border_color(p.line)
-            .child(div().text_color(p.ink).child(tool.to_uppercase()))
+            .child(div().text_color(p.ink).child(tool))
             .children(options)
             .child(div().flex_1().min_w(px(8.)))
             .child(crate::widgets::tip(
-                chip("advanced", "advanced", advanced, p).on_click(cx.listener(
+                chip("advanced", "More", advanced, p).on_click(cx.listener(
                     move |_, _, _, cx| {
                         crate::app_state::update_settings(cx, |s| s.advanced_tools = !advanced);
                     },
@@ -1717,6 +1719,8 @@ impl EditorView {
             ));
         let font_picker = self.font_picker(p, cx);
         div()
+            .id("editor-tool-options")
+            .test_support()
             .relative()
             .flex()
             .flex_col()
@@ -2083,34 +2087,28 @@ impl EditorView {
         } else {
             "saved"
         };
-        let render = self
-            .cache
-            .borrow()
-            .last_batch
-            .map(|(k, d)| format!(" · {k} tiles in {} ms", d.as_millis()))
-            .unwrap_or_default();
         let autosaved = self
             .autosave_note()
             .map(|a| format!(" · {a}"))
             .unwrap_or_default();
         let right = format!(
-            "{n} layer{} · {saved}{autosaved}{render}",
+            "{n} layer{} · {saved}{autosaved}",
             if n == 1 { "" } else { "s" }
         );
         div()
             .id("editor-status-strip")
             .flex()
             .flex_none()
-            .h(px(40.))
+            .h(px(30.))
             .items_center()
             .gap(px(8.))
-            .px(px(16.))
-            .py(px(6.))
+            .px(px(10.))
+            .py(px(3.))
             .border_t_1()
             .border_color(p.line)
             .overflow_hidden()
             .when(!self.suggestions.is_empty(), |d| {
-                d.child(mono("IT NOTICED", 9.5, p.muted).whitespace_nowrap())
+                d.child(mono("Suggestions", 9.5, p.muted).whitespace_nowrap())
             })
             .children(self.suggestion_chips(p, cx))
             .children(self.status.as_ref().map(|(msg, err)| {
@@ -2254,10 +2252,12 @@ impl EditorView {
         div()
             .flex()
             .flex_col()
+            .h_full()
+            .min_h_0()
             .gap(px(2.))
-            .px(px(15.))
-            .pt(px(13.))
-            .pb(px(11.))
+            .px(px(10.))
+            .pt(px(8.))
+            .pb(px(8.))
             .border_b_1()
             .border_color(p.line)
             .child(header)
@@ -2271,7 +2271,8 @@ impl EditorView {
                     .flex()
                     .flex_col()
                     .gap(px(2.))
-                    .max_h(px(180.))
+                    .flex_1()
+                    .min_h_0()
                     .overflow_y_scroll()
                     // Rows stop the click; what reaches here is empty space.
                     .on_click(cx.listener(|this, _, _, cx| this.deselect_layer(cx)))
@@ -3184,8 +3185,11 @@ impl Render for EditorView {
                 }
             }))
             .child(doc_bar)
+            .child(context)
             .child(
                 div()
+                    .id("editor-work-area")
+                    .test_support()
                     .flex()
                     .flex_1()
                     .min_h_0()
@@ -3194,24 +3198,25 @@ impl Render for EditorView {
                     .children(self.draw_side_sliders(&p, cx))
                     .child(
                         div()
+                            .id("editor-canvas-column")
+                            .test_support()
                             .flex()
                             .flex_col()
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
                             .overflow_hidden()
-                            .child(context)
                             .children(size_panel)
                             .children(export_panel)
                             .children(presets)
                             .children(ask)
                             .child(canvas)
-                            .children(dock)
-                            .child(strip),
+                            .children(dock),
                     )
                     .child(panel)
                     .children(picker),
             )
+            .child(strip)
             .into_any_element()
     }
 }

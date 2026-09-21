@@ -820,7 +820,7 @@ impl Workspace {
                 .id(id)
                 .flex()
                 .items_center()
-                .px(px(15.))
+                .px(px(10.))
                 .border_l_1()
                 .border_color(p.chrome_line)
                 .font_family(MONO_FONT)
@@ -857,7 +857,7 @@ impl Workspace {
             .flex()
             .flex_none()
             .items_stretch()
-            .h(if crate::app_state::settings(cx).compact_chrome {
+            .h(if self.screen == Screen::Editor || crate::app_state::settings(cx).compact_chrome {
                 dim::TOP_BAR_H_COMPACT
             } else {
                 dim::TOP_BAR_H
@@ -868,12 +868,11 @@ impl Workspace {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(11.))
-                    .px(px(18.))
-                    .child(div().size(px(14.)).bg(p.accent))
+                    .gap(px(7.))
+                    .px(px(12.))
                     .child(
                         div()
-                            .text_size(px(16.))
+                            .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("Emulsion"),
                     ),
@@ -881,7 +880,7 @@ impl Workspace {
             .child(
                 tab(
                     "tab-editor",
-                    "EDITOR",
+                    "Editor",
                     self.screen == Screen::Editor,
                     has_editor,
                 )
@@ -893,7 +892,7 @@ impl Workspace {
                 })),
             )
             .child(
-                tab("tab-home", "HOME", self.screen == Screen::Home, true).on_click(cx.listener(
+                tab("tab-home", "Home", self.screen == Screen::Home, true).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.screen = Screen::Home;
                         cx.notify();
@@ -901,7 +900,7 @@ impl Workspace {
                 )),
             )
             .child(
-                tab("tab-batch", "BATCH", self.screen == Screen::Batch, true).on_click(
+                tab("tab-batch", "Batch", self.screen == Screen::Batch, true).on_click(
                     cx.listener(|this, _, _, cx| {
                         this.screen = Screen::Batch;
                         this.refresh_batch_recipes(cx);
@@ -911,7 +910,7 @@ impl Workspace {
             .child(
                 tab(
                     "tab-settings",
-                    "SETTINGS",
+                    "Settings",
                     self.screen == Screen::Settings,
                     true,
                 )
@@ -921,7 +920,7 @@ impl Workspace {
                 })),
             )
             .child(
-                tab("tab-about", "ABOUT", self.screen == Screen::About, true).on_click(
+                tab("tab-about", "About", self.screen == Screen::About, true).on_click(
                     cx.listener(|this, _, _, cx| {
                         this.screen = Screen::About;
                         cx.notify();
