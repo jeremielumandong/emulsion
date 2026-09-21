@@ -913,6 +913,17 @@ impl EditorView {
         }
     }
 
+    /// No layer selected: the Properties panel empties and painting will
+    /// go to a new layer. Escape in the panel, Ctrl-click on the selected
+    /// row, or a click on empty list space all land here.
+    pub(crate) fn deselect_layer(&mut self, cx: &mut Context<Self>) {
+        if self.selected.is_some() {
+            self.selected = None;
+            self.menu = None;
+            cx.notify();
+        }
+    }
+
     fn add_node(&mut self, node: Node, cx: &mut Context<Self>) {
         self.select_sidebar(SidebarTab::Properties, cx);
         let slot = self.insertion_slot();
@@ -1572,6 +1583,7 @@ impl EditorView {
     fn doc_bar(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let d = &self.editor.doc;
         let ink = p.ink;
+        let compact = crate::app_state::settings(cx).compact_chrome;
         let depth = if d.source_depth == 16 {
             "16 bit"
         } else {
@@ -1583,7 +1595,7 @@ impl EditorView {
             .items_center()
             .gap(px(13.))
             .px(px(16.))
-            .py(px(10.))
+            .py(if compact { px(4.) } else { px(10.) })
             .border_b_1()
             .border_color(p.line)
             .child(
@@ -1591,12 +1603,6 @@ impl EditorView {
                     .flex()
                     .items_baseline()
                     .gap(px(9.))
-                    .child(
-                        div()
-                            .text_size(px(15.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.name.clone()),
-                    )
                     .child(crate::widgets::tip(
                         // The dimensions are the door to resizing, where
                         // Photoshop's Image menu would be.
@@ -1693,8 +1699,9 @@ impl EditorView {
                 .child(div().text_color(p.muted).child("ADVANCED"))
                 .children(more)
         });
+        let compact = crate::app_state::settings(cx).compact_chrome;
         let first = row(p)
-            .py(px(8.))
+            .py(if compact { px(4.) } else { px(8.) })
             .border_b_1()
             .border_color(p.line)
             .child(div().text_color(p.ink).child(tool.to_uppercase()))
@@ -2266,7 +2273,12 @@ impl EditorView {
                     .gap(px(2.))
                     .max_h(px(180.))
                     .overflow_y_scroll()
+                    // Rows stop the click; what reaches here is empty space.
+                    .on_click(cx.listener(|this, _, _, cx| this.deselect_layer(cx)))
                     .children(row_els)
+                    // Always a little empty space to click, even when the
+                    // list is full.
+                    .child(div().h(px(10.)).flex_none())
                     .test_support(),
             )
             .child(actions)
@@ -2441,10 +2453,17 @@ impl EditorView {
             .text_color(fg)
             .cursor_pointer()
             .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                cx.stop_propagation();
                 window.focus(&this.panel_focus, cx);
                 this.menu = None;
                 if e.click_count() >= 2 {
                     this.start_rename(id, window, cx);
+                } else if this.selected == Some(id)
+                    && (e.modifiers().control || e.modifiers().shift)
+                {
+                    // Ctrl- or Shift-click on the selected layer deselects it
+                    // (GIMP's habit; Photoshop uses Ctrl-click too).
+                    this.deselect_layer(cx);
                 } else {
                     if this.sidebar_tab != SidebarTab::Reference {
                         this.select_sidebar(SidebarTab::Properties, cx);
@@ -2498,7 +2517,11 @@ impl EditorView {
                 .py(px(13.))
                 .border_b_1()
                 .border_color(p.line)
-                .child(mono("Select a layer to edit its properties", 10., p.muted));
+                .child(mono(
+                    "No layer selected. Click one to edit it; a new stroke starts its own layer.",
+                    10.,
+                    p.muted,
+                ));
         };
         let id = n.id;
         let mut body = div()

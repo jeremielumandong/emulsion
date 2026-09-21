@@ -67,3 +67,23 @@ fn a_new_transparent_canvas_has_one_empty_layer(cx: &mut TestAppContext) {
         ));
     });
 }
+
+#[gpui_kit::test]
+fn escape_in_the_layer_panel_deselects_and_the_panel_says_so(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, doc(&["Sketch"], None));
+    let e = editor(&ws, cx);
+    cx.update(|window, cx| {
+        e.update(cx, |e, cx| {
+            e.selected = Some(e.editor.doc.nodes[0].id);
+            window.focus(&e.panel_focus, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = e.read(cx);
+        assert!(e.selected.is_none(), "Escape deselects the layer");
+        assert_eq!(e.editor.doc.nodes.len(), 1, "nothing was deleted");
+    });
+}

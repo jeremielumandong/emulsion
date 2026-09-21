@@ -152,6 +152,12 @@ impl EditorView {
             .border_color(p.line)
             .track_focus(&self.panel_focus)
             .key_context("NodePanel")
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" && this.selected.is_some() {
+                    this.deselect_layer(cx);
+                    cx.stop_propagation();
+                }
+            }))
             .child(div().flex_none().child(self.scene_graph(p, cx)))
             .when(!self.draw_mode, |d| {
                 d.child(tabs).child(

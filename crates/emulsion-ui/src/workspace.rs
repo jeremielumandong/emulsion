@@ -290,7 +290,11 @@ impl Workspace {
             .items_end()
             .gap(px(2.))
             .px(px(8.))
-            .pt(px(4.))
+            .pt(if crate::app_state::settings(cx).compact_chrome {
+                px(1.)
+            } else {
+                px(4.)
+            })
             .border_b_1()
             .border_color(p.line)
             .bg(p.chrome)
@@ -853,7 +857,11 @@ impl Workspace {
             .flex()
             .flex_none()
             .items_stretch()
-            .h(dim::TOP_BAR_H)
+            .h(if crate::app_state::settings(cx).compact_chrome {
+                dim::TOP_BAR_H_COMPACT
+            } else {
+                dim::TOP_BAR_H
+            })
             .bg(p.chrome)
             .text_color(p.chrome_fg)
             .child(
@@ -1048,6 +1056,7 @@ impl Render for Workspace {
                         .child(self.last_title.trim_end_matches(" — Emulsion").to_string()),
                 ),
             );
+        let compact = crate::app_state::settings(cx).compact_chrome;
         let top = self.top_bar(cx);
         let banner = self.banner(cx);
         let body: AnyElement = match (self.screen, &self.editor) {
@@ -1367,7 +1376,7 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
-            .child(title_bar)
+            .children((!compact).then_some(title_bar))
             .child(top)
             .children(banner)
             .child(body)

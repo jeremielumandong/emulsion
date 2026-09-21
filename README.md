@@ -178,6 +178,11 @@ Leaving Recipes cancels an unapplied preview; leaving Timeline stops playback
 and returns to the full document. Timeline also holds **Replay drawing**: the
 picture played back from its history (every step still undoable and every save),
 over the canvas, with a GIF export. Nothing is recorded ahead of time.
+**Settings › Layout › compact chrome** removes the client title bar and tightens
+the top bars, leaving more height for the canvas; the window then moves through
+the desktop (Super-drag on Omarchy) and Ctrl-Q quits. Omarchy desktops start
+compact. The assistant panel under the canvas folds to one line with its ▾ chip.
+
 
 Tool buttons and options support Tab navigation and Enter/Space activation.
 Focused sliders accept arrow keys, Shift+arrow for larger steps, and Home/End
@@ -253,6 +258,8 @@ To render the manga guide's example locally, without an assistant provider:
 ```sh
 cargo run --release -p emulsion-assistant --example playbook -- --guide manga --out target/manga-studies
 ```
+  To deselect, press Escape with the panel focused, Ctrl-click the selected row,
+  or click empty space under the list; the next stroke then starts a new layer.
 
 This writes a PNG and an editable ORA for inspection.
 

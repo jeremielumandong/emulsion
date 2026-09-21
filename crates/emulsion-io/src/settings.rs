@@ -37,6 +37,10 @@ pub struct Settings {
     pub follow_omarchy: bool,
     /// Apply every assistant change without asking, deletes and merges too.
     pub approve_all: bool,
+    /// Tighter chrome: no client title bar (the window manager or a
+    /// Super-drag moves the window) and shorter bars, for small screens
+    /// and tiling desktops.
+    pub compact_chrome: bool,
     /// Play the assistant's brush strokes on the canvas as it paints.
     pub show_drawing: bool,
     /// How fast those strokes play.
@@ -92,6 +96,7 @@ impl Default for Settings {
             light_mode: false,
             follow_omarchy: false,
             approve_all: false,
+            compact_chrome: false,
             show_drawing: true,
             drawing_pace: DrawingPace::Natural,
             advanced_tools: false,
@@ -143,6 +148,9 @@ impl Settings {
             // First run: on an Omarchy desktop, start in its colours.
             Err(_) => Self {
                 follow_omarchy: omarchy_present(),
+                // Omarchy tiles windows and draws no decorations; the
+                // client title bar would be a second, empty one.
+                compact_chrome: omarchy_present(),
                 ..Self::default()
             },
         }

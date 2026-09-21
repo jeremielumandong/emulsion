@@ -93,6 +93,8 @@ pub struct Assistant {
     pub cost: f64,
     pub show_transcript: bool,
     pub dock_open: bool,
+    /// Only the dock's header line shows, giving the canvas the room back.
+    pub dock_collapsed: bool,
     /// A `paint` call being played back stroke by stroke.
     pub(crate) playback: Option<Playback>,
     /// Document reads and mutations execute in arrival order, so inspection
@@ -2034,7 +2036,7 @@ impl EditorView {
                 .flex()
                 .flex_col()
                 .gap(px(8.))
-                .max_h(px(220.))
+                .max_h(px(160.))
                 .overflow_y_scroll()
                 .border_t_1()
                 .border_color(p.line)
@@ -2064,6 +2066,7 @@ impl EditorView {
                 }))
         });
         let show_t = a.show_transcript;
+        let collapsed = a.dock_collapsed;
         let phase = a.anim;
         // An indeterminate progress line along the top while the AI works.
         let progress = running.then(|| {
@@ -2127,11 +2130,20 @@ impl EditorView {
                         )
                         .child(status_el)
                         .child(div().flex_1())
+                        .child(crate::widgets::tip(
+                            chip("dock-fold", if collapsed { "▴" } else { "▾" }, false, p)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.assistant.dock_collapsed = !this.assistant.dock_collapsed;
+                                    cx.notify();
+                                })),
+                            "Fold the assistant panel to one line, or unfold it",
+                        ))
                         .child(
                             chip("transcript", "transcript", show_t, p).on_click(cx.listener(
                                 |this, _, _, cx| {
                                     this.assistant.show_transcript =
                                         !this.assistant.show_transcript;
+                                    this.assistant.dock_collapsed = false;
                                     cx.notify();
                                 },
                             )),
@@ -2152,10 +2164,10 @@ impl EditorView {
                             )))
                         }),
                 )
-                .when(!text.is_empty(), |d| {
+                .when(!collapsed && !text.is_empty(), |d| {
                     d.child(div().text_size(px(12.5)).text_color(p.ink).child(text))
                 })
-                .when(!cards.is_empty(), |d| {
+                .when(!collapsed && !cards.is_empty(), |d| {
                     d.child(
                         div()
                             .id("assistant-cards")
@@ -2167,8 +2179,8 @@ impl EditorView {
                             .children(cards),
                     )
                 })
-                .children(pending)
-                .when(many, |d| {
+                .when(!collapsed, |d| d.children(pending))
+                .when(!collapsed && many, |d| {
                     d.child(
                         div()
                             .flex()
@@ -2202,7 +2214,7 @@ impl EditorView {
                             ),
                     )
                 })
-                .children(transcript)
+                .when(!collapsed, |d| d.children(transcript))
                 .into_any_element(),
         )
     }

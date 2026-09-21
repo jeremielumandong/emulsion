@@ -81,6 +81,8 @@ pub const MONO_FONT: &str = "JetBrains Mono";
 pub mod dim {
     use gpui_kit::{Pixels, px};
     pub const TOP_BAR_H: Pixels = px(54.);
+    /// The same bar in compact chrome.
+    pub const TOP_BAR_H_COMPACT: Pixels = px(38.);
     pub const TOOL_RAIL_W: Pixels = px(58.);
     pub const TOOL_BTN_W: Pixels = px(40.);
     pub const TOOL_BTN_H: Pixels = px(38.);
