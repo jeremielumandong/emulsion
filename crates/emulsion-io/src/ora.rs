@@ -1174,10 +1174,26 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
         children: Vec<Item>,
         is_stack: bool,
     }
+    use emulsion_core::DocumentError;
+    use emulsion_core::document::{MAX_DEPTH, MAX_NODES};
     let mut size = None;
     let mut stack: Vec<Item> = Vec::new();
     let mut root: Option<Item> = None;
     let mut buf = Vec::new();
+    // Enforce the document limits while parsing, so a hostile stack.xml
+    // cannot build a tree too deep to recurse over (or drop) or too big to
+    // hold. The root stack is not a node; its children have depth 0.
+    let mut nodes = 0usize;
+    let mut count_node = |open: usize| -> Result<()> {
+        nodes += 1;
+        if nodes > MAX_NODES {
+            return Err(DocumentError::TooManyNodes(MAX_NODES).into());
+        }
+        if open > MAX_DEPTH + 1 {
+            return Err(DocumentError::TooDeep(MAX_DEPTH).into());
+        }
+        Ok(())
+    };
     let attrs_of = |e: &quick_xml::events::BytesStart| -> Result<HashMap<String, String>> {
         let mut m = HashMap::new();
         for a in e.attributes() {
@@ -1203,6 +1219,9 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 size = Some((w, h));
             }
             Event::Start(e) if e.name().as_ref() == "stack" => {
+                if !stack.is_empty() {
+                    count_node(stack.len())?;
+                }
                 let a = attrs_of(&e)?;
                 stack.push(Item {
                     name: a.get("name").cloned().unwrap_or_default(),
@@ -1221,6 +1240,7 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 }
             }
             Event::Empty(e) | Event::Start(e) if e.name().as_ref() == "layer" => {
+                count_node(stack.len())?;
                 let a = attrs_of(&e)?;
                 let item = Item {
                     name: a.get("name").cloned().unwrap_or_default(),
@@ -1261,9 +1281,10 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             blobs.insert(p.clone(), read_entry(zip, p, MAX_ENTRY_BYTES)?);
         }
     }
-    let decoded: HashMap<String, Result<(Raster, u8)>> = blobs
+    // One decoded raster per distinct src, shared by every layer using it.
+    let decoded: HashMap<String, Result<(Arc<Raster>, u8)>> = blobs
         .par_iter()
-        .map(|(k, v)| (k.clone(), decode_png(v)))
+        .map(|(k, v)| (k.clone(), decode_png(v).map(|(r, d)| (Arc::new(r), d))))
         .collect();
 
     let mut doc = Document::new(w, h);
@@ -1271,7 +1292,7 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
         doc: &mut Document,
         item: &Item,
         parent: Option<NodeId>,
-        decoded: &HashMap<String, Result<(Raster, u8)>>,
+        decoded: &HashMap<String, Result<(Arc<Raster>, u8)>>,
     ) -> Result<()> {
         // ORA lists top first; the document is bottom first.
         for c in item.children.iter().rev() {
@@ -1321,7 +1342,7 @@ fn read_stack<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                     .and_then(|v| v.parse::<f64>().ok())
                     .unwrap_or(0.0);
                 NodeKind::Raster {
-                    raster: Arc::new(r.clone()),
+                    raster: r.clone(),
                     placement: Placement::at(x, y),
                 }
             };
@@ -2415,6 +2436,58 @@ mod tests {
         };
         let (a, b) = (r.to_srgba16(), raster.to_srgba16());
         assert!(a.iter().zip(&b).all(|(x, y)| x.abs_diff(*y) <= 1));
+    }
+
+    /// A foreign ORA archive holding `stack` and one 2×2 PNG at `a.png`.
+    fn foreign_ora(stack: &str) -> ZipArchive<std::io::Cursor<Vec<u8>>> {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut out = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        out.start_file("stack.xml", SimpleFileOptions::default())
+            .unwrap();
+        out.write_all(stack.as_bytes()).unwrap();
+        out.start_file("a.png", SimpleFileOptions::default())
+            .unwrap();
+        out.write_all(&png).unwrap();
+        ZipArchive::new(out.finish().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn foreign_stack_limits_are_enforced_while_parsing() {
+        let deep = format!("<image w=\"2\" h=\"2\">{}", "<stack>".repeat(100_000));
+        assert!(matches!(
+            read_stack(&mut foreign_ora(&deep)),
+            Err(IoError::Invalid(emulsion_core::DocumentError::TooDeep(_)))
+        ));
+        let wide = format!(
+            "<image w=\"2\" h=\"2\"><stack>{}</stack></image>",
+            "<layer src=\"a.png\"/>".repeat(100_000)
+        );
+        assert!(matches!(
+            read_stack(&mut foreign_ora(&wide)),
+            Err(IoError::Invalid(
+                emulsion_core::DocumentError::TooManyNodes(_)
+            ))
+        ));
+        // Within the limits, layers naming one src share its pixels.
+        let shared = format!(
+            "<image w=\"2\" h=\"2\"><stack>{}<stack>{}</stack></stack></image>",
+            "<layer src=\"a.png\"/>".repeat(3),
+            "<layer src=\"a.png\"/>".repeat(2)
+        );
+        let doc = read_stack(&mut foreign_ora(&shared)).unwrap();
+        let rasters: Vec<_> = doc
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NodeKind::Raster { raster, .. } => Some(raster.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rasters.len(), 5);
+        assert!(rasters.iter().all(|r| Arc::ptr_eq(r, &rasters[0])));
     }
 
     #[test]

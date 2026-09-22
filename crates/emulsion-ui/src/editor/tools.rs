@@ -2527,7 +2527,6 @@ impl EditorView {
         ) {
             self.set_layer_selection(vec![id], Some(id));
         }
-        let _ = fill::gradient; // the dense variant serves the MCP tools
     }
 
     // ── Colour picker ───────────────────────────────────────────────────

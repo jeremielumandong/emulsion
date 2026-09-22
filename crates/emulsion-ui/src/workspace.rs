@@ -734,20 +734,33 @@ impl Workspace {
     }
 
     /// Save current work and existing versions without creating a checkpoint.
-    fn write(&mut self, ed: Entity<EditorView>, path: PathBuf, cx: &mut Context<Self>) {
-        let (doc, rev, graph) = ed.update(cx, |e, cx| {
+    /// Writes to one document never overlap: a Save requested while one runs
+    /// is remembered (only the newest) and written when the current finishes.
+    pub(crate) fn write(&mut self, ed: Entity<EditorView>, path: PathBuf, cx: &mut Context<Self>) {
+        let Some((doc, rev, graph)) = ed.update(cx, |e, cx| {
+            if e.history.save_busy {
+                e.history.save_queued = Some(path.clone());
+                return None;
+            }
+            e.history.save_busy = true;
             e.set_status(format!("Saving {}…", path.display()), false, cx);
-            (
+            Some((
                 e.editor.doc.clone(),
                 e.editor.revision,
                 e.editor.graph.clone(),
-            )
-        });
+            ))
+        }) else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let (p, d) = (path.clone(), doc.clone());
             let result = cx
                 .background_spawn(async move { emulsion_io::save_full(&d, &graph, &p) })
                 .await;
+            let queued = ed.update(cx, |e, _| {
+                e.history.save_busy = false;
+                e.history.save_queued.take()
+            });
             this.update(cx, |this, cx| match result {
                 Ok(()) => {
                     this.recents = recent::push(&path, summary(&doc));
@@ -769,6 +782,9 @@ impl Workspace {
                 }),
             })
             .ok();
+            if let Some(next) = queued {
+                this.update(cx, |this, cx| this.write(ed, next, cx)).ok();
+            }
         })
         .detach();
     }

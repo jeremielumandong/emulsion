@@ -162,8 +162,12 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        match std::fs::read(file()) {
-            Ok(b) => serde_json::from_slice(&b).unwrap_or_default(),
+        Self::load_from(&file())
+    }
+
+    fn load_from(path: &std::path::Path) -> Self {
+        match std::fs::read(path) {
+            Ok(b) => crate::parse_config(path, &b).unwrap_or_default(),
             // First run: on an Omarchy desktop, start in its colours.
             Err(_) => Self {
                 follow_omarchy: omarchy_present(),
@@ -176,24 +180,7 @@ impl Settings {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let dir = crate::recent::data_dir();
-        std::fs::create_dir_all(&dir)?;
-        let path = file();
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&path)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        }
-        serde_json::to_writer_pretty(&mut file, self).map_err(std::io::Error::other)?;
-        Ok(())
+        crate::save_config(&file(), self)
     }
 
     /// The Jev key in effect, and where it came from.
@@ -213,6 +200,38 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_is_owner_only_and_corrupt_file_is_kept_as_backup() {
+        let dir = std::env::temp_dir().join(format!("emulsion-settings-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let settings = Settings {
+            jev_api_key: Some("secret".into()),
+            ..Settings::default()
+        };
+        crate::save_config(&path, &settings).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert_eq!(
+            Settings::load_from(&path).jev_api_key.as_deref(),
+            Some("secret")
+        );
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert_eq!(Settings::load_from(&path).jev_api_key, None);
+        let backup = dir.join("settings.json.bak");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"{ not json");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&backup).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn existing_theme_preferences_do_not_enable_omarchy() {

@@ -111,6 +111,38 @@ mod workflow_recipe_tests;
 #[path = "alignment_tests.rs"]
 mod alignment_tests;
 
+/// Test-process environment, fixed before `main` so no thread can observe it
+/// changing (mutating the environment while other threads run is UB):
+/// no Jev key, the app binary for the real-CLI test, and a private data
+/// directory so tests neither read nor write the person's recents, recovery
+/// copies, keymap or presets.
+extern "C" fn init_test_env() {
+    // SAFETY: this runs from the loader's static initialisers, before `main`
+    // and therefore before the test harness or any test spawns a thread.
+    unsafe {
+        std::env::remove_var("TYPESAFE_API_KEY");
+        let exe =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/emulsion");
+        if let Ok(exe) = std::fs::canonicalize(exe) {
+            std::env::set_var("EMULSION_EXE", exe);
+        }
+        let data = std::env::temp_dir().join(format!("emulsion-ui-tests-{}", std::process::id()));
+        std::env::set_var("XDG_DATA_HOME", data);
+    }
+}
+
+#[used]
+#[cfg_attr(
+    any(target_os = "linux", target_os = "android", target_os = "freebsd"),
+    unsafe(link_section = ".init_array")
+)]
+#[cfg_attr(
+    target_vendor = "apple",
+    unsafe(link_section = "__DATA,__mod_init_func")
+)]
+#[cfg_attr(windows, unsafe(link_section = ".CRT$XCU"))]
+static INIT_TEST_ENV: extern "C" fn() = init_test_env;
+
 fn doc(names: &[&str], pixels: Option<Raster>) -> Document {
     let mut d = Document::new(256, 192);
     for name in names {
@@ -148,8 +180,7 @@ fn open_with(
         }));
         cx.set_global(Capabilities { cli });
     });
-    // SAFETY: tests run single-threaded per process for this variable.
-    unsafe { std::env::remove_var("TYPESAFE_API_KEY") };
+    // TYPESAFE_API_KEY is cleared once before `main`; see `init_test_env`.
     let slot: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::default();
     let s = slot.clone();
     let (_, vcx) = cx.add_window_view(move |window, cx| {
@@ -808,8 +839,11 @@ fn assistant_turn_through_the_ui_with_the_real_cli(cx: &mut TestAppContext) {
         eprintln!("claude not installed; skipping");
         return;
     };
-    // SAFETY: set before any thread reads it.
-    unsafe { std::env::set_var("EMULSION_EXE", std::fs::canonicalize(&exe).unwrap()) };
+    // EMULSION_EXE points at `exe`; it is set once before `main` (`init_test_env`).
+    assert_eq!(
+        std::env::var_os("EMULSION_EXE").map(std::path::PathBuf::from),
+        Some(std::fs::canonicalize(&exe).unwrap())
+    );
     cx.executor().allow_parking();
 
     let mut d = Document::new(600, 400);

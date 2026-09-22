@@ -265,7 +265,9 @@ pub fn register_texture(png: &[u8]) -> Result<u32> {
             }
         })
         .collect();
-    textures::register(id, textures::Texture::from_gray8(w, h, &gray));
+    let texture = textures::Texture::from_gray8(w, h, &gray)
+        .ok_or_else(|| IoError::Unsupported("texture image is empty".into()))?;
+    textures::register(id, texture);
     Ok(id)
 }
 

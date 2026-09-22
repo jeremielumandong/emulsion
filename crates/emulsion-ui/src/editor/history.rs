@@ -131,6 +131,10 @@ pub(crate) struct HistoryState {
     pub(crate) recovery_busy: bool,
     recovery_generation: u64,
     pub(crate) last_recovery: Option<Instant>,
+    /// A Save is writing the document; a second write must not overlap it.
+    pub(crate) save_busy: bool,
+    /// The newest Save requested while one was running, written next.
+    pub(crate) save_queued: Option<PathBuf>,
 }
 
 /// A merge waiting for the person's choices.
@@ -645,7 +649,7 @@ impl EditorView {
                         ))
                     }),
             );
-            for (ci, id) in ids.iter().enumerate() {
+            for id in ids.iter() {
                 let c = g.commit(*id).expect("listed");
                 let on = *id == selected;
                 let fill = if *id == b.tip && !(is_head && uncommitted) {
@@ -715,7 +719,6 @@ impl EditorView {
                                 .child(mono(meta, 9.5, p.muted)),
                         ),
                 );
-                let _ = ci;
             }
             if is_head {
                 col = col.child(

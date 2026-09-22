@@ -11,27 +11,46 @@ fn file() -> PathBuf {
     emulsion_io::recent::data_dir().join("brush-presets.json")
 }
 
-/// Saved brushes; an unreadable file reads as none.
-pub fn load() -> Vec<BrushPreset> {
-    std::fs::read(file())
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Vec<BrushPreset>>(&b).ok())
-        .map(|mut v| {
+/// Saved brushes at `path`. A missing file reads as none. A file that exists
+/// but cannot be parsed is moved aside to `<path>.bak` (returned) so a later
+/// save cannot overwrite it; if it cannot be read or moved, this is an error
+/// and nothing may be saved over it.
+fn load_from(path: &std::path::Path) -> std::io::Result<(Vec<BrushPreset>, Option<PathBuf>)> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), None)),
+        Err(e) => return Err(e),
+    };
+    match serde_json::from_slice::<Vec<BrushPreset>>(&bytes) {
+        Ok(mut v) => {
             v.truncate(MAX_PRESETS);
             for p in &mut v {
                 p.brush = p.brush.sanitized();
             }
-            v
-        })
-        .unwrap_or_default()
+            Ok((v, None))
+        }
+        Err(_) => {
+            let mut bak = path.as_os_str().to_owned();
+            bak.push(".bak");
+            let bak = PathBuf::from(bak);
+            std::fs::rename(path, &bak)?;
+            Ok((Vec::new(), Some(bak)))
+        }
+    }
+}
+
+fn save_to(path: &std::path::Path, presets: &[BrushPreset]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let bytes = serde_json::to_vec_pretty(presets).map_err(std::io::Error::other)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(tmp, path)
 }
 
 fn save(presets: &[BrushPreset]) -> std::io::Result<()> {
-    std::fs::create_dir_all(emulsion_io::recent::data_dir())?;
-    let bytes = serde_json::to_vec_pretty(presets).map_err(std::io::Error::other)?;
-    let tmp = file().with_extension("json.tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(tmp, file())
+    save_to(&file(), presets)
 }
 
 #[cfg(test)]
@@ -91,6 +110,31 @@ pub(crate) struct PresetState {
 }
 
 impl EditorView {
+    /// Load the saved brushes on first use. False when the file could not be
+    /// read or set aside: the caller must not save over it.
+    fn ensure_saved_presets(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.presets.saved.is_some() {
+            return true;
+        }
+        match load_from(&file()) {
+            Ok((v, bak)) => {
+                self.presets.saved = Some(v);
+                if let Some(bak) = bak {
+                    self.set_status(
+                        format!("Saved brushes were unreadable; moved to {}.", bak.display()),
+                        true,
+                        cx,
+                    );
+                }
+                true
+            }
+            Err(e) => {
+                self.set_status(format!("Could not read saved brushes: {e}"), true, cx);
+                false
+            }
+        }
+    }
+
     pub fn toggle_presets(&mut self, cx: &mut Context<Self>) {
         let tab = if self.sidebar_tab == SidebarTab::BrushPresets {
             SidebarTab::History
@@ -99,9 +143,7 @@ impl EditorView {
         };
         self.select_sidebar(tab, cx);
         self.presets.open = tab == SidebarTab::BrushPresets;
-        if self.presets.saved.is_none() {
-            self.presets.saved = Some(load());
-        }
+        self.ensure_saved_presets(cx);
         if self.presets.category.is_none() && self.presets.saved.as_ref().is_none_or(Vec::is_empty)
         {
             self.presets.category = Some(CATEGORIES[0].into());
@@ -155,11 +197,12 @@ impl EditorView {
     /// Pick a brush by name, built-in or saved.
     pub fn apply_preset_named(&mut self, name: &str, cx: &mut Context<Self>) -> bool {
         let found = library::find(name).or_else(|| {
+            self.ensure_saved_presets(cx);
             let n = name.trim().to_lowercase();
             self.presets
                 .saved
-                .get_or_insert_with(load)
                 .iter()
+                .flatten()
                 .find(|p| p.name.to_lowercase() == n)
                 .cloned()
         });
@@ -208,7 +251,12 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                let saved = this.presets.saved.get_or_insert_with(load);
+                if !this.ensure_saved_presets(cx) {
+                    return;
+                }
+                let Some(saved) = this.presets.saved.as_mut() else {
+                    return;
+                };
                 let previous = saved.clone();
                 let (mut added, mut errors) = (0usize, Vec::new());
                 for r in imported {
@@ -259,7 +307,12 @@ impl EditorView {
     /// Save the current brush under a name describing it.
     pub fn save_preset(&mut self, cx: &mut Context<Self>) {
         let b = self.tools.brush;
-        let saved = self.presets.saved.get_or_insert_with(load);
+        if !self.ensure_saved_presets(cx) {
+            return;
+        }
+        let Some(saved) = self.presets.saved.as_mut() else {
+            return;
+        };
         if saved
             .iter()
             .chain(&library::library())
@@ -456,7 +509,32 @@ impl EditorView {
 
 #[cfg(test)]
 mod tests {
-    use super::{Brush, library, matches};
+    use super::{Brush, library, load_from, matches, save_to};
+
+    #[test]
+    fn a_corrupt_presets_file_survives_the_next_save() {
+        let dir = std::env::temp_dir().join(format!(
+            "emulsion-presets-corrupt-{}-{}",
+            std::process::id(),
+            emulsion_io::recent::now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("brush-presets.json");
+        let corrupt = b"[{\"name\": \"My favourite\", \"brush\": {truncated";
+        std::fs::write(&path, corrupt).unwrap();
+
+        let (saved, bak) = load_from(&path).unwrap();
+        assert!(saved.is_empty());
+        let bak = bak.expect("the unreadable file is set aside");
+        save_to(&path, &library::library()[..1]).unwrap();
+
+        assert_eq!(std::fs::read(&bak).unwrap(), corrupt);
+        assert_eq!(load_from(&path).unwrap().0, library::library()[..1]);
+        // A missing file is simply empty, not an error.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(load_from(&path).unwrap(), (Vec::new(), None));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn library_brushes_round_trip_through_json() {

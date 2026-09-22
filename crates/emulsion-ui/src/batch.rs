@@ -996,8 +996,7 @@ impl Workspace {
                                     .text_size(px(10.))
                                     .font_family(MONO_FONT)
                                     .child(if item.selected { "✓" } else { "" })
-                                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                                        let _ = e;
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                         cx.stop_propagation();
                                         if let Some(it) = this.batch.items.get_mut(i) {
                                             it.selected = !it.selected;

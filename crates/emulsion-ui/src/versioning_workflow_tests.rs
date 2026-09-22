@@ -179,3 +179,65 @@ fn create_named_version_from_history_keeps_edits_undoable(cx: &mut TestAppContex
         );
     });
 }
+
+#[gpui_kit::test]
+fn saves_to_one_document_never_overlap_and_the_newest_request_wins(cx: &mut TestAppContext) {
+    let folder = RecoveryFolder::new();
+    let [first, skipped, newest] =
+        ["first.ora", "skipped.ora", "newest.ora"].map(|n| folder.0.join(n));
+    let original = doc(&["Photo"], None);
+    let id = original.nodes[0].id;
+    let (ws, cx) = open(cx, original);
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| {
+        ws.update(cx, |w, cx| {
+            w.write(view.clone(), first.clone(), cx);
+            view.update(cx, |e, cx| {
+                e.execute(Command::SetOpacity { id, opacity: 0.5 }, cx)
+            });
+            // Pressed again while the first write is still running.
+            w.write(view.clone(), skipped.clone(), cx);
+            w.write(view.clone(), newest.clone(), cx);
+        })
+    });
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert!(e.history.save_busy);
+        assert_eq!(e.history.save_queued.as_ref(), Some(&newest));
+    });
+    cx.run_until_parked();
+    let saved = cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert!(!e.history.save_busy);
+        assert!(e.history.save_queued.is_none());
+        assert_eq!(e.editor.path.as_ref(), Some(&newest));
+        e.status.clone()
+    });
+    assert!(!skipped.exists(), "a superseded request is not written");
+    assert_eq!(
+        emulsion_io::open_full(&first)
+            .unwrap()
+            .doc
+            .node(id)
+            .unwrap()
+            .opacity,
+        1.0
+    );
+    assert_eq!(
+        emulsion_io::open_full(&newest)
+            .unwrap()
+            .doc
+            .node(id)
+            .unwrap()
+            .opacity,
+        0.5,
+        "the queued save writes the document as it is when it runs"
+    );
+    assert_eq!(
+        saved.map(|(s, error)| (s.to_string(), error)),
+        Some((format!("Saved {}", newest.display()), false))
+    );
+    for p in [first, newest] {
+        let _ = std::fs::remove_file(p);
+    }
+}

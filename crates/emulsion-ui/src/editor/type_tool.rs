@@ -406,7 +406,7 @@ impl EditorView {
     pub(crate) fn text_key_down(
         &mut self,
         event: &KeyDownEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(spec) = self.editing_text() else {
@@ -537,7 +537,6 @@ impl EditorView {
             }
             _ => return false,
         }
-        let _ = window;
         true
     }
 

@@ -444,6 +444,49 @@ impl Filter {
         true
     }
 
+    /// Clamp every parameter to its `ParamSpec` range and replace non-finite
+    /// values with the catalogue default, so filters loaded from files or
+    /// commands cannot ask the kernels for unbounded work. In-range values
+    /// are left unchanged.
+    pub fn sanitized(&self) -> Filter {
+        let mut out = self.clone();
+        let default = Filter::catalogue()
+            .into_iter()
+            .find(|d| d.key() == self.key());
+        for spec in self.params() {
+            let value = if spec.value.is_finite() {
+                spec.value
+            } else {
+                default
+                    .as_ref()
+                    .and_then(|d| d.params().into_iter().find(|s| s.key == spec.key))
+                    .map_or(spec.min, |s| s.value)
+            };
+            out.set_param(spec.key, value);
+        }
+        if let Filter::LensProfile {
+            a,
+            b,
+            c,
+            k1,
+            k2,
+            k3,
+            scale,
+            ..
+        } = &mut out
+        {
+            for v in [a, b, c, k1, k2, k3] {
+                if !v.is_finite() {
+                    *v = 0.0;
+                }
+            }
+            if !scale.is_finite() {
+                *scale = 1.0;
+            }
+        }
+        out
+    }
+
     /// How far this filter can push pixels past the layer's edge.
     pub fn spread(&self) -> i32 {
         let s = match self {
@@ -696,7 +739,7 @@ pub fn apply_pixels_cpu(
     }
     Some(
         apply_one_cpu_owned(
-            filter,
+            &filter.sanitized(),
             Image {
                 w: width,
                 h: height,
@@ -1057,6 +1100,7 @@ pub fn apply_stack_styled(
     if stack.is_empty() {
         return (source.clone(), (0, 0));
     }
+    let stack: Vec<Filter> = stack.iter().map(Filter::sanitized).collect();
     let spread: i32 = stack
         .iter()
         .map(Filter::spread)
@@ -1070,10 +1114,10 @@ pub fn apply_stack_styled(
     });
     let mut img = Image { w, h, px }.pad(spread as usize);
     for (index, f) in stack.iter().enumerate() {
-        let before = img.clone();
-        img = apply_one(f, img);
         let style = styles.get(index).copied().unwrap_or_default().sanitized();
-        if style.opacity < 1.0 || style.blend != BlendMode::Normal {
+        let before = (style.opacity < 1.0 || style.blend != BlendMode::Normal).then(|| img.clone());
+        img = apply_one(f, img);
+        if let Some(before) = before {
             img.px
                 .par_iter_mut()
                 .zip(before.px.par_iter())
@@ -1118,7 +1162,7 @@ pub fn apply_region(source: &Raster, stack: &[Filter], region: IRect) -> Raster 
         px,
     };
     for f in stack {
-        img = apply_one(f, img);
+        img = apply_one(&f.sanitized(), img);
     }
     let out: Vec<[u16; 4]> = img
         .px
@@ -1140,6 +1184,39 @@ mod tests {
                 [0; 4]
             }
         })
+    }
+
+    #[test]
+    fn out_of_range_params_are_sanitized_before_kernels() {
+        let tiny = Raster::from_fn(4, 4, [0; 4], |_, _| [30000, 20000, 10000, 65535]);
+        let start = std::time::Instant::now();
+        let hostile = [
+            Filter::LensBlur { radius: 1e5 },
+            Filter::MotionBlur {
+                angle: f32::NAN,
+                distance: 1e9,
+            },
+            Filter::GaussianBlur { radius: f32::NAN },
+            Filter::GaussianBlur {
+                radius: f32::INFINITY,
+            },
+        ];
+        let (out, _) = apply_stack(&tiny, &hostile);
+        assert!(out.width() > 0);
+        let region = apply_region(&tiny, &hostile, tiny.bounds());
+        assert_eq!(region.width(), 4);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(
+            Filter::LensBlur { radius: 1e5 }.sanitized(),
+            Filter::LensBlur { radius: 40.0 }
+        );
+        assert_eq!(
+            Filter::GaussianBlur { radius: f32::NAN }.sanitized(),
+            Filter::GaussianBlur { radius: 5.0 }
+        );
+        for filter in Filter::catalogue() {
+            assert_eq!(filter.sanitized(), filter, "in-range values are unchanged");
+        }
     }
 
     #[test]

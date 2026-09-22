@@ -92,9 +92,20 @@ fn blend_out(b: BlendMode) -> PsdBlend {
     }
 }
 
+/// The first `width`×`height`×`channels` bytes of a pixel block, or `None`
+/// when the data is shorter than its dimensions claim. Callers must have
+/// passed the dimensions through `check_size`, so the product fits.
+fn pixel_bytes(px: &PixelData, channels: usize) -> Option<&[u8]> {
+    let len = (px.width as usize)
+        .checked_mul(px.height as usize)?
+        .checked_mul(channels)?;
+    px.data.get(..len)
+}
+
 /// Grey values from a mask's pixel block, whichever layout ag-psd used.
+/// The block's size must already be checked.
 fn mask_bytes(px: &PixelData) -> Vec<u8> {
-    let n = (px.width * px.height) as usize;
+    let n = px.width as usize * px.height as usize;
     if px.data.len() == n * 4 {
         px.data.as_chunks::<4>().0.iter().map(|c| c[0]).collect()
     } else if px.data.len() >= n {
@@ -107,10 +118,14 @@ fn mask_bytes(px: &PixelData) -> Vec<u8> {
 /// A layer mask in the layer's own pixel space (`lw`×`lh`, at `lx`,`ly`).
 fn mask_in(m: &LayerMaskData, lx: i64, ly: i64, lw: u32, lh: u32) -> Option<Arc<Mask>> {
     let px = m.image_data.as_ref().or(m.canvas.as_ref())?;
+    crate::import::check_size(px.width, px.height).ok()?;
     let fill = m.default_color.unwrap_or(255.0).clamp(0.0, 255.0) as u8;
     let bytes = mask_bytes(px);
-    let (mx, my) = (m.left.unwrap_or(0.0) as i64, m.top.unwrap_or(0.0) as i64);
-    let mut out = vec![fill; (lw * lh) as usize];
+    // Offsets far outside any canvas cannot overlap it; clamping keeps the
+    // arithmetic below from overflowing.
+    let offset = |v: Option<f64>| v.unwrap_or(0.0).clamp(-4e9, 4e9) as i64;
+    let (mx, my) = (offset(m.left), offset(m.top));
+    let mut out = vec![fill; lw as usize * lh as usize];
     for y in 0..px.height as i64 {
         let dy = my + y - ly;
         if dy < 0 || dy >= lh as i64 {
@@ -169,24 +184,20 @@ fn add_layers(doc: &mut Document, layers: &[Layer], parent: Option<NodeId>) -> R
         } else {
             let px = l.image_data.as_ref().or(l.canvas.as_ref());
             let (left, top) = (l.left.unwrap_or(0.0), l.top.unwrap_or(0.0));
-            let (raster, lw, lh) = match px {
-                Some(p)
-                    if p.width > 0
-                        && p.height > 0
-                        && p.data.len() >= (p.width * p.height * 4) as usize =>
-                {
+            let pixels = match px {
+                Some(p) if p.width > 0 && p.height > 0 => {
                     crate::import::check_size(p.width, p.height)?;
-                    (
-                        Raster::from_srgba8(
-                            p.width,
-                            p.height,
-                            &p.data[..(p.width * p.height * 4) as usize],
-                        ),
-                        p.width,
-                        p.height,
-                    )
+                    pixel_bytes(p, 4).map(|data| (p, data))
                 }
-                _ => (Raster::transparent(1, 1), 1, 1),
+                _ => None,
+            };
+            let (raster, lw, lh) = match pixels {
+                Some((p, data)) => (
+                    Raster::from_srgba8(p.width, p.height, data),
+                    p.width,
+                    p.height,
+                ),
+                None => (Raster::transparent(1, 1), 1, 1),
             };
             let mut n = Node::raster(0, name, Arc::new(raster), Placement::at(left, top));
             if let Some(m) = &l.additional_info.mask {
@@ -274,6 +285,12 @@ pub fn read(path: &Path) -> Result<Document> {
     };
     let psd =
         ag_psd::read_psd(&bytes, &opts).map_err(|e| IoError::Unsupported(format!("PSD: {e:?}")))?;
+    from_psd(&psd)
+}
+
+/// Build a document from a parsed PSD, rejecting sizes and pixel blocks
+/// that do not match rather than trusting the file.
+fn from_psd(psd: &Psd) -> Result<Document> {
     let (w, h) = (psd.width as u32, psd.height as u32);
     crate::import::check_size(w, h)?;
     if !matches!(
@@ -308,11 +325,11 @@ pub fn read(path: &Path) -> Result<Document> {
                 .ok_or_else(|| {
                     IoError::Unsupported("PSD has neither layers nor a composite".into())
                 })?;
-            let r = Raster::from_srgba8(
-                px.width,
-                px.height,
-                &px.data[..(px.width * px.height * 4) as usize],
-            );
+            crate::import::check_size(px.width, px.height)?;
+            let data = pixel_bytes(px, 4).ok_or_else(|| {
+                IoError::Unsupported("PSD composite image data is truncated".into())
+            })?;
+            let r = Raster::from_srgba8(px.width, px.height, data);
             add(
                 &mut doc,
                 Node::raster(
@@ -900,6 +917,56 @@ mod tests {
             flatten(&doc.composite_tree(), 0).to_srgba8(),
             flatten(&restored.composite_tree(), 0).to_srgba8()
         );
+    }
+
+    #[test]
+    fn malformed_pixel_blocks_are_errors_not_panics() {
+        let block = |width, height, len| PixelData {
+            width,
+            height,
+            data: vec![255; len],
+        };
+        let flat = |image_data| Psd {
+            width: 2.0,
+            height: 2.0,
+            color_mode: Some(ColorMode::Rgb),
+            image_data: Some(image_data),
+            ..Default::default()
+        };
+        // Truncated, overflowing and oversized composites.
+        for px in [
+            block(2, 2, 15),
+            block(1 << 16, 1 << 16, 16),
+            block(u32::MAX, u32::MAX, 16),
+            block(0, 2, 16),
+        ] {
+            assert!(from_psd(&flat(px)).is_err());
+        }
+        // A short layer opens as an empty layer; a huge one is refused;
+        // a huge or offset mask is ignored rather than walked.
+        let layer = |px, mask: Option<PixelData>| Psd {
+            width: 2.0,
+            height: 2.0,
+            color_mode: Some(ColorMode::Rgb),
+            children: Some(vec![Layer {
+                image_data: Some(px),
+                additional_info: ag_psd::psd::LayerAdditionalInfo {
+                    mask: mask.map(|m| LayerMaskData {
+                        image_data: Some(m),
+                        left: Some(1e300),
+                        top: Some(-1e300),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        assert!(from_psd(&layer(block(2, 2, 3), None)).is_ok());
+        assert!(from_psd(&layer(block(u32::MAX, 3, 16), None)).is_err());
+        assert!(from_psd(&layer(block(2, 2, 16), Some(block(u32::MAX, u32::MAX, 4)))).is_ok());
+        assert!(from_psd(&layer(block(2, 2, 16), Some(block(2, 2, 1)))).is_ok());
     }
 
     #[test]

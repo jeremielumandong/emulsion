@@ -152,6 +152,7 @@ impl PartialEq for NodeKind {
                     source: a,
                     editable: ea,
                     filters: fa,
+                    filter_styles: sa,
                     placement: pa,
                     ..
                 },
@@ -159,10 +160,11 @@ impl PartialEq for NodeKind {
                     source: b,
                     editable: eb,
                     filters: fb,
+                    filter_styles: sb,
                     placement: pb,
                     ..
                 },
-            ) => Arc::ptr_eq(a, b) && ea == eb && fa == fb && pa == pb,
+            ) => Arc::ptr_eq(a, b) && ea == eb && fa == fb && sa == sb && pa == pb,
             _ => false,
         }
     }

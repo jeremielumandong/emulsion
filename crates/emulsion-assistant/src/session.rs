@@ -13,6 +13,11 @@ use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// How long a CLI has to exit after SIGTERM before it gets SIGKILL.
+#[cfg(unix)]
+const KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Output from the child, before parsing.
 pub enum Line {
@@ -41,7 +46,26 @@ pub struct ProdLauncher;
 struct ProdProcess {
     stdin: Option<std::process::ChildStdin>,
     pid: u32,
-    dead: Arc<std::sync::atomic::AtomicBool>,
+    dead: Arc<AtomicBool>,
+}
+
+/// Signal the process group `pgid`. A group that is already gone is not an
+/// error.
+#[cfg(unix)]
+fn signal_group(pgid: u32, signal: libc::c_int) {
+    let Ok(pgid) = libc::pid_t::try_from(pgid) else {
+        return;
+    };
+    // SAFETY: `kill` takes plain integers and touches no memory of ours. The
+    // negative pid names the child's process group (it was spawned with
+    // `process_group(0)`, so the group id is its pid): the CLI and its
+    // `mcp-serve`, nothing else.
+    if unsafe { libc::kill(-pgid, signal) } != 0 {
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::ESRCH) {
+            tracing::warn!(error = %e, pgid, signal, "could not signal the assistant CLI");
+        }
+    }
 }
 
 impl CliProcess for ProdProcess {
@@ -61,13 +85,24 @@ impl CliProcess for ProdProcess {
 
     fn kill(&mut self) {
         self.stdin.take();
-        if self.dead.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.dead.load(Ordering::Relaxed) {
             return;
         }
         #[cfg(unix)]
-        unsafe {
-            // Negative pid: the whole process group, including mcp-serve.
-            libc::kill(-(self.pid as i32), libc::SIGTERM);
+        {
+            signal_group(self.pid, libc::SIGTERM);
+            // A CLI that ignores SIGTERM would keep the relay token; force
+            // it after a grace period, off the UI thread. The `cli-wait`
+            // thread reaps it either way.
+            let (pid, dead) = (self.pid, self.dead.clone());
+            let _ = std::thread::Builder::new()
+                .name("cli-kill".into())
+                .spawn(move || {
+                    std::thread::sleep(KILL_GRACE);
+                    if !dead.load(Ordering::Relaxed) {
+                        signal_group(pid, libc::SIGKILL);
+                    }
+                });
         }
         #[cfg(windows)]
         {
@@ -102,7 +137,7 @@ impl Launcher for ProdLauncher {
         let stderr = child.stderr.take().expect("piped");
         let stdin = child.stdin.take();
         let sink = Arc::new(sink);
-        let dead = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dead = Arc::new(AtomicBool::new(false));
 
         let s = sink.clone();
         let out = std::thread::Builder::new()
@@ -125,8 +160,9 @@ impl Launcher for ProdLauncher {
             .name("cli-wait".into())
             .spawn(move || {
                 let code = child.wait().ok().and_then(|st| st.code());
+                // Reaped: its pid may be reused, so never signal it again.
+                d.store(true, Ordering::Relaxed);
                 let _ = out.join(); // deliver all output before the exit
-                d.store(true, std::sync::atomic::Ordering::Relaxed);
                 s(Line::Exit(code));
             })?;
         Ok(Box::new(ProdProcess { stdin, pid, dead }))
@@ -143,6 +179,10 @@ pub struct Session {
     pub events: async_channel::Receiver<Event>,
     tx: async_channel::Sender<Event>,
     parser: Arc<Mutex<Parser>>,
+    /// Which spawn is current. Each process's output is tagged with the
+    /// generation it was started in; a replaced process's late output and
+    /// exit are dropped instead of landing in the next turn.
+    generation: Arc<AtomicU64>,
     initialized: bool,
     /// One process per turn (Codex, OpenCode, Kimi); `None` is a
     /// persistent stream-json process (Claude Code).
@@ -154,12 +194,14 @@ impl Session {
     pub fn start(launcher: &dyn Launcher, spec: &LaunchSpec) -> std::io::Result<Self> {
         let (tx, rx) = async_channel::unbounded();
         let parser = Arc::new(Mutex::new(Parser::default()));
-        let process = launcher.spawn(spec, Self::sink(&parser, &tx))?;
+        let generation = Arc::new(AtomicU64::new(0));
+        let process = launcher.spawn(spec, Self::sink(&parser, &tx, &generation))?;
         Ok(Self {
             process: Some(process),
             events: rx,
             tx,
             parser,
+            generation,
             initialized: false,
             respawn: None,
         })
@@ -173,6 +215,7 @@ impl Session {
             events: rx,
             tx,
             parser: Arc::new(Mutex::new(Parser::with_flavor(flavor))),
+            generation: Arc::new(AtomicU64::new(0)),
             initialized: true,
             respawn: Some(respawn),
         }
@@ -182,12 +225,25 @@ impl Session {
         self.respawn.is_some()
     }
 
-    fn sink(parser: &Arc<Mutex<Parser>>, tx: &async_channel::Sender<Event>) -> LineSink {
+    /// Parses one process's output into events. The parser lock is held
+    /// while checking the generation, so a respawn (which bumps it under the
+    /// same lock) cleanly separates the old process's lines from the new.
+    fn sink(
+        parser: &Arc<Mutex<Parser>>,
+        tx: &async_channel::Sender<Event>,
+        generation: &Arc<AtomicU64>,
+    ) -> LineSink {
         let p = parser.clone();
         let tx = tx.clone();
+        let current = generation.clone();
+        let mine = generation.load(Ordering::SeqCst);
         Box::new(move |line| {
+            let mut parser = p.lock();
+            if current.load(Ordering::SeqCst) != mine {
+                return;
+            }
             let events = match line {
-                Line::Stdout(l) => p.lock().feed(&l),
+                Line::Stdout(l) => parser.feed(&l),
                 Line::Stderr(l) => {
                     let t = l.trim();
                     if t.is_empty() {
@@ -198,14 +254,14 @@ impl Session {
                 }
                 Line::Exit(code) => {
                     // One-shot CLIs end a turn by exiting; if nothing said
-                    // "done", a clean exit is a result and a failure an error.
+                    // "done", a clean exit is a result, a failure an error,
+                    // and a signal (stopped by the person) a cancelled turn.
                     let mut out = Vec::new();
-                    let mut parser = p.lock();
                     if parser.flavor != protocol::Flavor::Claude && !parser.saw_result {
                         parser.saw_result = true;
                         let (input_tokens, output_tokens, cost_usd) = parser.usage;
                         out.push(match code {
-                            Some(0) | None => Event::Result {
+                            Some(0) => Event::Result {
                                 text: String::new(),
                                 cost_usd,
                                 duration_ms: 0,
@@ -214,6 +270,7 @@ impl Session {
                                 output_tokens,
                             },
                             Some(c) => Event::Error(format!("the CLI exited with status {c}")),
+                            None => Event::Error("the turn was cancelled".into()),
                         });
                     }
                     out.push(Event::Exited(code));
@@ -247,12 +304,19 @@ impl Session {
         images: &[(String, String)],
     ) -> std::io::Result<()> {
         if let Some(respawn) = &self.respawn {
+            {
+                // Retire the previous process first: nothing it still says
+                // (its exit included) belongs to this turn.
+                let mut parser = self.parser.lock();
+                self.generation.fetch_add(1, Ordering::SeqCst);
+                parser.begin_turn();
+            }
             if let Some(mut old) = self.process.take() {
                 old.kill();
             }
-            self.parser.lock().begin_turn();
             let spec = respawn(text, self.session_id())?;
-            let mut process = launcher.spawn(&spec, Self::sink(&self.parser, &self.tx))?;
+            let sink = Self::sink(&self.parser, &self.tx, &self.generation);
+            let mut process = launcher.spawn(&spec, sink)?;
             // The prompt travels in argv; nothing more is coming on stdin.
             process.close_stdin();
             self.process = Some(process);
@@ -414,5 +478,106 @@ mod tests {
             1,
             "initialize once"
         );
+    }
+
+    /// One-shot processes that stay quiet until the test speaks for them;
+    /// `kill` reports a signal exit, as SIGTERM does.
+    #[derive(Default)]
+    struct OneShotLauncher {
+        sinks: Arc<StdMutex<Vec<Arc<LineSink>>>>,
+    }
+
+    struct OneShotProcess {
+        sink: Arc<LineSink>,
+    }
+
+    impl CliProcess for OneShotProcess {
+        fn write_line(&mut self, _: &str) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn kill(&mut self) {
+            (self.sink)(Line::Exit(None));
+        }
+    }
+
+    impl Launcher for OneShotLauncher {
+        fn spawn(&self, _: &LaunchSpec, sink: LineSink) -> std::io::Result<Box<dyn CliProcess>> {
+            let sink = Arc::new(sink);
+            self.sinks.lock().unwrap().push(sink.clone());
+            Ok(Box::new(OneShotProcess { sink }))
+        }
+    }
+
+    fn one_shot_session() -> Session {
+        Session::one_shot(
+            protocol::Flavor::Codex,
+            Box::new(|_, _| {
+                Ok(LaunchSpec {
+                    program: "codex".into(),
+                    args: vec![],
+                    env: vec![],
+                    cwd: ".".into(),
+                })
+            }),
+        )
+    }
+
+    #[test]
+    fn a_replaced_process_cannot_end_the_next_turn() {
+        let launcher = OneShotLauncher::default();
+        let mut s = one_shot_session();
+        s.send_with(&launcher, "first", &[]).unwrap();
+        s.send_with(&launcher, "second", &[]).unwrap();
+        let old = launcher.sinks.lock().unwrap()[0].clone();
+        // Late output from the first process, after its (dropped) exit.
+        old(Line::Stdout(
+            r#"{"type":"turn.completed","usage":{}}"#.into(),
+        ));
+        old(Line::Exit(Some(0)));
+        assert!(s.events.try_recv().is_err(), "nothing from the old process");
+
+        let new = launcher.sinks.lock().unwrap()[1].clone();
+        new(Line::Stdout(
+            r#"{"type":"turn.completed","usage":{}}"#.into(),
+        ));
+        assert!(matches!(s.events.try_recv(), Ok(Event::Result { .. })));
+    }
+
+    #[test]
+    fn a_signal_exit_cancels_the_turn() {
+        let launcher = OneShotLauncher::default();
+        let mut s = one_shot_session();
+        s.send_with(&launcher, "paint", &[]).unwrap();
+        s.interrupt().unwrap();
+        assert!(matches!(s.events.try_recv(), Ok(Event::Error(e)) if e.contains("cancelled")));
+        assert!(matches!(s.events.try_recv(), Ok(Event::Exited(None))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_ignoring_sigterm_is_killed() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = StdMutex::new(tx);
+        let spec = LaunchSpec {
+            program: "sh".into(),
+            args: vec!["-c".into(), "trap '' TERM; echo ready; sleep 30".into()],
+            env: vec![],
+            cwd: ".".into(),
+        };
+        let sink: LineSink = Box::new(move |line| {
+            let tag = match line {
+                Line::Stdout(l) => l,
+                Line::Stderr(_) => return,
+                Line::Exit(code) => format!("exit {code:?}"),
+            };
+            let _ = tx.lock().unwrap().send(tag);
+        });
+        let mut p = ProdLauncher.spawn(&spec, sink).unwrap();
+        let wait = std::time::Duration::from_secs(10);
+        assert_eq!(rx.recv_timeout(wait).unwrap(), "ready");
+        let start = std::time::Instant::now();
+        p.kill();
+        assert_eq!(rx.recv_timeout(wait).unwrap(), "exit None", "reaped");
+        assert!(start.elapsed() >= KILL_GRACE, "SIGTERM was ignored");
     }
 }

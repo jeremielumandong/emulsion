@@ -19,6 +19,11 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+/// Pixel count of `rect` (0 when empty), computed without `i32` overflow.
+fn rect_area(rect: IRect) -> usize {
+    rect.w.max(0) as usize * rect.h.max(0) as usize
+}
+
 fn next_content_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -249,8 +254,11 @@ impl<P: Pix> Plane<P> {
 
     /// A dense copy of `rect` (clipped to the plane), row-major, with the
     /// rect's size; pixels outside the plane read as `fill`.
+    ///
+    /// # Panics
+    /// When the rect's area cannot be allocated.
     pub fn read_rect(&self, rect: IRect) -> Vec<P> {
-        let mut out = vec![self.fill; (rect.w.max(0) * rect.h.max(0)) as usize];
+        let mut out = vec![self.fill; rect_area(rect)];
         let clip = rect.intersect(&self.bounds());
         if clip.is_empty() {
             return out;
@@ -264,7 +272,7 @@ impl<P: Pix> Plane<P> {
                 let tr = IRect::new(tx * t, ty * t, t, t).intersect(&clip);
                 for y in tr.y..tr.bottom() {
                     let src = ((y - ty * t) * t + (tr.x - tx * t)) as usize;
-                    let dst = ((y - rect.y) * rect.w + (tr.x - rect.x)) as usize;
+                    let dst = (y - rect.y) as usize * rect.w as usize + (tr.x - rect.x) as usize;
                     out[dst..dst + tr.w as usize].copy_from_slice(&tile[src..src + tr.w as usize]);
                 }
             }
@@ -273,8 +281,11 @@ impl<P: Pix> Plane<P> {
     }
 
     /// A copy with a dense `rect` written in (clipped to the plane).
+    ///
+    /// # Panics
+    /// When `px.len()` is not the rect's area.
     pub fn write_rect(&self, rect: IRect, px: &[P]) -> Self {
-        assert_eq!(px.len(), (rect.w * rect.h) as usize);
+        assert_eq!(px.len(), rect_area(rect));
         let clip = rect.intersect(&self.bounds());
         if clip.is_empty() {
             return self.clone();
@@ -291,7 +302,7 @@ impl<P: Pix> Plane<P> {
                 let tr = IRect::new(tx * t, ty * t, t, t).intersect(&clip);
                 for y in tr.y..tr.bottom() {
                     let dst = ((y - ty * t) * t + (tr.x - tx * t)) as usize;
-                    let src = ((y - rect.y) * rect.w + (tr.x - rect.x)) as usize;
+                    let src = (y - rect.y) as usize * rect.w as usize + (tr.x - rect.x) as usize;
                     tile[dst..dst + tr.w as usize].copy_from_slice(&px[src..src + tr.w as usize]);
                 }
                 changes.push((c, Some(tile)));
@@ -726,6 +737,20 @@ impl Mask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rect_area_does_not_overflow_i32() {
+        assert_eq!(rect_area(IRect::new(0, 0, 50_000, 50_000)), 2_500_000_000);
+        assert_eq!(rect_area(IRect::new(0, 0, -4, 7)), 0);
+        let m = Mask::from_fn(4, 4, 0, |x, y| (x + y) as u8);
+        let r = IRect::new(1, 1, 2, 3);
+        let px = m.read_rect(r);
+        assert_eq!(px.len(), 6);
+        assert_eq!(
+            m.write_rect(r, &px).read_rect(m.bounds()),
+            m.read_rect(m.bounds())
+        );
+    }
 
     #[test]
     fn roundtrip_and_sparsity() {

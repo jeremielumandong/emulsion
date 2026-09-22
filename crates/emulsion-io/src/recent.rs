@@ -39,11 +39,21 @@ pub fn now() -> u64 {
 
 /// Load the list, dropping files that no longer exist.
 pub fn load() -> Vec<Recent> {
-    let Ok(bytes) = std::fs::read(file()) else {
+    load_from(&file())
+}
+
+fn load_from(path: &Path) -> Vec<Recent> {
+    let Ok(bytes) = std::fs::read(path) else {
         return Vec::new();
     };
-    let list: Vec<Recent> = serde_json::from_slice(&bytes).unwrap_or_default();
+    let list: Vec<Recent> = crate::parse_config(path, &bytes).unwrap_or_default();
     list.into_iter().filter(|r| r.path.exists()).collect()
+}
+
+fn save(list: &[Recent]) {
+    if let Err(error) = crate::save_config(&file(), &list) {
+        tracing::warn!(%error, "could not save recent files");
+    }
 }
 
 /// Put `path` at the front and save.
@@ -60,10 +70,7 @@ pub fn push(path: &Path, summary: String) -> Vec<Recent> {
         },
     );
     list.truncate(MAX);
-    let _ = std::fs::create_dir_all(data_dir());
-    if let Ok(bytes) = serde_json::to_vec_pretty(&list) {
-        let _ = std::fs::write(file(), bytes);
-    }
+    save(&list);
     list
 }
 
@@ -72,10 +79,7 @@ pub fn remove(path: &Path) -> Vec<Recent> {
     let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut list = load();
     list.retain(|r| r.path != canon && r.path != path);
-    let _ = std::fs::create_dir_all(data_dir());
-    if let Ok(bytes) = serde_json::to_vec_pretty(&list) {
-        let _ = std::fs::write(file(), bytes);
-    }
+    save(&list);
     list
 }
 
@@ -90,5 +94,28 @@ pub fn ago(opened: u64) -> String {
         172_800..1_209_600 => format!("{} days", d / 86_400),
         1_209_600..5_184_000 => format!("{} wks", d / 604_800),
         _ => format!("{} mo", d / 2_592_000),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_recent_list_is_kept_as_backup() {
+        let dir = std::env::temp_dir().join(format!("emulsion-recent-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("recent.json");
+        std::fs::write(&path, b"[{").unwrap();
+        assert!(load_from(&path).is_empty());
+        assert_eq!(std::fs::read(dir.join("recent.json.bak")).unwrap(), b"[{");
+        let list = vec![Recent {
+            path: dir.clone(),
+            opened: 1,
+            summary: "1 node".into(),
+        }];
+        crate::save_config(&path, &list).unwrap();
+        assert_eq!(load_from(&path), list);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

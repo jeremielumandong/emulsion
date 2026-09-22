@@ -13,17 +13,26 @@
 use crate::server::{ToolDef, ToolHost, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::hash::{BuildHasher, RandomState};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 pub const ENV_ADDR: &str = "EMULSION_RELAY";
 pub const ENV_TOKEN: &str = "EMULSION_TOKEN";
 const MAX_LINE: u64 = 8 << 20;
-const CALL_TIMEOUT: Duration = Duration::from_secs(600);
+/// Longest a single tool call may run, as advertised to the coding CLIs:
+/// painting plays at a hand's pace and answers only when it has finished.
+pub const TOOL_TIMEOUT: Duration = Duration::from_secs(900);
+/// How long the relay waits for the app. Longer than [`TOOL_TIMEOUT`], so
+/// the CLI gives up first instead of seeing a timeout while the app is
+/// still running the call (and retrying it).
+const CALL_TIMEOUT: Duration = TOOL_TIMEOUT.saturating_add(Duration::from_secs(30));
+/// A new connection must authenticate within this long.
+const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+/// Concurrent connections; the CLI needs one per `mcp-serve`.
+const MAX_CONNECTIONS: usize = 16;
 
 #[derive(Serialize, Deserialize)]
 struct Wire {
@@ -54,10 +63,11 @@ pub struct Relay {
     stop: Arc<AtomicBool>,
 }
 
-fn random_token() -> String {
-    let a = RandomState::new().hash_one(std::time::SystemTime::now());
-    let b = RandomState::new().hash_one(std::process::id());
-    format!("{a:016x}{b:016x}")
+/// 32 bytes from the operating system's CSPRNG, as hex.
+fn random_token() -> std::io::Result<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(e.to_string()))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn same(a: &str, b: &str) -> bool {
@@ -72,10 +82,11 @@ impl Relay {
     pub fn start() -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let addr = listener.local_addr()?;
-        let token = random_token();
+        let token = random_token()?;
         let (tx, rx) = async_channel::unbounded::<RelayCall>();
         let stop = Arc::new(AtomicBool::new(false));
         let (tok, st) = (token.clone(), stop.clone());
+        let open = Arc::new(AtomicUsize::new(0));
         std::thread::Builder::new()
             .name("emulsion-relay".into())
             .spawn(move || {
@@ -84,11 +95,17 @@ impl Relay {
                         break;
                     }
                     let Ok(conn) = conn else { continue };
-                    let (tx, tok) = (tx.clone(), tok.clone());
+                    if open.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
+                        open.fetch_sub(1, Ordering::Relaxed);
+                        tracing::debug!("relay connection refused: too many open");
+                        continue;
+                    }
+                    let (tx, tok, open) = (tx.clone(), tok.clone(), open.clone());
                     std::thread::spawn(move || {
                         if let Err(e) = serve_conn(conn, &tx, &tok) {
                             tracing::debug!(error = %e, "relay connection ended");
                         }
+                        open.fetch_sub(1, Ordering::Relaxed);
                     });
                 }
             })?;
@@ -121,41 +138,76 @@ fn serve_conn(
     tx: &async_channel::Sender<RelayCall>,
     token: &str,
 ) -> std::io::Result<()> {
+    // Until it authenticates, a peer gets a short read timeout; after that
+    // the CLI may sit idle between turns for as long as it likes.
+    conn.set_read_timeout(Some(AUTH_TIMEOUT))?;
     let mut reader = BufReader::new(conn.try_clone()?).take(MAX_LINE);
     let mut writer = conn;
     let mut line = String::new();
+    let mut authenticated = false;
     loop {
         line.clear();
         if reader.read_line(&mut line)? == 0 {
             return Ok(());
         }
-        let result = match serde_json::from_str::<Wire>(&line) {
-            Err(e) => ToolResult::error(format!("bad relay request: {e}")),
-            Ok(w) if !same(&w.token, token) => ToolResult::error("relay token rejected"),
-            Ok(w) => {
-                let (rtx, rrx) = std::sync::mpsc::sync_channel(1);
-                if tx
-                    .send_blocking(RelayCall {
-                        name: w.name,
-                        arguments: w.arguments,
-                        reply: rtx,
-                    })
-                    .is_err()
-                {
-                    ToolResult::error("the document was closed")
-                } else {
-                    rrx.recv_timeout(CALL_TIMEOUT)
-                        .unwrap_or_else(|_| ToolResult::error("Emulsion did not answer in time"))
-                }
+        let w = match serde_json::from_str::<Wire>(&line) {
+            Ok(w) if same(&w.token, token) => w,
+            // Reply, then hang up: no second guess on the same connection.
+            rejected => {
+                let why = match rejected {
+                    Err(e) => format!("bad relay request: {e}"),
+                    Ok(_) => "relay token rejected".into(),
+                };
+                return reply(&mut writer, &ToolResult::error(why));
             }
         };
-        writeln!(
-            writer,
-            "{}",
-            serde_json::to_string(&result).unwrap_or_default()
-        )?;
-        writer.flush()?;
+        if !authenticated {
+            authenticated = true;
+            writer.set_read_timeout(None)?;
+        }
+        let (rtx, rrx) = std::sync::mpsc::sync_channel(1);
+        let result = if tx
+            .send_blocking(RelayCall {
+                name: w.name,
+                arguments: w.arguments,
+                reply: rtx,
+            })
+            .is_err()
+        {
+            ToolResult::error("the document was closed")
+        } else {
+            rrx.recv_timeout(CALL_TIMEOUT)
+                .unwrap_or_else(|_| ToolResult::error("Emulsion did not answer in time"))
+        };
+        reply(&mut writer, &result)?;
         reader.set_limit(MAX_LINE);
+    }
+}
+
+fn reply(writer: &mut TcpStream, result: &ToolResult) -> std::io::Result<()> {
+    writeln!(
+        writer,
+        "{}",
+        serde_json::to_string(result).unwrap_or_default()
+    )?;
+    writer.flush()
+}
+
+/// How far a relay round trip got before it failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    /// No connection: the request never left.
+    Connect,
+    /// The request was (or may have been) written.
+    Exchange,
+}
+
+impl Stage {
+    /// Only a call that never reached the app is sent again: once the
+    /// request is written the app may already be running it, and a
+    /// mutating tool (paint, export) must not run twice.
+    fn retryable(self) -> bool {
+        self == Stage::Connect
     }
 }
 
@@ -181,12 +233,29 @@ impl RelayHost {
         Some(Self::new(addr, token))
     }
 
-    fn roundtrip(&mut self, name: &str, args: &Value) -> std::io::Result<ToolResult> {
+    fn connect(&mut self) -> std::io::Result<()> {
         if self.conn.is_none() {
             let addr: SocketAddr = self.addr.parse().map_err(std::io::Error::other)?;
             let s = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
             self.conn = Some((BufReader::new(s.try_clone()?), s));
         }
+        Ok(())
+    }
+
+    fn roundtrip(
+        &mut self,
+        name: &str,
+        args: &Value,
+    ) -> Result<ToolResult, (Stage, std::io::Error)> {
+        self.connect().map_err(|e| (Stage::Connect, e))?;
+        self.exchange(name, args).map_err(|e| {
+            // The connection's state is unknown; start fresh next call.
+            self.conn = None;
+            (Stage::Exchange, e)
+        })
+    }
+
+    fn exchange(&mut self, name: &str, args: &Value) -> std::io::Result<ToolResult> {
         let (r, w) = self.conn.as_mut().expect("connected");
         let wire = Wire {
             token: self.token.clone(),
@@ -212,16 +281,17 @@ impl ToolHost for RelayHost {
     }
 
     fn call(&mut self, name: &str, args: &Value) -> ToolResult {
-        match self.roundtrip(name, args) {
-            Ok(r) => r,
-            Err(_) => {
-                // One reconnect attempt: the app may have restarted the relay.
-                self.conn = None;
-                self.roundtrip(name, args).unwrap_or_else(|e| {
-                    ToolResult::error(format!("Emulsion is not reachable: {e}"))
-                })
-            }
-        }
+        let result = match self.roundtrip(name, args) {
+            // One more attempt, only if the call never reached the app.
+            Err((stage, _)) if stage.retryable() => self.roundtrip(name, args),
+            other => other,
+        };
+        result.unwrap_or_else(|(stage, e)| match stage {
+            Stage::Connect => ToolResult::error(format!("Emulsion is not reachable: {e}")),
+            Stage::Exchange => ToolResult::error(format!(
+                "the connection to Emulsion broke during the call, so it may or may not have run; check before repeating it: {e}"
+            )),
+        })
     }
 }
 
@@ -252,5 +322,83 @@ mod tests {
         assert!(r.is_error && r.content[0]["text"].as_str().unwrap().contains("token"));
         drop(relay);
         drop(app);
+    }
+
+    #[test]
+    fn relay_outwaits_the_advertised_tool_timeout() {
+        assert!(CALL_TIMEOUT > TOOL_TIMEOUT);
+        assert!(CALL_TIMEOUT - TOOL_TIMEOUT <= Duration::from_secs(60));
+    }
+
+    #[test]
+    fn tokens_are_32_random_bytes() {
+        let (a, b) = (random_token().unwrap(), random_token().unwrap());
+        assert_eq!(a.len(), 64);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_bad_token_closes_the_connection() {
+        let relay = Relay::start().unwrap();
+        let mut conn = TcpStream::connect(relay.addr).unwrap();
+        conn.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let wire = Wire {
+            token: "0".repeat(64),
+            name: "double".into(),
+            arguments: json!({}),
+        };
+        writeln!(conn, "{}", serde_json::to_string(&wire).unwrap()).unwrap();
+        let mut reader = BufReader::new(conn);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(line.contains("token rejected"), "{line}");
+        line.clear();
+        assert_eq!(reader.read_line(&mut line).unwrap(), 0, "hung up");
+        assert!(relay.calls.try_recv().is_err(), "nothing reached the app");
+    }
+
+    #[test]
+    fn only_undelivered_calls_are_retried() {
+        assert!(Stage::Connect.retryable());
+        assert!(!Stage::Exchange.retryable());
+
+        // A relay that takes each request and hangs up without answering.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let received = Arc::new(AtomicUsize::new(0));
+        let count = received.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming().flatten() {
+                let mut line = String::new();
+                if BufReader::new(conn).read_line(&mut line).unwrap_or(0) > 0 {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+        let mut host = RelayHost::new(addr.to_string(), "t".into());
+        let r = host.call("paint", &json!({}));
+        assert!(r.is_error);
+        assert!(
+            r.content[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("may or may not"),
+            "{:?}",
+            r.content
+        );
+        assert_eq!(received.load(Ordering::SeqCst), 1, "sent once");
+
+        // Nothing listening: the call never left, so it is tried again.
+        let closed = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let dead = closed.local_addr().unwrap();
+        drop(closed);
+        let r = RelayHost::new(dead.to_string(), "t".into()).call("paint", &json!({}));
+        assert!(
+            r.content[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("not reachable")
+        );
     }
 }

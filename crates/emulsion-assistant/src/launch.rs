@@ -12,6 +12,7 @@
 //!   shows it as an Apply/Skip card. Only read-only tools are pre-allowed.
 
 use serde_json::json;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
@@ -39,8 +40,29 @@ fn env_map(relay_env: &[(String, String)]) -> serde_json::Map<String, serde_json
 }
 
 /// Longest a single tool call may run, in seconds: painting plays at a
-/// hand's pace on the canvas and answers only when it has finished.
-pub const TOOL_TIMEOUT_SECS: u64 = 900;
+/// hand's pace on the canvas and answers only when it has finished. The
+/// relay waits a little longer, so the CLI gives up first.
+pub const TOOL_TIMEOUT_SECS: u64 = emulsion_mcp::relay::TOOL_TIMEOUT.as_secs();
+
+/// Write a file only its owner can read, from the moment it exists: the
+/// provider configs carry the relay token.
+fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    // `mode` applies only on creation; tighten a file left by an older run.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(contents)
+}
 
 fn common_env() -> Vec<(String, String)> {
     vec![
@@ -94,8 +116,10 @@ pub fn write_codex_home(
             }
         }
     }
+    // Emulsion's tools run without Codex asking: its sandbox is read-only
+    // and approvals are off, and Emulsion holds each change at the relay.
     config.push_str(&format!(
-        "\n[mcp_servers.{}]\ncommand = {}\nargs = [\"mcp-serve\"]\ntool_timeout_sec = {}\n",
+        "\n[mcp_servers.{}]\ncommand = {}\nargs = [\"mcp-serve\"]\ntool_timeout_sec = {}\ndefault_tools_approval_mode = \"approve\"\n",
         emulsion_mcp::SERVER_NAME,
         toml_str(&exe.to_string_lossy()),
         TOOL_TIMEOUT_SECS
@@ -105,16 +129,8 @@ pub fn write_codex_home(
         .map(|(k, v)| format!("{k} = {}", toml_str(v)))
         .collect();
     config.push_str(&format!("env = {{ {} }}\n", env.join(", ")));
-    std::fs::write(home.join("config.toml"), config)?;
+    write_private(&home.join("config.toml"), config.as_bytes())?;
     std::fs::write(home.join("AGENTS.md"), SYSTEM_PROMPT)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            home.join("config.toml"),
-            std::fs::Permissions::from_mode(0o600),
-        )?;
-    }
     Ok(home)
 }
 
@@ -184,17 +200,30 @@ pub fn write_opencode_config(
             }),
         );
     }
-    // OpenCode's built-in tools stay on: turning them off (or denying them
-    // in `permission`) makes its free-tier provider refuse headless runs.
-    // The instructions tell the model to use Emulsion's tools only.
+    lock_down_opencode(obj);
     let path = session_dir.join("opencode.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    write_private(&path, &serde_json::to_vec_pretty(&config)?)?;
     Ok(path)
+}
+
+/// Keep OpenCode's own tools from running commands or changing files.
+///
+/// The shell stays listed but on "ask": its free-tier provider refuses
+/// headless runs when `bash` is denied outright, and `opencode run` (without
+/// `--auto`) rejects every call that would ask. File edits, subagents and
+/// paths outside the session are denied. Emulsion's MCP tools keep the
+/// default "allow".
+fn lock_down_opencode(config: &mut serde_json::Map<String, serde_json::Value>) {
+    let permission = config.entry("permission").or_insert_with(|| json!({}));
+    if !permission.is_object() {
+        // A bare action ("allow") applies to every tool.
+        *permission = json!({ "*": permission.take() });
+    }
+    let rules = permission.as_object_mut().expect("object");
+    rules.insert("bash".into(), json!("ask"));
+    for tool in ["edit", "task", "external_directory"] {
+        rules.insert(tool.into(), json!("deny"));
+    }
 }
 
 /// Kimi Code reads `.kimi-code/mcp.json` from its working directory.
@@ -216,7 +245,7 @@ pub fn write_kimi_config(
         }
     });
     let path = dir.join("mcp.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
+    write_private(&path, &serde_json::to_vec_pretty(&config)?)?;
     Ok(path)
 }
 
@@ -226,13 +255,22 @@ pub fn codex_args(opts: &Options, prompt: &str) -> Vec<String> {
     if let Some(r) = opts.resume.as_ref().filter(|r| !r.is_empty()) {
         a.extend(["resume".into(), r.clone()]);
     }
-    // Codex has no host approval channel: with a restrictive policy it
-    // refuses MCP tools outright, so approvals are bypassed here and
-    // Emulsion holds each change for the person at the relay instead.
+    // Codex has no host approval channel, so it never asks: Emulsion's
+    // server is pre-approved in the scoped config and Emulsion holds each
+    // change for the person at the relay. Its shell tools are removed and
+    // the sandbox is read-only, so nothing else can run or write. (`exec
+    // resume` has no `--sandbox`; `-c` works for both.)
     a.extend([
         "--json".into(),
         "--skip-git-repo-check".into(),
-        "--dangerously-bypass-approvals-and-sandbox".into(),
+        "-c".into(),
+        "sandbox_mode=\"read-only\"".into(),
+        "-c".into(),
+        "approval_policy=\"never\"".into(),
+        "--disable".into(),
+        "shell_tool".into(),
+        "--disable".into(),
+        "unified_exec".into(),
     ]);
     if let Some(m) = opts.model.as_ref().filter(|m| !m.is_empty()) {
         a.extend(["-m".into(), m.clone()]);
@@ -348,12 +386,7 @@ pub fn write_mcp_config(
         }
     });
     let path = dir.join("mcp.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    write_private(&path, &serde_json::to_vec_pretty(&config)?)?;
     Ok(path)
 }
 
@@ -609,6 +642,87 @@ mod provider_tests {
     use super::*;
     use crate::provider;
 
+    fn assert_private(path: &Path) {
+        assert!(path.is_file(), "{}", path.display());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn write_private_tightens_an_existing_file() {
+        let dir = std::env::temp_dir().join(format!("emulsion-private-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mcp.json");
+        std::fs::write(&path, "old contents that are longer").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        write_private(&path, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert_private(&path);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn codex_runs_without_shell_or_writable_sandbox() {
+        for resume in [None, Some("t1".to_string())] {
+            let a = codex_args(
+                &Options {
+                    model: None,
+                    resume,
+                },
+                "hello",
+            );
+            let pairs: Vec<(&str, &str)> = a
+                .windows(2)
+                .map(|w| (w[0].as_str(), w[1].as_str()))
+                .collect();
+            for pair in [
+                ("-c", "sandbox_mode=\"read-only\""),
+                ("-c", "approval_policy=\"never\""),
+                ("--disable", "shell_tool"),
+                ("--disable", "unified_exec"),
+            ] {
+                assert!(pairs.contains(&pair), "{pair:?} missing from {a:?}");
+            }
+            assert!(!a.iter().any(|x| x.contains("dangerously")), "{a:?}");
+            assert!(
+                !a.iter().any(|x| x == "--sandbox"),
+                "not accepted by resume"
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_lockdown_overrides_the_persons_rules() {
+        let mut config = json!({ "permission": { "bash": "allow", "read": "allow" } });
+        lock_down_opencode(config.as_object_mut().unwrap());
+        assert_eq!(
+            config["permission"],
+            json!({
+                "bash": "ask",
+                "read": "allow",
+                "edit": "deny",
+                "task": "deny",
+                "external_directory": "deny"
+            })
+        );
+        let mut config = json!({ "permission": "allow" });
+        lock_down_opencode(config.as_object_mut().unwrap());
+        assert_eq!(config["permission"]["*"], "allow");
+        assert_eq!(config["permission"]["bash"], "ask");
+    }
+
     #[test]
     fn relative_session_paths_are_absolute_and_claude_prompt_stays_out_of_argv() {
         let dir = PathBuf::from(format!(
@@ -691,11 +805,8 @@ mod provider_tests {
             .unwrap();
         let toml = std::fs::read_to_string(home.join("config.toml")).unwrap();
         assert!(toml.contains("[mcp_servers.emulsion]"));
-        assert!(
-            spec.args
-                .iter()
-                .any(|a| a == "--dangerously-bypass-approvals-and-sandbox")
-        );
+        assert!(toml.contains("default_tools_approval_mode = \"approve\""));
+        assert_private(&home.join("config.toml"));
         assert!(
             toml.contains(r#"EMULSION_RELAY_TOKEN = "se\"cret""#),
             "{toml}"
@@ -723,6 +834,9 @@ mod provider_tests {
         assert_eq!(v["mcp"]["emulsion"]["type"], "local");
         assert_eq!(v["mcp"]["emulsion"]["command"][1], "mcp-serve");
         assert!(v.get("tools").is_none_or(|t| t["bash"] != false));
+        assert_eq!(v["permission"]["bash"], "ask", "listed, but never runs");
+        assert_eq!(v["permission"]["edit"], "deny");
+        assert_private(&cfg);
 
         let spec = spec_for(
             provider::by_id("kimi"),
@@ -734,7 +848,7 @@ mod provider_tests {
             Some("do it"),
         )
         .unwrap();
-        assert!(dir.join(".kimi-code/mcp.json").exists());
+        assert_private(&dir.join(".kimi-code/mcp.json"));
         assert_eq!(spec.args[0], "-p");
         std::fs::remove_dir_all(&dir).ok();
     }

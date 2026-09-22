@@ -90,13 +90,27 @@ pub fn is_svg(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"))
 }
 
+/// Largest SVG text an `.svgz` may inflate to.
+const MAX_SVG_BYTES: u64 = 64 << 20;
+
 /// SVG text from `path`, inflating `.svgz`.
 fn read_svg(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)?;
+    svg_text(std::fs::read(path)?, MAX_SVG_BYTES)
+}
+
+/// SVG text from raw file bytes, inflating gzip up to `limit` bytes.
+fn svg_text(bytes: Vec<u8>, limit: u64) -> Result<String> {
     if bytes.starts_with(&[0x1f, 0x8b]) {
         use std::io::Read;
         let mut text = String::new();
-        flate2::read::GzDecoder::new(&bytes[..]).read_to_string(&mut text)?;
+        flate2::read::GzDecoder::new(&bytes[..])
+            .take(limit + 1)
+            .read_to_string(&mut text)?;
+        if text.len() as u64 > limit {
+            return Err(IoError::Unsupported(
+                "compressed SVG inflates past the size limit".into(),
+            ));
+        }
         return Ok(text);
     }
     String::from_utf8(bytes).map_err(|_| IoError::Unsupported("SVG is not UTF-8 text".into()))
@@ -212,12 +226,72 @@ pub fn save_full(doc: &Document, graph: &emulsion_core::graph::Graph, path: &Pat
     ora::write_full(doc, Some(graph), path)
 }
 
+/// Parse a JSON config file's `bytes`. When they do not parse, keep them
+/// at `<name>.bak` (owner-only) and log a warning, so falling back to
+/// defaults and saving later cannot silently destroy the user's settings.
+pub(crate) fn parse_config<T: serde::de::DeserializeOwned>(path: &Path, bytes: &[u8]) -> Option<T> {
+    let error = match serde_json::from_slice(bytes) {
+        Ok(value) => return Some(value),
+        Err(e) => e,
+    };
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    let backup = path.with_file_name(name);
+    let kept = write_atomic_mode(&backup, Some(0o600), |f| {
+        use std::io::Write;
+        f.write_all(bytes)?;
+        Ok(())
+    });
+    match kept {
+        Ok(()) => tracing::warn!(
+            path = %path.display(),
+            backup = %backup.display(),
+            %error,
+            "unreadable config file kept as backup; using defaults"
+        ),
+        Err(backup_error) => tracing::warn!(
+            path = %path.display(),
+            %error,
+            %backup_error,
+            "unreadable config file could not be backed up; using defaults"
+        ),
+    }
+    None
+}
+
+/// Write `value` as pretty JSON to `path` atomically, owner-only on Unix.
+pub(crate) fn save_config<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    write_atomic_mode(path, Some(0o600), |f| {
+        serde_json::to_writer_pretty(f, value).map_err(std::io::Error::other)?;
+        Ok(())
+    })
+    .map_err(|e| match e {
+        IoError::Io(e) => e,
+        e => std::io::Error::other(e),
+    })
+}
+
 /// Write `bytes` to `path` via a temporary file in the same directory, so a
 /// crash or full disk never leaves a half-written file in place.
 pub(crate) fn write_atomic(
     path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> Result<()>,
 ) -> Result<()> {
+    write_atomic_mode(path, None, write)
+}
+
+/// `write_atomic`, creating the file with Unix permission bits `mode`
+/// (ignored elsewhere) instead of the process default.
+pub(crate) fn write_atomic_mode(
+    path: &Path,
+    mode: Option<u32>,
+    write: impl FnOnce(&mut std::fs::File) -> Result<()>,
+) -> Result<()> {
+    // Unique per call, so concurrent writes to one path never share a file.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -226,9 +300,19 @@ pub(crate) fn write_atomic(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.emulsion-tmp-{}", std::process::id()));
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.emulsion-tmp-{}-{seq}", std::process::id()));
     let result = (|| {
-        let mut f = std::fs::File::create(&tmp)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        if let Some(mode) = mode {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(mode);
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        let mut f = options.open(&tmp)?;
         write(&mut f)?;
         f.sync_all()?;
         std::fs::rename(&tmp, path)?;
@@ -238,4 +322,55 @@ pub(crate) fn write_atomic(
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_atomic_writes_never_mix_payloads() {
+        let dir = std::env::temp_dir().join(format!("emulsion-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.ora");
+        let payloads = [vec![b'a'; 256 << 10], vec![b'b'; 256 << 10]];
+        for _ in 0..20 {
+            std::thread::scope(|s| {
+                for payload in &payloads {
+                    let path = &path;
+                    s.spawn(move || {
+                        for _ in 0..5 {
+                            write_atomic(path, |f| {
+                                use std::io::Write;
+                                for chunk in payload.chunks(4096) {
+                                    f.write_all(chunk)?;
+                                }
+                                Ok(())
+                            })
+                            .unwrap();
+                        }
+                    });
+                }
+            });
+            let written = std::fs::read(&path).unwrap();
+            assert!(payloads.contains(&written), "file mixes both writes");
+        }
+        let leftovers = std::fs::read_dir(&dir).unwrap().count();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(leftovers, 1, "no temporary files remain");
+    }
+
+    #[test]
+    fn svgz_inflation_is_capped() {
+        use std::io::Write;
+        let text = format!("<svg>{}</svg>", " ".repeat(4096));
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(text.as_bytes()).unwrap();
+        let bytes = gz.finish().unwrap();
+        assert_eq!(svg_text(bytes.clone(), 1 << 20).unwrap(), text);
+        assert!(matches!(
+            svg_text(bytes, 1024),
+            Err(IoError::Unsupported(_))
+        ));
+    }
 }

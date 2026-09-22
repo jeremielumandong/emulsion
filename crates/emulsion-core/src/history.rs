@@ -628,6 +628,41 @@ mod tests {
     }
 
     #[test]
+    fn filter_style_change_is_an_undoable_step() {
+        let (mut e, id) = editor();
+        e.execute(Command::ConvertToSmart { id }).unwrap();
+        e.execute(Command::SetFilters {
+            id,
+            filters: vec![emulsion_filters::Filter::BoxBlur { radius: 1.0 }],
+        })
+        .unwrap();
+        e.mark_saved(PathBuf::from("sample.ora"), e.revision);
+        let steps = e.history.len();
+        let revision = e.revision;
+        let style = emulsion_filters::FilterStyle {
+            opacity: 0.25,
+            ..Default::default()
+        };
+        e.execute(Command::SetFilterStyles {
+            id,
+            styles: vec![style],
+        })
+        .unwrap();
+        assert_eq!(e.history.len(), steps + 1);
+        assert_ne!(e.revision, revision);
+        assert!(e.is_modified());
+        let styles = |e: &Editor| match &e.doc.node(id).unwrap().kind {
+            crate::NodeKind::Smart { filter_styles, .. } => filter_styles.clone(),
+            _ => panic!("not smart"),
+        };
+        assert_eq!(styles(&e), vec![style]);
+        assert!(e.undo());
+        assert_eq!(styles(&e), vec![Default::default()]);
+        assert!(e.doc.node(id).is_some(), "undo keeps the layer");
+        assert!(!e.is_modified());
+    }
+
+    #[test]
     fn undo_redo_restore_revisions() {
         let (mut e, id) = editor();
         let r0 = e.revision;

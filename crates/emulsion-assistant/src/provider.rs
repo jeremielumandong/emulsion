@@ -336,7 +336,9 @@ pub fn version(path: &Path) -> Option<String> {
                 std::thread::sleep(Duration::from_millis(50))
             }
             _ => {
+                // SIGKILL, then reap it so no zombie is left behind.
                 let _ = child.kill();
+                let _ = child.wait();
                 return None;
             }
         }

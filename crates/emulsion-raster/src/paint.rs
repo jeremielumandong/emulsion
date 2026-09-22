@@ -603,15 +603,17 @@ fn halftone_radius(density: f32) -> f32 {
 /// render. A few hundred tiles are kept; older ones are dropped.
 type PatternKey = (GrainKind, u32, u32, TileCoord);
 
-fn pattern_cache() -> &'static std::sync::Mutex<HashMap<PatternKey, Arc<[f32]>>> {
-    static C: std::sync::OnceLock<std::sync::Mutex<HashMap<PatternKey, Arc<[f32]>>>> =
+/// A `parking_lot` mutex: it does not poison, so one panicking render
+/// cannot break every later brush stroke.
+fn pattern_cache() -> &'static parking_lot::Mutex<HashMap<PatternKey, Arc<[f32]>>> {
+    static C: std::sync::OnceLock<parking_lot::Mutex<HashMap<PatternKey, Arc<[f32]>>>> =
         std::sync::OnceLock::new();
-    C.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+    C.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
 fn pattern_tile(kind: GrainKind, scale: f32, radius: f32, c: TileCoord) -> Arc<[f32]> {
     let key = (kind, scale.to_bits(), radius.to_bits(), c);
-    if let Some(t) = pattern_cache().lock().unwrap().get(&key) {
+    if let Some(t) = pattern_cache().lock().get(&key) {
         return t.clone();
     }
     let t = TILE as i32;
@@ -629,7 +631,7 @@ fn pattern_tile(kind: GrainKind, scale: f32, radius: f32, c: TileCoord) -> Arc<[
             }
         });
     let tile: Arc<[f32]> = v.into();
-    let mut cache = pattern_cache().lock().unwrap();
+    let mut cache = pattern_cache().lock();
     if cache.len() >= 256 {
         cache.clear();
     }
@@ -2352,7 +2354,10 @@ mod tests {
     #[test]
     fn image_grain_replaces_manga_patterns_including_zero_strength() {
         let texture_id = textures::id_for(b"manga image grain precedence regression");
-        textures::register(texture_id, textures::Texture::from_gray8(2, 1, &[0, 255]));
+        textures::register(
+            texture_id,
+            textures::Texture::from_gray8(2, 1, &[0, 255]).unwrap(),
+        );
         for strength in [0.0, 0.4] {
             let brush = Brush {
                 grain_tex: texture_id,
@@ -2995,21 +3000,36 @@ pub mod textures {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, OnceLock};
 
-    /// A grey texture, 0–1 per pixel.
+    /// A grey texture, 0–1 per pixel. Never empty, and `data` always
+    /// holds exactly `width * height` values.
     pub struct Texture {
-        pub width: u32,
-        pub height: u32,
-        pub data: Vec<f32>,
+        width: u32,
+        height: u32,
+        data: Vec<f32>,
     }
 
     impl Texture {
-        /// From 8-bit grey or alpha; `data.len() == w * h`.
-        pub fn from_gray8(width: u32, height: u32, data: &[u8]) -> Texture {
-            Texture {
+        /// From 8-bit grey or alpha. `None` when a side is zero or
+        /// `data.len() != width * height`.
+        pub fn from_gray8(width: u32, height: u32, data: &[u8]) -> Option<Texture> {
+            let len = (width as usize).checked_mul(height as usize)?;
+            if len == 0 || data.len() != len || width > i32::MAX as u32 || height > i32::MAX as u32
+            {
+                return None;
+            }
+            Some(Texture {
                 width,
                 height,
                 data: data.iter().map(|v| *v as f32 / 255.0).collect(),
-            }
+            })
+        }
+
+        pub fn width(&self) -> u32 {
+            self.width
+        }
+
+        pub fn height(&self) -> u32 {
+            self.height
         }
 
         /// Bilinear sample at `u, v` in 0–1.
@@ -3079,7 +3099,7 @@ pub mod textures {
 
         #[test]
         fn textures_sample_and_tile() {
-            let t = Texture::from_gray8(2, 1, &[0, 255]);
+            let t = Texture::from_gray8(2, 1, &[0, 255]).unwrap();
             assert!((t.sample(0.25, 0.5) - 0.0).abs() < 1e-6);
             assert!((t.sample(0.75, 0.5) - 1.0).abs() < 1e-6);
             assert!((t.sample(0.5, 0.5) - 0.5).abs() < 1e-6);
@@ -3089,6 +3109,18 @@ pub mod textures {
             let id = id_for(b"abc");
             register(id, t);
             assert!(get(id).is_some() && get(0).is_none());
+        }
+
+        #[test]
+        fn malformed_textures_are_rejected() {
+            assert!(Texture::from_gray8(0, 4, &[]).is_none());
+            assert!(Texture::from_gray8(4, 0, &[]).is_none());
+            assert!(Texture::from_gray8(2, 2, &[1, 2, 3]).is_none());
+            assert!(Texture::from_gray8(2, 2, &[1, 2, 3, 4, 5]).is_none());
+            assert!(Texture::from_gray8(u32::MAX, u32::MAX, &[1]).is_none());
+            let t = Texture::from_gray8(1, 1, &[255]).unwrap();
+            assert_eq!((t.width(), t.height()), (1, 1));
+            assert!((t.tiled(-7.5, 3.25) - 1.0).abs() < 1e-6);
         }
     }
 }

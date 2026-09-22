@@ -104,23 +104,45 @@ fn display_image(r: &Raster) -> Arc<RenderImage> {
 }
 
 /// Write `frames` as a looping GIF, one frame at a time so a long replay
-/// never holds every picture in memory at once.
+/// never holds every picture in memory at once. Frames go to a staging file
+/// beside `path` that replaces it only once complete, so a failure leaves
+/// any existing file untouched.
 fn encode_gif(
     path: &std::path::Path,
     frames: impl IntoIterator<Item = Result<image::RgbaImage, String>>,
     fps: u32,
 ) -> Result<(), String> {
     use image::codecs::gif::{GifEncoder, Repeat};
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    let mut enc = GifEncoder::new(std::io::BufWriter::new(file));
-    enc.set_repeat(Repeat::Infinite)
-        .map_err(|e| e.to_string())?;
-    let delay = image::Delay::from_numer_denom_ms(1000, fps.max(1));
-    for f in frames {
-        enc.encode_frame(image::Frame::from_parts(f?, 0, 0, delay))
-            .map_err(|e| e.to_string())?;
+    use std::io::Write as _;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let staging = path.with_file_name(format!(".{name}.emulsion-tmp-{}-{seq}", std::process::id()));
+    let result = (|| {
+        let mut out =
+            std::io::BufWriter::new(std::fs::File::create(&staging).map_err(|e| e.to_string())?);
+        {
+            // Dropping the encoder writes the GIF trailer.
+            let mut enc = GifEncoder::new(&mut out);
+            enc.set_repeat(Repeat::Infinite)
+                .map_err(|e| e.to_string())?;
+            let delay = image::Delay::from_numer_denom_ms(1000, fps.max(1));
+            for f in frames {
+                enc.encode_frame(image::Frame::from_parts(f?, 0, 0, delay))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        out.flush().map_err(|e| e.to_string())?;
+        out.get_ref().sync_all().map_err(|e| e.to_string())?;
+        std::fs::rename(&staging, path).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staging);
     }
-    Ok(())
+    result
 }
 
 impl EditorView {
@@ -624,5 +646,43 @@ impl EditorView {
                 .child(div().child("each top-level layer or group is one frame"))
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_gif;
+
+    #[test]
+    fn a_failed_gif_export_leaves_the_existing_file_and_no_staging_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "emulsion-gif-export-{}-{}",
+            std::process::id(),
+            emulsion_io::recent::now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("replay.gif");
+        std::fs::write(&path, b"previous export").unwrap();
+        let frame = || {
+            Ok(image::RgbaImage::from_pixel(
+                4,
+                4,
+                image::Rgba([200, 30, 30, 255]),
+            ))
+        };
+
+        let failed = encode_gif(&path, [frame(), Err("render failed".into())], 12);
+        assert_eq!(failed, Err("render failed".into()));
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous export");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "staging file removed"
+        );
+
+        encode_gif(&path, [frame(), frame()], 12).unwrap();
+        assert_eq!(image::open(&path).unwrap().width(), 4);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

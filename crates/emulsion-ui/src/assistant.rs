@@ -964,8 +964,11 @@ impl EditorView {
                 let auto = settings.approve_all
                     || (settings.auto_apply && !tools::DESTRUCTIVE.contains(&tool.as_str()));
                 if auto {
-                    if let Some(s) = &mut self.assistant.session {
-                        let _ = s.allow(&request_id, &tool_use_id, &input);
+                    if let Some(s) = &mut self.assistant.session
+                        && let Err(e) = s.allow(&request_id, &tool_use_id, &input)
+                    {
+                        self.status =
+                            Some((format!("Could not reach the assistant: {e}").into(), true));
                     }
                 } else if let Some(turn) = &mut self.assistant.turn {
                     if let Some(c) = turn.cards.iter_mut().find(|c| c.id == tool_use_id) {
@@ -1656,7 +1659,6 @@ impl EditorView {
         let rev = self.editor.revision;
         let doc = self.editor.doc.clone();
         // Model-backed proposals need a small picture and what is installed.
-        let tree = self.tree.clone();
         let faces_possible = emulsion_ai::face::detector_available().is_some()
             && emulsion_ai::face::available().is_some();
         let lens_possible = doc.info.is_some() && emulsion_io::lensfun::installed();
@@ -1705,7 +1707,6 @@ impl EditorView {
                     {
                         // Detect on a small composite: a few hundred ms.
                         let (w, h, bgra) = crate::editor::doc_thumb(&doc, 640);
-                        let _ = tree;
                         let rgba: Vec<u8> = bgra
                             .as_chunks::<4>()
                             .0
