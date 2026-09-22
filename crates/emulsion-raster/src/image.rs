@@ -331,6 +331,9 @@ impl<P: Pix> Plane<P> {
         ];
         let out = if children.iter().all(Option::is_none) {
             None
+        } else if let Some(shared) = uniform_quad(&children) {
+            // Four copies of one uniform buffer reduce to themselves.
+            Some(shared)
         } else {
             Some(reduce(&children, self.fill))
         };
@@ -419,6 +422,17 @@ impl<P: Pix> Plane<P> {
     pub fn to_pixels(&self) -> Vec<P> {
         self.rows_par(1, self.fill, |row, dst| dst.copy_from_slice(row))
     }
+}
+
+/// The shared buffer when all four children are one uniform tile whose box
+/// average is itself, as with the interior of [`Raster::solid`].
+fn uniform_quad<P: Pix>(children: &[Option<Tile<P>>; 4]) -> Option<Tile<P>> {
+    let first = children[0].as_ref()?;
+    let p = *first.first()?;
+    let shared = children[1..]
+        .iter()
+        .all(|c| c.as_ref().is_some_and(|c| Arc::ptr_eq(c, first)));
+    (shared && P::avg4(p, p, p, p) == p && first.iter().all(|q| *q == p)).then(|| first.clone())
 }
 
 fn reduce<P: Pix>(children: &[Option<Tile<P>>; 4], fill: P) -> Tile<P> {
@@ -589,10 +603,36 @@ impl Raster {
         })
     }
 
-    /// Uniform colour, premultiplied linear.
+    /// Uniform colour, premultiplied linear. Tiles of the same extent share
+    /// one buffer, so the cost is independent of the image area.
     pub fn solid(width: u32, height: u32, premul: [f32; 4]) -> Self {
         let p = color::f_to_px(premul);
-        Self::from_fn(width, height, [0; 4], |_, _| p)
+        let mut plane = Self::empty(width, height, [0; 4]);
+        if p == [0; 4] || width == 0 || height == 0 {
+            return plane;
+        }
+        let mut shared: HashMap<(u32, u32), Tile<[u16; 4]>> = HashMap::new();
+        let (tx, ty) = plane.tiles_at(0);
+        for y in 0..ty {
+            for x in 0..tx {
+                let cw = TILE.min(width - x as u32 * TILE);
+                let ch = TILE.min(height - y as u32 * TILE);
+                let tile = shared.entry((cw, ch)).or_insert_with(|| {
+                    let mut t = vec![[0; 4]; TILE_PX];
+                    for row in t
+                        .as_chunks_mut::<{ TILE as usize }>()
+                        .0
+                        .iter_mut()
+                        .take(ch as usize)
+                    {
+                        row[..cw as usize].fill(p);
+                    }
+                    t.into()
+                });
+                plane.tiles.insert(TileCoord::new(x, y), tile.clone());
+            }
+        }
+        plane
     }
 
     pub fn to_srgba8(&self) -> Vec<u8> {
@@ -762,6 +802,44 @@ mod tests {
         assert_eq!(edited.get(1905, 905), [65535; 4]);
         assert_eq!(edited.read_rect(IRect::new(1899, 899, 2, 2))[3], [65535; 4]);
         assert_eq!(r.get(1905, 905)[1], 0, "the original is unchanged");
+    }
+
+    #[test]
+    fn shared_solid_matches_dense_at_every_level() {
+        for (w, h) in [
+            (1031, 777),
+            (768, 256),
+            (300, 1),
+            (4096, 256),
+            (1, 1),
+            (0, 5),
+        ] {
+            for premul in [[0.0, 0.0, 0.0, 1.0], [0.2, 0.4, 0.1, 0.5], [0.0; 4]] {
+                let p = color::f_to_px(premul);
+                let dense = Raster::from_fn(w, h, [0; 4], |_, _| p);
+                let solid = Raster::solid(w, h, premul);
+                assert_eq!(solid.tile_count(), dense.tile_count());
+                for level in 0..=dense.max_level() + 1 {
+                    let (tx, ty) = dense.tiles_at(level);
+                    for y in -1..=ty {
+                        for x in -1..=tx {
+                            let c = TileCoord::new(x, y);
+                            assert_eq!(
+                                solid.tile(level, c).as_deref(),
+                                dense.tile(level, c).as_deref(),
+                                "{w}×{h} level {level} tile {x},{y}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let shared = Raster::solid(1031, 777, [1.0; 4]);
+        assert!(shared.buffer_allocations().len() > 4);
+        let mut buffers: Vec<_> = shared.buffer_allocations().iter().map(|b| b.0).collect();
+        buffers.sort_unstable();
+        buffers.dedup();
+        assert_eq!(buffers.len(), 4, "interior, right, bottom and corner tiles");
     }
 
     #[test]

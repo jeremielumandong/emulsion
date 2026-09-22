@@ -905,6 +905,34 @@ impl<P: Pix> Window<P> {
             None => self.fill,
         }
     }
+
+    /// The 2×2 block `(x, y)..=(x + 1, y + 1)` as `[x0y0, x1y0, x0y1, x1y1]`
+    /// when it lies inside the image and one window tile; `None` otherwise.
+    /// A single tile lookup, matching four calls to [`Self::get`].
+    #[inline]
+    fn quad(&self, x: i64, y: i64) -> Option<[P; 4]> {
+        let t = TILE as i64;
+        if x < 0 || y < 0 || x + 1 >= self.lw || y + 1 >= self.lh {
+            return None;
+        }
+        let (lx, ly) = (x % t, y % t);
+        if lx == t - 1 || ly == t - 1 {
+            return None;
+        }
+        let cx = (x / t) as i32 - self.tx0;
+        let cy = (y / t) as i32 - self.ty0;
+        if cx < 0 || cy < 0 || cx >= self.cols || cy >= self.rows {
+            return None;
+        }
+        Some(match &self.tiles[(cy * self.cols + cx) as usize] {
+            Some(tile) => {
+                let i = (ly * t + lx) as usize;
+                let t = TILE as usize;
+                [tile[i], tile[i + 1], tile[i + t], tile[i + t + 1]]
+            }
+            None => [self.fill; 4],
+        })
+    }
 }
 
 #[inline]
@@ -945,10 +973,17 @@ fn sample_raster(dst: &mut FTile, raster: &Raster, placement: &Placement, ctx: C
             let (fx, fy) = (p.x.floor(), p.y.floor());
             let (ix, iy) = (fx as i64, fy as i64);
             let (ax, ay) = ((p.x - fx) as f32, (p.y - fy) as f32);
-            let s00 = color::px_to_f(win.get(ix, iy, [0; 4]));
-            let s10 = color::px_to_f(win.get(ix + 1, iy, [0; 4]));
-            let s01 = color::px_to_f(win.get(ix, iy + 1, [0; 4]));
-            let s11 = color::px_to_f(win.get(ix + 1, iy + 1, [0; 4]));
+            let [s00, s10, s01, s11] = win
+                .quad(ix, iy)
+                .unwrap_or_else(|| {
+                    [
+                        win.get(ix, iy, [0; 4]),
+                        win.get(ix + 1, iy, [0; 4]),
+                        win.get(ix, iy + 1, [0; 4]),
+                        win.get(ix + 1, iy + 1, [0; 4]),
+                    ]
+                })
+                .map(color::px_to_f);
             let mut o = [0.0; 4];
             for c in 0..4 {
                 let top = s00[c] + (s10[c] - s00[c]) * ax;
@@ -979,9 +1014,19 @@ fn sample_mask(mask: &Mask, placement: &Placement, ctx: Ctx) -> Vec<f32> {
             let (fx, fy) = (p.x.floor(), p.y.floor());
             let (ix, iy) = (fx as i64, fy as i64);
             let (ax, ay) = ((p.x - fx) as f32, (p.y - fy) as f32);
-            let s = |dx, dy| win.get(ix + dx, iy + dy, f) as f32;
-            let top = s(0, 0) + (s(1, 0) - s(0, 0)) * ax;
-            let bot = s(0, 1) + (s(1, 1) - s(0, 1)) * ax;
+            let [s00, s10, s01, s11] = win
+                .quad(ix, iy)
+                .unwrap_or_else(|| {
+                    [
+                        win.get(ix, iy, f),
+                        win.get(ix + 1, iy, f),
+                        win.get(ix, iy + 1, f),
+                        win.get(ix + 1, iy + 1, f),
+                    ]
+                })
+                .map(|v| v as f32);
+            let top = s00 + (s10 - s00) * ax;
+            let bot = s01 + (s11 - s01) * ax;
             out[y * t + x] = (top + (bot - top) * ay) / 255.0;
         }
     }
@@ -1130,6 +1175,52 @@ pub fn tile_to_bgra8(
 mod tests {
     use super::*;
     use crate::adjust::Adjustment;
+
+    #[test]
+    fn window_quad_matches_four_gets() {
+        // Sparse, with a nonzero fill, a missing tile and a partial edge tile.
+        let (w, h) = (600, 530);
+        let mut raster = Raster::from_fn(w, h, [0; 4], |x, y| {
+            [(x * 97 % 65535) as u16, (y * 31 % 65535) as u16, 7, 65535]
+        })
+        .with_changes(vec![(TileCoord::new(1, 0), None)]);
+        for fill in [[0; 4], [9, 8, 7, 6]] {
+            raster = Raster::from_tiles(
+                w,
+                h,
+                fill,
+                raster.base_tiles().map(|(c, t)| (*c, t.clone())),
+            )
+            .unwrap();
+            // A window that stops short of the image on the left.
+            let g = Grid {
+                level: 0,
+                p0: dvec2(300.5, 200.5),
+                ex: dvec2(1.0, 0.0),
+                ey: dvec2(0.0, 1.0),
+            };
+            let win = Window::new(&raster, &g).unwrap();
+            let outside = [1, 2, 3, 4];
+            for y in -2..h as i64 + 2 {
+                for x in -2..w as i64 + 2 {
+                    if let Some(q) = win.quad(x, y) {
+                        let want = [
+                            win.get(x, y, outside),
+                            win.get(x + 1, y, outside),
+                            win.get(x, y + 1, outside),
+                            win.get(x + 1, y + 1, outside),
+                        ];
+                        assert_eq!(q, want, "{x},{y}");
+                    }
+                }
+            }
+            assert!(win.quad(300, 300).is_some());
+            assert_eq!(win.quad(300, 100), Some([fill; 4]), "missing tile");
+            assert!(win.quad(255, 300).is_none(), "tile seam");
+            assert!(win.quad(599, 300).is_none(), "image edge");
+            assert!(win.quad(10, 10).is_none(), "outside the window");
+        }
+    }
 
     #[test]
     fn pixel_sampler_preserves_composition_and_bounds_its_cache() {
