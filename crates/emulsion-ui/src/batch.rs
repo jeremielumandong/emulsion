@@ -17,11 +17,14 @@ use emulsion_recipes::store;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const THUMB: u32 = 300;
+const THUMB_WORKERS: usize = 2;
+const THUMB_CACHE: usize = 128;
 const PREVIEW: u32 = 1100;
 
 pub(crate) struct BatchItem {
@@ -36,6 +39,11 @@ pub(crate) struct BatchState {
     pub items: Vec<BatchItem>,
     /// Retain failed requests too, so redraws do not retry converters forever.
     thumbs_requested: HashSet<PathBuf>,
+    thumbs_active: usize,
+    thumbs_generation: u64,
+    thumbs_visible: Range<usize>,
+    thumbs_cached: VecDeque<usize>,
+    thumbs_scroll: UniformListScrollHandle,
     /// The picture shown large.
     pub current: Option<usize>,
     /// Chosen recipe name, if any.
@@ -49,6 +57,7 @@ pub(crate) struct BatchState {
     /// Large preview for (path, recipe).
     preview: Option<(PathBuf, Option<String>, Arc<RenderImage>)>,
     preview_loading: Option<(PathBuf, Option<String>)>,
+    preview_failed: Option<(PathBuf, Option<String>)>,
     /// Invalidates renders for older recipe contents, even when names match.
     preview_generation: u64,
     /// "jpg" or "png".
@@ -61,6 +70,57 @@ pub(crate) struct BatchState {
 }
 
 impl BatchState {
+    fn request_thumbs(&mut self) -> Vec<(usize, PathBuf)> {
+        let mut todo = Vec::new();
+        for index in self.thumbs_visible.clone() {
+            if self.thumbs_active >= THUMB_WORKERS {
+                break;
+            }
+            let Some(item) = self.items.get(index) else {
+                break;
+            };
+            if item.thumb.is_none() && self.thumbs_requested.insert(item.path.clone()) {
+                self.thumbs_active += 1;
+                todo.push((index, item.path.clone()));
+            }
+        }
+        todo
+    }
+
+    fn finish_thumb(
+        &mut self,
+        generation: u64,
+        index: usize,
+        rendered: Option<(u32, u32, Vec<u8>)>,
+    ) {
+        self.thumbs_active = self.thumbs_active.saturating_sub(1);
+        if generation != self.thumbs_generation {
+            return;
+        }
+        if let Some((w, h, bgra)) = rendered {
+            self.items[index].thumb = Some(Arc::new(bgra_image(w, h, bgra)));
+            self.thumbs_cached.push_back(index);
+            while self.thumbs_cached.len() > THUMB_CACHE {
+                let old = self.thumbs_cached.pop_front().unwrap();
+                if self.thumbs_visible.contains(&old) {
+                    self.thumbs_cached.push_back(old);
+                    // An unusually tall viewport may need more than the normal cache.
+                    if self
+                        .thumbs_cached
+                        .iter()
+                        .all(|i| self.thumbs_visible.contains(i))
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                let item = &mut self.items[old];
+                item.thumb = None;
+                self.thumbs_requested.remove(&item.path);
+            }
+        }
+    }
+
     fn refresh_recipes(&mut self, dir: &Path) {
         let recipes: Vec<_> = store::list(dir)
             .into_iter()
@@ -79,6 +139,7 @@ impl BatchState {
         self.preview_generation = self.preview_generation.wrapping_add(1);
         self.preview = None;
         self.preview_loading = None;
+        self.preview_failed = None;
     }
 
     fn finish_preview(
@@ -102,6 +163,9 @@ impl BatchState {
         }
         if let Some((w, h, bgra)) = rendered {
             self.preview = Some((key.0, key.1, Arc::new(bgra_image(w, h, bgra))));
+            self.preview_failed = None;
+        } else {
+            self.preview_failed = Some(key);
         }
         true
     }
@@ -324,9 +388,14 @@ impl Workspace {
             })
             .collect();
         b.thumbs_requested.clear();
+        b.thumbs_generation = b.thumbs_generation.wrapping_add(1);
+        b.thumbs_visible = 0..0;
+        b.thumbs_cached.clear();
+        b.thumbs_scroll = UniformListScrollHandle::new();
         b.current = None;
         b.preview = None;
         b.preview_loading = None;
+        b.preview_failed = None;
         b.preview_generation = b.preview_generation.wrapping_add(1);
         b.note = None;
         if b.format.is_empty() {
@@ -336,26 +405,13 @@ impl Workspace {
     }
 
     fn batch_thumbs(&mut self, cx: &mut Context<Self>) {
-        let todo: Vec<PathBuf> = self
-            .batch
-            .items
-            .iter()
-            .enumerate()
-            // Opening a folder only lists files. Decode after an explicit
-            // export selection or a click to preview that picture.
-            .filter(|(index, item)| item.selected || self.batch.current == Some(*index))
-            .filter(|(_, item)| item.thumb.is_none())
-            .map(|(_, item)| item.path.clone())
-            .filter(|p| !self.batch.thumbs_requested.contains(p))
-            .take(6)
-            .collect();
-        for path in todo {
-            self.batch.thumbs_requested.insert(path.clone());
+        let generation = self.batch.thumbs_generation;
+        for (index, path) in self.batch.request_thumbs() {
             cx.spawn(async move |this, cx| {
                 let p = path.clone();
                 let r = cx
                     .background_spawn(async move {
-                        emulsion_io::thumb::thumbnail(&p, THUMB).map(|(w, h, mut rgba)| {
+                        emulsion_io::thumb::batch_thumbnail(&p, THUMB).map(|(w, h, mut rgba)| {
                             for px in rgba.as_chunks_mut::<4>().0 {
                                 px.swap(0, 2);
                             }
@@ -364,10 +420,11 @@ impl Workspace {
                     })
                     .await;
                 this.update(cx, |this, cx| {
-                    if let Ok((w, h, bgra)) = r
-                        && let Some(item) = this.batch.items.iter_mut().find(|i| i.path == path)
-                    {
-                        item.thumb = Some(Arc::new(bgra_image(w, h, bgra)));
+                    this.batch.finish_thumb(generation, index, r.ok());
+                    // Refill only the latest viewport; old folders still occupy worker slots
+                    // until their decoders return, but can never publish stale images.
+                    if this.screen == crate::workspace::Screen::Batch {
+                        this.batch_thumbs(cx);
                     }
                     cx.notify();
                 })
@@ -415,10 +472,13 @@ impl Workspace {
             .as_ref()
             .is_some_and(|(p, r, _)| (p, r) == (&key.0, &key.1))
             || self.batch.preview_loading.as_ref() == Some(&key)
+            || self.batch.preview_failed.as_ref() == Some(&key)
         {
             return;
         }
         self.batch.preview_loading = Some(key.clone());
+        self.batch.preview_failed = None;
+        self.batch.preview = None;
         self.batch.preview_generation = self.batch.preview_generation.wrapping_add(1);
         let generation = self.batch.preview_generation;
         let recipe = self.chosen_recipe();
@@ -863,7 +923,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
-        self.batch_thumbs(cx);
         self.batch_preview(cx);
         let recipes = self.batch_recipes();
         let selected = self.batch.items.iter().filter(|i| i.selected).count();
@@ -952,97 +1011,134 @@ impl Workspace {
                     .test_support(),
             );
 
-        // Grid of pictures.
-        let current = self.batch.current;
-        let mut grid = div().flex().flex_wrap().gap(px(8.)).p(px(12.));
-        for (i, item) in self.batch.items.iter().enumerate() {
-            let is_cur = current == Some(i);
-            let name = item
-                .path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let image: AnyElement = match &item.thumb {
-                Some(t) => img(ImageSource::Render(t.clone()))
-                    .object_fit(ObjectFit::Cover)
-                    .size_full()
-                    .into_any_element(),
-                None => div().size_full().bg(p.stage).into_any_element(),
-            };
-            grid = grid.child(
-                div()
-                    .id(("batch-item", i))
-                    .w(px(132.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(3.))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.batch.current = Some(i);
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .w(px(132.))
-                            .h(px(100.))
-                            .relative()
-                            .overflow_hidden()
-                            .border_2()
-                            .border_color(if is_cur { p.accent } else { p.line })
-                            .when(!item.selected, |d| d.opacity(0.45))
-                            .child(image)
-                            .child(
+        // Only build visible rows. Thumbnails are scheduled after layout so measuring
+        // a row cannot start expensive work or notify during paint.
+        let columns = if f32::from(window.viewport_size().width) < 1050. {
+            1
+        } else {
+            2
+        };
+        let generation = self.batch.thumbs_generation;
+        let grid: AnyElement = if self.batch.items.is_empty() {
+            div()
+                .p_6()
+                .text_color(p.muted)
+                .child("Choose a folder to see its pictures here.")
+                .into_any_element()
+        } else {
+            uniform_list(
+                "batch-grid-rows",
+                self.batch.items.len().div_ceil(columns),
+                cx.processor(move |this, rows: Range<usize>, window, cx| {
+                    let visible =
+                        rows.start * columns..(rows.end * columns).min(this.batch.items.len());
+                    // Measurement runs before the real viewport callback. Coalesce by
+                    // storing its latest range before any deferred scheduler runs.
+                    this.batch.thumbs_visible = visible;
+                    cx.defer_in(window, move |this, _, cx| {
+                        if this.batch.thumbs_generation == generation {
+                            this.batch_thumbs(cx);
+                        }
+                    });
+                    rows.map(|row_index| {
+                        let mut row = div().flex().gap_2().px_3().pt_2().h(px(127.));
+                        let current = this.batch.current;
+                        for i in row_index * columns
+                            ..((row_index + 1) * columns).min(this.batch.items.len())
+                        {
+                            let item = &this.batch.items[i];
+                            let is_cur = current == Some(i);
+                            let name = item
+                                .path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            let image: AnyElement = match &item.thumb {
+                                Some(t) => img(ImageSource::Render(t.clone()))
+                                    .object_fit(ObjectFit::Cover)
+                                    .size_full()
+                                    .into_any_element(),
+                                None => div().size_full().bg(p.stage).into_any_element(),
+                            };
+                            row = row.child(
                                 div()
-                                    .id(("batch-tick", i))
-                                    .absolute()
-                                    .top(px(4.))
-                                    .left(px(4.))
-                                    .size(px(16.))
-                                    .border_1()
-                                    .border_color(gpui_kit::white())
-                                    .bg(if item.selected {
-                                        p.accent
-                                    } else {
-                                        gpui_kit::black().opacity(0.4)
-                                    })
+                                    .id(("batch-item", i))
+                                    .w(px(132.))
                                     .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_color(p.accent_fg)
-                                    .text_size(px(10.))
-                                    .font_family(MONO_FONT)
-                                    .child(if item.selected { "✓" } else { "" })
-                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                        cx.stop_propagation();
-                                        if let Some(it) = this.batch.items.get_mut(i) {
-                                            it.selected = !it.selected;
-                                        }
+                                    .flex_col()
+                                    .gap(px(3.))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.batch.current = Some(i);
                                         cx.notify();
                                     }))
+                                    .child(
+                                        div()
+                                            .w(px(132.))
+                                            .h(px(100.))
+                                            .relative()
+                                            .overflow_hidden()
+                                            .border_2()
+                                            .border_color(if is_cur { p.accent } else { p.line })
+                                            .when(!item.selected, |d| d.opacity(0.45))
+                                            .child(image)
+                                            .child(
+                                                div()
+                                                    .id(("batch-tick", i))
+                                                    .absolute()
+                                                    .top(px(4.))
+                                                    .left(px(4.))
+                                                    .size(px(16.))
+                                                    .border_1()
+                                                    .border_color(gpui_kit::white())
+                                                    .bg(if item.selected {
+                                                        p.accent
+                                                    } else {
+                                                        gpui_kit::black().opacity(0.4)
+                                                    })
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_color(p.accent_fg)
+                                                    .text_size(px(10.))
+                                                    .font_family(MONO_FONT)
+                                                    .child(if item.selected { "✓" } else { "" })
+                                                    .on_click(cx.listener(
+                                                        move |this, _: &ClickEvent, _, cx| {
+                                                            cx.stop_propagation();
+                                                            if let Some(it) =
+                                                                this.batch.items.get_mut(i)
+                                                            {
+                                                                it.selected = !it.selected;
+                                                            }
+                                                            cx.notify();
+                                                        },
+                                                    ))
+                                                    .test_support(),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(132.))
+                                            .text_size(px(10.))
+                                            .text_color(p.muted)
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(name),
+                                    )
                                     .test_support(),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .w(px(132.))
-                            .text_size(px(10.))
-                            .text_color(p.muted)
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(name),
-                    )
-                    .test_support(),
-            );
-        }
-        if self.batch.items.is_empty() {
-            grid = grid.child(
-                div()
-                    .p(px(24.))
-                    .text_color(p.muted)
-                    .child("Choose a folder to see its pictures here."),
-            );
-        }
+                            );
+                        }
+                        row
+                    })
+                    .collect()
+                }),
+            )
+            .track_scroll(&self.batch.thumbs_scroll)
+            .size_full()
+            .into_any_element()
+        };
 
         // Large preview.
         let preview: AnyElement = match &self.batch.preview {
@@ -1058,6 +1154,8 @@ impl Workspace {
                 .child(mono(
                     if self.batch.preview_loading.is_some() {
                         "rendering…"
+                    } else if self.batch.preview_failed.is_some() {
+                        "Preview unavailable for this photo"
                     } else {
                         "Select a photo to preview its recipe"
                     },
@@ -1129,7 +1227,7 @@ impl Workspace {
                                     .id("batch-grid")
                                     .flex_1()
                                     .min_h_0()
-                                    .overflow_y_scroll()
+                                    .overflow_hidden()
                                     .child(grid)
                                     .test_support(),
                             ),
@@ -1174,6 +1272,94 @@ pub(crate) fn batch_ext(format: &str) -> &'static str {
 #[cfg(test)]
 mod export_safety_tests {
     use super::{BatchStage, list_folder, publish_batch_file};
+
+    fn thumbnail_state(count: usize) -> super::BatchState {
+        super::BatchState {
+            items: (0..count)
+                .map(|i| super::BatchItem {
+                    path: format!("photo-{i}.png").into(),
+                    selected: false,
+                    thumb: None,
+                })
+                .collect(),
+            thumbs_visible: 0..count,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn thumbnails_are_bounded_prioritize_viewport_and_retain_failures() {
+        let mut batch = thumbnail_state(1000);
+        batch.thumbs_visible = 400..410;
+        let first = batch.request_thumbs();
+        assert_eq!(
+            first.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            vec![400, 401]
+        );
+        for _ in 0..50 {
+            assert!(batch.request_thumbs().is_empty());
+        }
+        batch.finish_thumb(0, 400, None);
+        batch.thumbs_visible = 900..910;
+        assert_eq!(batch.request_thumbs()[0].0, 900);
+        assert_eq!(batch.thumbs_active, super::THUMB_WORKERS);
+        batch.finish_thumb(0, 401, None);
+        batch.finish_thumb(0, 900, None);
+        batch.thumbs_visible = 400..402;
+        assert!(
+            batch.request_thumbs().is_empty(),
+            "failed files are not retried on redraw"
+        );
+        assert!(batch.items.iter().all(|item| !item.selected));
+        assert!(batch.current.is_none() && batch.preview.is_none() && batch.running.is_none());
+    }
+
+    #[test]
+    fn folder_changes_keep_worker_limit_and_reject_stale_thumbnails() {
+        let mut batch = thumbnail_state(4);
+        assert_eq!(batch.request_thumbs().len(), 2);
+        batch.thumbs_generation += 1;
+        batch.thumbs_requested.clear();
+        assert!(batch.request_thumbs().is_empty());
+        batch.finish_thumb(0, 0, Some((1, 1, vec![255; 4])));
+        assert!(batch.items[0].thumb.is_none());
+        assert_eq!(batch.request_thumbs().len(), 1);
+        assert_eq!(batch.thumbs_active, 2);
+        batch.finish_thumb(0, 1, None);
+        batch.finish_thumb(1, 0, Some((1, 1, vec![255; 4])));
+        assert!(batch.items[0].thumb.is_some());
+    }
+
+    #[test]
+    fn scrolling_evicts_old_successful_thumbnails_but_can_reload_them() {
+        let mut batch = thumbnail_state(super::THUMB_CACHE + 2);
+        for index in 0..super::THUMB_CACHE + 2 {
+            batch.thumbs_visible = index..index + 1;
+            assert_eq!(batch.request_thumbs().len(), 1);
+            batch.finish_thumb(0, index, Some((1, 1, vec![255; 4])));
+        }
+        assert_eq!(
+            batch
+                .items
+                .iter()
+                .filter(|item| item.thumb.is_some())
+                .count(),
+            super::THUMB_CACHE
+        );
+        batch.thumbs_visible = 0..1;
+        assert_eq!(batch.request_thumbs()[0].0, 0);
+    }
+
+    #[test]
+    fn failed_preview_is_remembered_after_loading_finishes() {
+        let mut batch = thumbnail_state(1);
+        batch.current = Some(0);
+        let key = (batch.items[0].path.clone(), None);
+        batch.preview_loading = Some(key.clone());
+        assert!(batch.finish_preview(0, key.clone(), None));
+        assert_eq!(batch.preview_failed, Some(key));
+        assert!(batch.preview_loading.is_none());
+    }
 
     #[test]
     fn folder_scan_keeps_supported_images_and_camera_raw_files_only() {

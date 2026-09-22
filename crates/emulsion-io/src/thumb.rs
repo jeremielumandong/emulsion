@@ -174,9 +174,8 @@ pub fn batch_thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
             image::ImageFormat::Png,
         ))?
     } else if crate::raw_probe::is_raw(path)? {
-        crate::raw_probe::embedded_preview(path)?.ok_or_else(|| {
-            crate::IoError::Unsupported("no embedded RAW browsing preview".into())
-        })?
+        crate::raw_probe::embedded_preview(path)?
+            .ok_or_else(|| crate::IoError::Unsupported("no embedded RAW browsing preview".into()))?
     } else {
         if std::fs::metadata(path)?.len() > 128 << 20 {
             return Err(crate::IoError::Unsupported(
@@ -386,9 +385,8 @@ mod tests {
         bytes.extend(0u32.to_le_bytes());
         bytes.extend(jpeg);
         std::fs::write(&file.0, bytes).unwrap();
-        let sidecar = Fixture(
-            crate::raw_settings::sidecar_path(&file.0.canonicalize().unwrap()).unwrap(),
-        );
+        let sidecar =
+            Fixture(crate::raw_settings::sidecar_path(&file.0.canonicalize().unwrap()).unwrap());
         std::fs::write(&sidecar.0, b"invalid saved recipe").unwrap();
         let (width, height, pixels) = batch_thumbnail(&file.0, 128).unwrap();
         assert_eq!((width, height), (4, 2));
@@ -419,7 +417,11 @@ mod tests {
         assert_eq!(pixels.len(), 20 * 10 * 4);
 
         let img = image::RgbaImage::new(16385, 1);
-        std::fs::write(&file.0, crate::export::png8(16385, 1, img.as_raw()).unwrap()).unwrap();
+        std::fs::write(
+            &file.0,
+            crate::export::png8(16385, 1, img.as_raw()).unwrap(),
+        )
+        .unwrap();
         assert!(batch_thumbnail(&file.0, 20).is_err());
     }
 
