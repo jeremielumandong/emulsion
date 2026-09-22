@@ -218,6 +218,47 @@ mod tests {
     }
 
     #[test]
+    fn shape_tools_are_discoverable_over_json_rpc() {
+        let request: Request =
+            serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).unwrap();
+        let response = handle(&mut OfflineHost, request).unwrap();
+        let tools = response.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .clone();
+        for name in [
+            "draw_shape",
+            "combine_path",
+            "resize_path",
+            "align_path_components",
+            "list_shape_stroke_presets",
+            "save_shape_stroke_preset",
+            "apply_shape_stroke_preset",
+        ] {
+            let tool = tools.iter().find(|tool| tool["name"] == name).expect(name);
+            assert_eq!(tool["inputSchema"]["type"], "object");
+        }
+        for name in ["draw_path", "set_path"] {
+            let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+            for field in [
+                "fill_paint",
+                "stroke_paint",
+                "stroke_alignment",
+                "cap",
+                "join",
+                "dashes",
+                "dash_offset",
+                "miter_limit",
+            ] {
+                assert!(
+                    tool["inputSchema"]["properties"].get(field).is_some(),
+                    "{name}.{field}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn unknown_method_and_tool() {
         let out = roundtrip(concat!(
             r#"{"jsonrpc":"2.0","id":1,"method":"nope"}"#,

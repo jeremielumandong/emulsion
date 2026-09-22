@@ -11,6 +11,7 @@ pub const READ_ONLY: &[&str] = &[
     "list_history",
     "compare",
     "list_brushes",
+    "list_shape_stroke_presets",
     "list_recipes",
     "critique",
     "list_fonts",
@@ -128,6 +129,16 @@ fn def(name: &str, description: &str, properties: Value, required: &[&str]) -> T
             "additionalProperties": false,
         }),
     }
+}
+
+fn path_properties(mut base: Value) -> Value {
+    base.as_object_mut().unwrap().extend(
+        crate::shape_style::style_properties()
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    base
 }
 
 pub fn definitions() -> Vec<ToolDef> {
@@ -315,16 +326,60 @@ pub fn definitions() -> Vec<ToolDef> {
             &[],
         ),
         def(
+            "draw_shape",
+            "Create an editable rectangle or ellipse at exact document-pixel bounds. shape mode creates visible vectors (default black fill/no stroke); path mode creates an invisible editable path; pixels mode rasterizes. style.width is stroke width. align_edges rounds bounds to pixels. One undo step.",
+            json!({"shape":{"type":"string","enum":["rectangle","ellipse"]},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number","exclusiveMinimum":0,"maximum":1000000},"height":{"type":"number","exclusiveMinimum":0,"maximum":1000000},"mode":{"type":"string","enum":["shape","path","pixels"]},"align_edges":{"type":"boolean"},"name":{"type":"string"},"above":node(),"style":{"type":"object","additionalProperties":false,"properties":crate::shape_style::style_properties()}}),
+            &["shape", "x", "y", "width", "height"],
+        ),
+        def(
             "draw_path",
-            "Add a vector Path node from SVG path data (M L H V C S Q T Z, absolute or relative; no arcs). It stays editable. stroke and fill are #RRGGBB or \"none\"; width is the stroke width in pixels. Use it for clean outlines, shapes, lettering and anything that should be crisp and adjustable; use paint for painterly marks.",
-            json!({ "d": { "type": "string", "minLength": 3 }, "name": { "type": "string" }, "stroke": { "type": "string" }, "width": { "type": "number", "minimum": 0, "maximum": 500 }, "fill": { "type": "string" }, "above": node() }),
+            "Add an editable vector from SVG path data (M L H V C S Q T Z; no arcs). Fill/stroke accept #RRGGBB, #RRGGBBAA or none. Native fill_paint/stroke_paint support solid, linear/radial gradient and checker/stripes/dots pattern. width is stroke width. Omitted style fields use defaults.",
+            path_properties(
+                json!({"d":{"type":"string","minLength":3},"name":{"type":"string"},"above":node()}),
+            ),
             &["d"],
         ),
         def(
             "set_path",
-            "Change a Path node: new path data d, and/or stroke, width, fill (#RRGGBB or \"none\"). describe_document shows each path's current d.",
-            json!({ "node": node(), "d": { "type": "string" }, "stroke": { "type": "string" }, "width": { "type": "number", "minimum": 0, "maximum": 500 }, "fill": { "type": "string" } }),
+            "Edit an existing vector's SVG geometry and/or native paint/stroke settings. Omitted fields are preserved. Setting a color preserves its existing paint kind; pass fill_paint/stroke_paint kind solid to remove a gradient or pattern. describe_document exposes path_style, path_bounds and indexed components. One undo step.",
+            path_properties(json!({"node":node(),"d":{"type":"string"}})),
             &["node"],
+        ),
+        def(
+            "combine_path",
+            "Combine SVG path data with an existing vector on the same layer. component appends independently editable subpaths; add/subtract/intersect/exclude perform geometry operations and preserve target style. Curved boolean results are editable straight segments approximated within subpixel precision. Input geometry uses the target path coordinate space. One undo step.",
+            json!({"node":node(),"d":{"type":"string"},"operation":{"type":"string","enum":["component","add","subtract","intersect","exclude"]}}),
+            &["node", "d", "operation"],
+        ),
+        def(
+            "resize_path",
+            "Set exact vector geometry width/height, excluding stroke, anchored at its top-left. linked preserves aspect ratio; supply one dimension, or two consistent dimensions. align_edges rounds the resulting bounds to pixels. Preserves style and editability. One undo step.",
+            json!({"node":node(),"width":{"type":"number","exclusiveMinimum":0,"maximum":1000000},"height":{"type":"number","exclusiveMinimum":0,"maximum":1000000},"linked":{"type":"boolean"},"align_edges":{"type":"boolean"}}),
+            &["node"],
+        ),
+        def(
+            "align_path_components",
+            "Align subpaths within a vector's overall geometry bounds. component is the zero-based index from describe_document; omit to align all. Distribution requires at least three components and no component argument. Preserves curves and style. One undo step.",
+            json!({"node":node(),"component":{"type":"integer","minimum":0},"alignment":{"type":"string","enum":["left","right","top","bottom","center_x","center_y","distribute_x","distribute_y"]}}),
+            &["node", "alignment"],
+        ),
+        def(
+            "list_shape_stroke_presets",
+            "List built-in solid/dashed/dotted and saved shape stroke presets shared with the Properties panel. Saved entries include native stroke settings. Read-only.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "save_shape_stroke_preset",
+            "Save the stroke settings of a vector node to the shared preset library (maximum 32). Name must be unique unless overwrite=true. This changes preferences, not document history; fill is not applied with the preset.",
+            json!({"node":node(),"name":{"type":"string","minLength":1,"maxLength":80},"overwrite":{"type":"boolean","default":false}}),
+            &["node", "name"],
+        ),
+        def(
+            "apply_shape_stroke_preset",
+            "Apply a built-in solid/dashed/dotted preset or a saved preset by exact name. source is builtin or saved (default saved). Saved presets replace all stroke settings but preserve fill/geometry. Built-ins change dash/cap settings like the Properties panel. One undo step.",
+            json!({"node":node(),"name":{"type":"string"},"source":{"type":"string","enum":["builtin","saved"],"default":"saved"}}),
+            &["node", "name"],
         ),
         def(
             "path_to_selection",

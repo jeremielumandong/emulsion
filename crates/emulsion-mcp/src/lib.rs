@@ -15,6 +15,9 @@ pub mod reference;
 pub mod relay;
 mod review;
 pub mod server;
+mod shape_geometry;
+pub mod shape_presets;
+mod shape_style;
 pub mod tools;
 
 pub use server::{

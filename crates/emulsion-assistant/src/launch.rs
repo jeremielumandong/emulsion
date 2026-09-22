@@ -421,6 +421,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shape_guidance_matches_discoverable_tools_and_permissions() {
+        let definitions = emulsion_mcp::tools::definitions();
+        let read_only = read_only_tools();
+        for name in [
+            "draw_shape",
+            "combine_path",
+            "resize_path",
+            "align_path_components",
+            "list_shape_stroke_presets",
+            "save_shape_stroke_preset",
+            "apply_shape_stroke_preset",
+        ] {
+            assert!(SYSTEM_PROMPT.contains(name), "missing guidance: {name}");
+            assert!(
+                definitions.iter().any(|tool| tool.name == name),
+                "undiscoverable tool: {name}"
+            );
+            assert_eq!(
+                read_only.contains(&emulsion_mcp::tools::qualified(name)),
+                name == "list_shape_stroke_presets",
+                "incorrect approval classification: {name}"
+            );
+        }
+    }
+
+    #[test]
     fn playbook_examples_execute_with_current_tools() {
         let definitions = emulsion_mcp::tools::definitions();
         let mut example_count = 0;
@@ -518,7 +544,7 @@ mod tests {
         assert_eq!(a[pos("--mcp-config") + 1], "/tmp/s/mcp.json");
         assert_eq!(
             a[pos("--allowedTools") + 1],
-            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__get_reference_image,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes,mcp__emulsion__list_recipes,mcp__emulsion__critique,mcp__emulsion__list_fonts,mcp__emulsion__list_models"
+            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__get_reference_image,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes,mcp__emulsion__list_shape_stroke_presets,mcp__emulsion__list_recipes,mcp__emulsion__critique,mcp__emulsion__list_fonts,mcp__emulsion__list_models"
         );
         assert_eq!(a[pos("--model") + 1], "sonnet");
         assert!(

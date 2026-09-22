@@ -1970,6 +1970,18 @@ fn exec(editor: &mut Editor, cmd: Command) -> Result<Option<NodeId>, ToolResult>
 
 fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, ToolResult> {
     match name {
+        "draw_shape" | "combine_path" | "resize_path" | "align_path_components" => {
+            crate::shape_geometry::execute(editor, name, args)
+        }
+        "list_shape_stroke_presets" | "save_shape_stroke_preset" | "apply_shape_stroke_preset" => {
+            let mut settings = emulsion_io::settings::Settings::load();
+            Ok(crate::shape_presets::execute(
+                editor,
+                name,
+                args,
+                &mut settings,
+            ))
+        }
         "describe_document" => Ok(ToolResult::text(
             serde_json::to_string_pretty(&describe(editor)).unwrap_or_default(),
         )),
@@ -2371,17 +2383,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 .ok_or_else(|| err("missing string 'd' (SVG path data)"))?;
             let path = emulsion_raster::vector::Path::from_svg(d)
                 .map_err(|e| err(format!("bad path data: {e}")))?;
-            let style = emulsion_raster::vector::PathStyle {
-                stroke: if args.get("stroke").is_some() {
-                    rgba_arg(args.get("stroke"))?
-                } else {
-                    Some([10, 10, 11, 255])
-                },
-                width: args.get("width").and_then(Value::as_f64).unwrap_or(3.0) as f32,
-                fill: rgba_arg(args.get("fill"))?,
-                ..Default::default()
-            }
-            .sanitized();
+            let style = crate::shape_style::parse_style(args, Default::default())?;
             let (w, h) = (editor.doc.width, editor.doc.height);
             let name = args.get("name").and_then(Value::as_str).unwrap_or("Path");
             let node = Node::path(0, name, Arc::new(path), style, w, h);
@@ -2434,15 +2436,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 ),
                 None => path,
             };
-            if args.get("stroke").is_some() {
-                style.stroke = rgba_arg(args.get("stroke"))?;
-            }
-            if args.get("fill").is_some() {
-                style.fill = rgba_arg(args.get("fill"))?;
-            }
-            if let Some(w) = args.get("width").and_then(Value::as_f64) {
-                style.width = w as f32;
-            }
+            style = crate::shape_style::parse_style(args, style)?;
             exec(
                 editor,
                 Command::SetPath {
@@ -3517,6 +3511,12 @@ pub fn describe(editor: &Editor) -> Value {
                 NodeKind::Path { path, style, .. } => {
                     o.insert("d".into(), json!(path.to_svg()));
                     o.insert("anchors".into(), json!(path.anchor_count()));
+                    o.insert("path_style".into(), crate::shape_style::style_json(style));
+                    o.insert("path_bounds".into(), json!(emulsion_raster::vector_geometry::bounds(path)));
+                    o.insert("components".into(), json!(path.subpaths.iter().enumerate().map(|(index, sub)| {
+                        let p = emulsion_raster::vector::Path { subpaths: vec![sub.clone()] };
+                        json!({"index":index,"d":p.to_svg(),"bounds":emulsion_raster::vector_geometry::bounds(&p)})
+                    }).collect::<Vec<_>>()));
                     o.insert("stroke".into(), json!(style.stroke.map(hex)));
                     o.insert("stroke_width".into(), json!(style.width));
                     o.insert("fill".into(), json!(style.fill.map(hex)));

@@ -42,7 +42,12 @@ impl DrawingReview {
                 "paint"
                     | "hatch"
                     | "draw_path"
+                    | "draw_shape"
                     | "set_path"
+                    | "combine_path"
+                    | "resize_path"
+                    | "align_path_components"
+                    | "apply_shape_stroke_preset"
                     | "fill_selection"
                     | "add_text"
                     | "generate_image"
@@ -228,6 +233,35 @@ mod tests {
                 true,
             );
             assert_eq!(review.completion(2), Completion::Review);
+        }
+    }
+
+    #[test]
+    fn shape_edits_require_review_but_preset_management_does_not() {
+        for tool in [
+            "draw_shape",
+            "combine_path",
+            "resize_path",
+            "align_path_components",
+            "apply_shape_stroke_preset",
+        ] {
+            let mut review = DrawingReview::default();
+            review.observe(tool, &json!({}), &ToolResult::text("Edited"), 2, true);
+            assert_eq!(review.completion(2), Completion::Review, "{tool}");
+
+            for (result, changed) in [
+                (ToolResult::text("No change"), false),
+                (ToolResult::error("Locked"), true),
+            ] {
+                let mut review = DrawingReview::default();
+                review.observe(tool, &json!({}), &result, 2, changed);
+                assert_eq!(review.completion(2), Completion::Finish, "{tool}");
+            }
+        }
+        for tool in ["list_shape_stroke_presets", "save_shape_stroke_preset"] {
+            let mut review = DrawingReview::default();
+            review.observe(tool, &json!({}), &ToolResult::text("Preset"), 2, true);
+            assert_eq!(review.completion(2), Completion::Finish, "{tool}");
         }
     }
 

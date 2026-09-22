@@ -330,6 +330,16 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         ),
         "draw_path" => format!("draw path {}", input["name"].as_str().unwrap_or("Path")),
         "set_path" => format!("edit path {}", n()),
+        "draw_shape" => format!("draw {}", input["shape"].as_str().unwrap_or("shape")),
+        "combine_path" => format!("combine path components on {}", n()),
+        "resize_path" => format!("resize path {}", n()),
+        "align_path_components" => format!("align path components on {}", n()),
+        "list_shape_stroke_presets" => "read shape stroke presets".into(),
+        "save_shape_stroke_preset" => format!(
+            "save stroke preset {}",
+            input["name"].as_str().unwrap_or("")
+        ),
+        "apply_shape_stroke_preset" => format!("apply stroke preset to {}", n()),
         "path_to_selection" => format!("select inside {}", n()),
         "list_brushes" => "look at the brushes".into(),
         "hatch" => format!(
@@ -1230,7 +1240,22 @@ impl EditorView {
             return;
         }
         let before = self.editor.revision;
-        let r = exec::execute(&mut self.editor, &call.name, &call.arguments);
+        let r = if emulsion_mcp::shape_presets::is_tool(&call.name) {
+            let mut settings = app_state::settings(cx).clone();
+            let result = emulsion_mcp::shape_presets::execute(
+                &mut self.editor,
+                &call.name,
+                &call.arguments,
+                &mut settings,
+            );
+            if !result.is_error && call.name == "save_shape_stroke_preset" {
+                cx.global_mut::<app_state::AppSettings>().0 = settings;
+                cx.refresh_windows();
+            }
+            result
+        } else {
+            exec::execute(&mut self.editor, &call.name, &call.arguments)
+        };
         self.observe_drawing_tool(
             &call.name,
             &call.arguments,

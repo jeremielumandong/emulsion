@@ -172,6 +172,25 @@ Worked study: three editable shapes and a deliberate contour revision.
 ]
 ```
 
+Worked shape study: an editable gradient frame and three patterned accents in one path. Create the frame with exact bounds, cut its opening, then resize its geometry with linked proportions. Append accents as separate components so alignment preserves their curves. The preset changes the frame's stroke without replacing its gradient fill. Use ids returned by the tools in a real document; component indices can change after geometry operations.
+
+```json
+[
+  {"name":"draw_shape","arguments":{"shape":"rectangle","name":"Frame","x":220,"y":160,"width":360,"height":260,"mode":"shape","align_edges":true,"style":{"fill":"#345B70","fill_paint":{"kind":"linear_gradient","end":"#6F8D92","angle":90},"stroke":"#F0D9AA","width":3,"stroke_alignment":"inside","join":"miter","miter_limit":4}}},
+  {"name":"combine_path","arguments":{"node":1,"operation":"subtract","d":"M 250 190 L 550 190 L 550 390 L 250 390 Z"}},
+  {"name":"resize_path","arguments":{"node":1,"width":324,"linked":true,"align_edges":true}},
+  {"name":"apply_shape_stroke_preset","arguments":{"node":1,"name":"dashed","source":"builtin"}},
+  {"name":"draw_shape","arguments":{"shape":"ellipse","name":"Accents","x":300,"y":250,"width":36,"height":36,"style":{"fill":"#D8A666","stroke":"none"}}},
+  {"name":"combine_path","arguments":{"node":2,"operation":"component","d":"M 370 245 L 406 245 L 406 281 L 370 281 Z"}},
+  {"name":"combine_path","arguments":{"node":2,"operation":"component","d":"M 445 258 L 481 258 L 481 294 L 445 294 Z"}},
+  {"name":"align_path_components","arguments":{"node":2,"alignment":"center_y"}},
+  {"name":"align_path_components","arguments":{"node":2,"alignment":"distribute_x"}},
+  {"name":"set_path","arguments":{"node":2,"fill_paint":{"kind":"pattern","end":"#F0D9AA","pattern":"dots","size":8}}},
+  {"name":"describe_document","arguments":{}},
+  {"name":"get_view","arguments":{"max_size":800}}
+]
+```
+
 Playbook: pixel-art
 
 Choose a document-pixel grid and a small palette. Block readable clusters before isolated pixels, place integer coordinates, and inspect at native size. Use integer select_rect plus fill_selection for exact raster cells; a hard round brush or antialiased path is not a guarantee of pixel alignment. Layers: Base clusters, Highlights, optionally separate Background. Check silhouette at intended display size, cluster spacing/jaggies at a native-resolution region, then palette consistency. Do not add blur or resample the document to manufacture detail. For a strict low-resolution sprite, establish its actual canvas size first; the study below is a tiny motif inside the shared test canvas.
