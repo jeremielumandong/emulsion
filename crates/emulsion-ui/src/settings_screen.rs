@@ -414,7 +414,7 @@ impl Workspace {
             .child(
                 section(&p)
                     .child(tier(5, "Layout", s.compact_chrome, if s.compact_chrome { "compact" } else { "roomy" }, &p))
-                    .child(body("Compact chrome drops the client title bar and tightens the top bars, leaving more height for the canvas. Without a title bar the window moves and closes through your desktop (Super-drag on Omarchy; Ctrl-Q quits). Omarchy desktops start compact.", &p))
+                    .child(body("Compact layout combines document controls in one bar and places movable toolbars over the canvas. Drag a toolbar grip to dock it, use Layout to restore hidden bars, and collapse the sidebar for more canvas space. Native window controls stay available.", &p))
                     .child(
                         chip("compact-chrome", if s.compact_chrome { "compact chrome" } else { "roomy chrome" }, s.compact_chrome, &p)
                             .on_click(cx.listener(|_, _, _, cx| {

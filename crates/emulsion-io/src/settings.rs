@@ -26,6 +26,8 @@ pub struct ShapeStrokePreset {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
+    /// Home items starred by the user, stored by their canonical recent path.
+    pub starred_files: Vec<PathBuf>,
     pub shape_stroke_presets: Vec<ShapeStrokePreset>,
     /// Per-effect defaults used when adding a layer style.
     pub layer_style_defaults: Vec<emulsion_core::styles::LayerStyle>,
@@ -49,9 +51,8 @@ pub struct Settings {
     pub follow_omarchy: bool,
     /// Apply every assistant change without asking, deletes and merges too.
     pub approve_all: bool,
-    /// Tighter chrome: no client title bar (the window manager or a
-    /// Super-drag moves the window) and shorter bars, for small screens
-    /// and tiling desktops.
+    /// Compact editor header and movable canvas toolbars, with native
+    /// window controls retained in the header.
     pub compact_chrome: bool,
     /// Height of the Layers list in the side panel, in logical pixels;
     /// dragged by its handle.
@@ -102,6 +103,7 @@ pub fn omarchy_present() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            starred_files: Vec::new(),
             provider: "claude".into(),
             cli_path: None,
             model: None,
@@ -114,7 +116,7 @@ impl Default for Settings {
             light_mode: false,
             follow_omarchy: false,
             approve_all: false,
-            compact_chrome: false,
+            compact_chrome: true,
             layers_height: 400.0,
             show_drawing: true,
             drawing_pace: DrawingPace::Natural,
@@ -171,9 +173,6 @@ impl Settings {
             // First run: on an Omarchy desktop, start in its colours.
             Err(_) => Self {
                 follow_omarchy: omarchy_present(),
-                // Omarchy tiles windows and draws no decorations; the
-                // client title bar would be a second, empty one.
-                compact_chrome: omarchy_present(),
                 ..Self::default()
             },
         }

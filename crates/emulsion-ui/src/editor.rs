@@ -12,6 +12,7 @@ mod animation;
 mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
+mod compact;
 pub(crate) mod crop;
 pub(crate) mod export_ui;
 mod filters;
@@ -207,6 +208,11 @@ pub(crate) const LAYERS_MIN_H: f32 = 340.0;
 pub(crate) const LAYERS_MAX_H: f32 = 900.0;
 
 enum Drag {
+    Toolbar(compact::ToolbarDrag),
+    SidebarResize {
+        start_x: Pixels,
+        start_w: f32,
+    },
     Tool(tools::ToolDrag),
     /// Dragging the handle under the Layers list.
     LayersSplit {
@@ -317,6 +323,8 @@ pub struct EditorView {
     pub(crate) generate: generate_ui::GenState,
     /// Tool rail fly-outs and remembered picks.
     pub(crate) rail: rail::RailState,
+    compact: compact::CompactLayout,
+    sidebar_layout: sidebar::SidebarState,
     /// Draw mode: painter's rail and a Layers-only sidebar.
     pub(crate) draw_mode: bool,
     /// Export chooser state and the last format picked.
@@ -427,6 +435,8 @@ impl EditorView {
             raw: Default::default(),
             generate: Default::default(),
             rail: Default::default(),
+            compact: compact::CompactLayout::new(cx),
+            sidebar_layout: Default::default(),
             export_prefs: Default::default(),
             draw_mode: cx
                 .try_global::<crate::app_state::AppSettings>()
@@ -454,7 +464,14 @@ impl EditorView {
             focus_watchers: None,
             renaming: None,
             menu: None,
-            sidebar_tab: SidebarTab::History,
+            sidebar_tab: if cx
+                .try_global::<crate::app_state::AppSettings>()
+                .is_some_and(|settings| settings.0.compact_chrome)
+            {
+                SidebarTab::Info
+            } else {
+                SidebarTab::History
+            },
             brush_settings_section: Default::default(),
             dock_tab: DockTab::Layers,
             sidebar_menu: false,
@@ -1298,6 +1315,14 @@ impl EditorView {
         }
         let Some(drag) = &self.drag else { return };
         match drag {
+            Drag::Toolbar(drag) => {
+                let drag = *drag;
+                self.move_toolbar(drag, pos, cx);
+            }
+            Drag::SidebarResize { start_x, start_w } => {
+                self.sidebar_layout.width = Some((*start_w - f32::from(pos.x - *start_x)).max(0.));
+                cx.notify();
+            }
             Drag::Tool(_) => self.tool_move(pos, cx),
             Drag::RotateView {
                 center,
@@ -1336,7 +1361,7 @@ impl EditorView {
                 let dy: f32 = (pos.y - *start_y).into();
                 if self.layer_panel.compact && !self.layer_panel.controls_open {
                     self.layer_panel.compact_height =
-                        Some((*start_h - dy).clamp(150., LAYERS_MAX_H));
+                        Some((*start_h - dy).clamp(120., LAYERS_MAX_H));
                 } else {
                     self.layers_h = (*start_h - dy).clamp(LAYERS_MIN_H, LAYERS_MAX_H);
                 }
@@ -1409,6 +1434,7 @@ impl EditorView {
         self.end_text_pointer(cx);
         self.snap_lines.clear();
         match self.drag.take() {
+            Some(Drag::Toolbar(drag)) => self.finish_toolbar(drag, cx),
             None => return,
             Some(Drag::Distort { id, quad, .. }) => self.finish_distort(id, quad, cx),
             Some(Drag::Slider {
@@ -1431,6 +1457,7 @@ impl EditorView {
                 crate::app_state::update_settings(cx, |s| s.layers_height = h);
             }
             Some(Drag::Pan { .. })
+            | Some(Drag::SidebarResize { .. })
             | Some(Drag::RotateView { .. })
             | Some(Drag::Navigator)
             | Some(Drag::Vanishing(_))
@@ -2416,7 +2443,12 @@ impl EditorView {
     }
 
     fn status_strip(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let controls = self.view_controls(p, cx);
+        let compact = crate::app_state::settings(cx).compact_chrome;
+        let controls = if compact {
+            Vec::new()
+        } else {
+            self.view_controls(p, cx)
+        };
         let n = self.editor.doc.nodes.len();
         let saved = if self.editor.is_modified() {
             "unsaved"
@@ -2435,7 +2467,7 @@ impl EditorView {
             .id("editor-status-strip")
             .flex()
             .flex_none()
-            .h(px(30.))
+            .h(if compact { rems(1.5) } else { rems(1.875) })
             .items_center()
             .gap(px(8.))
             .px(px(10.))
@@ -2443,6 +2475,10 @@ impl EditorView {
             .border_t_1()
             .border_color(p.line)
             .overflow_hidden()
+            .when(compact, |d| {
+                d.bg(p.paper)
+                    .child(mono(self.active_tool_name(), 9.5, p.ink))
+            })
             .when(!self.suggestions.is_empty(), |d| {
                 d.child(mono("Suggestions", 9.5, p.muted).whitespace_nowrap())
             })
@@ -2834,7 +2870,11 @@ impl EditorView {
             .gap(px(8.))
             .pl(px(6. + depth as f32 * 14.))
             .pr(px(8.))
-            .py(px(6.))
+            .py(if crate::app_state::settings(cx).compact_chrome {
+                px(3.)
+            } else {
+                px(6.)
+            })
             .border_1()
             .border_color(border)
             .bg(bg)
@@ -3569,6 +3609,9 @@ impl Render for EditorView {
         self.sync_rotation_fields(window, cx);
         self.sync_style_color_pickers(window, cx);
         self.ensure_gen_prompt(window, cx);
+        if crate::app_state::settings(cx).compact_chrome {
+            return self.compact_editor(&p, window, cx);
+        }
         let doc_bar = self.doc_bar(&p, cx);
         if self.history.open {
             let page = self.history_page(&p, cx);

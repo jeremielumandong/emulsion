@@ -1,5 +1,68 @@
 //! History and task controls above the Layers, Channels and Paths dock.
 use super::*;
+use gpui_kit::component::{
+    Sizable,
+    button::{Button, ButtonVariants},
+};
+
+#[derive(Default)]
+pub(crate) struct SidebarState {
+    pub width: Option<f32>,
+    pub collapsed: bool,
+}
+
+impl SidebarState {
+    fn width_for_viewport(&self, viewport_width: f32, rem_size: f32) -> Option<f32> {
+        let available = (viewport_width - 280.).max(0.);
+        let minimum = 13.75 * rem_size;
+        if self.collapsed || available < minimum {
+            return None;
+        }
+        Some(
+            self.width
+                .unwrap_or(20. * rem_size)
+                .clamp(minimum, 35. * rem_size)
+                .min(available),
+        )
+    }
+
+    fn snapped_width(width: f32, rem_size: f32) -> f32 {
+        if width / rem_size < 21.25 {
+            25. * rem_size
+        } else {
+            18.75 * rem_size
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SidebarState;
+
+    #[test]
+    fn sidebar_preserves_canvas_and_restores_requested_width() {
+        let state = SidebarState {
+            width: Some(560.),
+            collapsed: false,
+        };
+        assert_eq!(state.width_for_viewport(600., 16.), Some(320.));
+        assert_eq!(state.width_for_viewport(499., 16.), None);
+        assert_eq!(state.width_for_viewport(1200., 16.), Some(560.));
+    }
+
+    #[test]
+    fn sidebar_geometry_and_snap_follow_interface_zoom() {
+        let state = SidebarState::default();
+        assert_eq!(state.width_for_viewport(1200., 20.), Some(400.));
+        assert_eq!(SidebarState::snapped_width(400., 20.), 500.);
+        assert_eq!(SidebarState::snapped_width(500., 20.), 375.);
+        let collapsed = SidebarState {
+            collapsed: true,
+            ..Default::default()
+        };
+        assert_eq!(collapsed.width_for_viewport(1200., 20.), None);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DockTab {
@@ -48,6 +111,10 @@ impl EditorView {
             self.anim.replay = None;
         }
         self.sidebar_tab = tab;
+        self.sidebar_layout.collapsed = false;
+        if tab == SidebarTab::Info {
+            self.panels.info = true;
+        }
         self.presets.open = tab == SidebarTab::BrushPresets;
         self.sidebar_menu = false;
         self.menu = None;
@@ -59,28 +126,83 @@ impl EditorView {
         p: &Palette,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        self.layer_panel.compact = f32::from(window.viewport_size().height) < 700.;
+    ) -> AnyElement {
+        let compact = crate::app_state::settings(cx).compact_chrome;
+        let rem_size = f32::from(window.rem_size());
+        let visible_width = self
+            .sidebar_layout
+            .width_for_viewport(f32::from(window.viewport_size().width), rem_size);
+        let sidebar_width = visible_width.unwrap_or(20. * rem_size);
+        self.layer_panel.compact = compact || f32::from(window.viewport_size().height) < 700.;
+        if compact && visible_width.is_none() {
+            return div()
+                .id("sidebar-collapsed")
+                .flex()
+                .flex_col()
+                .flex_none()
+                .w(rems(1.875))
+                .h_full()
+                .border_l_1()
+                .border_color(p.line)
+                .bg(p.panel)
+                .child(
+                    Button::new("sidebar-expand")
+                        .ghost()
+                        .xsmall()
+                        .label("‹")
+                        .accessibility_label("Expand sidebar")
+                        .tooltip("Expand sidebar")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sidebar_layout.collapsed = false;
+                            cx.notify();
+                        })),
+                )
+                .children(
+                    [
+                        (SidebarTab::Info, "I", "Info"),
+                        (SidebarTab::Properties, "P", "Properties"),
+                        (SidebarTab::Adjustments, "A", "Adjustments"),
+                        (SidebarTab::History, "H", "History"),
+                        (SidebarTab::Reference, "R", "Reference"),
+                    ]
+                    .into_iter()
+                    .map(|(tab, label, title)| {
+                        Button::new(("sidebar-rail", tab as usize))
+                            .ghost()
+                            .xsmall()
+                            .label(label)
+                            .accessibility_label(title)
+                            .tooltip(title)
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.select_sidebar(tab, cx)),
+                            )
+                    }),
+                )
+                .test_support()
+                .into_any_element();
+        }
         let dock_bounds = self.layer_panel.dock_bounds.clone();
         let tabs = div()
             .flex()
             .flex_none()
-            .h(px(34.))
+            .h(if compact { rems(1.625) } else { rems(2.125) })
             .border_t_1()
             .border_b_1()
             .border_color(p.line)
             .children(
                 [
-                    (SidebarTab::History, "sidebar-history-top", "History"),
+                    (SidebarTab::Info, "sidebar-info-top", "Info"),
                     (SidebarTab::Properties, "sidebar-properties", "Properties"),
                     (
                         SidebarTab::Adjustments,
                         "sidebar-adjustments",
                         "Adjustments",
                     ),
+                    (SidebarTab::History, "sidebar-history-top", "History"),
                     (SidebarTab::Reference, "sidebar-reference", "Reference"),
                 ]
                 .into_iter()
+                .filter(|(tab, _, _)| compact || *tab != SidebarTab::Info)
                 .map(|(tab, id, title)| {
                     let active = self.sidebar_tab == tab;
                     div()
@@ -106,13 +228,36 @@ impl EditorView {
                             transparent_black()
                         })
                         .cursor_pointer()
-                        .child(title)
+                        .child(if compact {
+                            match tab {
+                                SidebarTab::Properties => "Props",
+                                SidebarTab::Adjustments => "Adjust",
+                                SidebarTab::Reference => "Ref",
+                                _ => title,
+                            }
+                        } else {
+                            title
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.select_sidebar(tab, cx);
                         }))
                         .test_support()
                 }),
-            );
+            )
+            .when(compact, |d| {
+                d.child(
+                    Button::new("sidebar-collapse")
+                        .ghost()
+                        .xsmall()
+                        .label("›")
+                        .accessibility_label("Collapse sidebar")
+                        .tooltip("Collapse sidebar")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sidebar_layout.collapsed = true;
+                            cx.notify();
+                        })),
+                )
+            });
         let content = match self.sidebar_tab {
             SidebarTab::BlendingOptions => self.blending_options_panel(p, cx),
             SidebarTab::BrushSettings => self.brush_settings_panel(p, cx),
@@ -179,6 +324,7 @@ impl EditorView {
             .flex_none()
             .gap_1()
             .p_1()
+            .when(compact, |d| d.h(rems(1.625)).p_0().gap_0())
             .border_b_1()
             .border_color(p.line)
             .children(
@@ -192,6 +338,7 @@ impl EditorView {
                     chip(id, title, self.dock_tab == tab, p)
                         .aria_selected(self.dock_tab == tab)
                         .flex_1()
+                        .when(compact, |d| d.min_h_0().h_full().py_0().border_0())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.dock_tab = tab;
                             this.menu = None;
@@ -208,10 +355,12 @@ impl EditorView {
         };
         div()
             .id("node-panel")
+            .relative()
             .flex()
             .flex_none()
             .flex_col()
             .w(dim::NODE_PANEL_W)
+            .when(compact, |d| d.w(px(sidebar_width)))
             .min_h_0()
             .border_l_1()
             .border_color(p.line)
@@ -277,7 +426,11 @@ impl EditorView {
                     .flex_none()
                     .h(px(
                         if self.layer_panel.compact && !self.layer_panel.controls_open {
-                            self.layer_panel.compact_height.unwrap_or(260.)
+                            self.layer_panel.compact_height.unwrap_or(if compact {
+                                240.
+                            } else {
+                                260.
+                            })
                         } else {
                             self.layers_h
                         },
@@ -302,7 +455,41 @@ impl EditorView {
                     .child(dock_content)
                     .test_support(),
             )
+            .when(compact, |d| {
+                let accent = p.accent;
+                d.child(crate::widgets::tip(
+                    div()
+                        .id("sidebar-width-resize")
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(rems(0.25))
+                        .cursor(CursorStyle::ResizeLeftRight)
+                        .hover(move |s| s.bg(accent.opacity(0.25)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                if e.click_count == 2 {
+                                    this.sidebar_layout.width =
+                                        Some(SidebarState::snapped_width(sidebar_width, rem_size));
+                                    this.drag = None;
+                                } else {
+                                    this.drag = Some(Drag::SidebarResize {
+                                        start_x: e.position.x,
+                                        start_w: sidebar_width,
+                                    });
+                                }
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        )
+                        .test_support(),
+                    "Drag to resize sidebar; double-click to snap between narrow and wide",
+                ))
+            })
             .test_support()
+            .into_any_element()
     }
 
     fn paths_panel(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {

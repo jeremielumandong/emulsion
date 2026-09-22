@@ -465,6 +465,28 @@ impl EditorView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        self.render_tool_rail(None, p, cx)
+    }
+
+    /// Compact tools wrap within the available length, expressed in rem units.
+    pub(crate) fn compact_tool_rail(
+        &mut self,
+        horizontal: bool,
+        available_length: f32,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        self.render_tool_rail(Some((horizontal, available_length)), p, cx)
+    }
+
+    fn render_tool_rail(
+        &mut self,
+        compact_layout: Option<(bool, f32)>,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let compact = compact_layout.is_some();
+        let horizontal = compact_layout.is_some_and(|(horizontal, _)| horizontal);
         let (ink, accent, panel, line) = (p.ink, p.accent, p.panel, p.line);
         let selected_bg = ink.opacity(0.10);
         let hover_bg = ink.opacity(0.06);
@@ -479,23 +501,37 @@ impl EditorView {
             .flex_col()
             .min_h_0()
             .items_center()
-            .w(dim::TOOL_RAIL_W)
-            .border_r_1()
+            .when(!compact, |d| d.w(dim::TOOL_RAIL_W).border_r_1())
             .border_color(p.line);
         // Keep every tool at its normal target size on short windows. Flyouts
         // are deferred, so they paint outside this scrolling content mask.
         let mut tools = div()
             .id("tool-rail-scroll")
             .flex()
-            .flex_col()
-            .flex_1()
             .min_h_0()
-            .w_full()
             .items_center()
-            .py(px(8.))
-            .gap(px(2.))
-            .overflow_y_scroll();
+            .when(!compact, |d| {
+                d.flex_col()
+                    .flex_1()
+                    .w_full()
+                    .py(px(8.))
+                    .gap(px(2.))
+                    .overflow_y_scroll()
+            });
         let groups = self.rail_groups();
+        if let Some((horizontal, available_length)) = compact_layout {
+            let slots =
+                (((available_length + 0.125) / 1.875).floor() as usize).clamp(1, groups.len());
+            let tracks = groups.len().div_ceil(slots);
+            let length = rems(slots as f32 * 1.875 - 0.125);
+            let breadth = rems(tracks as f32 * 1.875 - 0.125);
+            tools = tools
+                .flex_none()
+                .flex_wrap()
+                .gap(rems(0.125))
+                .when(horizontal, |d| d.flex_row().w(length).h(breadth))
+                .when(!horizontal, |d| d.flex_col().h(length).w(breadth));
+        }
         for (g, group) in groups.iter().enumerate() {
             let shown = self.rail_shown(g);
             let it = group[shown];
@@ -539,9 +575,7 @@ impl EditorView {
                             cx.notify();
                         }
                     }))
-                    .absolute()
-                    .left(dim::TOOL_BTN_W)
-                    .top_0()
+                    .when(!compact, |d| d.absolute().left(dim::TOOL_BTN_W).top_0())
                     .flex()
                     .flex_col()
                     .min_w(px(200.))
@@ -625,8 +659,8 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .w(dim::TOOL_BTN_W)
-                    .h(BTN_H)
+                    .when(compact, |d| d.size(rems(1.75)))
+                    .when(!compact, |d| d.w(dim::TOOL_BTN_W).h(BTN_H))
                     .flex_none()
                     .border_1()
                     // The active tool in the accent, as the nav's active
@@ -670,11 +704,12 @@ impl EditorView {
                     .tooltip(move |w, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
                     })
-                    .child(tool_icon(it.glyph).size(px(18.)).text_color(if on {
-                        accent_fg
-                    } else {
-                        ink
-                    }))
+                    .child(
+                        tool_icon(it.glyph)
+                            .when(compact, |icon| icon.size(rems(1.0625)))
+                            .when(!compact, |icon| icon.size(px(18.)))
+                            .text_color(if on { accent_fg } else { ink }),
+                    )
                     .when(has_more, |d| {
                         // Corner mark: this slot holds more tools (right-click).
                         d.child(
@@ -690,6 +725,7 @@ impl EditorView {
                                 .w(px(16.))
                                 .h(px(16.))
                                 .text_size(px(8.))
+                                .when(compact, |d| d.size(rems(0.75)).text_size(rems(0.375)))
                                 .text_color(ink.opacity(0.65))
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -719,7 +755,19 @@ impl EditorView {
                         .size_full()
                     }))
                     // Painted after the canvas, so the list is not covered.
-                    .children(list.map(|l| deferred(l).with_priority(1)))
+                    .children(list.map(|list| {
+                        let list = if compact {
+                            div()
+                                .absolute()
+                                .when(horizontal, |d| d.left_0().top(rems(1.75)))
+                                .when(!horizontal, |d| d.left(rems(1.75)).top_0())
+                                .child(anchored().snap_to_window().child(list))
+                                .into_any_element()
+                        } else {
+                            list.into_any_element()
+                        };
+                        deferred(list).with_priority(1)
+                    }))
                     .test_support(),
             );
             let dividers = if self.draw_mode {
@@ -727,19 +775,21 @@ impl EditorView {
             } else {
                 DIVIDERS
             };
-            if dividers.contains(&g) && g + 1 < groups.len() {
+            if !compact && dividers.contains(&g) && g + 1 < groups.len() {
                 tools = tools.child(div().h(px(3.)).flex_none());
             }
         }
         rail.child(tools.test_support())
-            .child(
-                div()
-                    .id("tool-rail-swatches")
-                    .flex_none()
-                    .py(px(8.))
-                    .child(self.swatches(p, cx))
-                    .test_support(),
-            )
+            .when(!compact, |d| {
+                d.child(
+                    div()
+                        .id("tool-rail-swatches")
+                        .flex_none()
+                        .py(px(8.))
+                        .child(self.swatches(p, cx))
+                        .test_support(),
+                )
+            })
             .test_support()
     }
 }

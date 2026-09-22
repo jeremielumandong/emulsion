@@ -60,6 +60,10 @@ fn history_and_paths_docks_work_without_changing_the_document(cx: &mut TestAppCo
 #[gpui_kit::test]
 fn editor_keeps_tools_left_layers_right_and_options_above_canvas(cx: &mut TestAppContext) {
     let (_ws, cx) = open(cx, doc(&["Photo", "Paint", "Details"], None));
+    cx.update(|window, cx| {
+        cx.global_mut::<AppSettings>().0.compact_chrome = false;
+        window.refresh();
+    });
     for (width, height) in [(1000., 720.), (800., 600.), (720., 540.)] {
         cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height)));
         cx.run_until_parked();
@@ -116,8 +120,175 @@ fn editor_keeps_tools_left_layers_right_and_options_above_canvas(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
+fn compact_editor_gives_canvas_more_room_and_contains_toolbars(cx: &mut TestAppContext) {
+    let (_ws, cx) = open(cx, doc(&["Photo", "Paint", "Details"], None));
+    for (width, height) in [(800., 600.), (1000., 720.), (1440., 900.)] {
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height)));
+        cx.update(|window, cx| {
+            cx.global_mut::<AppSettings>().0.compact_chrome = false;
+            window.refresh();
+        });
+        cx.run_until_parked();
+        let legacy_canvas = cx.update(|window, _| window.find("editor-canvas-column").bounds());
+        cx.update(|window, cx| {
+            cx.global_mut::<AppSettings>().0.compact_chrome = true;
+            window.refresh();
+        });
+        cx.run_until_parked();
+        let expanded = cx.update(|window, _| {
+            let header = window.find("editor-document-bar").bounds();
+            assert!(header.size.height <= gpui_kit::px(32.));
+            let canvas = window.find("editor-canvas-column").bounds();
+            assert!(canvas.size.width > legacy_canvas.size.width);
+            assert!(canvas.size.height > legacy_canvas.size.height);
+            for name in ["tools", "options", "view", "color"] {
+                let toolbar = window
+                    .find(gpui_kit::SharedString::from(format!(
+                        "canvas-toolbar-{name}"
+                    )))
+                    .bounds();
+                assert!(toolbar.size.width > gpui_kit::px(0.));
+                assert!(toolbar.size.height > gpui_kit::px(0.));
+                assert!(
+                    toolbar.origin.x >= canvas.origin.x,
+                    "{name} at {width}×{height}"
+                );
+                assert!(
+                    toolbar.origin.y >= canvas.origin.y,
+                    "{name} at {width}×{height}"
+                );
+                assert!(
+                    toolbar.right() <= canvas.right() + gpui_kit::px(1.),
+                    "{name}: {toolbar:?}, canvas: {canvas:?}"
+                );
+                assert!(
+                    toolbar.bottom() <= canvas.bottom() + gpui_kit::px(1.),
+                    "{name}: {toolbar:?}, canvas: {canvas:?}"
+                );
+            }
+            canvas
+        });
+        cx.update(|window, cx| window.click("sidebar-collapse", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let canvas = window.find("editor-canvas-column").bounds();
+            assert!(canvas.size.width > expanded.size.width + gpui_kit::px(100.));
+            assert!(window.find("sidebar-expand").visible());
+            window.click("sidebar-expand", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            assert_eq!(window.find("editor-canvas-column").bounds(), expanded);
+            assert!(window.find(("row", 3u64)).visible());
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn compact_toolbars_restore_and_presets_preserve_document(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(900.)));
+    cx.update(|window, cx| {
+        cx.global_mut::<AppSettings>().0.compact_chrome = true;
+        window.refresh();
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("toolbar-close-tools", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("canvas-toolbar-tools").is_none());
+        if window.try_find("compact-layout-trigger").is_some() {
+            window.click("compact-layout-trigger", cx);
+        }
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("toolbar-toggle-tools", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("canvas-toolbar-tools").visible());
+        window.click("layout-preset-minimal", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("canvas-toolbar-tools").visible());
+        for name in ["options", "view", "color"] {
+            assert!(
+                window
+                    .try_find(gpui_kit::SharedString::from(format!(
+                        "canvas-toolbar-{name}"
+                    )))
+                    .is_none()
+            );
+        }
+        assert!(window.find("sidebar-expand").visible());
+        window.click("layout-reset", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        for name in ["tools", "options", "view", "color"] {
+            assert!(
+                window
+                    .find(gpui_kit::SharedString::from(format!(
+                        "canvas-toolbar-{name}"
+                    )))
+                    .visible()
+            );
+        }
+        assert!(window.find("sidebar-collapse").visible());
+        let editor = ws.read(cx).editor.as_ref().unwrap().read(cx);
+        assert_eq!(editor.editor.doc, original);
+        assert_eq!(editor.editor.history.len(), 0);
+    });
+}
+
+#[gpui_kit::test]
+fn compact_tool_grip_docks_with_arrow_keys(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(720.)));
+    cx.update(|window, cx| {
+        cx.global_mut::<AppSettings>().0.compact_chrome = true;
+        window.refresh();
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("toolbar-grip-tools", cx));
+    cx.simulate_keystrokes("right");
+    cx.run_until_parked();
+    cx.update(|window, _| {
+        let canvas = window.find("editor-canvas-column").bounds();
+        let tools = window.find("canvas-toolbar-tools").bounds();
+        assert!(tools.origin.x > canvas.center().x);
+        assert!(tools.right() <= canvas.right());
+    });
+    cx.simulate_keystrokes("up");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let canvas = window.find("editor-canvas-column").bounds();
+        let tools = window.find("canvas-toolbar-tools").bounds();
+        assert!(tools.size.width > tools.size.height);
+        assert!(tools.origin.y < canvas.origin.y + gpui_kit::px(20.));
+        assert!(tools.right() <= canvas.right());
+        assert_eq!(
+            ws.read(cx)
+                .editor
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .editor
+                .history
+                .len(),
+            0
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn grouped_tools_remain_clickable_outside_the_scrolling_rail(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.update(|window, cx| {
+        cx.global_mut::<AppSettings>().0.compact_chrome = false;
+        window.refresh();
+    });
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(800.), gpui_kit::px(600.)));
     cx.run_until_parked();
     for _ in 0..2 {

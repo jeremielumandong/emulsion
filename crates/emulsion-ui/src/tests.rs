@@ -176,6 +176,9 @@ fn open_with(
         actions::bind(cx);
         cx.set_global(AppSettings(Settings {
             jev_api_key: None,
+            // Most established interaction tests target the roomy layout;
+            // compact layout has its own focused integration coverage.
+            compact_chrome: false,
             ..Settings::default()
         }));
         cx.set_global(Capabilities { cli });

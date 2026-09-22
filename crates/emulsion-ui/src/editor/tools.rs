@@ -3013,6 +3013,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let track = self.tracks.entry(key).or_default().clone();
+        let compact = crate::app_state::settings(cx).compact_chrome;
         div()
             .flex()
             .items_center()
@@ -3020,7 +3021,7 @@ impl EditorView {
             .flex_none()
             .child(div().child(name.to_string()))
             .child(
-                div().w(px(84.)).child(
+                div().w(if compact { rems(4.) } else { rems(5.25) }).child(
                     slider(
                         SharedString::from(format!("{key:?}")),
                         norm,
@@ -3047,7 +3048,12 @@ impl EditorView {
                     .test_support(),
                 ),
             )
-            .child(div().w(px(40.)).text_color(p.ink).child(display))
+            .child(
+                div()
+                    .w(if compact { rems(2.) } else { rems(2.5) })
+                    .text_color(p.ink)
+                    .child(display),
+            )
             .into_any_element()
     }
 
@@ -3586,6 +3592,13 @@ impl EditorView {
                             })
                             .into_any_element(),
                     );
+                    // In the floating bar, spend available space on brush
+                    // values before commands that open other panels.
+                    let panel_commands = if crate::app_state::settings(cx).compact_chrome {
+                        std::mem::take(&mut v)
+                    } else {
+                        Vec::new()
+                    };
                     v.push(self.opt_slider(
                         SliderKey::ToolSize,
                         "size",
@@ -3615,6 +3628,7 @@ impl EditorView {
                             cx,
                         ));
                     }
+                    v.extend(panel_commands);
                     // What is switched on in the advanced row, at a glance.
                     let mut on: Vec<&str> = Vec::new();
                     if self.tools.mirror_x || self.tools.mirror_y {

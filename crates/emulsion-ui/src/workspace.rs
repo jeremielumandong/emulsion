@@ -8,6 +8,9 @@ use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Node, NodeKind};
 use emulsion_io::recent::{self, Recent};
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::{Selectable, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::HashMap;
@@ -31,6 +34,7 @@ pub struct Workspace {
     /// Every open document, in tab order.
     pub tabs: Vec<Entity<EditorView>>,
     pub recents: Vec<Recent>,
+    pub(crate) home_state: crate::home::HomeState,
     pub(crate) thumbs: HashMap<PathBuf, crate::home::GalleryThumbnail>,
     pub(crate) thumbs_loading: HashMap<PathBuf, u64>,
     pub(crate) thumb_generation: u64,
@@ -162,6 +166,7 @@ impl Workspace {
             editor: None,
             tabs: Vec::new(),
             recents: Vec::new(),
+            home_state: Default::default(),
             recovered: Vec::new(),
             thumbs: HashMap::new(),
             thumbs_loading: HashMap::new(),
@@ -377,6 +382,180 @@ impl Workspace {
             );
         }
         Some(row.into_any_element())
+    }
+
+    fn compact_app_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = theme::palette(cx);
+        let workspace = cx.entity().downgrade();
+        Button::new("compact-app-menu")
+            .label("E")
+            .tooltip("Emulsion menu")
+            .xsmall()
+            .ghost()
+            .rounded_none()
+            .text_color(p.ink)
+            .dropdown_menu(move |mut menu, _, _| {
+                menu = menu
+                    .menu("New document…", Box::new(NewDocument))
+                    .menu("Open…", Box::new(Open))
+                    .separator();
+                for (label, screen) in [
+                    ("Home", Screen::Home),
+                    ("Batch", Screen::Batch),
+                    ("Settings", Screen::Settings),
+                    ("About", Screen::About),
+                ] {
+                    let workspace = workspace.clone();
+                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                        workspace
+                            .update(cx, |this, cx| {
+                                this.cancel_style_dialog(window, cx);
+                                this.screen = screen;
+                                if screen == Screen::Batch {
+                                    this.refresh_batch_recipes(cx);
+                                }
+                                cx.notify();
+                            })
+                            .ok();
+                    }));
+                }
+                menu.separator().menu("Toggle theme", Box::new(ToggleTheme))
+            })
+            .into_any_element()
+    }
+
+    /// Navigation and document tabs share the compact editor's single header.
+    fn compact_tabs(&self, cx: &mut Context<Self>) -> (AnyElement, AnyElement) {
+        let p = theme::palette(cx);
+        let app_menu = self.compact_app_menu(cx);
+        let home = Button::new("compact-home")
+            .label("← Home")
+            .tooltip("Back to Home (Esc)")
+            .xsmall()
+            .outline()
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.cancel_style_dialog(window, cx);
+                this.screen = Screen::Home;
+                cx.notify();
+            }));
+        let navigation = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(app_menu)
+            .child(home);
+        let mut tabs = div()
+            .id("compact-document-tabs")
+            .flex()
+            .flex_1()
+            .items_center()
+            .min_w(rems(14.375))
+            .overflow_x_scroll()
+            .gap_1();
+        for (i, editor) in self.tabs.iter().enumerate() {
+            let view = editor.read(cx);
+            let name = view.name.clone();
+            let dirty = view.editor.is_modified();
+            let active = self.editor.as_ref() == Some(editor);
+            let id = editor.entity_id();
+            tabs = tabs.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .flex_shrink_0()
+                    .max_w(rems(9.375))
+                    .border_b_1()
+                    .border_color(if active { p.accent } else { p.line })
+                    .bg(if active { p.panel } else { p.paper })
+                    .child(
+                        Button::new(("compact-document", id))
+                            .label(format!("{name}{}", if dirty { " •" } else { "" }))
+                            .tooltip(name)
+                            .xsmall()
+                            .ghost()
+                            .rounded_none()
+                            .selected(active)
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(if active { p.ink } else { p.muted })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.activate_tab(i, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new(("compact-document-close", id))
+                            .label("×")
+                            .tooltip("Close document (Ctrl-W)")
+                            .xsmall()
+                            .ghost()
+                            .rounded_none()
+                            .text_color(p.muted)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_tab(i, window, cx)
+                            })),
+                    ),
+            );
+        }
+        let tabs = div()
+            .flex()
+            .flex_1()
+            .items_center()
+            .min_w_0()
+            .gap_1()
+            .child(tabs)
+            .child(
+                Button::new("compact-new-document")
+                    .label("+")
+                    .tooltip("New document (Ctrl-N)")
+                    .xsmall()
+                    .ghost()
+                    .rounded_none()
+                    .text_color(p.muted)
+                    .on_click(cx.listener(|this, _, window, cx| this.new_document(window, cx))),
+            )
+            .when(self.tabs.len() > 3, |row| {
+                let workspace = cx.entity().downgrade();
+                let count = self.tabs.len();
+                row.child(
+                    Button::new("compact-all-documents")
+                        .label(format!("{count} ⌄"))
+                        .tooltip("All open documents")
+                        .xsmall()
+                        .outline()
+                        .dropdown_menu(move |mut menu, _, cx| {
+                            let Some(workspace) = workspace.upgrade() else {
+                                return menu;
+                            };
+                            let tabs = workspace.read(cx).tabs.clone();
+                            for (i, editor) in tabs.iter().enumerate() {
+                                let view = editor.read(cx);
+                                let dimensions =
+                                    format!("{}×{}", view.editor.doc.width, view.editor.doc.height);
+                                let label = format!(
+                                    "{}{}  {}",
+                                    view.name,
+                                    if view.editor.is_modified() {
+                                        " •"
+                                    } else {
+                                        ""
+                                    },
+                                    dimensions
+                                );
+                                let workspace = workspace.downgrade();
+                                menu = menu.item(PopupMenuItem::new(label).on_click(
+                                    move |_, window, cx| {
+                                        workspace
+                                            .update(cx, |this, cx| this.activate_tab(i, window, cx))
+                                            .ok();
+                                    },
+                                ));
+                            }
+                            menu
+                        }),
+                )
+            })
+            .into_any_element();
+        (navigation.into_any_element(), tabs)
     }
 
     /// Run `then` now, or after the user agrees to drop unsaved changes.
@@ -1125,7 +1304,36 @@ impl Render for Workspace {
                 ),
             );
         let compact = crate::app_state::settings(cx).compact_chrome;
-        let top = self.top_bar(cx);
+        let compact_editor = compact && self.screen == Screen::Editor && self.editor.is_some();
+        let compact_home = compact && self.screen == Screen::Home;
+        let top = if compact_editor {
+            let (navigation, tabs) = self.compact_tabs(cx);
+            let editor = self.editor.as_ref().unwrap().clone();
+            let header = editor.update(cx, |editor, cx| {
+                editor.compact_header(navigation, tabs, &p, window, cx)
+            });
+            gpui_kit::component::TitleBar::new()
+                .h(rems(1.875))
+                .when(!cfg!(target_os = "macos"), |bar| bar.pl_1())
+                .bg(p.paper)
+                .border_color(p.line)
+                .on_close_window(|_, window, cx| window.dispatch_action(Box::new(Quit), cx))
+                .child(header)
+                .into_any_element()
+        } else if compact_home {
+            let navigation = self.compact_app_menu(cx);
+            let header = self.home_header(navigation, window, cx);
+            gpui_kit::component::TitleBar::new()
+                .h(rems(1.875))
+                .when(!cfg!(target_os = "macos"), |bar| bar.pl_1())
+                .bg(p.paper)
+                .border_color(p.line)
+                .on_close_window(|_, window, cx| window.dispatch_action(Box::new(Quit), cx))
+                .child(header)
+                .into_any_element()
+        } else {
+            self.top_bar(cx).into_any_element()
+        };
         let banner = self.banner(cx);
         let body: AnyElement = match (self.screen, &self.editor) {
             (Screen::Editor, Some(e)) => div()
@@ -1133,7 +1341,7 @@ impl Render for Workspace {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .children(self.tab_strip(cx))
+                .when(!compact_editor, |body| body.children(self.tab_strip(cx)))
                 .child(e.clone())
                 .into_any_element(),
             (Screen::Settings, _) => self.settings_screen(window, cx).into_any_element(),
@@ -1542,7 +1750,10 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
-            .children((!compact).then_some(title_bar))
+            .children(
+                (!(compact_editor || compact_home) && (!compact || !cfg!(target_os = "linux")))
+                    .then_some(title_bar),
+            )
             .child(top)
             .children(banner)
             .child(body)
@@ -1591,5 +1802,78 @@ pub(crate) fn recovered_name(p: &Path) -> String {
         parts[0].to_string()
     } else {
         stem
+    }
+}
+
+#[cfg(test)]
+mod compact_tests {
+    use super::*;
+    use crate::app_state::{AppSettings, Capabilities, CliStatus};
+    use core::prelude::v1::test;
+    use emulsion_io::settings::Settings;
+    use gpui_kit::component::Root;
+    use gpui_kit::test::TestWindowExt;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[gpui_kit::test]
+    fn compact_document_tabs_switch_and_close_through_pointer_input(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+            theme::install(cx);
+            crate::actions::bind(cx);
+            cx.set_global(AppSettings(Settings {
+                compact_chrome: true,
+                ..Settings::default()
+            }));
+            cx.set_global(Capabilities {
+                cli: CliStatus::Missing,
+            });
+        });
+        let slot = Rc::new(RefCell::new(None));
+        let installed = slot.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let workspace = cx.new(|cx| Workspace::new(window, cx));
+            workspace.update(cx, |workspace, cx| {
+                workspace.splash = false;
+                for name in ["First", "Second"] {
+                    workspace.install(
+                        Document::new(64, 64),
+                        None,
+                        None,
+                        None,
+                        name.into(),
+                        window,
+                        cx,
+                    );
+                }
+            });
+            *installed.borrow_mut() = Some(workspace.clone());
+            Root::new(workspace, window, cx)
+        });
+        let workspace = slot.borrow().clone().unwrap();
+        cx.run_until_parked();
+        let first = cx.update(|_, cx| workspace.read(cx).tabs[0].clone());
+        cx.update(|window, cx| window.click(("compact-document", first.entity_id()), cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(workspace.read(cx).editor.as_ref(), Some(&first)));
+
+        cx.update(|window, cx| window.click(("compact-document-close", first.entity_id()), cx));
+        cx.run_until_parked();
+        let last = cx.update(|_, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.tabs.len(), 1);
+            assert_eq!(workspace.editor.as_ref(), workspace.tabs.first());
+            workspace.tabs[0].clone()
+        });
+        cx.update(|window, cx| window.click(("compact-document-close", last.entity_id()), cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let workspace = workspace.read(cx);
+            assert!(workspace.tabs.is_empty());
+            assert!(workspace.editor.is_none());
+            assert_eq!(workspace.screen, Screen::Home);
+        });
     }
 }
