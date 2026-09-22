@@ -86,6 +86,37 @@ pub(super) fn label_color(label: LayerColor, p: &Palette) -> Hsla {
 }
 
 impl EditorView {
+    pub(crate) fn cycle_blend_mode(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let ids = self.selected_layer_ids();
+        let Some(current) = self
+            .selected
+            .and_then(|id| self.editor.doc.node(id))
+            .map(|node| node.blend)
+        else {
+            return;
+        };
+        let group_only = ids
+            .iter()
+            .all(|id| self.editor.doc.node(*id).is_some_and(Node::is_group));
+        let modes: Vec<_> = group_only
+            .then_some(BlendMode::PassThrough)
+            .into_iter()
+            .chain(BlendMode::MENU.iter().flatten().copied())
+            .collect();
+        let index = modes.iter().position(|mode| *mode == current).unwrap_or(0);
+        let next = if forward {
+            modes[(index + 1) % modes.len()]
+        } else {
+            modes[(index + modes.len() - 1) % modes.len()]
+        };
+        let commands = ids
+            .into_iter()
+            .map(|id| Command::SetBlend { id, blend: next })
+            .collect();
+        self.close_text_field(cx);
+        self.execute_layer_commands("Layer blend mode", commands, cx);
+    }
+
     pub(super) fn ensure_layer_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.layer_panel.search.is_some() {
             return;
@@ -272,11 +303,42 @@ impl EditorView {
             .bg(p.soft_bg)
             .text_color(p.ink)
             .dropdown_menu(move |mut menu, _, _| {
-                let modes = group_only
-                    .then_some(BlendMode::PassThrough)
-                    .into_iter()
-                    .chain(BlendMode::MENU.iter().flatten().copied());
-                for mode in modes {
+                if group_only {
+                    let editor = editor.clone();
+                    menu = menu
+                        .item(
+                            PopupMenuItem::new(BlendMode::PassThrough.label())
+                                .checked(!mixed_blend && current == BlendMode::PassThrough)
+                                .on_click(move |_, window, cx| {
+                                    editor
+                                        .update(cx, |this, cx| {
+                                            this.close_text_field(cx);
+                                            let commands = this
+                                                .selected_layer_ids()
+                                                .into_iter()
+                                                .map(|id| Command::SetBlend {
+                                                    id,
+                                                    blend: BlendMode::PassThrough,
+                                                })
+                                                .collect();
+                                            this.execute_layer_commands(
+                                                "Layer blend mode",
+                                                commands,
+                                                cx,
+                                            );
+                                            window.focus(&this.panel_focus, cx);
+                                        })
+                                        .ok();
+                                }),
+                        )
+                        .separator();
+                }
+                for entry in BlendMode::MENU {
+                    let Some(mode) = entry else {
+                        menu = menu.separator();
+                        continue;
+                    };
+                    let mode = *mode;
                     let editor = editor.clone();
                     menu = menu.item(
                         PopupMenuItem::new(mode.label())

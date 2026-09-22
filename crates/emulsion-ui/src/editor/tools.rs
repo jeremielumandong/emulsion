@@ -10,6 +10,9 @@ use emulsion_raster::paint::{Brush, BrushBlend, Clip, GrainKind, Ink, Stroke, fi
 use emulsion_raster::select::{self, Combine};
 use emulsion_raster::{IRect, Mask, fill};
 use glam::{DAffine2, dvec2};
+use gpui_kit::component::Sizable;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 
 #[path = "shape_fill.rs"]
 mod shape_fill;
@@ -2348,6 +2351,7 @@ impl EditorView {
         let hole = stroke.coverage();
         let base = stroke.base().clone();
         let alpha_lock = self.tools.alpha_lock;
+        let blend = stroke.brush.blend;
         // The live colored overlay belongs only to this stroke. Restore it
         // before dispatch so the worker never owns an open UI transaction.
         self.editor.cancel();
@@ -2380,7 +2384,28 @@ impl EditorView {
                         .map(|v| v as f32 / 255.0)
                         .collect();
                     let out = fill::content_aware(&img, &h, reg.w as usize, reg.h as usize, 0x4EA1);
-                    let px: Vec<[u16; 4]> = out.into_iter().zip(&img).map(|(mut pixel, prior)| {
+                    let px: Vec<[u16; 4]> = out.into_iter().zip(&img).zip(&h).enumerate().map(|(index, ((mut pixel, prior), coverage))| {
+                        let coverage = coverage.clamp(0.0, 1.0);
+                        pixel = match blend {
+                            BrushBlend::Clear => prior.map(|value| value * (1.0 - coverage)),
+                            BrushBlend::Behind => {
+                                let amount = coverage * (1.0 - prior[3]);
+                                emulsion_raster::blend::blend_px(
+                                    emulsion_raster::BlendMode::Normal,
+                                    emulsion_raster::blend::BlendSpace::Linear,
+                                    *prior,
+                                    pixel.map(|value| value * amount),
+                                    index as f32,
+                                )
+                            }
+                            _ => emulsion_raster::blend::blend_px(
+                                blend.blend_mode(),
+                                emulsion_raster::blend::BlendSpace::Linear,
+                                *prior,
+                                pixel.map(|value| value * coverage),
+                                index as f32,
+                            ),
+                        };
                         if alpha_lock {
                             if pixel[3] > 0.0 {
                                 let scale = prior[3] / pixel[3];
@@ -3534,6 +3559,34 @@ impl EditorView {
                     }
                 }
                 if self.brushy() {
+                    let current_blend = b.blend;
+                    let editor = cx.weak_entity();
+                    v.push(
+                        Button::new("brush-blend-mode")
+                            .label(format!("{} ▾", current_blend.label()))
+                            .small()
+                            .bg(p.soft_bg)
+                            .text_color(p.ink)
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for mode in BrushBlend::MENU.iter().copied() {
+                                    let editor = editor.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(mode.label())
+                                            .checked(mode == current_blend)
+                                            .on_click(move |_, _, cx| {
+                                                editor
+                                                    .update(cx, |this, cx| {
+                                                        this.tools.brush.blend = mode;
+                                                        cx.notify();
+                                                    })
+                                                    .ok();
+                                            }),
+                                    );
+                                }
+                                menu
+                            })
+                            .into_any_element(),
+                    );
                     v.push(self.opt_slider(
                         SliderKey::ToolSize,
                         "size",
@@ -4417,16 +4470,14 @@ impl EditorView {
             v.push(mono(crate::tablet::status(), 10., p.muted).into_any_element());
         }
         if self.brush_settings_section == BrushSettingsSection::Drawing {
-            for (id, t, k) in [
-                ("bl-normal", "normal", BrushBlend::Normal),
-                ("bl-mult", "multiply", BrushBlend::Multiply),
-                ("bl-behind", "behind", BrushBlend::Behind),
-            ] {
-                v.push(self.mode_chip(id, t, k, b.blend, p, cx, |e, k, cx| {
-                    e.tools.brush.blend = k;
-                    cx.notify();
-                }));
-            }
+            v.push(
+                mono(
+                    format!("blend: {} · choose it in the options bar", b.blend.label()),
+                    10.,
+                    p.muted,
+                )
+                .into_any_element(),
+            );
         }
         v
     }

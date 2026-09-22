@@ -33,6 +33,8 @@ pub(crate) fn check(command: &Command, doc: &Document) -> Result<(), CommandErro
         | Command::TranslateNode { id, .. }
         | Command::AlignNode { id, .. } => (*id, false, true, false),
         Command::SetFilters { id, .. }
+        | Command::SetFilterStyles { id, .. }
+        | Command::SetFilterStack { id, .. }
         | Command::SetSmartCache { id, .. }
         | Command::ConvertToLayers { id } => (*id, true, false, true),
         Command::Rasterize { id } => (*id, true, false, false),

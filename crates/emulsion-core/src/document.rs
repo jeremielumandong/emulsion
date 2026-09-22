@@ -488,6 +488,28 @@ impl Document {
                         clip_source.opacity = 1.0;
                         clip_source.blend = emulsion_raster::BlendMode::Normal;
                         clip_source.blending = Default::default();
+                        let effect_mask = if n.blending.layer_mask_hides_effects
+                            && node.mask.is_some()
+                        {
+                            let mut mask_node = node.clone();
+                            mask_node.opacity = 1.0;
+                            mask_node.blend = emulsion_raster::BlendMode::Normal;
+                            mask_node.blending = Default::default();
+                            mask_node.content = match &node.content {
+                                NodeContent::Pixels { raster, placement } => NodeContent::Pixels {
+                                    raster: Arc::new(emulsion_raster::Raster::solid(
+                                        raster.width(),
+                                        raster.height(),
+                                        [1.0; 4],
+                                    )),
+                                    placement: *placement,
+                                },
+                                _ => NodeContent::Fill([1.0; 4]),
+                            };
+                            Some(Box::new(mask_node))
+                        } else {
+                            None
+                        };
                         let mut children = Vec::with_capacity(fx.below.len() + fx.above.len() + 1);
                         let effect = |id, rendered: &crate::styles::RenderedEffect| {
                             let mut effect = crate::styles::effect_node(
@@ -508,11 +530,18 @@ impl Document {
                             ));
                         }
                         node.opacity = 1.0;
-                        node.blend = emulsion_raster::BlendMode::Normal;
+                        node.blend = if n.blending.blend_interior_effects_as_group {
+                            emulsion_raster::BlendMode::Normal
+                        } else {
+                            n.blend
+                        };
                         node.blending = emulsion_raster::composite::BlendingOptions {
                             fill_opacity: n.blending.fill_opacity,
                             ..Default::default()
                         };
+                        if effect_mask.is_some() {
+                            node.mask = None;
+                        }
                         children.push(node);
                         for (index, rendered) in fx.above.iter().enumerate() {
                             children.push(effect(
@@ -524,7 +553,9 @@ impl Document {
                             id: n.id,
                             visible: n.visible,
                             opacity: n.opacity,
-                            blend: if n.blend == emulsion_raster::BlendMode::PassThrough {
+                            blend: if !n.blending.blend_interior_effects_as_group
+                                || n.blend == emulsion_raster::BlendMode::PassThrough
+                            {
                                 emulsion_raster::BlendMode::Normal
                             } else {
                                 n.blend
@@ -538,6 +569,7 @@ impl Document {
                             content: NodeContent::StyledGroup {
                                 children,
                                 clip_source: Box::new(clip_source),
+                                effect_mask,
                             },
                         };
                     }

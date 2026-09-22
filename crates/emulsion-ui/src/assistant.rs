@@ -255,6 +255,21 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
         ),
         "rename_node" => format!("rename {} → {}", n(), input["name"].as_str().unwrap_or("?")),
         "set_opacity" => format!("{} opacity {}%", n(), input["opacity"]),
+        "set_blending_options" => format!("edit blending on {}", n()),
+        "set_style_blending" => format!("edit effect {} blending on {}", input["index"], n()),
+        "set_blend_space" => format!(
+            "document blending: {}",
+            input["space"].as_str().unwrap_or("?")
+        ),
+        "set_effects_enabled" => format!(
+            "{} effects on {}",
+            if input["enabled"] == true {
+                "show"
+            } else {
+                "hide"
+            },
+            n()
+        ),
         "set_blend_mode" => format!("{} → {}", n(), input["mode"].as_str().unwrap_or("?")),
         "move_node" => format!("move {}", n()),
         "group_nodes" => format!(

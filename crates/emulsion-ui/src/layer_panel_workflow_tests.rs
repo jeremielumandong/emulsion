@@ -4,6 +4,28 @@ use emulsion_core::node::LayerColor;
 use gpui_kit::test::TestWindowExt;
 
 #[gpui_kit::test]
+fn photoshop_shortcuts_cycle_selected_layer_blend_mode(cx: &mut TestAppContext) {
+    let document = doc(&["Layer"], None);
+    let id = document.nodes[0].id;
+    let (ws, cx) = open(cx, document);
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| {
+        editor.update(cx, |e, _| e.selected = Some(id));
+        window.focus(&editor.read(cx).canvas_focus, cx);
+    });
+    cx.simulate_keystrokes("shift-=");
+    assert_eq!(
+        cx.update(|_, cx| editor.read(cx).editor.doc.node(id).unwrap().blend),
+        emulsion_raster::BlendMode::Dissolve
+    );
+    cx.simulate_keystrokes("ctrl-z shift--");
+    assert_eq!(
+        cx.update(|_, cx| editor.read(cx).editor.doc.node(id).unwrap().blend),
+        emulsion_raster::BlendMode::Luminosity
+    );
+}
+
+#[gpui_kit::test]
 fn layer_search_reaches_collapsed_children_without_changing_document(cx: &mut TestAppContext) {
     let mut document = doc(&["Photo", "Title"], None);
     let title = document.nodes[1].id;

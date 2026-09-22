@@ -121,6 +121,10 @@ pub enum Command {
         id: NodeId,
         blend: BlendMode,
     },
+    /// Choose document-wide layer blend math. This is persisted and undoable.
+    SetBlendSpace {
+        space: emulsion_raster::blend::BlendSpace,
+    },
     Rename {
         id: NodeId,
         name: String,
@@ -280,6 +284,17 @@ pub enum Command {
         id: NodeId,
         filters: Vec<emulsion_filters::Filter>,
     },
+    /// Change per-filter opacity and blend modes, preserving filter settings.
+    SetFilterStyles {
+        id: NodeId,
+        styles: Vec<emulsion_filters::FilterStyle>,
+    },
+    /// Atomically replace filters and their blending options with one render.
+    SetFilterStack {
+        id: NodeId,
+        filters: Vec<emulsion_filters::Filter>,
+        styles: Vec<emulsion_filters::FilterStyle>,
+    },
     /// `SetFilters` with the stack already rendered (off the UI thread).
     SetSmartCache {
         id: NodeId,
@@ -351,6 +366,13 @@ impl Command {
             Command::SetLocked { locked, .. } => if *locked { "Lock" } else { "Unlock" }.into(),
             Command::SetOpacity { .. } => "Opacity".into(),
             Command::SetBlend { blend, .. } => format!("Blend: {}", blend.label()),
+            Command::SetBlendSpace { space } => format!(
+                "Blend space: {}",
+                match space {
+                    emulsion_raster::blend::BlendSpace::Srgb => "Photoshop / sRGB",
+                    emulsion_raster::blend::BlendSpace::Linear => "Linear light",
+                }
+            ),
             Command::Rename { name, .. } => format!("Rename to {name}"),
             Command::SetParam { key, .. } => key.replace('_', " "),
             Command::SetAdjustment { .. } => "Adjustment".into(),
@@ -432,6 +454,11 @@ impl Command {
                     None => "Filters".into(),
                 }
             }
+            Command::SetFilterStyles { .. } => "Filter blending options".into(),
+            Command::SetFilterStack { filters, .. } => match filters.last() {
+                Some(filter) => filter.label().to_string(),
+                None => "Filters".into(),
+            },
         }
     }
 
@@ -557,6 +584,7 @@ impl Command {
             }
 
             Self::SetGlobalLight { .. }
+            | Self::SetBlendSpace { .. }
             | Self::SetCollapsed { .. }
             | Self::SetSelection { .. }
             | Self::SetGuides { .. }
@@ -619,6 +647,8 @@ impl Command {
             | Self::ConvertToLayers { id }
             | Self::Rasterize { id }
             | Self::SetFilters { id, .. }
+            | Self::SetFilterStyles { id, .. }
+            | Self::SetFilterStack { id, .. }
             | Self::SetSmartCache { id, .. }
             | Self::SetStyles { id, .. }
             | Self::SetLayerEffects { id, .. }
@@ -634,6 +664,10 @@ impl Command {
         match self {
             Command::SetLayerLinks { ids, linked } => {
                 crate::layer_links::set_links(doc, ids, *linked)
+            }
+            Command::SetBlendSpace { space } => {
+                doc.blend_space = *space;
+                Ok(None)
             }
             Command::ArrangeLayers {
                 ids,
@@ -1133,6 +1167,7 @@ impl Command {
                     editable,
                     source: source.clone(),
                     filters: Vec::new(),
+                    filter_styles: Vec::new(),
                     placement,
                     cache: source,
                     offset: (0, 0),
@@ -1202,6 +1237,7 @@ impl Command {
                 let NodeKind::Smart {
                     source,
                     filters: f,
+                    filter_styles,
                     cache,
                     offset,
                     ..
@@ -1209,10 +1245,63 @@ impl Command {
                 else {
                     return Err(CommandError::NoSuchParam(*id, "filters".into()));
                 };
-                let (c, o) = crate::smart::render(source, filters);
+                filter_styles.resize(filters.len(), Default::default());
+                filter_styles.truncate(filters.len());
+                let (c, o) = crate::smart::render_styled(source, filters, filter_styles);
                 *cache = c;
                 *offset = o;
                 *f = filters.clone();
+                Ok(None)
+            }
+            Command::SetFilterStyles { id, styles } => {
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let NodeKind::Smart {
+                    source,
+                    filters,
+                    filter_styles,
+                    cache,
+                    offset,
+                    ..
+                } = &mut n.kind
+                else {
+                    return Err(CommandError::NoSuchParam(*id, "filters".into()));
+                };
+                if styles.len() != filters.len() {
+                    return Err(CommandError::NoSuchParam(*id, "filter styles".into()));
+                }
+                let styles: Vec<_> = styles.iter().copied().map(|s| s.sanitized()).collect();
+                let (rendered, off) = crate::smart::render_styled(source, filters, &styles);
+                *filter_styles = styles;
+                *cache = rendered;
+                *offset = off;
+                Ok(None)
+            }
+            Command::SetFilterStack {
+                id,
+                filters,
+                styles,
+            } => {
+                if filters.len() > 32 || filters.len() != styles.len() {
+                    return Err(CommandError::NoSuchParam(*id, "filter stack".into()));
+                }
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let NodeKind::Smart {
+                    source,
+                    filters: current,
+                    filter_styles,
+                    cache,
+                    offset,
+                    ..
+                } = &mut n.kind
+                else {
+                    return Err(CommandError::NoSuchParam(*id, "filters".into()));
+                };
+                let styles: Vec<_> = styles.iter().copied().map(|s| s.sanitized()).collect();
+                let (rendered, off) = crate::smart::render_styled(source, filters, &styles);
+                *current = filters.clone();
+                *filter_styles = styles;
+                *cache = rendered;
+                *offset = off;
                 Ok(None)
             }
             Command::SetSmartCache {
@@ -1224,6 +1313,7 @@ impl Command {
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 let NodeKind::Smart {
                     filters: f,
+                    filter_styles,
                     cache,
                     offset,
                     ..
@@ -1233,7 +1323,28 @@ impl Command {
                 };
                 *cache = rendered.clone();
                 *offset = *off;
+                let old_filters = f.clone();
+                let old_styles = filter_styles.clone();
+                let mut used = vec![false; old_filters.len()];
+                let next_styles = filters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, filter)| {
+                        let matched = old_filters
+                            .iter()
+                            .enumerate()
+                            .find(|(old, candidate)| !used[*old] && *candidate == filter)
+                            .map(|(old, _)| old);
+                        if let Some(old) = matched {
+                            used[old] = true;
+                            old_styles.get(old).copied().unwrap_or_default()
+                        } else {
+                            old_styles.get(index).copied().unwrap_or_default()
+                        }
+                    })
+                    .collect();
                 *f = filters.clone();
+                *filter_styles = next_styles;
                 Ok(None)
             }
             Command::SetPath { id, path, style } => {

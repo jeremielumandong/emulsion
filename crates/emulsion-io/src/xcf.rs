@@ -10,7 +10,7 @@
 use crate::{IoError, Result};
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Node};
-use emulsion_raster::{Placement, Raster};
+use emulsion_raster::{BlendMode, Placement, Raster};
 use std::path::Path;
 use std::sync::Arc;
 use xcf_rs::data::property::{PropertyIdentifier, PropertyPayload};
@@ -25,6 +25,73 @@ struct Props {
     offset: (i32, i32),
     opacity: f32,
     visible: bool,
+    mode: BlendMode,
+}
+
+fn mode_in(value: u32) -> BlendMode {
+    match value {
+        1 => BlendMode::Dissolve,
+        23 => BlendMode::Overlay,
+        28 => BlendMode::Normal,
+        30 => BlendMode::Multiply,
+        31 => BlendMode::Screen,
+        32 => BlendMode::Difference,
+        33 => BlendMode::LinearDodge,
+        34 => BlendMode::Subtract,
+        35 => BlendMode::Darken,
+        36 => BlendMode::Lighten,
+        37 => BlendMode::Hue,
+        38 => BlendMode::Saturation,
+        39 => BlendMode::Color,
+        41 => BlendMode::Divide,
+        42 => BlendMode::ColorDodge,
+        43 => BlendMode::ColorBurn,
+        44 => BlendMode::HardLight,
+        45 => BlendMode::SoftLight,
+        48 => BlendMode::VividLight,
+        49 => BlendMode::PinLight,
+        50 => BlendMode::LinearLight,
+        51 => BlendMode::HardMix,
+        52 => BlendMode::Exclusion,
+        53 => BlendMode::LinearBurn,
+        54 => BlendMode::DarkerColor,
+        55 => BlendMode::LighterColor,
+        56 => BlendMode::Luminosity,
+        61 => BlendMode::PassThrough,
+        _ => BlendMode::Normal,
+    }
+}
+fn mode_out(mode: BlendMode) -> Option<u32> {
+    Some(match mode {
+        BlendMode::PassThrough => 61,
+        BlendMode::Normal => 28,
+        BlendMode::Dissolve => 1,
+        BlendMode::Darken => 35,
+        BlendMode::Multiply => 30,
+        BlendMode::ColorBurn => 43,
+        BlendMode::LinearBurn => 53,
+        BlendMode::DarkerColor => 54,
+        BlendMode::Lighten => 36,
+        BlendMode::Screen => 31,
+        BlendMode::ColorDodge => 42,
+        BlendMode::LinearDodge => 33,
+        BlendMode::LighterColor => 55,
+        BlendMode::Overlay => 23,
+        BlendMode::SoftLight => 45,
+        BlendMode::HardLight => 44,
+        BlendMode::VividLight => 48,
+        BlendMode::LinearLight => 50,
+        BlendMode::PinLight => 49,
+        BlendMode::HardMix => 51,
+        BlendMode::Difference => 32,
+        BlendMode::Exclusion => 52,
+        BlendMode::Subtract => 34,
+        BlendMode::Divide => 41,
+        BlendMode::Hue => 37,
+        BlendMode::Saturation => 38,
+        BlendMode::Color => 39,
+        BlendMode::Luminosity => 56,
+    })
 }
 
 fn props(layer: &xcf_rs::data::layer::Layer) -> Props {
@@ -32,6 +99,7 @@ fn props(layer: &xcf_rs::data::layer::Layer) -> Props {
         offset: (0, 0),
         opacity: 1.0,
         visible: true,
+        mode: BlendMode::Normal,
     };
     let be_u32 = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
     for prop in &layer.properties {
@@ -39,6 +107,10 @@ fn props(layer: &xcf_rs::data::layer::Layer) -> Props {
             PropertyPayload::Unknown(b) => b,
             PropertyPayload::OffsetsLayer(x, y) => {
                 p.offset = (*x as i32, *y as i32);
+                continue;
+            }
+            PropertyPayload::ModeLayer(value) => {
+                p.mode = mode_in(*value);
                 continue;
             }
             _ => continue,
@@ -56,6 +128,7 @@ fn props(layer: &xcf_rs::data::layer::Layer) -> Props {
             PropertyIdentifier::PropVisible if raw.len() >= 4 => {
                 p.visible = be_u32(raw) != 0;
             }
+            PropertyIdentifier::PropMode if raw.len() >= 4 => p.mode = mode_in(be_u32(raw)),
             _ => {}
         }
     }
@@ -106,6 +179,7 @@ pub fn read(path: &Path) -> Result<Document> {
         );
         node.opacity = p.opacity;
         node.visible = p.visible;
+        node.blend = p.mode;
         Command::AddNode {
             node: Box::new(node),
             slot: Slot::TOP,
@@ -191,6 +265,11 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
             },
             properties: vec![
                 Property {
+                    kind: PropertyIdentifier::PropMode,
+                    length: 4,
+                    payload: PropertyPayload::ModeLayer(mode_out(n.blend).unwrap_or(28)),
+                },
+                Property {
                     kind: PropertyIdentifier::PropOffsets,
                     length: 8,
                     payload: PropertyPayload::OffsetsLayer(0, 0),
@@ -248,10 +327,24 @@ fn render_alone(doc: &Document, id: emulsion_core::NodeId) -> Raster {
         if keep.contains(&n.id) {
             if n.id == id {
                 n.opacity = 1.0;
+                n.blend = BlendMode::Normal;
             }
         } else {
             n.visible = false;
         }
     }
     emulsion_raster::composite::flatten(&d.composite_tree(), 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supported_gimp_modes_roundtrip_their_v11_ids() {
+        for mode in BlendMode::MENU.iter().flatten().copied() {
+            let id = mode_out(mode).expect("supported XCF mode");
+            assert_eq!(mode_in(id), mode, "{mode:?} id {id}");
+        }
+    }
 }

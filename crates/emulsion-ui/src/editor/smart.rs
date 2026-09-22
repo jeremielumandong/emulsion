@@ -1,7 +1,11 @@
 //! Smart layers in the panel: convert a pixel node, add and tune filters.
 
 use super::*;
-use emulsion_filters::Filter;
+use emulsion_filters::{Filter, FilterStyle};
+use emulsion_raster::BlendMode;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 
 #[derive(Default)]
 pub(crate) struct SmartUi {
@@ -161,9 +165,18 @@ impl EditorView {
             );
             return;
         }
-        let (source, convert) = match self.editor.doc.node(id).map(|n| &n.kind) {
-            Some(NodeKind::Smart { source, .. }) => (source.clone(), false),
-            Some(NodeKind::Raster { raster, .. }) => (raster.clone(), true),
+        let (source, styles, convert) = match self.editor.doc.node(id).map(|n| &n.kind) {
+            Some(NodeKind::Smart {
+                source,
+                filters: current,
+                filter_styles,
+                ..
+            }) => (
+                source.clone(),
+                aligned_filter_styles(current, filter_styles, &filters),
+                false,
+            ),
+            Some(NodeKind::Raster { raster, .. }) => (raster.clone(), Vec::new(), true),
             _ => return,
         };
         let original = self.editor.doc.node(id).cloned();
@@ -176,7 +189,9 @@ impl EditorView {
         cx.spawn(async move |this, cx| {
             let f2 = filters.clone();
             let (cache, offset) = cx
-                .background_spawn(async move { emulsion_core::smart::render(&source, &f2) })
+                .background_spawn(async move {
+                    emulsion_core::smart::render_styled(&source, &f2, &styles)
+                })
                 .await;
             let mut ready = Some((filters, cache, offset));
             loop {
@@ -258,6 +273,7 @@ impl EditorView {
         &mut self,
         id: NodeId,
         filters: &[Filter],
+        styles: &[FilterStyle],
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
@@ -301,6 +317,7 @@ impl EditorView {
             v.push(mono("no filters yet · + filter", 10., p.muted).into_any_element());
         }
         for (idx, f) in filters.iter().enumerate() {
+            let style = styles.get(idx).copied().unwrap_or_default().sanitized();
             v.push(
                 div()
                     .flex()
@@ -312,6 +329,79 @@ impl EditorView {
                     .child(chip(("filter-del", idx), "×", false, p).on_click(
                         cx.listener(move |this, _, _, cx| this.remove_filter(id, idx, cx)),
                     ))
+                    .into_any_element(),
+            );
+            let editor = cx.weak_entity();
+            v.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(mono("blending", 10., p.muted))
+                    .child(
+                        Button::new(format!("filter-blend-{id}-{idx}"))
+                            .label(format!("{} ▾", style.blend.label()))
+                            .small()
+                            .bg(p.soft_bg)
+                            .text_color(p.ink)
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for mode in BlendMode::MENU.iter().flatten().copied() {
+                                    let editor = editor.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(mode.label())
+                                            .checked(mode == style.blend)
+                                            .on_click(move |_, _, cx| {
+                                                editor
+                                                    .update(cx, |this, cx| {
+                                                        this.set_filter_style(
+                                                            id,
+                                                            idx,
+                                                            Some(mode),
+                                                            None,
+                                                            cx,
+                                                        );
+                                                    })
+                                                    .ok();
+                                            }),
+                                    );
+                                }
+                                menu
+                            }),
+                    )
+                    .child({
+                        let editor = cx.weak_entity();
+                        Button::new(format!("filter-opacity-{id}-{idx}"))
+                            .label(format!("{:.0}% ▾", style.opacity * 100.0))
+                            .small()
+                            .bg(p.soft_bg)
+                            .text_color(p.ink)
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for percent in [0_u8, 25, 50, 75, 100] {
+                                    let editor = editor.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(format!("{percent}%"))
+                                            .checked(
+                                                (style.opacity * 100.0 - percent as f32).abs()
+                                                    < 0.5,
+                                            )
+                                            .on_click(move |_, _, cx| {
+                                                editor
+                                                    .update(cx, |this, cx| {
+                                                        this.set_filter_style(
+                                                            id,
+                                                            idx,
+                                                            None,
+                                                            Some(percent as f32 / 100.0),
+                                                            cx,
+                                                        );
+                                                    })
+                                                    .ok();
+                                            }),
+                                    );
+                                }
+                                menu
+                            })
+                    })
                     .into_any_element(),
             );
             for spec in f.params() {
@@ -333,4 +423,59 @@ impl EditorView {
         }
         v
     }
+
+    fn set_filter_style(
+        &mut self,
+        id: NodeId,
+        index: usize,
+        blend: Option<BlendMode>,
+        opacity: Option<f32>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(NodeKind::Smart {
+            filters,
+            filter_styles,
+            ..
+        }) = self.editor.doc.node(id).map(|node| &node.kind)
+        else {
+            return;
+        };
+        let mut styles = filter_styles.clone();
+        styles.resize(filters.len(), FilterStyle::default());
+        let Some(style) = styles.get_mut(index) else {
+            return;
+        };
+        if let Some(blend) = blend {
+            style.blend = blend;
+        }
+        if let Some(opacity) = opacity {
+            style.opacity = opacity;
+        }
+        self.execute(Command::SetFilterStyles { id, styles }, cx);
+    }
+}
+
+fn aligned_filter_styles(
+    current: &[Filter],
+    styles: &[FilterStyle],
+    requested: &[Filter],
+) -> Vec<FilterStyle> {
+    let mut used = vec![false; current.len()];
+    requested
+        .iter()
+        .enumerate()
+        .map(|(index, filter)| {
+            let matched = current
+                .iter()
+                .enumerate()
+                .find(|(old, candidate)| !used[*old] && *candidate == filter)
+                .map(|(old, _)| old);
+            if let Some(old) = matched {
+                used[old] = true;
+                styles.get(old).copied().unwrap_or_default()
+            } else {
+                styles.get(index).copied().unwrap_or_default()
+            }
+        })
+        .collect()
 }

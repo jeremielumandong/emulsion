@@ -53,6 +53,15 @@ impl DrawingReview {
                     | "set_text"
                     | "format_text_range"
                     | "set_text_path"
+                    | "set_blend_mode"
+                    | "set_blending_options"
+                    | "set_blend_space"
+                    | "set_style_blending"
+                    | "set_effects_enabled"
+                    | "add_style"
+                    | "set_style"
+                    | "remove_style"
+                    | "set_opacity"
                     | "generate_image"
                     | "generative_fill"
             )
@@ -278,6 +287,31 @@ mod tests {
             let mut review = DrawingReview::default();
             review.observe(tool, &json!({}), &ToolResult::error("Locked"), 2, true);
             assert_eq!(review.completion(2), Completion::Finish, "{tool}");
+        }
+    }
+
+    #[test]
+    fn blending_edits_require_review_only_after_successful_changes() {
+        for tool in [
+            "set_blend_mode",
+            "set_blending_options",
+            "set_blend_space",
+            "set_style_blending",
+            "set_effects_enabled",
+            "add_style",
+            "set_style",
+            "remove_style",
+            "set_opacity",
+        ] {
+            for (changed, result, expected) in [
+                (true, ToolResult::text("Updated"), Completion::Review),
+                (false, ToolResult::text("Unchanged"), Completion::Finish),
+                (true, ToolResult::error("Locked"), Completion::Finish),
+            ] {
+                let mut review = DrawingReview::default();
+                review.observe(tool, &json!({}), &result, 3, changed);
+                assert_eq!(review.completion(3), expected, "{tool}");
+            }
         }
     }
 

@@ -8,12 +8,31 @@ use std::path::{Path, PathBuf};
 /// Where a recipe came from.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Origin {
+    /// Emulsion's own starter and camera sets.
     Starter,
+    /// The shipped community library, by collection name.
+    Library(String),
     Saved(PathBuf),
 }
 
-/// Recipes shipped with Emulsion plus those saved under `dir`, saved ones
-/// first. Unreadable files are skipped.
+impl Origin {
+    /// The collection a recipe is listed under: its library collection, or
+    /// [`EMULSION_COLLECTION`] for the built-in sets and saved recipes.
+    pub fn collection(&self) -> &str {
+        match self {
+            Origin::Library(name) => name,
+            Origin::Starter | Origin::Saved(_) => EMULSION_COLLECTION,
+        }
+    }
+}
+
+/// The collection name for Emulsion's own sets and the user's saved recipes.
+pub const EMULSION_COLLECTION: &str = "Emulsion";
+
+/// Recipes shipped with Emulsion plus those saved under `dir`: saved ones
+/// first, then the starter and camera sets, then the community library.
+/// A saved recipe hides a built-in one of the same name. Unreadable files
+/// are skipped.
 pub fn list(dir: &Path) -> Vec<(Recipe, Origin)> {
     let mut out: Vec<(Recipe, Origin)> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
@@ -31,12 +50,17 @@ pub fn list(dir: &Path) -> Vec<(Recipe, Origin)> {
             }
         }
     }
-    for r in starter_set().into_iter().chain(crate::cameras::presets()) {
+    let builtin = starter_set()
+        .into_iter()
+        .chain(crate::cameras::presets())
+        .map(|r| (r, Origin::Starter))
+        .chain(crate::library::recipes().map(|(r, c)| (r.clone(), Origin::Library(c.to_string()))));
+    for (r, origin) in builtin {
         if !out
             .iter()
             .any(|(o, _)| o.name.eq_ignore_ascii_case(&r.name))
         {
-            out.push((r, Origin::Starter));
+            out.push((r, origin));
         }
     }
     out
@@ -240,6 +264,29 @@ mod tests {
         assert!(matches!(all[0].1, Origin::Saved(_)));
         assert!(all.len() > starter_set().len());
         assert_eq!(find(&dir, "my chrome").unwrap().name, "My Chrome");
+        // Built-ins come before the library, and the library keeps its collection.
+        let first_library = all
+            .iter()
+            .position(|(_, o)| matches!(o, Origin::Library(_)))
+            .expect("library listed");
+        assert!(
+            all[..first_library]
+                .iter()
+                .all(|(_, o)| !matches!(o, Origin::Library(_)))
+        );
+        assert!(
+            all[first_library..]
+                .iter()
+                .all(|(_, o)| matches!(o, Origin::Library(_)))
+        );
+        assert_eq!(all[first_library].1.collection(), "Classic Chrome");
+        assert_eq!(all[0].1.collection(), EMULSION_COLLECTION);
+        assert_eq!(
+            find(&dir, "kodachrome 64 · x raw studio")
+                .unwrap()
+                .film_simulation,
+            "classic-chrome"
+        );
 
         let mut e = Editor::new(Document::new(64, 64), None);
         let gid = add_to(&mut e, mine.compile(None), Slot::TOP).unwrap();

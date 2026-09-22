@@ -60,8 +60,141 @@ pub enum BrushBlend {
     Normal,
     /// Darkens where strokes overlap, like a marker.
     Multiply,
+    Dissolve,
+    Darken,
+    ColorBurn,
+    LinearBurn,
+    DarkerColor,
+    Lighten,
+    Screen,
+    ColorDodge,
+    LinearDodge,
+    LighterColor,
+    Overlay,
+    SoftLight,
+    HardLight,
+    VividLight,
+    LinearLight,
+    PinLight,
+    HardMix,
+    Difference,
+    Exclusion,
+    Subtract,
+    Divide,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
     /// Only paints where the layer is transparent.
     Behind,
+    /// Remove pixels using the brush coverage.
+    Clear,
+}
+
+impl BrushBlend {
+    pub const MENU: &'static [BrushBlend] = &[
+        Self::Normal,
+        Self::Dissolve,
+        Self::Darken,
+        Self::Multiply,
+        Self::ColorBurn,
+        Self::LinearBurn,
+        Self::DarkerColor,
+        Self::Lighten,
+        Self::Screen,
+        Self::ColorDodge,
+        Self::LinearDodge,
+        Self::LighterColor,
+        Self::Overlay,
+        Self::SoftLight,
+        Self::HardLight,
+        Self::VividLight,
+        Self::LinearLight,
+        Self::PinLight,
+        Self::HardMix,
+        Self::Difference,
+        Self::Exclusion,
+        Self::Subtract,
+        Self::Divide,
+        Self::Hue,
+        Self::Saturation,
+        Self::Color,
+        Self::Luminosity,
+        Self::Behind,
+        Self::Clear,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Dissolve => "dissolve",
+            Self::Darken => "darken",
+            Self::Multiply => "multiply",
+            Self::ColorBurn => "color burn",
+            Self::LinearBurn => "linear burn",
+            Self::DarkerColor => "darker color",
+            Self::Lighten => "lighten",
+            Self::Screen => "screen",
+            Self::ColorDodge => "color dodge",
+            Self::LinearDodge => "linear dodge",
+            Self::LighterColor => "lighter color",
+            Self::Overlay => "overlay",
+            Self::SoftLight => "soft light",
+            Self::HardLight => "hard light",
+            Self::VividLight => "vivid light",
+            Self::LinearLight => "linear light",
+            Self::PinLight => "pin light",
+            Self::HardMix => "hard mix",
+            Self::Difference => "difference",
+            Self::Exclusion => "exclusion",
+            Self::Subtract => "subtract",
+            Self::Divide => "divide",
+            Self::Hue => "hue",
+            Self::Saturation => "saturation",
+            Self::Color => "color",
+            Self::Luminosity => "luminosity",
+            Self::Behind => "behind",
+            Self::Clear => "clear",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        let key = value.trim().to_ascii_lowercase().replace(['-', '_'], " ");
+        Self::MENU.iter().copied().find(|mode| mode.label() == key)
+    }
+
+    pub fn blend_mode(self) -> BlendMode {
+        match self {
+            Self::Behind | Self::Clear => BlendMode::Normal,
+            Self::Normal => BlendMode::Normal,
+            Self::Dissolve => BlendMode::Dissolve,
+            Self::Darken => BlendMode::Darken,
+            Self::Multiply => BlendMode::Multiply,
+            Self::ColorBurn => BlendMode::ColorBurn,
+            Self::LinearBurn => BlendMode::LinearBurn,
+            Self::DarkerColor => BlendMode::DarkerColor,
+            Self::Lighten => BlendMode::Lighten,
+            Self::Screen => BlendMode::Screen,
+            Self::ColorDodge => BlendMode::ColorDodge,
+            Self::LinearDodge => BlendMode::LinearDodge,
+            Self::LighterColor => BlendMode::LighterColor,
+            Self::Overlay => BlendMode::Overlay,
+            Self::SoftLight => BlendMode::SoftLight,
+            Self::HardLight => BlendMode::HardLight,
+            Self::VividLight => BlendMode::VividLight,
+            Self::LinearLight => BlendMode::LinearLight,
+            Self::PinLight => BlendMode::PinLight,
+            Self::HardMix => BlendMode::HardMix,
+            Self::Difference => BlendMode::Difference,
+            Self::Exclusion => BlendMode::Exclusion,
+            Self::Subtract => BlendMode::Subtract,
+            Self::Divide => BlendMode::Divide,
+            Self::Hue => BlendMode::Hue,
+            Self::Saturation => BlendMode::Saturation,
+            Self::Color => BlendMode::Color,
+            Self::Luminosity => BlendMode::Luminosity,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -1383,10 +1516,7 @@ impl Stroke {
         let mut changes = Vec::new();
         let mut dirty = IRect::default();
         let opacity = self.brush.opacity.clamp(0.0, 1.0);
-        let mode = match self.brush.blend {
-            BrushBlend::Normal | BrushBlend::Behind => BlendMode::Normal,
-            BrushBlend::Multiply => BlendMode::Multiply,
-        };
+        let mode = self.brush.blend.blend_mode();
         let (gk, gs, gstr) = (
             self.brush.grain,
             self.brush.grain_scale,
@@ -1419,6 +1549,10 @@ impl Stroke {
             && edge == 0.0
             && relief == 0.0
             && !matches!(self.ink, Ink::Clone { .. })
+            && matches!(
+                self.brush.blend,
+                BrushBlend::Normal | BrushBlend::Multiply | BrushBlend::Behind
+            )
             && let Some(compositor) = compositor
         {
             let tiles: Vec<_> = self
@@ -1539,44 +1673,52 @@ impl Stroke {
                         *c = (*c * l).min(alpha);
                     }
                 }
-                let o = match &self.ink {
-                    Ink::Color(_) | Ink::Smudge => {
-                        let k = if self.brush.blend == BrushBlend::Behind {
-                            k * (1.0 - b[3].min(1.0))
-                        } else {
-                            k
-                        };
-                        let s = ink.map(|v| v * k);
-                        if self.alpha_lock {
-                            let opaque = [b[0] / b[3], b[1] / b[3], b[2] / b[3], 1.0];
-                            let mixed = blend_px(mode, BlendSpace::Linear, opaque, s, 0.0);
-                            [mixed[0] * b[3], mixed[1] * b[3], mixed[2] * b[3], b[3]]
-                        } else {
-                            blend_px(mode, BlendSpace::Linear, b, s, 0.0)
-                        }
+                let o = if self.brush.blend == BrushBlend::Clear {
+                    if self.alpha_lock {
+                        b
+                    } else {
+                        b.map(|v| v * (1.0 - k))
                     }
-                    Ink::Erase if self.alpha_lock => b,
-                    Ink::Erase => b.map(|v| v * (1.0 - k)),
-                    Ink::Clone { dx, dy } => {
-                        let (sx, sy) = ((x as f32 + dx).round(), (y as f32 + dy).round());
-                        if sx < 0.0
-                            || sy < 0.0
-                            || sx >= self.base.width() as f32
-                            || sy >= self.base.height() as f32
-                        {
-                            continue;
+                } else {
+                    match &self.ink {
+                        Ink::Color(_) | Ink::Smudge => {
+                            let k = if self.brush.blend == BrushBlend::Behind {
+                                k * (1.0 - b[3].min(1.0))
+                            } else {
+                                k
+                            };
+                            let s = ink.map(|v| v * k);
+                            if self.alpha_lock {
+                                let opaque = [b[0] / b[3], b[1] / b[3], b[2] / b[3], 1.0];
+                                let mixed = blend_px(mode, BlendSpace::Linear, opaque, s, 0.0);
+                                [mixed[0] * b[3], mixed[1] * b[3], mixed[2] * b[3], b[3]]
+                            } else {
+                                blend_px(mode, BlendSpace::Linear, b, s, 0.0)
+                            }
                         }
-                        let s = color::px_to_f(self.base.get(sx as u32, sy as u32));
-                        if self.alpha_lock {
-                            let a = s[3];
-                            [
-                                s[0] * k * b[3] + b[0] * (1.0 - a * k),
-                                s[1] * k * b[3] + b[1] * (1.0 - a * k),
-                                s[2] * k * b[3] + b[2] * (1.0 - a * k),
-                                b[3],
-                            ]
-                        } else {
-                            [0, 1, 2, 3].map(|ch| s[ch] * k + b[ch] * (1.0 - k))
+                        Ink::Erase if self.alpha_lock => b,
+                        Ink::Erase => b.map(|v| v * (1.0 - k)),
+                        Ink::Clone { dx, dy } => {
+                            let (sx, sy) = ((x as f32 + dx).round(), (y as f32 + dy).round());
+                            if sx < 0.0
+                                || sy < 0.0
+                                || sx >= self.base.width() as f32
+                                || sy >= self.base.height() as f32
+                            {
+                                continue;
+                            }
+                            let s = color::px_to_f(self.base.get(sx as u32, sy as u32));
+                            if self.alpha_lock {
+                                let a = s[3];
+                                [
+                                    s[0] * k * b[3] + b[0] * (1.0 - a * k),
+                                    s[1] * k * b[3] + b[1] * (1.0 - a * k),
+                                    s[2] * k * b[3] + b[2] * (1.0 - a * k),
+                                    b[3],
+                                ]
+                            } else {
+                                [0, 1, 2, 3].map(|ch| s[ch] * k + b[ch] * (1.0 - k))
+                            }
                         }
                     }
                 };
@@ -2808,6 +2950,41 @@ mod tests {
             r.get(195, 50)[3] > 0,
             "and reaches it when the pointer lifts"
         );
+    }
+
+    #[test]
+    fn standard_brush_modes_and_clear_are_available() {
+        assert_eq!(BrushBlend::parse("soft-light"), Some(BrushBlend::SoftLight));
+        assert_eq!(
+            BrushBlend::parse("Color Dodge"),
+            Some(BrushBlend::ColorDodge)
+        );
+        let base = Arc::new(Raster::solid(40, 40, [0.3, 0.45, 0.6, 1.0]));
+        let mut clear = Stroke::new(
+            base.clone(),
+            Brush {
+                blend: BrushBlend::Clear,
+                ..hard(20.0)
+            },
+            opaque_red(),
+            None,
+        );
+        clear.point(20.0, 20.0);
+        let (cleared, _) = clear.render(&base);
+        assert!(cleared.get(20, 20)[3] < base.get(20, 20)[3]);
+
+        let mut screen = Stroke::new(
+            base.clone(),
+            Brush {
+                blend: BrushBlend::Screen,
+                ..hard(20.0)
+            },
+            opaque_red(),
+            None,
+        );
+        screen.point(20.0, 20.0);
+        let (screened, _) = screen.render(&base);
+        assert_ne!(screened.get(20, 20), base.get(20, 20));
     }
 }
 

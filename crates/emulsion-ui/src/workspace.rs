@@ -1339,6 +1339,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MoveNodeDown, _, cx| {
                 this.with_editor(cx, |e, cx| e.shift_selected(false, cx))
             }))
+            .on_action(cx.listener(|this, _: &NextBlendMode, _, cx| {
+                this.with_editor(cx, |e, cx| e.cycle_blend_mode(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &PreviousBlendMode, _, cx| {
+                this.with_editor(cx, |e, cx| e.cycle_blend_mode(false, cx))
+            }))
             .on_action(cx.listener(|this, _: &ToggleNodeVisible, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_selected_visible(cx))
             }))

@@ -4,12 +4,15 @@
 //!
 //! A recipe applies to any image. The base looks are Emulsion's own
 //! approximations, named descriptively; a recipe can name a `.cube` LUT as
-//! its base look instead.
+//! its base look instead. Besides the starter and camera sets, the crate
+//! ships a community library ([`library`]) of shared Fujifilm recipes,
+//! grouped by film simulation family.
 
 pub mod bundle;
 pub mod cameras;
 pub mod effects;
 pub mod import;
+pub mod library;
 pub mod looks;
 pub mod store;
 pub mod workflow;

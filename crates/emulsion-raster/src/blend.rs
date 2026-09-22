@@ -59,6 +59,59 @@ pub enum BlendSpace {
 }
 
 impl BlendMode {
+    /// Photoshop's eight blend modes whose result responds to Fill differently
+    /// from layer opacity.
+    pub fn has_special_fill(self) -> bool {
+        matches!(
+            self,
+            Self::ColorBurn
+                | Self::LinearBurn
+                | Self::ColorDodge
+                | Self::LinearDodge
+                | Self::VividLight
+                | Self::LinearLight
+                | Self::HardMix
+                | Self::Difference
+        )
+    }
+
+    /// Blend kernel with Photoshop Fill semantics. `fill == 0` is the
+    /// identity kernel and `fill == 1` is [`Self::mix`].
+    pub fn mix_fill(self, cb: [f32; 3], cs: [f32; 3], fill: f32) -> [f32; 3] {
+        let f = fill.clamp(0.0, 1.0);
+        if !self.has_special_fill() || f >= 1.0 {
+            return self.mix(cb, cs);
+        }
+        if f <= 0.0 {
+            return cb;
+        }
+        let one = |b: f32, s: f32| match self {
+            Self::ColorBurn => color_burn(b, 1.0 - f * (1.0 - s)),
+            Self::LinearBurn => (b - f * (1.0 - s)).max(0.0),
+            Self::ColorDodge => color_dodge(b, f * s),
+            Self::LinearDodge => (b + f * s).min(1.0),
+            Self::Difference => (b - f * s).abs(),
+            Self::VividLight => {
+                if s <= 0.5 {
+                    color_burn(b, 1.0 - f * (1.0 - 2.0 * s))
+                } else {
+                    color_dodge(b, f * (2.0 * s - 1.0))
+                }
+            }
+            Self::LinearLight => (b + f * (2.0 * s - 1.0)).clamp(0.0, 1.0),
+            Self::HardMix => {
+                let vivid = if s <= 0.5 {
+                    color_burn(b, 1.0 - f * (1.0 - 2.0 * s))
+                } else {
+                    color_dodge(b, f * (2.0 * s - 1.0))
+                };
+                if vivid < 0.5 { 0.0 } else { 1.0 }
+            }
+            _ => unreachable!(),
+        };
+        [one(cb[0], cs[0]), one(cb[1], cs[1]), one(cb[2], cs[2])]
+    }
+
     /// Modes in menu order, with separators between Photoshop's groups
     /// expressed as `None`.
     pub const MENU: &'static [Option<BlendMode>] = &[
@@ -469,6 +522,55 @@ pub fn blend_px(
     o
 }
 
+/// Composite with Photoshop's special Fill behavior. `coverage` is layer
+/// opacity/mask/clipping coverage and deliberately excludes Fill.
+pub fn blend_px_fill(
+    mode: BlendMode,
+    space: BlendSpace,
+    dst: [f32; 4],
+    src: [f32; 4],
+    coverage: f32,
+    fill: f32,
+) -> [f32; 4] {
+    debug_assert!(mode.has_special_fill());
+    let q = (src[3] * coverage).clamp(0.0, 1.0);
+    let f = fill.clamp(0.0, 1.0);
+    if q <= 0.0 || f <= 0.0 {
+        return dst;
+    }
+    let ab = dst[3];
+    let cs = [src[0] / src[3], src[1] / src[3], src[2] / src[3]];
+    let cb = if ab > 0.0 {
+        [dst[0] / ab, dst[1] / ab, dst[2] / ab]
+    } else {
+        [0.0; 3]
+    };
+    let kernel = match space {
+        BlendSpace::Linear => mode.mix_fill(cb, cs, f),
+        BlendSpace::Srgb => {
+            let encode = |v: [f32; 3]| {
+                [
+                    linear_to_srgb(v[0]),
+                    linear_to_srgb(v[1]),
+                    linear_to_srgb(v[2]),
+                ]
+            };
+            let m = mode.mix_fill(encode(cb), encode(cs), f);
+            [
+                srgb_to_linear(m[0]),
+                srgb_to_linear(m[1]),
+                srgb_to_linear(m[2]),
+            ]
+        }
+    };
+    let mut out = [0.0; 4];
+    for c in 0..3 {
+        out[c] = q * ((1.0 - ab) * f * cs[c] + ab * kernel[c]) + (1.0 - q) * dst[c];
+    }
+    out[3] = q * f + ab * (1.0 - q * f);
+    out
+}
+
 /// Deterministic per-pixel noise in [0,1) for Dissolve.
 #[inline]
 pub fn dissolve_noise(x: i32, y: i32, seed: u64) -> f32 {
@@ -545,6 +647,53 @@ mod tests {
                 "{m:?}"
             );
         }
+    }
+
+    #[test]
+    fn special_fill_uses_kernel_while_opacity_fades_result() {
+        let dst = [0.4, 0.4, 0.4, 1.0];
+        let src = [0.8, 0.8, 0.8, 1.0];
+        let linear_dodge = blend_px_fill(BlendMode::LinearDodge, L, dst, src, 1.0, 0.5);
+        assert!((linear_dodge[0] - 0.8).abs() < 1e-6);
+        let half_opacity = blend_px_fill(BlendMode::LinearDodge, L, dst, src, 0.5, 1.0);
+        assert!((half_opacity[0] - 0.7).abs() < 1e-6);
+        assert_ne!(linear_dodge[0], half_opacity[0]);
+    }
+
+    #[test]
+    fn all_eight_special_modes_have_identity_at_zero_fill() {
+        let modes = [
+            BlendMode::ColorBurn,
+            BlendMode::LinearBurn,
+            BlendMode::ColorDodge,
+            BlendMode::LinearDodge,
+            BlendMode::VividLight,
+            BlendMode::LinearLight,
+            BlendMode::HardMix,
+            BlendMode::Difference,
+        ];
+        let backdrop = [0.23, 0.51, 0.77];
+        for mode in modes {
+            assert_eq!(
+                mode.mix_fill(backdrop, [0.8, 0.2, 0.6], 0.0),
+                backdrop,
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn special_fill_scales_alpha_only_on_transparent_backdrop() {
+        let out = blend_px_fill(
+            BlendMode::Difference,
+            L,
+            [0.0; 4],
+            [0.2, 0.4, 0.6, 1.0],
+            0.5,
+            0.25,
+        );
+        assert!((out[3] - 0.125).abs() < 1e-6);
+        assert!((out[0] - 0.025).abs() < 1e-6);
     }
 
     #[test]

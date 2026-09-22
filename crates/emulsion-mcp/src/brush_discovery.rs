@@ -65,7 +65,7 @@ pub(crate) fn list(args: &Value) -> Result<ToolResult, ToolResult> {
             "unit_interval": ["grain_strength", "size_pressure", "flow_pressure", "speed_thins", "stabilizer", "size_jitter", "scatter", "color_jitter", "wetness", "edge_darken", "relief"],
             "angle": "degrees, wraps to 0..360", "follow_path": "boolean",
             "grain": ["None", "Paper", "Canvas", "Chalk", "Speckle", "Bristle", "Halftone", "Hatch", "CrossHatch"],
-            "blend": ["Normal", "Multiply", "Behind"]
+            "blend": emulsion_raster::paint::BrushBlend::MENU.iter().map(|mode| mode.label()).collect::<Vec<_>>()
         },
         "material_limits": "These are procedural brush presets: grain, pigment pickup, edge darkening and relief approximate material character. Names do not establish faithful water, drying, diffusion or physical oil simulation. paint.sample_merged opts into lower-layer pickup; default samples the current layer only.",
         "swatch_layout": {"enabled": swatches, "rows": page.iter().enumerate().map(|(i,b)| json!({"name": b.name, "rect": [0,i*72,256,72]})).collect::<Vec<_>>(),

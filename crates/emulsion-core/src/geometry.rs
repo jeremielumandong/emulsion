@@ -1473,6 +1473,7 @@ mod tests {
                     cache: source.clone(),
                     offset: (0, 0),
                     filters: vec![],
+                    filter_styles: vec![],
                     placement,
                 };
             }

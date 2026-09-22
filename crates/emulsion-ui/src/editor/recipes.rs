@@ -3,7 +3,10 @@
 //! (one history step), Cancel puts the picture back, and a new preview
 //! replaces the old one instead of stacking. Recipes import from the
 //! clipboard, a file (.recipe.toml, Lightroom .xmp, Fujifilm .FP1, text)
-//! or a web page — one recipe or a whole index of them.
+//! or a web page — one recipe or a whole index of them. The shipped
+//! community library is browsed one collection at a time (Classic Chrome,
+//! Velvia, Black and white…) so the grid stays small; the Emulsion
+//! collection holds the built-in sets and everything saved.
 
 use super::*;
 use emulsion_core::command::Slot;
@@ -20,7 +23,10 @@ const THUMB: u32 = 150;
 #[derive(Default)]
 pub(crate) struct RecipeState {
     pub open: bool,
-    /// Tag filter, if any.
+    /// Library collection shown; `None` is the Emulsion collection
+    /// (built-in sets plus saved recipes).
+    pub collection: Option<String>,
+    /// Tag filter within the collection, if any.
     pub tag: Option<String>,
     /// The library, shared so a frame does not clone every recipe.
     cache: Option<Arc<Vec<(Recipe, Origin)>>>,
@@ -287,6 +293,15 @@ impl EditorView {
                 .child(chip("rc-capture-cancel", "Cancel", false, p).on_click(cx.listener(|this, _, _, cx| { this.recipes.capture = None; cx.notify(); }))))
             .child(mono("Update existing replaces your saved recipe with the same name. Image pixels, masks and RAW settings are not captured.", 9.5, p.muted))
             .into_any_element())
+    }
+
+    /// Show one library collection, or the Emulsion collection for `None`.
+    /// The tag filter belongs to a collection, so it clears on a change.
+    pub(crate) fn select_collection(&mut self, collection: Option<String>) {
+        if self.recipes.collection != collection {
+            self.recipes.tag = None;
+        }
+        self.recipes.collection = collection;
     }
 
     pub fn toggle_recipes(&mut self, cx: &mut Context<Self>) {
@@ -823,15 +838,32 @@ impl EditorView {
         }
         self.ensure_url_field(window, cx);
         let all = self.recipe_list();
-        let mut tags: Vec<String> = all.iter().flat_map(|(r, _)| r.tags.clone()).collect();
+        let collection = self.recipes.collection.clone();
+        let in_collection: Vec<&(Recipe, Origin)> = all
+            .iter()
+            .filter(|(_, o)| match &collection {
+                None => !matches!(o, Origin::Library(_)),
+                Some(c) => o.collection() == c,
+            })
+            .collect();
+        let mut tags: Vec<String> = in_collection
+            .iter()
+            .flat_map(|(r, _)| r.tags.clone())
+            .collect();
         tags.sort();
         tags.dedup();
         let tag = self.recipes.tag.clone();
-        let shown: Vec<(Recipe, Origin)> = all
+        let shown: Vec<(Recipe, Origin)> = in_collection
             .iter()
             .filter(|(r, _)| tag.as_ref().is_none_or(|t| r.tags.contains(t)))
-            .cloned()
+            .map(|entry| (*entry).clone())
             .collect();
+        let collection_notes = collection.as_ref().and_then(|c| {
+            emulsion_recipes::library::collections()
+                .iter()
+                .find(|l| &l.name == c)
+                .map(|l| format!("{} · {} recipes", l.notes, l.recipes.len()))
+        });
         self.ensure_thumbs(
             shown
                 .iter()
@@ -853,15 +885,37 @@ impl EditorView {
             )
             .child(div().flex_1())
             .child(
-                chip("rc-all", "all", tag.is_none(), p).on_click(cx.listener(|this, _, _, cx| {
-                    this.recipes.tag = None;
+                chip(
+                    "rc-collection-emulsion",
+                    store::EMULSION_COLLECTION,
+                    collection.is_none(),
+                    p,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.select_collection(None);
                     cx.notify();
                 })),
             );
+        for (i, c) in emulsion_recipes::library::collections().iter().enumerate() {
+            let on = collection.as_deref() == Some(c.name.as_str());
+            let name = c.name.clone();
+            header = header.child(chip(("rc-collection", i), c.name.clone(), on, p).on_click(
+                cx.listener(move |this, _, _, cx| {
+                    this.select_collection(Some(name.clone()));
+                    cx.notify();
+                }),
+            ));
+        }
+        let mut tag_row = div().flex().flex_wrap().items_center().gap(px(5.)).child(
+            chip("rc-all", "all", tag.is_none(), p).on_click(cx.listener(|this, _, _, cx| {
+                this.recipes.tag = None;
+                cx.notify();
+            })),
+        );
         for (i, t) in tags.iter().enumerate() {
             let on = tag.as_deref() == Some(t);
             let t2 = t.clone();
-            header = header.child(chip(("rc-tag", i), t.clone(), on, p).on_click(cx.listener(
+            tag_row = tag_row.child(chip(("rc-tag", i), t.clone(), on, p).on_click(cx.listener(
                 move |this, _, _, cx| {
                     this.recipes.tag = Some(t2.clone());
                     cx.notify();
@@ -995,6 +1049,8 @@ impl EditorView {
                 .border_color(p.line)
                 .bg(p.panel)
                 .child(header)
+                .children(collection_notes.map(|notes| mono(notes, 9.5, p.muted)))
+                .child(tag_row)
                 .children(self.recipe_capture_view(p, cx))
                 .child(actions)
                 .when(!limitations.is_empty(), |view| {

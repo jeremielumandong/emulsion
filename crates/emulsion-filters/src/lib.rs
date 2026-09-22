@@ -8,7 +8,8 @@
 //! the source. Smart layers keep the source and the stack and re-run this
 //! when a parameter changes.
 
-use emulsion_raster::{IRect, Raster, color};
+use emulsion_raster::blend::{BlendSpace, blend_px};
+use emulsion_raster::{BlendMode, IRect, Raster, color};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
@@ -111,6 +112,39 @@ pub enum Filter {
         amplitude: f32,
         wavelength: f32,
     },
+}
+
+/// Blending options for one editable smart filter.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FilterStyle {
+    /// Filter result opacity, from 0 to 1.
+    pub opacity: f32,
+    /// How the filter result blends with the pixels entering this stage.
+    pub blend: BlendMode,
+}
+
+impl Default for FilterStyle {
+    fn default() -> Self {
+        Self {
+            opacity: 1.0,
+            blend: BlendMode::Normal,
+        }
+    }
+}
+
+impl FilterStyle {
+    pub fn sanitized(mut self) -> Self {
+        self.opacity = if self.opacity.is_finite() {
+            self.opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if self.blend == BlendMode::PassThrough {
+            self.blend = BlendMode::Normal;
+        }
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -432,6 +466,7 @@ impl Filter {
 }
 
 /// Dense premultiplied linear image with its own origin.
+#[derive(Clone)]
 struct Image {
     w: usize,
     h: usize,
@@ -1009,6 +1044,16 @@ fn apply_one_cpu(f: &Filter, img: &Image) -> Image {
 /// Run `stack` over `source`. Returns the filtered raster and where its
 /// top-left sits relative to the source (negative when it spread out).
 pub fn apply_stack(source: &Raster, stack: &[Filter]) -> (Raster, (i32, i32)) {
+    apply_stack_styled(source, stack, &[])
+}
+
+/// Run a smart-filter stack with per-stage opacity and blend mode. Missing
+/// styles use Normal at 100%, preserving old documents exactly.
+pub fn apply_stack_styled(
+    source: &Raster,
+    stack: &[Filter],
+    styles: &[FilterStyle],
+) -> (Raster, (i32, i32)) {
     if stack.is_empty() {
         return (source.clone(), (0, 0));
     }
@@ -1024,8 +1069,26 @@ pub fn apply_stack(source: &Raster, stack: &[Filter]) -> (Raster, (i32, i32)) {
         }
     });
     let mut img = Image { w, h, px }.pad(spread as usize);
-    for f in stack {
+    for (index, f) in stack.iter().enumerate() {
+        let before = img.clone();
         img = apply_one(f, img);
+        let style = styles.get(index).copied().unwrap_or_default().sanitized();
+        if style.opacity < 1.0 || style.blend != BlendMode::Normal {
+            img.px
+                .par_iter_mut()
+                .zip(before.px.par_iter())
+                .enumerate()
+                .for_each(|(index, (filtered, base))| {
+                    let source = filtered.map(|channel| channel * style.opacity);
+                    *filtered = blend_px(
+                        style.blend,
+                        BlendSpace::Linear,
+                        *base,
+                        source,
+                        index as f32 * 0.618_034,
+                    );
+                });
+        }
     }
     let out: Vec<[u16; 4]> = img
         .px
@@ -1278,5 +1341,50 @@ mod tests {
             "outside the region is untouched"
         );
         assert_ne!(region.get(32, 10), src.get(32, 10));
+    }
+
+    #[test]
+    fn smart_filter_style_controls_stage_opacity_and_blend() {
+        let src = Raster::from_fn(24, 24, [0; 4], |x, _| {
+            if x < 12 {
+                [16000, 22000, 32000, 65535]
+            } else {
+                [50000, 42000, 25000, 65535]
+            }
+        });
+        let filters = [Filter::HighPass { radius: 3.0 }];
+        let (legacy, legacy_offset) = apply_stack(&src, &filters);
+        let (normal, normal_offset) = apply_stack_styled(&src, &filters, &[FilterStyle::default()]);
+        assert_eq!(legacy_offset, normal_offset);
+        assert_eq!(legacy.to_srgba8(), normal.to_srgba8());
+
+        let (hidden, hidden_offset) = apply_stack_styled(
+            &src,
+            &filters,
+            &[FilterStyle {
+                opacity: 0.0,
+                blend: BlendMode::SoftLight,
+            }],
+        );
+        for y in 0..src.height() {
+            for x in 0..src.width() {
+                assert_eq!(
+                    hidden.get(
+                        (x as i32 - hidden_offset.0) as u32,
+                        (y as i32 - hidden_offset.1) as u32
+                    ),
+                    src.get(x, y)
+                );
+            }
+        }
+        let (soft, _) = apply_stack_styled(
+            &src,
+            &filters,
+            &[FilterStyle {
+                opacity: 0.65,
+                blend: BlendMode::SoftLight,
+            }],
+        );
+        assert_ne!(soft.to_srgba8(), legacy.to_srgba8());
     }
 }

@@ -163,6 +163,8 @@ enum MKind {
         width: u32,
         height: u32,
         filters: Vec<emulsion_filters::Filter>,
+        #[serde(default)]
+        filter_styles: Vec<emulsion_filters::FilterStyle>,
         placement: Placement,
     },
 }
@@ -314,6 +316,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                 editable,
                 source,
                 filters,
+                filter_styles,
                 placement,
                 cache,
                 offset,
@@ -351,6 +354,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                     width: source.width(),
                     height: source.height(),
                     filters: filters.clone(),
+                    filter_styles: filter_styles.clone(),
                     placement: *placement,
                 }
             }
@@ -1027,6 +1031,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 width,
                 height,
                 filters,
+                filter_styles,
                 placement,
             } => {
                 let r = match raster_cache.get(&src) {
@@ -1050,11 +1055,13 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 if filters.len() > 32 {
                     return Err(IoError::Manifest("too many filters".into()));
                 }
-                let (cache, offset) = emulsion_core::smart::render(&r, &filters);
+                let (cache, offset) =
+                    emulsion_core::smart::render_styled(&r, &filters, &filter_styles);
                 NodeKind::Smart {
                     editable,
                     source: r,
                     filters,
+                    filter_styles,
                     placement,
                     cache,
                     offset,

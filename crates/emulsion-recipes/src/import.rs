@@ -810,22 +810,23 @@ pub fn from_fp1(xml: &str) -> (Recipe, Vec<String>) {
             "provia" => "provia",
             "velvia" => "velvia",
             "astia" => "astia",
-            "classicchrome" => "classic-chrome",
-            "classicneg" | "classicnegative" => "classic-negative",
-            "proneg" | "pronegstd" | "pronegstandard" => "pro-neg-std",
-            "proneghi" => "pro-neg-hi",
+            // X RAW STUDIO writes short codes: Classic, NEGAStd, NEGAhi, B, BY, BR, BG.
+            "classicchrome" | "classic" => "classic-chrome",
+            "classicneg" | "classicnegative" | "classicnega" => "classic-negative",
+            "proneg" | "pronegstd" | "pronegstandard" | "negastd" => "pro-neg-std",
+            "proneghi" | "negahi" => "pro-neg-hi",
             "eterna" => "eterna",
             "eternableachbypass" | "bleachbypass" => "eterna-bleach-bypass",
-            "nostalgicneg" | "nostalgicnegative" => "nostalgic-negative",
-            "realaace" => "reala-ace",
+            "nostalgicneg" | "nostalgicnegative" | "nostalgic" => "nostalgic-negative",
+            "realaace" | "reala" => "reala-ace",
             "acros" => "acros",
             "acrosye" => "acros-ye",
             "acrosr" => "acros-r",
             "acrosg" => "acros-g",
-            "monochrome" | "mono" => "monochrome",
-            "monochromeye" => "monochrome-ye",
-            "monochromer" => "monochrome-r",
-            "monochromeg" => "monochrome-g",
+            "monochrome" | "mono" | "b" => "monochrome",
+            "monochromeye" | "by" => "monochrome-ye",
+            "monochromer" | "br" => "monochrome-r",
+            "monochromeg" | "bg" => "monochrome-g",
             "sepia" => "sepia",
             other => {
                 unknown.push(format!("FilmSimulation {other}"));
@@ -860,16 +861,30 @@ pub fn from_fp1(xml: &str) -> (Recipe, Vec<String>) {
         r.color_chrome_fx_blue = strength(v);
     }
     if let Some(v) = tag("WhiteBalance") {
-        r.white_balance.preset = v.to_ascii_lowercase().replace("temperature", "kelvin");
+        r.white_balance.preset = match v.to_ascii_lowercase().as_str() {
+            // "INVALID" with WBShootCond ON means the white balance as shot.
+            "invalid" | "" => "auto".into(),
+            "temperature" => "kelvin".into(),
+            "flight1" => "fluorescent-1".into(),
+            "flight2" => "fluorescent-2".into(),
+            "flight3" => "fluorescent-3".into(),
+            other => other.to_string(),
+        };
     }
-    if let Some(k) = tag("WBColorTemp") {
+    if r.white_balance.preset == "kelvin"
+        && let Some(k) = tag("WBColorTemp")
+    {
         r.white_balance.kelvin = k.trim_end_matches('K').parse().ok();
     }
-    if let Some(v) = num("WBShiftR") {
-        r.white_balance.red = v.round() as i32;
+    // Shifts run −9–+9 in camera, so they are never halved like tones.
+    let shift = |name: &str| -> Option<i32> {
+        tag(name).and_then(|v| v.trim_start_matches('+').parse::<i32>().ok())
+    };
+    if let Some(v) = shift("WBShiftR") {
+        r.white_balance.red = v.clamp(-9, 9);
     }
-    if let Some(v) = num("WBShiftB") {
-        r.white_balance.blue = v.round() as i32;
+    if let Some(v) = shift("WBShiftB") {
+        r.white_balance.blue = v.clamp(-9, 9);
     }
     if let Some(v) = tag("DynamicRange") {
         r.dynamic_range = match v.trim_start_matches("DR").trim() {
@@ -897,10 +912,46 @@ pub fn from_fp1(xml: &str) -> (Recipe, Vec<String>) {
         r.clarity = v;
     }
     if let Some(v) = tag("ExposureBias") {
-        r.exposure_compensation = v;
+        r.exposure_compensation = fp1_exposure(&v);
     }
     r.tags.push("fujifilm".into());
     (r, unknown)
+}
+
+/// X RAW STUDIO's exposure code: `P0P33` is +1/3 EV, `M1P00` is −1 EV;
+/// anything else ("0", "+1/3") is kept as written.
+fn fp1_exposure(v: &str) -> String {
+    let v = v.trim();
+    let (sign, rest) = match v.chars().next() {
+        Some('P') => ("+", &v[1..]),
+        Some('M') => ("-", &v[1..]),
+        _ => {
+            return if v == "0" {
+                String::new()
+            } else {
+                v.to_string()
+            };
+        }
+    };
+    let Some((whole, frac)) = rest.split_once('P') else {
+        return v.to_string();
+    };
+    let (Ok(whole), Ok(frac)) = (whole.parse::<u32>(), frac.parse::<u32>()) else {
+        return v.to_string();
+    };
+    let frac = match frac {
+        0 => "",
+        33 => "1/3",
+        50 => "1/2",
+        67 => "2/3",
+        other => return format!("{sign}{}", whole as f32 + other as f32 / 100.0),
+    };
+    match (whole, frac) {
+        (0, "") => String::new(),
+        (0, f) => format!("{sign}{f}"),
+        (w, "") => format!("{sign}{w}"),
+        (w, f) => format!("{sign}{w} {f}"),
+    }
 }
 
 /// Import any supported file by its extension: `.recipe.toml`/`.toml`,
@@ -1023,6 +1074,54 @@ mod import_ext_tests {
         assert_eq!(r.color_chrome_effect, Strength::Strong);
         assert_eq!(r.exposure_compensation, "+1/3");
         r.validate().unwrap();
+
+        // The codes X RAW STUDIO itself writes.
+        let fp1 = r#"<?xml version="1.0" encoding="utf-8"?><ConversionProfile application="XRFC" version="1.10.0.0">
+          <PropertyGroup device="X-T3" version="X-T3_0100" label="Kodachrome 64">
+          <ExposureBias>P0P33</ExposureBias><DynamicRange>100</DynamicRange><FilmSimulation>Classic</FilmSimulation>
+          <GrainEffect>OFF</GrainEffect><GrainEffectSize>SMALL</GrainEffectSize><ChromeEffect>STRONG</ChromeEffect>
+          <ColorChromeBlue/><WBShootCond>ON</WBShootCond><WhiteBalance>INVALID</WhiteBalance><WBShiftR>2</WBShiftR>
+          <WBShiftB>-5</WBShiftB><WBColorTemp>10000K</WBColorTemp><HighlightTone>1</HighlightTone><ShadowTone>1</ShadowTone>
+          <Color>2</Color><Sharpness>1</Sharpness><NoisReduction>-4</NoisReduction><Clarity>0</Clarity>
+          </PropertyGroup></ConversionProfile>"#;
+        let (r, unknown) = from_fp1(fp1);
+        assert!(unknown.is_empty(), "{unknown:?}");
+        assert_eq!(r.film_simulation, "classic-chrome");
+        assert_eq!(r.exposure_compensation, "+1/3");
+        assert_eq!(r.white_balance.preset, "auto", "as-shot white balance");
+        assert_eq!(
+            r.white_balance.kelvin, None,
+            "a placeholder kelvin is ignored"
+        );
+        assert_eq!((r.white_balance.red, r.white_balance.blue), (2, -5));
+        assert_eq!(r.color_chrome_fx_blue, Strength::Off);
+        for (code, key) in [
+            ("NEGAStd", "pro-neg-std"),
+            ("NEGAhi", "pro-neg-hi"),
+            ("BR", "monochrome-r"),
+            ("BG", "monochrome-g"),
+            ("AcrosYe", "acros-ye"),
+        ] {
+            let (r, unknown) = from_fp1(&format!(
+                "<PropertyGroup label=\"x\"><FilmSimulation>{code}</FilmSimulation></PropertyGroup>"
+            ));
+            assert!(unknown.is_empty(), "{code}: {unknown:?}");
+            assert_eq!(r.film_simulation, key, "{code}");
+        }
+        let (r, _) = from_fp1(
+            "<PropertyGroup label=\"x\"><ExposureBias>M1P67</ExposureBias><WhiteBalance>Temperature</WhiteBalance><WBColorTemp>5900K</WBColorTemp><FilmSimulation>Provia</FilmSimulation></PropertyGroup>",
+        );
+        assert_eq!(r.exposure_compensation, "-1 2/3");
+        assert!((r.exposure_ev() + 1.667).abs() < 1e-2);
+        assert_eq!(
+            (r.white_balance.preset.as_str(), r.white_balance.kelvin),
+            ("kelvin", Some(5900))
+        );
+        let (r, _) = from_fp1(
+            "<PropertyGroup label=\"x\"><ExposureBias>0</ExposureBias><WhiteBalance>FLight1</WhiteBalance></PropertyGroup>",
+        );
+        assert_eq!(r.exposure_compensation, "");
+        assert_eq!(r.white_balance.preset, "fluorescent-1");
     }
 }
 

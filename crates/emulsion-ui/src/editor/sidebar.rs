@@ -31,6 +31,7 @@ impl EditorView {
             self.finish_shape_color_edit(cx);
         }
         if tab == SidebarTab::Recipes {
+            self.recipes.open = true;
             self.reload_recipes();
         }
         if tab != SidebarTab::Recipes && self.recipes.preview.is_some() {

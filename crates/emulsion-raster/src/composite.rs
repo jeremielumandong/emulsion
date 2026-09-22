@@ -10,7 +10,7 @@
 //! never disagree.
 
 use crate::adjust::Prepared;
-use crate::blend::{BlendMode, BlendSpace, blend_px, dissolve_noise};
+use crate::blend::{BlendMode, BlendSpace, blend_px, blend_px_fill, dissolve_noise};
 use crate::color;
 use crate::geom::{IRect, TileCoord};
 use crate::image::{Mask, Pix, Plane, Raster, Tile};
@@ -194,6 +194,19 @@ pub struct BlendingOptions {
     pub fill_opacity: f32,
     pub channels: [bool; 3],
     pub blend_if: BlendIf,
+    pub knockout: Knockout,
+    pub blend_interior_effects_as_group: bool,
+    pub blend_clipped_layers_as_group: bool,
+    pub transparency_shapes_layer: bool,
+    pub layer_mask_hides_effects: bool,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Knockout {
+    #[default]
+    None,
+    Shallow,
+    Deep,
 }
 impl Default for BlendingOptions {
     fn default() -> Self {
@@ -201,6 +214,11 @@ impl Default for BlendingOptions {
             fill_opacity: 1.0,
             channels: [true; 3],
             blend_if: BlendIf::default(),
+            knockout: Knockout::None,
+            blend_interior_effects_as_group: true,
+            blend_clipped_layers_as_group: true,
+            transparency_shapes_layer: true,
+            layer_mask_hides_effects: false,
         }
     }
 }
@@ -251,6 +269,7 @@ pub enum NodeContent {
     StyledGroup {
         children: Vec<CompositeNode>,
         clip_source: Box<CompositeNode>,
+        effect_mask: Option<Box<CompositeNode>>,
     },
     Adjust(Arc<Prepared>),
 }
@@ -327,7 +346,26 @@ pub fn render_tile_cpu(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTi
     acc
 }
 
-fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
+fn apply_punch(acc: &mut FTile, punch: &[f32]) {
+    for (pixel, amount) in acc.iter_mut().zip(punch) {
+        pixel
+            .iter_mut()
+            .for_each(|v| *v *= 1.0 - amount.clamp(0.0, 1.0));
+    }
+}
+
+fn merge_punch(target: &mut Option<Vec<f32>>, incoming: Vec<f32>) {
+    let target = target.get_or_insert_with(|| vec![0.0; TILE_PX]);
+    target
+        .iter_mut()
+        .zip(incoming)
+        .for_each(|(a, b)| *a = a.max(b));
+}
+
+/// Returns a Deep-knockout coverage plane for propagation across isolated
+/// group boundaries.
+fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec<f32>> {
+    let mut deep_punch: Option<Vec<f32>> = None;
     let is_source: Vec<bool> = (0..nodes.len())
         .map(|i| nodes.iter().any(|n| n.visible && n.clip_to == Some(i)))
         .collect();
@@ -377,7 +415,14 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                 if !nodes[j].visible {
                     continue; // clipped to a hidden base: hidden too
                 }
-                alphas[j].clone()
+                let mut alpha = alphas[j].clone();
+                if !nodes[j].blending.blend_clipped_layers_as_group {
+                    if let Some(alpha) = alpha.as_mut() {
+                        let scale = nodes[j].opacity * nodes[j].blending.fill_opacity;
+                        alpha.iter_mut().for_each(|v| *v *= scale);
+                    }
+                }
+                alpha
             }
             _ => None,
         };
@@ -389,11 +434,10 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
 
         // Coverage = opacity × mask × clip, per pixel.
         let coverage = |mask: Option<&Vec<f32>>| -> Option<Vec<f32>> {
-            if node.opacity * node.blending.fill_opacity >= 1.0 && mask.is_none() && clip.is_none()
-            {
+            if node.opacity >= 1.0 && mask.is_none() && clip.is_none() {
                 return None;
             }
-            let mut c = vec![node.opacity * node.blending.fill_opacity; TILE_PX];
+            let mut c = vec![node.opacity; TILE_PX];
             if let Some(m) = mask {
                 c.iter_mut().zip(m).for_each(|(c, m)| *c *= m);
             }
@@ -422,7 +466,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                     alphas[i] = Some(src.iter().map(|p| p[3]).collect());
                 }
                 let cov = coverage(None);
-                composite_into(acc, &mut src, cov.as_deref(), node, ctx);
+                composite_into(acc, &mut src, cov.as_deref(), node, ctx, &mut deep_punch);
             }
             NodeContent::Fill(c) => {
                 let mut src = vec![*c; TILE_PX];
@@ -436,7 +480,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                     alphas[i] = Some(src.iter().map(|p| p[3]).collect());
                 }
                 let cov = coverage(None);
-                composite_into(acc, &mut src, cov.as_deref(), node, ctx);
+                composite_into(acc, &mut src, cov.as_deref(), node, ctx, &mut deep_punch);
             }
             NodeContent::Group(children) => {
                 let mask = mask_doc(&node.mask);
@@ -444,10 +488,16 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                     && node.blending == BlendingOptions::default()
                 {
                     match coverage(mask.as_ref()) {
-                        None => render_list(children, acc, ctx),
+                        None => {
+                            if let Some(punch) = render_list(children, acc, ctx) {
+                                merge_punch(&mut deep_punch, punch);
+                            }
+                        }
                         Some(cov) => {
                             let before = acc.clone();
-                            render_list(children, acc, ctx);
+                            if let Some(punch) = render_list(children, acc, ctx) {
+                                merge_punch(&mut deep_punch, punch);
+                            }
                             for ((a, b), k) in acc.iter_mut().zip(&before).zip(&cov) {
                                 for c in 0..4 {
                                     a[c] = b[c] + (a[c] - b[c]) * k;
@@ -457,7 +507,10 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                     }
                 } else {
                     let mut sub = ftile();
-                    render_list(children, &mut sub, ctx);
+                    if let Some(punch) = render_list(children, &mut sub, ctx) {
+                        apply_punch(acc, &punch);
+                        merge_punch(&mut deep_punch, punch);
+                    }
                     if let Some(m) = &mask {
                         sub.iter_mut()
                             .zip(m)
@@ -467,15 +520,19 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                         alphas[i] = Some(sub.iter().map(|p| p[3]).collect());
                     }
                     let cov = coverage(None);
-                    composite_into(acc, &mut sub, cov.as_deref(), node, ctx);
+                    composite_into(acc, &mut sub, cov.as_deref(), node, ctx, &mut deep_punch);
                 }
             }
             NodeContent::StyledGroup {
                 children,
                 clip_source,
+                effect_mask,
             } => {
                 let mut sub = ftile();
-                render_list(children, &mut sub, ctx);
+                if let Some(punch) = render_list(children, &mut sub, ctx) {
+                    apply_punch(acc, &punch);
+                    merge_punch(&mut deep_punch, punch);
+                }
                 if children
                     .iter()
                     .any(|child| child.blend != BlendMode::Normal)
@@ -495,17 +552,29 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
                         }
                     }
                 }
+                if node.blending.layer_mask_hides_effects {
+                    if let Some(mask_node) = effect_mask {
+                        let mut mask = ftile();
+                        render_list(std::slice::from_ref(mask_node.as_ref()), &mut mask, ctx);
+                        sub.iter_mut().zip(mask).for_each(|(pixel, mask)| {
+                            pixel.iter_mut().for_each(|v| *v *= mask[3]);
+                        });
+                    }
+                }
                 if is_source[i] {
                     let mut shape = ftile();
                     render_list(std::slice::from_ref(clip_source.as_ref()), &mut shape, ctx);
                     alphas[i] = Some(shape.iter().map(|p| p[3]).collect());
                 }
                 let cov = coverage(None);
-                composite_into(acc, &mut sub, cov.as_deref(), node, ctx);
+                composite_into(acc, &mut sub, cov.as_deref(), node, ctx, &mut deep_punch);
             }
             NodeContent::Adjust(op) => {
                 let mask = mask_doc(&node.mask);
-                let cov = coverage(mask.as_ref());
+                let mut cov = coverage(mask.as_ref()).unwrap_or_else(|| vec![1.0; TILE_PX]);
+                cov.iter_mut()
+                    .for_each(|v| *v *= node.blending.fill_opacity);
+                let cov = Some(cov);
                 if node.blending.channels == [true; 3]
                     && node.blending.blend_if == BlendIf::default()
                 {
@@ -536,6 +605,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
             }
         }
     }
+    deep_punch
 }
 
 /// Scale `src` by coverage and blend it into `acc` with the node's mode.
@@ -545,6 +615,7 @@ fn composite_into(
     cov: Option<&[f32]>,
     node: &CompositeNode,
     ctx: Ctx,
+    deep_punch: &mut Option<Vec<f32>>,
 ) {
     let mode = if node.blend == BlendMode::PassThrough {
         BlendMode::Normal
@@ -552,14 +623,13 @@ fn composite_into(
         node.blend
     };
     for (idx, (a, s)) in acc.iter_mut().zip(src.iter_mut()).enumerate() {
-        if let Some(c) = cov {
-            let k = c[idx];
-            if k <= 0.0 {
-                continue;
-            }
-            s.iter_mut().for_each(|v| *v *= k);
+        let k = cov.map_or(1.0, |c| c[idx]);
+        if k <= 0.0 {
+            continue;
         }
-        if s[3] <= 0.0 {
+        if s[3] <= 0.0
+            && (node.blending.knockout == Knockout::None || node.blending.transparency_shapes_layer)
+        {
             continue;
         }
         let noise = if mode == BlendMode::Dissolve {
@@ -569,9 +639,8 @@ fn composite_into(
         } else {
             0.0
         };
-        if node.blending.blend_if != BlendIf::default() {
-            let gate = node
-                .blending
+        let gate = if node.blending.blend_if != BlendIf::default() {
+            node.blending
                 .blend_if
                 .source
                 .coverage(node.blending.blend_if.value(*s))
@@ -579,11 +648,39 @@ fn composite_into(
                     .blending
                     .blend_if
                     .backdrop
-                    .coverage(node.blending.blend_if.value(*a));
-            s.iter_mut().for_each(|v| *v *= gate);
+                    .coverage(node.blending.blend_if.value(*a))
+        } else {
+            1.0
+        };
+        let effective = k * gate;
+        if node.blending.knockout != Knockout::None {
+            let shape = if node.blending.transparency_shapes_layer {
+                s[3]
+            } else {
+                1.0
+            };
+            let punched = (shape * effective).clamp(0.0, 1.0);
+            a.iter_mut().for_each(|v| *v *= 1.0 - punched);
+            if node.blending.knockout == Knockout::Deep {
+                let plane = deep_punch.get_or_insert_with(|| vec![0.0; TILE_PX]);
+                plane[idx] = plane[idx].max(punched);
+            }
         }
         let before = *a;
-        let mut out = blend_px(mode, ctx.space, before, *s, noise);
+        let mut out = if mode.has_special_fill() {
+            blend_px_fill(
+                mode,
+                ctx.space,
+                before,
+                *s,
+                effective,
+                node.blending.fill_opacity,
+            )
+        } else {
+            s.iter_mut()
+                .for_each(|v| *v *= effective * node.blending.fill_opacity);
+            blend_px(mode, ctx.space, before, *s, noise)
+        };
         if !node.blending.channels.iter().any(|enabled| *enabled) {
             continue;
         }
@@ -1090,6 +1187,7 @@ mod tests {
                 group.content = NodeContent::StyledGroup {
                     children: vec![effect],
                     clip_source: Box::new(layer(4, Raster::empty(300, 300, [0; 4]))),
+                    effect_mask: None,
                 };
                 let actual = render_tile(
                     &tree(vec![backdrop(), group.clone()]),
@@ -1114,6 +1212,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn deep_knockout_crosses_group_boundary_and_unions_disjoint_children() {
+        let backdrop = layer(1, Raster::solid(300, 300, [1.0, 0.0, 0.0, 1.0]));
+        let make_group = |knockout| {
+            let mut left = layer(2, Raster::solid(20, 20, [0.0, 0.0, 1.0, 1.0]));
+            left.opacity = 0.5;
+            left.blending.knockout = knockout;
+            let mut right = left.clone();
+            right.id = 3;
+            if let NodeContent::Pixels { placement, .. } = &mut right.content {
+                placement.x = 40.0;
+            }
+            let mut group = layer(4, Raster::empty(1, 1, [0; 4]));
+            group.content = NodeContent::Group(vec![left, right]);
+            group
+        };
+        let shallow = render_tile(
+            &tree(vec![backdrop.clone(), make_group(Knockout::Shallow)]),
+            0,
+            TileCoord::new(0, 0),
+        );
+        let deep = render_tile(
+            &tree(vec![backdrop, make_group(Knockout::Deep)]),
+            0,
+            TileCoord::new(0, 0),
+        );
+        assert!(at(&deep, 5, 5)[3] < at(&shallow, 5, 5)[3]);
+        assert!(at(&deep, 45, 5)[3] < at(&shallow, 45, 5)[3]);
+    }
+
+    #[test]
+    fn transparency_shapes_controls_knockout_coverage() {
+        let backdrop = layer(1, Raster::solid(300, 300, [1.0, 0.0, 0.0, 1.0]));
+        let mut knockout = layer(2, Raster::empty(300, 300, [0; 4]));
+        knockout.blending.knockout = Knockout::Shallow;
+        let shaped = render_tile(
+            &tree(vec![backdrop.clone(), knockout.clone()]),
+            0,
+            TileCoord::new(0, 0),
+        );
+        knockout.blending.transparency_shapes_layer = false;
+        let unshaped = render_tile(&tree(vec![backdrop, knockout]), 0, TileCoord::new(0, 0));
+        assert_eq!(at(&shaped, 5, 5)[3], 1.0);
+        assert_eq!(at(&unshaped, 5, 5)[3], 0.0);
     }
 
     #[test]

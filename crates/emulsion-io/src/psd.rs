@@ -10,6 +10,7 @@ use ag_psd::psd::{ReadOptions, WriteOptions};
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Node, NodeId, NodeKind};
 use emulsion_raster::composite::flatten;
+use emulsion_raster::composite::{BlendIf, BlendRange, Knockout};
 use emulsion_raster::{BlendMode, Mask, Placement, Raster};
 use std::io::Write;
 use std::path::Path;
@@ -218,6 +219,44 @@ fn finish_node(
 ) -> Result<NodeId> {
     node.visible = !l.hidden.unwrap_or(false);
     node.opacity = l.opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32;
+    let info = &l.additional_info;
+    node.blending.fill_opacity = info.fill_opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32;
+    if let Some(restricted) = &info.channel_blending_restrictions {
+        for channel in restricted {
+            let index = *channel as usize;
+            if index < 3 {
+                node.blending.channels[index] = false;
+            }
+        }
+    }
+    if let Some(ranges) = &info.blending_ranges {
+        let range = |values: &[f64]| -> Option<BlendRange> {
+            (values.len() >= 4).then(|| BlendRange {
+                black: (values[0] / 255.0).clamp(0.0, 1.0) as f32,
+                black_fade: (values[1] / 255.0).clamp(0.0, 1.0) as f32,
+                white_fade: (values[2] / 255.0).clamp(0.0, 1.0) as f32,
+                white: (values[3] / 255.0).clamp(0.0, 1.0) as f32,
+            })
+        };
+        if let (Some(source), Some(backdrop)) = (
+            range(&ranges.composite_gray_blend_source),
+            range(&ranges.composite_graph_blend_destination_range),
+        ) {
+            node.blending.blend_if = BlendIf {
+                source,
+                backdrop,
+                ..Default::default()
+            };
+        }
+    }
+    node.blending.knockout = if info.knockout.unwrap_or(false) {
+        Knockout::Shallow
+    } else {
+        Knockout::None
+    };
+    node.blending.blend_interior_effects_as_group = info.blend_interior_elements.unwrap_or(true);
+    node.blending.blend_clipped_layers_as_group = info.blend_clippend_elements.unwrap_or(true);
+    node.blending.transparency_shapes_layer = info.transparency_shapes_layer.unwrap_or(true);
     // Transparency protection is not a whole-layer lock.
     node.locked = false;
     add(doc, node, parent)
@@ -247,6 +286,7 @@ pub fn read(path: &Path) -> Result<Document> {
         )));
     }
     let mut doc = Document::new(w, h);
+    doc.blend_space = emulsion_raster::blend::BlendSpace::Srgb;
     doc.source_depth = 8;
     fn needs_composite(layers: &[Layer]) -> bool {
         layers.iter().any(|l| {
@@ -433,7 +473,7 @@ pub fn needs_appearance_fallback(doc: &Document) -> bool {
     doc.nodes.iter().any(|n| {
         matches!(n.kind, NodeKind::Adjust(_))
             || !n.styles.is_empty()
-            || n.blending != Default::default()
+            || n.blending.layer_mask_hides_effects
     }) || unsupported_clips(doc, None)
 }
 
@@ -451,6 +491,38 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
         ..Default::default()
     };
     l.additional_info.name = Some(n.name.clone());
+    l.additional_info.fill_opacity = Some(n.blending.fill_opacity as f64);
+    let mut restrictions: Vec<f64> = n
+        .blending
+        .channels
+        .iter()
+        .enumerate()
+        .filter_map(|(i, enabled)| (!enabled).then_some(i as f64))
+        .collect();
+    // ag-psd 0.3's reader intentionally leaves the final 4-byte word for
+    // padding. Repeating the final restriction is harmless to Photoshop and
+    // makes files produced here round-trip through that reader faithfully.
+    if let Some(last) = restrictions.last().copied() {
+        restrictions.push(last);
+    }
+    l.additional_info.channel_blending_restrictions = Some(restrictions);
+    let values = |r: BlendRange| {
+        vec![
+            (r.black * 255.0).round() as f64,
+            (r.black_fade * 255.0).round() as f64,
+            (r.white_fade * 255.0).round() as f64,
+            (r.white * 255.0).round() as f64,
+        ]
+    };
+    l.additional_info.blending_ranges = Some(ag_psd::psd::BlendingRanges {
+        composite_gray_blend_source: values(n.blending.blend_if.source),
+        composite_graph_blend_destination_range: values(n.blending.blend_if.backdrop),
+        ranges: Vec::new(),
+    });
+    l.additional_info.blend_interior_elements = Some(n.blending.blend_interior_effects_as_group);
+    l.additional_info.blend_clippend_elements = Some(n.blending.blend_clipped_layers_as_group);
+    l.additional_info.transparency_shapes_layer = Some(n.blending.transparency_shapes_layer);
+    l.additional_info.knockout = Some(n.blending.knockout != Knockout::None);
     match &n.kind {
         NodeKind::Group { .. } => {
             let kids: Vec<Layer> = doc
@@ -692,6 +764,51 @@ mod tests {
         assert_eq!(
             flatten(&doc.composite_tree(), 0).to_srgba8(),
             flatten(&restored.composite_tree(), 0).to_srgba8()
+        );
+    }
+
+    #[test]
+    fn advanced_blending_metadata_roundtrips_as_layers() {
+        let mut doc = Document::new(4, 4);
+        let id = add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Advanced",
+                Arc::new(Raster::solid(4, 4, [0.8, 0.2, 0.1, 1.0])),
+                Placement::default(),
+            ),
+            None,
+        )
+        .unwrap();
+        let layer = doc.node_mut(id).unwrap();
+        layer.blend = BlendMode::LinearDodge;
+        layer.blending.fill_opacity = 0.4;
+        layer.blending.channels = [true, false, true];
+        layer.blending.knockout = Knockout::Deep;
+        layer.blending.blend_interior_effects_as_group = false;
+        layer.blending.blend_clipped_layers_as_group = false;
+        layer.blending.transparency_shapes_layer = false;
+        layer.blending.blend_if.source = BlendRange {
+            black: 0.1,
+            black_fade: 0.2,
+            white_fade: 0.8,
+            white: 0.9,
+        };
+        let restored = roundtrip(&doc, "advanced-blending");
+        assert_eq!(restored.nodes.len(), 1, "must remain layered");
+        let layer = &restored.nodes[0];
+        assert_eq!(layer.blend, BlendMode::LinearDodge);
+        assert!((layer.blending.fill_opacity - 0.4).abs() <= 1.0 / 255.0);
+        assert_eq!(layer.blending.channels, [true, false, true]);
+        assert!((layer.blending.blend_if.source.black - 0.1).abs() <= 1.0 / 255.0);
+        assert_eq!(layer.blending.knockout, Knockout::Shallow);
+        assert!(!layer.blending.blend_interior_effects_as_group);
+        assert!(!layer.blending.blend_clipped_layers_as_group);
+        assert!(!layer.blending.transparency_shapes_layer);
+        assert_eq!(
+            restored.blend_space,
+            emulsion_raster::blend::BlendSpace::Srgb
         );
     }
 

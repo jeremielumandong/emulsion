@@ -148,6 +148,43 @@ fn image_adjustments_menu_adds_editable_adjustment_with_undo(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn image_blend_space_is_discoverable_and_undoable(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx);
+    assert_eq!(
+        cx.update(|_, cx| editor.read(cx).editor.doc.blend_space),
+        emulsion_raster::blend::BlendSpace::Linear
+    );
+    cx.update(|window, cx| {
+        window.click("image-menu", cx);
+        assert_eq!(
+            window.within("popup-menu").find(1usize).label(),
+            Some("Blend space")
+        );
+        window.within("popup-menu").hover(1usize, cx);
+        window.press("right", cx);
+        assert_eq!(
+            window.within("submenu").find(0usize).label(),
+            Some("Photoshop / sRGB")
+        );
+        window.press("enter", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        editor.update(cx, |e, cx| {
+            assert_eq!(
+                e.editor.doc.blend_space,
+                emulsion_raster::blend::BlendSpace::Srgb
+            );
+            e.undo(cx);
+            assert_eq!(
+                e.editor.doc.blend_space,
+                emulsion_raster::blend::BlendSpace::Linear
+            );
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn filters_reject_locked_layers_and_pending_results_after_undo(cx: &mut TestAppContext) {
     let (editor, cx) = setup(cx);
     cx.update(|_, cx| {

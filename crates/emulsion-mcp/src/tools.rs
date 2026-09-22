@@ -182,6 +182,33 @@ fn text_properties(include_text: bool) -> Value {
     properties
 }
 
+fn blend_range_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"properties":{
+        "black":{"type":"number","minimum":0,"maximum":255},
+        "black_fade":{"type":"number","minimum":0,"maximum":255},
+        "white_fade":{"type":"number","minimum":0,"maximum":255},
+        "white":{"type":"number","minimum":0,"maximum":255}
+    }})
+}
+
+fn advanced_blending_schema() -> Value {
+    json!({
+        "node": node(),
+        "fill_opacity": {"type":"number","minimum":0,"maximum":100},
+        "channels": {"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3},
+        "blend_if": {"type":"object","additionalProperties":false,"properties":{
+            "channel":{"type":"string","enum":["gray","red","green","blue"]},
+            "source":blend_range_schema(),
+            "backdrop":blend_range_schema()
+        }},
+        "knockout": {"type":"string","enum":["none","shallow","deep"]},
+        "blend_interior_effects_as_group": {"type":"boolean"},
+        "blend_clipped_layers_as_group": {"type":"boolean"},
+        "transparency_shapes_layer": {"type":"boolean"},
+        "layer_mask_hides_effects": {"type":"boolean"}
+    })
+}
+
 pub fn definitions() -> Vec<ToolDef> {
     vec![
         def(
@@ -232,6 +259,30 @@ pub fn definitions() -> Vec<ToolDef> {
             "Set a node's blend mode. 'pass through' is only valid for groups.",
             json!({ "node": node(), "mode": { "type": "string", "enum": BLEND_MODES } }),
             &["node", "mode"],
+        ),
+        def(
+            "set_blending_options",
+            "Edit native advanced layer blending. Omitted fields are preserved. fill_opacity is 0..100 percent, channels is [red,green,blue]. Blend If split values use 0..255. Knockout accepts none, shallow or deep. Read describe_document first. One undoable edit.",
+            advanced_blending_schema(),
+            &["node"],
+        ),
+        def(
+            "set_blend_space",
+            "Set the document compositing space, linear or srgb, as one undoable change. Affects the entire composite, not the image color profile. Keep the existing space unless the requested appearance or compatibility workflow requires changing it.",
+            json!({"space":{"type":"string","enum":["linear","srgb"]}}),
+            &["space"],
+        ),
+        def(
+            "set_style_blending",
+            "Edit an existing layer effect's blend mode, enabled state, or bevel highlight/shadow blend modes. Inspect current effect index and options with describe_document first. Omitted fields and the effect's stable identity are preserved. Pass Through is not valid for effects.",
+            json!({"node":node(),"index":{"type":"integer","minimum":0},"blend":{"type":"string","enum":&BLEND_MODES[..BLEND_MODES.len()-1]},"enabled":{"type":"boolean"},"highlight_blend":{"type":"string","enum":&BLEND_MODES[..BLEND_MODES.len()-1]},"shadow_blend":{"type":"string","enum":&BLEND_MODES[..BLEND_MODES.len()-1]}}),
+            &["node", "index"],
+        ),
+        def(
+            "set_effects_enabled",
+            "Show or hide all effects on a layer without deleting their settings, as one undoable edit.",
+            json!({"node":node(),"enabled":{"type":"boolean"}}),
+            &["node", "enabled"],
         ),
         def(
             "move_node",
@@ -432,7 +483,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "list_recipes",
-            "Available recipes: film looks and saved exact adjustment workflows. Includes tags, workflow stage summaries or film settings, and unsupported legacy settings when present. Base looks that a film recipe can name: see looks.",
+            "Available recipes: film looks, the shipped community library and saved exact adjustment workflows. Each carries its collection (Emulsion for built-in and saved recipes; Classic Chrome, Velvia, Black and white… for the library), tags, author, workflow stage summaries or film settings, and unsupported legacy settings when present. Base looks that a film recipe can name: see looks.",
             json!({}),
             &[],
         ),
@@ -456,13 +507,13 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "add_style",
-            "Add a layer style (an effect drawn from the node's shape) to a pixel, smart or path node. Kinds: drop_shadow {opacity 0..100, angle, distance 0..100, size 0..60}, inner_shadow {same}, outer_glow {opacity, size 0..80}, stroke {opacity, size 1..40}, color_overlay {opacity}, gradient_overlay {angle, opacity; color and color2 are its ends}. color is #RRGGBB.",
+            "Add a layer style to a pixel, text, smart or path node. Also supports bevel_emboss, inner_glow, satin and pattern_overlay; inspect describe_document styles params/options after creation. Use set_style_blending for effect modes and enablement. Basic kinds: drop_shadow {opacity 0..100, angle, distance 0..100, size 0..60}, inner_shadow {same}, outer_glow {opacity, size 0..80}, stroke {opacity, size 1..40}, color_overlay {opacity}, gradient_overlay {angle, opacity; color and color2 are its ends}. color is #RRGGBB.",
             json!({ "node": node(), "kind": { "type": "string" }, "params": { "type": "object" }, "color": { "type": "string" }, "color2": { "type": "string" } }),
             &["node", "kind"],
         ),
         def(
             "set_style",
-            "Change a layer style at index (params, color, color2).",
+            "Change a layer style at index (params, color, color2). Use set_style_blending for effect blend and enablement.",
             json!({ "node": node(), "index": { "type": "integer", "minimum": 0 }, "params": { "type": "object" }, "color": { "type": "string" }, "color2": { "type": "string" } }),
             &["node", "index"],
         ),
@@ -480,15 +531,15 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "add_filter",
-            "Add a filter to a smart layer's stack. Kinds and parameters: gaussian_blur {radius 0..100}; box_blur {radius}; motion_blur {angle -180..180, distance 0..200}; lens_blur {radius 0..40}; unsharp_mask {amount 0..500 %, radius 0.1..50, threshold 0..255}; smart_sharpen {amount, radius}; add_noise {amount 0..100, monochrome 0/1}; reduce_noise {strength 0..10, detail 0..100}; high_pass {radius}; lens_correction {distortion -100..100, vignette -100..100}; emboss {angle, height 1..20, amount}; find_edges {}; pinch {amount -100..100}; twirl {angle}; wave {amplitude, wavelength}. Blurs spread past the layer's edges.",
-            json!({ "node": node(), "kind": { "type": "string" }, "params": { "type": "object" } }),
+            "Add a filter to a smart layer's stack with editable opacity and blend mode. Kinds and parameters: gaussian_blur {radius 0..100}; box_blur {radius}; motion_blur {angle -180..180, distance 0..200}; lens_blur {radius 0..40}; unsharp_mask {amount 0..500 %, radius 0.1..50, threshold 0..255}; smart_sharpen {amount, radius}; add_noise {amount 0..100, monochrome 0/1}; reduce_noise {strength 0..10, detail 0..100}; high_pass {radius}; lens_correction {distortion -100..100, vignette -100..100}; emboss {angle, height 1..20, amount}; find_edges {}; pinch {amount -100..100}; twirl {angle}; wave {amplitude, wavelength}. Blurs spread past the layer's edges.",
+            json!({ "node": node(), "kind": { "type": "string" }, "params": { "type": "object" }, "opacity": {"type":"number","minimum":0,"maximum":1}, "blend": {"type":"string"} }),
             &["node", "kind"],
         ),
         def(
             "set_filter",
-            "Change parameters of the filter at index on a smart layer (indices from describe_document).",
-            json!({ "node": node(), "index": { "type": "integer", "minimum": 0 }, "params": { "type": "object" } }),
-            &["node", "index", "params"],
+            "Change parameters, opacity and/or blend mode of the filter at index on a smart layer (indices from describe_document).",
+            json!({ "node": node(), "index": { "type": "integer", "minimum": 0 }, "params": { "type": "object" }, "opacity": {"type":"number","minimum":0,"maximum":1}, "blend": {"type":"string"} }),
+            &["node", "index"],
         ),
         def(
             "remove_filter",
@@ -744,7 +795,7 @@ pub fn definitions() -> Vec<ToolDef> {
                 "node": node(),
                 "brush": { "type": "string", "minLength": 1 },
                 "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
-                "settings": { "type": "object" },
+                "settings": { "type": "object", "description": "Brush overrides. blend accepts the serialized mode names listed by list_brushes, including Normal, Multiply, Screen, Overlay, SoftLight, Behind and Clear." },
                 "sample_merged": {"type": "boolean", "default": false, "description": "Opt into frozen lower-layer colour pickup for wet/smudge brushes. Current and higher layers are excluded from the backdrop; current layer still supplies its own paint."},
                 "alpha_lock": {"type": "boolean", "default": false, "description": "Paint only where the layer already has pixels (shading inside an existing shape)."},
                 "mirror": {"type": "string", "enum": ["x", "y", "xy"], "description": "Also paint each stroke mirrored across the canvas centre: x = left/right, y = top/bottom, xy = both (quadrant symmetry)."},

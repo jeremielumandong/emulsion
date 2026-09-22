@@ -6,7 +6,7 @@
 //! pixel (0, 0) lands exactly where it did before filtering, whatever the
 //! placement's rotation or scale.
 
-use emulsion_filters::{Filter, apply_stack};
+use emulsion_filters::{Filter, FilterStyle, apply_stack, apply_stack_styled};
 use emulsion_raster::{Placement, Raster};
 use glam::dvec2;
 use std::sync::Arc;
@@ -14,6 +14,15 @@ use std::sync::Arc;
 /// Render the stack. Returns the cache and its offset in source pixels.
 pub fn render(source: &Raster, filters: &[Filter]) -> (Arc<Raster>, (i32, i32)) {
     let (r, off) = apply_stack(source, filters);
+    (Arc::new(r), off)
+}
+
+pub fn render_styled(
+    source: &Raster,
+    filters: &[Filter],
+    styles: &[FilterStyle],
+) -> (Arc<Raster>, (i32, i32)) {
+    let (r, off) = apply_stack_styled(source, filters, styles);
     (Arc::new(r), off)
 }
 

@@ -207,6 +207,8 @@ enum HKind {
         cache: u32,
         offset: (i32, i32),
         filters: Vec<emulsion_filters::Filter>,
+        #[serde(default)]
+        filter_styles: Vec<emulsion_filters::FilterStyle>,
         placement: Placement,
     },
 }
@@ -351,6 +353,7 @@ pub(crate) fn encode(
                             editable,
                             source,
                             filters,
+                            filter_styles,
                             placement,
                             cache,
                             offset,
@@ -360,6 +363,7 @@ pub(crate) fn encode(
                             cache: rasters.add(cache),
                             offset: *offset,
                             filters: filters.clone(),
+                            filter_styles: filter_styles.clone(),
                             placement: *placement,
                         },
                         NodeKind::Path { path, style, .. } => HKind::Path {
@@ -581,6 +585,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     cache,
                     offset,
                     filters,
+                    filter_styles,
                     placement,
                 } => NodeKind::Smart {
                     editable,
@@ -588,6 +593,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     cache: raster(cache)?,
                     offset,
                     filters,
+                    filter_styles,
                     placement,
                 },
                 HKind::Text { spec } => {

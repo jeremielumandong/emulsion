@@ -8,7 +8,7 @@ use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
 use emulsion_raster::composite::region;
 use emulsion_raster::paint::{Brush, Ink, Stroke};
 use emulsion_raster::select::{self, Combine};
-use emulsion_raster::{Adjustment, BlendMode, Placement};
+use emulsion_raster::{Adjustment, Placement};
 use emulsion_raster::{IRect, Raster, color, fill, library};
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
@@ -126,10 +126,11 @@ fn save_recipe(
     )))
 }
 
-fn recipe_summary(r: &emulsion_recipes::Recipe, saved: bool) -> Value {
+fn recipe_summary(r: &emulsion_recipes::Recipe, origin: &emulsion_recipes::store::Origin) -> Value {
+    let saved = matches!(origin, emulsion_recipes::store::Origin::Saved(_));
     let mut summary = json!({
         "name": r.name, "author": r.author, "tags": r.tags, "notes": r.notes,
-        "saved": saved, "limitations": r.limitations(),
+        "saved": saved, "collection": origin.collection(), "limitations": r.limitations(),
     });
     if let Some(workflow) = &r.workflow {
         summary["kind"] = json!("adjustment_workflow");
@@ -338,7 +339,16 @@ fn resolve_brush(
             if base.get(k).is_none() {
                 return Err(err(format!("unknown brush setting {k:?}")));
             }
-            base[k] = v.clone();
+            base[k] = if k == "blend" {
+                let label = v
+                    .as_str()
+                    .ok_or_else(|| err("brush blend must be a mode name"))?;
+                let blend = emulsion_raster::paint::BrushBlend::parse(label)
+                    .ok_or_else(|| err(format!("unknown brush blend mode {label:?}")))?;
+                serde_json::to_value(blend).map_err(|e| err(e.to_string()))?
+            } else {
+                v.clone()
+            };
         }
         brush = serde_json::from_value::<Brush>(base)
             .map_err(|e| err(format!("bad settings: {e}")))?
@@ -1036,6 +1046,28 @@ fn smart_filters(doc: &Document, id: NodeId) -> Result<Vec<emulsion_filters::Fil
             "{} is not a smart layer; call convert_to_smart first",
             node_label(doc, id)
         ))),
+    }
+}
+
+fn smart_filter_styles(
+    doc: &Document,
+    id: NodeId,
+) -> Result<Vec<emulsion_filters::FilterStyle>, ToolResult> {
+    match &doc
+        .node(id)
+        .ok_or_else(|| err(format!("no node {id}")))?
+        .kind
+    {
+        NodeKind::Smart {
+            filters,
+            filter_styles,
+            ..
+        } => {
+            let mut styles = filter_styles.clone();
+            styles.resize(filters.len(), Default::default());
+            Ok(styles)
+        }
+        _ => Err(err(format!("{} is not a smart layer", node_label(doc, id)))),
     }
 }
 
@@ -1824,6 +1856,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
         "add_filter" | "set_filter" | "remove_filter" => {
             let id = id_arg(args, "node")?;
             let mut filters = smart_filters(doc, id)?;
+            let mut styles = smart_filter_styles(doc, id)?;
             match name {
                 "add_filter" => {
                     let kind = args
@@ -1844,6 +1877,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                         apply_filter_params(&mut f, p)?;
                     }
                     filters.push(f);
+                    styles.push(Default::default());
                 }
                 "set_filter" => {
                     let i = args
@@ -1854,11 +1888,9 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                     let f = filters
                         .get_mut(i)
                         .ok_or_else(|| err(format!("no filter at index {i}")))?;
-                    let p = args
-                        .get("params")
-                        .and_then(Value::as_object)
-                        .ok_or_else(|| err("missing object 'params'"))?;
-                    apply_filter_params(f, p)?;
+                    if let Some(p) = args.get("params").and_then(Value::as_object) {
+                        apply_filter_params(f, p)?;
+                    }
                 }
                 _ => {
                     let i = args
@@ -1870,6 +1902,24 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                         return Err(err(format!("no filter at index {i}")));
                     }
                     filters.remove(i);
+                    styles.remove(i);
+                }
+            }
+            if name != "remove_filter" {
+                let index = if name == "add_filter" {
+                    styles.len() - 1
+                } else {
+                    args.get("index").and_then(Value::as_u64).unwrap() as usize
+                };
+                if let Some(opacity) = args.get("opacity").and_then(Value::as_f64) {
+                    if !(0.0..=1.0).contains(&opacity) {
+                        return Err(err("opacity must be 0–1"));
+                    }
+                    styles[index].opacity = opacity as f32;
+                }
+                if let Some(mode) = args.get("blend").and_then(Value::as_str) {
+                    let blend = crate::blending::mode(&Value::String(mode.to_string()), false)?;
+                    styles[index].blend = blend;
                 }
             }
             if filters.len() > 32 {
@@ -1878,7 +1928,11 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let n = filters.len();
             Ok(Planned {
                 feedback: None,
-                commands: vec![Command::SetFilters { id, filters }],
+                commands: vec![Command::SetFilterStack {
+                    id,
+                    filters,
+                    styles,
+                }],
                 message: format!(
                     "{} now has {n} filter{}",
                     node_label(doc, id),
@@ -1980,13 +2034,21 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 node_label(&editor.doc, id)
             )))
         }
+        "set_blending_options"
+        | "set_style_blending"
+        | "set_effects_enabled"
+        | "set_blend_space" => crate::blending::execute(editor, name, args),
         "set_blend_mode" => {
             let id = id_arg(args, "node")?;
             let m = args
                 .get("mode")
                 .and_then(Value::as_str)
                 .ok_or_else(|| err("missing string 'mode'"))?;
-            let blend = parse_blend(m).ok_or_else(|| err(format!("unknown blend mode '{m}'")))?;
+            let node = editor
+                .doc
+                .node(id)
+                .ok_or_else(|| err(format!("no node {id}")))?;
+            let blend = crate::blending::mode(&Value::String(m.to_string()), node.is_group())?;
             exec(editor, Command::SetBlend { id, blend })?;
             Ok(ToolResult::text(format!(
                 "Set {} blend mode to {}",
@@ -2420,12 +2482,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             let dir = emulsion_io::recent::data_dir().join("recipes");
             let list: Vec<Value> = emulsion_recipes::store::list(&dir)
                 .into_iter()
-                .map(|(r, origin)| {
-                    recipe_summary(
-                        &r,
-                        matches!(origin, emulsion_recipes::store::Origin::Saved(_)),
-                    )
-                })
+                .map(|(r, origin)| recipe_summary(&r, &origin))
                 .collect();
             let looks: Vec<Value> = emulsion_recipes::looks::LOOKS
                 .iter()
@@ -2524,7 +2581,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                     let mut s = LayerStyle::catalogue()
                         .into_iter()
                         .find(|s| s.key() == k)
-                        .ok_or_else(|| err(format!("unknown style {kind:?}; one of drop_shadow, inner_shadow, outer_glow, stroke, color_overlay, gradient_overlay")))?;
+                        .ok_or_else(|| err(format!("unknown style {kind:?}; one of drop_shadow, inner_shadow, outer_glow, inner_glow, stroke, color_overlay, gradient_overlay, bevel_emboss, satin, pattern_overlay")))?;
                     apply(&mut s, args)?;
                     styles.push(s);
                 }
@@ -3140,18 +3197,6 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
     }
 }
 
-fn parse_blend(s: &str) -> Option<BlendMode> {
-    let s = s.trim().to_ascii_lowercase().replace(['_', '-'], " ");
-    if s == "pass through" {
-        return Some(BlendMode::PassThrough);
-    }
-    BlendMode::MENU
-        .iter()
-        .flatten()
-        .copied()
-        .find(|m| m.label() == s)
-}
-
 pub fn adjustment(kind: &str) -> Option<Adjustment> {
     let k = kind.trim().to_lowercase().replace(['-', ' '], "_");
     let k = match k.as_str() {
@@ -3406,6 +3451,8 @@ pub fn describe(editor: &Editor) -> Value {
                 "visible": n.visible,
                 "opacity": (n.opacity * 100.0).round(),
                 "blend": n.blend.label(),
+                "blending": crate::blending::describe(&n.blending),
+                "effects_enabled": n.effects_enabled,
             });
             let o = v.as_object_mut().unwrap();
             if let Some(p) = n.parent {
@@ -3427,7 +3474,7 @@ pub fn describe(editor: &Editor) -> Value {
                     .enumerate()
                     .map(|(i, s)| {
                         let params: Map<String, Value> = s.params().into_iter().map(|p| (p.key.to_string(), json!(p.value))).collect();
-                        json!({ "index": i, "kind": s.key(), "colors": s.colors().iter().map(|c| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])).collect::<Vec<_>>(), "params": params })
+                        json!({ "index": i, "kind": s.key(), "options": crate::blending::describe_style(&n.style_options.get(i).cloned().unwrap_or_else(|| emulsion_core::style_options::StyleOptions::for_style(s))), "colors": s.colors().iter().map(|c| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])).collect::<Vec<_>>(), "params": params })
                     })
                     .collect();
                 o.insert("styles".into(), Value::Array(st));
@@ -3448,7 +3495,7 @@ pub fn describe(editor: &Editor) -> Value {
                 NodeKind::Fill { rgba } => {
                     o.insert("color".into(), json!(format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])));
                 }
-                NodeKind::Smart { source, filters, placement, .. } => {
+                NodeKind::Smart { source, filters, filter_styles, placement, .. } => {
                     o.insert("pixels".into(), json!(format!("{}×{}", source.width(), source.height())));
                     o.insert("placement".into(), json!({ "x": placement.x, "y": placement.y, "scale": placement.scale_x.abs() * 100.0, "rotation": placement.rotation }));
                     let fs: Vec<Value> = filters
@@ -3456,7 +3503,8 @@ pub fn describe(editor: &Editor) -> Value {
                         .enumerate()
                         .map(|(i, f)| {
                             let params: Map<String, Value> = f.params().into_iter().map(|s| (s.key.to_string(), json!(s.value))).collect();
-                            json!({ "index": i, "kind": f.key(), "params": params })
+                            let style = filter_styles.get(i).copied().unwrap_or_default().sanitized();
+                            json!({ "index": i, "kind": f.key(), "params": params, "opacity": style.opacity, "blend": style.blend.label() })
                         })
                         .collect();
                     o.insert("filters".into(), Value::Array(fs));
@@ -3503,6 +3551,7 @@ pub fn describe(editor: &Editor) -> Value {
     };
     json!({
         "canvas": { "width": doc.width, "height": doc.height },
+        "blend_space": doc.blend_space,
         "camera": doc.info.as_ref().map(|i| i.summary()),
         "looks_like": looks_like,
         "selection": selection,
@@ -3628,8 +3677,12 @@ mod tests {
         assert_eq!(saved.tags, vec!["portrait"]);
         assert_eq!(saved.notes, "Two editable stages");
         assert_eq!(saved.workflow.as_ref().unwrap().stages.len(), 2);
-        assert_eq!(recipe_summary(&saved, true)["kind"], "adjustment_workflow");
-        assert!(recipe_summary(&saved, true)["workflow"]["stages"][0]["adjustment"].is_string());
+        let origin = emulsion_recipes::store::Origin::Saved(dir.join("x"));
+        assert_eq!(
+            recipe_summary(&saved, &origin)["kind"],
+            "adjustment_workflow"
+        );
+        assert!(recipe_summary(&saved, &origin)["workflow"]["stages"][0]["adjustment"].is_string());
         let mut target = Editor::new(picture, None);
         let result = execute(
             &mut target,
@@ -3723,7 +3776,7 @@ mod tests {
             color_chrome_fx_blue: emulsion_recipes::Strength::Weak,
             ..Default::default()
         };
-        let summary = recipe_summary(&recipe, false);
+        let summary = recipe_summary(&recipe, &emulsion_recipes::store::Origin::Starter);
         assert_eq!(summary["kind"], "film_recipe");
         assert_eq!(summary["limitations"].as_array().unwrap().len(), 3);
         let mut e = editor();
@@ -3963,6 +4016,14 @@ mod tests {
         assert_eq!(script.strokes[2].brush.size, 6.0);
         assert_eq!(script.strokes[2].brush.opacity, 0.4);
         assert!(matches!(script.strokes[2].ink, Ink::Erase));
+
+        let args = json!({"node": 1, "color": "#000000", "settings": {"blend": "soft light"},
+            "strokes": [{"settings": {"blend": "clear"}, "points": [[10,10]]}]});
+        let script = paint_script(&e.doc, &args).unwrap();
+        assert_eq!(
+            script.strokes[0].brush.blend,
+            emulsion_raster::paint::BrushBlend::Clear
+        );
     }
 
     #[test]
@@ -5188,12 +5249,36 @@ mod tests {
         let mut e = editor();
         let r = execute(&mut e, "convert_to_smart", &json!({ "node": 1 }));
         assert!(!r.is_error, "{}", text(&r));
+        let before_add = e.history.len();
         let r = execute(
             &mut e,
             "add_filter",
-            &json!({ "node": 1, "kind": "gaussian blur", "params": { "radius": 6 } }),
+            &json!({ "node": 1, "kind": "gaussian blur", "params": { "radius": 6 },
+                "opacity": 0.5, "blend": "soft light" }),
         );
         assert!(!r.is_error, "{}", text(&r));
+        assert_eq!(
+            e.history.len(),
+            before_add + 1,
+            "filter plus blending options are one undo step"
+        );
+        let NodeKind::Smart {
+            source,
+            filters,
+            filter_styles,
+            cache,
+            offset,
+            ..
+        } = &e.doc.node(1).unwrap().kind
+        else {
+            panic!()
+        };
+        assert_eq!(filter_styles[0].opacity, 0.5);
+        assert_eq!(filter_styles[0].blend, emulsion_core::BlendMode::SoftLight);
+        let (expected, expected_offset) =
+            emulsion_core::smart::render_styled(source, filters, filter_styles);
+        assert_eq!(cache.to_srgba8(), expected.to_srgba8());
+        assert_eq!(*offset, expected_offset);
         let r = execute(
             &mut e,
             "add_filter",

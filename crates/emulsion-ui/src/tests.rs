@@ -2404,6 +2404,59 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn recipes_panel_browses_the_library_one_collection_at_a_time(cx: &mut TestAppContext) {
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        cx.update(|window, cx| window.click("sidebar-panels-toggle", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("sidebar-recipes", cx));
+        cx.run_until_parked();
+        // The Emulsion collection is the default: built-ins only, no library cards.
+        cx.update(|window, cx| {
+            assert!(window.find("rc-collection-emulsion").visible());
+            assert!(window.find(("rc-collection", 0usize)).visible());
+            let e = e.read(cx);
+            assert!(e.recipes.collection.is_none());
+            assert!(e.recipes.tag.is_none());
+        });
+        let library = emulsion_recipes::library::collections();
+        assert!(
+            library.len() >= 8,
+            "one collection per film simulation family"
+        );
+        // A tag chosen in one collection does not leak into the next.
+        cx.update(|window, cx| {
+            e.update(cx, |e, _| {
+                e.recipes.tag = Some("street".into());
+            });
+            window.click(("rc-collection", 0usize), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let first = library[0].name.clone();
+            {
+                let e = e.read(cx);
+                assert_eq!(e.recipes.collection.as_deref(), Some(first.as_str()));
+                assert_eq!(e.recipes.tag, None, "the tag filter clears on a change");
+            }
+            // Every recipe of the collection is a card; a library card has no remove chip.
+            let cards = library[0].recipes.len();
+            assert!(
+                window.find(("rc-card", cards - 1)).visible(),
+                "{cards} cards"
+            );
+            assert!(window.try_find(("rc-del", 0usize)).is_none());
+            window.click("rc-collection-emulsion", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            assert!(e.recipes.collection.is_none());
+        });
+    }
+
+    #[gpui_kit::test]
     fn smart_layer_filters_are_editable_and_undoable(cx: &mut TestAppContext) {
         use emulsion_core::NodeKind;
         use emulsion_filters::Filter;

@@ -86,7 +86,9 @@ impl EditorView {
                                 return menu;
                             };
                             let enabled = editor.read(cx).effects_ready();
+                            let blend_space = editor.read(cx).editor.doc.blend_space;
                             let adjustment_editor = image_editor.clone();
+                            let blend_editor = image_editor.clone();
                             let menu = menu
                                 .submenu("Adjustments", window, cx, move |mut menu, _, _| {
                                     for adjustment in Adjustment::catalogue() {
@@ -99,6 +101,32 @@ impl EditorView {
                                                     editor
                                                         .update(cx, |view, cx| {
                                                             view.quick_adjust(key, cx);
+                                                            view.restore_effect_focus(window, cx);
+                                                        })
+                                                        .ok();
+                                                }),
+                                        );
+                                    }
+                                    menu
+                                })
+                                .submenu("Blend space", window, cx, move |menu, _, _| {
+                                    let mut menu = menu;
+                                    for (space, label) in [
+                                        (emulsion_raster::blend::BlendSpace::Srgb, "Photoshop / sRGB"),
+                                        (emulsion_raster::blend::BlendSpace::Linear, "Linear light"),
+                                    ] {
+                                        let editor = blend_editor.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(label)
+                                                .checked(blend_space == space)
+                                                .disabled(!enabled)
+                                                .on_click(move |_, window, cx| {
+                                                    editor
+                                                        .update(cx, |view, cx| {
+                                                            view.execute(
+                                                                Command::SetBlendSpace { space },
+                                                                cx,
+                                                            );
                                                             view.restore_effect_focus(window, cx);
                                                         })
                                                         .ok();

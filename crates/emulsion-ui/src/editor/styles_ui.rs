@@ -3,7 +3,7 @@
 use super::*;
 use emulsion_core::style_options::StyleOptions;
 use emulsion_core::styles::LayerStyle;
-use emulsion_raster::composite::{BlendIfChannel, BlendingOptions};
+use emulsion_raster::composite::{BlendIfChannel, BlendingOptions, Knockout};
 use gpui_kit::component::WindowExt;
 #[path = "style_controls.rs"]
 mod controls;
@@ -488,7 +488,85 @@ impl EditorView {
                 .test_support(),
             );
         }
-        body = body.child(channels).child(
+        body = body.child(channels);
+        let mut knockout = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(label("Knockout", p));
+        for (index, (value, name)) in [
+            (Knockout::None, "None"),
+            (Knockout::Shallow, "Shallow"),
+            (Knockout::Deep, "Deep"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            knockout = knockout.child(
+                chip(
+                    ("blend-knockout", index),
+                    name,
+                    n.blending.knockout == value,
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_blending(id, |options| options.knockout = value, cx)
+                }))
+                .test_support(),
+            );
+        }
+        body = body.child(knockout);
+        for (index, (name, enabled)) in [
+            (
+                "Blend interior effects as group",
+                n.blending.blend_interior_effects_as_group,
+            ),
+            (
+                "Blend clipped layers as group",
+                n.blending.blend_clipped_layers_as_group,
+            ),
+            (
+                "Transparency shapes layer",
+                n.blending.transparency_shapes_layer,
+            ),
+            (
+                "Layer mask hides effects",
+                n.blending.layer_mask_hides_effects,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            body = body.child(
+                chip(("advanced-blend-toggle", index), name, enabled, p)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_blending(
+                            id,
+                            |options| match index {
+                                0 => {
+                                    options.blend_interior_effects_as_group =
+                                        !options.blend_interior_effects_as_group
+                                }
+                                1 => {
+                                    options.blend_clipped_layers_as_group =
+                                        !options.blend_clipped_layers_as_group
+                                }
+                                2 => {
+                                    options.transparency_shapes_layer =
+                                        !options.transparency_shapes_layer
+                                }
+                                _ => {
+                                    options.layer_mask_hides_effects =
+                                        !options.layer_mask_hides_effects
+                                }
+                            },
+                            cx,
+                        )
+                    }))
+                    .test_support(),
+            );
+        }
+        body = body.child(
             chip(
                 "blend-if-toggle",
                 "Blend If",
@@ -531,6 +609,42 @@ impl EditorView {
                 (true, "Underlying layers", n.blending.blend_if.backdrop),
             ] {
                 body = body.child(label(title, p));
+                let points = [range.black, range.black_fade, range.white_fade, range.white];
+                let mut gradient = div()
+                    .id(("blend-if-gradient", backdrop))
+                    .relative()
+                    .w_full()
+                    .h(px(30.))
+                    .border_1()
+                    .border_color(p.line)
+                    .bg(linear_gradient(
+                        90.,
+                        linear_color_stop(gpui_kit::black(), 0.),
+                        linear_color_stop(gpui_kit::white(), 1.),
+                    ))
+                    .test_support();
+                for (index, point) in points.into_iter().enumerate() {
+                    let upper = index == 1 || index == 2;
+                    gradient = gradient.child(
+                        div()
+                            .id(format!("blend-if-handle-{backdrop}-{index}"))
+                            .absolute()
+                            .left(relative(point))
+                            .ml(px(-4.))
+                            .top(if upper { px(2.) } else { px(17.) })
+                            .w(px(8.))
+                            .h(px(11.))
+                            .border_1()
+                            .border_color(if upper { p.accent } else { p.ink })
+                            .bg(p.panel)
+                            .test_support(),
+                    );
+                }
+                body = body.child(gradient).child(mono(
+                    "Outer handles set cutoffs; inner handles set the split fade.",
+                    10.,
+                    p.muted,
+                ));
                 for (index, (name, value)) in [
                     ("Black cutoff", range.black),
                     ("Black fade end", range.black_fade),

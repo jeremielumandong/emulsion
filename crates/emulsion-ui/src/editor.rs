@@ -3272,6 +3272,7 @@ impl EditorView {
             NodeKind::Smart {
                 source,
                 filters,
+                filter_styles,
                 placement,
                 ..
             } => {
@@ -3287,7 +3288,8 @@ impl EditorView {
                     p.muted,
                 ));
                 let filters = filters.clone();
-                for el in self.smart_panel(id, &filters, p, cx) {
+                let filter_styles = filter_styles.clone();
+                for el in self.smart_panel(id, &filters, &filter_styles, p, cx) {
                     body = body.child(el);
                 }
             }

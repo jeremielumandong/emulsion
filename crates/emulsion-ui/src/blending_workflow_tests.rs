@@ -81,6 +81,21 @@ fn advanced_blending_channels_and_ranges_are_undoable(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.render_frame(cx);
     });
+    let blend_if = cx.update(|window, _| window.find("blend-if-toggle").bounds().center());
+    cx.simulate_click(blend_if, Default::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .find(("blend-if-gradient", false))
+                .bounds()
+                .size
+                .width
+                > px(0.)
+        );
+        assert!(window.find("blend-if-handle-true-3").bounds().size.height > px(0.));
+    });
     let point = cx.update(|window, _| window.find(("blend-channel", 0usize)).bounds().center());
     cx.simulate_click(point, Default::default());
     cx.run_until_parked();
@@ -129,6 +144,44 @@ fn advanced_blending_channels_and_ranges_are_undoable(cx: &mut TestAppContext) {
                 .fill_opacity,
             0.3
         );
+        editor.update(cx, |e, cx| e.undo(cx));
+        assert_eq!(editor.read(cx).editor.doc, original);
+    });
+}
+
+#[gpui_kit::test]
+fn layer_style_dialog_exposes_knockout_and_advanced_blending(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let id = original.nodes[0].id;
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(1200.)));
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| editor.update(cx, |e, cx| e.open_layer_styles_dialog(id, window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        window.render_frame(cx);
+    });
+    for target in [
+        ("blend-knockout", 1usize),
+        ("advanced-blend-toggle", 0usize),
+        ("advanced-blend-toggle", 3usize),
+    ] {
+        let point = cx.update(|window, _| window.find(target).bounds().center());
+        cx.simulate_click(point, Default::default());
+        cx.run_until_parked();
+    }
+    let ok = cx.update(|window, _| window.find("style-dialog-ok").bounds().center());
+    cx.simulate_click(ok, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let blending = editor.read(cx).editor.doc.node(id).unwrap().blending;
+        assert_eq!(
+            blending.knockout,
+            emulsion_raster::composite::Knockout::Shallow
+        );
+        assert!(!blending.blend_interior_effects_as_group);
+        assert!(blending.layer_mask_hides_effects);
         editor.update(cx, |e, cx| e.undo(cx));
         assert_eq!(editor.read(cx).editor.doc, original);
     });

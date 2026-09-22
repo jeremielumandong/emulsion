@@ -230,6 +230,16 @@ fn capture_form_preserves_metadata_and_exclusions_without_editing_artwork(cx: &m
         })
     });
     cx.run_until_parked();
+    cx.update(|window, cx| window.render_frame(cx));
+    cx.update(|_, cx| {
+        let state = e.read(cx);
+        assert!(state.recipes.open);
+        assert!(matches!(
+            state.sidebar_tab,
+            crate::editor::SidebarTab::Recipes
+        ));
+        assert!(state.recipes.capture.is_some());
+    });
     cx.update(|window, _| assert!(window.find("rc-capture-form").visible()));
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
