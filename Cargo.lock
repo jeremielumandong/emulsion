@@ -1803,6 +1803,7 @@ dependencies = [
  "getrandom 0.3.4",
  "glam",
  "image",
+ "rawler",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

@@ -22,3 +22,7 @@ pub use workspace::Workspace;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../emulsion-io/tests/common/raw_fixture.rs"]
+mod raw_test_fixture;

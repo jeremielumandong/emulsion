@@ -283,6 +283,12 @@ impl Editor {
         self.saved_revision = revision;
     }
 
+    /// Record a RAW recipe save without assigning a native project path.
+    /// Edits made while the sidecar was written remain unsaved.
+    pub fn mark_sidecar_saved(&mut self, revision: u64) {
+        self.saved_revision = revision;
+    }
+
     /// Revision recorded at the last save (or open).
     pub fn saved_revision(&self) -> u64 {
         self.saved_revision

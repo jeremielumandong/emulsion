@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 
 /// Tools that only read; the CLI may run them without asking.
 pub const READ_ONLY: &[&str] = &[
+    "describe_raw",
+    "get_raw_preview",
+    "list_raw_documents",
     "describe_document",
     "get_view",
     "get_reference_image",
@@ -32,6 +35,12 @@ pub const DESTRUCTIVE: &[&str] = &[
 
 /// Tools that compute for a while; hosts run them off the UI thread.
 pub const HEAVY: &[&str] = &[
+    "develop_raw",
+    "auto_develop_raw",
+    "pick_raw_white_balance",
+    "reset_raw",
+    "raw_settings",
+    "relink_raw",
     "select_color",
     "content_aware_fill",
     "paint",
@@ -210,7 +219,7 @@ fn advanced_blending_schema() -> Value {
 }
 
 pub fn definitions() -> Vec<ToolDef> {
-    vec![
+    let mut definitions = vec![
         def(
             "describe_document",
             "Describe the open document: canvas size, every node from the top of the stack down \
@@ -743,14 +752,19 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "save_document",
-            "Save the document as OpenRaster (.ora) with its history: to path, or to the file it was opened from.",
+            "Save to an explicit OpenRaster (.ora) path or the existing project path. With path omitted, a directly imported RAW containing only RAW development saves its adjacent .emulsion-raw.json sidecar and marks those edits saved; reopening the original restores them. Originals are never overwritten. Extra layers, painting, or other edits require an .ora path.",
             json!({ "path": { "type": "string" } }),
             &[],
         ),
         def(
             "export_image",
-            "Write the picture to path; the extension picks the format: png, jpg, webp, tif, bmp, gif, tga, ppm, ico, hdr, exr, qoi, ff flat; psd and xcf layered; avif, heic, jxl, pdf when a converter is installed. quality 1–100 for lossy formats.",
-            json!({ "path": { "type": "string" }, "quality": { "type": "integer", "minimum": 1, "maximum": 100 } }),
+            "Write the picture to path; the extension picks the format: png, jpg, webp, tif, bmp, gif, tga, ppm, ico, hdr, exr, qoi, ff flat; psd and xcf layered; avif, heic, jxl, pdf when a converter is installed. Redevelops linked RAW originals using saved settings before rendering; never overwrites originals. quality 1–100 for lossy formats. Optional bit_depth, color_space, scale, and dpi control output without changing the document; defaults retain document depth, full size, sRGB, and no resolution metadata.",
+            json!({ "path": { "type": "string" }, "quality": { "type": "integer", "minimum": 1, "maximum": 100 },
+                "bit_depth": { "type": "integer", "enum": [8,16], "description": "Default document depth. Explicit 16-bit requires PNG or TIFF." },
+                "color_space": { "type": "string", "enum": ["srgb","adobe_rgb"], "default": "srgb", "description": "Converted pixels and matching ICC profile; Adobe RGB cannot recover colors already clipped by the sRGB working document." },
+                "scale": { "type": "string", "enum": ["full","half","quarter"], "default": "full", "description": "Render RAW at full resolution, then resize output. Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
+                "dpi": { "type": "integer", "minimum": 1, "maximum": 1200, "description": "Optional pixels-per-inch metadata, without resampling; PNG, JPEG, TIFF only." }
+            }),
             &["path"],
         ),
         def(
@@ -761,8 +775,14 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "batch_export",
-            "Apply a film recipe or saved exact adjustment workflow to many pictures and write them out: folder (every picture in it) or paths, recipe by name (omit for none), out_dir, format jpg or png. Existing files and source pictures are never replaced: output name collisions gain a numeric suffix. Slow: seconds per picture.",
-            json!({ "folder": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "recipe": { "type": "string" }, "out_dir": { "type": "string" }, "format": { "type": "string", "description": "Output extension: jpg (default), png, webp, tif, bmp, gif, tga, ppm, qoi, ff, or avif/heic/jxl when a converter is installed." } }),
+            "Apply a film recipe or saved exact adjustment workflow to many pictures, including RAW, and write them out: folder (every picture in it) or paths, recipe by name (omit for none), out_dir, format extension. Optional quality, bit_depth, color_space, scale, and dpi apply to every output. Existing files and source pictures are never replaced: output name collisions gain a numeric suffix. Slow: seconds per picture.",
+            json!({ "folder": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "recipe": { "type": "string" }, "out_dir": { "type": "string" }, "format": { "type": "string", "description": "Output extension: jpg (default), png, webp, tif, bmp, gif, tga, ppm, qoi, ff, or avif/heic/jxl when a converter is installed." },
+                "quality": { "type": "integer", "minimum": 1, "maximum": 100 },
+                "bit_depth": { "type": "integer", "enum": [8,16], "description": "Default each source document depth. Explicit 16-bit requires PNG or TIFF." },
+                "color_space": { "type": "string", "enum": ["srgb","adobe_rgb"], "default": "srgb", "description": "Converted pixels and matching ICC profile. Adobe RGB cannot recover clipped working-space colors." },
+                "scale": { "type": "string", "enum": ["full","half","quarter"], "default": "full", "description": "Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
+                "dpi": { "type": "integer", "minimum": 1, "maximum": 1200, "description": "Optional pixels-per-inch metadata, without resampling; PNG, JPEG, TIFF only." }
+            }),
             &["out_dir"],
         ),
         def(
@@ -910,7 +930,10 @@ pub fn definitions() -> Vec<ToolDef> {
             json!({}),
             &[],
         ),
-    ]
+    ];
+    definitions.extend(crate::raw_tools::definitions());
+    definitions.extend(crate::raw_preview::definitions());
+    definitions
 }
 
 /// Tool names as the CLI sees them.

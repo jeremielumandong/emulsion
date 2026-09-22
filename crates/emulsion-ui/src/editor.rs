@@ -57,6 +57,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+pub(crate) use history::SaveTarget;
 pub(crate) use history::doc_thumb;
 pub use history::recovery_dir;
 use rayon::prelude::*;
@@ -321,6 +322,8 @@ pub struct EditorView {
     pub(crate) anim: animation::AnimState,
     /// RAW develop panel state.
     pub(crate) raw: raw_panel::RawState,
+    /// Other open tabs, supplied by the workspace; weak references never keep closed photos alive.
+    pub(crate) raw_peers: Vec<WeakEntity<EditorView>>,
     /// Generative fill prompt and state.
     pub(crate) generate: generate_ui::GenState,
     /// Tool rail fly-outs and remembered picks.
@@ -435,6 +438,7 @@ impl EditorView {
             warp: None,
             anim: Default::default(),
             raw: Default::default(),
+            raw_peers: Vec::new(),
             generate: Default::default(),
             rail: Default::default(),
             compact: compact::CompactLayout::new(cx),

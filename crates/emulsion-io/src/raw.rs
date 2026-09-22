@@ -246,20 +246,12 @@ pub fn develop(path: &Path) -> Result<(Raster, RawInfo)> {
 
 pub fn open(path: &Path) -> Result<Document> {
     let src = RawSource::load(path)?;
-    let params = DevelopParams::default();
+    let params = crate::raw_settings::adjacent_settings(&src.source, &src.source_sha256)?;
     let raster = src.develop_with(&params)?;
     let mut doc = Document::new(raster.width(), raster.height());
     doc.source_depth = 16;
     doc.info = crate::exif::read(path);
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "RAW".into());
-    let name = if src.info.model.is_empty() {
-        stem
-    } else {
-        format!("{stem} ({})", src.info.model)
-    };
+    let name = crate::raw_settings::original_layer_name(&src.source, &src.metadata.model);
     emulsion_core::Command::AddNode {
         node: Box::new(Node::raster(
             0,

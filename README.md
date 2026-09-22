@@ -59,7 +59,7 @@ model or provider subscription is not bundled. Open **Ctrl-K → Assistant** to
 work with the connected provider. Proposed document changes have **Apply/Skip**
 controls, so you can review what the assistant is about to do.
 
-### 83 MCP tools for editing and automation
+### MCP tools for editing and automation
 
 The [MCP tool catalog](crates/emulsion-mcp/src/tools.rs) exposes operations for:
 
@@ -71,6 +71,10 @@ The [MCP tool catalog](crates/emulsion-mcp/src/tools.rs) exposes operations for:
   layer styles, transforms, crop, and image/canvas sizing.
 - **Managing workflows:** recipes, batch export, project saving, image export,
   history inspection, branches, undo, and redo.
+- **Developing RAW:** camera/source inspection, exposure and white balance,
+  auto tone, curves, sidecars/presets, camera defaults, original relinking,
+  comparison previews, the live divider, and selected-photo synchronization.
+  See the [RAW MCP guide](docs/raw-mcp.md) for tool names and examples.
 - **Optional AI processing:** subject selection, background removal, inpainting,
   image generation, face restoration, and upscaling, with the required models or
   providers configured.
@@ -258,7 +262,18 @@ Drag the handle horizontally, or use Left/Right and Home/End while the canvas
 is focused. Escape closes comparison. Comparison does not change saved edits;
 starting another edit closes it.
 
-Save as `.ora` to retain versioned RAW settings, undo history, a rendered preview,
+For a directly opened RAW photo, **Save / Ctrl+S** writes its development settings
+beside the original as `<filename>.emulsion-raw.json` (for example,
+`DSC_1234.NEF.emulsion-raw.json`). Reopening the original automatically restores
+those settings; the original RAW is never modified. Keep the sidecar with the
+photo when moving or backing it up; if you rename the photo, rename the sidecar
+to match. This is Emulsion JSON, not Adobe XMP.
+An invalid or mismatched sidecar produces an error rather than silently losing
+your saved edits. Sidecars store the current RAW recipe, not undo history.
+
+**Save as** creates an `.ora` project. Save also asks for a project when the
+document has layers, other non-RAW edits, or named versions that a sidecar cannot
+preserve. Save as `.ora` to retain versioned RAW settings, undo history, a rendered preview,
 and a SHA-256-verified link to the original. Keep the original file: it is not
 embedded in the project. **Locate original…** reconnects a moved, identical file.
 A project can reopen without its original, but changing RAW settings or exporting

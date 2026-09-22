@@ -134,7 +134,21 @@ pub(crate) struct HistoryState {
     /// A Save is writing the document; a second write must not overlap it.
     pub(crate) save_busy: bool,
     /// The newest Save requested while one was running, written next.
-    pub(crate) save_queued: Option<PathBuf>,
+    pub(crate) save_queued: Option<SaveTarget>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SaveTarget {
+    Project(PathBuf),
+    Sidecar(PathBuf),
+}
+
+impl SaveTarget {
+    pub(crate) fn path(&self) -> &std::path::Path {
+        match self {
+            Self::Project(path) | Self::Sidecar(path) => path,
+        }
+    }
 }
 
 /// A merge waiting for the person's choices.

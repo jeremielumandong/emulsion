@@ -189,13 +189,17 @@ pub fn suggested_sidecar_path(doc: &Document) -> Result<PathBuf> {
         .raw
         .as_ref()
         .ok_or_else(|| invalid("document has no editable RAW source"))?;
-    let mut name = raw
-        .source
+    sidecar_path(&raw.source)
+}
+
+/// The automatically discovered recipe beside an original camera file.
+pub fn sidecar_path(source: &Path) -> Result<PathBuf> {
+    let mut name = source
         .file_name()
         .ok_or_else(|| invalid("RAW source has no filename"))?
         .to_os_string();
     name.push(".emulsion-raw.json");
-    Ok(raw.source.with_file_name(name))
+    Ok(source.with_file_name(name))
 }
 
 /// Load only settings whose fingerprint matches this document's linked RAW.
@@ -206,17 +210,89 @@ pub fn load_sidecar(doc: &Document, path: &Path) -> Result<DevelopParams> {
         .as_ref()
         .ok_or_else(|| invalid("document has no editable RAW source"))?;
     raw.validate().map_err(invalid)?;
+    load_sidecar_verified(path, &raw.source_sha256)
+}
+
+fn load_sidecar_verified(path: &Path, digest: &str) -> Result<DevelopParams> {
     let saved = read(path, "emulsion-raw-sidecar")?;
     if !saved
         .source_sha256
         .as_ref()
-        .is_some_and(|digest| digest.eq_ignore_ascii_case(&raw.source_sha256))
+        .is_some_and(|saved_digest| saved_digest.eq_ignore_ascii_case(digest))
     {
         return Err(invalid(
             "this sidecar belongs to a different RAW original (SHA-256 mismatch)",
         ));
     }
     Ok(saved.params)
+}
+
+/// Missing means an unedited original; any present but unreadable recipe is an
+/// error, never an excuse to silently discard previously saved adjustments.
+pub(crate) fn adjacent_settings(source: &Path, digest: &str) -> Result<DevelopParams> {
+    let path = sidecar_path(source)?;
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DevelopParams::default());
+        }
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    load_sidecar_verified(&path, digest).map_err(|error| {
+        invalid(format!(
+            "could not restore {}: {error}. Restore a valid matching sidecar, or move it aside to open the original without saved edits",
+            path.display()
+        ))
+    })
+}
+
+pub(crate) fn original_layer_name(source: &Path, model: &str) -> String {
+    let stem = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "RAW".into());
+    if model.is_empty() {
+        stem
+    } else {
+        format!("{stem} ({model})")
+    }
+}
+
+/// Whether an intact RAW recipe represents this entire document. Pixel edits
+/// must use core commands, which detach the RAW link. This intentionally rejects
+/// even non-rendering project edits (names, locks, guides, selection) that a
+/// recipe cannot persist. It does not include undo history or editor UI state.
+pub fn sidecar_only(doc: &Document) -> bool {
+    let Some(raw) = doc.raw.as_ref() else {
+        return false;
+    };
+    let [node] = doc.nodes.as_slice() else {
+        return false;
+    };
+    let emulsion_core::NodeKind::Raster { raster, placement } = &node.kind else {
+        return false;
+    };
+    if raw.validate().is_err()
+        || node.id != raw.node_id
+        || *placement != Default::default()
+        || (doc.width, doc.height) != (raster.width(), raster.height())
+        || doc.source_depth != 16
+        || doc.selection.is_some()
+        || !doc.guides.is_empty()
+        || doc.resolution != 72.0
+        || doc.global_light != Default::default()
+        || doc.blend_space != emulsion_raster::blend::BlendSpace::Linear
+        || doc.raw_originals.as_slice() != std::slice::from_ref(&raw.source)
+    {
+        return false;
+    }
+    let expected = emulsion_core::Node::raster(
+        node.id,
+        original_layer_name(&raw.source, &raw.metadata.model),
+        raster.clone(),
+        Default::default(),
+    );
+    *node == expected
 }
 
 /// Save reusable development settings, without binding them to a source image.

@@ -11,7 +11,13 @@
 mod blending;
 mod brush_discovery;
 pub mod exec;
+mod export_tools;
 mod preview;
+#[cfg(test)]
+#[path = "../../emulsion-io/tests/common/raw_fixture.rs"]
+pub(crate) mod raw_fixture;
+pub mod raw_preview;
+mod raw_tools;
 pub mod reference;
 pub mod relay;
 mod review;

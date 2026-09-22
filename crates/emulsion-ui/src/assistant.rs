@@ -33,6 +33,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod raw_mcp;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CardStatus {
     Running,
@@ -1166,6 +1168,7 @@ impl EditorView {
     }
 
     fn cancel_tool_work(&mut self, reason: &str, cx: &mut Context<Self>) {
+        self.raw_cancel_interaction(cx);
         self.assistant.tool_generation = self.assistant.tool_generation.wrapping_add(1);
         self.assistant.tool_busy = false;
         self.assistant.tool_stopped = true;
@@ -1180,11 +1183,54 @@ impl EditorView {
     fn execute_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
         let tool_generation = self.assistant.tool_generation;
         let ordered = Self::ordered_tool(&call.name);
+        if matches!(
+            call.name.as_str(),
+            "set_raw_comparison" | "list_raw_documents" | "synchronize_raw"
+        ) {
+            self.execute_raw_host_tool(call, cx);
+            return;
+        }
+        if self.raw.is_pending()
+            && (call.name.contains("raw")
+                || matches!(
+                    call.name.as_str(),
+                    "save_document" | "export_image" | "batch_export"
+                ))
+        {
+            call.reply(emulsion_mcp::ToolResult::error(
+                "RAW development is pending; wait for it to finish before calling this tool.",
+            ));
+            self.complete_tool_work(tool_generation, cx);
+            return;
+        }
         if call.name == "get_reference_image" {
             call.reply(self.reference_result());
             return;
         }
-        if matches!(call.name.as_str(), "get_view" | "critique" | "list_brushes") {
+        if call.name == "export_image" {
+            // Exports intentionally write the snapshot requested here, even if
+            // the user subsequently edits. Never run full RAW development on
+            // the UI thread or replace the live editor with the snapshot.
+            let doc = self.editor.doc.clone();
+            let revision = self.editor.revision;
+            cx.spawn(async move |this, cx| {
+                let args = call.arguments.clone();
+                let mut result = cx.background_spawn(async move {
+                    let mut snapshot = emulsion_core::Editor::new(doc, None);
+                    exec::execute(&mut snapshot, "export_image", &args)
+                }).await;
+                if !result.is_error {
+                    result.content.push(serde_json::json!({"type":"text","text":format!("Exported document snapshot at revision {revision}.")}));
+                }
+                call.reply(result);
+                this.update(cx, |this,cx| this.complete_tool_work(tool_generation,cx)).ok();
+            }).detach();
+            return;
+        }
+        if matches!(
+            call.name.as_str(),
+            "get_view" | "critique" | "list_brushes" | "get_raw_preview"
+        ) {
             let doc = self.editor.doc.clone();
             let args = call.arguments.clone();
             let name = call.name.clone();
@@ -1232,6 +1278,7 @@ impl EditorView {
             // Compute off the UI thread against a snapshot, then apply only
             // if nobody edited the document in the meantime.
             let (doc, rev) = (self.editor.doc.clone(), self.editor.revision);
+            let edit_ticket = self.edit_ticket();
             let generation = self.assistant.turn_generation;
             self.set_status("Working…", false, cx);
             cx.spawn(async move |this, cx| {
@@ -1247,14 +1294,14 @@ impl EditorView {
                             || this.assistant.tool_generation != tool_generation => {
                             emulsion_mcp::server::ToolResult::error("the assistant request ended while this was computing; the change was not applied")
                         }
-                        Ok(_) if this.editor.revision != rev => {
+                        Ok(_) if this.editor.revision != rev || this.edit_ticket() != edit_ticket || this.raw.is_pending() => {
                             emulsion_mcp::server::ToolResult::error("the document changed while this was computing; call the tool again")
                         }
                         Ok(p) => exec::apply(&mut this.editor, p),
                     };
                     this.observe_drawing_tool(&call.name, &call.arguments, &r, this.editor.revision, this.editor.revision != rev);
                     call.reply(r);
-                    this.after_change(cx);
+                    if this.editor.revision != rev { this.after_change(cx); } else { cx.notify(); }
                     this.complete_tool_work(tool_generation, cx);
                 })
                 .ok();
@@ -1287,7 +1334,11 @@ impl EditorView {
             self.editor.revision != before,
         );
         call.reply(r);
-        self.after_change(cx);
+        if self.editor.revision != before {
+            self.after_change(cx);
+        } else {
+            cx.notify();
+        }
         if ordered {
             self.complete_tool_work(tool_generation, cx);
         }
@@ -2406,6 +2457,197 @@ mod mutation_queue_tests {
                 "size_pressure": 0, "taper_start": 0, "taper_end": 0},
             "strokes": [{"points": [[10, y], [290, y]]}]
         })
+    }
+
+    struct RawFixture(std::path::PathBuf);
+    impl RawFixture {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "emulsion-raw-relay-{}-{}.dng",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            crate::raw_test_fixture::write_dng(&path);
+            Self(path)
+        }
+    }
+    impl Drop for RawFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn raw_mcp_live_development_comparison_and_sync_are_ordered(cx: &mut TestAppContext) {
+        use serde_json::json;
+        let file = RawFixture::new();
+        let document = emulsion_io::open(&file.0).unwrap();
+        let source = painting(cx, false);
+        let target = painting(cx, false);
+        source.update(cx, |view, _| {
+            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor.begin("Assistant RAW edits");
+            view.raw_peers = vec![target.downgrade()];
+        });
+        target.update(cx, |view, _| {
+            view.editor = emulsion_core::Editor::new(document.clone(), None)
+        });
+        let relay = Relay::start().unwrap();
+        let (develop, reply) = call(
+            &relay,
+            "develop_raw",
+            json!({"settings":{"exposure":1.5,"temperature":0.25}}),
+        );
+        source.update(cx, |view, cx| view.run_tool_now(develop, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        source.read_with(cx, |view, _| {
+            assert_eq!(view.editor.doc.raw.as_ref().unwrap().params.exposure, 1.5)
+        });
+
+        let (compare, compare_reply) = call(
+            &relay,
+            "set_raw_comparison",
+            json!({"mode":"split","position":0.3}),
+        );
+        let (list, list_reply) = call(&relay, "list_raw_documents", json!({}));
+        source.update(cx, |view, cx| {
+            view.run_tool_now(compare, cx);
+            view.run_tool_now(list, cx);
+        });
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(250));
+        cx.run_until_parked();
+        assert_eq!(compare_reply.join().unwrap()["isError"], false);
+        let listing = list_reply.join().unwrap();
+        assert_eq!(listing["isError"], false);
+        let listing: Value =
+            serde_json::from_str(listing["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(listing["documents"].as_array().unwrap().len(), 2);
+        source.read_with(cx, |view, _| {
+            assert!(view.raw_split_active());
+            assert_eq!(view.compare, 0.3);
+        });
+
+        let (describe, describe_reply) = call(&relay, "describe_raw", json!({}));
+        source.update(cx, |view, cx| view.run_tool_now(describe, cx));
+        cx.run_until_parked();
+        assert_eq!(describe_reply.join().unwrap()["isError"], false);
+        source.read_with(cx, |view, _| {
+            assert!(
+                view.raw_split_active(),
+                "Inspection must not close comparison"
+            )
+        });
+        let output = file.0.with_extension("png");
+        let (export, export_reply) = call(
+            &relay,
+            "export_image",
+            json!({"path":output,"bit_depth":16,"scale":"half","dpi":300}),
+        );
+        source.update(cx, |view, cx| view.run_tool_now(export, cx));
+        cx.run_until_parked();
+        assert_eq!(export_reply.join().unwrap()["isError"], false);
+        assert!(output.is_file());
+        std::fs::remove_file(output).unwrap();
+        source.read_with(cx, |view, _| {
+            assert!(view.raw_split_active(), "Export must not close comparison")
+        });
+
+        let (sync, sync_reply) = call(
+            &relay,
+            "synchronize_raw",
+            json!({"targets":[target.entity_id().as_u64()],"group":"tone"}),
+        );
+        source.update(cx, |view, cx| view.run_tool_now(sync, cx));
+        cx.run_until_parked();
+        assert_eq!(sync_reply.join().unwrap()["isError"], false);
+        target.update(cx, |view, cx| {
+            assert_eq!(view.editor.doc.raw.as_ref().unwrap().params.exposure, 1.5);
+            assert_eq!(view.editor.doc.raw.as_ref().unwrap().params.temperature, 0.);
+            assert!(view.editor.history.can_undo());
+            view.undo(cx);
+            assert_eq!(view.editor.doc, document);
+        });
+        let (close, close_reply) = call(&relay, "set_raw_comparison", json!({"mode":"edited"}));
+        source.update(cx, |view, cx| view.run_tool_now(close, cx));
+        cx.run_until_parked();
+        assert_eq!(close_reply.join().unwrap()["isError"], false);
+        source.update(cx, |view, _| {
+            assert!(!view.raw_split_active());
+            view.editor.end();
+            view.editor.undo();
+            assert_eq!(view.editor.doc, document);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn raw_mcp_sync_rejects_camera_mismatch_and_stale_target(cx: &mut TestAppContext) {
+        use serde_json::json;
+        let file = RawFixture::new();
+        let document = emulsion_io::open(&file.0).unwrap();
+        let source = painting(cx, false);
+        let target = painting(cx, false);
+        source.update(cx, |view, _| {
+            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor.doc.raw.as_mut().unwrap().params.wb_override = Some([2., 1., 1., 1.]);
+            view.editor.doc.raw.as_mut().unwrap().params.exposure = 1.;
+            view.raw_peers = vec![target.downgrade()];
+        });
+        target.update(cx, |view, _| {
+            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor.doc.raw.as_mut().unwrap().metadata.model = "Different camera".into();
+        });
+        let relay = Relay::start().unwrap();
+        let (sync, reply) = call(
+            &relay,
+            "synchronize_raw",
+            json!({"targets":[target.entity_id().as_u64()]}),
+        );
+        source.update(cx, |view, cx| view.run_tool_now(sync, cx));
+        assert_eq!(reply.join().unwrap()["isError"], true);
+        let (sync, reply) = call(
+            &relay,
+            "synchronize_raw",
+            json!({"targets":[target.entity_id().as_u64()],"group":"tone"}),
+        );
+        source.update(cx, |view, cx| view.run_tool_now(sync, cx));
+        target.update(cx, |view, cx| view.undo(cx)); // changes operation epoch even with no history
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], true);
+        target.read_with(cx, |view, _| {
+            assert_eq!(view.editor.doc.raw.as_ref().unwrap().params.exposure, 0.)
+        });
+    }
+
+    #[gpui_kit::test]
+    fn raw_mcp_failed_comparison_closes_without_repeating_the_error(cx: &mut TestAppContext) {
+        use serde_json::json;
+        let file = RawFixture::new();
+        let document = emulsion_io::open(&file.0).unwrap();
+        std::fs::remove_file(&file.0).unwrap();
+        let source = painting(cx, false);
+        source.update(cx, |view, _| {
+            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor.begin("Assistant RAW comparison");
+        });
+        let relay = Relay::start().unwrap();
+        let (compare, reply) = call(&relay, "set_raw_comparison", json!({"mode":"split"}));
+        source.update(cx, |view, cx| view.run_tool_now(compare, cx));
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(250));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], true);
+        let (close, reply) = call(&relay, "set_raw_comparison", json!({"mode":"edited"}));
+        source.update(cx, |view, cx| view.run_tool_now(close, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        source.read_with(cx, |view, _| {
+            assert!(!view.raw_split_requested());
+            assert_eq!(view.editor.doc, document);
+            assert!(view.editor.history.is_empty());
+        });
     }
 
     #[gpui_kit::test]

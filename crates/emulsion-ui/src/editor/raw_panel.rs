@@ -83,6 +83,54 @@ type RawRow = (&'static str, &'static str, String, f32, (f32, f32, f32));
 const SETTLE_MS: u64 = 220;
 
 impl EditorView {
+    pub(crate) fn raw_comparison_wait(
+        &mut self,
+        request: &emulsion_mcp::raw_preview::Comparison,
+        cx: &mut Context<Self>,
+    ) -> Result<(async_channel::Receiver<()>, u64), String> {
+        use emulsion_mcp::raw_preview::Mode;
+        if self.editor.doc.raw.is_none() {
+            return Err("This document has no editable RAW source".into());
+        }
+        if self.raw.is_pending() {
+            return Err("Wait for pending RAW development before changing comparison".into());
+        }
+        if request.mode == Mode::Split && self.raw_split_active() {
+            self.compare = request.position;
+            cx.notify();
+            let (_, receiver) = async_channel::bounded(1);
+            return Ok((receiver, self.raw.generation));
+        }
+        self.raw_clear_preview(cx);
+        match request.mode {
+            Mode::Edited => {
+                self.raw.error = None;
+            }
+            Mode::Split => {
+                self.raw_toggle_split(cx);
+                self.compare = request.position;
+            }
+            Mode::WithoutTone => self.raw_preview(RawSection::Adjust, false, cx),
+            Mode::WithoutCurve => self.raw_preview(RawSection::Curve, false, cx),
+            Mode::Clipping => self.raw_preview(RawSection::Adjust, true, cx),
+        }
+        let (sender, receiver) = async_channel::bounded(1);
+        if self.raw.is_pending() {
+            self.raw.completion = Some(sender);
+        }
+        Ok((receiver, self.raw.generation))
+    }
+
+    pub(crate) fn raw_comparison_result(&self, generation: u64) -> Result<(), String> {
+        if self.raw.generation != generation {
+            return Err("RAW comparison was cancelled or superseded".into());
+        }
+        if let Some(error) = &self.raw.error {
+            return Err(error.clone());
+        }
+        Ok(())
+    }
+
     /// RAW ownership is persisted by node identity, never inferred from order.
     fn raw_node(&self) -> Option<NodeId> {
         self.editor.doc.raw.as_ref().map(|raw| raw.node_id)
@@ -431,7 +479,10 @@ impl EditorView {
                     cx.notify();
                     return;
                 }
-                if !this.edit_is_current(ticket) || this.editor.doc.raw.as_ref() != Some(&raw) {
+                if this.edit_ticket() != ticket
+                    || (this.editor.in_transaction() && !preview)
+                    || this.editor.doc.raw.as_ref() != Some(&raw)
+                {
                     this.cancel_raw_develop();
                     cx.notify();
                     return;

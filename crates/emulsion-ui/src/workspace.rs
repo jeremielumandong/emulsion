@@ -1,7 +1,7 @@
 //! The window's root: top bar, screen switching, and every file operation.
 
 use crate::actions::*;
-use crate::editor::EditorView;
+use crate::editor::{EditorView, SaveTarget};
 use crate::theme::{self, MONO_FONT, dim};
 use crate::widgets::mono;
 use emulsion_core::command::Slot;
@@ -81,6 +81,18 @@ fn summary(doc: &Document) -> String {
 }
 
 impl Workspace {
+    fn refresh_raw_peers(&self, cx: &mut Context<Self>) {
+        for tab in &self.tabs {
+            let peers = self
+                .tabs
+                .iter()
+                .filter(|other| *other != tab)
+                .map(Entity::downgrade)
+                .collect();
+            tab.update(cx, |editor, _| editor.raw_peers = peers);
+        }
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Imported brush tips and grains register into a shared registry;
         // decoding them off the UI thread keeps the first frame quick.
@@ -287,6 +299,7 @@ impl Workspace {
             };
             ed.update(cx, |e, _| e.discard_recovery());
             this.tabs.remove(i);
+            this.refresh_raw_peers(cx);
             if this.editor.as_ref() == Some(&ed) {
                 this.editor = None;
                 if this.tabs.is_empty() {
@@ -435,8 +448,75 @@ impl Workspace {
                             .ok();
                     }));
                 }
-                menu.separator().menu("Toggle theme", Box::new(ToggleTheme))
+                menu.separator()
+                    .item(PopupMenuItem::new("Toggle theme").on_click(|_, _, cx| theme::toggle(cx)))
             })
+            .into_any_element()
+    }
+
+    fn compact_theme_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = theme::palette(cx);
+        div()
+            .id("compact-theme-controls")
+            .test_support()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                Button::new("compact-theme-light")
+                    .label("☀")
+                    .tooltip("Use light theme")
+                    .xsmall()
+                    .ghost()
+                    .rounded_none()
+                    .selected(!p.dark && !theme::following_omarchy(cx))
+                    .on_click(|_, _, cx| theme::set_dark(false, cx)),
+            )
+            .child(
+                Button::new("compact-theme-dark")
+                    .label("☾")
+                    .tooltip("Use dark theme")
+                    .xsmall()
+                    .ghost()
+                    .rounded_none()
+                    .selected(p.dark && !theme::following_omarchy(cx))
+                    .on_click(|_, _, cx| theme::set_dark(true, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn compact_page_header(
+        &self,
+        navigation: AnyElement,
+        theme_controls: AnyElement,
+        label: &'static str,
+    ) -> AnyElement {
+        div()
+            .id("compact-page-header")
+            .test_support()
+            .flex()
+            .items_center()
+            .w_full()
+            .min_w_0()
+            .h(rems(2.25))
+            .px_2()
+            .gap_2()
+            .child(navigation)
+            .child(
+                div()
+                    .text_size(rems(0.75))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .id("compact-page-window-drag")
+                    .test_support()
+                    .flex_1()
+                    .h_full()
+                    .window_control_area(WindowControlArea::Drag),
+            )
+            .child(theme_controls)
             .into_any_element()
     }
 
@@ -463,9 +543,8 @@ impl Workspace {
         let mut tabs = div()
             .id("compact-document-tabs")
             .flex()
-            .flex_1()
             .items_center()
-            .min_w(rems(14.375))
+            .max_w(rems(30.))
             .overflow_x_scroll()
             .gap_1();
         for (i, editor) in self.tabs.iter().enumerate() {
@@ -514,9 +593,9 @@ impl Workspace {
         }
         let tabs = div()
             .flex()
-            .flex_1()
             .items_center()
             .min_w_0()
+            .flex_shrink_1()
             .gap_1()
             .child(tabs)
             .child(
@@ -630,6 +709,7 @@ impl Workspace {
         let ed = cx.new(|cx| EditorView::new(doc, graph, path, source, name, cx));
         let focus = ed.read(cx).canvas_focus.clone();
         self.tabs.push(ed.clone());
+        self.refresh_raw_peers(cx);
         self.editor = Some(ed);
         self.screen = Screen::Editor;
         self.error = None;
@@ -911,6 +991,17 @@ impl Workspace {
                 .unwrap_or_else(|| PathBuf::from("."));
             (e.editor.path.clone(), dir, e.name.clone())
         };
+        if !save_as && path.is_none() {
+            let e = ed.read(cx);
+            if emulsion_io::raw_settings::sidecar_only(&e.editor.doc)
+                && e.editor.graph.commits().count() == 1
+                && e.editor.graph.branches().len() == 1
+                && let Ok(path) = emulsion_io::raw_settings::suggested_sidecar_path(&e.editor.doc)
+            {
+                self.write_target(ed, SaveTarget::Sidecar(path), cx);
+                return;
+            }
+        }
         match path {
             Some(p) if !save_as => self.write(ed, p, cx),
             _ => {
@@ -932,6 +1023,12 @@ impl Workspace {
     /// Writes to one document never overlap: a Save requested while one runs
     /// is remembered (only the newest) and written when the current finishes.
     pub(crate) fn write(&mut self, ed: Entity<EditorView>, path: PathBuf, cx: &mut Context<Self>) {
+        self.write_target(ed, SaveTarget::Project(path), cx);
+    }
+
+    fn write_target(&mut self, ed: Entity<EditorView>, target: SaveTarget, cx: &mut Context<Self>) {
+        let path = target.path().to_path_buf();
+        let sidecar = matches!(target, SaveTarget::Sidecar(_));
         let Some((doc, rev, graph)) = ed.update(cx, |e, cx| {
             if e.raw.is_pending() {
                 e.set_status(
@@ -942,7 +1039,26 @@ impl Workspace {
                 return None;
             }
             if e.history.save_busy {
-                e.history.save_queued = Some(path.clone());
+                e.history.save_queued = Some(target.clone());
+                return None;
+            }
+            // A queued sidecar request must not discard edits made since it
+            // was requested, or replace a newer native-project save.
+            if sidecar
+                && (e.editor.path.is_some()
+                    || !emulsion_io::raw_settings::sidecar_only(&e.editor.doc)
+                    || e.editor.graph.commits().count() != 1
+                    || e.editor.graph.branches().len() != 1
+                    || emulsion_io::raw_settings::suggested_sidecar_path(&e.editor.doc)
+                        .ok()
+                        .as_ref()
+                        != Some(&path))
+            {
+                e.set_status(
+                    "This document needs a project file. Use Save as to preserve all edits.",
+                    true,
+                    cx,
+                );
                 return None;
             }
             e.history.save_busy = true;
@@ -958,7 +1074,13 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let (p, d) = (path.clone(), doc.clone());
             let result = cx
-                .background_spawn(async move { emulsion_io::save_full(&d, &graph, &p) })
+                .background_spawn(async move {
+                    if sidecar {
+                        emulsion_io::raw_settings::save_sidecar(&d, &p)
+                    } else {
+                        emulsion_io::save_full(&d, &graph, &p)
+                    }
+                })
                 .await;
             let queued = ed.update(cx, |e, _| {
                 e.history.save_busy = false;
@@ -966,17 +1088,26 @@ impl Workspace {
             });
             this.update(cx, |this, cx| match result {
                 Ok(()) => {
-                    this.recents = recent::push(&path, summary(&doc));
+                    let recent_path = if sidecar {
+                        &doc.raw.as_ref().unwrap().source
+                    } else {
+                        &path
+                    };
+                    this.recents = recent::push(recent_path, summary(&doc));
                     this.invalidate_thumbnail(
-                        &std::fs::canonicalize(&path).unwrap_or(path.clone()),
+                        &std::fs::canonicalize(recent_path).unwrap_or(recent_path.clone()),
                     );
                     ed.update(cx, |e, cx| {
-                        e.editor.mark_saved(path.clone(), rev);
+                        if sidecar {
+                            e.editor.mark_sidecar_saved(rev);
+                        } else {
+                            e.editor.mark_saved(path.clone(), rev);
+                            e.name = stem(&path);
+                            e.source = Some(path.clone());
+                        }
                         if e.editor.revision == rev {
                             e.discard_recovery();
                         }
-                        e.name = stem(&path);
-                        e.source = Some(path.clone());
                         e.set_status(format!("Saved {}", path.display()), false, cx);
                     });
                 }
@@ -986,7 +1117,8 @@ impl Workspace {
             })
             .ok();
             if let Some(next) = queued {
-                this.update(cx, |this, cx| this.write(ed, next, cx)).ok();
+                this.update(cx, |this, cx| this.write_target(ed, next, cx))
+                    .ok();
             }
         })
         .detach();
@@ -1341,12 +1473,13 @@ impl Render for Workspace {
             );
         let compact = crate::app_state::settings(cx).compact_chrome;
         let compact_editor = compact && self.screen == Screen::Editor && self.editor.is_some();
-        let compact_home = compact && self.screen == Screen::Home;
+        let compact_page = compact && !compact_editor;
         let top = if compact_editor {
             let (navigation, tabs) = self.compact_tabs(cx);
+            let theme_controls = self.compact_theme_controls(cx);
             let editor = self.editor.as_ref().unwrap().clone();
             let header = editor.update(cx, |editor, cx| {
-                editor.compact_header(navigation, tabs, &p, window, cx)
+                editor.compact_header(navigation, tabs, theme_controls, &p, window, cx)
             });
             gpui_kit::component::TitleBar::new()
                 .draggable(false)
@@ -1357,9 +1490,21 @@ impl Render for Workspace {
                 .on_close_window(|_, window, cx| window.dispatch_action(Box::new(Quit), cx))
                 .child(header)
                 .into_any_element()
-        } else if compact_home {
+        } else if compact_page {
             let navigation = self.compact_app_menu(cx);
-            let header = self.home_header(navigation, window, cx);
+            let theme_controls = self.compact_theme_controls(cx);
+            let header = if self.screen == Screen::Home {
+                self.home_header(navigation, theme_controls, window, cx)
+            } else {
+                let label = match self.screen {
+                    Screen::Batch => "Batch",
+                    Screen::Settings => "Settings",
+                    Screen::About => "About",
+                    Screen::Editor => "Editor",
+                    Screen::Home => "Home",
+                };
+                self.compact_page_header(navigation, theme_controls, label)
+            };
             gpui_kit::component::TitleBar::new()
                 .draggable(false)
                 .h(rems(2.25))
@@ -1793,10 +1938,7 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
-            .children(
-                (!(compact_editor || compact_home) && (!compact || !cfg!(target_os = "linux")))
-                    .then_some(title_bar),
-            )
+            .children((!compact).then_some(title_bar))
             .child(top)
             .children(banner)
             .child(body)
@@ -1899,7 +2041,8 @@ mod compact_tests {
         cx.run_until_parked();
         cx.update(|window, _| {
             assert!(window.find("editor-document-bar").bounds().size.height >= px(36.));
-            assert!(window.find("compact-window-drag").bounds().size.width >= px(24.));
+            assert!(window.find("compact-tab-leading-drag").bounds().size.width >= px(24.));
+            assert!(window.find("compact-window-drag").bounds().size.width >= px(64.));
         });
         cx.update(|window, cx| window.click("compact-app-menu", cx));
         cx.run_until_parked();
@@ -1918,6 +2061,16 @@ mod compact_tests {
             assert_eq!(workspace.screen, Screen::Home);
             assert_eq!(workspace.editor.as_ref(), Some(&first));
         });
+        cx.update(|window, _| {
+            assert!(window.find("home-search-container").bounds().size.width <= px(320.));
+            assert!(window.find("home-window-drag").bounds().size.width >= px(48.));
+        });
+        cx.update(|window, cx| window.click("compact-theme-light", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert!(!theme::palette(cx).dark));
+        cx.update(|window, cx| window.click("compact-theme-dark", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert!(theme::palette(cx).dark));
         cx.update(|window, cx| window.click("compact-app-menu", cx));
         cx.run_until_parked();
         cx.update(|window, cx| window.within("popup-menu").click(3usize, cx));
@@ -1927,6 +2080,20 @@ mod compact_tests {
             assert_eq!(workspace.screen, Screen::Editor);
             assert_eq!(workspace.editor.as_ref(), Some(&first));
         });
+
+        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(5usize, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(workspace.read(cx).screen, Screen::Batch);
+            assert!(window.find("compact-page-header").bounds().size.height >= px(36.));
+            assert!(window.find("compact-page-window-drag").bounds().size.width >= px(64.));
+        });
+        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(3usize, cx));
+        cx.run_until_parked();
 
         cx.update(|window, cx| window.click(("compact-document-close", first.entity_id()), cx));
         cx.run_until_parked();

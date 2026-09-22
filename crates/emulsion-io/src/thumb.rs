@@ -51,6 +51,17 @@ fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
             Err(error) => embedded.or(Err(error)),
         }
     } else if crate::raw_probe::is_raw(path)? {
+        let original = path.canonicalize()?;
+        let sidecar = crate::raw_settings::sidecar_path(&original)?;
+        match std::fs::symlink_metadata(&sidecar) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => {
+                // Embedded JPEGs describe the camera's original rendering, not
+                // the saved recipe. Opening validates and develops that recipe.
+                return composite(&crate::raw::open(&original)?, width, height);
+            }
+        }
         if let Ok(Some(preview)) = crate::raw_probe::embedded_preview(path)
             && preview.width() >= width
             && preview.height() >= height
@@ -73,6 +84,10 @@ fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
 /// without rendering the whole picture at full size.
 fn composite_document(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
     let doc = crate::ora::read(path)?;
+    composite(&doc, width, height)
+}
+
+fn composite(doc: &emulsion_core::Document, width: u32, height: u32) -> Result<DynamicImage> {
     let long = doc.width.max(doc.height);
     let need = width.max(height).max(1);
     let mut level = 0;
@@ -86,12 +101,14 @@ fn composite_document(path: &Path, width: u32, height: u32) -> Result<DynamicIma
 }
 
 /// Where finished gallery crops are kept between launches, keyed by the
-/// file's path, size and modification time and the requested size.
+/// file's path, size and modification time, adjacent recipe content, and the
+/// requested size. Invalid/unreadable sidecars disable cache lookup entirely.
 fn cache_path(path: &Path, width: u32, height: u32) -> Option<std::path::PathBuf> {
     use std::hash::{Hash, Hasher};
+    use std::io::Read;
     let meta = std::fs::metadata(path).ok()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    "thumb-v2-raw-preview".hash(&mut h);
+    "thumb-v3-raw-sidecar".hash(&mut h);
     path.hash(&mut h);
     meta.len().hash(&mut h);
     meta.modified()
@@ -100,6 +117,25 @@ fn cache_path(path: &Path, width: u32, height: u32) -> Option<std::path::PathBuf
         .map(|d| d.as_nanos())
         .hash(&mut h);
     (width, height).hash(&mut h);
+    let sidecar = crate::raw_settings::sidecar_path(&path.canonicalize().ok()?).ok()?;
+    match std::fs::File::open(&sidecar) {
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            file.take(64 * 1024 + 1).read_to_end(&mut bytes).ok()?;
+            if bytes.len() > 64 * 1024 {
+                return None;
+            }
+            Some(bytes).hash(&mut h);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if !matches!(std::fs::symlink_metadata(&sidecar), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+            {
+                return None;
+            }
+            None::<Vec<u8>>.hash(&mut h);
+        }
+        Err(_) => return None,
+    }
     Some(
         crate::recent::data_dir()
             .join("thumbs")
@@ -129,7 +165,11 @@ pub fn thumbnail_cover(path: &Path, width: u32, height: u32) -> Result<(u32, u32
         return Ok((t.width(), t.height(), t.into_raw()));
     }
     let (w, h, px) = thumbnail_cover_uncached(path, width, height)?;
+    // A save racing development must not put the new rendering under the old
+    // recipe's key (which could be reused when that recipe is restored later).
+    let unchanged = cache == cache_path(path, width, height);
     if let Some(c) = cache
+        && unchanged
         && let Some(dir) = c.parent()
         && std::fs::create_dir_all(dir).is_ok()
         && let Ok(bytes) = crate::export::png8(w, h, &px)
@@ -162,6 +202,10 @@ fn thumbnail_cover_uncached(path: &Path, width: u32, height: u32) -> Result<(u32
     .into_rgba8();
     Ok((preview.width(), preview.height(), preview.into_raw()))
 }
+
+#[cfg(test)]
+#[path = "../tests/common/raw_fixture.rs"]
+mod raw_fixture;
 
 #[cfg(test)]
 mod tests {
@@ -266,5 +310,45 @@ mod tests {
         );
         let center = ((h / 2 * w + w / 2) * 4) as usize;
         assert_eq!(&pixels[center..center + 4], &[0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn raw_gallery_tracks_sidecar_saves_external_changes_and_removal() {
+        // Retain every historical cache key: later saves change which filename
+        // cache_path returns. Clean exactly those files even if an assertion fails.
+        struct Cleanup(Vec<PathBuf>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                for path in &self.0 {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        let file = Fixture::new("dng");
+        raw_fixture::write_dng(&file.0);
+        let mut doc = crate::raw::open(&file.0).unwrap();
+        let sidecar = crate::raw_settings::suggested_sidecar_path(&doc).unwrap();
+        let mut cleanup = Cleanup(vec![sidecar.clone()]);
+        cleanup.0.push(cache_path(&file.0, 36, 24).unwrap());
+        let original = thumbnail_cover(&file.0, 36, 24).unwrap();
+        let source_bytes = std::fs::read(&file.0).unwrap();
+        let mut previous = original.clone();
+        for exposure in [-1.0, -2.0] {
+            doc.raw.as_mut().unwrap().params.exposure = exposure;
+            crate::raw_settings::save_sidecar(&doc, &sidecar).unwrap();
+            cleanup.0.push(cache_path(&file.0, 36, 24).unwrap());
+            let edited = thumbnail_cover(&file.0, 36, 24).unwrap();
+            assert_ne!(edited, original);
+            assert_ne!(edited, previous);
+            assert_eq!(thumbnail_cover(&file.0, 36, 24).unwrap(), edited);
+            assert_eq!(thumbnail(&file.0, 36).unwrap(), edited);
+            previous = edited;
+        }
+        // External corruption must not return an older, valid cached image.
+        std::fs::write(&sidecar, b"invalid external recipe").unwrap();
+        assert!(thumbnail_cover(&file.0, 36, 24).is_err());
+        std::fs::remove_file(&sidecar).unwrap();
+        assert_eq!(thumbnail_cover(&file.0, 36, 24).unwrap(), original);
+        assert_eq!(std::fs::read(&file.0).unwrap(), source_bytes);
     }
 }

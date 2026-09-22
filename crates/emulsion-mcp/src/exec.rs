@@ -48,11 +48,15 @@ pub struct Planned {
     pub commands: Vec<Command>,
     pub message: String,
     /// A preview computed with the planned pixels, delivered only after apply succeeds.
-    feedback: Option<ToolResult>,
+    pub(crate) feedback: Option<ToolResult>,
+    pub(crate) deferred: Option<crate::raw_tools::SettingsWrite>,
 }
 
 /// Apply planned commands on the thread that owns the document.
 pub fn apply(editor: &mut Editor, p: Planned) -> ToolResult {
+    if let Some(effect) = p.deferred {
+        return effect.apply(&editor.doc);
+    }
     for c in p.commands {
         if let Err(e) = editor.execute(c) {
             return err(e.to_string());
@@ -201,14 +205,10 @@ fn export_batch_new(
     dir: &std::path::Path,
     stem: &str,
     ext: &str,
+    export: crate::export_tools::ExportRequest,
 ) -> Result<std::path::PathBuf, String> {
     let stage = BatchExportStage::new(dir, ext).map_err(|e| e.to_string())?;
-    emulsion_io::export::export(
-        doc,
-        &stage.0,
-        emulsion_io::export::ExportOptions::for_doc(doc),
-    )
-    .map_err(|e| e.to_string())?;
+    export.write(doc, &stage.0)?;
     for serial in 0u64.. {
         let name = if serial == 0 {
             format!("{stem}.{ext}")
@@ -922,6 +922,7 @@ fn plan_liquify(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
         return Err(err("the path missed the layer"));
     }
     Ok(Planned {
+        deferred: None,
         feedback: None,
         commands: vec![Command::ReplacePixels {
             id,
@@ -950,6 +951,7 @@ fn plan_from_script(doc: &Document, script: PaintScript) -> Result<Planned, Tool
             node_label(doc, script.id)
         );
         return Ok(Planned {
+            deferred: None,
             feedback: Some(paint_feedback(doc, message.clone())),
             commands: Vec::new(),
             message,
@@ -963,6 +965,7 @@ fn plan_from_script(doc: &Document, script: PaintScript) -> Result<Planned, Tool
     }
     let feedback = paint_feedback(&after, script.message.clone());
     Ok(Planned {
+        deferred: None,
         feedback: Some(feedback),
         commands: vec![Command::ReplacePixels {
             id: script.id,
@@ -1091,6 +1094,9 @@ fn doc_raster(doc: &Document) -> Raster {
 }
 
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
+    if crate::raw_tools::HEAVY.contains(&name) {
+        return crate::raw_tools::plan(doc, name, args);
+    }
     let (w, h) = (doc.width, doc.height);
     match name {
         "get_reference_image" => Err(crate::reference::missing_reference()),
@@ -1105,6 +1111,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             Ok(Planned {
                 commands: Vec::new(),
                 message,
+                deferred: None,
                 feedback: Some(result),
             })
         }
@@ -1147,6 +1154,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                         format!("Generated: {}", prompt.chars().take(40).collect::<String>())
                     });
                 return Ok(Planned {
+                    deferred: None,
                     feedback: None,
                     commands: vec![Command::AddNode {
                         node: Box::new(
@@ -1185,6 +1193,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                     .map_err(|e| err(e.to_string()))?;
             let label = format!("Generated: {}", prompt.chars().take(40).collect::<String>());
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode {
                     node: Box::new(
@@ -1236,6 +1245,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let (layer, reg) =
                 emulsion_ai::inpaint::fill(&img, &hole, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode {
                     node: Box::new(
@@ -1274,6 +1284,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 .unwrap_or("Depth (AI)")
                 .to_string();
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode {
                     node: Box::new(
@@ -1308,6 +1319,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let (restored, n) =
                 emulsion_ai::face::restore(&img, strength, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode {
                     node: Box::new(
@@ -1344,6 +1356,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let job = emulsion_ai::jobs::Job::new();
             let big = emulsion_ai::upscale::upscale(&img, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![
                     Command::ImageSize {
@@ -1426,6 +1439,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             skipped.sort();
             skipped.dedup();
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![],
                 message: format!(
@@ -1442,6 +1456,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
         }
         "batch_export" => {
             use emulsion_recipes::store;
+            let export = crate::export_tools::ExportRequest::parse(args).map_err(err)?;
             let out_dir = std::path::PathBuf::from(
                 args.get("out_dir")
                     .and_then(Value::as_str)
@@ -1501,6 +1516,9 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                         err(format!("format {want:?} is not one this machine can write"))
                     })?
             };
+            export
+                .validate_path(&out_dir.join(format!("output.{ext}")))
+                .map_err(err)?;
             std::fs::create_dir_all(&out_dir).map_err(|e| err(e.to_string()))?;
             let mut written = Vec::new();
             let mut failed = Vec::new();
@@ -1529,7 +1547,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                             )
                         })
                         .unwrap_or_default();
-                    export_batch_new(&ed.doc, &out_dir, &format!("{stem}{suffix}"), ext)
+                    export_batch_new(&ed.doc, &out_dir, &format!("{stem}{suffix}"), ext, export)
                 })();
                 match result {
                     Ok(o) => written.push(o.display().to_string()),
@@ -1537,6 +1555,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 }
             }
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![],
                 message: format!(
@@ -1617,6 +1636,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             }
             commands.push(Command::SetFilters { id, filters });
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands,
                 message: format!(
@@ -1650,6 +1670,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 emulsion_io::lensfun::install(&|_, _| {}, &cancel)
                     .map_err(|e| err(e.to_string()))?;
                 return Ok(Planned {
+                    deferred: None,
                     feedback: None,
                     commands: vec![],
                     message: "Installed the lensfun lens database".into(),
@@ -1661,6 +1682,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             emulsion_ai::models::download(spec, &|_, _| {}, &cancel)
                 .map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![],
                 message: format!(
@@ -1683,6 +1705,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let m = emulsion_ai::matte::harden(&m, 20, 235);
             let (c, msg) = selection_command(doc, m, combine_arg(args), 0.0);
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![c],
                 message: msg,
@@ -1736,6 +1759,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let m = emulsion_ai::matte::harden(&m, 96, 160);
             let (c, msg) = selection_command(doc, m, combine_arg(args), 0.0);
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![c],
                 message: format!("{msg} (confidence {:.0} %)", score * 100.0),
@@ -1801,6 +1825,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 commands.push(Command::SetVisible { id, visible: false });
             }
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands,
                 message: format!(
@@ -1842,6 +1867,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let m = select::by_color(&img, w, h, x as u32, y as u32, tol, contiguous);
             let (c, message) = selection_command(doc, m, combine_arg(args), 0.0);
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![c],
                 message,
@@ -1927,6 +1953,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             }
             let n = filters.len();
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![Command::SetFilterStack {
                     id,
@@ -1954,6 +1981,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 Placement::at(reg.x as f64, reg.y as f64),
             );
             Ok(Planned {
+                deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode { node: Box::new(node), slot: Slot::TOP }],
                 message: "Filled the selection into a new node \"Content-aware fill\" at the top of the stack".into(),
@@ -1969,6 +1997,11 @@ fn exec(editor: &mut Editor, cmd: Command) -> Result<Option<NodeId>, ToolResult>
 
 fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, ToolResult> {
     match name {
+        "describe_raw" => crate::raw_tools::describe(&editor.doc, args),
+        "get_raw_preview" => crate::raw_preview::preview(&editor.doc, args),
+        "list_raw_documents" | "set_raw_comparison" | "synchronize_raw" => {
+            Err(err("This tool needs the live Emulsion workspace host"))
+        }
         "format_text_range" | "set_text_path" => crate::text_tools::execute(editor, name, args),
         "draw_shape" | "combine_path" | "resize_path" | "align_path_components" => {
             crate::shape_geometry::execute(editor, name, args)
@@ -2864,6 +2897,22 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             )))
         }
         "save_document" => {
+            if args.get("path").is_none()
+                && editor.path.is_none()
+                && emulsion_io::raw_settings::sidecar_only(&editor.doc)
+                && editor.graph.commits().count() == 1
+                && editor.graph.branches().len() == 1
+            {
+                let path = emulsion_io::raw_settings::suggested_sidecar_path(&editor.doc)
+                    .map_err(|e| err(e.to_string()))?;
+                emulsion_io::raw_settings::save_sidecar(&editor.doc, &path)
+                    .map_err(|e| err(e.to_string()))?;
+                editor.mark_sidecar_saved(editor.revision);
+                return Ok(ToolResult::text(format!(
+                    "Saved RAW settings to {}; original RAW unchanged. Reopening the original restores these settings.",
+                    path.display()
+                )));
+            }
             let path = match args.get("path").and_then(Value::as_str) {
                 Some(p) => std::path::PathBuf::from(p),
                 None => editor.path.clone().ok_or_else(|| {
@@ -2879,12 +2928,9 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 .get("path")
                 .and_then(Value::as_str)
                 .ok_or_else(|| err("missing string 'path'"))?;
-            let mut opts = emulsion_io::export::ExportOptions::for_doc(&editor.doc);
-            if let Some(q) = args.get("quality").and_then(Value::as_u64) {
-                opts.jpeg_quality = q.clamp(1, 100) as u8;
-            }
-            emulsion_io::export::export(&editor.doc, std::path::Path::new(path), opts)
-                .map_err(|e| err(e.to_string()))?;
+            crate::export_tools::ExportRequest::parse(args)
+                .and_then(|export| export.write(&editor.doc, std::path::Path::new(path)))
+                .map_err(err)?;
             Ok(ToolResult::text(format!("Exported {path}")))
         }
         "add_layer" => {
@@ -3569,6 +3615,8 @@ pub fn view(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> {
 /// Image-bearing read tools can run against a snapshot off the UI thread.
 pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, ToolResult> {
     match name {
+        "get_raw_preview" => crate::raw_preview::preview(doc, args),
+        "describe_raw" => crate::raw_tools::describe(doc, args),
         "get_view" => view(doc, args),
         "get_reference_image" => Err(crate::reference::missing_reference()),
         "critique" => crate::review::critique(doc, args),

@@ -382,6 +382,7 @@ impl Workspace {
     pub(crate) fn home_header(
         &mut self,
         navigation: AnyElement,
+        theme_controls: AnyElement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -402,18 +403,27 @@ impl Workspace {
             .child(div().flex().items_center().child(navigation))
             .child(
                 div()
-                    .id("home-window-drag")
-                    .test_support()
-                    .window_control_area(WindowControlArea::Drag)
                     .text_size(rems(0.75))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Home"),
             )
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
+                    .id("home-search-container")
+                    .test_support()
+                    .w(rems(18.75))
+                    .min_w(rems(10.))
+                    .flex_shrink_1()
                     .child(Input::new(&input).small().h(rems(1.375))),
+            )
+            .child(
+                div()
+                    .id("home-window-drag")
+                    .test_support()
+                    .flex_1()
+                    .min_w(rems(3.))
+                    .h_full()
+                    .window_control_area(WindowControlArea::Drag),
             )
             .child(
                 control("home-grid", "Grid", &p)
@@ -441,6 +451,7 @@ impl Workspace {
                         cx.listener(|this, _, window, cx| this.open_home_selection(window, cx)),
                     ),
             )
+            .child(theme_controls)
             .into_any_element()
     }
 

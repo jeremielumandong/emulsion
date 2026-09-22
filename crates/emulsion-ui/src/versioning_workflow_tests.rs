@@ -203,7 +203,10 @@ fn saves_to_one_document_never_overlap_and_the_newest_request_wins(cx: &mut Test
     cx.update(|_, cx| {
         let e = view.read(cx);
         assert!(e.history.save_busy);
-        assert_eq!(e.history.save_queued.as_ref(), Some(&newest));
+        assert_eq!(
+            e.history.save_queued.as_ref().map(|s| s.path()),
+            Some(newest.as_path())
+        );
     });
     cx.run_until_parked();
     let saved = cx.update(|_, cx| {

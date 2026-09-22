@@ -2,8 +2,122 @@
 use super::*;
 use emulsion_core::raw::{DevelopParams, RawDocument, RawMetadata};
 
-#[path = "../../emulsion-io/tests/common/raw_fixture.rs"]
-mod raw_fixture;
+use crate::raw_test_fixture as raw_fixture;
+
+struct SidecarFixture(std::path::PathBuf);
+
+impl SidecarFixture {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "emulsion-ui-sidecar-{}-{}.dng",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        raw_fixture::write_dng(&path);
+        Self(path)
+    }
+
+    fn sidecar(&self) -> std::path::PathBuf {
+        emulsion_io::raw_settings::sidecar_path(&self.0).unwrap()
+    }
+}
+
+impl Drop for SidecarFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(self.sidecar());
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[gpui_kit::test]
+fn raw_ctrl_s_saves_sidecar_and_reopen_restores_edits(cx: &mut TestAppContext) {
+    let fixture = SidecarFixture::new();
+    let original = std::fs::read(&fixture.0).unwrap();
+    let (ws, cx) = open(cx, emulsion_io::open(&fixture.0).unwrap());
+    let ed = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| {
+        ed.update(cx, |e, cx| {
+            e.source = Some(fixture.0.clone());
+            e.raw_slider("exposure", 125.0, cx);
+            e.raw_slider("temperature", 20.0, cx);
+        })
+    });
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(250));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-s");
+    cx.run_until_parked();
+    assert!(!cx.did_prompt_for_new_path());
+    assert!(fixture.sidecar().exists());
+    let restored = emulsion_io::open(&fixture.0).unwrap();
+    cx.update(|_, cx| {
+        let e = ed.read(cx);
+        assert!(!e.editor.is_modified());
+        assert!(e.editor.path.is_none());
+        assert_eq!(e.source.as_ref(), Some(&fixture.0));
+        assert_eq!(
+            restored.raw.as_ref().unwrap().params,
+            e.editor.doc.raw.as_ref().unwrap().params
+        );
+        assert_ne!(
+            restored.raw.as_ref().unwrap().params,
+            DevelopParams::default()
+        );
+    });
+    assert_eq!(std::fs::read(&fixture.0).unwrap(), original);
+    // Save as remains a project operation, even for pure RAW development.
+    cx.simulate_keystrokes("ctrl-shift-s");
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn raw_sidecar_save_does_not_mark_concurrent_project_edit_saved(cx: &mut TestAppContext) {
+    let fixture = SidecarFixture::new();
+    let (ws, cx) = open(cx, emulsion_io::open(&fixture.0).unwrap());
+    let ed = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.simulate_keystrokes("ctrl-s");
+    cx.update(|_, cx| {
+        ed.update(cx, |e, cx| {
+            let id = e.editor.doc.raw.as_ref().unwrap().node_id;
+            e.execute(Command::SetOpacity { id, opacity: 0.5 }, cx);
+        })
+    });
+    cx.run_until_parked();
+    assert!(fixture.sidecar().exists());
+    cx.update(|_, cx| assert!(ed.read(cx).editor.is_modified()));
+    cx.simulate_keystrokes("ctrl-s");
+    assert!(
+        cx.did_prompt_for_new_path(),
+        "project edits cannot be saved as just a RAW recipe"
+    );
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn raw_sidecar_save_failure_keeps_edits_dirty(cx: &mut TestAppContext) {
+    let fixture = SidecarFixture::new();
+    let (ws, cx) = open(cx, emulsion_io::open(&fixture.0).unwrap());
+    let ed = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| ed.update(cx, |e, cx| e.raw_slider("exposure", 100.0, cx)));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(250));
+    cx.run_until_parked();
+    std::fs::write(fixture.sidecar(), b"unrelated file").unwrap();
+    cx.simulate_keystrokes("ctrl-s");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = ed.read(cx);
+        assert!(e.editor.is_modified());
+        assert!(e.status.as_ref().unwrap().0.contains("Save failed"));
+    });
+    assert_eq!(std::fs::read(fixture.sidecar()).unwrap(), b"unrelated file");
+}
 
 #[gpui_kit::test]
 fn raw_synchronization_applies_only_selected_group_and_is_undoable(cx: &mut TestAppContext) {

@@ -84,6 +84,7 @@ impl EditorView {
         &mut self,
         navigation: AnyElement,
         tabs: AnyElement,
+        theme_controls: AnyElement,
         p: &Palette,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -147,14 +148,23 @@ impl EditorView {
             .child(div().flex().items_center().child(self.effect_menus(p, cx)))
             .child(
                 div()
-                    .id("compact-window-drag")
+                    .id("compact-tab-leading-drag")
                     .test_support()
                     .w(rems(1.5))
                     .h_full()
                     .flex_none()
                     .window_control_area(WindowControlArea::Drag),
             )
-            .child(div().flex().flex_1().min_w_0().child(tabs))
+            .child(tabs)
+            .child(
+                div()
+                    .id("compact-window-drag")
+                    .test_support()
+                    .flex_1()
+                    .min_w(rems(1.5))
+                    .h_full()
+                    .window_control_area(WindowControlArea::Drag),
+            )
             .child(
                 control("doc-size", dimensions)
                     .tooltip("Image and canvas size")
@@ -186,6 +196,7 @@ impl EditorView {
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_export_panel(cx))),
             )
+            .child(theme_controls)
             .into_any_element()
     }
 
