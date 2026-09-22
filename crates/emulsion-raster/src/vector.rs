@@ -3,10 +3,12 @@
 //!
 //! A path is data; a Path node in a document keeps one and rasterizes it
 //! whenever it changes, so it composites like pixels but stays editable.
-//! Fill uses the non-zero winding rule; strokes have round joins and caps.
+//! Fill uses the non-zero winding rule; strokes support alignment, dashes,
+//! caps and joins, with round joins and caps as the legacy default.
 //! Paths read and write SVG path data (`M L H V C S Q T Z`), which is how
 //! the assistant draws them.
 
+#[cfg(test)]
 use crate::color;
 use crate::geom::IRect;
 use crate::image::{Mask, Raster};
@@ -52,36 +54,11 @@ pub struct Path {
     pub subpaths: Vec<SubPath>,
 }
 
-/// How a Path node draws itself. Colours are straight sRGB with alpha.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PathStyle {
-    pub stroke: Option<[u8; 4]>,
-    /// Stroke width in document pixels.
-    pub width: f32,
-    pub fill: Option<[u8; 4]>,
-}
-
-impl Default for PathStyle {
-    fn default() -> Self {
-        Self {
-            stroke: Some([10, 10, 11, 255]),
-            width: 3.0,
-            fill: None,
-        }
-    }
-}
-
-impl PathStyle {
-    pub fn sanitized(mut self) -> Self {
-        self.width = if self.width.is_finite() {
-            self.width.clamp(0.0, 500.0)
-        } else {
-            3.0
-        };
-        self
-    }
-}
+#[path = "vector_style.rs"]
+mod style;
+pub use style::*;
+#[path = "vector_render.rs"]
+mod render;
 
 pub const MAX_ANCHORS: usize = 20_000;
 
@@ -188,7 +165,7 @@ impl Path {
             return IRect::default();
         }
         let pad = if style.stroke.is_some() {
-            style.width as f64 / 2.0 + 2.0
+            style.sanitized().stroke_padding() as f64 + 2.0
         } else {
             2.0
         };
@@ -308,60 +285,8 @@ impl Path {
 
     /// Draw the path with `style` onto a transparent document-sized layer.
     pub fn rasterize(&self, style: &PathStyle, w: u32, h: u32) -> Raster {
-        let style = style.sanitized();
-        let b = self
-            .bounds(&style)
-            .intersect(&IRect::new(0, 0, w as i32, h as i32));
-        if b.is_empty() || self.is_empty() {
-            return Raster::transparent(w, h);
-        }
-        // Straight to 16-bit pixels, one row at a time in parallel: the
-        // fill goes down first, the stroke over it.
-        use rayon::prelude::*;
-        let fill = style.fill.map(|c| {
-            (
-                self.fill_mask(w, h).read_rect(b),
-                color::srgba8_to_premul(c),
-            )
-        });
-        let stroke = match (style.stroke, style.width > 0.0) {
-            (Some(c), true) => Some((
-                self.stroke_mask(style.width as f64, w, h).read_rect(b),
-                color::srgba8_to_premul(c),
-            )),
-            _ => None,
-        };
-        let bw = b.w as usize;
-        let mut out: Vec<[u16; 4]> = vec![[0; 4]; (b.w * b.h) as usize];
-        out.par_chunks_mut(bw).enumerate().for_each(|(row, o)| {
-            let base = row * bw;
-            for (i, px) in o.iter_mut().enumerate() {
-                let mut acc = [0.0f32; 4];
-                if let Some((m, col)) = &fill {
-                    let k = m[base + i] as f32 / 255.0;
-                    if k > 0.0 {
-                        for c in 0..4 {
-                            acc[c] = col[c] * k;
-                        }
-                    }
-                }
-                if let Some((m, col)) = &stroke {
-                    let k = m[base + i] as f32 / 255.0;
-                    if k > 0.0 {
-                        for c in 0..4 {
-                            acc[c] = col[c] * k + acc[c] * (1.0 - col[3] * k);
-                        }
-                    }
-                }
-                if acc[3] > 0.0 {
-                    *px = color::f_to_px(acc);
-                }
-            }
-        });
-        Raster::transparent(w, h).write_rect(b, &out)
+        render::rasterize(self, style, w, h)
     }
-
-    // ── SVG path data ──
 
     /// The path as SVG `d` data, absolute coordinates.
     pub fn to_svg(&self) -> String {
@@ -836,6 +761,7 @@ mod tests {
             stroke: Some([255, 0, 0, 255]),
             width: 2.0,
             fill: Some([0, 0, 255, 255]),
+            ..PathStyle::default()
         };
         let r = p.rasterize(&style, 64, 64);
         let inside = color::px_to_f(r.get(30, 30));

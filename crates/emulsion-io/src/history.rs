@@ -31,7 +31,8 @@ use std::io::{Read, Seek};
 use std::sync::Arc;
 use zip::ZipArchive;
 
-pub const HISTORY_VERSION: u32 = 4;
+// History snapshots retain native shape paints and stroke geometry as of version 5.
+pub const HISTORY_VERSION: u32 = 5;
 pub(crate) const GRAPH: &str = "history/graph.json";
 const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
 

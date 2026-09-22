@@ -92,7 +92,7 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
                 hi = hi.max(p);
             }
             let pad = if style.stroke.is_some() {
-                style.width as f64 / 2.0
+                style.sanitized().stroke_padding() as f64
             } else {
                 0.0
             };
@@ -487,6 +487,10 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 let mut p = (**path).clone();
                 p.transform(to_new);
                 style.width = (style.width as f64 * scale) as f32;
+                for length in &mut style.dash {
+                    *length = (*length as f64 * scale) as f32;
+                }
+                style.dash_offset = (style.dash_offset as f64 * scale) as f32;
                 *cache = Arc::new(p.rasterize(style, w, h));
                 *path = Arc::new(p);
                 if let Some(m) = &n.mask {

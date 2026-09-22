@@ -27,6 +27,9 @@ pub(crate) enum SidebarTab {
 impl EditorView {
     /// Resolve temporary previews before hiding their Apply/Cancel controls.
     pub(crate) fn select_sidebar(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        if tab != self.sidebar_tab {
+            self.finish_shape_color_edit(cx);
+        }
         if tab == SidebarTab::Recipes {
             self.reload_recipes();
         }
@@ -115,6 +118,7 @@ impl EditorView {
             SidebarTab::BrushPresets => div().children(self.presets_view(p, cx)).into_any_element(),
             SidebarTab::Properties => div()
                 .id("sidebar-properties-content")
+                .children(self.shape_properties(window, cx))
                 .child(self.inspector(p, window, cx))
                 .test_support()
                 .into_any_element(),

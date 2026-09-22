@@ -168,7 +168,12 @@ pub fn transform_nodes(
             NodeKind::Path { path, style, cache } => {
                 let mut updated = (**path).clone();
                 updated.transform(m);
-                style.width = (style.width as f64 * m.matrix2.determinant().abs().sqrt()) as f32;
+                let scale = m.matrix2.determinant().abs().sqrt();
+                style.width = (style.width as f64 * scale) as f32;
+                for length in &mut style.dash {
+                    *length = (*length as f64 * scale) as f32;
+                }
+                style.dash_offset = (style.dash_offset as f64 * scale) as f32;
                 *cache = Arc::new(updated.rasterize(style, w, h));
                 *path = Arc::new(updated);
             }
@@ -222,6 +227,55 @@ pub fn sample_mask(mask: &Mask, source: glam::DVec2) -> u8 {
 mod tests {
     use super::*;
     use crate::{Command, Editor};
+    #[test]
+    fn vector_stroke_dash_measurements_scale_with_shape_and_image() {
+        use emulsion_raster::vector::{Path, PathStyle, StrokeAlignment};
+        let mut original = Document::new(100, 80);
+        original.nodes.push(Node::path(
+            1,
+            "Dashed shape",
+            Arc::new(Path::from_svg("M 20 20 L 60 20 L 60 50 Z").unwrap()),
+            PathStyle {
+                width: 4.0,
+                alignment: StrokeAlignment::Outside,
+                dash: [8.0, 4.0, 0.0, 0.0, 0.0, 0.0],
+                dash_count: 2,
+                dash_offset: 3.0,
+                ..Default::default()
+            },
+            100,
+            80,
+        ));
+        for image in [false, true] {
+            let mut doc = original.clone();
+            if image {
+                Command::ImageSize {
+                    width: 200,
+                    height: 160,
+                }
+                .apply(&mut doc)
+                .unwrap();
+            } else {
+                transform_nodes(
+                    &mut doc,
+                    &[1],
+                    DAffine2::from_scale(dvec2(2., 2.)).to_cols_array(),
+                )
+                .unwrap();
+            }
+            let NodeKind::Path { style, .. } = &doc.nodes[0].kind else {
+                panic!()
+            };
+            assert_eq!(style.width, 8.);
+            assert_eq!(&style.dash[..2], &[16., 8.]);
+            assert_eq!(style.dash_offset, 6.);
+        }
+        let bounds = crate::geometry::node_bounds(&original, 1).unwrap();
+        assert!(
+            bounds.x <= 16 && bounds.right() >= 64,
+            "outside stroke fits geometry bounds: {bounds:?}"
+        );
+    }
     #[test]
     fn crop_and_image_size_apply_document_mask_affine_once_and_keep_pixel_masks_local() {
         let mut original = Document::new(80, 60);

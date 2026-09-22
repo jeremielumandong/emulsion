@@ -42,7 +42,8 @@ use std::sync::Arc;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-pub const FORMAT_VERSION: u32 = 4;
+// Native shape paints and stroke geometry must not be silently ignored by older readers.
+pub const FORMAT_VERSION: u32 = 5;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -2165,6 +2166,87 @@ mod tests {
     }
 
     #[test]
+    fn shape_paints_and_strokes_survive_undo_and_native_history() {
+        use emulsion_core::Editor;
+        use emulsion_raster::vector::{
+            Path, PathPaint, PathStyle, PatternKind, StrokeAlignment, StrokeCap, StrokeJoin,
+        };
+        let legacy: PathStyle = serde_json::from_value(serde_json::json!({
+            "stroke": [0, 0, 0, 255], "width": 3.0, "fill": [255, 0, 0, 255]
+        }))
+        .unwrap();
+        assert_eq!(legacy.fill_paint, PathPaint::Solid);
+        assert_eq!(legacy.alignment, StrokeAlignment::Center);
+        assert_eq!(legacy.dash_count, 0);
+        let path = Arc::new(Path::from_svg("M 8 8 L 48 8 L 48 40 L 8 40 Z").unwrap());
+        let mut doc = Document::new(64, 48);
+        doc.nodes
+            .push(Node::path(1, "Shape", path.clone(), legacy, 64, 48));
+        doc.normalize();
+        let mut editor = Editor::new(doc, None);
+        let styles = [
+            PathStyle {
+                fill_paint: PathPaint::LinearGradient {
+                    end: [0, 100, 255, 128],
+                    angle: 37.0,
+                },
+                stroke_paint: PathPaint::RadialGradient {
+                    end: [255, 255, 255, 255],
+                },
+                alignment: StrokeAlignment::Inside,
+                cap: StrokeCap::Square,
+                join: StrokeJoin::Bevel,
+                miter_limit: 7.0,
+                dash: [4.0, 2.0, 1.0, 2.0, 0.0, 0.0],
+                dash_count: 4,
+                dash_offset: 1.5,
+                ..legacy
+            },
+            PathStyle {
+                fill_paint: PathPaint::Pattern {
+                    kind: PatternKind::Dots,
+                    secondary: [20, 80, 50, 255],
+                    size: 8.0,
+                },
+                stroke_paint: PathPaint::Pattern {
+                    kind: PatternKind::Stripes,
+                    secondary: [200, 80, 50, 255],
+                    size: 6.0,
+                },
+                alignment: StrokeAlignment::Outside,
+                ..legacy
+            },
+        ];
+        for (index, style) in styles.into_iter().enumerate() {
+            editor
+                .execute(Command::SetPath {
+                    id: 1,
+                    path: path.clone(),
+                    style,
+                })
+                .unwrap();
+            let expected = editor.doc.clone();
+            assert!(editor.undo());
+            assert!(editor.redo());
+            assert_eq!(editor.doc, expected);
+            editor.commit(format!("Shape style {index}"), false);
+        }
+        let file = tmp("shape-style-history.ora");
+        write_full(&editor.doc, Some(&editor.graph), &file).unwrap();
+        let reopened = read_full(&file).unwrap();
+        assert!(reopened.history_error.is_none());
+        assert_eq!(reopened.doc, editor.doc);
+        let graph = reopened.graph.unwrap();
+        for commit in editor.graph.commits() {
+            assert_eq!(graph.commit(commit.id).unwrap().doc, commit.doc);
+        }
+        assert_eq!(
+            flatten(&reopened.doc.composite_tree(), 0).to_srgba8(),
+            flatten(&editor.doc.composite_tree(), 0).to_srgba8()
+        );
+    }
+
+    #[test]
     fn rotated_text_and_paths_roundtrip_as_editable_native_content() {
         use emulsion_core::text::TextSpec;
         use emulsion_raster::vector::{Path, PathStyle};
@@ -2187,6 +2269,7 @@ mod tests {
                     stroke: None,
                     fill: Some([20, 60, 180, 255]),
                     width: 0.0,
+                    ..Default::default()
                 },
                 240,
                 180,

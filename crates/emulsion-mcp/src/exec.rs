@@ -2379,6 +2379,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 },
                 width: args.get("width").and_then(Value::as_f64).unwrap_or(3.0) as f32,
                 fill: rgba_arg(args.get("fill"))?,
+                ..Default::default()
             }
             .sanitized();
             let (w, h) = (editor.doc.width, editor.doc.height);

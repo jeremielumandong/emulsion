@@ -33,6 +33,8 @@ mod rail;
 mod raw_panel;
 mod recipes;
 mod rotation;
+mod shape_path_ops;
+pub(crate) mod shapes;
 mod sidebar;
 pub(crate) use sidebar::{DockTab, SidebarTab};
 mod smart;
@@ -382,6 +384,7 @@ pub struct EditorView {
     pub(crate) smart: smart::SmartUi,
     pub(crate) panels: panels::PanelState,
     pub(crate) styles_ui: styles_ui::StylesUi,
+    pub(crate) shape_ui: shapes::ShapeUi,
     pub(crate) type_tool: type_tool::TypeState,
     pub(crate) ai: ai_tools::AiState,
     /// Shift held during a drag: free aspect, or 15° rotation steps.
@@ -494,6 +497,7 @@ impl EditorView {
             smart: Default::default(),
             panels: Default::default(),
             styles_ui: Default::default(),
+            shape_ui: Default::default(),
             type_tool: Default::default(),
             ai: Default::default(),
             drag_shift: false,
@@ -562,6 +566,7 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
+        self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
         self.tools.transform_lift = None;
         self.invalidate_pending_edits();
@@ -573,6 +578,7 @@ impl EditorView {
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
+        self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
         self.tools.transform_lift = None;
         self.invalidate_pending_edits();
@@ -584,6 +590,7 @@ impl EditorView {
     }
 
     fn undo_to(&mut self, steps: usize, cx: &mut Context<Self>) {
+        self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
         self.tools.transform_lift = None;
         self.invalidate_pending_edits();

@@ -273,13 +273,17 @@ fn shift_shape_preview_and_commit_agree_and_releasing_shift_restores_aspect(
                     panic!("shape drag")
                 };
                 v.tool_up(drag, cx);
-                let mask = v.editor.doc.nodes.last().unwrap().mask.as_ref().unwrap();
-                let expected = if ellipse {
-                    select::ellipse(64, 64, 10., 10., 20., if shift { 20. } else { 5. })
-                } else {
-                    select::rect(64, 64, 10., 10., 20., if shift { 20. } else { 5. })
+                let node = v.editor.doc.nodes.last().unwrap();
+                assert!(node.mask.is_none());
+                let NodeKind::Path { path, .. } = &node.kind else {
+                    panic!("editable shape")
                 };
-                assert_eq!(mask.to_pixels(), expected.to_pixels());
+                let bounds = emulsion_raster::vector_geometry::bounds(path).unwrap();
+                assert_eq!(bounds, (10., 10., 20., if shift { 20. } else { 5. }));
+                assert_eq!(
+                    path.subpaths[0].anchors.iter().any(|a| a.has_handles()),
+                    ellipse
+                );
             }
         }
     });

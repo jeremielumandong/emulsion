@@ -19,6 +19,7 @@ pub mod quickshape;
 pub mod select;
 pub mod tile;
 pub mod vector;
+pub mod vector_geometry;
 pub mod warp;
 
 pub use adjust::Adjustment;

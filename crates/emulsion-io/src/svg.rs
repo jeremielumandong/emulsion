@@ -9,7 +9,7 @@
 use crate::{IoError, Result};
 use emulsion_core::{Document, Node};
 use emulsion_raster::Raster;
-use emulsion_raster::vector::{Path, PathStyle};
+use emulsion_raster::vector::{Path, PathStyle, StrokeCap, StrokeJoin};
 use glam::{DAffine2, dvec2};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
@@ -139,6 +139,7 @@ struct Style {
     stroke: Option<[u8; 4]>,
     width: f32,
     opacity: f32,
+    stroke_options: PathStyle,
 }
 
 impl Style {
@@ -175,6 +176,52 @@ impl Style {
                         s.opacity = o.clamp(0.0, 1.0) as f32;
                     }
                 }
+                "stroke-linecap" => {
+                    s.stroke_options.cap = match v.as_str() {
+                        "round" => StrokeCap::Round,
+                        "square" => StrokeCap::Square,
+                        "butt" => StrokeCap::Butt,
+                        _ => s.stroke_options.cap,
+                    };
+                }
+                "stroke-linejoin" => {
+                    s.stroke_options.join = match v.as_str() {
+                        "round" => StrokeJoin::Round,
+                        "bevel" => StrokeJoin::Bevel,
+                        "miter" => StrokeJoin::Miter,
+                        _ => s.stroke_options.join,
+                    };
+                }
+                "stroke-miterlimit" => {
+                    if let Some(limit) = num(&v) {
+                        s.stroke_options.miter_limit = limit as f32;
+                    }
+                }
+                "stroke-dashoffset" => {
+                    if let Some(offset) = num(&v) {
+                        s.stroke_options.dash_offset = offset as f32;
+                    }
+                }
+                "stroke-dasharray" => {
+                    if v == "none" {
+                        s.stroke_options.dash_count = 0;
+                    } else {
+                        let values: Option<Vec<f32>> = v
+                            .split(|c: char| c == ',' || c.is_ascii_whitespace())
+                            .filter(|part| !part.is_empty())
+                            .map(|part| num(part).map(|n| n as f32))
+                            .collect();
+                        if let Some(values) = values.filter(|values| {
+                            !values.is_empty()
+                                && values.len() <= 6
+                                && values.iter().all(|n| n.is_finite() && *n >= 0.0)
+                        }) {
+                            s.stroke_options.dash = [0.0; 6];
+                            s.stroke_options.dash[..values.len()].copy_from_slice(&values);
+                            s.stroke_options.dash_count = values.len() as u8;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -183,10 +230,14 @@ impl Style {
 
     fn to_path_style(&self, scale: f64) -> PathStyle {
         let a = |c: [u8; 4]| [c[0], c[1], c[2], (c[3] as f32 * self.opacity).round() as u8];
+        let mut options = self.stroke_options;
+        options.dash.iter_mut().for_each(|n| *n *= scale as f32);
+        options.dash_offset *= scale as f32;
         PathStyle {
             stroke: self.stroke.map(a),
             width: (self.width as f64 * scale) as f32,
             fill: self.fill.map(a),
+            ..options
         }
         .sanitized()
     }
@@ -364,6 +415,11 @@ pub fn import(text: &str) -> Result<Imported> {
             stroke: None,
             width: 1.0,
             opacity: 1.0,
+            stroke_options: PathStyle {
+                cap: StrokeCap::Butt,
+                join: StrokeJoin::Miter,
+                ..Default::default()
+            },
         },
     )];
     let mut doc: Option<Document> = None;
@@ -516,6 +572,33 @@ mod tests {
   </g>
   <text x="5" y="45">hello</text>
 </svg>"##;
+
+    #[test]
+    fn inherited_stroke_geometry_and_dash_lengths_scale_with_viewbox() {
+        let imported = import(
+            r##"<svg width="100" height="100" viewBox="0 0 50 50">
+            <g fill="none" stroke="#123456" stroke-linecap="square" stroke-linejoin="bevel"
+               stroke-miterlimit="7" stroke-dasharray="3, 2" stroke-dashoffset="-1">
+                <path d="M 5 5 L 30 30"/>
+                <path d="M 5 10 L 30 35" style="stroke-linecap:round;stroke-dasharray:none"/>
+            </g></svg>"##,
+        )
+        .unwrap();
+        let NodeKind::Path { style, .. } = &imported.doc.nodes[0].kind else {
+            panic!("editable path expected")
+        };
+        assert_eq!(style.cap, StrokeCap::Square);
+        assert_eq!(style.join, StrokeJoin::Bevel);
+        assert_eq!(style.miter_limit, 7.0);
+        assert_eq!(style.dash_count, 2);
+        assert_eq!(&style.dash[..2], &[6.0, 4.0]);
+        assert_eq!(style.dash_offset, -2.0);
+        let NodeKind::Path { style, .. } = &imported.doc.nodes[1].kind else {
+            panic!("editable path expected")
+        };
+        assert_eq!(style.cap, StrokeCap::Round);
+        assert_eq!(style.dash_count, 0);
+    }
 
     #[test]
     fn shapes_become_path_nodes_with_scale_and_style() {

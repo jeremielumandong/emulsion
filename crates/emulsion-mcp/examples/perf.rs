@@ -279,6 +279,7 @@ fn main() {
                 stroke: Some([255, 0, 0, 255]),
                 width: 4.0,
                 fill: None,
+                ..Default::default()
             };
             path.rasterize(&style, w, h)
         },

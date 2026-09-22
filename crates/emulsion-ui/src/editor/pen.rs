@@ -175,6 +175,7 @@ impl EditorView {
             stroke: pen.stroke_on.then_some(self.tools.fg),
             width: pen.width,
             fill: pen.fill_on.then_some(self.tools.bg),
+            ..Default::default()
         }
         .sanitized()
     }
@@ -477,6 +478,10 @@ impl EditorView {
         };
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let path = Path { subpaths: vec![sp] };
+        if self.shape_ui.operation != super::shapes::ShapeOperation::NewLayer {
+            self.apply_shape_operation(path, cx);
+            return;
+        }
         let style = self.pen_style();
         let node = Node::path(0, "Path", Arc::new(path), style, w, h);
         let slot = self.insertion_slot();
@@ -630,7 +635,9 @@ impl EditorView {
     /// What the overlay shows for the pen: the path in progress or the
     /// selected node's path with its anchors and handles.
     pub(crate) fn pen_overlay(&self) -> Option<PenOverlay> {
-        if self.tool != Tool::Pen {
+        if self.tool != Tool::Pen
+            && !(self.tool == Tool::Shape && self.shape_ui.component.is_some())
+        {
             return None;
         }
         let mut o = PenOverlay::default();

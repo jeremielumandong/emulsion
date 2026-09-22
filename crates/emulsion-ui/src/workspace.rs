@@ -198,6 +198,7 @@ impl Workspace {
         let Some(editor) = self.editor.clone() else {
             return;
         };
+        editor.update(cx, |editor, cx| editor.finish_shape_color_edit(cx));
         let visible = editor.read(cx).styles_ui.dialog_for.is_some();
         if visible {
             editor.update(cx, |editor, cx| {

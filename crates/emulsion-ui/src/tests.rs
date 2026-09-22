@@ -74,8 +74,14 @@ mod layer_tests;
 #[path = "layer_selection_tests.rs"]
 mod layer_selection_tests;
 
+#[path = "shape_color_workflow_tests.rs"]
+mod shape_color_workflow_tests;
 #[path = "shape_fill_tests.rs"]
 mod shape_fill_tests;
+#[path = "shape_vector_fill_tests.rs"]
+mod shape_vector_fill_tests;
+#[path = "shape_workflow_tests.rs"]
+mod shape_workflow_tests;
 
 #[path = "layer_effect_rows_tests.rs"]
 mod layer_effect_rows_tests;
@@ -2630,14 +2636,18 @@ mod tools {
     }
 
     #[gpui_kit::test]
-    fn shape_drag_adds_a_masked_fill_node(cx: &mut TestAppContext) {
+    fn shape_drag_adds_an_editable_vector_node(cx: &mut TestAppContext) {
         let (_, e, cx) = setup(cx, Tool::Shape);
         drag(&e, cx, (30.0, 30.0), (90.0, 70.0));
-        let (kind, masked) = cx.update(|_, cx| {
+        let (kind, masked, vector) = cx.update(|_, cx| {
             let n = e.read(cx).editor.doc.nodes.last().unwrap().clone();
-            (n.name.clone(), n.mask.is_some())
+            (
+                n.name.clone(),
+                n.mask.is_some(),
+                matches!(n.kind, emulsion_core::NodeKind::Path { .. }),
+            )
         });
-        assert_eq!((kind.as_str(), masked), ("Rectangle", true));
+        assert_eq!((kind.as_str(), masked, vector), ("Rectangle", false, true));
     }
 
     #[gpui_kit::test]

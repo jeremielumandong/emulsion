@@ -35,6 +35,7 @@ impl EditorView {
     }
 
     pub(crate) fn set_layer_selection(&mut self, ids: Vec<NodeId>, active: Option<NodeId>) {
+        self.commit_shape_color_edit();
         self.selected = active;
         self.layer_selection = LayerSelection {
             active,

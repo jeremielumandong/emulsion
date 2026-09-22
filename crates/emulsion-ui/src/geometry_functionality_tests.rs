@@ -150,7 +150,7 @@ fn crop_preview_cancels_and_committed_crop_undo_restores_pixels(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn rectangle_and_ellipse_shapes_render_distinct_masks_and_undo(cx: &mut TestAppContext) {
+fn rectangle_and_ellipse_shapes_render_editable_paths_and_undo(cx: &mut TestAppContext) {
     let (e, cx) = setup(cx, Tool::Shape);
     let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
     // Focus the canvas before exercising the public shape shortcuts.
@@ -164,9 +164,22 @@ fn rectangle_and_ellipse_shapes_render_distinct_masks_and_undo(cx: &mut TestAppC
             let e = e.read(cx);
             let node = e.editor.doc.nodes.last().unwrap();
             assert_eq!(node.name, name);
-            let mask = node.mask.as_ref().unwrap();
-            assert_eq!(mask.get(90, 80), 255);
-            assert_eq!(mask.get(41, 41) > 127, corner_inside);
+            assert!(node.mask.is_none(), "shape geometry is not a pixel mask");
+            let NodeKind::Path { path, cache, .. } = &node.kind else {
+                panic!("editable vector shape expected")
+            };
+            assert_eq!(path.anchor_count(), 4);
+            assert!(path.subpaths[0].closed);
+            assert_eq!(cache.get(90, 80)[3], 65535);
+            assert_eq!(cache.get(41, 41)[3] > 32767, corner_inside);
+            assert_eq!(
+                path.subpaths[0]
+                    .anchors
+                    .iter()
+                    .all(|anchor| anchor.has_handles()),
+                !corner_inside,
+                "ellipse keeps cubic handles; rectangle keeps sharp corners"
+            );
             let rendered = emulsion_raster::composite::flatten(&e.editor.doc.composite_tree(), 0);
             assert!(rendered.get(90, 80)[0] > 64000, "shape fill renders red");
             assert_eq!(

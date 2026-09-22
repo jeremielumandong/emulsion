@@ -16,9 +16,17 @@ pub enum DrawingPace {
     Quick,
 }
 
+/// A named reusable shape stroke; applying it leaves the shape fill unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ShapeStrokePreset {
+    pub name: String,
+    pub style: emulsion_raster::vector::PathStyle,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
+    pub shape_stroke_presets: Vec<ShapeStrokePreset>,
     /// Per-effect defaults used when adding a layer style.
     pub layer_style_defaults: Vec<emulsion_core::styles::LayerStyle>,
     pub layer_style_option_defaults:
@@ -98,6 +106,7 @@ impl Default for Settings {
             cli_path: None,
             model: None,
             layer_style_defaults: Vec::new(),
+            shape_stroke_presets: Vec::new(),
             layer_style_option_defaults: Default::default(),
             jev_api_key: None,
             auto_apply: false,
@@ -260,6 +269,30 @@ mod tests {
 #[cfg(test)]
 mod style_default_tests {
     use super::*;
+    #[test]
+    fn shape_stroke_presets_roundtrip_and_legacy_settings_stay_empty() {
+        use emulsion_raster::vector::{PathPaint, PathStyle, StrokeCap};
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.shape_stroke_presets.is_empty());
+        settings.shape_stroke_presets.push(ShapeStrokePreset {
+            name: "Dotted gradient".into(),
+            style: PathStyle {
+                width: 8.0,
+                cap: StrokeCap::Round,
+                stroke_paint: PathPaint::LinearGradient {
+                    end: [255, 100, 30, 255],
+                    angle: 25.0,
+                },
+                dash: [1.0, 8.0, 0.0, 0.0, 0.0, 0.0],
+                dash_count: 2,
+                ..Default::default()
+            },
+        });
+        let decoded: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(decoded, settings);
+    }
+
     #[test]
     fn extended_style_defaults_roundtrip_and_legacy_defaults_stay_empty() {
         let old: Settings = serde_json::from_str("{}").unwrap();

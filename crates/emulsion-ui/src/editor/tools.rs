@@ -336,7 +336,11 @@ fn norm(a: (f64, f64), b: (f64, f64)) -> (f64, f64, f64, f64) {
 }
 
 /// Keep the raw pointer endpoint so releasing Shift restores the free aspect.
-fn shape_rect(start: (f64, f64), end: (f64, f64), constrain: bool) -> (f64, f64, f64, f64) {
+pub(super) fn shape_rect(
+    start: (f64, f64),
+    end: (f64, f64),
+    constrain: bool,
+) -> (f64, f64, f64, f64) {
     if !constrain {
         return norm(start, end);
     }
@@ -415,6 +419,7 @@ impl EditorView {
 
     /// Resolve the old tool before its controls and preview disappear.
     pub(super) fn finish_tool_interaction(&mut self, cx: &mut Context<Self>) {
+        self.finish_shape_color_edit(cx);
         self.tools.transform_lift = None;
         if matches!(self.drag, Some(Drag::Pan { .. } | Drag::RotateView { .. })) {
             self.drag = None;
@@ -480,6 +485,9 @@ impl EditorView {
                 SidebarTab::Adjustments
             };
             self.select_sidebar(tab, cx);
+        }
+        if tool == Tool::Shape {
+            self.select_sidebar(SidebarTab::Properties, cx);
         }
         if tool == Tool::Mask {
             // The tool needs a mask to paint; a node without one gets a
@@ -1750,33 +1758,8 @@ impl EditorView {
                 end,
                 ellipse,
             } => {
-                let (x, y, rw, rh) = shape_rect(start, end, self.drag_shift);
-                if rw < 1.0 || rh < 1.0 {
-                    return;
-                }
-                let m = if ellipse {
-                    select::ellipse(w, h, x as f32, y as f32, rw as f32, rh as f32)
-                } else {
-                    select::rect(w, h, x as f32, y as f32, rw as f32, rh as f32)
-                };
-                let mut node = Node::new(
-                    0,
-                    if ellipse { "Ellipse" } else { "Rectangle" },
-                    NodeKind::Fill {
-                        rgba: self.tools.fg,
-                    },
-                );
-                node.mask = Some(Arc::new(m));
-                let slot = self.insertion_slot();
-                if let Some(id) = self.execute(
-                    Command::AddNode {
-                        node: Box::new(node),
-                        slot,
-                    },
-                    cx,
-                ) {
-                    self.set_layer_selection(vec![id], Some(id));
-                }
+                let bounds = self.shape_drag_rect(start, end, self.drag_shift);
+                self.finish_shape(bounds, ellipse, cx);
             }
             ToolDrag::PickSv { .. } | ToolDrag::PickHue { .. } => {
                 if self.editor.in_transaction() {
@@ -2635,7 +2618,7 @@ impl EditorView {
                     ellipse,
                 } => {
                     let (x, y, w, h) = if matches!(t, ToolDrag::Shape { .. }) {
-                        shape_rect(*start, *end, self.drag_shift)
+                        self.shape_drag_rect(*start, *end, self.drag_shift)
                     } else {
                         norm(*start, *end)
                     };
@@ -3774,6 +3757,7 @@ impl EditorView {
             }
             Tool::Type => self.type_options(&mut v, p, cx),
             Tool::Pen => {
+                v.push(self.pen_operation_control(cx));
                 let pen_w = self.tools.pen.width;
                 v.push(self.opt_slider(
                     SliderKey::PenWidth,
@@ -3926,12 +3910,7 @@ impl EditorView {
                         cx.notify();
                     },
                 ));
-                v.push(
-                    div()
-                        .flex_none()
-                        .child("foreground fill · Shift: square / circle · Esc: cancel")
-                        .into_any_element(),
-                );
+                v.extend(self.shape_toolbar(cx));
             }
             Tool::Move => {
                 v.push(self.alignment_controls(p, cx));
