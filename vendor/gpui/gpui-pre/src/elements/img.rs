@@ -129,6 +129,7 @@ where
 pub struct ImageStyle {
     grayscale: bool,
     object_fit: ObjectFit,
+    object_position: (f32, f32),
     loading: Option<Box<dyn Fn() -> AnyElement>>,
     fallback: Option<Box<dyn Fn() -> AnyElement>>,
 }
@@ -138,6 +139,7 @@ impl Default for ImageStyle {
         Self {
             grayscale: false,
             object_fit: ObjectFit::Contain,
+            object_position: (0.5, 0.5),
             loading: None,
             fallback: None,
         }
@@ -158,6 +160,14 @@ pub trait StyledImage: Sized {
     /// Set the object fit for the image.
     fn object_fit(mut self, object_fit: ObjectFit) -> Self {
         self.image_style().object_fit = object_fit;
+        self
+    }
+
+    /// Set the focal position used when fitted image content is cropped.
+    /// Values are fractions from the image's top-left corner and are clamped
+    /// to the inclusive `0..=1` range.
+    fn object_position(mut self, x: f32, y: f32) -> Self {
+        self.image_style().object_position = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
         self
     }
 
@@ -487,10 +497,15 @@ impl Element for Img {
                     if data.frame_count() == 0 {
                         return;
                     }
-                    let new_bounds = self
+                    let mut new_bounds = self
                         .style
                         .object_fit
                         .get_bounds(bounds, data.size(layout_state.frame_index));
+                    let (x, y) = self.style.object_position;
+                    new_bounds.origin.x =
+                        bounds.origin.x + (bounds.size.width - new_bounds.size.width) * x;
+                    new_bounds.origin.y =
+                        bounds.origin.y + (bounds.size.height - new_bounds.size.height) * y;
                     let corner_radii = style.corner_radii.to_pixels(window.rem_size());
                     window
                         .paint_image(
@@ -895,6 +910,29 @@ mod tests {
                 rendered_tile_bounds.size.height.0,
             ),
             (50, 0, 100, 100),
+        );
+
+        let image = test_image_with_size(200, 100);
+        window.draw(point(px(10.), px(20.)), size(px(100.), px(100.)), |_, _| {
+            img(ImageSource::Render(image))
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .object_position(1.0, 0.5)
+                .into_any_element()
+        });
+        let positioned_tile_bounds = window.update(|window, _| {
+            window
+                .rendered_frame
+                .scene
+                .polychrome_sprites
+                .last()
+                .expect("positioned cover image should paint a sprite")
+                .tile
+                .bounds
+        });
+        assert_eq!(
+            positioned_tile_bounds.origin.x.0 - full_tile_bounds.origin.x.0,
+            100,
         );
     }
 

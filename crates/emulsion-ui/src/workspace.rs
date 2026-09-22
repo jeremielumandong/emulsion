@@ -62,7 +62,7 @@ pub struct Workspace {
     pub(crate) model_jobs: crate::settings_models::ModelJobs,
     pub(crate) batch: crate::batch::BatchState,
     /// The landing image, decoded once in the background.
-    pub(crate) landing: Option<Arc<RenderImage>>,
+    pub(crate) landing: Option<crate::landing::LandingImages>,
     /// Recovery copies left by an earlier session that did not close cleanly.
     pub(crate) recovered: Vec<(PathBuf, u64)>,
     /// Launch splash, until the timer or the first click or key.
@@ -149,7 +149,7 @@ impl Workspace {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         // Decoded up front (a few milliseconds) so the splash never shows without it.
-        let landing = crate::landing::decode().map(Arc::new);
+        let landing = crate::landing::decode();
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(1400))
@@ -403,6 +403,8 @@ impl Workspace {
         let p = theme::palette(cx);
         let workspace = cx.entity().downgrade();
         let has_editor = self.editor.is_some();
+        let is_home = self.screen == Screen::Home;
+        let home_rows = self.home_uses_rows();
         Button::new("compact-app-menu")
             .label("E")
             .tooltip("Emulsion menu")
@@ -448,8 +450,25 @@ impl Workspace {
                             .ok();
                     }));
                 }
-                menu.separator()
-                    .item(PopupMenuItem::new("Toggle theme").on_click(|_, _, cx| theme::toggle(cx)))
+                menu = menu.separator().item(
+                    PopupMenuItem::new("Toggle theme").on_click(|_, _, cx| theme::toggle(cx)),
+                );
+                if is_home {
+                    menu = menu.separator();
+                    for (label, rows) in [("Grid view", false), ("Rows view", true)] {
+                        let workspace = workspace.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(label)
+                                .checked(home_rows == rows)
+                                .on_click(move |_, _, cx| {
+                                    workspace
+                                        .update(cx, |this, cx| this.set_home_rows(rows, cx))
+                                        .ok();
+                                }),
+                        );
+                    }
+                }
+                menu
             })
             .into_any_element()
     }
@@ -853,12 +872,19 @@ impl Workspace {
         });
     }
 
-    fn splash_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn splash_view(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
-        let bg: AnyElement = match &self.landing {
-            Some(img_) => img(ImageSource::Render(img_.clone()))
+        let viewport = window.viewport_size();
+        let aspect = f32::from(viewport.width) / f32::from(viewport.height).max(1.0);
+        let bg: AnyElement = match self
+            .landing
+            .as_ref()
+            .map(|images| images.for_aspect(aspect))
+        {
+            Some((image, (x, y))) => img(ImageSource::Render(image))
                 .size_full()
                 .object_fit(ObjectFit::Cover)
+                .object_position(x, y)
                 .into_any_element(),
             None => div().size_full().bg(p.chrome).into_any_element(),
         };
@@ -1942,7 +1968,7 @@ impl Render for Workspace {
             .child(top)
             .children(banner)
             .child(body)
-            .when(self.splash, |d| d.child(self.splash_view(cx)))
+            .when(self.splash, |d| d.child(self.splash_view(window, cx)))
             .children(gpui_kit::component::Root::render_dialog_layer(window, cx))
     }
 }
@@ -2062,9 +2088,19 @@ mod compact_tests {
             assert_eq!(workspace.editor.as_ref(), Some(&first));
         });
         cx.update(|window, _| {
-            assert!(window.find("home-search-container").bounds().size.width <= px(320.));
+            assert!(window.find("home-brand").visible());
+            assert!(window.find("home-header-filters").visible());
             assert!(window.find("home-window-drag").bounds().size.width >= px(48.));
         });
+        cx.update(|window, cx| window.click("home-filter-today", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("home-header-search-button", cx));
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            assert!(window.find("home-search-container").bounds().size.width <= px(320.));
+        });
+        cx.update(|window, cx| window.press("escape", cx));
+        cx.run_until_parked();
         cx.update(|window, cx| window.click("compact-theme-light", cx));
         cx.run_until_parked();
         cx.update(|_, cx| assert!(!theme::palette(cx).dark));

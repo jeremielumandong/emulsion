@@ -9,12 +9,13 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Disableable, Selectable, Sizable};
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::{Disableable, IconName, Selectable, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub(crate) struct GalleryThumbnail {
     requested_width: u32,
@@ -70,6 +71,17 @@ fn control(id: impl Into<ElementId>, label: impl Into<SharedString>, p: &Palette
         .bg(p.soft_bg)
         .border_color(p.line)
         .text_color(p.ink)
+}
+
+fn app_icon() -> Arc<Image> {
+    static ICON: OnceLock<Arc<Image>> = OnceLock::new();
+    ICON.get_or_init(|| {
+        Arc::new(Image::from_bytes(
+            ImageFormat::Png,
+            include_bytes!("../../../assets/icons/emulsion.png").to_vec(),
+        ))
+    })
+    .clone()
 }
 
 #[cfg(test)]
@@ -168,7 +180,9 @@ mod tests {
         });
         cx.run_until_parked();
         cx.update(|_, cx| assert_eq!(workspace.read(cx).visible_recents(cx).len(), 1));
-        cx.update(|window, cx| window.click("home-rows", cx));
+        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(11usize, cx));
         cx.run_until_parked();
         cx.update(|window, cx| {
             window.click(path_id("home-recent", Path::new("photos/Portrait.png")), cx)
@@ -214,7 +228,7 @@ mod tests {
     #[gpui_kit::test]
     fn home_layout_keeps_presets_visible_and_scopes_gallery_scrolling(cx: &mut TestAppContext) {
         let (_, cx) = browser(cx);
-        for (width, height) in [(1280., 800.), (800., 600.)] {
+        for (width, height) in [(3840., 2160.), (1280., 800.), (800., 600.)] {
             cx.simulate_resize(size(px(width), px(height)));
             cx.run_until_parked();
             cx.update(|window, _| {
@@ -237,6 +251,15 @@ mod tests {
 }
 
 impl Workspace {
+    pub(crate) fn home_uses_rows(&self) -> bool {
+        self.home_state.rows
+    }
+
+    pub(crate) fn set_home_rows(&mut self, rows: bool, cx: &mut Context<Self>) {
+        self.home_state.rows = rows;
+        cx.notify();
+    }
+
     /// Drop a file from the recent list without touching the file.
     pub fn remove_recent(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
         self.recents = emulsion_io::recent::remove(path);
@@ -373,12 +396,6 @@ impl Workspace {
             .or_else(|| visible.into_iter().next())
     }
 
-    fn open_home_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(recent) = self.selected_recent(cx) {
-            self.open_path(recent.path, window, cx);
-        }
-    }
-
     pub(crate) fn home_header(
         &mut self,
         navigation: AnyElement,
@@ -388,8 +405,33 @@ impl Workspace {
     ) -> AnyElement {
         self.ensure_home_search(window, cx);
         let p = theme::palette(cx);
-        let selected = self.selected_recent(cx).is_some();
         let input = self.home_state.search.as_ref().unwrap().0.clone();
+        let filters = [
+            ("home-filter-all", "All", HomeFilter::All),
+            (
+                "home-filter-unfinished",
+                "Unfinished",
+                HomeFilter::Unfinished,
+            ),
+            ("home-filter-today", "Today", HomeFilter::Today),
+            ("home-filter-starred", "Starred", HomeFilter::Starred),
+        ]
+        .into_iter()
+        .map(|(id, label, filter)| {
+            control(id, label, &p)
+                .selected(self.home_state.filter == filter)
+                .tooltip(if filter == HomeFilter::Today {
+                    "Opened in the last 24 hours"
+                } else if filter == HomeFilter::Unfinished {
+                    "Open documents with unsaved changes"
+                } else {
+                    label
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.home_state.filter = filter;
+                    cx.notify();
+                }))
+        });
         div()
             .id("home-header")
             .test_support()
@@ -400,21 +442,31 @@ impl Workspace {
             .h(rems(2.25))
             .px_2()
             .gap_2()
-            .child(div().flex().items_center().child(navigation))
             .child(
                 div()
-                    .text_size(rems(0.75))
+                    .id("home-brand")
+                    .test_support()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .flex_none()
+                    .child(
+                        img(app_icon())
+                            .size(rems(1.25))
+                            .object_fit(ObjectFit::Contain),
+                    )
+                    .text_size(rems(0.813))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Home"),
+                    .child("Emulsion"),
             )
             .child(
                 div()
-                    .id("home-search-container")
+                    .id("home-header-filters")
                     .test_support()
-                    .w(rems(18.75))
-                    .min_w(rems(10.))
-                    .flex_shrink_1()
-                    .child(Input::new(&input).small().h(rems(1.375))),
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .children(filters),
             )
             .child(
                 div()
@@ -426,32 +478,27 @@ impl Workspace {
                     .window_control_area(WindowControlArea::Drag),
             )
             .child(
-                control("home-grid", "Grid", &p)
-                    .selected(!self.home_state.rows)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.home_state.rows = false;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                control("home-rows", "Rows", &p)
-                    .selected(self.home_state.rows)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.home_state.rows = true;
-                        cx.notify();
-                    })),
-            )
-            .child(control("home-open", "Open…", &p).on_click(|_, window, cx| {
-                window.dispatch_action(Box::new(crate::actions::Open), cx)
-            }))
-            .child(
-                control("home-open-selected", "Open selected", &p)
-                    .disabled(!selected)
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_home_selection(window, cx)),
-                    ),
+                Popover::new("home-header-search")
+                    .trigger(
+                        Button::new("home-header-search-button")
+                            .icon(IconName::Search)
+                            .tooltip("Search recent files")
+                            .xsmall()
+                            .ghost()
+                            .rounded_none(),
+                    )
+                    .content(move |_, _, _| {
+                        div()
+                            .id("home-search-container")
+                            .test_support()
+                            .w(rems(18.75))
+                            .p_1()
+                            .child(Input::new(&input).small())
+                            .into_any_element()
+                    }),
             )
             .child(theme_controls)
+            .child(div().flex().items_center().child(navigation))
             .into_any_element()
     }
 
@@ -484,8 +531,8 @@ impl Workspace {
                 )
             })
             .collect::<Vec<_>>();
-        let mut filters = div()
-            .id("home-filters")
+        let mut actions = div()
+            .id("home-actions")
             .test_support()
             .flex()
             .flex_wrap()
@@ -495,37 +542,32 @@ impl Workspace {
             .py_2()
             .border_b_1()
             .border_color(p.line);
-        for (id, label, filter) in [
-            ("home-filter-all", "All", HomeFilter::All),
-            (
-                "home-filter-unfinished",
-                "Unfinished",
-                HomeFilter::Unfinished,
-            ),
-            ("home-filter-today", "Today", HomeFilter::Today),
-            ("home-filter-starred", "Starred", HomeFilter::Starred),
-        ] {
-            filters = filters.child(
-                control(id, label, &p)
-                    .selected(self.home_state.filter == filter)
-                    .tooltip(if filter == HomeFilter::Today {
-                        "Opened in the last 24 hours"
-                    } else if filter == HomeFilter::Unfinished {
-                        "Open documents with unsaved changes"
-                    } else {
-                        label
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.home_state.filter = filter;
-                        cx.notify();
-                    })),
-            );
+        if !crate::app_state::settings(cx).compact_chrome {
+            for (id, label, filter) in [
+                ("home-filter-all", "All", HomeFilter::All),
+                (
+                    "home-filter-unfinished",
+                    "Unfinished",
+                    HomeFilter::Unfinished,
+                ),
+                ("home-filter-today", "Today", HomeFilter::Today),
+                ("home-filter-starred", "Starred", HomeFilter::Starred),
+            ] {
+                actions = actions.child(
+                    control(id, label, &p)
+                        .selected(self.home_state.filter == filter)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.home_state.filter = filter;
+                            cx.notify();
+                        })),
+                );
+            }
         }
-        filters = filters.child(div().flex_1());
+        actions = actions.child(div().flex_1());
         if !inspector && let Some(entry) = &selected {
             let path = entry.path.clone();
             let starred = crate::app_state::settings(cx).starred_files.contains(&path);
-            filters = filters.child(
+            actions = actions.child(
                 control("home-star-selected", "Star", &p)
                     .selected(starred)
                     .tooltip(format!("Star {}", file_name(&path)))
@@ -542,7 +584,7 @@ impl Workspace {
         }
         let checked = self.home_state.checked.len();
         if checked > 0 {
-            filters = filters
+            actions = actions
                 .child(
                     div()
                         .text_size(rems(0.625))
@@ -563,7 +605,7 @@ impl Workspace {
                     )),
                 );
         }
-        filters = filters.child(
+        actions = actions.child(
             div()
                 .text_size(rems(0.625))
                 .text_color(p.muted)
@@ -613,7 +655,7 @@ impl Workspace {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .child(filters)
+            .child(actions)
             .child(
                 div()
                     .id("home-scroll")
@@ -623,7 +665,7 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(self.hero(&p, cx))
+                    .child(self.hero(center_width, &p, cx))
                     .children(self.recovered_rows(&p, cx))
                     .child(gallery),
             )
@@ -957,8 +999,10 @@ impl Workspace {
             .w_full()
             .text_color(p.ink)
             .bg(if active { p.panel } else { p.paper })
-            .tooltip(format!("{} — double-click to open", path.display()))
-            .accessibility_label(format!("Select {name}"))
+            // A delayed tooltip on the whole card can survive the double-click
+            // that replaces Home with the editor. Keep the instruction in the
+            // accessible name instead of painting stale Home UI over the image.
+            .accessibility_label(format!("Select {name}; double-click to open"))
             .child(content)
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.home_state.selected = Some(path.clone());
@@ -1190,8 +1234,12 @@ impl Workspace {
         )
     }
 
-    fn hero(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+    fn hero(&self, width: f32, p: &Palette, cx: &Context<Self>) -> AnyElement {
         let workspace = cx.entity().downgrade();
+        let image = self
+            .landing
+            .as_ref()
+            .map(|images| images.for_aspect(width / 13.125));
         div()
             .id("hero")
             .test_support()
@@ -1203,11 +1251,12 @@ impl Workspace {
             .bg(p.chrome)
             .border_b_1()
             .border_color(p.line)
-            .when_some(self.landing.clone(), |hero, image| {
+            .when_some(image, |hero, (image, (x, y))| {
                 hero.child(
                     img(ImageSource::Render(image))
                         .size_full()
-                        .object_fit(ObjectFit::Cover),
+                        .object_fit(ObjectFit::Cover)
+                        .object_position(x, y),
                 )
             })
             .child(div().absolute().inset_0().bg(linear_gradient(
