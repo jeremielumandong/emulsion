@@ -14,6 +14,21 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+/// Converters run in the background, including once per batch thumbnail.
+fn converter_command(tool: &str) -> Command {
+    let mut command = Command::new(tool);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    command
+}
+
 /// Extensions a converter may open, lower case, roughly GIMP's list minus
 /// what Emulsion decodes itself.
 pub const EXTERNAL_EXTENSIONS: &[&str] = &[
@@ -192,11 +207,8 @@ pub fn decode(path: &Path) -> Result<Decoded> {
         for stale in std::fs::read_dir(&tmp.0).into_iter().flatten().flatten() {
             let _ = std::fs::remove_file(stale.path());
         }
-        let mut cmd = Command::new(c.tool);
-        cmd.args(&args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped());
+        let mut cmd = converter_command(c.tool);
+        cmd.args(&args);
         match cmd.output() {
             Ok(o)
                 if o.status.success()
@@ -308,12 +320,7 @@ pub fn encode(png: &[u8], ext: &'static str, out: &Path, quality: u8) -> Result<
             })
             .collect();
         let _ = std::fs::remove_file(&staged);
-        let result = Command::new(e.tool)
-            .args(&args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output();
+        let result = converter_command(e.tool).args(&args).output();
         match result {
             Ok(o) if o.status.success() && staged.is_file() => {
                 // Into place via rename when possible, else copy.
@@ -344,4 +351,36 @@ pub fn encode(png: &[u8], ext: &'static str, out: &Path, quality: u8) -> Result<
         ".{ext} could not be written ({})",
         failures.join("; ")
     )))
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    #[test]
+    fn converter_has_no_console() {
+        const CHILD: &str = "EMULSION_TEST_CONVERTER_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn GetConsoleWindow() -> *mut std::ffi::c_void;
+            }
+            // SAFETY: GetConsoleWindow takes no arguments and returns a borrowed handle.
+            assert!(unsafe { GetConsoleWindow() }.is_null());
+            eprintln!("converter stderr captured");
+            return;
+        }
+
+        let exe = std::env::current_exe().unwrap();
+        let output = super::converter_command(exe.to_str().unwrap())
+            .args([
+                "--exact",
+                "external::tests::converter_has_no_console",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert!(stderr.contains("converter stderr captured"), "{stderr}");
+    }
 }

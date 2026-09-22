@@ -816,6 +816,10 @@ impl Workspace {
             return;
         };
         self.load_batch(folder, paths, cx);
+        // These pictures were explicitly checked on Home before entering Batch.
+        for item in &mut self.batch.items {
+            item.selected = true;
+        }
         self.home_state.checked.clear();
         self.screen = crate::workspace::Screen::Batch;
         self.refresh_batch_recipes(cx);

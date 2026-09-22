@@ -34,7 +34,8 @@ pub(crate) struct BatchItem {
 pub(crate) struct BatchState {
     pub folder: Option<PathBuf>,
     pub items: Vec<BatchItem>,
-    thumbs_loading: HashSet<PathBuf>,
+    /// Retain failed requests too, so redraws do not retry converters forever.
+    thumbs_requested: HashSet<PathBuf>,
     /// The picture shown large.
     pub current: Option<usize>,
     /// Chosen recipe name, if any.
@@ -311,12 +312,12 @@ impl Workspace {
             .filter(|path| is_batch_input(path))
             .map(|path| BatchItem {
                 path,
-                selected: true,
+                selected: false,
                 thumb: None,
             })
             .collect();
-        b.thumbs_loading.clear();
-        b.current = (!b.items.is_empty()).then_some(0);
+        b.thumbs_requested.clear();
+        b.current = None;
         b.preview = None;
         b.preview_loading = None;
         b.preview_generation = b.preview_generation.wrapping_add(1);
@@ -332,13 +333,17 @@ impl Workspace {
             .batch
             .items
             .iter()
-            .filter(|i| i.thumb.is_none())
-            .map(|i| i.path.clone())
-            .filter(|p| !self.batch.thumbs_loading.contains(p))
+            .enumerate()
+            // Opening a folder only lists files. Decode after an explicit
+            // export selection or a click to preview that picture.
+            .filter(|(index, item)| item.selected || self.batch.current == Some(*index))
+            .filter(|(_, item)| item.thumb.is_none())
+            .map(|(_, item)| item.path.clone())
+            .filter(|p| !self.batch.thumbs_requested.contains(p))
             .take(6)
             .collect();
         for path in todo {
-            self.batch.thumbs_loading.insert(path.clone());
+            self.batch.thumbs_requested.insert(path.clone());
             cx.spawn(async move |this, cx| {
                 let p = path.clone();
                 let r = cx
@@ -352,7 +357,6 @@ impl Workspace {
                     })
                     .await;
                 this.update(cx, |this, cx| {
-                    this.batch.thumbs_loading.remove(&path);
                     if let Ok((w, h, bgra)) = r
                         && let Some(item) = this.batch.items.iter_mut().find(|i| i.path == path)
                     {
