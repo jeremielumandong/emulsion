@@ -68,6 +68,9 @@ mod filter_menu_tests;
 #[path = "tool_safety_tests.rs"]
 mod tool_safety_tests;
 
+#[path = "raw_workflow_tests.rs"]
+mod raw_workflow_tests;
+
 #[path = "painting_tests.rs"]
 mod painting_tests;
 
@@ -994,7 +997,7 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
             e.editor.doc.nodes.len(),
         )
     });
-    assert_eq!((name.as_str(), size, nodes), ("landing", (1586, 992), 1));
+    assert_eq!((name.as_str(), size, nodes), ("landing", (2172, 724), 1));
 }
 
 // ── Phase 3 tools, driven through real pointer and key events ────────────
@@ -1008,7 +1011,7 @@ fn batch_recipe_browser_preserves_photo_selection_and_export_settings(cx: &mut T
 
     let (ws, cx) = open(cx, doc(&["Photo"], None));
     let source =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/landing/landing.jpg");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/landing/landing.png");
     let out_dir = std::env::temp_dir().join("emulsion-batch-layout-export-unused");
     cx.update(|_, cx| {
         ws.update(cx, |ws, cx| {

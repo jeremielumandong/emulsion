@@ -396,12 +396,15 @@ impl Workspace {
             .items_center()
             .w_full()
             .min_w_0()
-            .h(rems(1.875))
+            .h(rems(2.25))
             .px_2()
             .gap_2()
-            .child(navigation)
+            .child(div().flex().items_center().child(navigation))
             .child(
                 div()
+                    .id("home-window-drag")
+                    .test_support()
+                    .window_control_area(WindowControlArea::Drag)
                     .text_size(rems(0.75))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Home"),

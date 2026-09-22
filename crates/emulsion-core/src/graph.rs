@@ -754,6 +754,9 @@ fn remap_collisions(base: &Document, ours: &Document, theirs: &Document) -> Docu
             *id = *n;
         }
     };
+    if let Some(raw) = &mut t.raw {
+        fix(&mut raw.node_id);
+    }
     for n in &mut t.nodes {
         fix(&mut n.id);
         if let Some(p) = &mut n.parent {
@@ -783,6 +786,13 @@ pub fn merge(
     let theirs = remap_collisions(base, ours, theirs);
     let mut conflicts = Vec::new();
     let mut out = ours.clone();
+    for doc in [base, &theirs] {
+        for path in &doc.raw_originals {
+            if !out.raw_originals.contains(path) {
+                out.raw_originals.push(path.clone());
+            }
+        }
+    }
 
     // Canvas: size, resolution and blend space move together.
     let canvas = |d: &Document| {
@@ -932,6 +942,32 @@ pub fn merge(
         .into_iter()
         .map(|id| result.remove(&id).expect("picked"))
         .collect();
+
+    // Development settings belong to the exact source pixels they produced.
+    // A node merge can choose another branch's pixels or bake the source;
+    // never retain a recipe from a different rendering in either case.
+    fn raw_pixels(doc: &Document, id: NodeId) -> Option<&std::sync::Arc<emulsion_raster::Raster>> {
+        match &doc.node(id)?.kind {
+            NodeKind::Raster { raster, .. } => Some(raster),
+            NodeKind::Smart {
+                source,
+                editable: None,
+                ..
+            } => Some(source),
+            _ => None,
+        }
+    }
+    let matching_recipe = |candidate: &Document| {
+        let raw = candidate.raw.as_ref()?;
+        let source = raw_pixels(candidate, raw.node_id)?;
+        let merged = raw_pixels(&out, raw.node_id)?;
+        std::sync::Arc::ptr_eq(source, merged).then(|| raw.clone())
+    };
+    out.raw = if ours.raw == base.raw && theirs.raw != base.raw {
+        matching_recipe(&theirs).or_else(|| matching_recipe(ours))
+    } else {
+        matching_recipe(ours).or_else(|| matching_recipe(&theirs))
+    };
 
     // References to nodes that no longer exist fall back to safe values.
     let present: HashSet<NodeId> = out.nodes.iter().map(|n| n.id).collect();

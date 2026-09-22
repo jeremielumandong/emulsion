@@ -32,6 +32,7 @@ pub(crate) use pen::PenMode;
 mod presets;
 mod rail;
 mod raw_panel;
+mod raw_settings_ui;
 mod recipes;
 mod rotation;
 mod shape_path_ops;
@@ -208,6 +209,7 @@ pub(crate) const LAYERS_MIN_H: f32 = 340.0;
 pub(crate) const LAYERS_MAX_H: f32 = 900.0;
 
 enum Drag {
+    Compare,
     Toolbar(compact::ToolbarDrag),
     SidebarResize {
         start_x: Pixels,
@@ -559,6 +561,10 @@ impl EditorView {
 
     // ── Document changes ────────────────────────────────────────────────
 
+    pub(crate) fn has_unsaved_changes(&self) -> bool {
+        self.editor.is_modified() || self.raw.is_pending()
+    }
+
     pub fn execute(&mut self, cmd: Command, cx: &mut Context<Self>) -> Option<NodeId> {
         match self.editor.execute(cmd) {
             Ok(created) => {
@@ -574,6 +580,7 @@ impl EditorView {
 
     pub(crate) fn after_change(&mut self, cx: &mut Context<Self>) {
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
+        self.cancel_raw_develop();
         if let Some(sel) = self.selected
             && self.editor.doc.node(sel).is_none()
         {
@@ -621,6 +628,7 @@ impl EditorView {
     }
 
     pub(crate) fn invalidate_pending_edits(&mut self) {
+        self.cancel_raw_develop();
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
         self.history_epoch = self.history_epoch.wrapping_add(1);
         self.selection_request = self.selection_request.wrapping_add(1);
@@ -789,7 +797,11 @@ impl EditorView {
     }
 
     fn before_active(&self) -> bool {
-        self.compare > 0.0 && self.editor.differs_from_base() && self.before_tree.is_some()
+        self.raw_split_active()
+            || (!self.raw_split_requested()
+                && self.compare > 0.0
+                && self.editor.differs_from_base()
+                && self.before_tree.is_some())
     }
 
     fn dispatch_render(&mut self, cx: &mut Context<Self>) {
@@ -807,7 +819,7 @@ impl EditorView {
             b
         };
         let cur = self.tree.clone();
-        let before = self.before_tree.clone();
+        let before = self.raw_split_tree().or_else(|| self.before_tree.clone());
         let (light, dark) = self.checker;
         let channel = self.channels.view;
         cx.spawn(async move |this, cx| {
@@ -1207,6 +1219,12 @@ impl EditorView {
         }
         window.focus(&self.canvas_focus, cx);
         self.menu = None;
+        if self.raw.picking_neutral && e.button == MouseButton::Left && !self.space_held {
+            if let Some(point) = self.doc_point(e.position) {
+                self.raw_neutral_at(point, cx);
+            }
+            return;
+        }
         if e.button == MouseButton::Left
             && !self.space_held
             && self.tool == Tool::Hand
@@ -1315,6 +1333,16 @@ impl EditorView {
         }
         let Some(drag) = &self.drag else { return };
         match drag {
+            Drag::Compare => {
+                if let Some(bounds) = self.canvas_bounds()
+                    && bounds.size.width > px(0.)
+                {
+                    self.compare = (f32::from(pos.x - bounds.origin.x)
+                        / f32::from(bounds.size.width))
+                    .clamp(0., 1.);
+                    cx.notify();
+                }
+            }
             Drag::Toolbar(drag) => {
                 let drag = *drag;
                 self.move_toolbar(drag, pos, cx);
@@ -1456,7 +1484,8 @@ impl EditorView {
                 let h = self.layers_h;
                 crate::app_state::update_settings(cx, |s| s.layers_height = h);
             }
-            Some(Drag::Pan { .. })
+            Some(Drag::Compare)
+            | Some(Drag::Pan { .. })
             | Some(Drag::SidebarResize { .. })
             | Some(Drag::RotateView { .. })
             | Some(Drag::Navigator)
@@ -2074,12 +2103,19 @@ impl EditorView {
             max_level,
             rev: self.render_gen,
             before,
+            raw_compare: self.raw_split_active(),
             stage: p.stage,
             ink: p.ink,
             accent: p.accent,
             rulers: self.rulers,
         };
         let scene2 = scene.clone();
+        // Keep the entire grab target inside the canvas even at 0% and 100%.
+        // The hairline itself stays exactly on the renderer's wipe coordinate.
+        let compare_handle_left = self.canvas_bounds().map_or(px(0.), |b| {
+            (b.size.width * self.compare - window.rem_size() * 0.75)
+                .clamp(px(0.), (b.size.width - window.rem_size() * 1.5).max(px(0.)))
+        });
         let cache = self.cache.clone();
         let cache2 = self.cache.clone();
         let bounds_cell = self.canvas_bounds.clone();
@@ -2087,6 +2123,7 @@ impl EditorView {
         let weak = cx.entity().downgrade();
         let (w1, w2, w3, w4) = (weak.clone(), weak.clone(), weak.clone(), weak.clone());
         let cursor = match (&self.drag, self.space_held) {
+            (Some(Drag::Compare), _) => CursorStyle::ResizeLeftRight,
             (Some(Drag::Pan { .. } | Drag::RotateView { .. }), _) => CursorStyle::ClosedHand,
             (Some(Drag::Guide { vertical: true, .. }), _) => CursorStyle::ResizeLeftRight,
             (
@@ -2113,6 +2150,30 @@ impl EditorView {
                 "CanvasText"
             } else {
                 "Canvas"
+            })
+            .when(self.raw_split_active(), |d| {
+                // Arrow keys normally dispatch layer-nudge actions before the
+                // key-down callback. Comparison owns them while it is open.
+                d.on_action(cx.listener(|this, _: &crate::actions::NudgeLeft, _, cx| {
+                    this.compare = (this.compare - 0.02).max(0.);
+                    cx.notify();
+                }))
+                .on_action(cx.listener(|this, _: &crate::actions::NudgeRight, _, cx| {
+                    this.compare = (this.compare + 0.02).min(1.);
+                    cx.notify();
+                }))
+                .on_action(
+                    cx.listener(|this, _: &crate::actions::NudgeLeftLarge, _, cx| {
+                        this.compare = (this.compare - 0.1).max(0.);
+                        cx.notify();
+                    }),
+                )
+                .on_action(cx.listener(
+                    |this, _: &crate::actions::NudgeRightLarge, _, cx| {
+                        this.compare = (this.compare + 0.1).min(1.);
+                        cx.notify();
+                    },
+                ))
             })
             .when(self.type_tool.field.is_some(), |d| {
                 d.on_action(cx.listener(|this, _: &crate::actions::Undo, _, cx| {
@@ -2209,6 +2270,21 @@ impl EditorView {
                 }
             }))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if this.raw_split_active() {
+                    let next = match e.keystroke.key.as_str() {
+                        "left" => Some(this.compare - 0.02),
+                        "right" => Some(this.compare + 0.02),
+                        "home" => Some(0.),
+                        "end" => Some(1.),
+                        _ => None,
+                    };
+                    if let Some(next) = next {
+                        this.compare = next.clamp(0., 1.);
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
                 if this.text_key_down(e, window, cx) {
                     cx.stop_propagation();
                     return;
@@ -2298,6 +2374,77 @@ impl EditorView {
             )
             .children(zoom_cursor)
             .children(replay)
+            .when(self.raw_split_active(), |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top_2()
+                        .left_2()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .bg(p.panel)
+                        .text_color(p.ink)
+                        .child("Before · As shot"),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_2()
+                        .right_2()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .bg(p.panel)
+                        .text_color(p.ink)
+                        .child("After · Edited"),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(relative(self.compare))
+                        .w(px(1.))
+                        .bg(p.ink),
+                )
+                .child(
+                    div()
+                        .id("raw-compare-handle")
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(compare_handle_left)
+                        .w_6()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor(CursorStyle::ResizeLeftRight)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                if this.drag.is_none() && !this.editor.in_transaction() {
+                                    window.focus(&this.canvas_focus, cx);
+                                    this.drag = Some(Drag::Compare);
+                                    cx.notify();
+                                }
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .px_1()
+                                .py_2()
+                                .bg(p.panel)
+                                .text_color(p.ink)
+                                .border_1()
+                                .border_color(p.ink)
+                                .child("↔"),
+                        )
+                        .test_support(),
+                )
+            })
             .context_menu({
                 let editor = cx.weak_entity();
                 let focus = self.canvas_focus.clone();
@@ -2363,7 +2510,7 @@ impl EditorView {
     fn view_controls(&mut self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let zoom = format!("{:.0}%", self.view.zoom * 100.0);
         let rot = format!("{:.0}°", self.view.rotation);
-        let can_compare = self.editor.differs_from_base();
+        let can_compare = self.editor.differs_from_base() || self.raw_split_active();
         let track = self.tracks.entry(SliderKey::Compare).or_default().clone();
         let compare = self.compare;
         let tip = crate::widgets::tip;

@@ -54,6 +54,11 @@ pub struct Settings {
     /// Compact editor header and movable canvas toolbars, with native
     /// window controls retained in the header.
     pub compact_chrome: bool,
+    /// Settings migration marker for the compact single-row editor header.
+    /// Version zero is the legacy layout preference written before compact
+    /// became the primary editor design.
+    #[serde(default = "legacy_compact_chrome_revision")]
+    pub compact_chrome_revision: u8,
     /// Height of the Layers list in the side panel, in logical pixels;
     /// dragged by its handle.
     pub layers_height: f32,
@@ -117,6 +122,7 @@ impl Default for Settings {
             follow_omarchy: false,
             approve_all: false,
             compact_chrome: true,
+            compact_chrome_revision: 1,
             layers_height: 400.0,
             show_drawing: true,
             drawing_pace: DrawingPace::Natural,
@@ -135,6 +141,10 @@ impl Default for Settings {
 
 fn file() -> PathBuf {
     crate::recent::data_dir().join("settings.json")
+}
+
+fn legacy_compact_chrome_revision() -> u8 {
+    0
 }
 
 impl Settings {
@@ -169,7 +179,17 @@ impl Settings {
 
     fn load_from(path: &std::path::Path) -> Self {
         match std::fs::read(path) {
-            Ok(b) => crate::parse_config(path, &b).unwrap_or_default(),
+            Ok(b) => {
+                let mut settings: Self = crate::parse_config(path, &b).unwrap_or_default();
+                if settings.compact_chrome_revision == 0 {
+                    settings.compact_chrome = true;
+                    settings.compact_chrome_revision = 1;
+                    // Best effort: the in-memory migration still fixes this
+                    // launch if the settings directory is temporarily read-only.
+                    let _ = crate::save_config(path, &settings);
+                }
+                settings
+            }
             // First run: on an Omarchy desktop, start in its colours.
             Err(_) => Self {
                 follow_omarchy: omarchy_present(),
@@ -229,6 +249,29 @@ mod tests {
             let mode = std::fs::metadata(&backup).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_roomy_preference_migrates_once_to_the_compact_header() {
+        let dir = std::env::temp_dir().join(format!(
+            "emulsion-compact-layout-migration-{}",
+            std::process::id()
+        ));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, br#"{"compact_chrome":false}"#).unwrap();
+
+        let migrated = Settings::load_from(&path);
+        assert!(migrated.compact_chrome);
+        assert_eq!(migrated.compact_chrome_revision, 1);
+
+        let deliberately_roomy = Settings {
+            compact_chrome: false,
+            ..migrated
+        };
+        crate::save_config(&path, &deliberately_roomy).unwrap();
+        assert!(!Settings::load_from(&path).compact_chrome);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -20,6 +20,7 @@ fn main() {
         tint: num(4),
         highlights: num(5),
         shadows: num(6),
+        ..Default::default()
     };
     let t = std::time::Instant::now();
     let src = RawSource::load(&path).expect("decode");

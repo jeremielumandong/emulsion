@@ -138,6 +138,10 @@ struct HDoc {
     guides: Vec<emulsion_core::document::Guide>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     info: Option<emulsion_core::document::ImageInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<emulsion_core::raw::RawDocument>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    raw_originals: Vec<std::path::PathBuf>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -389,6 +393,8 @@ pub(crate) fn encode(
             nodes,
             guides: d.guides.clone(),
             info: d.info.clone(),
+            raw: d.raw.clone(),
+            raw_originals: d.raw_originals.clone(),
         })
     };
     let commits = graph
@@ -550,6 +556,8 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         doc.blend_space = h.blend_space;
         doc.guides = h.guides;
         doc.info = h.info;
+        doc.raw = h.raw;
+        doc.raw_originals = h.raw_originals;
         doc.selection = h
             .selection
             .map(|i| mask(i, h.width, h.height))

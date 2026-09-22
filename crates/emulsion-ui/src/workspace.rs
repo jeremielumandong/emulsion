@@ -17,6 +17,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod raw_sync;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
     Home,
@@ -99,7 +101,7 @@ impl Workspace {
                 (
                     ws.editor
                         .as_ref()
-                        .is_some_and(|e| e.read(cx).editor.is_modified()),
+                        .is_some_and(|e| e.read(cx).has_unsaved_changes()),
                     ws.closing,
                 )
             };
@@ -215,7 +217,7 @@ impl Workspace {
 
     /// Does any open document have unsaved changes?
     fn modified(&self, cx: &App) -> bool {
-        self.tabs.iter().any(|e| e.read(cx).editor.is_modified())
+        self.tabs.iter().any(|e| e.read(cx).has_unsaved_changes())
     }
 
     /// Run `then` at once: opening another document adds a tab, so nothing
@@ -277,7 +279,7 @@ impl Workspace {
             return;
         };
         self.cancel_style_dialog(window, cx);
-        let dirty = ed.read(cx).editor.is_modified();
+        let dirty = ed.read(cx).has_unsaved_changes();
         let name = ed.read(cx).name.clone();
         let finish = move |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
             let Some(i) = this.tabs.iter().position(|t| t == &ed) else {
@@ -344,7 +346,7 @@ impl Workspace {
         for (i, ed) in self.tabs.iter().enumerate() {
             let (name, dirty) = {
                 let e = ed.read(cx);
-                (e.name.clone(), e.editor.is_modified())
+                (e.name.clone(), e.has_unsaved_changes())
             };
             let on = active == Some(i);
             let (ink, paper, line, chrome_fg) = (p.ink, p.paper, p.line, p.chrome_fg);
@@ -387,6 +389,7 @@ impl Workspace {
     fn compact_app_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let workspace = cx.entity().downgrade();
+        let has_editor = self.editor.is_some();
         Button::new("compact-app-menu")
             .label("E")
             .tooltip("Emulsion menu")
@@ -399,6 +402,19 @@ impl Workspace {
                     .menu("New document…", Box::new(NewDocument))
                     .menu("Open…", Box::new(Open))
                     .separator();
+                if has_editor {
+                    let workspace = workspace.clone();
+                    menu =
+                        menu.item(PopupMenuItem::new("Editor").on_click(move |_, window, cx| {
+                            workspace
+                                .update(cx, |this, cx| {
+                                    if let Some(active) = this.active_tab() {
+                                        this.activate_tab(active, window, cx);
+                                    }
+                                })
+                                .ok();
+                        }));
+                }
                 for (label, screen) in [
                     ("Home", Screen::Home),
                     ("Batch", Screen::Batch),
@@ -455,7 +471,7 @@ impl Workspace {
         for (i, editor) in self.tabs.iter().enumerate() {
             let view = editor.read(cx);
             let name = view.name.clone();
-            let dirty = view.editor.is_modified();
+            let dirty = view.has_unsaved_changes();
             let active = self.editor.as_ref() == Some(editor);
             let id = editor.entity_id();
             tabs = tabs.child(
@@ -534,7 +550,7 @@ impl Workspace {
                                 let label = format!(
                                     "{}{}  {}",
                                     view.name,
-                                    if view.editor.is_modified() {
+                                    if view.has_unsaved_changes() {
                                         " •"
                                     } else {
                                         ""
@@ -728,7 +744,7 @@ impl Workspace {
                     .background_spawn(async {
                         emulsion_io::import::import_bytes(
                             crate::landing::LANDING_NAME,
-                            crate::landing::LANDING_JPG,
+                            crate::landing::LANDING_PNG,
                         )
                     })
                     .await;
@@ -917,6 +933,14 @@ impl Workspace {
     /// is remembered (only the newest) and written when the current finishes.
     pub(crate) fn write(&mut self, ed: Entity<EditorView>, path: PathBuf, cx: &mut Context<Self>) {
         let Some((doc, rev, graph)) = ed.update(cx, |e, cx| {
+            if e.raw.is_pending() {
+                e.set_status(
+                    "RAW development is still running. Save when the preview finishes updating.",
+                    false,
+                    cx,
+                );
+                return None;
+            }
             if e.history.save_busy {
                 e.history.save_queued = Some(path.clone());
                 return None;
@@ -975,6 +999,16 @@ impl Workspace {
         let Some(ed) = self.editor.clone() else {
             return;
         };
+        if ed.read(cx).raw.is_pending() {
+            ed.update(cx, |e, cx| {
+                e.set_status(
+                    "RAW development is still running. Export when the preview finishes updating.",
+                    false,
+                    cx,
+                )
+            });
+            return;
+        }
         let (doc, dir, name) = {
             let e = ed.read(cx);
             let dir = e
@@ -1009,7 +1043,9 @@ impl Workspace {
             opts.depth = if prefs.depth16 { 16 } else { 8 };
             opts.jpeg_quality = prefs.quality;
             let result = cx
-                .background_spawn(async move { emulsion_io::export(&d, &q, opts) })
+                .background_spawn(async move {
+                    emulsion_io::export::export_with_workflow(&d, &q, opts, prefs.workflow())
+                })
                 .await;
             ed.update(cx, |e, cx| match result {
                 Ok(()) => {
@@ -1282,7 +1318,7 @@ impl Render for Workspace {
                 format!(
                     "{}{} — Emulsion",
                     e.name,
-                    if e.editor.is_modified() { " •" } else { "" }
+                    if e.has_unsaved_changes() { " •" } else { "" }
                 )
             }
             None => "Emulsion".into(),
@@ -1313,7 +1349,8 @@ impl Render for Workspace {
                 editor.compact_header(navigation, tabs, &p, window, cx)
             });
             gpui_kit::component::TitleBar::new()
-                .h(rems(1.875))
+                .draggable(false)
+                .h(rems(2.25))
                 .when(!cfg!(target_os = "macos"), |bar| bar.pl_1())
                 .bg(p.paper)
                 .border_color(p.line)
@@ -1324,7 +1361,8 @@ impl Render for Workspace {
             let navigation = self.compact_app_menu(cx);
             let header = self.home_header(navigation, window, cx);
             gpui_kit::component::TitleBar::new()
-                .h(rems(1.875))
+                .draggable(false)
+                .h(rems(2.25))
                 .when(!cfg!(target_os = "macos"), |bar| bar.pl_1())
                 .bg(p.paper)
                 .border_color(p.line)
@@ -1367,6 +1405,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Save, window, cx| this.save(false, window, cx)))
             .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.save(true, window, cx)))
             .on_action(cx.listener(|this, _: &Export, window, cx| this.export(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &SynchronizeRaw, window, cx| {
+                    this.synchronize_raw(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
             .on_action(cx.listener(|this, _: &ShowHome, window, cx| {
                 this.cancel_style_dialog(window, cx);
@@ -1854,10 +1897,36 @@ mod compact_tests {
         });
         let workspace = slot.borrow().clone().unwrap();
         cx.run_until_parked();
+        cx.update(|window, _| {
+            assert!(window.find("editor-document-bar").bounds().size.height >= px(36.));
+            assert!(window.find("compact-window-drag").bounds().size.width >= px(24.));
+        });
+        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(window.find("popup-menu").visible()));
+        cx.update(|window, cx| window.press("escape", cx));
+        cx.run_until_parked();
         let first = cx.update(|_, cx| workspace.read(cx).tabs[0].clone());
         cx.update(|window, cx| window.click(("compact-document", first.entity_id()), cx));
         cx.run_until_parked();
         cx.update(|_, cx| assert_eq!(workspace.read(cx).editor.as_ref(), Some(&first)));
+
+        cx.update(|window, cx| window.click("compact-home", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.screen, Screen::Home);
+            assert_eq!(workspace.editor.as_ref(), Some(&first));
+        });
+        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(3usize, cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.screen, Screen::Editor);
+            assert_eq!(workspace.editor.as_ref(), Some(&first));
+        });
 
         cx.update(|window, cx| window.click(("compact-document-close", first.entity_id()), cx));
         cx.run_until_parked();

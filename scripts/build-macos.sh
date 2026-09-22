@@ -8,7 +8,7 @@
 #   scripts/build-macos.sh            # release build, then package
 #   scripts/build-macos.sh --no-build # package the existing release binary
 #
-# Requires iconutil and either rsvg-convert or ImageMagick for the app icon.
+# Requires the standard macOS iconutil and sips tools for the app icon.
 # The bundle is signed ad hoc for local use; distribution requires a Developer ID
 # signature and notarization.
 
@@ -35,9 +35,7 @@ case "$ARCH" in arm64|x86_64) ;; *) die "unsupported architecture: $ARCH" ;; esa
 command -v iconutil >/dev/null || die "iconutil is required"
 command -v hdiutil >/dev/null || die "hdiutil is required"
 command -v codesign >/dev/null || die "codesign is required"
-if ! command -v rsvg-convert >/dev/null && ! command -v magick >/dev/null; then
-  die "install librsvg (rsvg-convert) or ImageMagick (magick) to render assets/icons/emulsion.svg"
-fi
+command -v sips >/dev/null || die "sips is required"
 
 VERSION=$(awk -F'"' '/^\[workspace.package\]/ { f = 1 } f && /^version/ { print $2; exit }' "$ROOT_DIR/Cargo.toml")
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "expected a numeric workspace version in Cargo.toml"
@@ -66,11 +64,7 @@ bash "$ROOT_DIR/scripts/stage-licenses.sh" "$STAGE/Contents/Resources/licenses"
 
 render_icon() {
   local size="$1" dest="$2"
-  if command -v rsvg-convert >/dev/null; then
-    rsvg-convert -w "$size" -h "$size" -o "$dest" "$ROOT_DIR/assets/icons/emulsion.svg"
-  else
-    magick -background none "$ROOT_DIR/assets/icons/emulsion.svg" -resize "${size}x${size}" "$dest"
-  fi
+  sips -z "$size" "$size" "$ROOT_DIR/assets/icons/emulsion.png" --out "$dest" >/dev/null
 }
 
 for size in 16 32 64 128 256 512; do

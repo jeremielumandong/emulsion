@@ -1,0 +1,35 @@
+[
+  {
+    "file": "nikon-d50.NEF",
+    "make": "Nikon",
+    "model": "D50",
+    "bits": 12,
+    "sensor": "Bayer",
+    "compression": "lossy type 1",
+    "url": "https://raw.pixls.us/getfile.php/1282/nice/Nikon%20-%20D50%20-%2012bit%2012bit%20compressed%20(Lossy%20(type%201))%20(3:2).NEF",
+    "sha256": "9f94c27672a63f946c92d43910ef0c266dffaa14dae0007ae00ac72d2c684935",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+    "file": "fujifilm-x-pro1.RAF",
+    "make": "Fujifilm",
+    "model": "X-Pro1",
+    "bits": 12,
+    "sensor": "X-Trans",
+    "compression": "uncompressed",
+    "url": "https://raw.pixls.us/getfile.php/1191/nice/Fujifilm%20-%20X-Pro1%20-%2012bit%2012bit%20uncompressed%20(3:2).RAF",
+    "sha256": "0b1046c299d9eb222a8f003bd047f2a34f507da0d1704ac32cefbc82f799d121",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+    "file": "canon-eos-m50.CR3",
+    "make": "Canon",
+    "model": "EOS M50",
+    "bits": 14,
+    "sensor": "Bayer",
+    "compression": "CRAW",
+    "url": "https://raw.pixls.us/getfile.php/4656/nice/Canon%20-%20EOS%20M50%20-%203:2.CR3",
+    "sha256": "27a88fdae82516ba136e12c2cc9b934f25dbaaac24d64ab4e5517f8524463594",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  }
+]

@@ -10,6 +10,7 @@ pub mod graph;
 pub mod history;
 pub mod layer_links;
 pub mod node;
+pub mod raw;
 pub mod smart;
 pub mod styles;
 pub mod text;

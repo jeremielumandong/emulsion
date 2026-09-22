@@ -50,8 +50,13 @@ fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
             Ok(image) => Ok(image),
             Err(error) => embedded.or(Err(error)),
         }
-    } else if crate::raw::is_raw(path) {
-        // Develop small: RAW files carry no cheap preview we read yet.
+    } else if crate::raw_probe::is_raw(path)? {
+        if let Ok(Some(preview)) = crate::raw_probe::embedded_preview(path)
+            && preview.width() >= width
+            && preview.height() >= height
+        {
+            return Ok(preview);
+        }
         let (r, _) = crate::raw::develop(path)?;
         Ok(DynamicImage::ImageRgba8(
             image::RgbaImage::from_raw(r.width(), r.height(), r.to_srgba8())
@@ -86,7 +91,7 @@ fn cache_path(path: &Path, width: u32, height: u32) -> Option<std::path::PathBuf
     use std::hash::{Hash, Hasher};
     let meta = std::fs::metadata(path).ok()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    "thumb-v1".hash(&mut h);
+    "thumb-v2-raw-preview".hash(&mut h);
     path.hash(&mut h);
     meta.len().hash(&mut h);
     meta.modified()
@@ -198,6 +203,13 @@ mod tests {
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
+            // Remove this fixture's gallery crops before deleting the source:
+            // cache keys include the source's size and modification time.
+            for (width, height) in [(800, 600), (128, 96)] {
+                if let Some(path) = cache_path(&self.0, width, height) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
             let _ = std::fs::remove_file(&self.0);
         }
     }

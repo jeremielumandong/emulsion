@@ -21,6 +21,8 @@ pub mod ora;
 mod path_data;
 pub mod psd;
 pub mod raw;
+pub mod raw_probe;
+pub mod raw_settings;
 pub mod recent;
 pub mod settings;
 pub mod svg;
@@ -54,6 +56,10 @@ pub enum IoError {
     TooLarge(u32, u32),
     #[error("unsupported file type: {0}")]
     Unsupported(String),
+    #[error("unsupported RAW camera or encoding: {0}")]
+    UnsupportedRaw(String),
+    #[error("malformed RAW file: {0}")]
+    MalformedRaw(String),
 }
 
 pub type Result<T> = std::result::Result<T, IoError>;
@@ -143,7 +149,7 @@ fn import_any(path: &Path) -> Result<Document> {
         }
     } else if is_svg(path) {
         open_svg(path)
-    } else if raw::is_raw(path) {
+    } else if raw_probe::is_raw(path)? {
         raw::open(path)
     } else if jxl::is_jxl(path) {
         jxl::open(path)

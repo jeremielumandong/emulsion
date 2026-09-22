@@ -32,6 +32,8 @@ pub enum DocumentError {
     BadValue(NodeId, &'static str),
     #[error("guides must be finite and at most 500")]
     BadGuides,
+    #[error("invalid RAW recipe: {0}")]
+    BadRaw(&'static str),
     #[error("more than {0} nodes")]
     TooManyNodes(usize),
 }
@@ -70,6 +72,9 @@ pub struct Document {
     pub guides: Vec<Guide>,
     /// What the camera recorded, when the document came from a photograph.
     pub info: Option<ImageInfo>,
+    pub raw: Option<crate::raw::RawDocument>,
+    /// Original files remain protected even after baking or painting detaches a recipe.
+    pub raw_originals: Vec<std::path::PathBuf>,
 }
 
 /// Camera metadata carried from the source file (EXIF), for the Info
@@ -132,6 +137,8 @@ impl PartialEq for Document {
             && self.blend_space == o.blend_space
             && self.nodes == o.nodes
             && self.guides == o.guides
+            && self.raw == o.raw
+            && self.raw_originals == o.raw_originals
             && match (&self.selection, &o.selection) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -161,6 +168,8 @@ impl Document {
             selection: None,
             guides: Vec::new(),
             info: None,
+            raw: None,
+            raw_originals: Vec::new(),
         }
     }
 
@@ -168,6 +177,20 @@ impl Document {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    /// Protection is monotonic across history navigation, even when a recipe
+    /// or relink operation is undone.
+    pub(crate) fn retain_raw_originals(&mut self, previous: &Document) {
+        for path in previous
+            .raw_originals
+            .iter()
+            .chain(previous.raw.iter().map(|raw| &raw.source))
+        {
+            if !self.raw_originals.contains(path) {
+                self.raw_originals.push(path.clone());
+            }
+        }
     }
 
     pub fn index_of(&self, id: NodeId) -> Option<usize> {
@@ -296,6 +319,29 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<(), DocumentError> {
+        if self.raw_originals.len() > 1024
+            || self
+                .raw_originals
+                .iter()
+                .any(|path| path.as_os_str().is_empty())
+        {
+            return Err(DocumentError::BadRaw(
+                "invalid original-file protection list",
+            ));
+        }
+        if let Some(raw) = &self.raw {
+            raw.validate().map_err(DocumentError::BadRaw)?;
+            if !self.node(raw.node_id).is_some_and(|node| {
+                matches!(
+                    node.kind,
+                    NodeKind::Raster { .. } | NodeKind::Smart { editable: None, .. }
+                )
+            }) {
+                return Err(DocumentError::BadRaw(
+                    "RAW source node is missing or incompatible",
+                ));
+            }
+        }
         if !self.global_light.valid() {
             return Err(DocumentError::BadValue(0, "global light"));
         }

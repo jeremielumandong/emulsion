@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <!-- Emulsion: ink plate with the accent square, as in the app's top bar. Square geometry. -->
-  <rect width="256" height="256" fill="#0A0A0B"/>
-  <rect x="24" y="24" width="208" height="208" fill="none" stroke="#232326" stroke-width="4"/>
-  <rect x="84" y="84" width="88" height="88" fill="#D93A1E"/>
-</svg>

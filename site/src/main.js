@@ -55,7 +55,7 @@ document.querySelectorAll('[data-look]').forEach(button => button.addEventListen
 const installDialog = document.querySelector('#install-dialog');
 const platforms = {
   linux: { requirements: 'Requires Rust, the GPUI system libraries, and a working graphics driver. The script builds and installs an AppImage.', command: 'scripts/install-appimage.sh --build', anchor: 'install-linux' },
-  macos: { requirements: 'Requires Rust and rsvg-convert or ImageMagick. The script builds a local .app and .dmg for your Mac.', command: 'scripts/build-macos.sh', anchor: 'build-macos' },
+  macos: { requirements: 'Requires Rust and the standard macOS iconutil and sips tools. The script builds a local .app and .dmg for your Mac.', command: 'scripts/build-macos.sh', anchor: 'build-macos' },
   windows: { requirements: 'Requires Rust (MSVC) and Visual Studio Build Tools with the Desktop development with C++ workload. Run in PowerShell.', command: '.\\scripts\\build-windows.ps1', anchor: 'build-windows' },
 };
 function selectPlatform(name) {

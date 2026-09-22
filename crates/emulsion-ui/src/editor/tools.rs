@@ -1857,6 +1857,9 @@ impl EditorView {
 
     /// Escape: cancel the active gesture and all pending tool previews.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.raw_cancel_interaction(cx) {
+            return true;
+        }
         if self.cancel_text_pointer(cx) {
             return true;
         }

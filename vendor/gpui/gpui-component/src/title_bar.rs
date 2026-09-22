@@ -43,6 +43,7 @@ pub struct TitleBar {
     style: StyleRefinement,
     children: SmallVec<[AnyElement; 1]>,
     on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    draggable: bool,
 }
 
 impl TitleBar {
@@ -52,6 +53,7 @@ impl TitleBar {
             style: StyleRefinement::default(),
             children: SmallVec::new(),
             on_close_window: None,
+            draggable: true,
         }
     }
 
@@ -99,6 +101,13 @@ impl TitleBar {
         if cfg!(target_os = "linux") {
             self.on_close_window = Some(Rc::new(Box::new(f)));
         }
+        self
+    }
+
+    /// Set whether the whole title-bar content acts as a window drag surface.
+    /// Disable this when a dense title bar provides its own explicit drag region.
+    pub fn draggable(mut self, draggable: bool) -> Self {
+        self.draggable = draggable;
         self
     }
 }
@@ -322,6 +331,7 @@ impl RenderOnce for TitleBar {
         let is_web = cfg!(target_family = "wasm");
         let is_linux = cfg!(target_os = "linux");
         let is_macos = cfg!(target_os = "macos");
+        let draggable = self.draggable;
 
         let state = window.use_state(cx, |_, _| TitleBarState { should_move: false });
 
@@ -341,33 +351,38 @@ impl RenderOnce for TitleBar {
                     cx.theme().background,
                 ))
                 .refine_style(&self.style)
-                .when(is_linux, |this| {
-                    this.on_double_click(|_, window, _| window.zoom_window())
-                })
-                .when(is_macos, |this| {
-                    this.on_double_click(|_, window, _| window.titlebar_double_click())
-                })
-                .on_mouse_down_out(window.listener_for(&state, |state, _, _, _| {
-                    state.should_move = false;
-                }))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    window.listener_for(&state, |state, _, _, _| {
-                        state.should_move = true;
-                    }),
-                )
-                .on_mouse_up(
-                    MouseButton::Left,
-                    window.listener_for(&state, |state, _, _, _| {
+                .when(draggable, |this| {
+                    this.when(is_linux, |this| {
+                        this.on_double_click(|_, window, _| window.zoom_window())
+                    })
+                    .when(is_macos, |this| {
+                        this.on_double_click(|_, window, _| window.titlebar_double_click())
+                    })
+                    .on_mouse_down_out(window.listener_for(&state, |state, _, _, _| {
                         state.should_move = false;
-                    }),
-                )
-                .on_mouse_move(window.listener_for(&state, |state, _, window, _| {
-                    if state.should_move {
-                        state.should_move = false;
-                        window.start_window_move();
-                    }
-                }))
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        window.listener_for(&state, |state, _, _, _| {
+                            state.should_move = true;
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        window.listener_for(&state, |state, _, _, _| {
+                            state.should_move = false;
+                        }),
+                    )
+                    .on_mouse_move(window.listener_for(
+                        &state,
+                        |state, _, window, _| {
+                            if state.should_move {
+                                state.should_move = false;
+                                window.start_window_move();
+                            }
+                        },
+                    ))
+                })
                 .child(
                     h_flex()
                         .id("bar")
@@ -375,7 +390,7 @@ impl RenderOnce for TitleBar {
                         .justify_between()
                         .flex_shrink_0()
                         .flex_1()
-                        .when(!is_web, |this| {
+                        .when(!is_web && draggable, |this| {
                             this.window_control_area(WindowControlArea::Drag)
                                 .when(window.is_fullscreen(), |this| this.pl_3())
                                 .when(is_linux && is_client_decorated, |this| {

@@ -74,6 +74,10 @@ struct Manifest {
     /// Camera metadata from the source photograph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     info: Option<emulsion_core::document::ImageInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<emulsion_core::raw::RawDocument>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    raw_originals: Vec<std::path::PathBuf>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -533,6 +537,8 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             .collect(),
         guides: doc.guides.clone(),
         info: doc.info.clone(),
+        raw: doc.raw.clone(),
+        raw_originals: doc.raw_originals.clone(),
     };
     Ok(Encoded {
         patterns,
@@ -653,6 +659,12 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
 
 /// Write `doc` and, when given, its history graph.
 pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<()> {
+    ensure_not_raw_original(doc, path)?;
+    if let Some(graph) = graph {
+        for commit in graph.commits() {
+            ensure_not_raw_original(&commit.doc, path)?;
+        }
+    }
     doc.validate()?;
     let mut paths = crate::path_data::PathPool::default();
     let enc = encode(doc, &mut paths)?;
@@ -722,6 +734,25 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
         z.finish()?.flush()?;
         Ok(())
     })
+}
+
+/// Enforce original preservation at the write boundary, including baked RAWs.
+pub(crate) fn ensure_not_raw_original(doc: &Document, path: &Path) -> Result<()> {
+    let destination = std::fs::canonicalize(path).ok();
+    for source in doc
+        .raw_originals
+        .iter()
+        .chain(doc.raw.iter().map(|raw| &raw.source))
+    {
+        if source == path
+            || destination.as_ref().is_some_and(|destination| {
+                std::fs::canonicalize(source).ok().as_ref() == Some(destination)
+            })
+        {
+            return Err(IoError::Unsupported("Saving or exporting cannot overwrite an original RAW. Choose a different output file.".into()));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn read_entry<R: Read + Seek>(
@@ -974,6 +1005,8 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     doc.blend_space = m.blend_space;
     doc.guides = m.guides.clone();
     doc.info = m.info.clone();
+    doc.raw = m.raw.clone();
+    doc.raw_originals = m.raw_originals.clone();
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     let mut paths = crate::path_data::PathReader::default();
     for mut n in m.nodes {
@@ -1468,6 +1501,125 @@ mod tests {
         .unwrap();
         let _ = bg;
         d
+    }
+
+    #[test]
+    fn raw_recipe_and_original_link_round_trip_in_document_and_history() {
+        use emulsion_core::raw::{DevelopParams, RawDocument, RawMetadata};
+        let mut doc = sample_doc();
+        let id = doc.nodes[0].id;
+        doc.raw = Some(RawDocument {
+            schema_version: 1,
+            node_id: id,
+            source: "originals/camera.dng".into(),
+            source_sha256: "ab".repeat(32),
+            params: DevelopParams::default(),
+            metadata: RawMetadata {
+                make: "Test".into(),
+                model: "Bayer 14".into(),
+                compression: "lossless".into(),
+                bits_per_sample: 14,
+                ..Default::default()
+            },
+        });
+        let original = doc.raw.clone();
+        doc.raw_originals = vec![std::path::PathBuf::from("originals/camera.dng")];
+        let mut editor = emulsion_core::Editor::new(doc, None);
+        let pixels = match &editor.doc.nodes[0].kind {
+            NodeKind::Raster { raster, .. } => {
+                Arc::new(Raster::solid(raster.width(), raster.height(), [0.5; 4]))
+            }
+            _ => panic!("raster source"),
+        };
+        editor
+            .execute(Command::DevelopRaw {
+                id,
+                raster: pixels,
+                params: DevelopParams {
+                    exposure: -1.0,
+                    temperature: 0.3,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        editor.commit("Developed", false);
+        let path = tmp("raw-recipe-history.ora");
+        write_full(&editor.doc, Some(&editor.graph), &path).unwrap();
+        let reopened = read_full(&path).unwrap();
+        assert!(reopened.history_error.is_none());
+        assert_eq!(reopened.doc.raw, editor.doc.raw);
+        assert_eq!(reopened.doc.raw_originals, editor.doc.raw_originals);
+        let graph = reopened.graph.unwrap();
+        assert!(graph.commits().any(|commit| commit.doc.raw == original));
+        assert!(
+            graph
+                .commits()
+                .any(|commit| commit.doc.raw == editor.doc.raw)
+        );
+    }
+
+    #[test]
+    fn raw_original_stays_protected_after_painting_and_native_reopen() {
+        use emulsion_core::raw::{DevelopParams, RawDocument, RawMetadata};
+        let original = tmp("protected-original.tif");
+        let relocated = tmp("relocated-original.tif");
+        let native = tmp("protected-original-edits.ora");
+        std::fs::write(&original, b"unchanged RAW original").unwrap();
+        std::fs::write(&relocated, b"unchanged RAW original").unwrap();
+        let mut doc = Document::new(2, 2);
+        doc.nodes.push(Node::raster(
+            1,
+            "RAW",
+            Arc::new(Raster::solid(2, 2, [0.5; 4])),
+            Default::default(),
+        ));
+        doc.next_id = 2;
+        doc.raw = Some(RawDocument {
+            schema_version: 1,
+            node_id: 1,
+            source: original.clone(),
+            source_sha256: "a".repeat(64),
+            params: DevelopParams::default(),
+            metadata: RawMetadata::default(),
+        });
+        assert!(write(&doc, &original).is_err());
+        let mut editor = emulsion_core::Editor::new(doc, None);
+        editor
+            .execute(Command::RelinkRaw {
+                source: relocated.clone(),
+            })
+            .unwrap();
+        editor.undo();
+        let mut doc = editor.doc;
+        assert!(doc.raw_originals.contains(&relocated));
+        Command::ReplacePixels {
+            id: 1,
+            raster: Arc::new(Raster::solid(2, 2, [1.0; 4])),
+            dirty: emulsion_raster::IRect::new(0, 0, 2, 2),
+            label: "Paint".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert!(doc.raw.is_none());
+        assert!(doc.raw_originals.contains(&original));
+        assert!(write(&doc, &original).is_err());
+        write(&doc, &native).unwrap();
+        let reopened = read_full(&native).unwrap().doc;
+        assert!(ensure_not_raw_original(&reopened, &original).is_err());
+        assert!(write(&reopened, &original).is_err());
+        assert!(write(&reopened, &relocated).is_err());
+        for path in [&original, &relocated] {
+            assert!(
+                crate::export::export(
+                    &reopened,
+                    path,
+                    crate::export::ExportOptions::for_doc(&reopened)
+                )
+                .is_err()
+            );
+            assert_eq!(std::fs::read(path).unwrap(), b"unchanged RAW original");
+        }
+        assert_eq!(std::fs::read(&original).unwrap(), b"unchanged RAW original");
     }
 
     fn tmp(name: &str) -> std::path::PathBuf {

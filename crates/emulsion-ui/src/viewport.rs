@@ -358,6 +358,8 @@ pub struct Scene {
     /// Before/after: the reference revision and the wipe position in [0,1]
     /// of the canvas width. `None` when off or when nothing changed.
     pub before: Option<(u64, f32)>,
+    /// RAW comparison supplies a draggable, theme-aware divider overlay.
+    pub raw_compare: bool,
     pub stage: Hsla,
     pub ink: Hsla,
     pub accent: Hsla,
@@ -786,7 +788,7 @@ pub fn paint(
     if let Some(g) = &plan.grid {
         paint_grid(g, scene, window);
     }
-    if let Some(x) = plan.wipe_x {
+    if let Some(x) = plan.wipe_x.filter(|_| !scene.raw_compare) {
         window.paint_quad(fill(
             Bounds::new(
                 point(x - px(1.), plan.bounds.origin.y),

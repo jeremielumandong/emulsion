@@ -812,7 +812,7 @@ mod tests {
             white_fade: 0.8,
             white: 0.9,
         };
-        let restored = roundtrip(&doc, "advanced-blending");
+        let restored = roundtrip(&doc, "advanced-blending-metadata");
         assert_eq!(restored.nodes.len(), 1, "must remain layered");
         let layer = &restored.nodes[0];
         assert_eq!(layer.blend, BlendMode::LinearDodge);

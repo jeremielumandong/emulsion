@@ -137,7 +137,11 @@ fn compact_editor_gives_canvas_more_room_and_contains_toolbars(cx: &mut TestAppC
         cx.run_until_parked();
         let expanded = cx.update(|window, _| {
             let header = window.find("editor-document-bar").bounds();
-            assert!(header.size.height <= gpui_kit::px(32.));
+            assert!(
+                header.size.height >= gpui_kit::px(36.)
+                    && header.size.height <= gpui_kit::px(40.),
+                "compact header should stay comfortable without becoming a second toolbar: {header:?}"
+            );
             let canvas = window.find("editor-canvas-column").bounds();
             assert!(canvas.size.width > legacy_canvas.size.width);
             assert!(canvas.size.height > legacy_canvas.size.height);

@@ -167,6 +167,7 @@ impl Editor {
         };
         let mut next = baseline.clone();
         let out = cmd.apply(&mut next)?;
+        next.retain_raw_originals(&self.doc);
         let restored_revision = (next == *baseline).then_some(*baseline_revision);
         if next != self.doc {
             self.doc = next;
@@ -217,7 +218,8 @@ impl Editor {
     /// Abandon the open transaction: the document returns to how it was
     /// when the outermost `begin` ran, and nothing reaches the history.
     pub fn cancel(&mut self) {
-        if let Some((_, before, revision, _)) = self.txn.take() {
+        if let Some((_, mut before, revision, _)) = self.txn.take() {
+            before.retain_raw_originals(&self.doc);
             if self.doc != before {
                 self.dirty = Dirty::All;
             }
@@ -239,6 +241,7 @@ impl Editor {
         };
         self.dirty = Dirty::All;
         let current = std::mem::replace(&mut self.doc, step.before);
+        self.doc.retain_raw_originals(&current);
         let rev = self.revision;
         self.revision = step.revision_before;
         self.history.redo.push(Step {
@@ -256,6 +259,7 @@ impl Editor {
         };
         self.dirty = Dirty::All;
         let current = std::mem::replace(&mut self.doc, step.before);
+        self.doc.retain_raw_originals(&current);
         let rev = self.revision;
         self.revision = step.revision_before;
         self.history.undo.push(Step {
@@ -368,12 +372,14 @@ impl Editor {
         let history = self.stashed.remove(name).unwrap_or_default();
         self.stashed
             .insert(old, std::mem::replace(&mut self.history, history));
-        self.doc = self
+        let mut next = self
             .graph
             .commit(target.tip)
             .ok_or(GraphError::NoCommit(target.tip))?
             .doc
             .clone();
+        next.retain_raw_originals(&self.doc);
+        self.doc = next;
         self.bump();
         self.dirty = Dirty::All;
         self.refresh_base();
@@ -436,8 +442,9 @@ impl Editor {
     }
 
     /// Swap in a whole document as one undo step.
-    fn replace_document(&mut self, doc: Document, label: &str) {
+    fn replace_document(&mut self, mut doc: Document, label: &str) {
         self.end_all();
+        doc.retain_raw_originals(&self.doc);
         if doc == self.doc {
             return;
         }

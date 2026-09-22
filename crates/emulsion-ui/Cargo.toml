@@ -43,3 +43,4 @@ block2 = "0.6.2"
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
+rawler = { workspace = true }

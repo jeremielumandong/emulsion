@@ -223,6 +223,16 @@ pub enum Command {
         dirty: IRect,
         label: String,
     },
+    /// Commit developed pixels and their editable recipe as one history step.
+    DevelopRaw {
+        id: NodeId,
+        raster: Arc<Raster>,
+        params: crate::raw::DevelopParams,
+    },
+    /// Change the original's location after the IO layer verifies its digest.
+    RelinkRaw {
+        source: std::path::PathBuf,
+    },
     /// Set or clear a node's mask.
     SetMask {
         id: NodeId,
@@ -419,6 +429,8 @@ impl Command {
             }
             .into(),
             Command::ReplacePixels { label, .. } => label.clone(),
+            Command::DevelopRaw { .. } => "Develop RAW".into(),
+            Command::RelinkRaw { .. } => "Relink RAW original".into(),
             Command::SetMask { mask, .. } => if mask.is_some() {
                 "Mask"
             } else {
@@ -532,7 +544,36 @@ impl Command {
         }
         crate::layer_locks::check(self, doc)?;
         let mut next = doc.clone();
+        if let Some(raw) = &doc.raw
+            && !next.raw_originals.contains(&raw.source)
+        {
+            next.raw_originals.push(raw.source.clone());
+        }
         let created = self.apply_inner(&mut next)?;
+        // Baking or editing source pixels detaches the recipe: later export
+        // must never replace a painted result with freshly developed RAW.
+        if !matches!(self, Self::DevelopRaw { .. })
+            && let Some(raw) = &doc.raw
+        {
+            fn source(doc: &Document, id: NodeId) -> Option<&Arc<Raster>> {
+                match &doc.node(id)?.kind {
+                    NodeKind::Raster { raster, .. } => Some(raster),
+                    NodeKind::Smart {
+                        source,
+                        editable: None,
+                        ..
+                    } => Some(source),
+                    _ => None,
+                }
+            }
+            let retained = match (source(doc, raw.node_id), source(&next, raw.node_id)) {
+                (Some(before), Some(after)) => Arc::ptr_eq(before, after),
+                _ => false,
+            };
+            if !retained {
+                next.raw = None;
+            }
+        }
         // Moving/removing a clip base can also clear a different node's clip.
         // Protect those indirect changes, not only the command's main target.
         if has_locks
@@ -584,6 +625,7 @@ impl Command {
             }
 
             Self::SetGlobalLight { .. }
+            | Self::RelinkRaw { .. }
             | Self::SetBlendSpace { .. }
             | Self::SetCollapsed { .. }
             | Self::SetSelection { .. }
@@ -639,6 +681,7 @@ impl Command {
             | Self::SetMaskEnabled { id, .. }
             | Self::Ungroup { id }
             | Self::ReplacePixels { id, .. }
+            | Self::DevelopRaw { id, .. }
             | Self::SetMask { id, .. }
             | Self::ReplaceContent { id, .. }
             | Self::SetPath { id, .. }
@@ -664,6 +707,19 @@ impl Command {
         match self {
             Command::SetLayerLinks { ids, linked } => {
                 crate::layer_links::set_links(doc, ids, *linked)
+            }
+            Command::RelinkRaw { source } => {
+                let raw = doc
+                    .raw
+                    .as_mut()
+                    .ok_or(CommandError::NoSuchParam(0, "RAW source".into()))?;
+                raw.source = source.clone();
+                raw.validate()
+                    .map_err(crate::document::DocumentError::BadRaw)?;
+                if !doc.raw_originals.contains(source) {
+                    doc.raw_originals.push(source.clone());
+                }
+                Ok(None)
             }
             Command::SetBlendSpace { space } => {
                 doc.blend_space = *space;
@@ -969,6 +1025,52 @@ impl Command {
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "pixels".into())),
                 }
+            }
+            Command::DevelopRaw { id, raster, params } => {
+                params
+                    .validate()
+                    .map_err(crate::document::DocumentError::BadRaw)?;
+                if doc.raw.as_ref().map(|raw| raw.node_id) != Some(*id) {
+                    return Err(CommandError::NoSuchParam(*id, "RAW source".into()));
+                }
+                let locks = doc.layer_locks(*id);
+                if locks.pixels || locks.transparency {
+                    return Err(CommandError::Locked(*id));
+                }
+                let node = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                match &mut node.kind {
+                    NodeKind::Raster { raster: old, .. } => {
+                        if (old.width(), old.height()) != (raster.width(), raster.height()) {
+                            return Err(crate::document::DocumentError::BadRaw(
+                                "RAW dimensions changed",
+                            )
+                            .into());
+                        }
+                        *old = raster.clone();
+                    }
+                    NodeKind::Smart {
+                        source,
+                        editable: None,
+                        filters,
+                        filter_styles,
+                        cache,
+                        offset,
+                        ..
+                    } => {
+                        if (source.width(), source.height()) != (raster.width(), raster.height()) {
+                            return Err(crate::document::DocumentError::BadRaw(
+                                "RAW dimensions changed",
+                            )
+                            .into());
+                        }
+                        *source = raster.clone();
+                        (*cache, *offset) =
+                            crate::smart::render_styled(source, filters, filter_styles);
+                    }
+                    _ => return Err(CommandError::NoSuchParam(*id, "RAW source".into())),
+                }
+                doc.raw.as_mut().unwrap().params = *params;
+                Ok(None)
             }
             Command::SetMask { id, mask } => {
                 let n = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?;

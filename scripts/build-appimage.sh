@@ -101,25 +101,9 @@ for f in "$ROOT_DIR"/vendor/gpui/licenses/*; do install -Dm644 "$f" "$APPDIR/usr
 install -Dm644 "$ROOT_DIR/vendor/gpui/gpui-pre/LICENSE-APACHE" "$APPDIR/usr/share/doc/emulsion/licenses/GPUI-ZED-LICENSE-APACHE"
 install -Dm644 "$ROOT_DIR/vendor/gpui/gpui-base/LICENSE-APACHE" "$APPDIR/usr/share/doc/emulsion/licenses/GPUI-KIT-LICENSE-APACHE"
 install -Dm644 "$ROOT_DIR/licenses/LGPL-2.1-rawler.txt" "$APPDIR/usr/share/doc/emulsion/licenses/LGPL-2.1-rawler.txt"
-install -Dm644 "$ROOT_DIR/assets/icons/emulsion.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/emulsion.svg"
 install -Dm644 "$ROOT_DIR/assets/icons/emulsion-symbolic.svg" "$APPDIR/usr/share/icons/hicolor/symbolic/apps/emulsion-symbolic.svg"
-
-render_png() {
-  local size="$1" dest="$2"
-  if command -v rsvg-convert >/dev/null; then
-    rsvg-convert -w "$size" -h "$size" -o "$dest" "$ROOT_DIR/assets/icons/emulsion.svg"
-  elif command -v magick >/dev/null; then
-    magick -background none -density 384 "$ROOT_DIR/assets/icons/emulsion.svg" -resize "${size}x${size}" "$dest"
-  else
-    return 1
-  fi
-}
-for size in 32 64 128 256 512; do
-  mkdir -p "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps"
-  render_png "$size" "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/emulsion.png" \
-    || die "need rsvg-convert or ImageMagick to render the icon"
-done
-cp "$APPDIR/usr/share/icons/hicolor/256x256/apps/emulsion.png" "$APPDIR/emulsion.png"
+install -Dm644 "$ROOT_DIR/assets/icons/emulsion.png" "$APPDIR/usr/share/icons/hicolor/512x512/apps/emulsion.png"
+cp "$ROOT_DIR/assets/icons/emulsion.png" "$APPDIR/emulsion.png"
 ln -sf emulsion.png "$APPDIR/.DirIcon"
 
 cat >"$APPDIR/AppRun" <<'APPRUN'

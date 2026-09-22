@@ -3,6 +3,9 @@
 
 use super::*;
 use crate::widgets::tip;
+use emulsion_io::export::{ExportColorSpace, ExportScale, ExportWorkflow};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{ActiveTheme, Selectable, Sizable};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExportPrefs {
@@ -15,6 +18,9 @@ pub struct ExportPrefs {
     pub depth16: bool,
     /// The longer list of formats is unfolded.
     pub more: bool,
+    pub scale: ExportScale,
+    pub color_space: ExportColorSpace,
+    pub dpi: Option<u16>,
 }
 
 impl Default for ExportPrefs {
@@ -25,6 +31,22 @@ impl Default for ExportPrefs {
             quality: 92,
             depth16: false,
             more: false,
+            scale: ExportScale::Full,
+            color_space: ExportColorSpace::Srgb,
+            dpi: None,
+        }
+    }
+}
+
+impl ExportPrefs {
+    pub fn workflow(self) -> ExportWorkflow {
+        if !matches!(self.ext, "png" | "jpg" | "tif" | "webp") {
+            return ExportWorkflow::default();
+        }
+        ExportWorkflow {
+            scale: self.scale,
+            color_space: self.color_space,
+            dpi: if self.ext == "webp" { None } else { self.dpi },
         }
     }
 }
@@ -136,14 +158,17 @@ impl EditorView {
             return None;
         }
         let prefs = self.export_prefs;
-        let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        let (w, h) = prefs
+            .workflow()
+            .scale
+            .dimensions(self.editor.doc.width, self.editor.doc.height);
         let mut row = div()
             .flex()
             .flex_wrap()
             .items_center()
-            .gap(px(10.))
-            .px(px(16.))
-            .py(px(10.))
+            .gap_2()
+            .px_4()
+            .py_2()
             .border_b_1()
             .border_color(p.line)
             .bg(p.panel)
@@ -229,6 +254,72 @@ impl EditorView {
                         this.export_prefs.depth16 = bits == 16;
                         cx.notify();
                     })),
+                );
+            }
+        }
+        if matches!(prefs.ext, "png" | "jpg" | "tif" | "webp") {
+            row = row.child(div().text_sm().child("Size"));
+            for (key, name, scale) in [
+                ("full", "Full", ExportScale::Full),
+                ("half", "Half", ExportScale::Half),
+                ("quarter", "Quarter", ExportScale::Quarter),
+            ] {
+                row = row.child(
+                    Button::new(format!("export-size-{key}"))
+                        .small()
+                        .ghost()
+                        .label(name)
+                        .selected(prefs.scale == scale)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.export_prefs.scale = scale;
+                            cx.notify();
+                        })),
+                );
+            }
+            row = row.child(div().text_sm().child("Output profile"));
+            for (key, name, space) in [
+                ("srgb", "sRGB", ExportColorSpace::Srgb),
+                ("adobe", "Adobe RGB", ExportColorSpace::AdobeRgb),
+            ] {
+                row = row.child(
+                    Button::new(format!("export-profile-{key}"))
+                        .small()
+                        .ghost()
+                        .label(name)
+                        .selected(prefs.color_space == space)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.export_prefs.color_space = space;
+                            cx.notify();
+                        })),
+                );
+            }
+            if prefs.ext != "webp" {
+                row = row.child(div().text_sm().child("Resolution"));
+                for (key, name, dpi) in [
+                    ("none", "Unspecified", None),
+                    ("72", "72 ppi", Some(72)),
+                    ("240", "240 ppi", Some(240)),
+                    ("300", "300 ppi", Some(300)),
+                ] {
+                    row = row.child(
+                        Button::new(format!("export-ppi-{key}"))
+                            .small()
+                            .ghost()
+                            .label(name)
+                            .selected(prefs.dpi == dpi)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.export_prefs.dpi = dpi;
+                                cx.notify();
+                            })),
+                    );
+                }
+            }
+            if prefs.color_space == ExportColorSpace::AdobeRgb {
+                row = row.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Converts existing sRGB colors; does not recover clipped gamut"),
                 );
             }
         }

@@ -175,7 +175,7 @@ scripts/build-macos.sh             # build and package for this Mac
 scripts/build-macos.sh --no-build  # package an existing release binary
 ```
 
-Requires Rust and either `rsvg-convert` (from librsvg) or ImageMagick for the icon.
+Requires Rust and the standard macOS `iconutil` and `sips` tools for the icon.
 The script creates a versioned `.app` and `.dmg` in `target/macos/`. The app is
 signed ad hoc for local use; distributing it requires Developer ID signing and
 notarization.
@@ -228,7 +228,56 @@ Emulsion decodes these itself: its own `.ora`, Photoshop `.psd`/`.psb`, GIMP `.x
 (8-bit layers with names, offsets and opacity), PNG, JPEG, WebP, TIFF, BMP, GIF, SVG
 and `.svgz`, JPEG XL, Targa, PNM/PAM, Windows icons, Radiance HDR, OpenEXR, DDS,
 QOI, farbfeld, and camera RAW from Sony, Canon, Nikon, Adobe DNG, Fujifilm, Olympus,
-Panasonic, Pentax and more. 16-bit and float sources keep their precision.
+Panasonic, Pentax and more through rawler. Camera/model/compression support varies;
+see the [tested RAW samples](crates/emulsion-io/tests/fixtures/RAW-CORPUS.md).
+The document raster uses 16-bit linear RGB; floating-point and RAW sources are
+converted to that representation, not retained as floating-point document pixels.
+
+### Developing RAW photos
+
+RAW files are developed from sensor data, not their embedded JPEG. The RAW panel
+offers exposure, temperature, tint, shadow lift, black clipping, brightness,
+contrast, saturation, and highlight rolloff, applied in
+floating-point before conversion to the document's bounded linear-sRGB raster.
+Development includes black/white levels, Bayer or X-Trans demosaicing, camera
+color conversion, and orientation/crop metadata. Embedded previews speed up
+thumbnail loading where available.
+
+The **Adjust** section includes **Auto tone**, a sensor-based **Pick neutral**
+white-balance tool, an independent **As-shot WB** reset, and display-only clipping
+and tone comparisons. **Curve** adds Linear/Medium/Strong presets and five
+editable luminance points. **Settings** saves and loads Emulsion JSON sidecars
+and presets, copies selected parameter groups, manages explicit per-camera
+defaults, and synchronizes selected open RAW photos. These settings are not
+Adobe XMP. See the [Camera Raw 3 reference comparison](docs/camera-raw-3-gap.md)
+for implemented equivalents and remaining differences.
+
+Choose **Before / after** in RAW Properties to reveal a draggable divider over
+the photo: as-shot development on the left, your edited image on the right.
+Drag the handle horizontally, or use Left/Right and Home/End while the canvas
+is focused. Escape closes comparison. Comparison does not change saved edits;
+starting another edit closes it.
+
+Save as `.ora` to retain versioned RAW settings, undo history, a rendered preview,
+and a SHA-256-verified link to the original. Keep the original file: it is not
+embedded in the project. **Locate original…** reconnects a moved, identical file.
+A project can reopen without its original, but changing RAW settings or exporting
+the linked RAW layer requires it. Painting directly on that layer detaches the RAW
+recipe; use another layer for nondestructive retouching.
+
+Export redevelops the linked source at full resolution. PNG, JPEG, WebP, and TIFF
+offer sRGB or Adobe RGB output with matching profiles and full/half/quarter sizes;
+PNG/JPEG/TIFF can also store print-resolution metadata without changing pixel
+dimensions. PNG/TIFF support 16-bit output. Changing export profile does not
+recover colors already clipped in the sRGB working document. Save/export waits for RAW editing
+to finish (retry when the preview is ready). Original RAW paths are protected
+against native-save and export overwrites, including after relinking or painting.
+
+Current limits: monitor-profile conversion, wide-gamut floating-point documents,
+lens profiles, advanced noise reduction, and saturated-highlight reconstruction
+are not part of this path. Cancellation discards obsolete results but cannot
+interrupt individual decoder stages. A 128-megapixel shared decoded-source budget
+and serialized heavy stages limit concurrency, not every upstream allocation.
 
 Like GIMP, the rest goes through a converter already on the machine when one is
 installed: HEIC/HEIF (`heif-convert` from libheif), AVIF (`avifdec` from libavif),

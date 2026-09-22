@@ -136,16 +136,25 @@ impl EditorView {
             .items_center()
             .w_full()
             .min_w_0()
-            .h(rems(1.875))
+            .h(rems(2.25))
             .flex_none()
             .gap_1()
             .px_2()
             .bg(p.paper)
             .border_b_1()
             .border_color(p.line)
-            .child(navigation)
-            .child(self.effect_menus(p, cx))
-            .child(tabs)
+            .child(div().flex().items_center().child(navigation))
+            .child(div().flex().items_center().child(self.effect_menus(p, cx)))
+            .child(
+                div()
+                    .id("compact-window-drag")
+                    .test_support()
+                    .w(rems(1.5))
+                    .h_full()
+                    .flex_none()
+                    .window_control_area(WindowControlArea::Drag),
+            )
+            .child(div().flex().flex_1().min_w_0().child(tabs))
             .child(
                 control("doc-size", dimensions)
                     .tooltip("Image and canvas size")
@@ -164,7 +173,7 @@ impl EditorView {
                         }
                     })),
             )
-            .child(layout)
+            .child(div().flex().items_center().child(layout))
             .child(
                 control("save", "Save")
                     .outline()
