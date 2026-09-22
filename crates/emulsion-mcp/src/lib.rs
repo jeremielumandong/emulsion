@@ -18,6 +18,7 @@ pub mod server;
 mod shape_geometry;
 pub mod shape_presets;
 mod shape_style;
+mod text_tools;
 pub mod tools;
 
 pub use server::{

@@ -41,6 +41,7 @@ mod smart;
 mod snap;
 mod style_pattern;
 mod styles_ui;
+mod text_properties;
 mod tools;
 mod transform;
 mod type_tool;
@@ -1405,9 +1406,7 @@ impl EditorView {
     }
 
     fn drag_end(&mut self, cx: &mut Context<Self>) {
-        if let Some(field) = &mut self.type_tool.field {
-            field.selecting = false;
-        }
+        self.end_text_pointer(cx);
         self.snap_lines.clear();
         match self.drag.take() {
             None => return,

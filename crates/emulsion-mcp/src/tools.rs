@@ -141,6 +141,47 @@ fn path_properties(mut base: Value) -> Value {
     base
 }
 
+fn character_style_properties() -> Value {
+    json!({
+        "font": { "type": "string", "description": "Installed font family; empty uses the default sans family." },
+        "size": { "type": "number", "minimum": 1, "maximum": 4000 },
+        "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$" },
+        "bold": { "type": "boolean" },
+        "italic": { "type": "boolean" },
+        "letter_spacing": { "type": "number", "minimum": -50, "maximum": 500 },
+        "baseline": { "type": "number", "minimum": -4000, "maximum": 4000 }
+    })
+}
+
+fn text_properties(include_text: bool) -> Value {
+    let mut properties = character_style_properties();
+    let object = properties.as_object_mut().unwrap();
+    if include_text {
+        object.insert("text".into(), json!({ "type": "string" }));
+    }
+    object.extend(json!({
+        "x": { "type": "number" }, "y": { "type": "number" },
+        "vertical": { "type": "boolean" },
+        "align": { "type": "string", "enum": ["left", "center", "right", "justify"] },
+        "width": { "type": ["number", "null"], "minimum": 1, "description": "Paragraph frame width in pixels; null makes point text." },
+        "height": { "type": ["number", "null"], "minimum": 1, "description": "Paragraph frame height in pixels; null leaves height unconstrained." },
+        "line_height": { "type": "number", "minimum": 0.5, "maximum": 4 },
+        "rotation": { "type": "number" },
+        "scale_x": { "type": "number", "minimum": -1000, "maximum": 1000 },
+        "scale_y": { "type": "number", "minimum": -1000, "maximum": 1000 },
+        "anti_alias": { "type": "string", "enum": ["smooth", "crisp", "strong", "none"] },
+        "warp": { "type": "object", "additionalProperties": false,
+            "properties": {
+                "style": { "type": "string", "enum": ["none", "arc", "bulge", "flag"] },
+                "bend": { "type": "number", "minimum": -100, "maximum": 100 },
+                "horizontal": { "type": "number", "minimum": -100, "maximum": 100 },
+                "vertical": { "type": "number", "minimum": -100, "maximum": 100 }
+            }
+        }
+    }).as_object().unwrap().clone());
+    properties
+}
+
 pub fn definitions() -> Vec<ToolDef> {
     vec![
         def(
@@ -327,28 +368,30 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "draw_shape",
-            "Create an editable rectangle or ellipse at exact document-pixel bounds. shape mode creates visible vectors (default black fill/no stroke); path mode creates an invisible editable path; pixels mode rasterizes. style.width is stroke width. align_edges rounds bounds to pixels. One undo step.",
-            json!({"shape":{"type":"string","enum":["rectangle","ellipse"]},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number","exclusiveMinimum":0,"maximum":1000000},"height":{"type":"number","exclusiveMinimum":0,"maximum":1000000},"mode":{"type":"string","enum":["shape","path","pixels"]},"align_edges":{"type":"boolean"},"name":{"type":"string"},"above":node(),"style":{"type":"object","additionalProperties":false,"properties":crate::shape_style::style_properties()}}),
+            "Create an editable rectangle or ellipse at exact document-pixel bounds. Geometry must stay inside the canvas unless allow_outside_canvas is explicitly true. shape mode creates visible vectors (default black fill/no stroke); path mode creates an invisible editable path; pixels mode rasterizes. style.width is stroke width. align_edges rounds bounds to pixels. One undo step.",
+            json!({"shape":{"type":"string","enum":["rectangle","ellipse"]},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number","exclusiveMinimum":0,"maximum":1000000},"height":{"type":"number","exclusiveMinimum":0,"maximum":1000000},"mode":{"type":"string","enum":["shape","path","pixels"]},"align_edges":{"type":"boolean"},"allow_outside_canvas":{"type":"boolean"},"name":{"type":"string"},"above":node(),"style":{"type":"object","additionalProperties":false,"properties":crate::shape_style::style_properties()}}),
             &["shape", "x", "y", "width", "height"],
         ),
         def(
             "draw_path",
-            "Add an editable vector from SVG path data (M L H V C S Q T Z; no arcs). Fill/stroke accept #RRGGBB, #RRGGBBAA or none. Native fill_paint/stroke_paint support solid, linear/radial gradient and checker/stripes/dots pattern. width is stroke width. Omitted style fields use defaults.",
+            "Add an editable vector from SVG path data (M L H V C S Q T Z; no arcs). Geometry must stay inside the canvas unless allow_outside_canvas is explicitly true. Fill/stroke accept #RRGGBB, #RRGGBBAA or none. Native fill_paint/stroke_paint support solid, linear/radial gradient and checker/stripes/dots pattern. width is stroke width. Omitted style fields use defaults.",
             path_properties(
-                json!({"d":{"type":"string","minLength":3},"name":{"type":"string"},"above":node()}),
+                json!({"d":{"type":"string","minLength":3},"name":{"type":"string"},"above":node(),"allow_outside_canvas":{"type":"boolean"}}),
             ),
             &["d"],
         ),
         def(
             "set_path",
-            "Edit an existing vector's SVG geometry and/or native paint/stroke settings. Omitted fields are preserved. Setting a color preserves its existing paint kind; pass fill_paint/stroke_paint kind solid to remove a gradient or pattern. describe_document exposes path_style, path_bounds and indexed components. One undo step.",
-            path_properties(json!({"node":node(),"d":{"type":"string"}})),
+            "Edit an existing vector's SVG geometry and/or native paint/stroke settings. New geometry must stay inside the canvas unless allow_outside_canvas is explicitly true. Omitted fields are preserved. Setting a color preserves its existing paint kind; pass fill_paint/stroke_paint kind solid to remove a gradient or pattern. describe_document exposes path_style, path_bounds and indexed components. One undo step.",
+            path_properties(
+                json!({"node":node(),"d":{"type":"string"},"allow_outside_canvas":{"type":"boolean"}}),
+            ),
             &["node"],
         ),
         def(
             "combine_path",
             "Combine SVG path data with an existing vector on the same layer. component appends independently editable subpaths; add/subtract/intersect/exclude perform geometry operations and preserve target style. Curved boolean results are editable straight segments approximated within subpixel precision. Input geometry uses the target path coordinate space. One undo step.",
-            json!({"node":node(),"d":{"type":"string"},"operation":{"type":"string","enum":["component","add","subtract","intersect","exclude"]}}),
+            json!({"node":node(),"d":{"type":"string"},"operation":{"type":"string","enum":["component","add","subtract","intersect","exclude"]},"allow_outside_canvas":{"type":"boolean"}}),
             &["node", "d", "operation"],
         ),
         def(
@@ -470,20 +513,65 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "add_text",
-            "Add an editable text layer. text may contain newlines for paragraphs; x, y is the top-left of the text box in pixels; size is the font size in pixels; color is #RRGGBB; font is a family name from list_fonts (empty for the default sans). width wraps lines. Use it for titles, captions, speech-bubble lettering and any text that must stay editable. Returns the node id.",
-            json!({ "text": { "type": "string" }, "x": { "type": "number" }, "y": { "type": "number" }, "size": { "type": "number", "minimum": 1, "maximum": 4000 }, "color": { "type": "string" }, "font": { "type": "string" }, "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "align": { "type": "string", "enum": ["left", "center", "right", "justify"] }, "width": { "type": ["number", "null"], "description": "Wrap width in pixels; null for a single line per paragraph." }, "line_height": { "type": "number", "minimum": 0.5, "maximum": 4 }, "letter_spacing": { "type": "number" }, "name": { "type": "string" }, "above": node() }),
+            "Add editable point or paragraph text. A width/height creates a paragraph frame; omit both for point text. Supports horizontal/vertical type, native character and paragraph formatting, anti-aliasing and editable warp. Use format_text_range for mixed character styles and set_text_path for type on or inside a path. Returns the node id.",
+            {
+                let mut properties = text_properties(true);
+                properties.as_object_mut().unwrap().extend(
+                    json!({ "name": { "type": "string" }, "above": node() })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                );
+                properties
+            },
             &["text"],
         ),
         def(
             "set_text",
-            "Change a text layer: any of text, x, y, size, color, font, bold, italic, align, width, line_height, letter_spacing. Unmentioned settings stay as they are.",
-            json!({ "node": node(), "text": { "type": "string" }, "x": { "type": "number" }, "y": { "type": "number" }, "size": { "type": "number", "minimum": 1, "maximum": 4000 }, "color": { "type": "string" }, "font": { "type": "string" }, "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "align": { "type": "string", "enum": ["left", "center", "right", "justify"] }, "width": { "type": ["number", "null"], "description": "Wrap width in pixels; null for a single line per paragraph." }, "line_height": { "type": "number", "minimum": 0.5, "maximum": 4 }, "letter_spacing": { "type": "number" } }),
+            "Change an editable text layer. Omitted fields are preserved. Character fields here set the layer default and format all characters; use format_text_range for a substring. Text replacement preserves valid style runs.",
+            {
+                let mut properties = text_properties(true);
+                properties
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("node".into(), node());
+                properties
+            },
             &["node"],
         ),
         def(
+            "format_text_range",
+            "Format a character range inside an editable text layer without changing its wording. start and end are zero-based Unicode character offsets, not UTF-8 bytes. Omit both to format all characters. Unmentioned style fields are preserved. One undo step.",
+            {
+                let mut properties = character_style_properties();
+                properties.as_object_mut().unwrap().extend(
+                    json!({
+                        "node": node(), "start": { "type": "integer", "minimum": 0 },
+                        "end": { "type": "integer", "minimum": 0 }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                );
+                properties
+            },
+            &["node"],
+        ),
+        def(
+            "set_text_path",
+            "Put editable text along an open or closed vector path, flow it inside a closed path, or detach it. Supply exactly one of path_node or SVG d for follow/inside. The path is copied into the text layer so later edits remain self-contained. offset moves type along the path, flip moves it to the other side, and inset pads inside text. One undo step.",
+            json!({
+                "node": node(), "mode": { "type": "string", "enum": ["follow", "inside", "none"] },
+                "path_node": node(), "d": { "type": "string" },
+                "offset": { "type": "number" }, "flip": { "type": "boolean" },
+                "inset": { "type": "number", "minimum": 0, "maximum": 10000 }
+            }),
+            &["node", "mode"],
+        ),
+        def(
             "list_fonts",
-            "Font families installed on this machine, usable as `font` in add_text and set_text.",
-            json!({}),
+            "Font families installed on this machine, usable as font in text tools. Set refresh=true after installing or activating fonts while Emulsion is open.",
+            json!({ "refresh": { "type": "boolean", "default": false } }),
             &[],
         ),
         def(

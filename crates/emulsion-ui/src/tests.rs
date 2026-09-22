@@ -50,6 +50,9 @@ mod versioning_workflow_tests;
 #[path = "text_color_workflow_tests.rs"]
 mod text_color_workflow_tests;
 
+#[path = "text_properties_tests.rs"]
+mod text_properties_tests;
+
 #[path = "on_canvas_text_tests.rs"]
 mod on_canvas_text_tests;
 

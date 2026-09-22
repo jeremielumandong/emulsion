@@ -50,6 +50,9 @@ impl DrawingReview {
                     | "apply_shape_stroke_preset"
                     | "fill_selection"
                     | "add_text"
+                    | "set_text"
+                    | "format_text_range"
+                    | "set_text_path"
                     | "generate_image"
                     | "generative_fill"
             )
@@ -261,6 +264,19 @@ mod tests {
         for tool in ["list_shape_stroke_presets", "save_shape_stroke_preset"] {
             let mut review = DrawingReview::default();
             review.observe(tool, &json!({}), &ToolResult::text("Preset"), 2, true);
+            assert_eq!(review.completion(2), Completion::Finish, "{tool}");
+        }
+    }
+
+    #[test]
+    fn editable_typography_changes_require_visual_review() {
+        for tool in ["add_text", "set_text", "format_text_range", "set_text_path"] {
+            let mut review = DrawingReview::default();
+            review.observe(tool, &json!({}), &ToolResult::text("Edited"), 2, true);
+            assert_eq!(review.completion(2), Completion::Review, "{tool}");
+
+            let mut review = DrawingReview::default();
+            review.observe(tool, &json!({}), &ToolResult::error("Locked"), 2, true);
             assert_eq!(review.completion(2), Completion::Finish, "{tool}");
         }
     }

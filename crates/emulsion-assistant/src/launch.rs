@@ -447,6 +447,30 @@ mod tests {
     }
 
     #[test]
+    fn typography_guidance_matches_discoverable_tools_and_permissions() {
+        let definitions = emulsion_mcp::tools::definitions();
+        let read_only = read_only_tools();
+        for name in [
+            "add_text",
+            "set_text",
+            "format_text_range",
+            "set_text_path",
+            "list_fonts",
+        ] {
+            assert!(SYSTEM_PROMPT.contains(name), "missing guidance: {name}");
+            assert!(
+                definitions.iter().any(|tool| tool.name == name),
+                "undiscoverable tool: {name}"
+            );
+            assert_eq!(
+                read_only.contains(&emulsion_mcp::tools::qualified(name)),
+                name == "list_fonts",
+                "incorrect approval classification: {name}"
+            );
+        }
+    }
+
+    #[test]
     fn playbook_examples_execute_with_current_tools() {
         let definitions = emulsion_mcp::tools::definitions();
         let mut example_count = 0;

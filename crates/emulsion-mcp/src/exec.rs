@@ -984,64 +984,9 @@ fn hex(c: [u8; 4]) -> String {
     format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])
 }
 
-/// Colour argument as straight sRGB, or None for "none"/null.
-fn rgba_arg(v: Option<&Value>) -> Result<Option<[u8; 4]>, ToolResult> {
-    match v {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) if s.eq_ignore_ascii_case("none") => Ok(None),
-        Some(v) => {
-            let p = hex_color(v)?;
-            Ok(Some(color::premul_to_srgba8(p)))
-        }
-    }
-}
-
-/// Apply text/x/y/size/color/font/bold/italic/align/width/line_height/
-/// letter_spacing from `args` onto `spec`; absent keys leave it alone.
+/// Apply validated editable text attributes; absent keys leave them unchanged.
 fn text_args(spec: &mut emulsion_core::text::TextSpec, args: &Value) -> Result<(), ToolResult> {
-    if let Some(t) = args.get("text").and_then(Value::as_str) {
-        spec.text = t.to_string();
-    }
-    let num = |k: &str| args.get(k).and_then(Value::as_f64).map(|v| v as f32);
-    if let Some(v) = num("x") {
-        spec.x = v;
-    }
-    if let Some(v) = num("y") {
-        spec.y = v;
-    }
-    if let Some(v) = num("size") {
-        spec.size = v;
-    }
-    if let Some(v) = num("line_height") {
-        spec.line_height = v;
-    }
-    if let Some(v) = num("letter_spacing") {
-        spec.letter_spacing = v;
-    }
-    if let Some(c) = args.get("color") {
-        spec.color = rgba_arg(Some(c))?.unwrap_or([0, 0, 0, 255]);
-    }
-    if let Some(f) = args.get("font").and_then(Value::as_str) {
-        spec.font = f.trim().to_string();
-    }
-    if let Some(b) = args.get("bold").and_then(Value::as_bool) {
-        spec.bold = b;
-    }
-    if let Some(b) = args.get("italic").and_then(Value::as_bool) {
-        spec.italic = b;
-    }
-    if let Some(a) = args.get("align").and_then(Value::as_str) {
-        spec.align = emulsion_core::text::Align::parse(a).ok_or_else(|| {
-            err(format!(
-                "unknown align {a:?}: left, center, right or justify"
-            ))
-        })?;
-    }
-    match args.get("width") {
-        None => {}
-        Some(Value::Null) => spec.width = None,
-        Some(v) => spec.width = v.as_f64().map(|w| w as f32),
-    }
+    *spec = crate::text_tools::parse_text_args(args, spec.clone())?;
     Ok(())
 }
 
@@ -1970,6 +1915,7 @@ fn exec(editor: &mut Editor, cmd: Command) -> Result<Option<NodeId>, ToolResult>
 
 fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, ToolResult> {
     match name {
+        "format_text_range" | "set_text_path" => crate::text_tools::execute(editor, name, args),
         "draw_shape" | "combine_path" | "resize_path" | "align_path_components" => {
             crate::shape_geometry::execute(editor, name, args)
         }
@@ -2383,6 +2329,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 .ok_or_else(|| err("missing string 'd' (SVG path data)"))?;
             let path = emulsion_raster::vector::Path::from_svg(d)
                 .map_err(|e| err(format!("bad path data: {e}")))?;
+            crate::shape_geometry::ensure_canvas_bounds(editor, args, &path)?;
             let style = crate::shape_style::parse_style(args, Default::default())?;
             let (w, h) = (editor.doc.width, editor.doc.height);
             let name = args.get("name").and_then(Value::as_str).unwrap_or("Path");
@@ -2436,6 +2383,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 ),
                 None => path,
             };
+            crate::shape_geometry::ensure_canvas_bounds(editor, args, &path)?;
             style = crate::shape_style::parse_style(args, style)?;
             exec(
                 editor,
@@ -2715,6 +2663,11 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             )))
         }
         "list_fonts" => {
+            match args.get("refresh") {
+                None | Some(Value::Bool(false)) => {}
+                Some(Value::Bool(true)) => emulsion_core::text::refresh_fonts(),
+                Some(_) => return Err(err("refresh must be a boolean")),
+            }
             let fonts = emulsion_core::text::font_families();
             Ok(ToolResult::text(
                 serde_json::to_string_pretty(&json!({ "count": fonts.len(), "fonts": fonts }))
@@ -3522,17 +3475,12 @@ pub fn describe(editor: &Editor) -> Value {
                     o.insert("fill".into(), json!(style.fill.map(hex)));
                 }
                 NodeKind::Text { spec, .. } => {
-                    o.insert("text".into(), json!(spec.text));
-                    o.insert("rotation".into(), json!(spec.rotation));
-                    o.insert("x".into(), json!(spec.x));
-                    o.insert("y".into(), json!(spec.y));
-                    o.insert("size".into(), json!(spec.size));
-                    o.insert("color".into(), json!(hex(spec.color)));
-                    o.insert("font".into(), json!(spec.font));
-                    o.insert("bold".into(), json!(spec.bold));
-                    o.insert("italic".into(), json!(spec.italic));
-                    o.insert("align".into(), json!(spec.align.key()));
-                    o.insert("width".into(), json!(spec.width));
+                    o.extend(
+                        crate::text_tools::text_json(spec)
+                            .as_object()
+                            .expect("text description is an object")
+                            .clone(),
+                    );
                 }
                 NodeKind::Group { .. } => {}
             }

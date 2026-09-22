@@ -1,7 +1,8 @@
 //! In-place text editing on the canvas, with native text input and IME.
 
 use super::*;
-use emulsion_core::text::{Align, TextSpec};
+use emulsion_core::text::TextSpec;
+use gpui_kit::component::Sizable;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -10,6 +11,11 @@ pub struct TypeState {
     pub spec: TextSpec,
     pub field: Option<TextSession>,
     pub font_chip: crate::widgets::TrackBounds,
+    pub(super) properties: Option<super::text_properties::TextFields>,
+    pub(super) selection: Option<(NodeId, Range<usize>)>,
+    pub(super) path_drag: Option<NodeId>,
+    pub(super) box_drag: Option<(NodeId, (f64, f64), bool)>,
+    pub(super) error: Option<String>,
 }
 
 pub struct TextSession {
@@ -94,7 +100,11 @@ impl EditorView {
     }
 
     pub(crate) fn close_text_field(&mut self, cx: &mut Context<Self>) {
-        if self.type_tool.field.take().is_some() {
+        self.end_text_pointer(cx);
+        if let Some(field) = self.type_tool.field.take() {
+            self.type_tool.selection =
+                (!field.range().is_empty()).then(|| (field.id, field.range()));
+            self.type_tool.box_drag = None;
             if self.editor.in_transaction() {
                 self.editor.end();
             }
@@ -103,6 +113,9 @@ impl EditorView {
     }
 
     fn cancel_text_field(&mut self, cx: &mut Context<Self>) {
+        self.type_tool.box_drag = None;
+        self.type_tool.path_drag = None;
+        self.type_tool.selection = None;
         if self.type_tool.field.take().is_some() {
             self.editor.cancel();
             if self
@@ -142,6 +155,10 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.start_text_path_drag(d, cx) || self.start_text_box_resize(d, cx) {
+            return;
+        }
+        self.type_tool.selection = None;
         let hit = self.text_hit(d);
         let editing = self.type_tool.field.as_ref().map(|field| field.id);
         if hit != editing || editing.is_none() {
@@ -152,6 +169,10 @@ impl EditorView {
             } else {
                 let mut spec = self.type_tool.spec.clone();
                 spec.text = "Text".into();
+                spec.runs.clear();
+                spec.width = None;
+                spec.height = None;
+                spec.text_path = None;
                 spec.x = d.0.round() as f32;
                 spec.y = d.1.round() as f32;
                 spec.color = self.tools.fg;
@@ -179,6 +200,10 @@ impl EditorView {
                 return;
             };
             self.type_tool.spec = (*spec).clone();
+            if created {
+                self.type_tool.box_drag = Some((id, d, false));
+            }
+            self.sidebar_tab = SidebarTab::Properties;
             let blur = cx.on_blur(&self.canvas_focus, window, |this, _, cx| {
                 this.close_text_field(cx)
             });
@@ -237,6 +262,45 @@ impl EditorView {
     }
 
     pub(crate) fn text_pointer_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+        if let Some(id) = self.type_tool.path_drag {
+            if let Some(d) = self.doc_point(pos) {
+                self.move_text_on_path(id, d, cx);
+            }
+            return true;
+        }
+        if let Some((id, origin, resizing)) = self.type_tool.box_drag {
+            let Some(d) = self.doc_point(pos) else {
+                return true;
+            };
+            let distance = ((d.0 - origin.0).abs() + (d.1 - origin.1).abs()) * self.view.zoom;
+            if (resizing || distance > 5.)
+                && let Some(node) = self.editor.doc.node(id)
+                && let NodeKind::Text { spec, .. } = &node.kind
+            {
+                let mut spec = (**spec).clone();
+                if resizing {
+                    let local = spec
+                        .transform()
+                        .inverse()
+                        .transform_point2(glam::dvec2(d.0, d.1));
+                    spec.width = Some(local.x.max(1.) as f32);
+                    spec.height = Some(local.y.max(1.) as f32);
+                } else {
+                    spec.x = origin.0.min(d.0) as f32;
+                    spec.y = origin.1.min(d.1) as f32;
+                    spec.width = Some((d.0 - origin.0).abs().max(1.) as f32);
+                    spec.height = Some((d.1 - origin.1).abs().max(1.) as f32);
+                }
+                self.execute(
+                    Command::SetText {
+                        id,
+                        spec: Box::new(spec),
+                    },
+                    cx,
+                );
+            }
+            return true;
+        }
         if !self
             .type_tool
             .field
@@ -263,7 +327,25 @@ impl EditorView {
         }
         let old_label = spec.label();
         let mut updated = (**spec).clone();
-        updated.text = text;
+        let prefix = spec
+            .text
+            .char_indices()
+            .zip(text.char_indices())
+            .take_while(|((_, a), (_, b))| a == b)
+            .map(|((at, ch), _)| at + ch.len_utf8())
+            .last()
+            .unwrap_or(0);
+        let suffix = spec.text[prefix..]
+            .chars()
+            .rev()
+            .zip(text[prefix..].chars().rev())
+            .take_while(|(a, b)| a == b)
+            .map(|(ch, _)| ch.len_utf8())
+            .sum::<usize>();
+        updated.replace_range(
+            prefix..spec.text.len() - suffix,
+            &text[prefix..text.len() - suffix],
+        );
         if !self.editor.in_transaction() {
             self.editor.begin("Type");
         }
@@ -459,17 +541,70 @@ impl EditorView {
         true
     }
 
-    /// Change one aspect of the selected text layer and the tool defaults.
+    pub(crate) fn text_style_range(&self) -> Option<Range<usize>> {
+        let id = self.selected?;
+        if let Some(field) = &self.type_tool.field {
+            return (field.id == id && !field.range().is_empty()).then(|| field.range());
+        }
+        self.type_tool
+            .selection
+            .as_ref()
+            .filter(|(target, range)| *target == id && !range.is_empty())
+            .map(|(_, range)| range.clone())
+    }
+
+    /// Character properties affect the selected range; paragraph properties affect the layer.
     pub(crate) fn restyle_text(&mut self, f: impl Fn(&mut TextSpec), cx: &mut Context<Self>) {
         f(&mut self.type_tool.spec);
-        if let Some((id, spec)) = self.text_target() {
-            let mut s = (*spec).clone();
-            f(&mut s);
-            if s != *spec {
+        if let Some((id, original)) = self.text_target() {
+            let range = self.text_style_range();
+            let mut before = (*original).clone();
+            if let Some(range) = &range {
+                let style = original.style_at(range.start);
+                before.font = style.font;
+                before.size = style.size;
+                before.color = style.color;
+                before.bold = style.bold;
+                before.italic = style.italic;
+                before.letter_spacing = style.letter_spacing;
+            }
+            let mut next = before.clone();
+            f(&mut next);
+            let mut updated = next.clone();
+            if range.is_some() {
+                updated.font = original.font.clone();
+                updated.size = original.size;
+                updated.color = original.color;
+                updated.bold = original.bold;
+                updated.italic = original.italic;
+                updated.letter_spacing = original.letter_spacing;
+            }
+            let mut character = (*original).clone();
+            character.apply_style(range.unwrap_or(0..original.text.len()), |style| {
+                let mut run = TextSpec {
+                    font: style.font.clone(),
+                    size: style.size,
+                    color: style.color,
+                    bold: style.bold,
+                    italic: style.italic,
+                    letter_spacing: style.letter_spacing,
+                    ..Default::default()
+                };
+                f(&mut run);
+                style.font = run.font;
+                style.size = run.size;
+                style.color = run.color;
+                style.bold = run.bold;
+                style.italic = run.italic;
+                style.letter_spacing = run.letter_spacing;
+            });
+            updated.runs = character.runs;
+            updated.normalize_runs();
+            if updated != *original {
                 self.execute(
                     Command::SetText {
                         id,
-                        spec: Box::new(s),
+                        spec: Box::new(updated),
                     },
                     cx,
                 );
@@ -478,16 +613,169 @@ impl EditorView {
         cx.notify();
     }
 
+    fn text_path_handle(&self, spec: &TextSpec) -> Option<(f32, f32)> {
+        let path = spec.text_path.as_ref()?;
+        if path.mode != emulsion_core::text_effects::TextPathMode::Follow {
+            return None;
+        }
+        let mut remaining = (path.offset as f64).max(0.);
+        let mut last = None;
+        for (points, _) in path.path.flatten(0.35) {
+            for pair in points.windows(2) {
+                let length = (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1);
+                last = Some(pair[1]);
+                if remaining <= length && length > 0. {
+                    let t = remaining / length;
+                    return Some((
+                        (pair[0].0 + (pair[1].0 - pair[0].0) * t) as f32,
+                        (pair[0].1 + (pair[1].1 - pair[0].1) * t) as f32,
+                    ));
+                }
+                remaining -= length;
+            }
+        }
+        last.map(|p| (p.0 as f32, p.1 as f32))
+    }
+    fn start_text_path_drag(&mut self, d: (f64, f64), cx: &mut Context<Self>) -> bool {
+        let Some((id, spec)) = self.text_target() else {
+            return false;
+        };
+        let Some(handle) = self.text_path_handle(&spec) else {
+            return false;
+        };
+        let at = spec
+            .transform()
+            .transform_point2(glam::dvec2(handle.0 as f64, handle.1 as f64));
+        if (at.x - d.0).hypot(at.y - d.1) * self.view.zoom > 9. {
+            return false;
+        }
+        self.close_text_field(cx);
+        self.type_tool.selection = None;
+        self.editor.begin("Move text on path");
+        self.type_tool.path_drag = Some(id);
+        true
+    }
+    fn move_text_on_path(&mut self, id: NodeId, d: (f64, f64), cx: &mut Context<Self>) {
+        let Some(node) = self.editor.doc.node(id) else {
+            return;
+        };
+        let NodeKind::Text { spec, .. } = &node.kind else {
+            return;
+        };
+        let Some(path) = &spec.text_path else {
+            return;
+        };
+        let local = spec
+            .transform()
+            .inverse()
+            .transform_point2(glam::dvec2(d.0, d.1));
+        let mut best = (f64::INFINITY, 0., 0.);
+        let mut travelled = 0.;
+        for (points, _) in path.path.flatten(0.35) {
+            for pair in points.windows(2) {
+                let a = glam::dvec2(pair[0].0, pair[0].1);
+                let b = glam::dvec2(pair[1].0, pair[1].1);
+                let v = b - a;
+                let length = v.length();
+                if length < 1e-6 {
+                    continue;
+                }
+                let t = ((local - a).dot(v) / (length * length)).clamp(0., 1.);
+                let q = a + v * t;
+                let distance = (local - q).length_squared();
+                if distance < best.0 {
+                    best = (
+                        distance,
+                        travelled + length * t,
+                        (local - q).dot(glam::dvec2(-v.y, v.x) / length),
+                    );
+                }
+                travelled += length;
+            }
+        }
+        if !best.0.is_finite() {
+            return;
+        }
+        let mut updated = (**spec).clone();
+        let path = updated.text_path.as_mut().unwrap();
+        path.offset = best.1 as f32;
+        if best.2.abs() > spec.size as f64 * 0.3 {
+            path.flip = best.2 > 0.;
+        }
+        self.execute(
+            Command::SetText {
+                id,
+                spec: Box::new(updated),
+            },
+            cx,
+        );
+    }
+
+    fn start_text_box_resize(&mut self, d: (f64, f64), cx: &mut Context<Self>) -> bool {
+        let Some((id, spec)) = self.text_target() else {
+            return false;
+        };
+        let (Some(width), Some(height)) = (spec.width, spec.height) else {
+            return false;
+        };
+        let corner = spec
+            .transform()
+            .transform_point2(glam::dvec2(width as f64, height as f64));
+        if ((corner.x - d.0).powi(2) + (corner.y - d.1).powi(2)).sqrt() * self.view.zoom > 9. {
+            return false;
+        }
+        self.close_text_field(cx);
+        self.type_tool.selection = None;
+        self.editor.begin("Resize text frame");
+        self.type_tool.box_drag = Some((id, d, true));
+        true
+    }
+
+    pub(crate) fn cancel_text_pointer(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.type_tool.box_drag.is_none() && self.type_tool.path_drag.is_none() {
+            return false;
+        }
+        self.type_tool.box_drag = None;
+        self.type_tool.path_drag = None;
+        self.type_tool.field = None;
+        self.type_tool.selection = None;
+        self.editor.cancel();
+        self.after_change(cx);
+        true
+    }
+
+    pub(crate) fn end_text_pointer(&mut self, cx: &mut Context<Self>) {
+        if self.type_tool.path_drag.take().is_some() {
+            self.editor.end();
+            self.after_change(cx);
+        }
+        if let Some((_, _, true)) = self.type_tool.box_drag.take() {
+            self.editor.end();
+            self.after_change(cx);
+        }
+        if let Some(field) = &mut self.type_tool.field {
+            field.selecting = false;
+        }
+    }
+
     pub(crate) fn type_options(
         &mut self,
         v: &mut Vec<AnyElement>,
         p: &Palette,
         cx: &mut Context<Self>,
     ) {
-        let cur = self
+        let mut cur = self
             .text_target()
             .map(|(_, s)| (*s).clone())
             .unwrap_or_else(|| self.type_tool.spec.clone());
+        if let Some(range) = self.text_style_range() {
+            let style = cur.style_at(range.start);
+            cur.font = style.font;
+            cur.size = style.size;
+            cur.color = style.color;
+            cur.bold = style.bold;
+            cur.italic = style.italic;
+        }
         if self.type_tool.field.is_some() {
             for (id, title, cancel) in [
                 ("type-done", "Done", false),
@@ -521,7 +809,7 @@ impl EditorView {
                 } else if self.text_target().is_some() {
                     "Click text to edit ? double-click a word to select"
                 } else {
-                    "Click the canvas to place text"
+                    "Click for point text; drag for paragraph"
                 },
                 10.,
                 p.muted,
@@ -551,58 +839,22 @@ impl EditorView {
                 }))
                 .into_any_element(),
         );
-        for (i, (a, t)) in [
-            (Align::Left, "left"),
-            (Align::Center, "centre"),
-            (Align::Right, "right"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            v.push(
-                chip(("type-align", i), t, cur.align == a, p)
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.restyle_text(|s| s.align = a, cx)),
-                    )
-                    .into_any_element(),
-            );
-        }
-        let wrapped = cur.width.is_some();
-        v.push(
-            chip(
-                "type-wrap",
-                if wrapped { "wrap ✓" } else { "wrap" },
-                wrapped,
-                p,
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                let dw = this.editor.doc.width as f32;
-                this.restyle_text(
-                    move |s| {
-                        s.width = if s.width.is_some() {
-                            None
-                        } else {
-                            Some(((dw - s.x) * 0.6).clamp(40.0, dw))
-                        }
-                    },
-                    cx,
-                )
-            }))
-            .into_any_element(),
-        );
         v.push(
             chip("type-colour", "Text colour", self.tools.picker, p)
                 .test_support()
                 .on_click(cx.listener(move |this, _, window, cx| this.open_text_colour(window, cx)))
                 .into_any_element(),
         );
-        if let Some((id, _)) = self.text_target() {
-            v.push(
-                chip("type-raster", "rasterize", false, p)
-                    .on_click(cx.listener(move |this, _, _, cx| this.rasterize_text(id, cx)))
-                    .into_any_element(),
-            );
-        }
+        v.push(
+            gpui_kit::component::button::Button::new("type-properties")
+                .small()
+                .label("Character / Paragraph")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar_tab = SidebarTab::Properties;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        );
         let open = self.menu == Some(super::Menu::Font);
         let label = if cur.font.is_empty() {
             "font: default ▾".to_string()
@@ -720,12 +972,6 @@ impl EditorView {
             .into_any_element(),
         )
     }
-
-    /// Bake the selected text layer into pixels.
-    pub(crate) fn rasterize_text(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        self.close_text_field(cx);
-        self.execute(Command::Rasterize { id }, cx);
-    }
 }
 
 impl EditorView {
@@ -745,6 +991,41 @@ impl EditorView {
         cx: &App,
         entity: Entity<Self>,
     ) {
+        if self.tool == Tool::Type
+            && let Some((_, spec)) = self.text_target()
+            && let Some(handle) = self.text_path_handle(&spec)
+            && let Some(at) = self.text_screen_point(&spec, handle)
+        {
+            window.paint_quad(fill(
+                Bounds::new(at - point(px(4.), px(4.)), size(px(8.), px(8.))),
+                theme::palette(cx).accent,
+            ));
+        }
+        if self.tool == Tool::Type
+            && let Some((_, spec)) = self.text_target()
+            && let (Some(width), Some(height)) = (spec.width, spec.height)
+        {
+            let points: Vec<_> = [(0., 0.), (width, 0.), (width, height), (0., height)]
+                .into_iter()
+                .filter_map(|p| self.text_screen_point(&spec, p))
+                .collect();
+            if points.len() == 4 {
+                let accent = theme::palette(cx).accent;
+                let mut path = PathBuilder::stroke(px(1.));
+                path.move_to(points[0]);
+                for p in &points[1..] {
+                    path.line_to(*p);
+                }
+                path.close();
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, accent);
+                }
+                window.paint_quad(fill(
+                    Bounds::new(points[2] - point(px(4.), px(4.)), size(px(8.), px(8.))),
+                    accent,
+                ));
+            }
+        }
         let Some(spec) = self.editing_text() else {
             return;
         };

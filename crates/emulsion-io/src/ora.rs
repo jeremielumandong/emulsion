@@ -43,7 +43,9 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 // Native shape paints and stroke geometry must not be silently ignored by older readers.
-pub const FORMAT_VERSION: u32 = 5;
+// Version 6 preserves rich text runs, paragraph frames, warp and path text.
+// Older builds must reject these files instead of silently flattening those attributes.
+pub const FORMAT_VERSION: u32 = 6;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.

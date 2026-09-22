@@ -340,6 +340,11 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
             input["name"].as_str().unwrap_or("")
         ),
         "apply_shape_stroke_preset" => format!("apply stroke preset to {}", n()),
+        "add_text" => format!("add text {}", input["name"].as_str().unwrap_or("layer")),
+        "set_text" => format!("edit text {}", n()),
+        "format_text_range" => format!("format characters in {}", n()),
+        "set_text_path" => format!("change text path on {}", n()),
+        "list_fonts" => "read installed fonts".into(),
         "path_to_selection" => format!("select inside {}", n()),
         "list_brushes" => "look at the brushes".into(),
         "hatch" => format!(

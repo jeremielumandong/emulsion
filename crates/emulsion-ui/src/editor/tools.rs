@@ -463,6 +463,7 @@ impl EditorView {
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         if tool != self.tool {
             self.finish_tool_interaction(cx);
+            self.type_tool.selection = None;
         }
         let from = BrushSlot::of(self.tool, self.tools.paint);
         self.tool = tool;
@@ -578,7 +579,9 @@ impl EditorView {
     pub(crate) fn open_text_colour(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_text_field(cx);
         if let Some((_, spec)) = self.text_target() {
-            self.tools.fg = spec.color;
+            self.tools.fg = self
+                .text_style_range()
+                .map_or(spec.color, |range| spec.style_at(range.start).color);
         }
         self.tools.hue = rgb_to_hsv(self.tools.fg).0;
         self.tools.picker = true;
@@ -1851,6 +1854,9 @@ impl EditorView {
 
     /// Escape: cancel the active gesture and all pending tool previews.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.cancel_text_pointer(cx) {
+            return true;
+        }
         if let Some(Drag::RotateView { rotation, .. }) = self.drag.as_ref() {
             self.view.rotation = *rotation;
             self.drag = None;

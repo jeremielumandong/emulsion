@@ -13,6 +13,7 @@ pub mod node;
 pub mod smart;
 pub mod styles;
 pub mod text;
+pub mod text_effects;
 pub mod transform;
 
 pub use command::{Command, CommandError, Dirty};

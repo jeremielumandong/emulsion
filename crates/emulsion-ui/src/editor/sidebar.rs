@@ -119,6 +119,7 @@ impl EditorView {
             SidebarTab::Properties => div()
                 .id("sidebar-properties-content")
                 .children(self.shape_properties(window, cx))
+                .children(self.text_properties(window, cx))
                 .child(self.inspector(p, window, cx))
                 .test_support()
                 .into_any_element(),

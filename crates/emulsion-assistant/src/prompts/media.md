@@ -208,6 +208,24 @@ Choose a document-pixel grid and a small palette. Block readable clusters before
 ]
 ```
 
+Playbook: typographic-layout
+
+Keep titles and paragraphs editable. Use point text for a short title and a paragraph frame for copy. Apply mixed character formatting with Unicode character offsets only after checking the exact string. For text on a curve, create or reuse a vector path and attach the text to it; keep the source path if it remains part of the design. Check spelling, hierarchy, readable line length, path direction and clipping before delivery.
+
+Worked title study: editable type follows a curve, one word receives its own colour and spacing, and a separate paragraph remains justified in a bounded frame.
+
+```json
+[
+  {"name":"draw_path","arguments":{"name":"Title curve","d":"M 170 250 C 300 115 500 115 630 250","stroke":"none","fill":"none"}},
+  {"name":"add_text","arguments":{"name":"Curved title","text":"EMULSION STUDIO","x":0,"y":0,"size":54,"color":"#223344","bold":true,"anti_alias":"smooth"}},
+  {"name":"format_text_range","arguments":{"node":2,"start":9,"end":15,"color":"#C65E42","letter_spacing":3}},
+  {"name":"set_text_path","arguments":{"node":2,"mode":"follow","path_node":1,"offset":16,"flip":false}},
+  {"name":"add_text","arguments":{"name":"Paragraph","text":"Editable paragraph text stays inside its frame and can be restyled without rebuilding the layer.","x":245,"y":315,"width":310,"height":120,"size":22,"line_height":1.35,"align":"justify","color":"#394B58","anti_alias":"crisp"}},
+  {"name":"describe_document","arguments":{}},
+  {"name":"get_view","arguments":{"max_size":800}}
+]
+```
+
 Playbook: collage-mixed-media
 
 Arrange already available source layers and native cutout shapes before adding marks. Use masks, duplicate_node, move_node and set_transform for supplied pixel assets as appropriate; preserve source layers and respect crop/placement intent. Use draw_path for editable paper-like pieces and Dry brush for optional drawn texture. Layers: Back cutout, Front cutout, Drawn marks, with each supplied asset separately named. Check overlap and focal hierarchy, cutout boundaries/reference fidelity, then whether contrasting materials remain intentional. Do not invent unavailable assets or silently call an image-generation backend. Paper fibres, torn edges and physical adhesion are not simulated by a polygon.

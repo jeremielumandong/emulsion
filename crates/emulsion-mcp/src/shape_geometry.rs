@@ -35,6 +35,30 @@ fn flag(args: &Value, key: &str) -> Result<bool, ToolResult> {
             .ok_or_else(|| error(format!("{key} must be a boolean"))),
     }
 }
+pub(crate) fn ensure_canvas_bounds(
+    editor: &Editor,
+    args: &Value,
+    path: &Path,
+) -> Result<(), ToolResult> {
+    if flag(args, "allow_outside_canvas")? {
+        return Ok(());
+    }
+    let Some((x, y, width, height)) = geometry::bounds(path) else {
+        return Ok(());
+    };
+    let epsilon = 1e-6;
+    if x < -epsilon
+        || y < -epsilon
+        || x + width > editor.doc.width as f64 + epsilon
+        || y + height > editor.doc.height as f64 + epsilon
+    {
+        return Err(error(format!(
+            "geometry bounds [{x:.2}, {y:.2}, {width:.2}, {height:.2}] extend outside the {}x{} canvas; keep editable geometry inside the document or explicitly set allow_outside_canvas to true",
+            editor.doc.width, editor.doc.height
+        )));
+    }
+    Ok(())
+}
 fn target(editor: &Editor, args: &Value) -> Result<(NodeId, Arc<Path>, PathStyle), ToolResult> {
     let id = args
         .get("node")
@@ -108,6 +132,7 @@ pub(crate) fn execute(
                     ));
                 }
             };
+            ensure_canvas_bounds(editor, args, &path)?;
             update(editor, id, path, style)
         }
         "resize_path" => resize(editor, args),
@@ -144,6 +169,7 @@ fn draw(editor: &mut Editor, args: &Value) -> Result<ToolResult, ToolResult> {
     if path.anchor_count() == 0 {
         return Err(error("shape coordinates exceed supported bounds"));
     }
+    ensure_canvas_bounds(editor, args, &path)?;
     let style_args = args.get("style").cloned().unwrap_or_else(|| json!({}));
     let mut style = crate::shape_style::parse_style(
         &style_args,
@@ -534,6 +560,10 @@ mod tests {
                 json!({"shape":"ellipse","x":0,"y":0,"width":10,"height":10,"mode":"bad"}),
             ),
             (
+                "draw_shape",
+                json!({"shape":"ellipse","x":-10,"y":0,"width":30,"height":30}),
+            ),
+            (
                 "resize_path",
                 json!({"node":id,"width":10,"height":10,"linked":true}),
             ),
@@ -575,5 +605,25 @@ mod tests {
                 assert_eq!(e.history.len(), history);
             }
         }
+    }
+
+    #[test]
+    fn agent_shapes_stay_on_canvas_unless_explicitly_allowed() {
+        let mut e = editor();
+        assert!(
+            execute(
+                &mut e,
+                "draw_shape",
+                &json!({"shape":"ellipse","x":80,"y":80,"width":40,"height":40}),
+            )
+            .is_err()
+        );
+        assert!(e.doc.nodes.is_empty());
+        call(
+            &mut e,
+            "draw_shape",
+            json!({"shape":"ellipse","x":80,"y":80,"width":40,"height":40,"allow_outside_canvas":true}),
+        );
+        assert_eq!(e.doc.nodes.len(), 1);
     }
 }
