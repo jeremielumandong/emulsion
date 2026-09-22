@@ -894,17 +894,20 @@ impl EditorView {
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.select_collection(None);
                     cx.notify();
-                })),
+                }))
+                .test_support(),
             );
         for (i, c) in emulsion_recipes::library::collections().iter().enumerate() {
             let on = collection.as_deref() == Some(c.name.as_str());
             let name = c.name.clone();
-            header = header.child(chip(("rc-collection", i), c.name.clone(), on, p).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    this.select_collection(Some(name.clone()));
-                    cx.notify();
-                }),
-            ));
+            header = header.child(
+                chip(("rc-collection", i), c.name.clone(), on, p)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.select_collection(Some(name.clone()));
+                        cx.notify();
+                    }))
+                    .test_support(),
+            );
         }
         let mut tag_row = div().flex().flex_wrap().items_center().gap(px(5.)).child(
             chip("rc-all", "all", tag.is_none(), p).on_click(cx.listener(|this, _, _, cx| {
@@ -974,16 +977,17 @@ impl EditorView {
                         .text_ellipsis()
                         .child(r.name.clone()),
                 )
-                .on_click(cx.listener(move |this, _, _, cx| this.preview_recipe(&recipe, cx)));
+                .on_click(cx.listener(move |this, _, _, cx| this.preview_recipe(&recipe, cx)))
+                .test_support();
             if let Origin::Saved(_) = origin {
                 let name = r.name.clone();
                 card = card.child(
-                    chip(("rc-del", i), "remove", false, p).on_click(cx.listener(
-                        move |this, e: &ClickEvent, _, cx| {
+                    chip(("rc-del", i), "remove", false, p)
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                             let _ = e;
                             this.delete_recipe(&name, cx);
-                        },
-                    )),
+                        }))
+                        .test_support(),
                 );
             }
             grid = grid.child(card);
@@ -1048,10 +1052,10 @@ impl EditorView {
                 .border_b_1()
                 .border_color(p.line)
                 .bg(p.panel)
+                .children(self.recipe_capture_view(p, cx))
                 .child(header)
                 .children(collection_notes.map(|notes| mono(notes, 9.5, p.muted)))
                 .child(tag_row)
-                .children(self.recipe_capture_view(p, cx))
                 .child(actions)
                 .when(!limitations.is_empty(), |view| {
                     view.child(mono(

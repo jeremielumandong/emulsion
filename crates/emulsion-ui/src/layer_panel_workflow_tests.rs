@@ -11,7 +11,8 @@ fn photoshop_shortcuts_cycle_selected_layer_blend_mode(cx: &mut TestAppContext) 
     let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
     cx.update(|window, cx| {
         editor.update(cx, |e, _| e.selected = Some(id));
-        window.focus(&editor.read(cx).canvas_focus, cx);
+        let focus = editor.read(cx).canvas_focus.clone();
+        window.focus(&focus, cx);
     });
     cx.simulate_keystrokes("shift-=");
     assert_eq!(

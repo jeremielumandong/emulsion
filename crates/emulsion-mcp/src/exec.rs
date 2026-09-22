@@ -5274,7 +5274,10 @@ mod tests {
             panic!()
         };
         assert_eq!(filter_styles[0].opacity, 0.5);
-        assert_eq!(filter_styles[0].blend, emulsion_core::BlendMode::SoftLight);
+        assert_eq!(
+            filter_styles[0].blend,
+            emulsion_raster::BlendMode::SoftLight
+        );
         let (expected, expected_offset) =
             emulsion_core::smart::render_styled(source, filters, filter_styles);
         assert_eq!(cache.to_srgba8(), expected.to_srgba8());

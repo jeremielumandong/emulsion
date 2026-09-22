@@ -2412,6 +2412,15 @@ mod tools {
         cx.run_until_parked();
         cx.update(|window, cx| window.click("sidebar-recipes", cx));
         cx.run_until_parked();
+        cx.update(|window, cx| window.render_frame(cx));
+        cx.update(|_, cx| {
+            let state = e.read(cx);
+            assert!(state.recipes.open);
+            assert!(matches!(
+                state.sidebar_tab,
+                crate::editor::SidebarTab::Recipes
+            ));
+        });
         // The Emulsion collection is the default: built-ins only, no library cards.
         cx.update(|window, cx| {
             assert!(window.find("rc-collection-emulsion").visible());
@@ -2440,12 +2449,11 @@ mod tools {
                 assert_eq!(e.recipes.collection.as_deref(), Some(first.as_str()));
                 assert_eq!(e.recipes.tag, None, "the tag filter clears on a change");
             }
-            // Every recipe of the collection is a card; a library card has no remove chip.
+            // The collection's cards are in a scrollable, virtualized viewport; its first card
+            // is visible and library cards have no remove chip.
             let cards = library[0].recipes.len();
-            assert!(
-                window.find(("rc-card", cards - 1)).visible(),
-                "{cards} cards"
-            );
+            assert!(cards > 0);
+            assert!(window.find(("rc-card", 0usize)).visible());
             assert!(window.try_find(("rc-del", 0usize)).is_none());
             window.click("rc-collection-emulsion", cx);
         });

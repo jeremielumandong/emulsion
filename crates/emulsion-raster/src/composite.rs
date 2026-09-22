@@ -416,11 +416,11 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     continue; // clipped to a hidden base: hidden too
                 }
                 let mut alpha = alphas[j].clone();
-                if !nodes[j].blending.blend_clipped_layers_as_group {
-                    if let Some(alpha) = alpha.as_mut() {
-                        let scale = nodes[j].opacity * nodes[j].blending.fill_opacity;
-                        alpha.iter_mut().for_each(|v| *v *= scale);
-                    }
+                if !nodes[j].blending.blend_clipped_layers_as_group
+                    && let Some(alpha) = alpha.as_mut()
+                {
+                    let scale = nodes[j].opacity * nodes[j].blending.fill_opacity;
+                    alpha.iter_mut().for_each(|v| *v *= scale);
                 }
                 alpha
             }
@@ -450,7 +450,19 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
         match &node.content {
             NodeContent::Pixels { raster, placement } => {
                 let mut src = ftile();
-                if !sample_raster(&mut src, raster, placement, ctx) {
+                let sampled = sample_raster(&mut src, raster, placement, ctx);
+                let knockout_shape = if node.blending.knockout != Knockout::None
+                    && !node.blending.transparency_shapes_layer
+                {
+                    let bounds =
+                        Raster::solid(raster.width(), raster.height(), [0.0, 0.0, 0.0, 1.0]);
+                    let mut shape = ftile();
+                    sample_raster(&mut shape, &bounds, placement, ctx);
+                    Some(shape.into_iter().map(|pixel| pixel[3]).collect::<Vec<_>>())
+                } else {
+                    None
+                };
+                if !sampled && knockout_shape.is_none() {
                     if is_source[i] {
                         alphas[i] = Some(vec![0.0; TILE_PX]);
                     }
@@ -466,7 +478,15 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     alphas[i] = Some(src.iter().map(|p| p[3]).collect());
                 }
                 let cov = coverage(None);
-                composite_into(acc, &mut src, cov.as_deref(), node, ctx, &mut deep_punch);
+                composite_into(
+                    acc,
+                    &mut src,
+                    cov.as_deref(),
+                    knockout_shape.as_deref(),
+                    node,
+                    ctx,
+                    &mut deep_punch,
+                );
             }
             NodeContent::Fill(c) => {
                 let mut src = vec![*c; TILE_PX];
@@ -480,7 +500,15 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     alphas[i] = Some(src.iter().map(|p| p[3]).collect());
                 }
                 let cov = coverage(None);
-                composite_into(acc, &mut src, cov.as_deref(), node, ctx, &mut deep_punch);
+                composite_into(
+                    acc,
+                    &mut src,
+                    cov.as_deref(),
+                    None,
+                    node,
+                    ctx,
+                    &mut deep_punch,
+                );
             }
             NodeContent::Group(children) => {
                 let mask = mask_doc(&node.mask);
@@ -520,7 +548,15 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                         alphas[i] = Some(sub.iter().map(|p| p[3]).collect());
                     }
                     let cov = coverage(None);
-                    composite_into(acc, &mut sub, cov.as_deref(), node, ctx, &mut deep_punch);
+                    composite_into(
+                        acc,
+                        &mut sub,
+                        cov.as_deref(),
+                        None,
+                        node,
+                        ctx,
+                        &mut deep_punch,
+                    );
                 }
             }
             NodeContent::StyledGroup {
@@ -552,14 +588,14 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                         }
                     }
                 }
-                if node.blending.layer_mask_hides_effects {
-                    if let Some(mask_node) = effect_mask {
-                        let mut mask = ftile();
-                        render_list(std::slice::from_ref(mask_node.as_ref()), &mut mask, ctx);
-                        sub.iter_mut().zip(mask).for_each(|(pixel, mask)| {
-                            pixel.iter_mut().for_each(|v| *v *= mask[3]);
-                        });
-                    }
+                if node.blending.layer_mask_hides_effects
+                    && let Some(mask_node) = effect_mask
+                {
+                    let mut mask = ftile();
+                    render_list(std::slice::from_ref(mask_node.as_ref()), &mut mask, ctx);
+                    sub.iter_mut().zip(mask).for_each(|(pixel, mask)| {
+                        pixel.iter_mut().for_each(|v| *v *= mask[3]);
+                    });
                 }
                 if is_source[i] {
                     let mut shape = ftile();
@@ -567,7 +603,15 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     alphas[i] = Some(shape.iter().map(|p| p[3]).collect());
                 }
                 let cov = coverage(None);
-                composite_into(acc, &mut sub, cov.as_deref(), node, ctx, &mut deep_punch);
+                composite_into(
+                    acc,
+                    &mut sub,
+                    cov.as_deref(),
+                    None,
+                    node,
+                    ctx,
+                    &mut deep_punch,
+                );
             }
             NodeContent::Adjust(op) => {
                 let mask = mask_doc(&node.mask);
@@ -613,6 +657,7 @@ fn composite_into(
     acc: &mut FTile,
     src: &mut FTile,
     cov: Option<&[f32]>,
+    knockout_shape: Option<&[f32]>,
     node: &CompositeNode,
     ctx: Ctx,
     deep_punch: &mut Option<Vec<f32>>,
@@ -657,7 +702,7 @@ fn composite_into(
             let shape = if node.blending.transparency_shapes_layer {
                 s[3]
             } else {
-                1.0
+                knockout_shape.map_or(1.0, |shape| shape[idx])
             };
             let punched = (shape * effective).clamp(0.0, 1.0);
             a.iter_mut().for_each(|v| *v *= 1.0 - punched);

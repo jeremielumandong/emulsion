@@ -88,13 +88,13 @@ fn advanced_blending_channels_and_ranges_are_undoable(cx: &mut TestAppContext) {
         window.render_frame(cx);
         assert!(
             window
-                .find(("blend-if-gradient", false))
+                .find(("blend-if-gradient", 0usize))
                 .bounds()
                 .size
                 .width
-                > px(0.)
+                > gpui_kit::px(0.)
         );
-        assert!(window.find("blend-if-handle-true-3").bounds().size.height > px(0.));
+        assert!(window.find("blend-if-handle-true-3").bounds().size.height > gpui_kit::px(0.));
     });
     let point = cx.update(|window, _| window.find(("blend-channel", 0usize)).bounds().center());
     cx.simulate_click(point, Default::default());

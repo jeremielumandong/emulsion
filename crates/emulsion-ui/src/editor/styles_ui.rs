@@ -611,7 +611,7 @@ impl EditorView {
                 body = body.child(label(title, p));
                 let points = [range.black, range.black_fade, range.white_fade, range.white];
                 let mut gradient = div()
-                    .id(("blend-if-gradient", backdrop))
+                    .id(("blend-if-gradient", usize::from(backdrop)))
                     .relative()
                     .w_full()
                     .h(px(30.))
