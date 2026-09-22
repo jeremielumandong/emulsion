@@ -476,6 +476,25 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) {
             } => {
                 let mut sub = ftile();
                 render_list(children, &mut sub, ctx);
+                if children
+                    .iter()
+                    .any(|child| child.blend != BlendMode::Normal)
+                {
+                    // Effects such as Multiply shadows must see the real backdrop.
+                    // Recover an equivalent source from that result so layer opacity,
+                    // clipping and advanced blending are still applied exactly once.
+                    let mut appearance = acc.clone();
+                    render_list(children, &mut appearance, ctx);
+                    for ((source, rendered), backdrop) in
+                        sub.iter_mut().zip(appearance).zip(acc.iter())
+                    {
+                        for channel in 0..3 {
+                            source[channel] = (rendered[channel]
+                                - backdrop[channel] * (1.0 - source[3]))
+                                .clamp(0.0, source[3]);
+                        }
+                    }
+                }
                 if is_source[i] {
                     let mut shape = ftile();
                     render_list(std::slice::from_ref(clip_source.as_ref()), &mut shape, ctx);
@@ -1048,6 +1067,53 @@ mod tests {
 
     fn at(t: &FTile, x: usize, y: usize) -> [f32; 4] {
         t[y * TILE as usize + x]
+    }
+
+    #[test]
+    fn style_blend_uses_backdrop_and_layer_opacity_once() {
+        for background_alpha in [0.5, 1.0] {
+            for shade in [0.0, 0.5, 1.0] {
+                let backdrop = || {
+                    layer(
+                        1,
+                        Raster::solid(300, 300, [0.2, 0.4, 0.8, background_alpha]),
+                    )
+                };
+                let mut effect = layer(2, Raster::solid(300, 300, [shade, shade, shade, 0.6]));
+                effect.blend = BlendMode::Multiply;
+                let expected = render_tile(
+                    &tree(vec![backdrop(), effect.clone()]),
+                    0,
+                    TileCoord::new(0, 0),
+                );
+                let mut group = layer(3, Raster::empty(300, 300, [0; 4]));
+                group.content = NodeContent::StyledGroup {
+                    children: vec![effect],
+                    clip_source: Box::new(layer(4, Raster::empty(300, 300, [0; 4]))),
+                };
+                let actual = render_tile(
+                    &tree(vec![backdrop(), group.clone()]),
+                    0,
+                    TileCoord::new(0, 0),
+                );
+                for (a, b) in at(&actual, 10, 10).into_iter().zip(at(&expected, 10, 10)) {
+                    assert!(
+                        (a - b).abs() < 1e-4,
+                        "shade {shade}, backdrop alpha {background_alpha}: {a} vs {b}"
+                    );
+                }
+                group.opacity = 0.5;
+                let half = render_tile(&tree(vec![backdrop(), group]), 0, TileCoord::new(0, 0));
+                let base = render_tile(&tree(vec![backdrop()]), 0, TileCoord::new(0, 0));
+                for ((a, full), base) in at(&half, 10, 10)
+                    .into_iter()
+                    .zip(at(&expected, 10, 10))
+                    .zip(at(&base, 10, 10))
+                {
+                    assert!((a - (base + (full - base) * 0.5)).abs() < 1e-4);
+                }
+            }
+        }
     }
 
     #[test]

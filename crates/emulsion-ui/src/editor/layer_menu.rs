@@ -89,7 +89,7 @@ pub(super) fn layer_context_menu(
             editor,
             "Blending Options…",
             single && ready,
-            move |e, _, cx| e.open_blending_options(id, cx),
+            move |e, window, cx| e.open_blending_options(id, window, cx),
         ))
         .separator()
         .menu_with_disabled(
@@ -243,7 +243,7 @@ pub(super) fn layer_context_menu(
             &target,
             "Blending Options…",
             single && ready,
-            move |e, _, cx| e.open_blending_options(id, cx),
+            move |e, window, cx| e.open_blending_options(id, window, cx),
         ))
         .item(item(
             &target,
@@ -454,6 +454,7 @@ impl EditorView {
             doc.node(*ids.last().unwrap()).unwrap().name.clone()
         };
         let mut source = Document::new(doc.width, doc.height);
+        source.global_light = doc.global_light;
         source.blend_space = doc.blend_space;
         if visible {
             source = doc.clone();

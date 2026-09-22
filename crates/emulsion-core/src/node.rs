@@ -199,6 +199,9 @@ pub struct Node {
     pub mask_transform: [f64; 6],
     /// Effects drawn from the node's alpha (shadows, glow, stroke, overlays).
     pub styles: Vec<crate::styles::LayerStyle>,
+    /// Parallel per-effect controls; missing entries use defaults.
+    pub style_options: Vec<crate::style_options::StyleOptions>,
+    pub effects_enabled: bool,
     /// Provenance for content a model produced: `ai:<model id>`.
     pub origin: Option<String>,
     pub kind: NodeKind,
@@ -227,6 +230,8 @@ impl PartialEq for Node {
             && self.mask_linked == o.mask_linked
             && self.mask_transform == o.mask_transform
             && self.styles == o.styles
+            && self.style_options == o.style_options
+            && self.effects_enabled == o.effects_enabled
             && self.origin == o.origin
             && self.kind == o.kind
     }
@@ -257,6 +262,8 @@ impl Node {
             mask_linked: true,
             mask_transform: default_mask_transform(),
             styles: Vec::new(),
+            style_options: Vec::new(),
+            effects_enabled: true,
             origin: None,
             kind,
         }
@@ -359,4 +366,9 @@ impl Node {
             _ => Vec::new(),
         }
     }
+}
+
+/// Old native files show their layer effects by default.
+pub fn default_effects_enabled() -> bool {
+    true
 }

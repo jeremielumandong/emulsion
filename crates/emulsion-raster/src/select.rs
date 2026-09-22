@@ -420,26 +420,7 @@ pub fn live_wire(
 
 /// Exact bounding box of coverage above zero.
 pub fn bounds(m: &Mask) -> IRect {
-    let e = extent(m);
-    if e.is_empty() {
-        return e;
-    }
-    let d = m.read_rect(e);
-    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-    for y in 0..e.h {
-        for x in 0..e.w {
-            if d[(y * e.w + x) as usize] > 0 {
-                x0 = x0.min(x);
-                y0 = y0.min(y);
-                x1 = x1.max(x);
-                y1 = y1.max(y);
-            }
-        }
-    }
-    if x1 < x0 {
-        return IRect::default();
-    }
-    IRect::new(e.x + x0, e.y + y0, x1 - x0 + 1, y1 - y0 + 1)
+    m.coverage_bounds()
 }
 
 /// One row of a running box blur, edges clamped.

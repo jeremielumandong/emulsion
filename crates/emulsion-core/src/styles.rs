@@ -8,8 +8,12 @@
 //! and styles; painting on the node invalidates its entry.
 
 use crate::document::Document;
+use crate::effect_render::*;
 use crate::node::{Node, NodeKind};
-use emulsion_raster::composite::{CompositeNode, NodeContent, flatten};
+use crate::style_options::*;
+#[cfg(test)]
+use emulsion_raster::composite::flatten;
+use emulsion_raster::composite::{CompositeNode, NodeContent, render_tile};
 use emulsion_raster::{BlendMode, IRect, Placement, Raster, color};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -403,8 +407,12 @@ impl LayerStyle {
 
     fn spread(&self) -> i32 {
         match self {
-            LayerStyle::DropShadow { distance, size, .. } => (distance + size * 3.0).ceil() as i32,
-            LayerStyle::OuterGlow { size, .. } => (size * 3.0).ceil() as i32,
+            LayerStyle::DropShadow { distance, size, .. }
+            | LayerStyle::InnerShadow { distance, size, .. }
+            | LayerStyle::Satin { distance, size, .. } => (distance + size * 3.0).ceil() as i32,
+            LayerStyle::OuterGlow { size, .. } | LayerStyle::InnerGlow { size, .. } => {
+                (size * 3.0).ceil() as i32
+            }
             LayerStyle::Stroke { size, .. } => size.ceil() as i32 + 1,
             _ => 0,
         }
@@ -413,53 +421,139 @@ impl LayerStyle {
 
 /// Rendered effects for one node.
 pub struct Rendered {
-    pub below: Option<(Arc<Raster>, IRect)>,
-    pub above: Option<(Arc<Raster>, IRect)>,
+    pub below: Vec<RenderedEffect>,
+    pub above: Vec<RenderedEffect>,
 }
 
+pub struct RenderedEffect {
+    pub raster: Arc<Raster>,
+    pub rect: IRect,
+    pub blend: BlendMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ColorSampling {
+    SpatialGradient,
+    CoverageGradient,
+    Pattern,
+}
+type ColorMapping = ([u8; 3], [u8; 3], f32, f32, ColorSampling);
+
 type Key = (usize, usize, u64, String);
-type Memo = Mutex<Vec<(Key, Arc<Rendered>)>>;
+#[path = "style_cache.rs"]
+mod cache;
+type Memo = Mutex<cache::Memo>;
 
 fn memo() -> &'static Memo {
     static M: std::sync::OnceLock<Memo> = std::sync::OnceLock::new();
-    M.get_or_init(|| Mutex::new(Vec::new()))
+    M.get_or_init(|| Mutex::new(cache::Memo::default()))
 }
 
-fn key_for(n: &Node) -> Option<Key> {
-    if n.styles.is_empty() {
+#[cfg(test)]
+pub(crate) fn evict_for_test(doc: &Document, node: &Node) {
+    if let Some((local, _)) = translation_source(doc, node) {
+        if let Some(key) = key_for(&local, &local.nodes[0]) {
+            memo().lock().evict(&key);
+        }
+    } else if let Some(key) = key_for(doc, node) {
+        memo().lock().evict(&key);
+    }
+}
+
+fn has_enabled_effects(n: &Node) -> bool {
+    n.effects_enabled
+        && !n.styles.is_empty()
+        && n.styles
+            .iter()
+            .enumerate()
+            .any(|(index, _)| n.style_options.get(index).is_none_or(|o| o.enabled))
+}
+
+fn key_for(doc: &Document, n: &Node) -> Option<Key> {
+    if !has_enabled_effects(n) {
         return None;
     }
-    let (content, placement) = match &n.kind {
-        NodeKind::Raster { raster, placement } => (Arc::as_ptr(raster) as usize, *placement),
-        NodeKind::Smart {
-            cache, placement, ..
-        } => (Arc::as_ptr(cache) as usize, *placement),
-        NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
-            (Arc::as_ptr(cache) as usize, Placement::default())
+    fn signature(n: &Node, root: bool) -> String {
+        let (pointer, placement, extra) = match &n.kind {
+            NodeKind::Raster { raster, placement } => {
+                (Arc::as_ptr(raster) as usize, *placement, String::new())
+            }
+            NodeKind::Smart {
+                cache,
+                placement,
+                offset,
+                ..
+            } => (
+                Arc::as_ptr(cache) as usize,
+                *placement,
+                format!("{offset:?}"),
+            ),
+            NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => (
+                Arc::as_ptr(cache) as usize,
+                Placement::default(),
+                String::new(),
+            ),
+            NodeKind::Fill { rgba } => (0, Placement::default(), format!("{rgba:?}")),
+            NodeKind::Adjust(adjustment) => (0, Placement::default(), format!("{adjustment:?}")),
+            _ => (0, Placement::default(), String::new()),
+        };
+        let mut options = n.style_options.clone();
+        let assets: Vec<_> = options
+            .iter_mut()
+            .map(|o| {
+                o.id = 0; // Identity is for editing, not rendered appearance.
+                o.pattern.image.take().map(|p| Arc::as_ptr(&p) as usize)
+            })
+            .collect();
+        format!(
+            "{pointer}:{placement:?}:{extra}:{:?}:{:?}:{:?}:{:?}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}",
+            n.styles,
+            options,
+            assets,
+            n.mask_transform,
+            n.mask_enabled,
+            if root { 1.0 } else { n.opacity },
+            if root { BlendMode::Normal } else { n.blend },
+            if root { Default::default() } else { n.blending },
+            n.mask.as_ref().map(|m| Arc::as_ptr(m) as usize),
+            root || n.visible,
+            if root { None } else { n.clip_to }
+        )
+    }
+    let mut key = signature(n, true);
+    if matches!(n.kind, NodeKind::Group { .. }) {
+        let mut ids = vec![n.id];
+        loop {
+            let more: Vec<_> = doc
+                .nodes
+                .iter()
+                .filter(|c| c.parent.is_some_and(|p| ids.contains(&p)) && !ids.contains(&c.id))
+                .map(|c| c.id)
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            ids.extend(more);
         }
-        _ => return None,
-    };
-    let mask = n.mask.as_ref().map_or(0, |m| Arc::as_ptr(m) as usize);
-    let mut ph = 0u64;
-    for v in [
-        placement.x,
-        placement.y,
-        placement.scale_x,
-        placement.scale_y,
-        placement.rotation,
-    ] {
-        ph = ph.rotate_left(13) ^ v.to_bits();
+        for child in doc
+            .nodes
+            .iter()
+            .filter(|c| c.id != n.id && ids.contains(&c.id))
+        {
+            key.push_str(&format!(
+                "{}:{:?}:{}:{}",
+                child.id,
+                child.parent,
+                child.effects_enabled,
+                signature(child, false)
+            ));
+        }
     }
-    ph ^= (placement.flip_x as u64) << 1 | placement.flip_y as u64 | (n.mask_enabled as u64) << 2;
-    for value in n.mask_transform {
-        ph = ph.rotate_left(13) ^ value.to_bits();
-    }
-    Some((
-        content,
-        mask,
-        ph,
-        serde_json::to_string(&n.styles).unwrap_or_default(),
-    ))
+    key.push_str(&format!(
+        "{}:{}:{:?}:{:?}",
+        doc.width, doc.height, doc.global_light, doc.blend_space
+    ));
+    Some((0, 0, 0, key))
 }
 
 /// The node's document-space alpha over its bounds, from a solo render.
@@ -472,61 +566,117 @@ fn alpha_of(doc: &Document, n: &Node, pad: i32) -> Option<(Vec<f32>, IRect)> {
     node.opacity = 1.0;
     node.blend = BlendMode::Normal;
     node.styles.clear();
+    node.style_options.clear();
     node.blending = Default::default();
+    solo.global_light = doc.global_light;
+    solo.blend_space = doc.blend_space;
     solo.nodes.push(node);
-    let full = flatten(&solo.composite_tree(), 0);
-    let b = full.tile_bounds();
+    if matches!(n.kind, NodeKind::Group { .. }) {
+        let mut ids = vec![n.id];
+        loop {
+            let more: Vec<_> = doc
+                .nodes
+                .iter()
+                .filter(|child| {
+                    child.parent.is_some_and(|p| ids.contains(&p)) && !ids.contains(&child.id)
+                })
+                .map(|c| c.id)
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            ids.extend(more);
+        }
+        solo.nodes.extend(
+            doc.nodes
+                .iter()
+                .filter(|child| child.id != n.id && ids.contains(&child.id))
+                .cloned(),
+        );
+    }
+    let canvas = IRect::new(0, 0, doc.width as i32, doc.height as i32);
+    let candidate = if matches!(n.kind, NodeKind::Group { .. }) {
+        canvas
+    } else {
+        crate::geometry::node_bounds(&solo, n.id)?.intersect(&canvas)
+    };
+    if candidate.is_empty() {
+        return None;
+    }
+    let tile_size = emulsion_raster::TILE as i32;
+    let x = candidate.x.div_euclid(tile_size) * tile_size;
+    let y = candidate.y.div_euclid(tile_size) * tile_size;
+    let candidate = IRect::new(
+        x,
+        y,
+        ((candidate.right() + tile_size - 1) / tile_size) * tile_size - x,
+        ((candidate.bottom() + tile_size - 1) / tile_size) * tile_size - y,
+    )
+    .intersect(&canvas);
+    // Keep only alpha. Flattening an 8K layer and then reading its RGBA rectangle
+    // used two extra full-size color buffers merely to discard RGB immediately.
+    let mut coverage = vec![0.0f32; candidate.w as usize * candidate.h as usize];
+    let tree = solo.composite_tree();
+    use rayon::prelude::*;
+    let b = coverage
+        .par_chunks_mut(candidate.w as usize * tile_size as usize)
+        .enumerate()
+        .map(|(band, pixels)| {
+            let top = candidate.y + band as i32 * tile_size;
+            let height = pixels.len() / candidate.w as usize;
+            let mut left = candidate.right();
+            let mut right = candidate.x;
+            let mut first = candidate.bottom();
+            let mut bottom = candidate.y;
+            for tx in candidate.x / tile_size..(candidate.right() + tile_size - 1) / tile_size {
+                let tile = render_tile(
+                    &tree,
+                    0,
+                    emulsion_raster::TileCoord::new(tx, top / tile_size),
+                );
+                let width = tile_size.min(candidate.right() - tx * tile_size) as usize;
+                let offset = (tx * tile_size - candidate.x) as usize;
+                for row in 0..height {
+                    for col in 0..width {
+                        let alpha = tile[row * tile_size as usize + col][3];
+                        pixels[row * candidate.w as usize + offset + col] = alpha;
+                        if alpha > 0.0 {
+                            let px = tx * tile_size + col as i32;
+                            let py = top + row as i32;
+                            left = left.min(px);
+                            right = right.max(px + 1);
+                            first = first.min(py);
+                            bottom = bottom.max(py + 1);
+                        }
+                    }
+                }
+            }
+            if right > left && bottom > first {
+                IRect::new(left, first, right - left, bottom - first)
+            } else {
+                IRect::default()
+            }
+        })
+        .reduce(IRect::default, |a, b| a.union(&b));
     if b.is_empty() {
         return None;
     }
     let r = IRect::new(b.x - pad, b.y - pad, b.w + 2 * pad, b.h + 2 * pad);
-    let a: Vec<f32> = full
-        .read_rect(r)
-        .into_iter()
-        .map(|p| color::u16_to_f(p[3]))
-        .collect();
+    if r == candidate {
+        return Some((coverage, r));
+    }
+    let mut a = vec![0.0f32; r.w as usize * r.h as usize];
+    for y in b.y..b.bottom() {
+        let src = ((y - candidate.y) * candidate.w + b.x - candidate.x) as usize;
+        let dst = ((y - r.y) * r.w + b.x - r.x) as usize;
+        a[dst..dst + b.w as usize].copy_from_slice(&coverage[src..src + b.w as usize]);
+    }
     Some((a, r))
 }
 
-fn blur(a: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
-    if radius < 0.3 {
-        return a.to_vec();
-    }
-    let sigma = (radius / 2.0).max(0.3);
-    let r = (sigma * 3.0).ceil() as i64;
-    let k: Vec<f32> = (-r..=r)
-        .map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp())
-        .collect();
-    let sum: f32 = k.iter().sum();
-    let k: Vec<f32> = k.iter().map(|v| v / sum).collect();
-    let mut tmp = vec![0.0f32; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let mut acc = 0.0;
-            for (i, kv) in k.iter().enumerate() {
-                let sx = x as i64 + i as i64 - r;
-                if sx >= 0 && (sx as usize) < w {
-                    acc += a[y * w + sx as usize] * kv;
-                }
-            }
-            tmp[y * w + x] = acc;
-        }
-    }
-    let mut out = vec![0.0f32; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let mut acc = 0.0;
-            for (i, kv) in k.iter().enumerate() {
-                let sy = y as i64 + i as i64 - r;
-                if sy >= 0 && (sy as usize) < h {
-                    acc += tmp[sy as usize * w + x] * kv;
-                }
-            }
-            out[y * w + x] = acc;
-        }
-    }
-    out
-}
+#[path = "effect_kernels.rs"]
+mod effect_kernels;
+use effect_kernels::{blur, dilate};
 
 fn shift(a: &[f32], w: usize, h: usize, dx: i32, dy: i32) -> Vec<f32> {
     let mut out = vec![0.0f32; w * h];
@@ -541,28 +691,6 @@ fn shift(a: &[f32], w: usize, h: usize, dx: i32, dy: i32) -> Vec<f32> {
     out
 }
 
-fn dilate(a: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
-    let r = radius.ceil() as i32;
-    let mut out = vec![0.0f32; w * h];
-    let offsets: Vec<(i32, i32)> = (-r..=r)
-        .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
-        .filter(|(dx, dy)| ((dx * dx + dy * dy) as f32).sqrt() <= radius + 0.5)
-        .collect();
-    for y in 0..h {
-        for x in 0..w {
-            let mut m = 0.0f32;
-            for (dx, dy) in &offsets {
-                let (sx, sy) = (x as i32 + dx, y as i32 + dy);
-                if sx >= 0 && sy >= 0 && (sx as usize) < w && (sy as usize) < h {
-                    m = m.max(a[sy as usize * w + sx as usize]);
-                }
-            }
-            out[y * w + x] = m;
-        }
-    }
-    out
-}
-
 fn offset(angle: f32, distance: f32) -> (i32, i32) {
     // Photoshop measures the light's angle; the shadow falls opposite.
     let a = angle.to_radians();
@@ -572,113 +700,349 @@ fn offset(angle: f32, distance: f32) -> (i32, i32) {
     )
 }
 
-/// Render `n`'s styles. Memoized.
-pub fn render(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
-    let key = key_for(n)?;
-    {
-        let m = memo().lock();
-        if let Some((_, r)) = m.iter().find(|(k, _)| *k == key) {
-            return Some(r.clone());
+fn erode(a: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
+    let inv: Vec<_> = a.iter().map(|v| 1. - v).collect();
+    dilate(&inv, w, h, r).iter().map(|v| 1. - v).collect()
+}
+fn adjusted(cov: &mut [f32], alpha: &[f32], w: usize, o: &StyleOptions, clip: bool) {
+    for (i, v) in cov.iter_mut().enumerate() {
+        let source = if clip && alpha[i] > 0. {
+            *v / alpha[i]
+        } else {
+            *v
+        };
+        *v = contour(source, o) * (1. - o.noise / 100. * grain(i % w, i / w));
+        if clip {
+            *v *= alpha[i]
         }
+    }
+}
+/// Build a translation-independent source canvas. Full source bounds keep
+/// shadows and gradient geometry stable when the layer crosses document edges.
+/// Document-anchored patterns/textures intentionally retain their old path.
+fn translation_source(doc: &Document, n: &Node) -> Option<(Document, (i32, i32))> {
+    for (index, style) in n.styles.iter().enumerate() {
+        let option = n.style_options.get(index);
+        if option.is_some_and(|o| !o.enabled) {
+            continue;
+        }
+        match style {
+            LayerStyle::PatternOverlay { .. } => return None,
+            LayerStyle::Stroke { .. } if option.is_some_and(|o| o.fill == FillType::Pattern) => {
+                return None;
+            }
+            LayerStyle::BevelEmboss { texture, .. }
+                if *texture != 0.
+                    || option
+                        .is_some_and(|o| o.pattern.image.is_some() && o.texture_depth != 0.) =>
+            {
+                return None;
+            }
+            _ => {}
+        }
+    }
+    let (width, height, placement) = match &n.kind {
+        NodeKind::Raster { raster, placement } => (raster.width(), raster.height(), *placement),
+        NodeKind::Smart {
+            source,
+            cache,
+            placement,
+            offset,
+            ..
+        } => (
+            cache.width(),
+            cache.height(),
+            crate::smart::cache_placement(
+                placement,
+                (source.width(), source.height()),
+                (cache.width(), cache.height()),
+                *offset,
+            ),
+        ),
+        _ => return None,
+    };
+    let transform = placement.to_doc(width, height);
+    let corners = [
+        glam::dvec2(0., 0.),
+        glam::dvec2(width as f64, 0.),
+        glam::dvec2(0., height as f64),
+        glam::dvec2(width as f64, height as f64),
+    ]
+    .map(|p| transform.transform_point2(p));
+    let mut lo = corners[0];
+    let mut hi = lo;
+    for p in corners {
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        return None;
+    }
+    let x = lo.x.floor();
+    let y = lo.y.floor();
+    let w = hi.x.ceil() - x;
+    let h = hi.y.ceil() - y;
+    if x < i32::MIN as f64
+        || x > i32::MAX as f64
+        || y < i32::MIN as f64
+        || y > i32::MAX as f64
+        || w < 1.
+        || h < 1.
+        || w > crate::document::MAX_SIDE as f64
+        || h > crate::document::MAX_SIDE as f64
+        || w * h > crate::document::MAX_PIXELS as f64
+    {
+        return None;
+    }
+    let mut local = Document::new(w as u32, h as u32);
+    local.global_light = doc.global_light;
+    local.blend_space = doc.blend_space;
+    let mut node = n.clone();
+    node.parent = None;
+    node.clip_to = None;
+    match &mut node.kind {
+        NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } => {
+            placement.x -= x;
+            placement.y -= y;
+        }
+        _ => unreachable!(),
+    }
+    local.nodes.push(node);
+    Some((local, (x as i32, y as i32)))
+}
+
+/// Render independently blended effects, sharing their pixels across integer moves.
+pub fn render(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
+    if !has_enabled_effects(n) {
+        return None;
+    }
+    if let Some((local, (x, y))) = translation_source(doc, n) {
+        let rendered = render_cached(&local, &local.nodes[0])?;
+        if x == 0 && y == 0 {
+            return Some(rendered);
+        }
+        let shifted = |effect: &RenderedEffect| RenderedEffect {
+            raster: effect.raster.clone(),
+            rect: IRect::new(
+                effect.rect.x.saturating_add(x),
+                effect.rect.y.saturating_add(y),
+                effect.rect.w,
+                effect.rect.h,
+            ),
+            blend: effect.blend,
+        };
+        return Some(Arc::new(Rendered {
+            below: rendered.below.iter().map(shifted).collect(),
+            above: rendered.above.iter().map(shifted).collect(),
+        }));
+    }
+    render_cached(doc, n)
+}
+
+fn render_cached(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
+    let key = key_for(doc, n)?;
+    if let Some(rendered) = memo().lock().get(&key) {
+        return Some(rendered);
     }
     let pad = n
         .styles
         .iter()
-        .map(LayerStyle::spread)
+        .map(|s| {
+            s.spread()
+                .max(if let LayerStyle::BevelEmboss { size, .. } = s {
+                    (*size * 3.).ceil() as i32
+                } else {
+                    0
+                })
+        })
         .max()
         .unwrap_or(0)
-        .clamp(0, 200);
+        .clamp(0, 600);
     let (alpha, r) = alpha_of(doc, n, pad)?;
     let (w, h) = (r.w as usize, r.h as usize);
-    let mut below = vec![[0.0f32; 4]; w * h];
-    let mut above = vec![[0.0f32; 4]; w * h];
-    let (mut any_below, mut any_above) = (false, false);
-    let over = |dst: &mut [[f32; 4]], cov: &[f32], col: [f32; 3], k: f32| {
-        for (d, c) in dst.iter_mut().zip(cov) {
-            let a = (c * k).clamp(0.0, 1.0);
-            if a <= 0.0 {
-                continue;
-            }
-            for i in 0..3 {
-                d[i] = col[i] * a + d[i] * (1.0 - a);
-            }
-            d[3] = a + d[3] * (1.0 - a);
-        }
+    let bounds = IRect::new(r.x + pad, r.y + pad, r.w - 2 * pad, r.h - 2 * pad);
+    let mut result = Rendered {
+        below: vec![],
+        above: vec![],
     };
-    let lin = |c: [u8; 3]| [0, 1, 2].map(|i| color::srgb_to_linear(c[i] as f32 / 255.0));
-    for s in &n.styles {
-        match s {
+    let lin = |c: [u8; 3]| {
+        [
+            color::srgb_to_linear(c[0] as f32 / 255.),
+            color::srgb_to_linear(c[1] as f32 / 255.),
+            color::srgb_to_linear(c[2] as f32 / 255.),
+            1.,
+        ]
+    };
+    for (index, style) in n.styles.iter().enumerate() {
+        let default = StyleOptions::default();
+        let o = n.style_options.get(index).unwrap_or(&default);
+        if !o.enabled || !o.valid() {
+            continue;
+        }
+        let light_angle = |a: f32| {
+            if o.use_global_light {
+                doc.global_light.angle
+            } else {
+                a
+            }
+        };
+        // Overlays borrow the source alpha; spatial effects populate their own coverage.
+        let mut cov = Vec::new();
+        let mut below = false;
+        let opacity;
+        let mut solid = [0.; 4];
+        let mut colors: Option<ColorMapping> = None;
+        match style {
             LayerStyle::DropShadow {
                 color,
-                opacity,
+                opacity: op,
                 angle,
                 distance,
                 size,
             } => {
-                let (dx, dy) = offset(*angle, *distance);
-                let cov = blur(&shift(&alpha, w, h, dx, dy), w, h, *size);
-                over(&mut below, &cov, lin(*color), opacity / 100.0);
-                any_below = true;
-            }
-            LayerStyle::OuterGlow {
-                color,
-                opacity,
-                size,
-            } => {
-                let cov = blur(&dilate(&alpha, w, h, size / 3.0), w, h, *size);
-                over(&mut below, &cov, lin(*color), opacity / 100.0);
-                any_below = true;
-            }
-            LayerStyle::Stroke {
-                color,
-                opacity,
-                size,
-            } => {
-                let cov = dilate(&alpha, w, h, *size);
-                over(&mut below, &cov, lin(*color), opacity / 100.0);
-                any_below = true;
+                let (dx, dy) = offset(light_angle(*angle), *distance);
+                let spread = *size * o.spread / 100.;
+                cov = blur(
+                    &shift(&dilate(&alpha, w, h, spread), w, h, dx, dy),
+                    w,
+                    h,
+                    *size - spread,
+                );
+                adjusted(&mut cov, &alpha, w, o, false);
+                below = true;
+                opacity = *op;
+                solid = lin(*color);
             }
             LayerStyle::InnerShadow {
                 color,
-                opacity,
+                opacity: op,
                 angle,
                 distance,
                 size,
             } => {
-                let (dx, dy) = offset(*angle, *distance);
-                let inv: Vec<f32> = shift(&alpha, w, h, dx, dy)
-                    .iter()
-                    .map(|v| 1.0 - v)
-                    .collect();
-                let cov: Vec<f32> = blur(&inv, w, h, *size)
+                let (dx, dy) = offset(light_angle(*angle), *distance);
+                let inner = erode(&alpha, w, h, *size * o.choke / 100.);
+                let inv: Vec<_> = shift(&inner, w, h, dx, dy).iter().map(|v| 1. - v).collect();
+                cov = blur(&inv, w, h, *size * (1. - o.choke / 100.))
                     .iter()
                     .zip(&alpha)
-                    .map(|(c, a)| c * a)
+                    .map(|(v, a)| v * a)
                     .collect();
-                over(&mut above, &cov, lin(*color), opacity / 100.0);
-                any_above = true;
+                adjusted(&mut cov, &alpha, w, o, true);
+                opacity = *op;
+                solid = lin(*color);
             }
-            LayerStyle::ColorOverlay { color, opacity } => {
-                over(&mut above, &alpha, lin(*color), opacity / 100.0);
-                any_above = true;
-            }
-            LayerStyle::InnerGlow {
+            LayerStyle::OuterGlow {
                 color,
-                opacity,
+                opacity: op,
+                size,
+            }
+            | LayerStyle::InnerGlow {
+                color,
+                opacity: op,
                 size,
             } => {
-                let soft = blur(&alpha, w, h, *size);
-                let cov: Vec<f32> = alpha
+                below = matches!(style, LayerStyle::OuterGlow { .. });
+                let amount = if below { o.spread } else { o.choke } / 100.;
+                let base = if below {
+                    dilate(&alpha, w, h, *size * amount)
+                } else {
+                    erode(&alpha, w, h, *size * amount)
+                };
+                let soft = match o.technique {
+                    Technique::Smooth => blur(&base, w, h, *size * (1. - amount)),
+                    Technique::ChiselHard => {
+                        if below {
+                            dilate(&base, w, h, *size * (1. - amount))
+                        } else {
+                            erode(&base, w, h, *size * (1. - amount))
+                        }
+                    }
+                    Technique::ChiselSoft => blur(&base, w, h, *size * (1. - amount) * 0.5),
+                };
+                cov = soft
                     .iter()
-                    .zip(soft)
-                    .map(|(a, b)| a * (1.0 - b) * 2.0)
+                    .zip(&alpha)
+                    .map(|(v, a)| {
+                        if below {
+                            v * (1. - a)
+                        } else {
+                            a * if o.glow_source == GlowSource::Center {
+                                *v
+                            } else {
+                                (1. - v) * 2.
+                            }
+                        }
+                    })
                     .collect();
-                over(&mut above, &cov, lin(*color), opacity / 100.0);
-                any_above = true;
+                adjusted(&mut cov, &alpha, w, o, !below);
+                opacity = *op;
+                solid = lin(*color);
+                if o.fill == FillType::Gradient {
+                    colors = Some((*color, [255; 3], 0., 8., ColorSampling::CoverageGradient));
+                }
+            }
+            LayerStyle::Stroke {
+                color,
+                opacity: op,
+                size,
+            } => {
+                let (outer, inner) = match o.stroke_position {
+                    StrokePosition::Outside => (dilate(&alpha, w, h, *size), alpha.clone()),
+                    StrokePosition::Inside => (alpha.clone(), erode(&alpha, w, h, *size)),
+                    StrokePosition::Center => (
+                        dilate(&alpha, w, h, *size / 2.),
+                        erode(&alpha, w, h, *size / 2.),
+                    ),
+                };
+                cov = outer
+                    .iter()
+                    .zip(inner)
+                    .map(|(a, b)| (a - b).max(0.))
+                    .collect();
+                below = o.stroke_position == StrokePosition::Outside;
+                opacity = *op;
+                solid = lin(*color);
+                if o.fill != FillType::Solid {
+                    colors = Some((
+                        *color,
+                        [255; 3],
+                        0.,
+                        8.,
+                        if o.fill == FillType::Gradient {
+                            ColorSampling::SpatialGradient
+                        } else {
+                            ColorSampling::Pattern
+                        },
+                    ));
+                }
+            }
+            LayerStyle::ColorOverlay { color, opacity: op } => {
+                solid = lin(*color);
+                opacity = *op;
+            }
+            LayerStyle::GradientOverlay {
+                from,
+                to,
+                angle,
+                opacity: op,
+            } => {
+                opacity = *op;
+                colors = Some((*from, *to, *angle, 8., ColorSampling::SpatialGradient));
+            }
+            LayerStyle::PatternOverlay {
+                from,
+                to,
+                opacity: op,
+                scale,
+                angle,
+            } => {
+                opacity = *op;
+                colors = Some((*from, *to, *angle, *scale, ColorSampling::Pattern));
             }
             LayerStyle::Satin {
                 color,
-                opacity,
+                opacity: op,
                 angle,
                 distance,
                 size,
@@ -687,137 +1051,195 @@ pub fn render(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
                 let (dx, dy) = offset(*angle, *distance);
                 let left = shift(&soft, w, h, dx, dy);
                 let right = shift(&soft, w, h, -dx, -dy);
-                let cov: Vec<f32> = left
-                    .iter()
-                    .zip(right)
-                    .zip(&alpha)
-                    .map(|((a, b), mask)| (a - b).abs() * mask)
-                    .collect();
-                over(&mut above, &cov, lin(*color), opacity / 100.0);
-                any_above = true;
+                cov = left.iter().zip(right).map(|(a, b)| (a - b).abs()).collect();
+                adjusted(&mut cov, &alpha, w, o, false);
+                cov.iter_mut().zip(&alpha).for_each(|(v, a)| *v *= a);
+                solid = lin(*color);
+                opacity = *op;
             }
             LayerStyle::BevelEmboss {
                 highlight,
                 shadow,
-                opacity,
+                opacity: op,
                 angle,
                 size,
                 depth,
-                contour,
+                contour: power,
                 texture,
                 texture_scale,
             } => {
-                // A softened alpha height field lights the object's edges; a
-                // periodic relief adds an optional woven surface texture.
-                let height = blur(&alpha, w, h, *size);
-                let (ly, lx) = angle.to_radians().sin_cos();
-                let mut light = vec![0.0; w * h];
-                let mut dark = vec![0.0; w * h];
-                let period = texture_scale.max(2.0);
-                let frequency = std::f32::consts::TAU / period;
-                for y in 0..h {
-                    for x in 0..w {
-                        let i = y * w + x;
-                        let gx = height[y * w + (x + 1).min(w - 1)]
-                            - height[y * w + x.saturating_sub(1)];
-                        let gy = height[(y + 1).min(h - 1) * w + x]
-                            - height[y.saturating_sub(1) * w + x];
-                        let tx = (x as f32 + r.x as f32) * frequency;
-                        let ty = (y as f32 + r.y as f32) * frequency;
-                        let relief =
-                            (tx.cos() * ty.sin() * lx - tx.sin() * ty.cos() * ly) * texture / 100.0;
-                        let shade = ((gx * lx - gy * ly) * size.max(1.0) + relief) * depth / 100.0;
-                        let strength = shade
-                            .abs()
-                            .clamp(0.0, 1.0)
-                            .powf((contour / 100.0).max(0.25))
-                            * alpha[i];
-                        if shade >= 0.0 {
-                            light[i] = strength;
-                        } else {
-                            dark[i] = strength;
-                        }
+                let base = match o.bevel_style {
+                    BevelStyle::Inner => alpha.clone(),
+                    BevelStyle::Outer => dilate(&alpha, w, h, *size),
+                    BevelStyle::Emboss | BevelStyle::Pillow => dilate(&alpha, w, h, *size / 2.),
+                    BevelStyle::Stroke => {
+                        let out = dilate(&alpha, w, h, *size);
+                        let inner = erode(&alpha, w, h, *size);
+                        out.iter().zip(inner).map(|(a, b)| a - b).collect()
                     }
+                };
+                let mut height = match o.technique {
+                    Technique::Smooth => blur(&base, w, h, *size),
+                    Technique::ChiselHard => {
+                        let mut v = vec![0.; w * h];
+                        let steps = (*size).ceil().clamp(1., 64.) as usize;
+                        for step in 0..steps {
+                            let e = erode(&base, w, h, step as f32);
+                            for (i, a) in e.iter().enumerate() {
+                                v[i] += a / steps as f32
+                            }
+                        }
+                        v
+                    }
+                    Technique::ChiselSoft => blur(&base, w, h, *size / 3.),
+                };
+                if o.soften > 0. {
+                    height = blur(&height, w, h, o.soften)
                 }
-                over(&mut above, &dark, lin(*shadow), opacity / 100.0);
-                over(&mut above, &light, lin(*highlight), opacity / 100.0);
-                any_above = true;
-            }
-            LayerStyle::PatternOverlay {
-                from,
-                to,
-                opacity,
-                scale,
-                angle,
-            } => {
-                // Two-colour checker tiles, anchored in document coordinates.
-                let (sn, cs) = angle.to_radians().sin_cos();
-                let period = scale.max(2.0);
-                let colors = [lin(*from), lin(*to)];
+                let (ly, lx) = light_angle(*angle).to_radians().sin_cos();
+                let altitude = if o.use_global_light {
+                    doc.global_light.altitude
+                } else {
+                    o.altitude
+                }
+                .to_radians();
+                let mut light = vec![0.; w * h];
+                let mut dark = vec![0.; w * h];
+                let texture_value = |x: f32, y: f32| {
+                    if o.pattern.image.is_some() {
+                        let p = pattern(x, y, &o.pattern, [0; 3], [255; 3], *texture_scale, 0.);
+                        (p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722) * o.texture_depth / 100.
+                            * if o.texture_invert { -1. } else { 1. }
+                    } else {
+                        (x * std::f32::consts::TAU / texture_scale.max(2.)).sin()
+                            * (y * std::f32::consts::TAU / texture_scale.max(2.)).sin()
+                            * texture
+                            / 100.
+                    }
+                };
                 for y in 0..h {
                     for x in 0..w {
                         let i = y * w + x;
                         let px = x as f32 + r.x as f32;
                         let py = y as f32 + r.y as f32;
-                        let u = ((px * cs - py * sn) / period).floor() as i64;
-                        let v = ((px * sn + py * cs) / period).floor() as i64;
-                        let col = colors[(u + v).rem_euclid(2) as usize];
-                        let a = (alpha[i] * opacity / 100.0).clamp(0.0, 1.0);
-                        let d = &mut above[i];
-                        for k in 0..3 {
-                            d[k] = col[k] * a + d[k] * (1.0 - a);
+                        let gx = (height[y * w + (x + 1).min(w - 1)]
+                            - height[y * w + x.saturating_sub(1)])
+                            * size.max(1.)
+                            + texture_value(px + 1., py)
+                            - texture_value(px - 1., py);
+                        let gy = (height[(y + 1).min(h - 1) * w + x]
+                            - height[y.saturating_sub(1) * w + x])
+                            * size.max(1.)
+                            + texture_value(px, py + 1.)
+                            - texture_value(px, py - 1.);
+                        let slope = (gx * lx - gy * ly) * depth / 100.;
+                        let mut shade = (slope * altitude.cos() + altitude.sin())
+                            / (1. + gx * gx + gy * gy).sqrt()
+                            - altitude.sin();
+                        if o.bevel_style == BevelStyle::Pillow {
+                            shade *= if alpha[i] > 0.5 { -1. } else { 1. }
                         }
-                        d[3] = a + d[3] * (1.0 - a);
+                        let mask = match o.bevel_style {
+                            BevelStyle::Inner => alpha[i],
+                            BevelStyle::Outer => base[i] * (1. - alpha[i]),
+                            _ => base[i],
+                        };
+                        let strength =
+                            contour(shade.abs().clamp(0., 1.).powf((*power / 100.).max(0.25)), o)
+                                * mask;
+                        if shade >= 0. {
+                            light[i] = strength
+                        } else {
+                            dark[i] = strength
+                        }
                     }
                 }
-                any_above = true;
-            }
-            LayerStyle::GradientOverlay {
-                from,
-                to,
-                angle,
-                opacity,
-            } => {
-                let (c0, c1) = (lin(*from), lin(*to));
-                let (s, c) = angle.to_radians().sin_cos();
-                let (cw, ch) = (w as f32 / 2.0, h as f32 / 2.0);
-                let extent = (cw * c.abs() + ch * s.abs()).max(1.0);
-                for y in 0..h {
-                    for x in 0..w {
-                        let i = y * w + x;
-                        let a = alpha[i] * opacity / 100.0;
-                        if a <= 0.0 {
-                            continue;
-                        }
-                        let t = ((((x as f32 - cw) * c - (y as f32 - ch) * s) / extent) * 0.5
-                            + 0.5)
-                            .clamp(0.0, 1.0);
-                        let col = [0, 1, 2].map(|k| c0[k] + (c1[k] - c0[k]) * t);
-                        let d = &mut above[i];
-                        for k in 0..3 {
-                            d[k] = col[k] * a + d[k] * (1.0 - a);
-                        }
-                        d[3] = a + d[3] * (1.0 - a);
-                    }
-                }
-                any_above = true;
+                let mut push = |coverage: Vec<f32>, c: [u8; 3], opacity: f32, blend: BlendMode| {
+                    let c = lin(c);
+                    let raster = Raster::from_fn(w as u32, h as u32, [0; 4], |x, y| {
+                        let a =
+                            (coverage[y as usize * w + x as usize] * opacity / 100.).clamp(0., 1.);
+                        color::f_to_px([c[0] * a, c[1] * a, c[2] * a, a])
+                    });
+                    result.above.push(RenderedEffect {
+                        raster: Arc::new(raster),
+                        rect: r,
+                        blend,
+                    });
+                };
+                push(dark, *shadow, *op * o.shadow_opacity / 100., o.shadow_blend);
+                push(
+                    light,
+                    *highlight,
+                    *op * o.highlight_opacity / 100.,
+                    o.highlight_blend,
+                );
+                continue;
             }
         }
+        let cov = if cov.is_empty() {
+            alpha.as_slice()
+        } else {
+            cov.as_slice()
+        };
+        let raster = Raster::from_fn(w as u32, h as u32, [0; 4], |x, y| {
+            let i = y as usize * w + x as usize;
+            let v = cov[i];
+            let c = colors.map_or(solid, |(from, to, angle, scale, kind)| {
+                let x = (i % w) as f32 + r.x as f32;
+                let y = (i / w) as f32 + r.y as f32;
+                if kind == ColorSampling::Pattern {
+                    pattern(x, y, &o.pattern, from, to, scale, angle)
+                } else {
+                    gradient(
+                        if kind == ColorSampling::CoverageGradient {
+                            v
+                        } else {
+                            gradient_position(x, y, bounds, angle, &o.gradient)
+                        },
+                        &o.gradient,
+                        from,
+                        to,
+                    )
+                }
+            });
+            let a = (v * opacity / 100. * c[3]).clamp(0., 1.);
+            color::f_to_px([c[0] * a, c[1] * a, c[2] * a, a])
+        });
+        let effect = RenderedEffect {
+            raster: Arc::new(raster),
+            rect: r,
+            blend: o.blend,
+        };
+        if below {
+            result.below.push(effect)
+        } else {
+            result.above.push(effect)
+        }
     }
-    let to_raster = |px: Vec<[f32; 4]>| {
-        let out: Vec<[u16; 4]> = px.into_iter().map(color::f_to_px).collect();
-        Arc::new(Raster::from_pixels(w as u32, h as u32, [0; 4], &out))
-    };
-    let rendered = Arc::new(Rendered {
-        below: any_below.then(|| (to_raster(below), r)),
-        above: any_above.then(|| (to_raster(above), r)),
-    });
-    let mut m = memo().lock();
-    if m.len() >= 24 {
-        m.remove(0);
-    }
-    m.push((key, rendered.clone()));
+    let rendered = Arc::new(result);
+    memo().lock().insert(key, &rendered, doc, n);
     Some(rendered)
+}
+
+fn rendered_bytes(r: &Rendered) -> usize {
+    r.below
+        .iter()
+        .chain(&r.above)
+        .map(|e| {
+            // Planes allocate whole 256² tiles, including edge tiles and mip
+            // levels. A one-pixel effect is not an eight-byte allocation.
+            (0..=e.raster.max_level())
+                .map(|level| {
+                    let (w, h) = e.raster.tiles_at(level);
+                    (w as usize)
+                        .saturating_mul(h as usize)
+                        .saturating_mul(emulsion_raster::TILE_PX)
+                        .saturating_mul(std::mem::size_of::<[u16; 4]>())
+                })
+                .sum::<usize>()
+        })
+        .sum()
 }
 
 /// A composite node drawing a rendered effect raster at `r`.
@@ -969,7 +1391,7 @@ mod tests {
             doc.nodes[0].styles = vec![style];
             let second = render(&doc, &doc.nodes[0]).unwrap();
             assert!(!Arc::ptr_eq(&first, &second));
-            assert_eq!(second.above.as_ref().unwrap().0.get(32, 32), [0; 4]);
+            assert_eq!(second.above.first().unwrap().raster.get(32, 32), [0; 4]);
         }
     }
 
@@ -981,7 +1403,10 @@ mod tests {
             opacity: 50.0,
         }];
         let effects = render(&doc, &doc.nodes[0]).unwrap();
-        let pixel = effects.above.as_ref().unwrap().0.get(32, 32);
+        let effect = effects.above.first().unwrap();
+        let pixel = effect
+            .raster
+            .get((32 - effect.rect.x) as u32, (32 - effect.rect.y) as u32);
         assert!(
             (pixel[0] as i32 - 32768).abs() <= 1,
             "red should equal alpha for translucent red: {pixel:?}"

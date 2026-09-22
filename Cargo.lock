@@ -1720,6 +1720,7 @@ dependencies = [
  "emulsion-raster",
  "glam",
  "parking_lot",
+ "rayon",
  "serde",
  "serde_json",
  "smallvec",

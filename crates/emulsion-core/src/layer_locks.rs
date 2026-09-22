@@ -464,6 +464,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let original = e.doc.node(id).unwrap().clone();
+        let original_render = emulsion_raster::composite::flatten(&e.doc.composite_tree(), 0);
         e.execute(Command::SetFillColor {
             id,
             rgba: [255, 30, 10, 255],
@@ -483,8 +484,8 @@ mod tests {
         let rendered = emulsion_raster::composite::flatten(&e.doc.composite_tree(), 0);
         assert_eq!(
             rendered.get(0, 0),
-            [0; 4],
-            "recoloring retains transparent masked surroundings"
+            original_render.get(0, 0),
+            "recoloring retains the existing shadow outside the masked shape"
         );
         assert_eq!(rendered.get(10, 10)[0], 65535);
         assert!(e.undo());

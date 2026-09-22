@@ -3,6 +3,77 @@ use crate::editor::Tool;
 use emulsion_core::NodeKind;
 
 #[gpui_kit::test]
+fn moving_styled_image_reuses_effect_pixels_across_canvas_edge_and_undo(cx: &mut TestAppContext) {
+    use emulsion_raster::composite::{CompositeTree, NodeContent};
+    fn effect(tree: &CompositeTree) -> (Arc<Raster>, Placement) {
+        let NodeContent::StyledGroup { children, .. } = &tree.nodes[0].content else {
+            panic!("styled image");
+        };
+        let NodeContent::Pixels { raster, placement } = &children.last().unwrap().content else {
+            panic!("overlay");
+        };
+        (raster.clone(), *placement)
+    }
+    let source = Arc::new(Raster::from_fn(256, 192, [0; 4], |x, y| {
+        [x as u16 * 128, y as u16 * 128, 10000, 65535]
+    }));
+    let mut original = Document::new(256, 192);
+    let mut node = Node::raster(1, "Photo", source.clone(), Placement::default());
+    node.styles
+        .push(emulsion_core::styles::LayerStyle::ColorOverlay {
+            color: [220, 80, 40],
+            opacity: 50.,
+        });
+    original.nodes.push(node);
+    let (ws, cx) = open(cx, original.clone());
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| {
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![1], Some(1));
+            e.set_tool(Tool::Move, cx);
+            e.snap = false;
+            window.focus(&e.canvas_focus, cx);
+        });
+    });
+    cx.run_until_parked();
+    let initial = cx.update(|_, cx| effect(&view.read(cx).tree));
+    let start = cx.update(|_, cx| view.read(cx).doc_to_window((100., 80.)).unwrap());
+    cx.simulate_mouse_down(start, gpui_kit::MouseButton::Left, Default::default());
+    let mut end = start;
+    for dx in [12., 25., 40.] {
+        end = cx.update(|_, cx| view.read(cx).doc_to_window((100. + dx, 100.)).unwrap());
+        cx.simulate_mouse_move(end, Some(gpui_kit::MouseButton::Left), Default::default());
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = view.read(cx);
+            let (pixels, placement) = effect(&e.tree);
+            assert!(
+                Arc::ptr_eq(&initial.0, &pixels),
+                "drag must reuse the effect raster"
+            );
+            assert_eq!(
+                (placement.x, placement.y),
+                (initial.1.x + dx, initial.1.y + 20.)
+            );
+            assert!(e.editor.history.is_empty());
+        });
+    }
+    cx.simulate_mouse_up(end, gpui_kit::MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert_eq!(e.editor.history.len(), 1);
+        let NodeKind::Raster { raster, .. } = &e.editor.doc.nodes[0].kind else {
+            panic!()
+        };
+        assert!(Arc::ptr_eq(raster, &source));
+    });
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original));
+}
+
+#[gpui_kit::test]
 fn sparse_raster_handles_resize_ink_without_replacing_source_and_undo(cx: &mut TestAppContext) {
     let source = Arc::new(Raster::from_fn(400, 300, [0; 4], |x, y| {
         if (60..100).contains(&x) && (70..100).contains(&y) {

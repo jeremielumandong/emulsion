@@ -42,7 +42,7 @@ use std::sync::Arc;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -57,16 +57,27 @@ struct Manifest {
     width: u32,
     height: u32,
     resolution: f32,
+    #[serde(default)]
+    global_light: emulsion_core::style_options::GlobalLight,
     source_depth: u8,
     blend_space: BlendSpace,
     /// Bottom to top.
     nodes: Vec<MNode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    patterns: Vec<MPattern>,
     /// Ruler guides. Absent in files from before guides existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     guides: Vec<emulsion_core::document::Guide>,
     /// Camera metadata from the source photograph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     info: Option<emulsion_core::document::ImageInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct MPattern {
+    src: String,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -97,6 +108,12 @@ struct MNode {
     mask_transform: [f64; 6],
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     styles: Vec<emulsion_core::styles::LayerStyle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    style_options: Vec<emulsion_core::style_options::StyleOptions>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pattern_refs: Vec<Option<usize>>,
+    #[serde(default = "emulsion_core::node::default_effects_enabled")]
+    effects_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<String>,
     kind: MKind,
@@ -166,6 +183,7 @@ fn is_integer_translation(p: &Placement) -> bool {
 
 /// Everything encoded before the zip is written.
 struct Encoded {
+    patterns: Vec<Arc<emulsion_core::style_options::PatternImage>>,
     entries: Vec<(String, Vec<u8>)>,
     /// Per raster node: (stack.xml src, x, y).
     ora_layers: HashMap<NodeId, (String, i64, i64)>,
@@ -239,6 +257,9 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
     let mut jobs = Vec::new();
     let mut nodes = Vec::new();
     let mut ora_layers = HashMap::new();
+    let mut patterns: Vec<Arc<emulsion_core::style_options::PatternImage>> = Vec::new();
+    let mut pattern_pointers: HashMap<usize, usize> = HashMap::new();
+    let mut pattern_hashes: HashMap<(u32, u32, String), Vec<usize>> = HashMap::new();
     for n in &doc.nodes {
         let mask = n.mask.as_ref().map(|m| {
             let path = format!("emulsion/mask-{}.png", n.id);
@@ -356,6 +377,36 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                 }
             }
         };
+        let mut style_options = n.style_options.clone();
+        let pattern_refs = style_options
+            .iter_mut()
+            .map(|option| {
+                option.pattern.image.take().map(|image| {
+                    let pointer = Arc::as_ptr(&image) as usize;
+                    if let Some(index) = pattern_pointers.get(&pointer) {
+                        return *index;
+                    }
+                    let hash = (
+                        image.width,
+                        image.height,
+                        crate::history::fingerprint(&image.pixels),
+                    );
+                    let candidates = pattern_hashes.entry(hash).or_default();
+                    let index = candidates
+                        .iter()
+                        .copied()
+                        .find(|i| patterns[*i].pixels == image.pixels)
+                        .unwrap_or_else(|| {
+                            let index = patterns.len();
+                            patterns.push(image);
+                            candidates.push(index);
+                            index
+                        });
+                    pattern_pointers.insert(pointer, index);
+                    index
+                })
+            })
+            .collect();
         nodes.push(MNode {
             id: n.id,
             name: n.name.clone(),
@@ -375,6 +426,9 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             mask_linked: n.mask_linked,
             mask_transform: n.mask_transform,
             styles: n.styles.clone(),
+            style_options,
+            pattern_refs,
+            effects_enabled: n.effects_enabled,
             origin: n.origin.clone(),
             kind,
         });
@@ -457,13 +511,24 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         width: doc.width,
         height: doc.height,
         resolution: doc.resolution,
+        global_light: doc.global_light,
         source_depth: doc.source_depth,
         blend_space: doc.blend_space,
         nodes,
+        patterns: patterns
+            .iter()
+            .enumerate()
+            .map(|(i, image)| MPattern {
+                src: format!("emulsion/patterns/{i}.rgba"),
+                width: image.width,
+                height: image.height,
+            })
+            .collect(),
         guides: doc.guides.clone(),
         info: doc.info.clone(),
     };
     Ok(Encoded {
+        patterns,
         entries,
         ora_layers,
         manifest,
@@ -584,6 +649,7 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
     doc.validate()?;
     let mut paths = crate::path_data::PathPool::default();
     let enc = encode(doc, &mut paths)?;
+    referenced_patterns(&enc.manifest)?;
     let xml = stack_xml(doc, &enc.ora_layers);
     let manifest =
         serde_json::to_vec(&enc.manifest).map_err(|e| IoError::Manifest(e.to_string()))?;
@@ -623,6 +689,10 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
                 deflated.large_file(bytes.len() as u64 >= u32::MAX as u64),
             )?;
             z.write_all(bytes)?;
+        }
+        for (pattern, metadata) in enc.patterns.iter().zip(&enc.manifest.patterns) {
+            z.start_file(&metadata.src, deflated)?;
+            z.write_all(&pattern.pixels)?;
         }
         for (name, bytes) in paths.entries() {
             z.start_file(name, deflated)?;
@@ -757,6 +827,51 @@ pub fn read(path: &Path) -> Result<Document> {
     Ok(doc)
 }
 
+/// Preflight references before inflating binary pattern assets. Shared entries
+/// count once, while unrelated referenced images share one aggregate budget.
+fn referenced_patterns(manifest: &Manifest) -> Result<Vec<usize>> {
+    let mut references = std::collections::BTreeSet::new();
+    for node in &manifest.nodes {
+        if node.pattern_refs.len() > node.style_options.len() {
+            return Err(IoError::Manifest(
+                "pattern references do not match effects".into(),
+            ));
+        }
+        references.extend(node.pattern_refs.iter().flatten().copied());
+    }
+    let mut sources = HashMap::new();
+    let mut total = 0u64;
+    for index in &references {
+        let metadata = manifest
+            .patterns
+            .get(*index)
+            .ok_or_else(|| IoError::Manifest("missing pattern reference".into()))?;
+        if metadata.width == 0
+            || metadata.height == 0
+            || metadata.width > 2048
+            || metadata.height > 2048
+        {
+            return Err(IoError::Manifest(
+                "pattern image dimensions exceed supported size".into(),
+            ));
+        }
+        let dimensions = (metadata.width, metadata.height);
+        if let Some(previous) = sources.insert(metadata.src.as_str(), dimensions) {
+            if previous != dimensions {
+                return Err(IoError::Manifest("pattern dimensions disagree".into()));
+            }
+        } else {
+            total += metadata.width as u64 * metadata.height as u64 * 4;
+            if total > MAX_NATIVE_MANIFEST_BYTES {
+                return Err(IoError::Manifest(
+                    "referenced pattern images exceed the 512 MiB asset budget".into(),
+                ));
+            }
+        }
+    }
+    Ok(references.into_iter().collect())
+}
+
 fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     let bytes = read_entry(zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES)?;
     // Probe only the version: a generic Value tree duplicates every path
@@ -784,6 +899,35 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     check_size(m.width, m.height)?;
     if m.nodes.len() > emulsion_core::document::MAX_NODES {
         return Err(IoError::Manifest("too many nodes".into()));
+    }
+
+    // Validate all referenced sizes and the aggregate budget before allocating any
+    // image bytes. Unused table entries are not part of the live document.
+    let references = referenced_patterns(&m)?;
+    let mut pattern_cache: HashMap<String, Arc<emulsion_core::style_options::PatternImage>> =
+        HashMap::new();
+    let mut patterns = HashMap::new();
+    for index in references {
+        let metadata = &m.patterns[index];
+        let expected = metadata.width as usize * metadata.height as usize * 4;
+        let pattern = if let Some(image) = pattern_cache.get(&metadata.src) {
+            image.clone()
+        } else {
+            let pixels = read_entry(zip, &metadata.src, expected as u64)?;
+            if pixels.len() != expected {
+                return Err(IoError::Manifest(
+                    "pattern image has the wrong length".into(),
+                ));
+            }
+            let image = Arc::new(emulsion_core::style_options::PatternImage {
+                width: metadata.width,
+                height: metadata.height,
+                pixels,
+            });
+            pattern_cache.insert(metadata.src.clone(), image.clone());
+            image
+        };
+        patterns.insert(index, pattern);
     }
 
     // Read compressed bytes sequentially, decode in parallel.
@@ -818,13 +962,29 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
 
     let mut doc = Document::new(m.width, m.height);
     doc.resolution = m.resolution;
+    doc.global_light = m.global_light;
     doc.source_depth = if m.source_depth == 16 { 16 } else { 8 };
     doc.blend_space = m.blend_space;
     doc.guides = m.guides.clone();
     doc.info = m.info.clone();
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     let mut paths = crate::path_data::PathReader::default();
-    for n in m.nodes {
+    for mut n in m.nodes {
+        if n.pattern_refs.len() > n.style_options.len() {
+            return Err(IoError::Manifest(
+                "pattern references do not match effects".into(),
+            ));
+        }
+        for (option, reference) in n.style_options.iter_mut().zip(n.pattern_refs) {
+            if let Some(index) = reference {
+                option.pattern.image = Some(
+                    patterns
+                        .get(&index)
+                        .cloned()
+                        .ok_or_else(|| IoError::Manifest("missing pattern reference".into()))?,
+                );
+            }
+        }
         let kind = match n.kind {
             MKind::Raster {
                 src,
@@ -979,6 +1139,8 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             mask_linked: n.mask_linked,
             mask_transform: n.mask_transform,
             styles: n.styles,
+            style_options: n.style_options,
+            effects_enabled: n.effects_enabled,
             origin: n.origin,
             kind,
         });
@@ -1386,6 +1548,298 @@ mod tests {
         assert!(legacy.doc.nodes.iter().all(|n| n.link_group.is_none()
             && n.mask_linked
             && n.mask_transform == emulsion_core::node::default_mask_transform()));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn extended_effect_assets_and_global_light_persist_without_repeating_history_assets() {
+        use emulsion_core::style_options::*;
+        let mut editor = emulsion_core::Editor::new(Document::new(8, 8), None);
+        let id = editor
+            .execute(Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "Pattern",
+                    Arc::new(Raster::solid(4, 4, [1.; 4])),
+                    Placement::default(),
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        let image = Arc::new(PatternImage {
+            width: 2,
+            height: 1,
+            pixels: vec![1, 2, 3, 4, 201, 202, 203, 204],
+        });
+        let mut option = StyleOptions {
+            id: 91,
+            enabled: false,
+            blend: BlendMode::Multiply,
+            ..Default::default()
+        };
+        option.pattern.image = Some(image.clone());
+        option.gradient.stops = vec![
+            GradientStop {
+                position: 0.25,
+                color: [2, 3, 4, 5],
+            },
+            GradientStop {
+                position: 0.8,
+                color: [91, 92, 93, 94],
+            },
+        ];
+        option.contour = vec![ContourPoint { x: 0., y: 1. }, ContourPoint { x: 1., y: 0. }];
+        let styles = vec![
+            emulsion_core::styles::LayerStyle::catalogue()
+                .pop()
+                .unwrap(),
+        ];
+        editor
+            .execute(Command::SetLayerEffects {
+                id,
+                styles,
+                options: vec![option.clone()],
+            })
+            .unwrap();
+        let light = GlobalLight {
+            angle: 51.,
+            altitude: 42.,
+        };
+        editor.execute(Command::SetGlobalLight { light }).unwrap();
+        editor
+            .execute(Command::SetEffectsEnabled { id, enabled: false })
+            .unwrap();
+        editor.commit("Pattern version", false).unwrap();
+        editor
+            .execute(Command::Rename {
+                id,
+                name: "Working copy".into(),
+            })
+            .unwrap();
+        let path = tmp("extended-effect-assets.ora");
+        write_full(&editor.doc, Some(&editor.graph), &path).unwrap();
+        let mut archive = ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let graph_json: serde_json::Value = serde_json::from_slice(
+            &read_entry(
+                &mut archive,
+                "history/graph.json",
+                MAX_NATIVE_MANIFEST_BYTES,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(graph_json["patterns"].as_array().unwrap().len(), 1);
+        drop(archive);
+        let opened = read_full(&path).unwrap();
+        assert!(opened.history_error.is_none());
+        assert_eq!(opened.doc.global_light, light);
+        assert!(!opened.doc.node(id).unwrap().effects_enabled);
+        assert_eq!(
+            opened.doc.node(id).unwrap().style_options,
+            vec![option.clone()]
+        );
+        let graph = opened.graph.unwrap();
+        let checkpoint = &graph.commit(graph.head_branch().tip).unwrap().doc;
+        let a = opened.doc.node(id).unwrap().style_options[0]
+            .pattern
+            .image
+            .as_ref()
+            .unwrap();
+        let b = checkpoint.node(id).unwrap().style_options[0]
+            .pattern
+            .image
+            .as_ref()
+            .unwrap();
+        assert!(Arc::ptr_eq(a, b), "history shares imported image data");
+        assert_eq!(a.pixels, image.pixels);
+        write_full(&editor.doc, None, &path).unwrap();
+        assert_eq!(
+            read_full(&path)
+                .unwrap()
+                .doc
+                .node(id)
+                .unwrap()
+                .style_options,
+            vec![option]
+        );
+        rewrite_archive(&path, |name, bytes| {
+            if name != MANIFEST {
+                return Some(bytes);
+            }
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            json.as_object_mut().unwrap().remove("global_light");
+            for node in json["nodes"].as_array_mut().unwrap() {
+                node.as_object_mut().unwrap().remove("style_options");
+                node.as_object_mut().unwrap().remove("pattern_refs");
+                node.as_object_mut().unwrap().remove("effects_enabled");
+            }
+            Some(serde_json::to_vec(&json).unwrap())
+        });
+        let legacy = read_full(&path).unwrap();
+        assert_eq!(legacy.doc.global_light, GlobalLight::default());
+        assert!(legacy.doc.node(id).unwrap().style_options.is_empty());
+        assert!(legacy.doc.node(id).unwrap().effects_enabled);
+        assert_eq!(legacy.doc.node(id).unwrap().styles.len(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn native_patterns_use_one_binary_asset_and_restore_shared_images() {
+        use emulsion_core::style_options::{PatternImage, StyleOptions};
+        let image = Arc::new(PatternImage {
+            width: 2,
+            height: 1,
+            pixels: vec![0, 1, 2, 3, 251, 252, 253, 254],
+        });
+        let mut doc = Document::new(4, 4);
+        for id in 1..=3 {
+            let mut node = Node::raster(
+                id,
+                "Pattern",
+                Arc::new(Raster::solid(4, 4, [1.; 4])),
+                Placement::default(),
+            );
+            node.styles = vec![
+                emulsion_core::styles::LayerStyle::catalogue()
+                    .pop()
+                    .unwrap(),
+            ];
+            let mut option = StyleOptions {
+                id: 1,
+                ..Default::default()
+            };
+            option.pattern.image = Some(if id == 3 {
+                Arc::new((*image).clone())
+            } else {
+                image.clone()
+            });
+            node.style_options = vec![option];
+            doc.nodes.push(node);
+        }
+        doc.next_id = 4;
+        let path = tmp("binary-pattern-pool.ora");
+        write_full(&doc, None, &path).unwrap();
+        let mut zip = ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(
+            &read_entry(&mut zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["patterns"].as_array().unwrap().len(), 1);
+        for node in json["nodes"].as_array().unwrap() {
+            assert!(node["style_options"][0]["pattern"]["image"].is_null());
+            assert_eq!(node["pattern_refs"][0], 0);
+        }
+        assert_eq!(
+            read_entry(&mut zip, "emulsion/patterns/0.rgba", 8).unwrap(),
+            image.pixels
+        );
+        drop(zip);
+        let reopened = read_full(&path).unwrap();
+        let a = reopened.doc.nodes[0].style_options[0]
+            .pattern
+            .image
+            .as_ref()
+            .unwrap();
+        for node in &reopened.doc.nodes {
+            let b = node.style_options[0].pattern.image.as_ref().unwrap();
+            assert!(Arc::ptr_eq(a, b));
+            assert_eq!(b.pixels, image.pixels);
+        }
+        assert_eq!(
+            flatten(&reopened.doc.composite_tree(), 0).to_srgba8(),
+            flatten(&doc.composite_tree(), 0).to_srgba8()
+        );
+        rewrite_archive(&path, |name, bytes| {
+            if name != MANIFEST {
+                return Some(bytes);
+            }
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            json["patterns"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "src": "unused-missing-asset.rgba", "width": u32::MAX, "height": u32::MAX
+                }));
+            Some(serde_json::to_vec(&json).unwrap())
+        });
+        assert_eq!(
+            read_full(&path).unwrap().doc.nodes[0].style_options[0]
+                .pattern
+                .image
+                .as_ref()
+                .unwrap()
+                .pixels,
+            image.pixels,
+            "unused assets are not loaded or size-validated"
+        );
+        // Version-three files embedded pattern bytes directly in each option.
+        rewrite_archive(&path, |name, bytes| {
+            if name.starts_with("emulsion/patterns/") {
+                return None;
+            }
+            if name != MANIFEST {
+                return Some(bytes);
+            }
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            json["version"] = 3.into();
+            json.as_object_mut().unwrap().remove("patterns");
+            for node in json["nodes"].as_array_mut().unwrap() {
+                node.as_object_mut().unwrap().remove("pattern_refs");
+                node["style_options"][0]["pattern"]["image"] =
+                    serde_json::to_value(&*image).unwrap();
+            }
+            Some(serde_json::to_vec(&json).unwrap())
+        });
+        assert_eq!(
+            read_full(&path).unwrap().doc.nodes[0].style_options[0]
+                .pattern
+                .image
+                .as_ref()
+                .unwrap()
+                .pixels,
+            image.pixels
+        );
+        write_full(&doc, None, &path).unwrap();
+        rewrite_archive(&path, |name, bytes| {
+            if name == "emulsion/patterns/0.rgba" {
+                Some(vec![0])
+            } else {
+                Some(bytes)
+            }
+        });
+        assert!(
+            read_full(&path).is_err(),
+            "truncated pattern data is rejected"
+        );
+        write_full(&doc, None, &path).unwrap();
+        rewrite_archive(&path, |name, bytes| {
+            if name != MANIFEST {
+                return Some(bytes);
+            }
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let template = json["nodes"][0].clone();
+            let mut nodes = Vec::new();
+            let mut patterns = Vec::new();
+            for index in 0..33 {
+                let mut node = template.clone();
+                node["id"] = (index + 1).into();
+                node["pattern_refs"] = serde_json::json!([index]);
+                nodes.push(node);
+                patterns.push(serde_json::json!({"src": format!("not-decoded-{index}.rgba"), "width": 2048, "height": 2048}));
+            }
+            json["nodes"] = nodes.into();
+            json["patterns"] = patterns.into();
+            Some(serde_json::to_vec(&json).unwrap())
+        });
+        let error = match read_full(&path) {
+            Ok(_) => panic!("oversized pattern pool accepted"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            error.contains("asset budget"),
+            "aggregate size is rejected before any absent asset is read: {error}"
+        );
         let _ = std::fs::remove_file(path);
     }
 

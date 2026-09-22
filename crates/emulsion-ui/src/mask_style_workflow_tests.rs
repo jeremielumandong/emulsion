@@ -4,6 +4,60 @@ use emulsion_core::styles::LayerStyle;
 use emulsion_raster::{Mask, paint::Brush};
 
 #[gpui_kit::test]
+fn add_mask_preserves_source_shares_aligned_selection_and_undo(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+    for selected in [false, true] {
+        let mut document = doc(&["Photo"], None);
+        let id = document.nodes[0].id;
+        let selection = Arc::new(Mask::from_fn(256, 192, 0, |x, y| {
+            if (16..240).contains(&x) && (16..176).contains(&y) {
+                255
+            } else {
+                0
+            }
+        }));
+        if selected {
+            document.selection = Some(selection.clone());
+        }
+        let original = document.clone();
+        let (ws, cx) = open(cx, document);
+        let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        cx.update(|_, cx| {
+            editor.update(cx, |e, cx| {
+                e.set_layer_selection(vec![id], Some(id));
+                e.select_sidebar(crate::editor::SidebarTab::Properties, cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("mask-add", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = editor.read(cx);
+            let node = e.editor.doc.node(id).unwrap();
+            let mask = node.mask.as_ref().unwrap();
+            assert_eq!(node.kind, original.node(id).unwrap().kind);
+            assert_eq!(e.editor.history.len(), 1);
+            if selected {
+                assert!(
+                    Arc::ptr_eq(mask, &selection),
+                    "aligned selection needs no pixel copy"
+                );
+                assert_eq!(
+                    emulsion_raster::select::bounds(mask),
+                    emulsion_raster::IRect::new(16, 16, 224, 160)
+                );
+            } else {
+                assert_eq!(mask.fill(), 255);
+                assert_eq!(mask.tile_count(), 0, "reveal-all mask is sparse");
+                assert_eq!(emulsion_raster::select::bounds(mask), mask.bounds());
+            }
+            editor.update(cx, |e, cx| e.undo(cx));
+            assert_eq!(editor.read(cx).editor.doc, original);
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn mask_brush_uses_gray_foreground_and_keeps_pixels_untouched(cx: &mut TestAppContext) {
     let mut document = doc(&["Pixels"], None);
     let id = document.nodes[0].id;

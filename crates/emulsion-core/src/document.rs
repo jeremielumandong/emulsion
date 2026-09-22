@@ -56,6 +56,7 @@ pub struct Document {
     pub height: u32,
     /// Pixels per inch, recorded for export.
     pub resolution: f32,
+    pub global_light: crate::style_options::GlobalLight,
     /// Bit depth of the source the document came from (8 or 16), for the
     /// title bar and export defaults. Storage is always 16-bit linear.
     pub source_depth: u8,
@@ -127,6 +128,7 @@ impl PartialEq for Document {
         self.width == o.width
             && self.height == o.height
             && self.resolution == o.resolution
+            && self.global_light == o.global_light
             && self.blend_space == o.blend_space
             && self.nodes == o.nodes
             && self.guides == o.guides
@@ -151,6 +153,7 @@ impl Document {
             width,
             height,
             resolution: 72.0,
+            global_light: Default::default(),
             source_depth: 8,
             blend_space: BlendSpace::Linear,
             nodes: Vec::new(),
@@ -193,53 +196,7 @@ impl Document {
     /// masks. An expanded filter cache needs the same mask shifted by its
     /// source offset before the compositor samples it through cache placement.
     pub fn composite_mask(node: &Node) -> Option<Arc<Mask>> {
-        let mask = node.mask_enabled.then_some(node.mask.as_ref()).flatten()?;
-        if node.mask_transform != crate::node::default_mask_transform() {
-            let (w, h, offset) = match &node.kind {
-                NodeKind::Raster { raster, .. } => (raster.width(), raster.height(), (0, 0)),
-                NodeKind::Smart { cache, offset, .. } => (cache.width(), cache.height(), *offset),
-                NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } => {
-                    (cache.width(), cache.height(), (0, 0))
-                }
-                _ => (mask.width(), mask.height(), (0, 0)),
-            };
-            let inverse = glam::DAffine2::from_cols_array(&node.mask_transform).inverse();
-            return Some(Arc::new(Mask::from_fn(w, h, mask.fill(), |x, y| {
-                crate::transform::sample_mask(
-                    mask,
-                    inverse.transform_point2(glam::dvec2(
-                        x as f64 + offset.0 as f64 + 0.5,
-                        y as f64 + offset.1 as f64 + 0.5,
-                    )),
-                )
-            })));
-        }
-        match &node.kind {
-            NodeKind::Smart { cache, offset, .. }
-                if *offset != (0, 0)
-                    || (mask.width(), mask.height()) != (cache.width(), cache.height()) =>
-            {
-                Some(Arc::new(Mask::from_fn(
-                    cache.width(),
-                    cache.height(),
-                    mask.fill(),
-                    |x, y| {
-                        let sx = x as i64 + offset.0 as i64;
-                        let sy = y as i64 + offset.1 as i64;
-                        if sx < 0
-                            || sy < 0
-                            || sx >= mask.width() as i64
-                            || sy >= mask.height() as i64
-                        {
-                            mask.fill()
-                        } else {
-                            mask.get(sx as u32, sy as u32)
-                        }
-                    },
-                )))
-            }
-            _ => Some(mask.clone()),
-        }
+        crate::composite_mask_cache::composite_mask(node)
     }
 
     pub fn node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
@@ -339,6 +296,9 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<(), DocumentError> {
+        if !self.global_light.valid() {
+            return Err(DocumentError::BadValue(0, "global light"));
+        }
         if self.guides.len() > MAX_GUIDES
             || self
                 .guides
@@ -373,6 +333,10 @@ impl Document {
                     }
                     _ => {}
                 }
+            }
+            if n.style_options.len() > n.styles.len() || n.style_options.iter().any(|o| !o.valid())
+            {
+                return Err(DocumentError::BadValue(n.id, "style options"));
             }
             let mask_affine = glam::DAffine2::from_cols_array(&n.mask_transform);
             if !n.mask_transform.iter().all(|v| v.is_finite())
@@ -524,15 +488,24 @@ impl Document {
                         clip_source.opacity = 1.0;
                         clip_source.blend = emulsion_raster::BlendMode::Normal;
                         clip_source.blending = Default::default();
-                        let mut children = Vec::with_capacity(3);
-                        let effect = |id, raster: Arc<emulsion_raster::Raster>, rect| {
-                            let mut effect = crate::styles::effect_node(id, raster, rect, n);
+                        let mut children = Vec::with_capacity(fx.below.len() + fx.above.len() + 1);
+                        let effect = |id, rendered: &crate::styles::RenderedEffect| {
+                            let mut effect = crate::styles::effect_node(
+                                id,
+                                rendered.raster.clone(),
+                                rendered.rect,
+                                n,
+                            );
                             effect.opacity = 1.0;
                             effect.blending = Default::default();
+                            effect.blend = rendered.blend;
                             effect
                         };
-                        if let Some((raster, rect)) = &fx.below {
-                            children.push(effect(n.id ^ (1 << 62), raster.clone(), *rect));
+                        for (index, rendered) in fx.below.iter().enumerate() {
+                            children.push(effect(
+                                n.id.wrapping_mul(32) ^ (1 << 62) ^ index as u64,
+                                rendered,
+                            ));
                         }
                         node.opacity = 1.0;
                         node.blend = emulsion_raster::BlendMode::Normal;
@@ -541,8 +514,11 @@ impl Document {
                             ..Default::default()
                         };
                         children.push(node);
-                        if let Some((raster, rect)) = &fx.above {
-                            children.push(effect(n.id ^ (1 << 63), raster.clone(), *rect));
+                        for (index, rendered) in fx.above.iter().enumerate() {
+                            children.push(effect(
+                                n.id.wrapping_mul(32) ^ (1 << 63) ^ index as u64,
+                                rendered,
+                            ));
                         }
                         node = CompositeNode {
                             id: n.id,
@@ -597,6 +573,8 @@ impl Document {
             return Document::composite_mask(n).map(|m| (*m).clone());
         }
         let mut solo = Document::new(self.width, self.height);
+        solo.global_light = self.global_light;
+        solo.blend_space = self.blend_space;
         let mut node = n.clone();
         node.parent = None;
         node.clip_to = None;
@@ -616,33 +594,50 @@ impl Document {
     }
 
     pub fn buffers(&self) -> Vec<(usize, usize)> {
+        self.buffers_once(&mut std::collections::HashSet::new())
+    }
+
+    /// Count a shared plane once across an entire history scan. Duplicating a
+    /// large layer must not enumerate its tiles again for every undo snapshot.
+    pub(crate) fn buffers_once(
+        &self,
+        planes: &mut std::collections::HashSet<usize>,
+    ) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
+        let mut raster = |r: &emulsion_raster::Raster| {
+            if planes.insert(r as *const _ as usize) {
+                out.extend(r.buffer_allocations());
+            }
+        };
         for n in &self.nodes {
-            if let NodeKind::Raster { raster, .. } = &n.kind {
-                out.push((
-                    Arc::as_ptr(raster) as usize,
-                    raster.tile_count() * 256 * 256 * 8,
-                ));
+            match &n.kind {
+                NodeKind::Raster { raster: r, .. } => raster(r),
+                NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => raster(cache),
+                NodeKind::Smart { source, cache, .. } => {
+                    raster(source);
+                    raster(cache);
+                }
+                _ => {}
             }
-            if let NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } = &n.kind {
-                out.push((
-                    Arc::as_ptr(cache) as usize,
-                    cache.tile_count() * 256 * 256 * 8,
-                ));
+        }
+        for n in &self.nodes {
+            if let Some(mask) = &n.mask
+                && planes.insert(Arc::as_ptr(mask) as usize)
+            {
+                out.extend(mask.buffer_allocations());
             }
-            if let NodeKind::Smart { source, cache, .. } = &n.kind {
-                out.push((
-                    Arc::as_ptr(source) as usize,
-                    source.tile_count() * 256 * 256 * 8,
-                ));
-                out.push((
-                    Arc::as_ptr(cache) as usize,
-                    cache.tile_count() * 256 * 256 * 8,
-                ));
+            for option in &n.style_options {
+                if let Some(image) = &option.pattern.image
+                    && planes.insert(Arc::as_ptr(image) as usize)
+                {
+                    out.push((image.pixels.as_ptr() as usize, image.pixels.len()));
+                }
             }
-            if let Some(m) = &n.mask {
-                out.push((Arc::as_ptr(m) as usize, m.tile_count() * 256 * 256));
-            }
+        }
+        if let Some(selection) = &self.selection
+            && planes.insert(Arc::as_ptr(selection) as usize)
+        {
+            out.extend(selection.buffer_allocations());
         }
         out
     }
@@ -764,5 +759,57 @@ mod styled_blending_tests {
             [65535; 4],
             "white backdrop hides complete styled layer"
         );
+    }
+}
+
+#[cfg(test)]
+mod retained_buffer_tests {
+    use super::*;
+    use std::collections::HashSet;
+    #[test]
+    fn duplicated_layers_and_small_edits_share_backing_tiles() {
+        let mut doc = Document::new(512, 256);
+        let pixels = Arc::new(emulsion_raster::Raster::from_fn(
+            512,
+            256,
+            [0; 4],
+            |_, _| [1, 2, 3, 65535],
+        ));
+        doc.nodes.push(Node::raster(
+            1,
+            "Pixels",
+            pixels.clone(),
+            Default::default(),
+        ));
+        doc.next_id = 2;
+        let initial: HashSet<_> = doc.buffers().into_iter().collect();
+        crate::Command::DuplicateNode { id: 1 }
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.buffers().into_iter().collect::<HashSet<_>>(), initial);
+        let mut planes = HashSet::new();
+        assert_eq!(doc.buffers_once(&mut planes).len(), initial.len());
+        assert!(
+            doc.clone().buffers_once(&mut planes).is_empty(),
+            "shared snapshots do not rescan the same image tiles"
+        );
+        let changed = Arc::new(
+            pixels.write_rect(emulsion_raster::IRect::new(0, 0, 1, 1), &[[9, 8, 7, 65535]]),
+        );
+        crate::Command::ReplacePixels {
+            id: 1,
+            raster: changed,
+            dirty: emulsion_raster::IRect::new(0, 0, 1, 1),
+            label: "Pixel".into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let after: HashSet<_> = doc.buffers().into_iter().collect();
+        assert_eq!(after.len(), 3, "two original tiles plus one edited tile");
+        assert_eq!(after.difference(&initial).count(), 1);
+        doc.selection = Some(Arc::new(Mask::from_fn(512, 256, 0, |x, _| {
+            if x == 0 { 255 } else { 0 }
+        })));
+        assert!(doc.buffers().len() > after.len());
     }
 }

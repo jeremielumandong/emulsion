@@ -18,6 +18,7 @@ mod filters;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
+mod layer_effect_rows;
 mod layer_links_ui;
 mod layer_menu;
 mod layer_selection;
@@ -36,6 +37,7 @@ mod sidebar;
 pub(crate) use sidebar::{DockTab, SidebarTab};
 mod smart;
 mod snap;
+mod style_pattern;
 mod styles_ui;
 mod tools;
 mod transform;
@@ -157,6 +159,10 @@ pub(crate) enum SliderKey {
     Filter(NodeId, usize, &'static str),
     /// A layer style parameter: node, style index, key.
     Style(NodeId, usize, &'static str),
+    StyleOption(NodeId, usize, &'static str),
+    StyleStop(NodeId, usize, usize, bool),
+    StyleContour(NodeId, usize, usize, bool),
+    StyleGlobalLight(bool),
     Tolerance,
     Feather,
     Straighten,
@@ -185,6 +191,10 @@ impl SliderKey {
                 | SliderKey::RefineFeather
                 | SliderKey::Filter(..)
                 | SliderKey::Style(..)
+                | SliderKey::StyleOption(..)
+                | SliderKey::StyleStop(..)
+                | SliderKey::StyleContour(..)
+                | SliderKey::StyleGlobalLight(..)
         )
     }
 }
@@ -657,7 +667,12 @@ impl EditorView {
             // Layer styles render blurs while the tree is built; that work
             // leaves the UI thread so slider drags stay smooth. Plain
             // documents build in microseconds and stay synchronous.
-            let heavy = self.editor.doc.nodes.iter().any(|n| !n.styles.is_empty());
+            let heavy = self
+                .editor
+                .doc
+                .nodes
+                .iter()
+                .any(|n| n.effects_enabled && !n.styles.is_empty());
             if heavy {
                 self.build_tree_async(cx);
             } else {
@@ -1424,6 +1439,11 @@ impl EditorView {
         cx.notify();
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_active_gesture(&self) -> bool {
+        self.drag.is_some()
+    }
+
     fn scroll(&mut self, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let Some(b) = self.canvas_bounds() else {
             return;
@@ -1473,6 +1493,10 @@ impl EditorView {
                 | SliderKey::RefineFeather => "Refine selection".into(),
                 SliderKey::Filter(_, _, k) => k.replace('_', " "),
                 SliderKey::Style(_, _, k) => k.replace('_', " "),
+                SliderKey::StyleOption(_, _, k) => k.replace('_', " "),
+                SliderKey::StyleStop(..) => "Gradient stop".into(),
+                SliderKey::StyleContour(..) => "Effect contour".into(),
+                SliderKey::StyleGlobalLight(..) => "Global light".into(),
                 _ => "Rotate".into(),
             };
             self.editor.begin(name);
@@ -1684,6 +1708,16 @@ impl EditorView {
             SliderKey::Curve(_) => {}
             SliderKey::Filter(id, idx, key) => self.set_filter_param(id, idx, key, v, false, cx),
             SliderKey::Style(id, idx, key) => self.set_style_param(id, idx, key, v, cx),
+            SliderKey::StyleOption(id, idx, key) => {
+                self.set_style_option_param(id, idx, key, v, cx)
+            }
+            SliderKey::StyleStop(id, idx, stop, opacity) => {
+                self.set_style_stop_param(id, idx, stop, opacity, v, cx)
+            }
+            SliderKey::StyleContour(id, idx, point, y) => {
+                self.set_style_contour_param(id, idx, point, y, v, cx)
+            }
+            SliderKey::StyleGlobalLight(altitude) => self.set_style_global_light(altitude, v, cx),
             SliderKey::FillOpacity(id) | SliderKey::LayerFillOpacity(id) => {
                 let ids = if self.layer_is_selected(id) {
                     self.selected_layer_ids()
@@ -2572,10 +2606,13 @@ impl EditorView {
                 .children(self.layer_blend_controls(p, cx))
                 .children(self.layer_lock_controls(p, cx))
         });
-        let row_els: Vec<AnyElement> = rows
-            .iter()
-            .map(|r| self.node_row(r.id, r.depth, p, cx).into_any_element())
-            .collect();
+        let mut row_els: Vec<AnyElement> = Vec::new();
+        for row in &rows {
+            row_els.push(self.node_row(row.id, row.depth, p, cx).into_any_element());
+            if let Some(effects) = self.layer_effect_rows(row.id, row.depth, p, cx) {
+                row_els.push(effects);
+            }
+        }
         div()
             .flex()
             .flex_col()
@@ -2808,7 +2845,7 @@ impl EditorView {
                     cx,
                 );
                 if e.click_count() >= 2 {
-                    this.open_blending_options(id, cx);
+                    this.open_blending_options(id, window, cx);
                 }
             }))
             .on_drag(dragged, |d, _, _, cx| cx.new(|_| d.clone()))
@@ -3128,7 +3165,8 @@ impl EditorView {
                     false,
                     p,
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.add_mask(cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.add_mask(cx)))
+                .test_support(),
             );
         }
         let locked = n.locked;
@@ -3521,6 +3559,7 @@ impl Render for EditorView {
         self.sync_trees(cx);
         self.sync_transform_fields(window, cx);
         self.sync_rotation_fields(window, cx);
+        self.sync_style_color_pickers(window, cx);
         self.ensure_gen_prompt(window, cx);
         let doc_bar = self.doc_bar(&p, cx);
         if self.history.open {

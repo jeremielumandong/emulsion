@@ -402,6 +402,11 @@ pub fn compare(a: &Document, b: &Document) -> Vec<DiffRow> {
         format!("{}×{}", b.width, b.height),
     );
     row(
+        "global light",
+        format!("{:?}", a.global_light),
+        format!("{:?}", b.global_light),
+    );
+    row(
         "nodes",
         a.nodes.len().to_string(),
         b.nodes.len().to_string(),
@@ -460,7 +465,10 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
     {
         out.push(("mask", "before".into(), "edited".into()));
     }
-    if x.styles != y.styles {
+    if x.styles != y.styles
+        || x.style_options != y.style_options
+        || x.effects_enabled != y.effects_enabled
+    {
         out.push(("styles", "before".into(), "changed".into()));
     }
     if x.clip_to != y.clip_to {
@@ -601,7 +609,7 @@ pub struct Conflict {
 
 #[derive(Debug)]
 pub enum MergeOutcome {
-    Merged(Document),
+    Merged(Box<Document>),
     /// These need a choice before the merge can finish.
     Conflicts(Vec<Conflict>),
 }
@@ -649,6 +657,12 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
         &(t.mask.clone(), t.mask_enabled),
         mask_eq,
     )?;
+    let (styles, style_options) = pick(
+        &(b.styles.clone(), b.style_options.clone()),
+        &(o.styles.clone(), o.style_options.clone()),
+        &(t.styles.clone(), t.style_options.clone()),
+        |x, y| x == y,
+    )?;
     Some(Node {
         id: o.id,
         name: pick(&b.name, &o.name, &t.name, |x, y| x == y)?,
@@ -675,7 +689,14 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
         clip_to: pick(&b.clip_to, &o.clip_to, &t.clip_to, |x, y| x == y)?,
         mask,
         mask_enabled,
-        styles: pick(&b.styles, &o.styles, &t.styles, |x, y| x == y)?,
+        styles,
+        style_options,
+        effects_enabled: pick(
+            &b.effects_enabled,
+            &o.effects_enabled,
+            &t.effects_enabled,
+            |x, y| x == y,
+        )?,
         origin: pick(&b.origin, &o.origin, &t.origin, |x, y| x == y)?,
         kind: pick(&b.kind, &o.kind, &t.kind, |x, y| x == y)?,
     })
@@ -764,24 +785,46 @@ pub fn merge(
     let mut out = ours.clone();
 
     // Canvas: size, resolution and blend space move together.
-    let canvas = |d: &Document| (d.width, d.height, d.resolution.to_bits(), d.blend_space);
+    let canvas = |d: &Document| {
+        (
+            d.width,
+            d.height,
+            d.resolution.to_bits(),
+            d.blend_space,
+            d.global_light,
+        )
+    };
     let (cb, co, ct) = (canvas(base), canvas(ours), canvas(&theirs));
     if co == cb && ct != cb {
-        (out.width, out.height, out.resolution, out.blend_space) = (
+        (
+            out.width,
+            out.height,
+            out.resolution,
+            out.blend_space,
+            out.global_light,
+        ) = (
             theirs.width,
             theirs.height,
             theirs.resolution,
             theirs.blend_space,
+            theirs.global_light,
         );
     } else if co != cb && ct != cb && co != ct {
         match choices.get(&ConflictKey::Canvas) {
             Some(Side::Ours) => {}
             Some(Side::Theirs) => {
-                (out.width, out.height, out.resolution, out.blend_space) = (
+                (
+                    out.width,
+                    out.height,
+                    out.resolution,
+                    out.blend_space,
+                    out.global_light,
+                ) = (
                     theirs.width,
                     theirs.height,
                     theirs.resolution,
                     theirs.blend_space,
+                    theirs.global_light,
                 )
             }
             None => conflicts.push(Conflict {
@@ -926,7 +969,7 @@ pub fn merge(
         }
     }
     out.validate()?;
-    Ok(MergeOutcome::Merged(out))
+    Ok(MergeOutcome::Merged(Box::new(out)))
 }
 
 #[cfg(test)]
@@ -962,7 +1005,7 @@ mod tests {
 
     fn merged(o: MergeOutcome) -> Document {
         match o {
-            MergeOutcome::Merged(d) => d,
+            MergeOutcome::Merged(d) => *d,
             MergeOutcome::Conflicts(c) => panic!("unexpected conflicts {c:?}"),
         }
     }

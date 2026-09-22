@@ -291,6 +291,19 @@ pub enum Command {
         id: NodeId,
         options: emulsion_raster::composite::BlendingOptions,
     },
+    /// Atomically replace effects and their extended options.
+    SetLayerEffects {
+        id: NodeId,
+        styles: Vec<crate::styles::LayerStyle>,
+        options: Vec<crate::style_options::StyleOptions>,
+    },
+    SetEffectsEnabled {
+        id: NodeId,
+        enabled: bool,
+    },
+    SetGlobalLight {
+        light: crate::style_options::GlobalLight,
+    },
     /// Replace a node's layer styles.
     SetStyles {
         id: NodeId,
@@ -403,6 +416,9 @@ impl Command {
             Command::SetPath { .. } => "Edit path".into(),
             Command::SetText { .. } => "Edit text".into(),
             Command::SetBlendingOptions { .. } => "Blending options".into(),
+            Command::SetEffectsEnabled { .. } => "Effects visibility".into(),
+            Command::SetGlobalLight { .. } => "Global light".into(),
+            Command::SetLayerEffects { .. } => "Layer effects".into(),
             Command::SetStyles { styles, .. } => match styles.last() {
                 Some(s) => s.label().to_string(),
                 None => "Layer styles".into(),
@@ -540,7 +556,8 @@ impl Command {
                 Ok(())
             }
 
-            Self::SetCollapsed { .. }
+            Self::SetGlobalLight { .. }
+            | Self::SetCollapsed { .. }
             | Self::SetSelection { .. }
             | Self::SetGuides { .. }
             | Self::Crop { .. }
@@ -604,6 +621,8 @@ impl Command {
             | Self::SetFilters { id, .. }
             | Self::SetSmartCache { id, .. }
             | Self::SetStyles { id, .. }
+            | Self::SetLayerEffects { id, .. }
+            | Self::SetEffectsEnabled { id, .. }
             | Self::SetBlendingOptions { id, .. } => check(*id, true),
         }
     }
@@ -955,7 +974,14 @@ impl Command {
                 doc.guides = guides.clone();
                 Ok(None)
             }
-            Command::SetStyles { id, styles } => {
+            Command::SetEffectsEnabled { id, enabled } => {
+                set(doc, *id, |n| n.effects_enabled = *enabled)
+            }
+            Command::SetGlobalLight { light } => {
+                doc.global_light = *light;
+                Ok(None)
+            }
+            Command::SetStyles { id, styles } | Command::SetLayerEffects { id, styles, .. } => {
                 if styles
                     .iter()
                     .flat_map(|s| s.params())
@@ -977,9 +1003,52 @@ impl Command {
                         | NodeKind::Smart { .. }
                         | NodeKind::Path { .. }
                         | NodeKind::Text { .. }
+                        | NodeKind::Fill { .. }
+                        | NodeKind::Group { .. }
                 ) {
                     return Err(CommandError::NoSuchParam(*id, "styles".into()));
                 }
+                let mut options = match self {
+                    Command::SetLayerEffects { options, .. } => options.clone(),
+                    _ => styles
+                        .iter()
+                        .enumerate()
+                        .map(|(i, style)| {
+                            if n.styles.get(i).is_some_and(|old| old.key() == style.key()) {
+                                n.style_options.get(i).cloned().unwrap_or_else(|| {
+                                    crate::style_options::StyleOptions::for_style(style)
+                                })
+                            } else {
+                                crate::style_options::StyleOptions::for_style(style)
+                            }
+                        })
+                        .collect(),
+                };
+                if options.len() > styles.len() || options.iter().any(|o| !o.valid()) {
+                    return Err(CommandError::Invalid(
+                        crate::document::DocumentError::BadValue(*id, "style options"),
+                    ));
+                }
+                while options.len() < styles.len() {
+                    options.push(crate::style_options::StyleOptions::for_style(
+                        &styles[options.len()],
+                    ));
+                }
+                let mut used: std::collections::HashSet<_> = options
+                    .iter()
+                    .filter_map(|o| (o.id != 0).then_some(o.id))
+                    .collect();
+                let mut seen = std::collections::HashSet::new();
+                for option in &mut options {
+                    if option.id == 0 || !seen.insert(option.id) {
+                        option.id = (1..)
+                            .find(|id| !used.contains(id))
+                            .expect("available effect ID");
+                        used.insert(option.id);
+                        seen.insert(option.id);
+                    }
+                }
+                n.style_options = options;
                 n.styles = styles.clone();
                 Ok(None)
             }
@@ -1646,5 +1715,139 @@ mod tests {
             .is_err()
         );
         assert_eq!(d, before);
+    }
+}
+
+#[cfg(test)]
+mod extended_effect_tests {
+    use super::*;
+    use crate::{
+        Editor,
+        style_options::{GlobalLight, StyleOptions},
+    };
+    #[test]
+    fn effect_options_ids_reorder_duplicate_clear_and_undo() {
+        let mut editor = Editor::new(Document::new(8, 8), None);
+        let id = editor
+            .execute(Command::AddNode {
+                node: Box::new(Node::group(0, "Effects")),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        let styles = crate::styles::LayerStyle::catalogue()[..2].to_vec();
+        let options = vec![
+            StyleOptions {
+                noise: 12.,
+                ..Default::default()
+            },
+            StyleOptions {
+                spread: 8.,
+                ..Default::default()
+            },
+        ];
+        editor
+            .execute(Command::SetLayerEffects {
+                id,
+                styles: styles.clone(),
+                options,
+            })
+            .unwrap();
+        let initial = editor.doc.node(id).unwrap().clone();
+        editor
+            .execute(Command::SetEffectsEnabled { id, enabled: false })
+            .unwrap();
+        assert!(!editor.doc.node(id).unwrap().effects_enabled);
+        assert_eq!(
+            editor.doc.node(id).unwrap().style_options,
+            initial.style_options
+        );
+        assert!(editor.undo());
+        assert!(editor.doc.node(id).unwrap().effects_enabled);
+        assert_ne!(initial.style_options[0].id, initial.style_options[1].id);
+        assert_ne!(initial.style_options[0].id, 0);
+        let mut reversed = initial.style_options.clone();
+        reversed.reverse();
+        editor
+            .execute(Command::SetLayerEffects {
+                id,
+                styles: styles.iter().rev().cloned().collect(),
+                options: reversed.clone(),
+            })
+            .unwrap();
+        assert_eq!(editor.doc.node(id).unwrap().style_options, reversed);
+        assert!(editor.undo());
+        assert_eq!(
+            editor.doc.node(id).unwrap().style_options,
+            initial.style_options
+        );
+        let copy = editor
+            .execute(Command::DuplicateNode { id })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            editor.doc.node(copy).unwrap().style_options,
+            initial.style_options
+        );
+        editor
+            .execute(Command::SetStyles {
+                id,
+                styles: styles.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            editor.doc.node(id).unwrap().style_options,
+            initial.style_options
+        );
+        let invalid = StyleOptions {
+            noise: f32::NAN,
+            ..Default::default()
+        };
+        assert!(
+            editor
+                .execute(Command::SetLayerEffects {
+                    id,
+                    styles: styles.clone(),
+                    options: vec![invalid]
+                })
+                .is_err()
+        );
+        assert_eq!(
+            editor.doc.node(id).unwrap().style_options,
+            initial.style_options
+        );
+        editor
+            .execute(Command::SetStyles { id, styles: vec![] })
+            .unwrap();
+        assert!(editor.doc.node(id).unwrap().style_options.is_empty());
+        assert!(editor.undo());
+        assert_eq!(
+            editor.doc.node(id).unwrap().style_options,
+            initial.style_options
+        );
+    }
+    #[test]
+    fn global_light_is_validated_and_undoable() {
+        let mut editor = Editor::new(Document::new(8, 8), None);
+        let old = editor.doc.global_light;
+        let light = GlobalLight {
+            angle: 44.,
+            altitude: 60.,
+        };
+        editor.execute(Command::SetGlobalLight { light }).unwrap();
+        assert_eq!(editor.doc.global_light, light);
+        assert!(
+            editor
+                .execute(Command::SetGlobalLight {
+                    light: GlobalLight {
+                        angle: 0.,
+                        altitude: 100.
+                    }
+                })
+                .is_err()
+        );
+        assert_eq!(editor.doc.global_light, light);
+        assert!(editor.undo());
+        assert_eq!(editor.doc.global_light, old);
     }
 }

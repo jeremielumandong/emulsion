@@ -14,37 +14,10 @@ use std::sync::Arc;
 /// Tight source-space bounds for sparse drawing/text pixels. Solid source
 /// images use their full extent; a local mask can narrow that extent.
 pub fn ink_bounds(raster: &Raster, mask: Option<&Mask>) -> IRect {
-    if raster.fill()[3] > 0 {
-        return mask.map_or_else(
-            || raster.bounds(),
-            |m| {
-                raster
-                    .bounds()
-                    .intersect(&emulsion_raster::select::bounds(m))
-            },
-        );
-    }
-    let mut bounds = IRect::default();
-    let tile = emulsion_raster::TILE as i32;
-    for (coord, pixels) in raster.base_tiles() {
-        for (i, pixel) in pixels.iter().enumerate() {
-            if pixel[3] == 0 {
-                continue;
-            }
-            let (x, y) = (
-                coord.x * tile + i as i32 % tile,
-                coord.y * tile + i as i32 / tile,
-            );
-            if x < 0 || y < 0 || x >= raster.width() as i32 || y >= raster.height() as i32 {
-                continue;
-            }
-            if mask.is_some_and(|m| m.get(x as u32, y as u32) == 0) {
-                continue;
-            }
-            bounds = bounds.union(&IRect::new(x, y, 1, 1));
-        }
-    }
-    bounds
+    mask.map_or_else(
+        || raster.coverage_bounds(),
+        |mask| raster.masked_coverage_bounds(mask),
+    )
 }
 
 fn mapped_bounds(rect: IRect, transform: DAffine2) -> IRect {
@@ -1747,5 +1720,34 @@ mod tests {
         assert_eq!((s.width(), s.height()), (20, 20));
         assert_eq!(s.get(4, 5), 0);
         assert_eq!(s.get(5, 5), 255);
+    }
+}
+
+#[cfg(test)]
+mod coverage_bounds_regression_tests {
+    use super::*;
+    #[test]
+    fn cached_unmasked_bounds_and_masked_pixel_intersection_remain_distinct() {
+        let raster = Raster::from_fn(300, 270, [0; 4], |x, y| {
+            if (x == 7 && y == 5) || (x == 299 && y == 269) {
+                [1, 2, 3, 65535]
+            } else {
+                [0; 4]
+            }
+        });
+        assert_eq!(ink_bounds(&raster, None), IRect::new(7, 5, 293, 265));
+        let mask = Mask::from_fn(
+            300,
+            270,
+            0,
+            |x, y| if x == 299 && y == 269 { 255 } else { 0 },
+        );
+        assert_eq!(ink_bounds(&raster, Some(&mask)), IRect::new(299, 269, 1, 1));
+        assert_eq!(ink_bounds(&raster, None), IRect::new(7, 5, 293, 265));
+        let empty = Mask::empty(300, 270, 0);
+        assert!(ink_bounds(&raster, Some(&empty)).is_empty());
+        let fill = Raster::empty(300, 270, [0, 0, 0, 1]);
+        assert_eq!(ink_bounds(&fill, None), fill.bounds());
+        assert_eq!(ink_bounds(&fill, Some(&mask)), IRect::new(299, 269, 1, 1));
     }
 }

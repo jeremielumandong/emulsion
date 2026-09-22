@@ -24,12 +24,17 @@ fn layer_context_menu_opens_blending_for_clicked_layer(cx: &mut TestAppContext) 
     cx.run_until_parked();
     click_menu_item(cx, 11);
     cx.update(|window, cx| {
-        assert!(window.find("layer-blending-panel").visible());
+        window.render_frame(cx);
+        window.render_frame(cx);
+        assert!(window.find("layer-style-dialog").visible());
         assert_eq!(editor.read(cx).selected, Some(second));
         assert_eq!(editor.read(cx).editor.doc, original);
         assert!(editor.read(cx).editor.history.is_empty());
     });
     cx.update(|window, cx| window.click(("style-kind", 0usize), cx));
+    cx.run_until_parked();
+    let ok = cx.update(|window, _| window.find("style-dialog-ok").bounds().center());
+    cx.simulate_click(ok, Default::default());
     cx.run_until_parked();
     cx.update(|_, cx| {
         assert_eq!(

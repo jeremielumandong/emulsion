@@ -3,9 +3,9 @@ use std::{rc::Rc, sync::LazyLock, time::Duration};
 
 use gpui::{
     Action, Animation, AnimationExt as _, AnyElement, App, BoxShadow, ClickEvent, Edges,
-    FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-    SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla, point,
-    prelude::FluentBuilder, px,
+    FocusHandle, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point,
+    RenderOnce, SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, div,
+    hsla, point, prelude::FluentBuilder, px,
 };
 use gpui_base::{ElementExt as _, TextSelectionScopeId};
 use rust_i18n::t;
@@ -168,6 +168,7 @@ pub(crate) struct DialogProps {
     overlay_closable: bool,
     pub(crate) overlay_visible: bool,
     keyboard: bool,
+    movable: bool,
 }
 
 impl Default for DialogProps {
@@ -178,11 +179,34 @@ impl Default for DialogProps {
             max_width: None,
             overlay: true,
             keyboard: true,
+            movable: false,
             overlay_visible: false,
             close_button: true,
             overlay_closable: true,
         }
     }
+}
+
+/// Presentation-only state, scoped to a dialog opening rather than document history.
+struct DialogMoveState {
+    owner: FocusHandle,
+    position: Option<Point<Pixels>>,
+    drag: Option<(Point<Pixels>, Point<Pixels>)>,
+}
+fn clamp_dialog_position(
+    position: Point<Pixels>,
+    view: gpui::Size<Pixels>,
+    width: Pixels,
+    margin: Pixels,
+    minimum_height: Pixels,
+) -> Point<Pixels> {
+    point(
+        position.x.max(px(0.)).min((view.width - width).max(px(0.))),
+        position
+            .y
+            .max(px(0.))
+            .min((view.height - margin - minimum_height).max(px(0.))),
+    )
 }
 
 enum BaseDialogRoot {
@@ -421,6 +445,13 @@ impl Dialog {
         self
     }
 
+    /// Allow dragging the title to uncover content behind the dialog.
+    /// Position is local to this opening; keyboard and modal focus are unchanged.
+    pub fn movable(mut self, movable: bool) -> Self {
+        self.props.movable = movable;
+        self
+    }
+
     /// Set the overlay of the dialog, defaults to `true`.
     pub fn overlay(mut self, overlay: bool) -> Self {
         self.props.overlay = overlay;
@@ -532,6 +563,37 @@ impl RenderOnce for Dialog {
             .width
             .min((view_size.width - margin * 2.).max(px(0.)));
         let x = (view_size.width - width) / 2.;
+        let topmost = (layer_ix + 1) == Root::read(window, cx).active_dialogs.len();
+        let movable = self.props.movable;
+        let move_state = movable.then(|| {
+            let owner = self.focus_handle.clone();
+            let state =
+                window.use_keyed_state(("dialog-position", layer_ix), cx, |_, _| DialogMoveState {
+                    owner: owner.clone(),
+                    position: None,
+                    drag: None,
+                });
+            state.update(cx, |state, _| {
+                if state.owner != owner {
+                    state.owner = owner;
+                    state.position = None;
+                    state.drag = None;
+                }
+                if !topmost {
+                    state.drag = None;
+                }
+            });
+            state
+        });
+        let minimum_height = window.rem_size() * 6.;
+        let position = move_state
+            .as_ref()
+            .and_then(|state| state.read(cx).position)
+            .map(|position| {
+                clamp_dialog_position(position, view_size, width, margin, minimum_height)
+            })
+            .unwrap_or(point(x, y));
+        let (x, y) = (position.x, position.y);
         let max_height = (view_size.height - y - margin).max(px(0.));
 
         let base_size = window.text_style().font_size;
@@ -572,6 +634,29 @@ impl RenderOnce for Dialog {
                     .occlude()
                     .w(view_size.width)
                     .h(view_size.height)
+                    .when_some(move_state.clone(), |this,state| {
+                        // Follow an active drag at window scope: popup occlusion
+                        // excludes its full-window ancestor from hovered hitboxes.
+                        this.child(gpui::canvas(|_,_,_|(),move |_,_,window,_| {
+                            let moving=state.clone();
+                            window.on_mouse_event(move |event:&gpui::MouseMoveEvent,phase,window,cx| {
+                                if !phase.capture() || !topmost{return;}
+                                moving.update(cx,|state,cx| {
+                                    if event.pressed_button!=Some(MouseButton::Left){state.drag=None;return;}
+                                    if let Some((pointer,origin))=state.drag {
+                                        state.position=Some(clamp_dialog_position(origin+(event.position-pointer),view_size,width,margin,minimum_height));
+                                        cx.notify();
+                                        window.refresh();
+                                        cx.stop_propagation();
+                                    }
+                                });
+                            });
+                            window.on_mouse_event(move |event:&gpui::MouseUpEvent,phase,_,cx| {
+                                if !phase.capture() || event.button!=MouseButton::Left{return;}
+                                state.update(cx,|state,cx|{if state.drag.take().is_some(){cx.stop_propagation();}});
+                            });
+                        }).absolute().size_full())
+                    })
                     .child(
                         self.base
                             .take()
@@ -644,10 +729,22 @@ impl RenderOnce for Dialog {
                                             })
                                             .when_some(self.title, |this, title| {
                                                 this.child(
-                                                    DialogTitle::new()
-                                                        .pl(paddings.left)
-                                                        .pr(paddings.right)
-                                                        .child(title),
+                                                    div()
+                                                        .id(("dialog-drag-handle",layer_ix))
+                                                        .test_support()
+                                                        .debug_selector(move ||format!("dialog-drag-handle-{layer_ix}"))
+                                                        .when_some(move_state.clone().filter(|_|topmost), |this,state| {
+                                                            this.cursor_grab().on_mouse_down(MouseButton::Left,window.listener_for(&state,move |state,event:&gpui::MouseDownEvent,window,cx| {
+                                                                state.position=Some(position);
+                                                                state.drag=Some((event.position,position));
+                                                                window.refresh();
+                                                                cx.stop_propagation();
+                                                            }))
+                                                        })
+                                                        .child(DialogTitle::new()
+                                                            .pl(paddings.left)
+                                                            .pr(paddings.right)
+                                                            .child(title)),
                                                 )
                                             })
                                             .when_some(self.content_builder, |this, builder| {
@@ -719,7 +816,7 @@ impl RenderOnce for Dialog {
                                                     inset: false,
                                                 },
                                             ];
-                                            this.top(y * delta).shadow(shadow)
+                                            this.top(if movable { y } else { y * delta }).shadow(shadow)
                                         },
                                     )
                                     .text_selection_scope(selection_scope),
@@ -844,5 +941,132 @@ mod tests {
         assert!(first.bottom() <= viewport.height - px(16.), "{first:?}");
         assert!(second.bottom() <= viewport.height - px(16.), "{second:?}");
         assert!(second.size.height < first.size.height);
+    }
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    #[gpui::test]
+    fn movable_dialog_drags_from_title_outside_header_and_stops_on_release(
+        cx: &mut TestAppContext,
+    ) {
+        let cx = window(cx, size(px(1000.), px(800.)));
+        open(cx, |dialog, _, _| {
+            dialog
+                .movable(true)
+                .overlay(false)
+                .title("Move me")
+                .child(div().h(px(180.)).child("body"))
+        });
+        let before = surface(cx, 0);
+        let title = cx.debug_bounds("dialog-drag-handle-0").unwrap();
+        let start = title.center();
+        let end = start + point(px(140.), px(180.));
+        cx.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(end, MouseButton::Left, gpui::Modifiers::none());
+        draw(cx);
+        let moved = surface(cx, 0);
+        assert_eq!(moved.origin, before.origin + point(px(140.), px(180.)));
+        cx.simulate_mouse_up(end, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(
+            end + point(px(25.), px(30.)),
+            MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        draw(cx);
+        assert_eq!(
+            surface(cx, 0).origin,
+            moved.origin,
+            "released drag must not resume"
+        );
+        let body = moved.origin + point(px(30.), px(80.));
+        cx.simulate_mouse_down(body, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(
+            body + point(px(40.), px(20.)),
+            MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_mouse_up(
+            body + point(px(40.), px(20.)),
+            MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        draw(cx);
+        assert_eq!(
+            surface(cx, 0).origin,
+            moved.origin,
+            "body controls never initiate dialog movement"
+        );
+    }
+
+    #[gpui::test]
+    fn moved_dialog_remains_reachable_after_resize_and_new_open_resets_position(
+        cx: &mut TestAppContext,
+    ) {
+        let cx = window(cx, size(px(1000.), px(800.)));
+        open(cx, |dialog, _, _| {
+            dialog
+                .movable(true)
+                .title("Move me")
+                .child(div().h(px(180.)))
+        });
+        let start = cx.debug_bounds("dialog-drag-handle-0").unwrap().center();
+        let end = point(px(990.), px(790.));
+        cx.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(end, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(end, MouseButton::Left, gpui::Modifiers::none());
+        draw(cx);
+        cx.simulate_resize(size(px(400.), px(300.)));
+        draw(cx);
+        let bounds = surface(cx, 0);
+        let title = cx.debug_bounds("dialog-drag-handle-0").unwrap();
+        assert!(bounds.origin.x >= px(0.) && bounds.right() <= px(400.));
+        assert!(
+            title.origin.y >= px(0.) && title.bottom() <= px(300.),
+            "title remains reachable {title:?}"
+        );
+        cx.update(|window, cx| window.close_dialog(cx));
+        draw(cx);
+        open(cx, |dialog, _, _| {
+            dialog.movable(true).title("New opening").child("body")
+        });
+        assert_eq!(surface(cx, 0).origin, point(px(16.), px(30.)));
+    }
+
+    #[gpui::test]
+    fn stationary_dialog_and_parent_of_nested_dialog_do_not_move(cx: &mut TestAppContext) {
+        let cx = window(cx, size(px(1000.), px(800.)));
+        open(cx, |dialog, _, _| dialog.title("Stationary").child("body"));
+        let first = surface(cx, 0);
+        let start = cx.debug_bounds("dialog-drag-handle-0").unwrap().center();
+        cx.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(
+            start + point(px(30.), px(40.)),
+            MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_mouse_up(
+            start + point(px(30.), px(40.)),
+            MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        draw(cx);
+        assert_eq!(surface(cx, 0).origin, first.origin);
+        open(cx, |dialog, _, _| {
+            dialog.movable(true).title("Nested").child("body")
+        });
+        let second = surface(cx, 1);
+        let start = cx.debug_bounds("dialog-drag-handle-1").unwrap().center();
+        let end = start + point(px(30.), px(40.));
+        cx.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(end, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(end, MouseButton::Left, gpui::Modifiers::none());
+        draw(cx);
+        assert_eq!(surface(cx, 0).origin, first.origin);
+        assert_eq!(
+            surface(cx, 1).origin,
+            second.origin + point(px(30.), px(40.))
+        );
     }
 }

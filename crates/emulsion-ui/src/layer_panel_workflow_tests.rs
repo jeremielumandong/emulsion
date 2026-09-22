@@ -178,16 +178,8 @@ fn layer_header_sliders_have_independent_tracks_and_batch_undo(cx: &mut TestAppC
     cx.run_until_parked();
     for (header, inspector, fill) in [
         ("LayerOpacity", "Opacity", false),
-        ("LayerFillOpacity", "FillOpacity", true),
+        ("LayerFillOpacity", "LayerOpacity", true),
     ] {
-        if fill {
-            cx.update(|_, cx| {
-                editor.update(cx, |e, cx| {
-                    e.select_sidebar(crate::editor::SidebarTab::BlendingOptions, cx)
-                })
-            });
-            cx.run_until_parked();
-        }
         let point = cx.update(|window, _| {
             let header = window
                 .find(gpui_kit::SharedString::from(format!("{header}({id})")))
@@ -216,6 +208,14 @@ fn layer_header_sliders_have_independent_tracks_and_batch_undo(cx: &mut TestAppC
                 })
                 .collect();
             assert_eq!(values[0], values[1], "both selected layers change together");
+            assert!(
+                e.editor.doc.nodes.iter().all(|node| if fill {
+                    node.opacity == 1.0
+                } else {
+                    node.blending.fill_opacity == 1.0
+                }),
+                "the other header control remains unchanged"
+            );
             assert!(
                 values[0] > 0.1 && values[0] < 0.4,
                 "clicked header quarter: {values:?}"

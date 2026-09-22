@@ -24,3 +24,14 @@ pub use emulsion_raster as raster;
 
 mod layer_locks;
 mod layer_mask;
+
+mod effect_render;
+pub mod style_options;
+
+#[cfg(test)]
+mod styles_advanced_tests;
+
+#[cfg(test)]
+mod style_memory_tests;
+
+mod composite_mask_cache;

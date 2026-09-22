@@ -414,7 +414,7 @@ impl Editor {
         let outcome = crate::graph::merge(base, &self.doc, theirs, choices)?;
         if let MergeOutcome::Merged(doc) = &outcome {
             let label = format!("Merge {from}");
-            self.replace_document(doc.clone(), &label);
+            self.replace_document((**doc).clone(), &label);
             self.graph.record_merge(
                 doc,
                 theirs_tip,
@@ -455,21 +455,31 @@ impl Editor {
     /// Drop the oldest steps beyond the count limit or while pixels kept alive
     /// only by history exceed the byte budget.
     fn trim(&mut self) {
+        self.trim_to_budget(MAX_RETAINED_BYTES);
+    }
+
+    fn trim_to_budget(&mut self, budget: usize) {
         while self.history.undo.len() > MAX_STEPS {
             self.history.undo.remove(0);
         }
         loop {
-            let live: HashSet<usize> = self.doc.buffers().into_iter().map(|(p, _)| p).collect();
+            let mut planes = HashSet::new();
+            let live: HashSet<usize> = self
+                .doc
+                .buffers_once(&mut planes)
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect();
             let mut seen = HashSet::new();
             let mut bytes = 0usize;
             for s in self.history.undo.iter().chain(&self.history.redo) {
-                for (p, b) in s.before.buffers() {
+                for (p, b) in s.before.buffers_once(&mut planes) {
                     if !live.contains(&p) && seen.insert(p) {
                         bytes += b;
                     }
                 }
             }
-            if bytes <= MAX_RETAINED_BYTES || self.history.undo.len() <= 1 {
+            if bytes <= budget || self.history.undo.len() <= 1 {
                 break;
             }
             self.history.undo.remove(0);
@@ -500,6 +510,77 @@ mod tests {
         .unwrap()
         .unwrap();
         (Editor::new(d, None), id)
+    }
+
+    #[test]
+    fn duplicate_effect_delete_cycles_share_pixels_and_budget_counts_only_removed_buffers() {
+        let (mut editor, id) = editor();
+        let pixels = Arc::new(Raster::from_fn(32, 32, [0; 4], |_, _| [1, 2, 3, 65535]));
+        editor
+            .execute(Command::ReplacePixels {
+                id,
+                raster: pixels.clone(),
+                dirty: emulsion_raster::IRect::new(0, 0, 32, 32),
+                label: "Pixels".into(),
+            })
+            .unwrap();
+        let styles = vec![crate::styles::LayerStyle::ColorOverlay {
+            color: [12, 34, 56],
+            opacity: 40.,
+        }];
+        for _ in 0..8 {
+            let copy = editor
+                .execute(Command::DuplicateNode { id })
+                .unwrap()
+                .unwrap();
+            editor
+                .execute(Command::SetStyles {
+                    id: copy,
+                    styles: styles.clone(),
+                })
+                .unwrap();
+            editor.execute(Command::RemoveNode { id: copy }).unwrap();
+        }
+        let mut allocations = HashSet::new();
+        for step in editor.history.steps() {
+            for node in &step.before.nodes {
+                if let crate::NodeKind::Raster { raster, .. } = &node.kind
+                    && raster.tile_count() > 0
+                {
+                    assert!(Arc::ptr_eq(raster, &pixels));
+                }
+            }
+            allocations.extend(step.before.buffers());
+        }
+        assert_eq!(
+            allocations.len(),
+            1,
+            "duplicate/style/delete does not clone pixels"
+        );
+        let before = editor.history.len();
+        editor.trim_to_budget(0);
+        assert_eq!(
+            editor.history.len(),
+            before,
+            "live shared pixels do not consume retained-history budget"
+        );
+        editor.execute(Command::RemoveNode { id }).unwrap();
+        editor
+            .execute(Command::SetGlobalLight {
+                light: crate::style_options::GlobalLight {
+                    angle: 44.,
+                    altitude: 30.,
+                },
+            })
+            .unwrap();
+        editor.trim_to_budget(0);
+        assert_eq!(
+            editor.history.len(),
+            1,
+            "old snapshots are dropped when their buffers exceed budget"
+        );
+        assert!(editor.undo());
+        assert!(editor.doc.nodes.is_empty());
     }
 
     #[test]

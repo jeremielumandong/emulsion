@@ -31,7 +31,7 @@ use std::io::{Read, Seek};
 use std::sync::Arc;
 use zip::ZipArchive;
 
-pub const HISTORY_VERSION: u32 = 3;
+pub const HISTORY_VERSION: u32 = 4;
 pub(crate) const GRAPH: &str = "history/graph.json";
 const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
 
@@ -83,6 +83,8 @@ struct HFile {
     rasters: Vec<HPlane<[u16; 4]>>,
     masks: Vec<HPlane<u8>>,
     commits: Vec<HCommit>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    patterns: Vec<Arc<emulsion_core::style_options::PatternImage>>,
 }
 
 /// The current saved work, independent of deliberately created versions.
@@ -123,6 +125,8 @@ struct HDoc {
     width: u32,
     height: u32,
     resolution: f32,
+    #[serde(default)]
+    global_light: emulsion_core::style_options::GlobalLight,
     source_depth: u8,
     blend_space: BlendSpace,
     next_id: NodeId,
@@ -160,6 +164,12 @@ struct HNode {
     mask_transform: [f64; 6],
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     styles: Vec<emulsion_core::styles::LayerStyle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    style_options: Vec<emulsion_core::style_options::StyleOptions>,
+    #[serde(default = "emulsion_core::node::default_effects_enabled")]
+    effects_enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pattern_refs: Vec<Option<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<String>,
     kind: HKind,
@@ -280,11 +290,27 @@ pub(crate) fn encode(
 ) -> Result<Vec<(String, Vec<u8>)>> {
     let mut rasters = Pool::<[u16; 4]>::new();
     let mut masks = Pool::<u8>::new();
+    let mut patterns = Vec::new();
+    let mut pattern_ids = HashMap::new();
     let mut encode_doc = |d: &Document| -> Result<HDoc> {
         let nodes = d
             .nodes
             .iter()
             .map(|n| {
+                let mut style_options = n.style_options.clone();
+                let pattern_refs = style_options
+                    .iter_mut()
+                    .map(|option| {
+                        option.pattern.image.take().map(|image| {
+                            let key = Arc::as_ptr(&image) as usize;
+                            *pattern_ids.entry(key).or_insert_with(|| {
+                                let id = patterns.len() as u32;
+                                patterns.push(image);
+                                id
+                            })
+                        })
+                    })
+                    .collect();
                 Ok(HNode {
                     id: n.id,
                     name: n.name.clone(),
@@ -303,6 +329,9 @@ pub(crate) fn encode(
                     mask_linked: n.mask_linked,
                     mask_transform: n.mask_transform,
                     styles: n.styles.clone(),
+                    style_options,
+                    effects_enabled: n.effects_enabled,
+                    pattern_refs,
                     origin: n.origin.clone(),
                     kind: match &n.kind {
                         NodeKind::Raster { raster, placement } => HKind::Raster {
@@ -346,6 +375,7 @@ pub(crate) fn encode(
             width: d.width,
             height: d.height,
             resolution: d.resolution,
+            global_light: d.global_light,
             source_depth: d.source_depth,
             blend_space: d.blend_space,
             next_id: d.next_id,
@@ -401,6 +431,7 @@ pub(crate) fn encode(
         rasters: rasters.list,
         masks: masks.list,
         commits,
+        patterns,
     };
     let json = serde_json::to_vec(&file).map_err(|e| IoError::Manifest(e.to_string()))?;
     if json.len() as u64 > MAX_GRAPH_BYTES {
@@ -508,6 +539,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         }
         let mut doc = Document::new(h.width, h.height);
         doc.resolution = h.resolution;
+        doc.global_light = h.global_light;
         doc.source_depth = if h.source_depth == 16 { 16 } else { 8 };
         doc.blend_space = h.blend_space;
         doc.guides = h.guides;
@@ -516,7 +548,20 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
             .selection
             .map(|i| mask(i, h.width, h.height))
             .transpose()?;
-        for n in h.nodes {
+        for mut n in h.nodes {
+            if n.pattern_refs.len() > n.style_options.len() {
+                return Err(IoError::Manifest(
+                    "style pattern references do not match effects".into(),
+                ));
+            }
+            for (option, reference) in n.style_options.iter_mut().zip(n.pattern_refs) {
+                if let Some(id) = reference {
+                    option.pattern.image =
+                        Some(f.patterns.get(id as usize).cloned().ok_or_else(|| {
+                            IoError::Manifest(format!("pattern {id} is missing"))
+                        })?);
+                }
+            }
             let kind = match n.kind {
                 HKind::Raster {
                     raster: i,
@@ -611,6 +656,8 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 mask_linked: n.mask_linked,
                 mask_transform: n.mask_transform,
                 styles: n.styles,
+                style_options: n.style_options,
+                effects_enabled: n.effects_enabled,
                 origin: n.origin,
                 kind,
             });

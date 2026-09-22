@@ -36,10 +36,19 @@ fn layer_effects_preserve_editable_text_and_paths(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(1200.)));
     let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
     for node in &original.nodes {
-        cx.update(|_, cx| editor.update(cx, |e, cx| e.open_blending_options(node.id, cx)));
+        cx.update(|window, cx| {
+            editor.update(cx, |e, cx| e.open_layer_styles_dialog(node.id, window, cx))
+        });
         cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+        });
         let point = cx.update(|window, _| window.find(("style-kind", 0usize)).bounds().center());
         cx.simulate_click(point, Default::default());
+        cx.run_until_parked();
+        let ok = cx.update(|window, _| window.find("style-dialog-ok").bounds().center());
+        cx.simulate_click(ok, Default::default());
         cx.run_until_parked();
         cx.update(|_, cx| {
             let current = editor.read(cx).editor.doc.node(node.id).unwrap();
@@ -66,10 +75,17 @@ fn advanced_blending_channels_and_ranges_are_undoable(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, original.clone());
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(1200.)));
     let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
-    cx.update(|_, cx| editor.update(cx, |e, cx| e.open_blending_options(id, cx)));
+    cx.update(|window, cx| editor.update(cx, |e, cx| e.open_layer_styles_dialog(id, window, cx)));
     cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        window.render_frame(cx);
+    });
     let point = cx.update(|window, _| window.find(("blend-channel", 0usize)).bounds().center());
     cx.simulate_click(point, Default::default());
+    cx.run_until_parked();
+    let ok = cx.update(|window, _| window.find("style-dialog-ok").bounds().center());
+    cx.simulate_click(ok, Default::default());
     cx.run_until_parked();
     cx.update(|_, cx| {
         assert_eq!(

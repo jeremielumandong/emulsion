@@ -21,6 +21,8 @@ pub enum DrawingPace {
 pub struct Settings {
     /// Per-effect defaults used when adding a layer style.
     pub layer_style_defaults: Vec<emulsion_core::styles::LayerStyle>,
+    pub layer_style_option_defaults:
+        std::collections::BTreeMap<String, emulsion_core::style_options::StyleOptions>,
     /// Which coding CLI drives the assistant: "claude", "codex", "opencode", "kimi".
     pub provider: String,
     /// Explicit path to the coding CLI; otherwise it is searched for.
@@ -96,6 +98,7 @@ impl Default for Settings {
             cli_path: None,
             model: None,
             layer_style_defaults: Vec::new(),
+            layer_style_option_defaults: Default::default(),
             jev_api_key: None,
             auto_apply: false,
             suggestions: true,
@@ -251,5 +254,30 @@ mod tests {
             restored.image_endpoint.as_deref(),
             Some("http://localhost:7860")
         );
+    }
+}
+
+#[cfg(test)]
+mod style_default_tests {
+    use super::*;
+    #[test]
+    fn extended_style_defaults_roundtrip_and_legacy_defaults_stay_empty() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.layer_style_option_defaults.is_empty());
+        let mut settings = old;
+        let mut option = emulsion_core::style_options::StyleOptions::default();
+        option.pattern.image = Some(std::sync::Arc::new(
+            emulsion_core::style_options::PatternImage {
+                width: 1,
+                height: 1,
+                pixels: vec![12, 34, 56, 78],
+            },
+        ));
+        settings
+            .layer_style_option_defaults
+            .insert("pattern-overlay".into(), option);
+        let decoded: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(settings, decoded);
     }
 }

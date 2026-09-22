@@ -64,6 +64,7 @@ pub(crate) struct LayerPanelState {
     pub query: String,
     pub kind: LayerKindFilter,
     pub compact: bool,
+    pub effects_collapsed: std::collections::HashSet<NodeId>,
     pub controls_open: bool,
     pub compact_height: Option<f32>,
     pub dock_bounds: TrackBounds,

@@ -1,18 +1,36 @@
 //! Layer styles in the node panel: add, tune, recolour and remove.
 
 use super::*;
+use emulsion_core::style_options::StyleOptions;
 use emulsion_core::styles::LayerStyle;
 use emulsion_raster::composite::{BlendIfChannel, BlendingOptions};
+use gpui_kit::component::WindowExt;
+#[path = "style_controls.rs"]
+mod controls;
+pub(crate) use controls::effect_options;
+#[path = "style_color_dialog.rs"]
+mod color_dialog;
+#[path = "style_color_picker.rs"]
+mod color_picker;
+#[path = "style_dialog.rs"]
+mod dialog;
 
 #[derive(Default)]
 pub(crate) struct StylesUi {
     pub menu_for: Option<NodeId>,
     pub blend_if_open: bool,
+    pub expanded: Option<(NodeId, usize)>,
+    pub advanced: Option<(NodeId, usize)>,
+    pub colors: std::collections::HashMap<(NodeId, u64, usize), controls::ColorDraft>,
+    pub dialog_for: Option<NodeId>,
+    pub color_dialog_for: Option<(NodeId, u64, usize)>,
 }
 
 #[derive(Clone)]
 struct StyleBundle {
     effects: Vec<LayerStyle>,
+    options: Vec<StyleOptions>,
+    effects_enabled: bool,
     blend: BlendMode,
     opacity: f32,
     blending: BlendingOptions,
@@ -21,6 +39,8 @@ impl StyleBundle {
     fn from_node(node: &Node) -> Self {
         Self {
             effects: node.styles.clone(),
+            options: node.style_options.clone(),
+            effects_enabled: node.effects_enabled,
             blend: node.blend,
             opacity: node.opacity,
             blending: node.blending,
@@ -28,9 +48,14 @@ impl StyleBundle {
     }
     fn commands(&self, id: NodeId) -> Vec<Command> {
         vec![
-            Command::SetStyles {
+            Command::SetEffectsEnabled {
+                id,
+                enabled: self.effects_enabled,
+            },
+            Command::SetLayerEffects {
                 id,
                 styles: self.effects.clone(),
+                options: self.options.clone(),
             },
             Command::SetBlend {
                 id,
@@ -114,6 +139,8 @@ impl EditorView {
             commands.extend(
                 StyleBundle {
                     effects: Vec::new(),
+                    options: Vec::new(),
+                    effects_enabled: true,
                     blend: BlendMode::Normal,
                     opacity: 1.0,
                     blending: BlendingOptions::default(),
@@ -199,6 +226,13 @@ impl EditorView {
                 .retain(|saved| saved.key() != style.key());
             settings.layer_style_defaults.push(style);
         });
+        if let Some(node) = self.editor.doc.node(id) {
+            let options = controls::effect_options(node)[index].clone();
+            let key = node.styles[index].key().to_string();
+            crate::app_state::update_settings(cx, |settings| {
+                settings.layer_style_option_defaults.insert(key, options);
+            });
+        }
         self.set_status("Effect saved as its default.", false, cx);
     }
 
@@ -218,11 +252,23 @@ impl EditorView {
         };
         let mut styles = node.styles.clone();
         styles[index] = factory;
-        self.set_styles(id, styles, cx);
+        let mut options = controls::effect_options(node);
+        options[index] = StyleOptions::for_style(&styles[index]);
+        self.execute(
+            Command::SetLayerEffects {
+                id,
+                styles,
+                options,
+            },
+            cx,
+        );
         crate::app_state::update_settings(cx, |settings| {
             settings
                 .layer_style_defaults
                 .retain(|saved| saved.key() != key)
+        });
+        crate::app_state::update_settings(cx, |settings| {
+            settings.layer_style_option_defaults.remove(key);
         });
     }
 
@@ -270,12 +316,19 @@ impl EditorView {
         );
     }
 
-    pub(crate) fn open_blending_options(&mut self, id: NodeId, cx: &mut Context<Self>) {
+    pub(crate) fn open_blending_options(
+        &mut self,
+        id: NodeId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.editor.doc.node(id).is_none() {
             return;
         }
         self.set_layer_selection(vec![id], Some(id));
         self.styles_ui.menu_for = None;
+        self.styles_ui.expanded = None;
+        self.open_layer_styles_dialog(id, window, cx);
         self.select_sidebar(SidebarTab::BlendingOptions, cx);
     }
 
@@ -284,6 +337,32 @@ impl EditorView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.styles_ui.dialog_for.is_none() {
+            let id = self.selected;
+            return div()
+                .id("layer-blending-panel")
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_3()
+                .child(label("Layer Style", p))
+                .child(mono(
+                    "Edit blending and effects in one window.",
+                    10.,
+                    p.muted,
+                ))
+                .when_some(id, |body, id| {
+                    body.child(
+                        chip("open-layer-style", "Open Layer Style…", false, p)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_blending_options(id, window, cx)
+                            }))
+                            .test_support(),
+                    )
+                })
+                .test_support()
+                .into_any_element();
+        }
         let mut body = div()
             .id("layer-blending-panel")
             .flex()
@@ -300,6 +379,11 @@ impl EditorView {
                     .child(
                         chip("layer-blending-close", "Close", false, p)
                             .on_click(cx.listener(|this, _, window, cx| {
+                                if this.styles_ui.dialog_for.is_some() {
+                                    this.close_style_dialog(true, cx);
+                                    window.close_dialog(cx);
+                                    return;
+                                }
                                 this.select_sidebar(SidebarTab::History, cx);
                                 window.focus(&this.panel_focus, cx);
                             }))
@@ -475,17 +559,21 @@ impl EditorView {
                     .test_support(),
             );
         }
-        if matches!(
-            n.kind,
-            NodeKind::Raster { .. }
-                | NodeKind::Smart { .. }
-                | NodeKind::Path { .. }
-                | NodeKind::Text { .. }
-        ) {
+        if self.styles_ui.dialog_for.is_none()
+            && matches!(
+                n.kind,
+                NodeKind::Raster { .. }
+                    | NodeKind::Smart { .. }
+                    | NodeKind::Path { .. }
+                    | NodeKind::Text { .. }
+                    | NodeKind::Fill { .. }
+                    | NodeKind::Group { .. }
+            )
+        {
             body = body.children(self.styles_panel_with_catalogue(id, &n.styles, true, p, cx));
         }
         body.child(mono(
-            "Changes apply immediately. Undo restores the previous setting.",
+            "Preview updates immediately. OK keeps changes; Cancel restores them.",
             10.,
             p.muted,
         ))
@@ -523,8 +611,26 @@ impl EditorView {
             s.set_color([fg[0], fg[1], fg[2]], false);
         }
         let mut styles = n.styles.clone();
+        let mut options = controls::effect_options(n);
+        let mut option = crate::app_state::settings(cx)
+            .layer_style_option_defaults
+            .get(s.key())
+            .cloned()
+            .unwrap_or_else(|| StyleOptions::for_style(&s));
+        option.id = (1..)
+            .find(|id| options.iter().all(|o| o.id != *id))
+            .expect("effect ID");
+        options.push(option);
         styles.push(s);
-        self.set_styles(id, styles, cx);
+        self.styles_ui.expanded = Some((id, styles.len() - 1));
+        self.execute(
+            Command::SetLayerEffects {
+                id,
+                styles,
+                options,
+            },
+            cx,
+        );
         self.styles_ui.menu_for = None;
     }
 
@@ -609,111 +715,30 @@ impl EditorView {
             }
             v.push(menu.into_any_element());
         }
-        if !styles.is_empty() {
-            v.push(
-                mono(
-                    "Click an effect swatch to use the foreground color.",
-                    9.5,
-                    p.muted,
-                )
-                .into_any_element(),
-            );
-        }
-        for (idx, s) in styles.iter().enumerate() {
-            let mut row = div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .pt(px(4.))
-                .child(mono(s.label(), 10.5, p.ink));
-            for (ci, c) in s.colors().iter().enumerate() {
-                let col: Hsla =
-                    rgb(((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32).into();
-                row = row.child(
-                    div()
-                        .id(("style-col", idx * 2 + ci))
-                        .size(px(14.))
-                        .border_1()
-                        .border_color(p.ink)
-                        .bg(col)
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            // Click a swatch to give it the foreground colour.
-                            let fg = this.tools.fg;
-                            let Some(n) = this.editor.doc.node(id) else {
-                                return;
-                            };
-                            let mut styles = n.styles.clone();
-                            if let Some(s) = styles.get_mut(idx) {
-                                s.set_color([fg[0], fg[1], fg[2]], ci == 1);
-                                this.set_styles(id, styles, cx);
-                            }
-                        })),
-                );
-            }
-            row =
-                row.child(div().flex_1())
-                    .child(
-                        chip(("style-del", idx), "×", false, p).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                let Some(n) = this.editor.doc.node(id) else {
-                                    return;
-                                };
-                                let mut styles = n.styles.clone();
-                                if idx < styles.len() {
-                                    styles.remove(idx);
-                                    this.set_styles(id, styles, cx);
-                                }
-                            },
-                        )),
-                    );
-            v.push(row.into_any_element());
-            v.push(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        chip(("style-save-default", idx), "Save default", false, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.save_style_default(id, idx, cx)
-                            }))
-                            .test_support(),
-                    )
-                    .child(
-                        chip(("style-reset-default", idx), "Reset default", false, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.reset_style_default(id, idx, cx)
-                            }))
-                            .test_support(),
-                    )
-                    .into_any_element(),
-            );
-            for spec in s.params() {
-                let norm = (spec.value - spec.min) / (spec.max - spec.min).max(1e-6);
-                v.push(
-                    self.param_slider(
-                        SliderKey::Style(id, idx, spec.key),
-                        spec.label,
-                        spec.display(),
-                        norm,
-                        (spec.min, spec.max, spec.step),
-                        p,
-                        cx,
-                    )
-                    .into_any_element(),
-                );
-            }
+        let options = self
+            .editor
+            .doc
+            .node(id)
+            .map(controls::effect_options)
+            .unwrap_or_default();
+        for (index, style) in styles.iter().enumerate() {
+            let option = options
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| StyleOptions::for_style(style));
+            v.extend(self.effect_controls((id, index), style, &option, styles.len(), p, cx));
         }
         if styles.is_empty() {
             v.push(
                 mono(
-                    "swatches take the foreground colour when clicked",
-                    9.5,
+                    "Add an effect, then expand it to edit its settings.",
+                    10.,
                     p.muted,
                 )
                 .into_any_element(),
             );
         }
+
         v
     }
 }

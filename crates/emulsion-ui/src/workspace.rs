@@ -7,6 +7,7 @@ use crate::widgets::mono;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Node, NodeKind};
 use emulsion_io::recent::{self, Recent};
+use gpui_kit::component::WindowExt;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::HashMap;
@@ -37,6 +38,7 @@ pub struct Workspace {
     pub error: Option<SharedString>,
     focus: FocusHandle,
     last_title: String,
+    dialog_root_watch: Option<Subscription>,
     closing: bool,
     pub(crate) settings_inputs: Option<(
         Entity<gpui_kit::component::input::InputState>,
@@ -87,6 +89,7 @@ impl Workspace {
             let Some(this) = weak.upgrade() else {
                 return true;
             };
+            this.update(cx, |this, cx| this.cancel_style_dialog(window, cx));
             let (modified, closing) = {
                 let ws = this.read(cx);
                 (
@@ -167,6 +170,7 @@ impl Workspace {
             error: None,
             focus,
             last_title: String::new(),
+            dialog_root_watch: None,
             closing: false,
             settings_inputs: None,
             jev_test: None,
@@ -179,6 +183,27 @@ impl Workspace {
             batch: Default::default(),
             landing,
             splash: true,
+        }
+    }
+
+    fn style_dialog_open(&self, cx: &App) -> bool {
+        self.editor.as_ref().is_some_and(|editor| {
+            let ui = &editor.read(cx).styles_ui;
+            ui.dialog_for.is_some()
+        })
+    }
+
+    /// Navigation cancels the preview before another document can own focus.
+    fn cancel_style_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor.clone() else {
+            return;
+        };
+        let visible = editor.read(cx).styles_ui.dialog_for.is_some();
+        if visible {
+            editor.update(cx, |editor, cx| {
+                editor.close_style_dialog(false, cx);
+            });
+            window.close_all_dialogs(cx);
         }
     }
 
@@ -195,6 +220,7 @@ impl Workspace {
         cx: &mut Context<Self>,
         then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) {
+        self.cancel_style_dialog(window, cx);
         then(self, window, cx);
     }
 
@@ -204,6 +230,7 @@ impl Workspace {
         let Some(ed) = self.tabs.get(i).cloned() else {
             return;
         };
+        self.cancel_style_dialog(window, cx);
         if let Some(old) = &self.editor
             && old != &ed
         {
@@ -243,6 +270,7 @@ impl Workspace {
         let Some(ed) = self.tabs.get(i).cloned() else {
             return;
         };
+        self.cancel_style_dialog(window, cx);
         let dirty = ed.read(cx).editor.is_modified();
         let name = ed.read(cx).name.clone();
         let finish = move |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
@@ -388,6 +416,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_style_dialog(window, cx);
         // Already open? Switch to it rather than opening twice.
         if let Some(p) = &path
             && let Some(i) = self
@@ -616,6 +645,7 @@ impl Workspace {
     }
 
     fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_style_dialog(window, cx);
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -669,6 +699,9 @@ impl Workspace {
     }
 
     fn save(&mut self, save_as: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.style_dialog_open(cx) {
+            return;
+        }
         let Some(ed) = self.editor.clone() else {
             return;
         };
@@ -740,6 +773,9 @@ impl Workspace {
     }
 
     fn export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.style_dialog_open(cx) {
+            return;
+        }
         let Some(ed) = self.editor.clone() else {
             return;
         };
@@ -795,6 +831,7 @@ impl Workspace {
     }
 
     fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_style_dialog(window, cx);
         self.confirm_discard(window, cx, |this, _, cx| {
             for ed in &this.tabs {
                 ed.update(cx, |e, _| e.discard_recovery());
@@ -809,7 +846,9 @@ impl Workspace {
         cx: &mut Context<Self>,
         f: impl FnOnce(&mut EditorView, &mut Context<EditorView>),
     ) {
-        if let Some(e) = &self.editor {
+        if !self.style_dialog_open(cx)
+            && let Some(e) = &self.editor
+        {
             e.update(cx, f);
         }
     }
@@ -895,7 +934,8 @@ impl Workspace {
             )
             .child(
                 tab("tab-home", "Home", self.screen == Screen::Home, true).on_click(cx.listener(
-                    |this, _, _, cx| {
+                    |this, _, window, cx| {
+                        this.cancel_style_dialog(window, cx);
                         this.screen = Screen::Home;
                         cx.notify();
                     },
@@ -903,7 +943,8 @@ impl Workspace {
             )
             .child(
                 tab("tab-batch", "Batch", self.screen == Screen::Batch, true).on_click(
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
+                        this.cancel_style_dialog(window, cx);
                         this.screen = Screen::Batch;
                         this.refresh_batch_recipes(cx);
                     }),
@@ -916,14 +957,16 @@ impl Workspace {
                     self.screen == Screen::Settings,
                     true,
                 )
-                .on_click(cx.listener(|this, _, _, cx| {
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.cancel_style_dialog(window, cx);
                     this.screen = Screen::Settings;
                     cx.notify();
                 })),
             )
             .child(
                 tab("tab-about", "About", self.screen == Screen::About, true).on_click(
-                    cx.listener(|this, _, _, cx| {
+                    cx.listener(|this, _, window, cx| {
+                        this.cancel_style_dialog(window, cx);
                         this.screen = Screen::About;
                         cx.notify();
                     }),
@@ -1029,6 +1072,13 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Dialog state belongs to Root, while this view owns its overlay layer.
+        // Root notifications must invalidate the cached Workspace as well.
+        if self.dialog_root_watch.is_none()
+            && let Some(Some(root)) = window.root::<gpui_kit::component::Root>()
+        {
+            self.dialog_root_watch = Some(cx.observe(&root, |_, _, cx| cx.notify()));
+        }
         let p = theme::palette(cx);
         let title = match &self.editor {
             Some(e) => {
@@ -1093,7 +1143,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.save(true, window, cx)))
             .on_action(cx.listener(|this, _: &Export, window, cx| this.export(window, cx)))
             .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
-            .on_action(cx.listener(|this, _: &ShowHome, _, cx| {
+            .on_action(cx.listener(|this, _: &ShowHome, window, cx| {
+                this.cancel_style_dialog(window, cx);
                 this.screen = Screen::Home;
                 cx.notify();
             }))
@@ -1291,6 +1342,9 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.toggle_selected_visible(cx))
             }))
             .on_action(cx.listener(|this, _: &Ask, window, cx| {
+                if this.style_dialog_open(cx) {
+                    return;
+                }
                 if let Some(e) = this.editor.clone() {
                     this.screen = Screen::Editor;
                     e.update(cx, |e, cx| e.open_ask(window, cx));
@@ -1355,6 +1409,9 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Zoom, cx))
             }))
             .on_action(cx.listener(|this, _: &ImageSizeDialog, window, cx| {
+                if this.style_dialog_open(cx) {
+                    return;
+                }
                 if let Some(e) = &this.editor {
                     e.update(cx, |e, cx| {
                         e.open_size_panel(crate::editor::SizeMode::Image, window, cx)
@@ -1362,6 +1419,9 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &CanvasSizeDialog, window, cx| {
+                if this.style_dialog_open(cx) {
+                    return;
+                }
                 if let Some(e) = &this.editor {
                     e.update(cx, |e, cx| {
                         e.open_size_panel(crate::editor::SizeMode::Canvas, window, cx)
@@ -1435,7 +1495,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ContentAwareFill, _, cx| {
                 this.with_editor(cx, |e, cx| e.content_aware_fill(cx))
             }))
-            .on_action(cx.listener(|this, _: &ShowSettings, _, cx| {
+            .on_action(cx.listener(|this, _: &ShowSettings, window, cx| {
+                this.cancel_style_dialog(window, cx);
                 this.screen = Screen::Settings;
                 cx.notify();
             }))
@@ -1463,6 +1524,7 @@ impl Render for Workspace {
             .children(banner)
             .child(body)
             .when(self.splash, |d| d.child(self.splash_view(cx)))
+            .children(gpui_kit::component::Root::render_dialog_layer(window, cx))
     }
 }
 

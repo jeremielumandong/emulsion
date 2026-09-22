@@ -68,7 +68,7 @@ fn parse_hex(value: &str) -> Option<Hsla> {
 /// Formats a color as `#RRGGBB`, or `#RRGGBBAA` when it is translucent.
 fn hex_string(color: Hsla) -> String {
     let rgba = Rgba::from(color);
-    let channel = |value: f32| (value * 255.) as u32;
+    let channel = |value: f32| (value * 255.).round().clamp(0., 255.) as u32;
     if rgba.a < 1. {
         format!(
             "#{:02X}{:02X}{:02X}{:02X}",
@@ -343,9 +343,12 @@ impl ColorPickerState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Hsla> {
-        let value = parse_hex(value)?;
-        self.select_color(value, window, cx);
-        Some(value)
+        let mut color = parse_hex(value)?;
+        if matches!(value.strip_prefix('#').unwrap_or(value).len(), 3 | 6) {
+            color.a = self.value.map_or(1., |previous| previous.a);
+        }
+        self.select_color(color, window, cx);
+        Some(color)
     }
 
     /// Commits a color and closes the picker, as a palette selection does.
@@ -357,6 +360,22 @@ impl ColorPickerState {
     /// Commits a color without changing the open state, as a slider drag does.
     pub fn update_color(&mut self, value: Hsla, window: &mut Window, cx: &mut Context<Self>) {
         self.update_value(Some(value), true, window, cx);
+    }
+
+    /// Updates a live color from an application-owned hex editor without
+    /// rewriting its text or disturbing the insertion point.
+    pub fn update_color_preserving_hex(
+        &mut self,
+        value: Hsla,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.needs_slider_sync = false;
+        self.value = Some(value);
+        self.preview = Some(value);
+        self.sliders.write(value, window, cx);
+        cx.emit(ColorPickerEvent::Change(Some(value)));
+        cx.notify();
     }
 
     /// Sets whether the picker popup is open.
@@ -799,6 +818,13 @@ mod tests {
     }
 
     #[test]
+    fn formatting_hex_rounds_float_conversion_back_to_exact_channel_bytes() {
+        for value in ["#22BB44", "#7F3DAD", "#010203", "#22BB4466"] {
+            assert_eq!(hex_string(parse_hex(value).unwrap()), value);
+        }
+    }
+
+    #[test]
     fn rejects_malformed_hex() {
         for value in ["#nope", "#12", "#1234567", "", "#+f0000", "#-fffff"] {
             assert_eq!(parse_hex(value), None, "{value} should not parse");
@@ -921,6 +947,21 @@ mod tests {
             assert_eq!(state.value(), committed);
             assert_eq!(state.preview(), committed);
             assert!(!state.is_open());
+        });
+    }
+
+    #[gpui::test]
+    fn rgb_hex_preserves_opacity_but_explicit_alpha_replaces_it(cx: &mut TestAppContext) {
+        let (state, cx) = state(cx);
+        cx.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.set_value(hsla(0., 1., 0.5, 0.4), window, cx);
+                assert!((state.commit_hex("#22bb44", window, cx).unwrap().a - 0.4).abs() < 1e-6);
+                assert!(
+                    (state.commit_hex("#22bb4480", window, cx).unwrap().a - 128. / 255.).abs()
+                        < 1e-6
+                );
+            });
         });
     }
 

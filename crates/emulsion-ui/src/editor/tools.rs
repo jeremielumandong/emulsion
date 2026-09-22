@@ -1448,8 +1448,15 @@ impl EditorView {
         };
         let m = match self.editor.doc.selection.clone() {
             Some(sel) => match to_doc {
+                Some(td)
+                    if td == glam::DAffine2::IDENTITY
+                        && (w, h) == (sel.width(), sel.height())
+                        && sel.fill() == 0 =>
+                {
+                    sel
+                }
                 // Raster masks live in the node's pixel space.
-                Some(td) => Mask::from_fn(w, h, 0, |x, y| {
+                Some(td) => Arc::new(Mask::from_fn(w, h, 0, |x, y| {
                     let p = td.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
                     if p.x < 0.0
                         || p.y < 0.0
@@ -1460,17 +1467,14 @@ impl EditorView {
                     } else {
                         sel.get(p.x as u32, p.y as u32)
                     }
-                }),
-                None => (*sel).clone(),
+                })),
+                None => sel,
             },
-            None => Mask::white(w, h),
+            None => Arc::new(Mask::white(w, h)),
         };
         let commands = vec![
             Command::SetMask { id, mask: None },
-            Command::SetMask {
-                id,
-                mask: Some(Arc::new(m)),
-            },
+            Command::SetMask { id, mask: Some(m) },
         ];
         if self
             .execute_layer_commands("Mask from selection", commands, cx)
