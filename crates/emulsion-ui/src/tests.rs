@@ -1003,7 +1003,7 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
 // ── Phase 3 tools, driven through real pointer and key events ────────────
 
 #[gpui_kit::test]
-fn batch_folder_waits_for_photo_selection_before_decoding(cx: &mut TestAppContext) {
+fn batch_folder_loads_thumbnails_without_selecting_or_exporting(cx: &mut TestAppContext) {
     use crate::workspace::Screen;
     use gpui_kit::test::TestWindowExt;
 
@@ -1039,7 +1039,7 @@ fn batch_folder_waits_for_photo_selection_before_decoding(cx: &mut TestAppContex
             batch
                 .items
                 .iter()
-                .all(|item| !item.selected && item.thumb.is_none())
+                .all(|item| !item.selected && item.thumb.is_some())
         );
         assert!(batch.current.is_none());
         assert!(batch.running.is_none());
@@ -1052,7 +1052,7 @@ fn batch_folder_waits_for_photo_selection_before_decoding(cx: &mut TestAppContex
         assert!(
             batch.items[1..]
                 .iter()
-                .all(|item| !item.selected && item.thumb.is_none())
+                .all(|item| !item.selected && item.thumb.is_some())
         );
         assert!(batch.current.is_none());
         window.click(("batch-item", 1usize), cx);
@@ -1063,11 +1063,50 @@ fn batch_folder_waits_for_photo_selection_before_decoding(cx: &mut TestAppContex
         assert_eq!(batch.current, Some(1));
         assert!(!batch.items[1].selected);
         assert!(batch.items[1].thumb.is_some());
-        assert!(batch.items[2].thumb.is_none());
+        assert!(batch.items[2].thumb.is_some());
         assert!(batch.running.is_none());
     });
     assert!(!folder.join("emulsion-export").exists());
     std::fs::remove_dir_all(&folder).unwrap();
+}
+
+#[gpui_kit::test]
+fn batch_large_folder_only_loads_visible_thumbnails_and_follows_scroll(cx: &mut TestAppContext) {
+    use crate::workspace::Screen;
+    use gpui_kit::test::TestWindowExt;
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    let folder = std::env::temp_dir().join(format!("emulsion-batch-scroll-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir(&folder).unwrap();
+    let paths: Vec<_> = (0..200).map(|i| folder.join(format!("photo-{i}.png"))).collect();
+    for path in &paths {
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([40, 80, 120, 255])).save(path).unwrap();
+    }
+    cx.update(|_, cx| ws.update(cx, |ws, cx| {
+        ws.load_batch(folder.clone(), paths, cx);
+        ws.screen = Screen::Batch;
+        cx.notify();
+    }));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let batch = &ws.read(cx).batch;
+        let loaded = batch.items.iter().filter(|item| item.thumb.is_some()).count();
+        assert!(loaded > 0 && loaded < 30, "only the viewport is decoded, got {loaded}");
+        assert!(batch.items[199].thumb.is_none());
+        assert!(window.find(("batch-item", 0usize)).visible());
+        window.scroll("batch-grid", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.), gpui_kit::px(-50000.))), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let batch = &ws.read(cx).batch;
+        assert!(window.find(("batch-item", 199usize)).visible());
+        assert!(batch.items[199].thumb.is_some());
+        assert!(batch.items[100].thumb.is_none(), "scrolling does not decode intervening rows");
+        assert!(batch.items.iter().all(|item| !item.selected));
+        assert!(batch.current.is_none() && batch.running.is_none());
+    });
+    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[gpui_kit::test]

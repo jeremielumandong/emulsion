@@ -1,6 +1,6 @@
 use super::{DevelopParams, cancelled};
 use crate::{IoError, Result};
-use emulsion_raster::Raster;
+use emulsion_raster::{Raster, TILE, TILE_PX, TileCoord};
 use rawler::{
     Orientation, RawImage,
     imgop::{
@@ -12,6 +12,7 @@ use rawler::{
     },
     rawimage::{RawImageData, RawPhotometricInterpretation},
 };
+use rayon::prelude::*;
 use std::sync::atomic::AtomicBool;
 
 fn invalid(message: &str) -> IoError {
@@ -483,18 +484,33 @@ fn finish(
             | Orientation::Rotate270
     );
     let (ow, oh) = if swap { (h, w) } else { (w, h) };
-    let mut pixels = Vec::with_capacity(ow * oh);
-    for y in 0..oh {
-        cancelled(cancel)?;
-        for x in 0..ow {
-            let index = oriented_index(w, h, orientation, x, y);
-            let p = tone(rgb[index], params).map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
-            pixels.push([p[0], p[1], p[2], u16::MAX]);
-        }
-    }
-    // Raster::from_pixels expects linear RGBA16; avoid an unnecessary gamma
-    // round-trip and its quantization. Output gamut remains linear sRGB.
-    Ok(Raster::from_pixels(ow as u32, oh as u32, [0; 4], &pixels))
+    let edge = TILE as usize;
+    let columns = ow.div_ceil(edge);
+    // Write linear RGBA16 directly into tiles, avoiding a full-frame buffer
+    // and copy. Each worker keeps the scalar tone/quantization order intact.
+    let tiles: Result<Vec<_>> = (0..columns * oh.div_ceil(edge))
+        .into_par_iter()
+        .map(|i| -> Result<_> {
+            cancelled(cancel)?;
+            let (tx, ty) = (i % columns, i / columns);
+            let (x0, y0) = (tx * edge, ty * edge);
+            let mut tile = vec![[0; 4]; TILE_PX];
+            for ly in 0..edge.min(oh - y0) {
+                cancelled(cancel)?;
+                for lx in 0..edge.min(ow - x0) {
+                    let index = oriented_index(w, h, orientation, x0 + lx, y0 + ly);
+                    let p = tone(rgb[index], params)
+                        .map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
+                    tile[ly * edge + lx] = [p[0], p[1], p[2], u16::MAX];
+                }
+            }
+            Ok((TileCoord::new(tx as i32, ty as i32), tile.into()))
+        })
+        .collect();
+    let tiles = tiles?;
+    cancelled(cancel)?;
+    Raster::from_tiles(ow as u32, oh as u32, [0; 4], tiles)
+        .ok_or_else(|| invalid("Invalid developed RAW tiles"))
 }
 
 #[cfg(test)]
@@ -711,6 +727,149 @@ mod tests {
         raw.data = RawImageData::Integer(vec![1, 2]);
         assert!(render(&raw, &DevelopParams::default(), &AtomicBool::new(false)).is_err());
     }
+    #[test]
+    fn finish_matches_dense_reference_across_tiles_and_orientations() {
+        let adjusted = DevelopParams {
+            exposure: -0.75,
+            black_point: 0.03,
+            brightness: 0.2,
+            contrast: -0.15,
+            saturation: 0.3,
+            highlights: -0.2,
+            shadows: 0.1,
+            tone_curve: DevelopParams::MEDIUM_CONTRAST_CURVE,
+            ..Default::default()
+        };
+        let values = [
+            -0.2,
+            0.0,
+            0.49 / 65535.0,
+            0.51 / 65535.0,
+            0.18,
+            0.50001,
+            1.0,
+            1.7,
+        ];
+        for (w, h) in [(3, 2), (1, 257), (257, 1), (256, 256), (259, 257)] {
+            let source: Vec<_> = (0..w * h)
+                .map(|i| {
+                    [
+                        values[i % values.len()],
+                        values[(i / w + 3) % values.len()],
+                        values[(i * 5 + i / w + 1) % values.len()],
+                    ]
+                })
+                .collect();
+            for exif in 1..=8 {
+                let orientation = Orientation::from_u16(exif);
+                let (ow, oh) = if exif >= 5 { (h, w) } else { (w, h) };
+                for params in [DevelopParams::default(), adjusted] {
+                    // Preserve the former scalar finishing loop as an exact oracle.
+                    let mut pixels = Vec::with_capacity(ow * oh);
+                    for y in 0..oh {
+                        for x in 0..ow {
+                            let index = oriented_index(w, h, orientation, x, y);
+                            let p = tone(source[index], &params)
+                                .map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
+                            pixels.push([p[0], p[1], p[2], u16::MAX]);
+                        }
+                    }
+                    let expected = Raster::from_pixels(ow as u32, oh as u32, [0; 4], &pixels);
+                    let actual = finish(
+                        w,
+                        h,
+                        source.clone(),
+                        orientation,
+                        &params,
+                        &AtomicBool::new(false),
+                    )
+                    .unwrap();
+                    assert_eq!((actual.width(), actual.height()), (ow as u32, oh as u32));
+                    assert_eq!(actual.fill(), [0; 4]);
+                    assert_eq!(actual.to_pixels(), pixels, "{w}x{h}, EXIF {exif}");
+                    assert_eq!(actual.tile_count(), expected.tile_count());
+                    for (coord, tile) in expected.base_tiles() {
+                        assert_eq!(actual.base_tile(*coord), Some(tile));
+                    }
+                    assert_eq!(
+                        actual.tile(1, emulsion_raster::TileCoord::new(0, 0)),
+                        expected.tile(1, emulsion_raster::TileCoord::new(0, 0))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finish_black_pixels_are_opaque_and_tile_padding_is_transparent() {
+        use emulsion_raster::{TILE, TileCoord};
+
+        let raster = finish(
+            257,
+            259,
+            vec![[0.0; 3]; 257 * 259],
+            Orientation::Normal,
+            &DevelopParams::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(raster.tile_count(), 4);
+        assert!(raster.to_pixels().iter().all(|p| *p == [0, 0, 0, 65535]));
+        let edge = raster.base_tile(TileCoord::new(1, 1)).unwrap();
+        for y in 0..TILE {
+            for x in 0..TILE {
+                let expected = if x == 0 && y < 3 {
+                    [0, 0, 0, 65535]
+                } else {
+                    [0; 4]
+                };
+                assert_eq!(edge[(y * TILE + x) as usize], expected);
+            }
+        }
+    }
+
+    #[test]
+    fn finish_rejects_malformed_pixels_and_cancellation() {
+        let params = DevelopParams::default();
+        let finish_pixels = |pixels| {
+            finish(
+                2,
+                2,
+                pixels,
+                Orientation::Normal,
+                &params,
+                &AtomicBool::new(false),
+            )
+        };
+        for len in [0, 3, 5] {
+            assert!(matches!(
+                finish_pixels(vec![[0.0; 3]; len]),
+                Err(IoError::MalformedRaw(_))
+            ));
+        }
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for channel in 0..3 {
+                let mut pixels = vec![[0.5; 3]; 4];
+                pixels[3][channel] = bad;
+                assert!(matches!(
+                    finish_pixels(pixels),
+                    Err(IoError::MalformedRaw(_))
+                ));
+            }
+        }
+        assert!(matches!(
+            finish(
+                259,
+                257,
+                vec![[0.5; 3]; 259 * 257],
+                Orientation::Rotate90,
+                &params,
+                &AtomicBool::new(true),
+            ),
+            Err(IoError::Unsupported(message)) if message == "RAW development cancelled"
+        ));
+    }
+
     #[test]
     fn every_exif_orientation_is_honored() {
         let source: Vec<_> = (1..=6).map(|v| [v as f32 / 10.0; 3]).collect();

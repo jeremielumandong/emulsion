@@ -107,9 +107,16 @@ impl BatchState {
     }
 }
 
-/// Keep Batch in lockstep with the application's real import surface. This
-/// includes camera RAW files and formats supplied by an installed converter.
+/// Batch accepts pictures, including camera RAW and converter-backed images,
+/// but not the page/document formats supported by the editor's general import.
 fn is_batch_input(path: &Path) -> bool {
+    if path.extension().is_some_and(|ext| {
+        ["pdf", "ps", "eps", "ai"]
+            .iter()
+            .any(|document| ext.eq_ignore_ascii_case(document))
+    }) {
+        return false;
+    }
     emulsion_io::is_openable(path)
 }
 
@@ -1183,6 +1190,11 @@ mod export_safety_tests {
             "portrait.PNG",
             "camera.CR3",
             "drawing.svg",
+            "tax-return.pdf",
+            "statement.PDF",
+            "document.ps",
+            "document.EPS",
+            "document.ai",
             "notes.txt",
             "raw-sidecar.json",
             "no-extension",

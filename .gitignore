@@ -12,3 +12,5 @@
 .agentops
 
 .env
+
+.perf-baselines**

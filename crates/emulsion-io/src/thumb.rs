@@ -1,4 +1,4 @@
-//! Thumbnails for the Home screen.
+//! Thumbnails for the Home screen and lightweight batch browsing.
 
 use crate::{Result, import};
 use image::{DynamicImage, ImageDecoder, ImageReader, imageops::FilterType, metadata::Orientation};
@@ -159,6 +159,62 @@ pub fn thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
     Ok((t.width(), t.height(), t.into_raw()))
 }
 
+/// A lightweight browsing preview, independent of selection and saved edits.
+/// RAW and native documents use only their embedded previews. Other inputs
+/// must decode directly within the browsing limits; this never develops RAW,
+/// composites a document, or launches an external converter.
+pub fn batch_thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
+    import::check_size(max, max)?;
+    let img = if crate::is_native(path) {
+        let mut archive =
+            zip::ZipArchive::new(std::io::BufReader::new(std::fs::File::open(path)?))?;
+        let bytes = crate::ora::read_entry(&mut archive, "Thumbnails/thumbnail.png", 16 << 20)?;
+        decode_batch(ImageReader::with_format(
+            Cursor::new(bytes),
+            image::ImageFormat::Png,
+        ))?
+    } else if crate::raw_probe::is_raw(path)? {
+        crate::raw_probe::embedded_preview(path)?.ok_or_else(|| {
+            crate::IoError::Unsupported("no embedded RAW browsing preview".into())
+        })?
+    } else {
+        if std::fs::metadata(path)?.len() > 128 << 20 {
+            return Err(crate::IoError::Unsupported(
+                "source exceeds browsing preview limits".into(),
+            ));
+        }
+        decode_batch(ImageReader::open(path)?.with_guessed_format()?)?
+    };
+    let preview = if img.width() > max || img.height() > max {
+        img.thumbnail(max, max)
+    } else {
+        img
+    }
+    .into_rgba8();
+    Ok((preview.width(), preview.height(), preview.into_raw()))
+}
+
+fn decode_batch<R: BufRead + Seek>(mut reader: ImageReader<R>) -> Result<DynamicImage> {
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(128 << 20);
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder()?;
+    let (width, height) = decoder.dimensions();
+    import::check_size(width, height)?;
+    // Include the eventual RGBA8 conversion even for single-channel images.
+    if decoder.total_bytes() > 128 << 20 || u64::from(width) * u64::from(height) > 32 << 20 {
+        return Err(crate::IoError::Unsupported(
+            "image exceeds browsing preview limits".into(),
+        ));
+    }
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let mut image = DynamicImage::from_decoder(decoder)?;
+    image.apply_orientation(orientation);
+    Ok(image)
+}
+
 /// A centred gallery crop sized for the card's device pixels. Crop before
 /// resizing so tall/wide images do not stretch an undersized fitted thumbnail.
 /// Small sources keep their native resolution; no detail is invented.
@@ -293,6 +349,78 @@ mod tests {
         let file = Fixture::archive(false);
         let (w, h, _) = thumbnail_cover(&file.0, 800, 600).unwrap();
         assert_eq!((w, h), (256, 192));
+    }
+
+    #[test]
+    fn batch_uses_small_embedded_native_preview_without_compositing() {
+        let file = Fixture::archive(true);
+        let (width, height, pixels) = batch_thumbnail(&file.0, 800).unwrap();
+        assert_eq!((width, height), (256, 192));
+        assert_eq!(&pixels[..4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn batch_does_not_develop_raw_without_an_embedded_preview() {
+        let file = Fixture::new("dng");
+        raw_fixture::write_dng(&file.0);
+        assert!(matches!(
+            batch_thumbnail(&file.0, 128),
+            Err(crate::IoError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn batch_accepts_small_raw_preview_and_ignores_sidecar_edits() {
+        let file = Fixture::new("dng");
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode(&[90; 4 * 2 * 3], 4, 2, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let mut bytes = b"II*\0\x08\0\0\0\x03\0".to_vec();
+        for (tag, value) in [(50706u16, 1u32), (513, 50), (514, jpeg.len() as u32)] {
+            bytes.extend(tag.to_le_bytes());
+            bytes.extend(4u16.to_le_bytes());
+            bytes.extend(1u32.to_le_bytes());
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend(jpeg);
+        std::fs::write(&file.0, bytes).unwrap();
+        let sidecar = Fixture(
+            crate::raw_settings::sidecar_path(&file.0.canonicalize().unwrap()).unwrap(),
+        );
+        std::fs::write(&sidecar.0, b"invalid saved recipe").unwrap();
+        let (width, height, pixels) = batch_thumbnail(&file.0, 128).unwrap();
+        assert_eq!((width, height), (4, 2));
+        assert_eq!(pixels.len(), 4 * 2 * 4);
+    }
+
+    #[test]
+    fn batch_does_not_fall_back_to_application_opener() {
+        let file = Fixture::new("svg");
+        std::fs::write(
+            &file.0,
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"/>"#,
+        )
+        .unwrap();
+        assert!(batch_thumbnail(&file.0, 128).is_err());
+        let malformed_raw = Fixture::new("nef");
+        std::fs::write(&malformed_raw.0, b"invalid raw").unwrap();
+        assert!(batch_thumbnail(&malformed_raw.0, 128).is_err());
+    }
+
+    #[test]
+    fn batch_fits_rasters_and_rejects_excessive_dimensions() {
+        let file = Fixture::new("png");
+        let img = image::RgbaImage::from_pixel(80, 40, image::Rgba([0, 255, 0, 255]));
+        std::fs::write(&file.0, crate::export::png8(80, 40, img.as_raw()).unwrap()).unwrap();
+        let (width, height, pixels) = batch_thumbnail(&file.0, 20).unwrap();
+        assert_eq!((width, height), (20, 10));
+        assert_eq!(pixels.len(), 20 * 10 * 4);
+
+        let img = image::RgbaImage::new(16385, 1);
+        std::fs::write(&file.0, crate::export::png8(16385, 1, img.as_raw()).unwrap()).unwrap();
+        assert!(batch_thumbnail(&file.0, 20).is_err());
     }
 
     #[test]
