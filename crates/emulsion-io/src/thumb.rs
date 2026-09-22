@@ -75,7 +75,15 @@ fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
         ))
     } else {
         let reader = image::ImageReader::open(path)?.with_guessed_format()?;
-        decode(reader)
+        match decode(reader) {
+            Ok(image) => Ok(image),
+            // Layered, vector, JPEG XL, and converter-backed formats are
+            // handled by the application opener rather than `image` itself.
+            // Batch uses the same openable-format predicate, so give every
+            // accepted input a real preview path.
+            Err(_) if crate::is_openable(path) => composite(&crate::open(path)?, width, height),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -310,6 +318,22 @@ mod tests {
         );
         let center = ((h / 2 * w + w / 2) * 4) as usize;
         assert_eq!(&pixels[center..center + 4], &[0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn thumbnail_falls_back_to_the_application_opener_for_svg() {
+        let file = Fixture::new("svg");
+        std::fs::write(
+            &file.0,
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">
+                    <rect width="40" height="20" fill="#00ff00"/>
+                </svg>"##,
+        )
+        .unwrap();
+
+        let (width, height, pixels) = thumbnail(&file.0, 20).unwrap();
+        assert_eq!((width, height), (20, 10));
+        assert_eq!(pixels.len(), 20 * 10 * 4);
     }
 
     #[test]

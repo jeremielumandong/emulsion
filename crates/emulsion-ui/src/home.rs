@@ -792,7 +792,7 @@ impl Workspace {
                         div()
                             .text_size(rems(0.625))
                             .text_color(p.muted)
-                            .child("ORA · PNG · JPEG · TIFF · WebP"),
+                            .child("RAW and supported image files"),
                     ),
             )
             .into_any_element()

@@ -106,8 +106,10 @@ impl BatchState {
     }
 }
 
-fn is_picture(p: &Path) -> bool {
-    !emulsion_io::is_svg(p) && emulsion_io::is_openable(p)
+/// Keep Batch in lockstep with the application's real import surface. This
+/// includes camera RAW files and formats supplied by an installed converter.
+fn is_batch_input(path: &Path) -> bool {
+    emulsion_io::is_openable(path)
 }
 
 /// Pictures in a folder, sorted by name.
@@ -116,7 +118,7 @@ fn list_folder(dir: &Path) -> Vec<PathBuf> {
         .map(|rd| {
             rd.flatten()
                 .map(|e| e.path())
-                .filter(|p| p.is_file() && is_picture(p))
+                .filter(|p| p.is_file() && is_batch_input(p))
                 .collect()
         })
         .unwrap_or_default();
@@ -304,6 +306,9 @@ impl Workspace {
         b.folder = Some(dir);
         b.items = paths
             .into_iter()
+            // `load_batch` is also called by Home, so preserve the supported
+            // input invariant even when no folder scan happened first.
+            .filter(|path| is_batch_input(path))
             .map(|path| BatchItem {
                 path,
                 selected: true,
@@ -1157,7 +1162,42 @@ pub(crate) fn batch_ext(format: &str) -> &'static str {
 
 #[cfg(test)]
 mod export_safety_tests {
-    use super::{BatchStage, publish_batch_file};
+    use super::{BatchStage, list_folder, publish_batch_file};
+
+    #[test]
+    fn folder_scan_keeps_supported_images_and_camera_raw_files_only() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "emulsion-batch-inputs-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        for name in [
+            "portrait.PNG",
+            "camera.CR3",
+            "drawing.svg",
+            "notes.txt",
+            "raw-sidecar.json",
+            "no-extension",
+        ] {
+            std::fs::write(dir.join(name), b"fixture").unwrap();
+        }
+        std::fs::create_dir(dir.join("looks-like-a-photo.jpg")).unwrap();
+
+        let listed = list_folder(&dir);
+        let mut expected = vec![
+            dir.join("portrait.PNG"),
+            dir.join("camera.CR3"),
+            dir.join("drawing.svg"),
+        ];
+        expected.sort();
+        assert_eq!(listed, expected);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn refreshing_recipe_catalog_loads_new_and_updated_workflows_and_rejects_old_preview() {
