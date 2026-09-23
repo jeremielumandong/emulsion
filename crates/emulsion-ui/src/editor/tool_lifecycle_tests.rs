@@ -395,34 +395,20 @@ fn brush_samples_coalesce_and_pointer_up_flushes_before_undo(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn choosing_a_medium_activates_its_brush_and_preserves_active_adjustments(cx: &mut TestAppContext) {
-    use emulsion_raster::library;
+fn browsing_brush_categories_preserves_active_brush_mode_and_adjustments(cx: &mut TestAppContext) {
     let v = view(cx);
     v.update(cx, |v, cx| {
-        v.set_paint(PaintKind::Brush, cx);
+        v.set_paint(PaintKind::Smudge, cx);
+        assert!(v.apply_preset_named("Fine spray", cx));
+        v.tools.brush.size = 73.;
+        let brush = v.tools.brush;
         for category in ["Oil", "Ink", "Airbrush", "Eraser", "Smudge", "Chalk"] {
-            let expected = library::library()
-                .into_iter()
-                .find(|p| p.category == category)
-                .unwrap();
             v.select_brush_category(category, cx);
             assert_eq!(v.presets.category.as_deref(), Some(category));
-            assert_eq!(v.presets.current.as_deref(), Some(expected.name.as_str()));
-            assert_eq!(v.tools.brush, expected.brush.sanitized());
-            assert_eq!(
-                v.tools.paint,
-                match category {
-                    "Eraser" => PaintKind::Eraser,
-                    "Smudge" => PaintKind::Smudge,
-                    _ => PaintKind::Brush,
-                }
-            );
+            assert_eq!(v.presets.current.as_deref(), Some("Fine spray"));
+            assert_eq!(v.tools.brush, brush);
+            assert_eq!(v.tools.paint, PaintKind::Smudge);
         }
-        v.select_brush_category("Airbrush", cx);
-        assert_eq!(v.tools.brush.hardness, 0.);
-        assert_eq!(v.tools.brush.flow, 0.08);
-        v.apply_preset_named("Fine spray", cx);
-        v.tools.brush.size = 73.;
         v.select_brush_category("Airbrush", cx);
         assert_eq!(v.presets.current.as_deref(), Some("Fine spray"));
         assert_eq!(

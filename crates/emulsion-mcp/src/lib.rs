@@ -9,7 +9,10 @@
 //!   app over loopback TCP, authenticated with a per-session token.
 
 mod blending;
+mod brush_assets;
+mod brush_catalog;
 mod brush_discovery;
+pub mod brush_tools;
 pub mod exec;
 mod export_tools;
 mod preview;

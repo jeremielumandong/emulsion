@@ -13,6 +13,7 @@ license = "MIT"
 # internal
 emulsion-core = { path = "crates/emulsion-core" }
 emulsion-raster = { path = "crates/emulsion-raster" }
+emulsion-brushes = { path = "crates/emulsion-brushes" }
 emulsion-gpu = { path = "crates/emulsion-gpu" }
 emulsion-tools = { path = "crates/emulsion-tools" }
 emulsion-filters = { path = "crates/emulsion-filters" }

@@ -1703,6 +1703,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "emulsion-brushes"
+version = "0.0.1"
+dependencies = [
+ "emulsion-raster",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "emulsion-color"
 version = "0.0.1"
 dependencies = [
@@ -1760,6 +1770,7 @@ version = "0.0.1"
 dependencies = [
  "ag-psd",
  "anyhow",
+ "emulsion-brushes",
  "emulsion-color",
  "emulsion-core",
  "emulsion-filters",
@@ -1880,6 +1891,7 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "unicode-segmentation",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

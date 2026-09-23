@@ -1,5 +1,7 @@
 # Brush Library and Brush Studio implementation plan
 
+Implementation update (2026-09-22): the library, Studio, expanded CPU engine, dual brushes, Windows input adapter, memories, and package/import workflows are implemented. See [usage](brush-workflow.md), [validation and remaining hardware gates](brush-validation.md), and [format boundaries](brush-import-formats.md). The audit below records the original baseline; its test-status notes are historical.
+
 Audit date: 2026-09-22. Scope: the current working tree, including the uncommitted Brush Settings sidebar and quick-controls work. This is a gap assessment and implementation plan; no application code was changed.
 
 Emulsion has a useful brush engine already. The largest missing pieces are a durable library model, a safe brush-authoring workflow, Windows pen input, and deeper rendering semantics. Build on the existing engine rather than replacing it or adding a screen full of unsupported settings.

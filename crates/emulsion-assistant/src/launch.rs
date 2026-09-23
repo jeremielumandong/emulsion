@@ -599,10 +599,42 @@ mod tests {
             "confirmations come to Emulsion"
         );
         assert_eq!(a[pos("--mcp-config") + 1], "/tmp/s/mcp.json");
-        assert_eq!(
-            a[pos("--allowedTools") + 1],
-            "mcp__emulsion__describe_document,mcp__emulsion__get_view,mcp__emulsion__get_reference_image,mcp__emulsion__list_history,mcp__emulsion__compare,mcp__emulsion__list_brushes,mcp__emulsion__list_shape_stroke_presets,mcp__emulsion__list_recipes,mcp__emulsion__critique,mcp__emulsion__list_fonts,mcp__emulsion__list_models"
+        let allowed: std::collections::HashSet<_> =
+            a[pos("--allowedTools") + 1].split(',').collect();
+        for name in [
+            "describe_document",
+            "get_view",
+            "list_brushes",
+            "describe_brush_library",
+            "preview_brush",
+        ] {
+            let qualified = emulsion_mcp::tools::qualified(name);
+            assert!(
+                allowed.contains(qualified.as_str()),
+                "read-only tool {name} is available without confirmation"
+            );
+        }
+        for name in [
+            "manage_brush_library",
+            "edit_brush",
+            "brush_memories",
+            "brush_source",
+            "import_brushes",
+            "export_brushes",
+            "paint",
+        ] {
+            let qualified = emulsion_mcp::tools::qualified(name);
+            assert!(
+                !allowed.contains(qualified.as_str()),
+                "writing tool {name} requires host confirmation"
+            );
+        }
+        assert!(
+            allowed
+                .iter()
+                .all(|name| name.starts_with("mcp__emulsion__"))
         );
+        assert!(!allowed.iter().any(|name| name.contains('*')));
         assert_eq!(a[pos("--model") + 1], "sonnet");
         assert!(
             a.contains(&"--restricted".to_string())

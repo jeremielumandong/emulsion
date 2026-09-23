@@ -3,6 +3,8 @@
 //! GPUI's pointer events carry position only. macOS uses an AppKit local
 //! event monitor which observes native tablet events and tablet mouse
 //! subtypes before GPUI dispatch, returning every event unchanged.
+//! Windows observes native pointer messages on the UI thread before GPUI's
+//! normal mouse dispatch. Pressure and tilt are read together from Windows Ink.
 //! On Linux the tablet is also
 //! an evdev device, so a background thread opens every device that reports
 //! pen pressure and keeps the latest pressure, tilt and pen-down state. The
@@ -32,6 +34,7 @@ struct State {
     /// Devices that looked like tablets but could not be opened.
     denied: Vec<String>,
     scanned: bool,
+    backend_error: Option<String>,
 }
 
 fn state() -> &'static Arc<Mutex<State>> {
@@ -55,13 +58,17 @@ fn active_sample(sample: Option<PenSample>, now: Instant) -> Option<PenSample> {
 /// The pressure to use for a pointer move happening now, if a pen is
 /// reporting one.
 pub fn pressure() -> Option<f32> {
-    let s = state().lock().ok()?;
-    active_sample(s.latest, Instant::now()).map(|p| p.pressure)
+    sample().map(|p| p.pressure)
 }
 
 pub fn tilt() -> Option<(f32, f32)> {
+    sample().map(|p| p.tilt)
+}
+
+/// Read pressure and tilt from one native event under a single lock.
+pub fn sample() -> Option<PenSample> {
     let s = state().lock().ok()?;
-    active_sample(s.latest, Instant::now()).map(|p| p.tilt)
+    active_sample(s.latest, Instant::now())
 }
 
 #[cfg(test)]
@@ -97,6 +104,9 @@ mod sample_tests {
 
 /// What the status line says about pressure.
 pub fn status() -> String {
+    if let Some(error) = state().lock().ok().and_then(|s| s.backend_error.clone()) {
+        return format!("pen input unavailable ({error}); pressure: speed");
+    }
     let s = state()
         .lock()
         .map(|s| (s.devices.clone(), s.denied.clone(), s.scanned))
@@ -128,13 +138,18 @@ pub fn start() {
     linux::start();
     #[cfg(target_os = "macos")]
     macos::start();
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    windows::start();
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         if let Ok(mut s) = state().lock() {
             s.scanned = true;
         }
     }
 }
+
+#[cfg(target_os = "windows")]
+mod windows;
 
 #[cfg(target_os = "macos")]
 mod macos {

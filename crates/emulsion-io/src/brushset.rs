@@ -19,6 +19,10 @@ pub struct Imported {
     pub preset: BrushPreset,
     pub shape_png: Option<Vec<u8>>,
     pub grain_png: Option<Vec<u8>>,
+    /// Settings that could not be faithfully converted for this brush.
+    pub warnings: Vec<String>,
+    /// Enclosing collection recovered from a nested library archive.
+    pub source_set: Option<String>,
 }
 
 /// Resolve an NSKeyedArchiver plist into its root object as a flat map
@@ -67,13 +71,9 @@ fn keyed_root(v: &Value) -> HashMap<String, Value> {
                 continue;
             }
             let rv = resolve(v);
-            // Strings and numbers are all the importer needs; skip nested objects.
-            match rv {
-                Value::String(_) | Value::Real(_) | Value::Integer(_) | Value::Boolean(_) => {
-                    out.insert(k.clone(), rv);
-                }
-                _ => {}
-            }
+            // Keep unconverted object keys so the compatibility report can
+            // identify nested features instead of silently dropping them.
+            out.insert(k.clone(), rv);
         }
     }
     out
@@ -165,47 +165,148 @@ fn brush_from(m: &HashMap<String, Value>, has_shape: bool, has_grain: bool) -> B
     }
 }
 
-fn read_entry<R: Read + std::io::Seek>(z: &mut zip::ZipArchive<R>, name: &str) -> Option<Vec<u8>> {
-    let f = z.by_name(name).ok()?;
+fn read_entry<R: Read + std::io::Seek>(
+    z: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Result<Option<Vec<u8>>> {
+    let f = match z.by_name(name) {
+        Ok(f) => f,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    const MAX_ENTRY: u64 = 32 << 20;
+    if f.size() > MAX_ENTRY {
+        return Err(IoError::Unsupported(format!(
+            "brush entry {name} exceeds 32 MiB"
+        )));
+    }
     let mut bytes = Vec::new();
-    f.take(64 << 20).read_to_end(&mut bytes).ok()?;
-    Some(bytes)
+    f.take(MAX_ENTRY + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_ENTRY {
+        return Err(IoError::Unsupported(format!(
+            "brush entry {name} exceeds 32 MiB"
+        )));
+    }
+    Ok(Some(bytes))
 }
 
 /// Import a `.brushset` or `.brush` file.
 pub fn import(path: &Path) -> Result<Vec<Imported>> {
     let file = std::fs::File::open(path)?;
-    let mut z = zip::ZipArchive::new(std::io::BufReader::new(file))
+    let z = zip::ZipArchive::new(std::io::BufReader::new(file))
         .map_err(|e| IoError::Unsupported(format!("not a brush archive: {e}")))?;
+    let label = path.file_stem().unwrap_or_default().to_string_lossy();
+    import_zip(z, &label, 0, &mut 0)
+}
+
+fn import_zip<R: Read + std::io::Seek>(
+    mut z: zip::ZipArchive<R>,
+    set_name: &str,
+    depth: usize,
+    expanded: &mut u64,
+) -> Result<Vec<Imported>> {
+    if depth > 3 {
+        return Err(IoError::Unsupported(
+            "brush archive nesting exceeds limit".into(),
+        ));
+    }
+    if z.len() > 10000 {
+        return Err(IoError::Unsupported(
+            "brush archive has too many entries".into(),
+        ));
+    }
     // Group entries by folder: "" for a single .brush, "Name/" in a set.
     let mut folders: Vec<String> = Vec::new();
+    let mut nested: Vec<String> = Vec::new();
     for i in 0..z.len() {
-        let Ok(f) = z.by_index(i) else { continue };
+        let f = z.by_index(i)?;
+        *expanded = expanded.saturating_add(f.size());
+        if *expanded > 512 << 20 {
+            return Err(IoError::Unsupported(
+                "brush archive exceeds 512 MiB expanded".into(),
+            ));
+        }
         let name = f.name().to_string();
         if name.ends_with("Brush.archive") {
             let dir = name.trim_end_matches("Brush.archive").to_string();
             if !folders.contains(&dir) {
                 folders.push(dir);
             }
+        } else if name.to_ascii_lowercase().ends_with(".brush")
+            || name.to_ascii_lowercase().ends_with(".brushset")
+        {
+            nested.push(name);
         }
     }
-    if folders.is_empty() {
-        return Err(IoError::Unsupported("no Brush.archive inside".into()));
+    if folders.is_empty() && nested.is_empty() {
+        return Err(IoError::Unsupported("no supported Brush.archive or nested .brush/.brushset inside; this library layout is unsupported".into()));
     }
-    let set_name = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "Imported".into());
     let mut out = Vec::new();
     for dir in folders {
-        let Some(archive) = read_entry(&mut z, &format!("{dir}Brush.archive")) else {
+        let Some(archive) = read_entry(&mut z, &format!("{dir}Brush.archive"))? else {
             continue;
         };
         let settings = plist::from_bytes::<Value>(&archive)
             .map(|v| keyed_root(&v))
-            .unwrap_or_default();
-        let shape_png = read_entry(&mut z, &format!("{dir}Shape.png"));
-        let grain_png = read_entry(&mut z, &format!("{dir}Grain.png"));
+            .map_err(|e| {
+                IoError::Unsupported(format!("invalid settings in {dir}Brush.archive: {e}"))
+            })?;
+        let shape_png = read_entry(&mut z, &format!("{dir}Shape.png"))?;
+        let grain_png = read_entry(&mut z, &format!("{dir}Grain.png"))?;
+        let mut warnings = vec![
+            "Procreate rendering is approximated; only supported scalar settings are converted"
+                .into(),
+        ];
+        let known = [
+            "name",
+            "bundledBrushName",
+            "brushName",
+            "paintSize",
+            "maxSize",
+            "size",
+            "plotSpacing",
+            "spacing",
+            "paintOpacity",
+            "maxOpacity",
+            "opacity",
+            "paintFlow",
+            "flow",
+            "shapeHardness",
+            "hardness",
+            "grainDepth",
+            "grainIntensity",
+            "grainScale",
+            "grainZoom",
+            "shapeRotation",
+            "shapeAngle",
+            "shapeOrientToStroke",
+            "shapeAzimuth",
+            "dynamicsPressureSize",
+            "pressureSize",
+            "dynamicsPressureOpacity",
+            "pressureOpacity",
+            "dynamicsPressureFlow",
+            "shapeScatter",
+            "scatter",
+            "taperSize",
+            "taperStartLength",
+            "taperLength",
+            "wetMix",
+            "dynamicsMix",
+            "smudgeAmount",
+            "dilution",
+            "blendMode",
+            "paintBlendMode",
+        ];
+        let mut unknown: Vec<_> = settings
+            .keys()
+            .filter(|k| !known.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        unknown.sort();
+        if !unknown.is_empty() {
+            warnings.push(format!("Unconverted fields: {}", unknown.join(", ")));
+        }
         let mut brush = brush_from(&settings, shape_png.is_some(), grain_png.is_some());
         if let Some(png) = &shape_png {
             brush.tip = textures::id_for(png);
@@ -223,7 +324,7 @@ pub fn import(path: &Path) -> Result<Vec<Imported>> {
             .filter(|n| !n.trim().is_empty())
             .unwrap_or_else(|| {
                 if folder_name.is_empty() {
-                    set_name.clone()
+                    set_name.to_owned()
                 } else {
                     folder_name.clone()
                 }
@@ -232,17 +333,40 @@ pub fn import(path: &Path) -> Result<Vec<Imported>> {
             preset: BrushPreset {
                 name,
                 category: format!("Imported · {set_name}"),
-                note: format!(
-                    "From {}",
-                    path.file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default()
-                ),
+                note: format!("From {set_name}"),
                 brush: brush.sanitized(),
             },
             shape_png,
             grain_png,
+            warnings,
+            source_set: dir
+                .trim_end_matches('/')
+                .rsplit_once('/')
+                .map(|(parent, _)| parent.rsplit('/').next().unwrap_or(parent).to_owned()),
         });
+    }
+    for name in nested {
+        let Some(bytes) = read_entry(&mut z, &name)? else {
+            continue;
+        };
+        let nested_zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+        let entry_path = Path::new(&name);
+        let label = entry_path.file_stem().unwrap_or_default().to_string_lossy();
+        let enclosing = if name.to_ascii_lowercase().ends_with(".brushset") {
+            Some(label.to_string())
+        } else {
+            entry_path
+                .parent()
+                .and_then(Path::file_name)
+                .map(|s| s.to_string_lossy().into_owned())
+        };
+        let mut brushes = import_zip(nested_zip, &label, depth + 1, expanded)?;
+        for b in &mut brushes {
+            if b.source_set.is_none() {
+                b.source_set = enclosing.clone();
+            }
+        }
+        out.extend(brushes);
     }
     Ok(out)
 }
@@ -250,6 +374,16 @@ pub fn import(path: &Path) -> Result<Vec<Imported>> {
 /// Decode a texture PNG (alpha if it has one, else luminance) and put it
 /// in the registry under its id. Returns the id.
 pub fn register_texture(png: &[u8]) -> Result<u32> {
+    if png.len() > 32 << 20 {
+        return Err(IoError::Unsupported("brush texture exceeds 32 MiB".into()));
+    }
+    let reader = image::ImageReader::new(std::io::Cursor::new(png)).with_guessed_format()?;
+    let (width, height) = reader.into_dimensions()?;
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 4096 * 4096 {
+        return Err(IoError::Unsupported(
+            "brush texture exceeds 16 megapixels".into(),
+        ));
+    }
     let img = image::load_from_memory(png)?;
     let id = textures::id_for(png);
     let (w, h) = (img.width(), img.height());
@@ -369,7 +503,8 @@ mod tests {
             z.start_file("Charcoal/Grain.png", opts).unwrap();
             z.write_all(&grain).unwrap();
             z.start_file("Plain/Brush.archive", opts).unwrap();
-            z.write_all(b"not a plist").unwrap();
+            z.write_all(b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict/></plist>")
+                .unwrap();
             z.finish().unwrap();
         }
         let got = import(&path).unwrap();
@@ -383,7 +518,7 @@ mod tests {
         assert!((b.preset.brush.grain_strength - 0.8).abs() < 1e-6);
         assert_eq!(
             got[1].preset.name, "Plain",
-            "unreadable settings fall back to the folder name"
+            "unnamed settings fall back to the folder name"
         );
         let id = register_texture(b.shape_png.as_ref().unwrap()).unwrap();
         assert_eq!(id, b.preset.brush.tip);

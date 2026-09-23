@@ -1,6 +1,10 @@
 //! Brush controls next to the pointer or their toolbar trigger.
 use super::*;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::{
+    Disableable, Selectable, Sizable,
+    button::{Button, ButtonVariants},
+};
 
 /// The small view observes the editor so open menus display live brush values.
 struct BrushQuickControls {
@@ -9,6 +13,7 @@ struct BrushQuickControls {
 }
 
 pub(super) fn menu(menu: PopupMenu, editor: &Entity<EditorView>, cx: &mut App) -> PopupMenu {
+    editor.update(cx, |editor, cx| editor.prepare_presets(cx));
     let view = cx.new(|cx| BrushQuickControls {
         editor: editor.downgrade(),
         _observe: cx.observe(editor, |_, _, cx| cx.notify()),
@@ -81,6 +86,96 @@ impl EditorView {
             &p,
             cx,
         ));
+        let key = self.active_memory_key();
+        let has_brush = key.is_some() && self.presets.current_id.is_some();
+        let marks = self.active_brush_marks(cx);
+        let mut memories =
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_xs().text_color(p.muted).child(match key {
+                    Some("paint") => "Paint memories · size and opacity",
+                    Some("smudge") => "Smudge memories · size and opacity",
+                    Some("erase") => "Erase memories · size and opacity",
+                    _ => "Brush memories · size and opacity",
+                }));
+        for (index, mark) in marks.into_iter().enumerate() {
+            let active = mark.is_some_and(|m| {
+                (m.size - brush.size).abs() < 0.01 && (m.opacity - brush.opacity).abs() < 0.001
+            });
+            let label = mark
+                .map(|m| format!("{}: {:.0}px · {:.0}%", index + 1, m.size, m.opacity * 100.0))
+                .unwrap_or_else(|| format!("{}: Empty", index + 1));
+            memories = memories.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        Button::new(("brush-memory-recall", index))
+                            .small()
+                            .outline()
+                            .flex_1()
+                            .label(label)
+                            .selected(active)
+                            .disabled(!has_brush || mark.is_none())
+                            .tooltip("Recall this size and opacity")
+                            .on_click(cx.listener(move |editor, _, _, cx| {
+                                editor.recall_brush_mark(index, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new(("brush-memory-save", index))
+                            .small()
+                            .outline()
+                            .label(if mark.is_some() { "Replace" } else { "Save" })
+                            .disabled(!has_brush)
+                            .tooltip("Save current size and opacity in this memory")
+                            .on_click(cx.listener(move |editor, _, _, cx| {
+                                editor.save_brush_mark(index, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new(("brush-memory-remove", index))
+                            .small()
+                            .ghost()
+                            .label("Clear")
+                            .disabled(!has_brush || mark.is_none())
+                            .on_click(cx.listener(move |editor, _, _, cx| {
+                                editor.remove_brush_mark(index, cx)
+                            })),
+                    ),
+            );
+        }
+        if !has_brush {
+            memories = memories.child(
+                div()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child("Select a library brush to save memories."),
+            );
+        }
+        let mut transfer = div().flex().items_center().gap_1();
+        for (id, label, target) in [
+            ("transfer-brush-paint", "Paint", PaintKind::Brush),
+            ("transfer-brush-smudge", "Smudge", PaintKind::Smudge),
+            ("transfer-brush-erase", "Erase", PaintKind::Eraser),
+        ] {
+            let current = self.tool == Tool::Brush && self.tools.paint == target;
+            transfer = transfer.child(
+                Button::new(id)
+                    .small()
+                    .outline()
+                    .flex_1()
+                    .label(label)
+                    .selected(current)
+                    .disabled(current)
+                    .on_click(
+                        cx.listener(move |editor, _, _, cx| editor.transfer_brush_to(target, cx)),
+                    ),
+            );
+        }
         div()
             .id("brush-quick-controls")
             .test_support()
@@ -88,7 +183,7 @@ impl EditorView {
             .flex_col()
             .gap_2()
             .p_2()
-            .w(rems(18.))
+            .w(rems(22.))
             .text_sm()
             .text_color(p.ink)
             // A custom menu item normally closes on click. These controls stay
@@ -117,6 +212,56 @@ impl EditorView {
             )
             .child(div().child("Brush settings"))
             .children(controls)
+            .child(memories)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child("Use current brush with"),
+            )
+            .child(transfer)
+            .when(
+                self.tool == Tool::Brush
+                    && matches!(self.tools.paint, PaintKind::Brush | PaintKind::Smudge),
+                |controls| {
+                    controls
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(p.muted)
+                                .child("Wet paint and smudge sampling"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_1()
+                                .child(
+                                    Button::new("brush-sample-visible")
+                                        .small()
+                                        .outline()
+                                        .flex_1()
+                                        .label("Visible layers")
+                                        .selected(self.tools.sample_merged)
+                                        .on_click(cx.listener(|editor, _, _, cx| {
+                                            editor.tools.sample_merged = true;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("brush-sample-current")
+                                        .small()
+                                        .outline()
+                                        .flex_1()
+                                        .label("Current layer")
+                                        .selected(!self.tools.sample_merged)
+                                        .on_click(cx.listener(|editor, _, _, cx| {
+                                            editor.tools.sample_merged = false;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                },
+            )
             .child(
                 div()
                     .text_xs()

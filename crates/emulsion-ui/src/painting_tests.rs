@@ -237,17 +237,27 @@ fn liquify_restore_uses_the_session_original_and_selection_clips_warps(cx: &mut 
 }
 
 #[gpui_kit::test]
-fn preset_tool_switches_preserve_the_previous_brush_and_leave_liquify(cx: &mut TestAppContext) {
+fn selecting_brushes_preserves_paint_smudge_erase_and_leaves_liquify(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Photo"], None));
     let e = editor(&ws, cx);
     cx.update(|_, cx| {
         e.update(cx, |e, cx| {
+            for mode in [PaintKind::Brush, PaintKind::Smudge, PaintKind::Eraser] {
+                e.set_paint(mode, cx);
+                assert!(e.apply_preset_named("Soft eraser", cx));
+                assert_eq!(
+                    e.paint_kind(),
+                    mode,
+                    "preset names must not change the operation"
+                );
+                assert!(e.apply_preset_named("Chalk", cx));
+                assert_eq!(e.paint_kind(), mode);
+            }
             e.set_paint(PaintKind::Brush, cx);
             e.tools.brush.size = 37.0;
             e.tools.brush.size_pressure = 0.73;
             let brush = e.brush();
-            assert!(e.apply_preset_named("Soft eraser", cx));
-            assert_eq!(e.paint_kind(), PaintKind::Eraser);
+            e.set_paint(PaintKind::Eraser, cx);
             e.set_paint(PaintKind::Brush, cx);
             assert_eq!(e.brush(), brush);
             e.set_paint(PaintKind::Liquify, cx);
@@ -255,4 +265,71 @@ fn preset_tool_switches_preserve_the_previous_brush_and_leave_liquify(cx: &mut T
             assert_eq!(e.paint_kind(), PaintKind::Brush);
         })
     });
+}
+
+#[gpui_kit::test]
+fn brush_smudge_sampling_switches_between_current_and_visible_layers(cx: &mut TestAppContext) {
+    let mut document = doc(
+        &["Lower"],
+        Some(Raster::solid(256, 192, [1.0, 0.0, 0.0, 1.0])),
+    );
+    Command::AddNode {
+        node: Box::new(Node::raster(
+            0,
+            "Upper",
+            Arc::new(Raster::empty(256, 192, [0; 4])),
+            Placement::default(),
+        )),
+        slot: Slot::TOP,
+    }
+    .apply(&mut document)
+    .unwrap();
+    let upper = document
+        .nodes
+        .iter()
+        .find(|node| node.name == "Upper")
+        .unwrap()
+        .id;
+    let (ws, cx) = open(cx, document);
+    let e = editor(&ws, cx);
+    cx.update(|_, cx| {
+        e.update(cx, |editor, cx| {
+            editor.selected = Some(upper);
+            editor.set_paint(PaintKind::Smudge, cx);
+            editor.tools.brush = emulsion_raster::paint::Brush {
+                size: 30.0,
+                size_pressure: 0.0,
+                flow_pressure: 0.0,
+                hardness: 1.0,
+                ..Default::default()
+            };
+            editor.tools.sample_merged = false;
+        })
+    });
+    cx.run_until_parked();
+    click(&e, cx, (100.0, 96.0), false);
+    cx.run_until_parked();
+    let pixel = |e: &Entity<EditorView>, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let NodeKind::Raster { raster, .. } = &e.read(cx).editor.doc.node(upper).unwrap().kind
+            else {
+                panic!("raster")
+            };
+            raster.get(100, 96)
+        })
+    };
+    assert_eq!(
+        pixel(&e, cx),
+        [0; 4],
+        "current-layer smudge cannot pick up the lower red layer"
+    );
+    cx.update(|_, cx| e.update(cx, |editor, _| editor.tools.sample_merged = true));
+    click(&e, cx, (100.0, 96.0), false);
+    cx.run_until_parked();
+    let sampled = pixel(&e, cx);
+    assert!(
+        sampled[0] > 0 && sampled[3] > 0,
+        "visible-layer smudge must pick up red on the transparent upper layer"
+    );
+    assert_eq!((sampled[1], sampled[2]), (0, 0));
 }

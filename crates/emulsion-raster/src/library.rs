@@ -40,7 +40,7 @@ fn p(name: &str, category: &str, note: &str, brush: Brush) -> BrushPreset {
 /// Every built-in brush, grouped by category in `CATEGORIES` order.
 pub fn library() -> Vec<BrushPreset> {
     let d = Brush::default();
-    vec![
+    let mut presets = vec![
         // ── Manga: nibs, liners, tones and effects ──
         p(
             "Maru pen",
@@ -860,7 +860,78 @@ pub fn library() -> Vec<BrushPreset> {
                 ..d
             },
         ),
-    ]
+    ];
+    // Original presets exercising the authored dynamics; no third-party artwork.
+    let mut marker = Brush {
+        size: 36.,
+        grain: GrainKind::Paper,
+        grain_strength: 0.5,
+        flow: 0.65,
+        ..d
+    };
+    marker.advanced.grain.mode = crate::paint::GrainMode::Moving;
+    marker.advanced.path.lateral_jitter = 0.035;
+    marker.advanced.rendering = crate::paint::RenderingMode::Accumulating;
+    presets.push(p(
+        "Moving paper marker",
+        "Marker",
+        "Original paper texture moving with each stamp",
+        marker,
+    ));
+    let mut linen = Brush {
+        size: 64.,
+        roundness: 0.3,
+        follow_path: true,
+        grain: GrainKind::CrossHatch,
+        grain_scale: 3.,
+        grain_strength: 0.7,
+        ..d
+    };
+    linen.advanced.grain.rotation = 25.;
+    linen.advanced.stabilization.stages = 3;
+    linen.advanced.stabilization.amount = 0.3;
+    presets.push(p(
+        "Woven roller",
+        "Chalk",
+        "Original crossed-fiber roller with staged smoothing",
+        linen,
+    ));
+    let mut spray = Brush {
+        size: 12.,
+        spacing: 0.4,
+        hardness: 0.7,
+        flow: 0.35,
+        ..d
+    };
+    spray.advanced.shape.count = 5;
+    spray.advanced.shape.count_jitter = 0.7;
+    spray.advanced.path.lateral_jitter = 1.5;
+    spray.advanced.path.linear_jitter = 0.5;
+    spray.advanced.dynamics.opacity_jitter = 0.5;
+    presets.push(p(
+        "Scattered pigment",
+        "Airbrush",
+        "Seeded scattered dabs with independent coverage variation",
+        spray,
+    ));
+    let mut stamp = Brush {
+        size: 42.,
+        roundness: 0.22,
+        spacing: 0.7,
+        hardness: 0.95,
+        flow: 0.8,
+        ..d
+    };
+    stamp.advanced.shape.rotation_jitter = 1.;
+    stamp.advanced.color.stamp_hue = 0.04;
+    stamp.advanced.color.stamp_lightness = 0.12;
+    presets.push(p(
+        "Turning petals",
+        "Oil",
+        "Original rotating elliptical stamps with gentle pigment variation",
+        stamp,
+    ));
+    presets
 }
 
 /// Find a built-in brush by name, case-insensitively.

@@ -2181,11 +2181,11 @@ mod tools {
             (b.size, b.grain),
             (24.0, emulsion_raster::paint::GrainKind::Chalk)
         );
-        // Picking an eraser switches the paint kind too.
+        // Brush names do not override the explicitly selected painting mode.
         assert!(cx.update(|_, cx| e.update(cx, |e, cx| e.apply_preset_named("soft eraser", cx))));
         assert_eq!(
             cx.update(|_, cx| e.read(cx).paint_kind()),
-            crate::editor::PaintKind::Eraser
+            crate::editor::PaintKind::Brush
         );
     }
 

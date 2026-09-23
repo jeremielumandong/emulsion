@@ -14,6 +14,8 @@ pub const READ_ONLY: &[&str] = &[
     "list_history",
     "compare",
     "list_brushes",
+    "describe_brush_library",
+    "preview_brush",
     "list_shape_stroke_presets",
     "list_recipes",
     "critique",
@@ -566,8 +568,15 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "hatch",
-            "Shade an area with parallel strokes generated across rect [x, y, width, height] (or the selection's bounds), at angle (degrees, default 45) every spacing pixels (default 8), with a little jitter (0-1) so they look hand-made; cross=true adds a second direction. rect bounds the generated centrelines: brush footprints and jitter may extend outside it. Make a selection to enforce an exact painted boundary. Uses a brush and color like paint. One undo step.",
+            "Shade an area with parallel strokes generated across rect [x, y, width, height] (or the selection's bounds), at angle (degrees, default 45) every spacing pixels (default 8), with a little jitter (0-1) so they look hand-made; cross=true adds a second direction. rect bounds the generated centrelines: brush footprints and jitter may extend outside it. Make a selection to enforce an exact painted boundary. Uses a brush and color like paint, including secondary_settings, combine_mode, seed, alpha_lock, mirror and symmetry. Generated geometry keeps stabilization disabled. One undo step.",
             json!({ "node": node(), "brush": { "type": "string" }, "color": { "type": "string" }, "settings": { "type": "object" }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "angle": { "type": "number" }, "spacing": { "type": "number", "minimum": 1 }, "jitter": { "type": "number", "minimum": 0, "maximum": 1 }, "cross": { "type": "boolean" },
+                "secondary_settings": {"type":["object","null"]},
+                "combine_mode": {"type":"string","enum":["Normal","Multiply","Screen"]},
+                "seed": {"type":"integer","minimum":0},
+                "alpha_lock": {"type":"boolean"},
+                "mirror": {"type":"string","enum":["x","y","xy"]},
+                "symmetry": {"type":"integer","minimum":2,"maximum":64},
+                "mode": {"type":"string","enum":["paint","erase","smudge"]},
                 "sample_merged": {"type": "boolean", "default": false, "description": "Opt into lower-layer colour pickup for wet/smudge brushes."} }),
             &["node"],
         ),
@@ -793,7 +802,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "list_brushes",
-            "Discover brushes by name or category, intended uses, actual preset settings and supported ranges. The lightweight catalog indexes all matches; detailed settings and optional rendered swatches are paged together, up to 12 brushes at a time. Use query to narrow the catalog and offset/next_offset for further pages. Preset names are approximations, not proof of material simulation. Use names with paint.",
+            "Discover brushes by name or category, intended uses, actual preset settings and supported ranges. The lightweight catalog indexes all matches; detailed settings and optional rendered swatches are paged together, up to 12 brushes at a time. Use query to narrow the catalog and offset/next_offset for further pages. Preset names are approximations, not proof of material simulation. Use stable IDs or unambiguous names with paint.",
             json!({"query": {"type": "string", "description": "Case-insensitive name/category substring; default all."},
                 "swatches": {"type": "boolean", "default": true}, "offset": {"type": "integer", "minimum": 0, "description": "First brush in the filtered page of detailed settings and swatches; catalog indexes all matches."}}),
             &[],
@@ -802,11 +811,12 @@ pub fn definitions() -> Vec<ToolDef> {
             "paint",
             concat!(
                 "Paint strokes on a pixel layer with a brush from list_brushes. Each stroke is a polyline in document pixels; ",
-                "A stroke must give exactly one of points (1–2000 samples [x, y] or [x, y, pressure 0-1]) or nonempty d (SVG path data: M L C Q Z, absolute or relative) for smooth curves, with at most 4000 flattened points. SVG subpaths preserve pen lifts; the optional pressure envelope [start, end], both numeric 0–1, restarts for each subpath. Invalid pressure is rejected. ",
+                "A stroke must give exactly one of samples (1-2000 objects {x,y,pressure?,tilt:[x,y]?,time_ms?}), points (1–2000 samples [x, y] or [x, y, pressure 0-1]) or nonempty d (SVG path data: M L C Q Z, absolute or relative) for smooth curves, with at most 4000 flattened points. SVG subpaths preserve pen lifts; the optional pressure envelope [start, end], both numeric 0–1, restarts for each subpath. Invalid pressure is rejected. ",
                 "color is #RRGGBB (ignored by Eraser and Smudge brushes). settings overrides brush fields for the whole call, e.g. ",
                 "{\"size\": 6, \"opacity\": 0.5, \"hardness\": 1, \"flow\": 0.3, \"wetness\": 0.5, \"taper_end\": 20}. ",
                 "Setting precedence is the named brush preset, then call settings, then per-stroke settings, including when a stroke chooses another brush. ",
-                "Scripted strokes have no tablet tilt or timestamps: tilt and speed_thins have no effect, and stabilizer is disabled to preserve the supplied geometry. Use pressure samples/envelopes, taper_start/taper_end, roundness and angle for controlled line character. ",
+                "brush accepts a stable ID or unambiguous name from list_brushes; mode selects paint, erase or smudge independently of the chosen brush. Without mode, legacy Eraser/Smudge categories retain their operation. ",
+                "Rich samples enable pressure, tilt in degrees (each axis -90 to 90), speed dynamics and stabilization. time_ms must be finite, nonnegative and monotonic; missing time starts at 0 and then advances 16ms. Legacy points/SVG preserve computed geometry with stabilization disabled. secondary_settings overrides or creates a secondary brush; null disables it. combine_mode is Normal, Multiply or Screen. seed is an unsigned 64-bit integer for reproducible marks. Call-level defaults can be overridden per stroke. ",
                 "mirror / symmetry repeat every stroke across or around the canvas centre; alpha_lock keeps paint on existing pixels. ",
                 "Everything in one call is a single undo step. Group marks by the chosen medium's current stage and inspection checkpoints; no fixed number of calls or universal paint order is required. ",
                 "Work on your own layer (add_layer) so the person can hide or mask it."
@@ -814,8 +824,12 @@ pub fn definitions() -> Vec<ToolDef> {
             json!({
                 "node": node(),
                 "brush": { "type": "string", "minLength": 1 },
+                "mode": { "type": "string", "enum": ["paint", "erase", "smudge"] },
                 "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
                 "settings": { "type": "object", "description": "Brush overrides. blend accepts the serialized mode names listed by list_brushes, including Normal, Multiply, Screen, Overlay, SoftLight, Behind and Clear." },
+                "secondary_settings": {"type":["object","null"]},
+                "combine_mode": {"type":"string","enum":["Normal","Multiply","Screen"]},
+                "seed": {"type":"integer","minimum":0},
                 "sample_merged": {"type": "boolean", "default": false, "description": "Opt into frozen lower-layer colour pickup for wet/smudge brushes. Current and higher layers are excluded from the backdrop; current layer still supplies its own paint."},
                 "alpha_lock": {"type": "boolean", "default": false, "description": "Paint only where the layer already has pixels (shading inside an existing shape)."},
                 "mirror": {"type": "string", "enum": ["x", "y", "xy"], "description": "Also paint each stroke mirrored across the canvas centre: x = left/right, y = top/bottom, xy = both (quadrant symmetry)."},
@@ -825,14 +839,19 @@ pub fn definitions() -> Vec<ToolDef> {
                     "items": {
                         "type": "object",
                         "properties": {
+                            "samples": brush_samples_schema(),
+                            "secondary_settings": {"type":["object","null"]},
+                            "combine_mode": {"type":"string","enum":["Normal","Multiply","Screen"]},
+                            "seed": {"type":"integer","minimum":0},
                             "d": { "type": "string", "minLength": 1 },
                             "pressure": { "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 }, "minItems": 2, "maxItems": 2 },
                             "points": { "type": "array", "minItems": 1, "maxItems": 2000, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3, "description": "[x,y] or [x,y,pressure]; optional pressure must be from 0 to 1." } },
                             "brush": { "type": "string", "minLength": 1 },
+                            "mode": { "type": "string", "enum": ["paint", "erase", "smudge"] },
                             "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
                             "settings": { "type": "object" }
                         },
-                        "oneOf": [{"required": ["d"]}, {"required": ["points"]}]
+                        "oneOf": [{"required": ["d"]}, {"required": ["points"]}, {"required": ["samples"]}]
                     }
                 }
             }),
@@ -931,6 +950,8 @@ pub fn definitions() -> Vec<ToolDef> {
             &[],
         ),
     ];
+    definitions.extend(crate::brush_catalog::definitions());
+    definitions.extend(crate::brush_assets::definitions());
     definitions.extend(crate::raw_tools::definitions());
     definitions.extend(crate::raw_preview::definitions());
     definitions
@@ -939,4 +960,8 @@ pub fn definitions() -> Vec<ToolDef> {
 /// Tool names as the CLI sees them.
 pub fn qualified(name: &str) -> String {
     format!("mcp__{}__{name}", crate::SERVER_NAME)
+}
+
+fn brush_samples_schema() -> Value {
+    json!({"type":"array","minItems":1,"maxItems":2000,"items":{"type":"object","required":["x","y"],"additionalProperties":false,"properties":{"x":{"type":"number"},"y":{"type":"number"},"pressure":{"type":"number","minimum":0,"maximum":1},"tilt":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":-90,"maximum":90}},"time_ms":{"type":"number","minimum":0}}}})
 }

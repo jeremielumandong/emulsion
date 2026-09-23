@@ -1183,6 +1183,38 @@ impl EditorView {
     fn execute_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
         let tool_generation = self.assistant.tool_generation;
         let ordered = Self::ordered_tool(&call.name);
+        if emulsion_mcp::brush_tools::is_tool(&call.name) {
+            // The catalog has its own revision and is shared by every document.
+            // Once a transaction starts, report its actual result even if the
+            // originating document is closed or its assistant turn ends.
+            cx.spawn(async move |this, cx| {
+                let name = call.name.clone();
+                let args = call.arguments.clone();
+                let (mut result, report) = cx.background_spawn(async move {
+                    let result = emulsion_mcp::brush_tools::execute(&name, &args);
+                    let report = if !emulsion_mcp::brush_tools::is_read_only(&name)
+                        && name != "export_brushes"
+                    {
+                        Some(emulsion_io::brush_library::load_with_report())
+                    } else {
+                        None
+                    };
+                    (result, report)
+                }).await;
+                match report {
+                    Some(Ok(report)) => {
+                        cx.update(|cx| Self::publish_brush_catalog(report, cx));
+                    }
+                    Some(Err(error)) => {
+                        result.content.push(serde_json::json!({"type":"text","text":format!("Could not refresh the app's brush library: {error}")}));
+                    }
+                    None => {}
+                }
+                call.reply(result);
+                this.update(cx, |this, cx| this.complete_tool_work(tool_generation, cx)).ok();
+            }).detach();
+            return;
+        }
         if matches!(
             call.name.as_str(),
             "set_raw_comparison" | "list_raw_documents" | "synchronize_raw"
@@ -1465,7 +1497,11 @@ impl EditorView {
                         let t = budget / d;
                         let pressure = playback_pressure(pressure0, p, t, s.brush.pressure_curve);
                         let step = (px0 + (x - px0) * t, py0 + (y - py0) * t, pressure);
-                        stroke.point_at(step.0, step.1, step.2, None);
+                        // Rich samples carry timing and tilt: do not invent
+                        // input samples while animating the cursor between them.
+                        if s.samples.is_none() {
+                            stroke.point_at(step.0, step.1, step.2, None);
+                        }
                         pb.pos = Some(step);
                         let dp = to_doc.transform_point2(glam::dvec2(step.0 as f64, step.1 as f64));
                         pb.cursor = Some(((dp.x, dp.y), size));
@@ -1476,7 +1512,7 @@ impl EditorView {
                     budget -= d;
                     pb.stroke_done += d;
                 }
-                stroke.point_at(x, y, p, None);
+                s.feed_point(stroke, pb.point);
                 pb.pos = Some((x, y, p));
                 pb.point += 1;
                 let dp = to_doc.transform_point2(glam::dvec2(x as f64, y as f64));
@@ -2925,6 +2961,50 @@ mod mutation_queue_tests {
             late_reply.join().unwrap(),
         ] {
             assert_eq!(response["isError"], true, "{response}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn rich_brush_samples_match_immediate_and_animated_paint(cx: &mut TestAppContext) {
+        let args = serde_json::json!({
+            "node":1,"brush":"Maru pen","color":"#386db0","seed":87,
+            "settings":{"size":14,"size_jitter":0.3,"stabilizer":0.5,"tilt":0.8,
+                "advanced":{"dynamics":{"speed_opacity":0.5},"stabilization":{"amount":0.4,"stages":2}}},
+            "secondary_settings":{"size":9},"combine_mode":"Multiply",
+            "strokes":[{"samples":[
+                {"x":10,"y":20,"pressure":0.5,"tilt":[20,30],"time_ms":0},
+                {"x":95,"y":60,"pressure":0.9,"tilt":[50,30],"time_ms":25},
+                {"x":200,"y":15,"tilt":[40,20],"time_ms":100},
+                {"x":285,"y":60}]}]
+        });
+        let mut images = Vec::new();
+        for live in [false, true] {
+            let relay = Relay::start().unwrap();
+            let view = painting(cx, live);
+            let (call, reply) = call(&relay, "paint", args.clone());
+            view.update(cx, |view, cx| view.run_tool_now(call, cx));
+            if live {
+                for _ in 0..2000 {
+                    if !view.update(cx, |view, cx| view.playback_tick(cx)) {
+                        break;
+                    }
+                }
+            }
+            cx.run_until_parked();
+            let result = reply.join().unwrap();
+            assert_ne!(result["isError"], true, "{result}");
+            images.push(view.read_with(cx, |view, _| {
+                assert!(view.assistant.playback.is_none());
+                let NodeKind::Raster { raster, .. } = &view.editor.doc.node(1).unwrap().kind else {
+                    panic!("ink layer");
+                };
+                raster.clone()
+            }));
+        }
+        for y in 0..100 {
+            for x in 0..300 {
+                assert_eq!(images[0].get(x, y), images[1].get(x, y), "pixel {x},{y}");
+            }
         }
     }
 

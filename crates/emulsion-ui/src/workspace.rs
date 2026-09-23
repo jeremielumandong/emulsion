@@ -1239,6 +1239,7 @@ impl Workspace {
     ) {
         if !self.style_dialog_open(cx)
             && let Some(e) = &self.editor
+            && !e.read(cx).brush_workspace_open()
         {
             e.update(cx, f);
         }

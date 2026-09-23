@@ -30,8 +30,11 @@ fn node_label(doc: &Document, id: NodeId) -> String {
 }
 
 /// Run `name` with `args` against `editor`. Every change goes through the
-/// Command API, so it lands in history like a person's edit.
+/// Command API for document edits; brush tools commit the independent catalog.
 pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
+    if crate::brush_tools::is_tool(name) {
+        return crate::brush_tools::execute(name, args);
+    }
     if crate::tools::HEAVY.contains(&name) {
         return match plan_heavy(&editor.doc, name, args) {
             Ok(planned) => apply(editor, planned),
@@ -301,68 +304,266 @@ fn hex_color(v: &Value) -> Result<[f32; 4], ToolResult> {
     ]))
 }
 
-/// A brush by name with `settings` laid over it. Returns the brush and
-/// its library category ("" when built from settings alone).
+type ResolvedBrush = (
+    Brush,
+    String,
+    Option<(Brush, emulsion_raster::paint::DualBlend)>,
+);
+
+fn merge_known_brush_settings(
+    base: &mut Value,
+    patch: &Value,
+    path: &str,
+) -> Result<(), ToolResult> {
+    if let Some(fields) = patch.as_object() {
+        let target = base
+            .as_object_mut()
+            .ok_or_else(|| err(format!("{path} does not accept nested settings")))?;
+        for (key, value) in fields {
+            let next = format!("{path}.{key}");
+            let original = target
+                .get_mut(key)
+                .ok_or_else(|| err(format!("unknown brush setting {next:?}")))?;
+            merge_known_brush_settings(original, value, &next)?;
+        }
+    } else {
+        *base = patch.clone();
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_brush_settings(brush: Brush, s: &Value) -> Result<Brush, ToolResult> {
+    let obj = s
+        .as_object()
+        .ok_or_else(|| err("settings must be an object"))?;
+    // Merge over the brush's JSON so any field can be set.
+    let mut base = serde_json::to_value(brush).map_err(|e| err(e.to_string()))?;
+    for (k, v) in obj {
+        if base.get(k).is_none() {
+            return Err(err(format!("unknown brush setting {k:?}")));
+        }
+        base[k] = if k == "blend" {
+            let label = v
+                .as_str()
+                .ok_or_else(|| err("brush blend must be a mode name"))?;
+            let blend = emulsion_raster::paint::BrushBlend::parse(label)
+                .ok_or_else(|| err(format!("unknown brush blend mode {label:?}")))?;
+            serde_json::to_value(blend).map_err(|e| err(e.to_string()))?
+        } else if v.is_object() {
+            let mut merged = base[k].clone();
+            merge_known_brush_settings(&mut merged, v, k)?;
+            merged
+        } else {
+            v.clone()
+        };
+    }
+    let brush = serde_json::from_value::<Brush>(base)
+        .map_err(|e| err(format!("bad settings: {e}")))?
+        .sanitized();
+    Ok(brush)
+}
+
+/// A brush by stable ID or name with overrides, its library category, and
+/// optional secondary component. The catalog is loaded once per paint call.
 fn resolve_brush(
     name: Option<&Value>,
     settings: Option<&Value>,
     fallback: &Brush,
-) -> Result<(Brush, String), ToolResult> {
+    catalog: Option<&emulsion_io::brush_library::Catalog>,
+) -> Result<ResolvedBrush, ToolResult> {
     let name = name
         .map(|v| {
             v.as_str()
                 .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| err("brush must be a nonempty preset name from list_brushes"))
+                .ok_or_else(|| err("brush must be a nonempty ID or name from list_brushes"))
         })
         .transpose()?;
-    let (mut brush, category) = match name {
+    let (mut brush, category, secondary) = match name {
         Some(n) => {
-            let p = library::find(n)
-                .or_else(|| {
-                    let want = n.trim().to_lowercase();
-                    saved_brushes()
-                        .into_iter()
-                        .find(|p| p.name.to_lowercase() == want)
-                })
-                .ok_or_else(|| err(format!("no brush named {n:?}; call list_brushes")))?;
-            (p.brush, p.category)
-        }
-        None => (*fallback, String::new()),
-    };
-    if let Some(s) = settings {
-        let obj = s
-            .as_object()
-            .ok_or_else(|| err("settings must be an object"))?;
-        // Merge over the brush's JSON so any field can be set.
-        let mut base = serde_json::to_value(brush).map_err(|e| err(e.to_string()))?;
-        for (k, v) in obj {
-            if base.get(k).is_none() {
-                return Err(err(format!("unknown brush setting {k:?}")));
-            }
-            base[k] = if k == "blend" {
-                let label = v
-                    .as_str()
-                    .ok_or_else(|| err("brush blend must be a mode name"))?;
-                let blend = emulsion_raster::paint::BrushBlend::parse(label)
-                    .ok_or_else(|| err(format!("unknown brush blend mode {label:?}")))?;
-                serde_json::to_value(blend).map_err(|e| err(e.to_string()))?
+            let catalog = catalog.ok_or_else(|| err("Brush catalog was not loaded"))?;
+            let definition = if let Some(definition) = catalog.brush(n) {
+                definition
             } else {
-                v.clone()
+                let want = n.trim().to_lowercase();
+                let found: Vec<_> = catalog
+                    .brushes
+                    .iter()
+                    .filter(|b| b.name.to_lowercase() == want)
+                    .collect();
+                if found.len() > 1 {
+                    return Err(err(format!(
+                        "Several brushes are named {n:?}; use a brush ID from list_brushes"
+                    )));
+                }
+                found
+                    .first()
+                    .copied()
+                    .ok_or_else(|| err(format!("no brush named {n:?}; call list_brushes")))?
             };
+            let p = catalog.preset(&definition.id).expect("validated catalog");
+            (
+                p.brush,
+                p.category,
+                definition.secondary.map(|b| (b, definition.combine_mode)),
+            )
         }
-        brush = serde_json::from_value::<Brush>(base)
-            .map_err(|e| err(format!("bad settings: {e}")))?
-            .sanitized();
+        None => (*fallback, String::new(), None),
+    };
+    if let Some(settings) = settings {
+        brush = apply_brush_settings(brush, settings)?;
     }
-    Ok((brush, category))
+    Ok((brush, category, secondary))
 }
 
 /// One resolved stroke of a `paint` call, in layer pixels.
 pub struct ScriptStroke {
     pub brush: Brush,
+    pub secondary: Option<(Brush, emulsion_raster::paint::DualBlend)>,
     pub ink: Ink,
     /// (x, y, pressure).
     pub points: Vec<(f32, f32, Option<f32>)>,
+    pub samples: Option<Vec<emulsion_raster::preview::StrokeSample>>,
+    pub seed: Option<u64>,
+}
+
+/// Rich input shared by canvas paint and portable brush previews.
+pub(crate) fn parse_brush_samples(
+    value: &Value,
+) -> Result<Vec<emulsion_raster::preview::StrokeSample>, ToolResult> {
+    let values = value
+        .as_array()
+        .filter(|v| !v.is_empty() && v.len() <= 2000)
+        .ok_or_else(|| err("samples must contain 1 to 2000 sample objects"))?;
+    let mut out = Vec::with_capacity(values.len());
+    let mut previous_time = 0.0;
+    for (index, value) in values.iter().enumerate() {
+        let object = value
+            .as_object()
+            .ok_or_else(|| err(format!("sample {index} must be an object")))?;
+        if let Some(key) = object
+            .keys()
+            .find(|key| !matches!(key.as_str(), "x" | "y" | "pressure" | "tilt" | "time_ms"))
+        {
+            return Err(err(format!("sample {index} has unknown field {key:?}")));
+        }
+        let number = |key: &str| -> Result<f64, ToolResult> {
+            value
+                .get(key)
+                .and_then(Value::as_f64)
+                .filter(|v| v.is_finite())
+                .ok_or_else(|| err(format!("sample {index} {key} must be a finite number")))
+        };
+        let x = number("x")? as f32;
+        let y = number("y")? as f32;
+        if !x.is_finite() || !y.is_finite() {
+            return Err(err(format!(
+                "sample {index} coordinates exceed the finite range"
+            )));
+        }
+        let pressure = if value.get("pressure").is_some() {
+            let p = number("pressure")?;
+            if !(0.0..=1.0).contains(&p) {
+                return Err(err(format!("sample {index} pressure must be from 0 to 1")));
+            }
+            Some(p as f32)
+        } else {
+            None
+        };
+        let tilt = value
+            .get("tilt")
+            .map(|v| {
+                let a = v
+                    .as_array()
+                    .filter(|a| a.len() == 2)
+                    .ok_or_else(|| err(format!("sample {index} tilt must be [x, y] degrees")))?;
+                let axis = |v: &Value| {
+                    v.as_f64()
+                        .filter(|v| v.is_finite() && (-90.0..=90.0).contains(v))
+                        .map(|v| v as f32)
+                        .ok_or_else(|| {
+                            err(format!(
+                                "sample {index} tilt axes must be from -90 to 90 degrees"
+                            ))
+                        })
+                };
+                Ok::<_, ToolResult>((axis(&a[0])?, axis(&a[1])?))
+            })
+            .transpose()?;
+        let time_ms = if value.get("time_ms").is_some() {
+            number("time_ms")?
+        } else if index == 0 {
+            0.0
+        } else {
+            previous_time + 16.0
+        };
+        if time_ms < 0.0 || time_ms < previous_time || !time_ms.is_finite() {
+            return Err(err(format!(
+                "sample {index} time_ms must be nonnegative and monotonic"
+            )));
+        }
+        previous_time = time_ms;
+        out.push(emulsion_raster::preview::StrokeSample {
+            x,
+            y,
+            pressure,
+            tilt,
+            time_ms,
+        });
+    }
+    Ok(out)
+}
+
+pub(crate) fn parse_dual_blend(
+    value: &Value,
+) -> Result<emulsion_raster::paint::DualBlend, ToolResult> {
+    use emulsion_raster::paint::DualBlend;
+    match value.as_str().map(str::to_ascii_lowercase).as_deref() {
+        Some("normal") => Ok(DualBlend::Normal),
+        Some("multiply") => Ok(DualBlend::Multiply),
+        Some("screen") => Ok(DualBlend::Screen),
+        _ => Err(err("combine_mode must be Normal, Multiply or Screen")),
+    }
+}
+
+fn secondary_overrides(
+    mut secondary: Option<(Brush, emulsion_raster::paint::DualBlend)>,
+    args: &Value,
+) -> Result<Option<(Brush, emulsion_raster::paint::DualBlend)>, ToolResult> {
+    if let Some(settings) = args.get("secondary_settings") {
+        if settings.is_null() {
+            secondary = None;
+        } else {
+            let (brush, blend) = secondary.unwrap_or_default();
+            secondary = Some((apply_brush_settings(brush, settings)?, blend));
+        }
+    }
+    if let Some(value) = args.get("combine_mode") {
+        let blend = parse_dual_blend(value)?;
+        let Some((_, mode)) = &mut secondary else {
+            return Err(err("combine_mode requires a secondary brush"));
+        };
+        *mode = blend;
+    }
+    Ok(secondary)
+}
+
+impl ScriptStroke {
+    /// Feed the same resolved input during immediate and animated rendering.
+    pub fn feed_point(&self, stroke: &mut Stroke, index: usize) {
+        if let Some(samples) = &self.samples {
+            let sample = samples[index];
+            stroke.point_full(
+                sample.x,
+                sample.y,
+                sample.pressure,
+                sample.tilt,
+                Some(sample.time_ms),
+            );
+        } else {
+            let (x, y, pressure) = self.points[index];
+            stroke.point_at(x, y, pressure, None);
+        }
+    }
 }
 
 /// A `paint` call resolved against a document: everything needed to lay
@@ -389,6 +590,12 @@ impl PaintScript {
     /// Shared stroke setup for immediate rendering and animated UI playback.
     pub fn start_stroke(&self, base: Arc<Raster>, s: &ScriptStroke) -> Stroke {
         let mut stroke = Stroke::new(base, s.brush, s.ink.clone(), self.clip.clone());
+        if let Some((secondary, blend)) = s.secondary {
+            stroke.set_secondary(secondary, blend);
+        }
+        if let Some(seed) = s.seed {
+            stroke.set_seed(seed);
+        }
         stroke.set_alpha_lock(self.alpha_lock);
         stroke.set_symmetry_space(self.to_doc);
         if let Some(backdrop) = &self.backdrop {
@@ -420,8 +627,8 @@ impl PaintScript {
         let mut dirty = IRect::default();
         for s in &self.strokes {
             let mut stroke = self.start_stroke(Arc::new(current.clone()), s);
-            for (x, y, p) in &s.points {
-                stroke.point_at(*x, *y, *p, None);
+            for index in 0..s.points.len() {
+                s.feed_point(&mut stroke, index);
             }
             stroke.finish();
             let (r, d) = stroke.render(&current);
@@ -536,7 +743,19 @@ pub fn hatch_to_paint(doc: &Document, args: &Value) -> Result<Value, ToolResult>
     }
     let mut paint =
         json!({ "node": args.get("node").cloned().unwrap_or(Value::Null), "strokes": strokes });
-    for k in ["brush", "color", "settings", "sample_merged"] {
+    for k in [
+        "brush",
+        "color",
+        "settings",
+        "secondary_settings",
+        "combine_mode",
+        "seed",
+        "sample_merged",
+        "mode",
+        "alpha_lock",
+        "mirror",
+        "symmetry",
+    ] {
         if let Some(v) = args.get(k) {
             paint[k] = v.clone();
         }
@@ -614,12 +833,28 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
     if strokes.len() > 400 {
         return Err(err("at most 400 strokes per call"));
     }
-    let (default_brush, default_cat) =
-        resolve_brush(args.get("brush"), args.get("settings"), &Brush::default())?;
+    let catalog = if args.get("brush").is_some() || strokes.iter().any(|s| s.get("brush").is_some())
+    {
+        Some(emulsion_io::brush_library::load().map_err(|e| err(e.to_string()))?)
+    } else {
+        None
+    };
+    let (default_brush, default_cat, default_secondary) = resolve_brush(
+        args.get("brush"),
+        args.get("settings"),
+        &Brush::default(),
+        catalog.as_ref(),
+    )?;
     let default_color = match args.get("color") {
         Some(c) => Some(hex_color(c)?),
         None => None,
     };
+    let parse_seed = |value: &Value| {
+        value
+            .as_u64()
+            .ok_or_else(|| err("seed must be an unsigned 64-bit integer"))
+    };
+    let default_seed = args.get("seed").map(&parse_seed).transpose()?;
     let to_doc = placement.to_doc(raster.width(), raster.height());
     let to_local = to_doc.inverse();
     let scale = to_doc.matrix2.determinant().abs().sqrt().max(1e-6);
@@ -643,19 +878,52 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
         if !s.is_object() {
             return Err(err(format!("stroke {i} must be an object")));
         }
-        let (brush, cat) = if s.get("brush").is_some() {
-            resolve_brush(s.get("brush"), args.get("settings"), &default_brush)?
+        let (brush, cat, mut secondary) = if s.get("brush").is_some() {
+            resolve_brush(
+                s.get("brush"),
+                args.get("settings"),
+                &default_brush,
+                catalog.as_ref(),
+            )?
         } else {
-            (default_brush, default_cat.clone())
+            (default_brush, default_cat.clone(), default_secondary)
         };
+        secondary = secondary_overrides(secondary, args)?;
+        secondary = secondary_overrides(secondary, s)?;
+        let seed = s.get("seed").map(&parse_seed).transpose()?.or(default_seed);
+        let rich = s.get("samples").map(parse_brush_samples).transpose()?;
         // Named preset, then call settings, then this stroke's overrides.
-        let mut brush = resolve_brush(None, s.get("settings"), &brush)?.0;
+        let mut brush = resolve_brush(None, s.get("settings"), &brush, catalog.as_ref())?.0;
         brush.size = (brush.size as f64 / scale) as f32;
         // Stabilizing suits a hand, not computed points.
-        brush.stabilizer = 0.0;
-        let ink = match cat.as_str() {
-            "Eraser" => Ink::Erase,
-            "Smudge" => Ink::Smudge,
+        if rich.is_none() {
+            brush.stabilizer = 0.0;
+            brush.advanced.stabilization = Default::default();
+        }
+        if let Some((brush, _)) = &mut secondary {
+            brush.size = (brush.size as f64 / scale) as f32;
+            if rich.is_none() {
+                brush.stabilizer = 0.0;
+                brush.advanced.stabilization = Default::default();
+            }
+        }
+        let operation = s
+            .get("mode")
+            .or_else(|| args.get("mode"))
+            .map(|mode| {
+                mode.as_str()
+                    .filter(|mode| matches!(*mode, "paint" | "erase" | "smudge"))
+                    .ok_or_else(|| err("paint mode must be paint, erase or smudge"))
+            })
+            .transpose()?;
+        let operation = operation.unwrap_or(match cat.as_str() {
+            "Eraser" => "erase",
+            "Smudge" => "smudge",
+            _ => "paint",
+        });
+        let ink = match operation {
+            "erase" => Ink::Erase,
+            "smudge" => Ink::Smudge,
             _ => {
                 let c = match s.get("color") {
                     Some(c) => hex_color(c)?,
@@ -669,9 +937,14 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
             }
         };
         // Points come as [x, y, pressure?] lists or as SVG path data.
-        if s.get("d").is_some() == s.get("points").is_some() {
+        if ["d", "points", "samples"]
+            .iter()
+            .filter(|key| s.get(**key).is_some())
+            .count()
+            != 1
+        {
             return Err(err(format!(
-                "stroke {i} must give exactly one of d or points"
+                "stroke {i} must give exactly one of d, points or samples"
             )));
         }
         let pressure = |v: &Value| -> Result<f32, ToolResult> {
@@ -690,7 +963,14 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
             })
             .transpose()?;
         let mut subpaths: Vec<Vec<(f64, f64, Option<f32>)>> = Vec::new();
-        if let Some(d) = s.get("d") {
+        if let Some(samples) = &rich {
+            subpaths.push(
+                samples
+                    .iter()
+                    .map(|sample| (sample.x as f64, sample.y as f64, sample.pressure))
+                    .collect(),
+            );
+        } else if let Some(d) = s.get("d") {
             let d = d
                 .as_str()
                 .filter(|d| !d.trim().is_empty())
@@ -778,7 +1058,24 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
                     "stroke {i} coordinates exceed the layer's finite range"
                 )));
             }
+            let samples = rich.as_ref().map(|samples| {
+                samples
+                    .iter()
+                    .zip(&points)
+                    .map(
+                        |(sample, &(x, y, pressure))| emulsion_raster::preview::StrokeSample {
+                            x,
+                            y,
+                            pressure,
+                            ..*sample
+                        },
+                    )
+                    .collect()
+            });
             out.push(ScriptStroke {
+                samples,
+                seed,
+                secondary,
                 brush,
                 ink: ink.clone(),
                 points,
@@ -1075,12 +1372,20 @@ fn smart_filter_styles(
 }
 
 /// Compute a heavy tool against a document snapshot, on any thread.
-/// Brushes the person saved or imported (`<data dir>/brush-presets.json`).
+/// Brushes the person saved or imported, including legacy migration.
 pub fn saved_brushes() -> Vec<library::BrushPreset> {
-    std::fs::read(emulsion_io::recent::data_dir().join("brush-presets.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    match emulsion_io::brush_library::load() {
+        Ok(catalog) => catalog
+            .brushes
+            .iter()
+            .filter(|b| !b.builtin)
+            .filter_map(|b| catalog.preset(&b.id))
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "Could not read brush library");
+            Vec::new()
+        }
+    }
 }
 
 /// The flattened document as a raster.
@@ -3614,6 +3919,14 @@ pub fn view(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> {
 
 /// Image-bearing read tools can run against a snapshot off the UI thread.
 pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, ToolResult> {
+    if crate::brush_tools::is_read_only(name) {
+        let result = crate::brush_tools::execute(name, args);
+        return if result.is_error {
+            Err(result)
+        } else {
+            Ok(result)
+        };
+    }
     match name {
         "get_raw_preview" => crate::raw_preview::preview(doc, args),
         "describe_raw" => crate::raw_tools::describe(doc, args),
@@ -4042,6 +4355,87 @@ mod tests {
     }
 
     #[test]
+    fn brush_ids_dual_and_nested_overrides_preserve_other_fields() {
+        let mut catalog = emulsion_io::brush_library::Catalog::builtin();
+        let first = catalog
+            .add_brush(
+                emulsion_io::brush_library::USER_SET,
+                "Duplicate",
+                Brush::default(),
+            )
+            .unwrap();
+        let second = catalog
+            .add_brush(
+                emulsion_io::brush_library::USER_SET,
+                "Duplicate",
+                Brush {
+                    size: 17.,
+                    ..Brush::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            resolve_brush(
+                Some(&json!("Duplicate")),
+                None,
+                &Brush::default(),
+                Some(&catalog)
+            )
+            .is_err()
+        );
+        let combined = catalog.combine_brushes(&first, &second).unwrap();
+        catalog
+            .brush_mut(&combined)
+            .unwrap()
+            .brush
+            .advanced
+            .shape
+            .count = 4;
+        catalog
+            .brush_mut(&combined)
+            .unwrap()
+            .brush
+            .advanced
+            .grain
+            .brightness = 0.5;
+        let (brush, _, secondary) = resolve_brush(
+            Some(&json!(combined)),
+            Some(&json!({"advanced":{"shape":{"flip_x":true}}})),
+            &Brush::default(),
+            Some(&catalog),
+        )
+        .unwrap_or_else(|e| panic!("{}", text(&e)));
+        assert_eq!(secondary.unwrap().0.size, 17.);
+        assert_eq!(brush.advanced.shape.count, 4);
+        assert!(brush.advanced.shape.flip_x);
+        assert_eq!(brush.advanced.grain.brightness, 0.5);
+        assert!(
+            resolve_brush(
+                Some(&json!(first)),
+                Some(&json!({"advanced":{"shape":{"nonsense":1}}})),
+                &Brush::default(),
+                Some(&catalog)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn paint_operation_is_independent_of_brush_category() {
+        let e = editor();
+        let hatch = hatch_to_paint(&e.doc, &json!({"node":1,"rect":[0,0,20,20],"mode":"erase"}))
+            .unwrap_or_else(|e| panic!("{}", text(&e)));
+        assert_eq!(hatch["mode"], json!("erase"));
+        let args = json!({"node":1,"brush":"Sketch pencil","mode":"erase","strokes":[{"points":[[5,5],[10,10]]},{"mode":"smudge","points":[[5,5],[10,10]]}]});
+        let script = paint_script(&e.doc, &args).unwrap_or_else(|e| panic!("{}", text(&e)));
+        assert!(matches!(script.strokes[0].ink, Ink::Erase));
+        assert!(matches!(script.strokes[1].ink, Ink::Smudge));
+        let mut invalid = args;
+        invalid["mode"] = json!("unknown");
+        assert!(paint_script(&e.doc, &invalid).is_err());
+    }
+
+    #[test]
     fn paint_settings_apply_preset_then_call_then_stroke() {
         let e = editor();
         let args = json!({"node": 1, "brush": "Sketch pencil", "color": "#000000",
@@ -4107,6 +4501,22 @@ mod tests {
             json!({"points": [[1,2]], "brush": " "}),
             json!({"points": [[1,2]], "brush": "nonexistent brush"}),
             json!({"points": vec![[1,2]; 2001]}),
+            json!({"samples": []}),
+            json!({"samples": [[1,2]]}),
+            json!({"samples": [{"x":1,"y":2}], "points":[[1,2]]}),
+            json!({"samples": [{"x":1,"y":2}], "d":"M1 2L3 4"}),
+            json!({"samples": [{"x":1e300,"y":2}]}),
+            json!({"samples": [{"x":1,"y":2,"pressure":1.1}]}),
+            json!({"samples": [{"x":1,"y":2,"tilt":[0,91]}]}),
+            json!({"samples": [{"x":1,"y":2,"tilt":[0]}]}),
+            json!({"samples": [{"x":1,"y":2,"time_ms":-1}]}),
+            json!({"samples": [{"x":1,"y":2,"time_ms":20},{"x":3,"y":4,"time_ms":19}]}),
+            json!({"samples": [{"x":1,"y":2,"unexpected":true}]}),
+            json!({"samples": vec![json!({"x":1,"y":2}); 2001]}),
+            json!({"points":[[1,2]],"secondary_settings":{"unknown":2}}),
+            json!({"points":[[1,2]],"combine_mode":"Multiply"}),
+            json!({"points":[[1,2]],"secondary_settings":{},"combine_mode":"invalid"}),
+            json!({"points":[[1,2]],"seed":-1}),
         ];
         let long_svg = format!(
             "M 0 0 {}",
@@ -4148,6 +4558,62 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn paint_rich_samples_match_dual_preview_and_incremental_feed() {
+        use emulsion_raster::preview::{PreviewMode, render_dual_stroke};
+        let base = Arc::new(Raster::solid(100, 60, [0.0; 4]));
+        let mut doc = Document::new(100, 60);
+        doc.nodes
+            .push(Node::raster(1, "Ink", base.clone(), Placement::default()));
+        let args = json!({"node":1,"color":"#000000","seed":87,
+            "settings":{"size":14,"size_jitter":0.3,"stabilizer":0.5,"tilt":0.8,"advanced":{"dynamics":{"speed_opacity":0.5},"stabilization":{"amount":0.4,"stages":2}}},
+            "secondary_settings":{"size":7,"scatter":0.2},"combine_mode":"Screen",
+            "strokes":[{"samples":[{"x":10,"y":20,"pressure":0.5,"tilt":[20,30],"time_ms":0},{"x":30,"y":30,"pressure":0.9,"tilt":[50,30],"time_ms":25},{"x":60,"y":15,"tilt":[40,20],"time_ms":100},{"x":85,"y":30}]}]});
+        let script = paint_script(&doc, &args).unwrap_or_else(|e| panic!("{}", text(&e)));
+        let resolved = &script.strokes[0];
+        assert_eq!(resolved.brush.stabilizer, 0.5);
+        let samples = resolved.samples.as_ref().unwrap();
+        assert_eq!(samples[3].time_ms, 116.);
+        let (secondary, mode) = resolved.secondary.unwrap();
+        let expected = render_dual_stroke(
+            base.clone(),
+            resolved.brush,
+            secondary,
+            mode,
+            PreviewMode::Paint([0., 0., 0., 1.]),
+            samples,
+            87,
+        );
+        let (actual, _) = script.render(&base);
+        assert_eq!(actual.to_srgba8(), expected.to_srgba8());
+        let mut other_seed = args.clone();
+        other_seed["seed"] = json!(88);
+        let changed = paint_script(&doc, &other_seed).unwrap().render(&base).0;
+        assert_ne!(changed.to_srgba8(), actual.to_srgba8());
+        let mut no_dynamics = args.clone();
+        for sample in no_dynamics["strokes"][0]["samples"].as_array_mut().unwrap() {
+            sample.as_object_mut().unwrap().remove("tilt");
+            sample["time_ms"] = json!(0);
+        }
+        let changed = paint_script(&doc, &no_dynamics).unwrap().render(&base).0;
+        assert_ne!(changed.to_srgba8(), actual.to_srgba8());
+        let mut incremental = script.start_stroke(base.clone(), resolved);
+        for index in 0..resolved.points.len() {
+            resolved.feed_point(&mut incremental, index);
+            let _ = incremental.render(&base);
+        }
+        incremental.finish();
+        assert_eq!(incremental.render(&base).0.to_srgba8(), actual.to_srgba8());
+        let mut legacy = args.clone();
+        legacy["strokes"] = json!([{"points":[[10,20],[30,30],[60,15],[85,30]], "secondary_settings":null,"seed":9}]);
+        let legacy = paint_script(&doc, &legacy).unwrap();
+        assert!(legacy.strokes[0].samples.is_none());
+        assert!(legacy.strokes[0].secondary.is_none());
+        assert_eq!(legacy.strokes[0].seed, Some(9));
+        assert_eq!(legacy.strokes[0].brush.stabilizer, 0.);
+        assert_eq!(legacy.strokes[0].brush.advanced.stabilization.amount, 0.);
     }
 
     #[test]

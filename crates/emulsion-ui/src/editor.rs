@@ -9,7 +9,10 @@ mod adjust_ui;
 mod ai_tools;
 mod alignment;
 mod animation;
+mod brush_library_ui;
+mod brush_memory;
 mod brush_quick;
+mod brush_studio;
 mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
@@ -409,6 +412,7 @@ pub struct EditorView {
     pub(crate) transform_fields: Option<transform::TransformFields>,
     pub(crate) rotation_fields: Option<rotation::RotationFields>,
     pub(crate) presets: presets::PresetState,
+    brush_workspace: Option<Entity<brush_library_ui::BrushWorkspace>>,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
     pub(crate) recipes: recipes::RecipeState,
     pub(crate) smart: smart::SmartUi,
@@ -532,6 +536,7 @@ impl EditorView {
             transform_fields: None,
             rotation_fields: None,
             presets: Default::default(),
+            brush_workspace: None,
             adjust_ui: Default::default(),
             recipes: Default::default(),
             smart: Default::default(),
@@ -608,6 +613,10 @@ impl EditorView {
             self.set_layer_selection(selected.into_iter().collect(), selected);
         }
         cx.notify();
+    }
+
+    pub(crate) fn brush_workspace_open(&self) -> bool {
+        self.brush_workspace.is_some()
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
@@ -1481,6 +1490,8 @@ impl EditorView {
     fn drag_end(&mut self, cx: &mut Context<Self>) {
         self.end_text_pointer(cx);
         self.snap_lines.clear();
+        let remember_brush = matches!(self.drag, Some(Drag::Slider { key, .. })
+            if key.is_quick_brush() || matches!(key, SliderKey::ToolSize | SliderKey::ToolOpacity | SliderKey::SideSize | SliderKey::SideOpacity));
         match self.drag.take() {
             Some(Drag::Toolbar(drag)) => self.finish_toolbar(drag, cx),
             None => return,
@@ -1517,6 +1528,9 @@ impl EditorView {
                 pos,
                 existing,
             }) => self.drop_guide(vertical, pos, existing, cx),
+        }
+        if remember_brush {
+            self.remember_active_brush(cx);
         }
         cx.notify();
     }
@@ -3759,6 +3773,15 @@ enum MenuAction {
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(workspace) = &self.brush_workspace {
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .child(workspace.clone())
+                .into_any_element();
+        }
         self.flush_live_stroke(cx);
         if self.focus_watchers.is_none() {
             let blur = cx.on_focus_out(&self.canvas_focus, window, |this, _, _, cx| {

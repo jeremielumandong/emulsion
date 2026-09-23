@@ -21,6 +21,7 @@ use crate::blend::{BlendSpace, blend_px};
 use crate::color;
 use crate::geom::{IRect, TileCoord};
 use crate::image::{Mask, Raster};
+pub use crate::paint_settings::*;
 use crate::tile::{TILE, TILE_PX};
 use glam::{DAffine2, dvec2};
 use serde::{Deserialize, Serialize};
@@ -265,6 +266,7 @@ pub struct Brush {
     pub tip: u32,
     /// Image grain from the registry, tiled over the canvas (0 = `grain`).
     pub grain_tex: u32,
+    pub advanced: AdvancedBrush,
 }
 
 impl Default for Brush {
@@ -298,6 +300,7 @@ impl Default for Brush {
             blend: BrushBlend::Normal,
             tip: 0,
             grain_tex: 0,
+            advanced: AdvancedBrush::default(),
         }
     }
 }
@@ -367,6 +370,7 @@ impl Brush {
         self.color_jitter = u(self.color_jitter);
         self.wetness = u(self.wetness);
         self.edge_darken = u(self.edge_darken);
+        self.advanced = self.advanced.sanitized();
         self
     }
 }
@@ -400,6 +404,7 @@ struct Sample {
     pressure: f32,
     /// Pen tilt in degrees from vertical, x and y.
     tilt: (f32, f32),
+    speed: f32,
 }
 
 /// Accumulated paint: premultiplied colour, alpha = coverage.
@@ -418,6 +423,8 @@ pub struct Stroke {
     persistent_factory: Option<Arc<dyn crate::paint_accel::PersistentFactory>>,
     persistent: Option<PersistentPaint>,
     pub brush: Brush,
+    secondary: Option<(Box<Stroke>, DualBlend)>,
+    stabilization: Vec<Sample>,
     ink: Ink,
     base: Arc<Raster>,
     clip: Option<Clip>,
@@ -720,6 +727,32 @@ fn rotate_hue(p: [f32; 4], amount: f32, light: f32) -> [f32; 4] {
     ]
 }
 
+fn transformed_grain(
+    kind: GrainKind,
+    texture: Option<&textures::Texture>,
+    x: f32,
+    y: f32,
+    scale: f32,
+    settings: GrainSettings,
+) -> f32 {
+    let (x, y) = if settings.rotation == 0.0 {
+        (x, y)
+    } else {
+        let (s, c) = settings.rotation.to_radians().sin_cos();
+        (x * c - y * s, x * s + y * c)
+    };
+    let scale = scale * settings.scale;
+    let value = match texture {
+        Some(texture) => texture.tiled(x / scale.max(0.01), y / scale.max(0.01)),
+        None => grain(kind, x, y, scale),
+    };
+    if settings.brightness == 0.0 && settings.contrast == 1.0 {
+        value
+    } else {
+        ((value - 0.5) * settings.contrast + 0.5 + settings.brightness).clamp(0.0, 1.0)
+    }
+}
+
 impl Stroke {
     pub fn new(base: Arc<Raster>, brush: Brush, ink: Ink, clip: Option<Clip>) -> Self {
         Self::new_with_persistent(base, brush, ink, clip, crate::paint_accel::persistent())
@@ -738,6 +771,8 @@ impl Stroke {
             persistent_factory: factory,
             persistent: None,
             brush: brush.sanitized(),
+            secondary: None,
+            stabilization: Vec::new(),
             ink,
             base,
             clip,
@@ -772,9 +807,58 @@ impl Stroke {
         self.persistent.is_some()
     }
 
+    /// Choose a reproducible noise sequence before the first input sample.
+    pub fn set_seed(&mut self, seed: u64) -> bool {
+        if !self.path.is_empty() || self.finished {
+            return false;
+        }
+        self.seed = seed.max(1);
+        self.rng = self.seed;
+        if let Some((secondary, _)) = &mut self.secondary {
+            secondary.set_seed(self.seed ^ 0xD0A1_5EED);
+        }
+        true
+    }
+
+    /// Attach an independently sampled secondary brush before painting begins.
+    /// A dual stroke shares selection, symmetry, alpha lock and one undo gesture.
+    pub fn set_secondary(&mut self, brush: Brush, mode: DualBlend) -> bool {
+        if !self.path.is_empty() || self.finished {
+            return false;
+        }
+        let mut secondary =
+            Self::new_with_persistent(self.base.clone(), brush, self.ink.clone(), None, None);
+        secondary.set_seed(self.seed ^ 0xD0A1_5EED);
+        secondary.backdrop = self.backdrop.clone();
+        secondary.mirror_x = self.mirror_x;
+        secondary.mirror_y = self.mirror_y;
+        secondary.radial = self.radial;
+        secondary.symmetry_space = self.symmetry_space;
+        self.secondary = Some((Box::new(secondary), mode));
+        self.persistent_factory = None;
+        true
+    }
+
+    fn stroke_opacity(&self) -> f32 {
+        if self.brush.advanced.rendering == RenderingMode::Accumulating {
+            1.0
+        } else {
+            self.brush_opacity()
+        }
+    }
+
+    fn brush_opacity(&self) -> f32 {
+        let limits = self.brush.advanced.properties;
+        self.brush
+            .opacity
+            .clamp(limits.min_opacity, limits.max_opacity)
+    }
+
     fn persistent_eligible(&self) -> bool {
         let b = self.brush;
         b.size >= 400.0
+            && self.secondary.is_none()
+            && b.advanced == AdvancedBrush::default()
             && self.base.width() <= 1024
             && self.base.height() <= 1024
             && b.roundness == 1.0
@@ -872,6 +956,9 @@ impl Stroke {
         if self.persistent.is_some() {
             self.recover_persistent();
         }
+        if let Some((secondary, _)) = &mut self.secondary {
+            secondary.set_backdrop(backdrop.clone());
+        }
         self.backdrop = Some(backdrop);
     }
 
@@ -882,6 +969,9 @@ impl Stroke {
         }
         self.mirror_x = x;
         self.mirror_y = y;
+        if let Some((secondary, _)) = &mut self.secondary {
+            secondary.set_mirror(x, y);
+        }
     }
 
     /// Interpret mirror axes and radial centers in this space (usually the
@@ -891,6 +981,9 @@ impl Stroke {
             self.recover_persistent();
         }
         self.symmetry_space = layer_to_space;
+        if let Some((secondary, _)) = &mut self.secondary {
+            secondary.set_symmetry_space(layer_to_space);
+        }
     }
 
     /// Also stamp every dab rotated `n` ways around `center` (mandalas).
@@ -900,6 +993,9 @@ impl Stroke {
             self.recover_persistent();
         }
         self.radial = (n >= 2).then_some((center, n.min(64)));
+        if let Some((secondary, _)) = &mut self.secondary {
+            secondary.set_radial(center, n);
+        }
     }
 
     fn rand(&mut self) -> f32 {
@@ -928,7 +1024,7 @@ impl Stroke {
         match self.paint.get(&c) {
             Some(tile) => {
                 let p = tile[((y - c.y * t) * t + (x - c.x * t)) as usize];
-                let k = p[4].min(1.0) * self.brush.opacity;
+                let k = p[4].min(1.0) * self.stroke_opacity();
                 if k <= 0.0 {
                     return under;
                 }
@@ -954,23 +1050,76 @@ impl Stroke {
     }
 
     /// Stamp one dab and its mirrors and rotations.
-    fn dab(&mut self, cx: f32, cy: f32, pressure: f32, tilt: (f32, f32), taper: f32) {
+    fn dab(&mut self, sample: Sample, taper: f32, distance: f32) {
+        let shape = self.brush.advanced.shape;
+        let omitted = if shape.count_jitter > 0.0 {
+            (self.rand() * shape.count_jitter * shape.count.saturating_sub(1) as f32).round() as u8
+        } else {
+            0
+        };
+        for _ in 0..shape.count.saturating_sub(omitted).max(1) {
+            self.dab_one(sample, taper, distance);
+        }
+    }
+
+    fn dab_one(&mut self, sample: Sample, taper: f32, distance: f32) {
+        let Sample {
+            x: cx,
+            y: cy,
+            pressure,
+            tilt,
+            speed,
+        } = sample;
         let b = self.brush;
+        let advanced = b.advanced;
+        let dynamics = advanced.dynamics;
+        let fast = ((speed - 0.8) / 5.0).clamp(0.0, 1.0);
         let jitter = 1.0 - b.size_jitter * self.rand();
-        let mut size = b.size * (1.0 - b.size_pressure * (1.0 - pressure)) * taper * jitter;
-        let flow = b.flow * (1.0 - b.flow_pressure * (1.0 - pressure));
-        let (sx, sy) = if b.scatter > 0.0 {
+        let mut size = b.size
+            * (1.0 - b.size_pressure * (1.0 - pressure))
+            * taper
+            * jitter
+            * (1.0 - dynamics.speed_size * fast * 0.95);
+        let mut flow = b.flow * (1.0 - b.flow_pressure * (1.0 - pressure));
+        flow *= 1.0 - dynamics.pressure_opacity * (1.0 - pressure);
+        flow *= 1.0 - dynamics.speed_opacity * fast;
+        flow *= 1.0 - dynamics.tilt_opacity * (tilt.0.hypot(tilt.1) / 90.0).clamp(0.0, 1.0);
+        if dynamics.opacity_jitter > 0.0 {
+            flow *= 1.0 - dynamics.opacity_jitter * self.rand();
+        }
+        if advanced.path.falloff > 0.0 {
+            flow *= (1.0 - distance / advanced.path.falloff).max(0.0);
+        }
+        if advanced.wet.charge > 0.0 {
+            flow *= (-distance / advanced.wet.charge).exp();
+        }
+        flow *= 1.0 - advanced.wet.dilution;
+        flow *= 1.0 - advanced.taper.opacity * (1.0 - ((taper - 0.08) / 0.92).clamp(0.0, 1.0));
+        if advanced.rendering == RenderingMode::Accumulating {
+            flow *= self.brush_opacity();
+        }
+        let (mut sx, mut sy) = if b.scatter > 0.0 {
             let a = self.rand() * std::f32::consts::TAU;
             let d = self.rand() * b.scatter * b.size;
             (cx + a.cos() * d, cy + a.sin() * d)
         } else {
             (cx, cy)
         };
+        if advanced.path.lateral_jitter > 0.0 || advanced.path.linear_jitter > 0.0 {
+            let lateral = (self.rand() * 2.0 - 1.0) * advanced.path.lateral_jitter * size;
+            let linear = (self.rand() * 2.0 - 1.0) * advanced.path.linear_jitter * size;
+            let (s, c) = self.dir.to_radians().sin_cos();
+            sx += c * linear - s * lateral;
+            sy += s * linear + c * lateral;
+        }
         let mut angle = if b.follow_path {
             b.angle + self.dir
         } else {
             b.angle
         };
+        if advanced.shape.rotation_jitter > 0.0 {
+            angle += (self.rand() * 2.0 - 1.0) * 180.0 * advanced.shape.rotation_jitter;
+        }
         // Tilt: 60° from vertical counts as fully laid down. The dab widens
         // along the tilt and flattens across it.
         let lean = (tilt.0.hypot(tilt.1) / 60.0).clamp(0.0, 1.0) * b.tilt;
@@ -980,7 +1129,8 @@ impl Stroke {
             angle = tilt.1.atan2(tilt.0).to_degrees();
             self.brush.roundness = (saved_round * (1.0 - lean * 0.7)).max(0.05);
         }
-        let colour = self.dab_colour(sx, sy, size / 2.0);
+        size = size.clamp(advanced.properties.min_size, advanced.properties.max_size);
+        let colour = self.dab_colour(sx, sy, size / 2.0, pressure);
         let mut stamps = vec![DAffine2::IDENTITY];
         if let Some(mx) = self.mirror_x {
             stamps.push(
@@ -1019,12 +1169,13 @@ impl Stroke {
         self.brush.roundness = saved_round;
     }
 
-    fn dab_colour(&mut self, cx: f32, cy: f32, r: f32) -> [f32; 4] {
+    fn dab_colour(&mut self, cx: f32, cy: f32, r: f32, pressure: f32) -> [f32; 4] {
         match self.ink.clone() {
             Ink::Erase | Ink::Clone { .. } => [0.0, 0.0, 0.0, 1.0],
             Ink::Smudge => {
                 let under = self.pick(cx, cy, r);
-                let w = 0.5 + 0.5 * self.brush.wetness;
+                let base = 0.5 + 0.5 * self.brush.wetness;
+                let w = base + (1.0 - base) * self.brush.advanced.wet.pull;
                 let load = match self.load {
                     None => under,
                     Some(l) => [0, 1, 2, 3].map(|i| l[i] * w + under[i] * (1.0 - w)),
@@ -1040,14 +1191,57 @@ impl Stroke {
                     );
                     c = rotate_hue(c, h, l);
                 }
-                if self.brush.wetness > 0.0 {
+                let dynamics = self.brush.advanced.color;
+                if dynamics != ColorDynamicsSettings::default() {
+                    let seed = (self.seed ^ (self.seed >> 32)) as u32;
+                    let stroke_random = |channel| hash2(channel, 0, seed) * 2.0 - 1.0;
+                    let mut stamp_random = |amount| {
+                        if amount == 0.0 {
+                            0.0
+                        } else {
+                            (self.rand() * 2.0 - 1.0) * amount
+                        }
+                    };
+                    let pressure = (pressure - 0.5) * 2.0;
+                    let hue = stamp_random(dynamics.stamp_hue)
+                        + stroke_random(0) * dynamics.stroke_hue
+                        + pressure * dynamics.pressure_hue;
+                    let saturation = stamp_random(dynamics.stamp_saturation)
+                        + stroke_random(1) * dynamics.stroke_saturation
+                        + pressure * dynamics.pressure_saturation;
+                    let lightness = stamp_random(dynamics.stamp_lightness)
+                        + stroke_random(2) * dynamics.stroke_lightness
+                        + pressure * dynamics.pressure_lightness;
+                    if hue != 0.0 || lightness != 0.0 {
+                        c = rotate_hue(c, hue * 0.5, lightness);
+                    }
+                    if saturation != 0.0 {
+                        let luma = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+                        for component in c.iter_mut().take(3) {
+                            *component = luma + (*component - luma) * (1.0 + saturation).max(0.0);
+                        }
+                    }
+                    let alpha = c[3];
+                    for component in c.iter_mut().take(3) {
+                        *component = component.clamp(0.0, alpha);
+                    }
+                }
+                let wetness = self.brush.wetness
+                    + (1.0 - self.brush.wetness) * self.brush.advanced.wet.dilution;
+                if wetness > 0.0 || self.brush.advanced.wet.pull > 0.0 {
                     let under = self.pick(cx, cy, r);
                     // Only mix with paint, not with transparency.
-                    let w = self.brush.wetness * under[3].min(1.0);
+                    let w = wetness * under[3].min(1.0);
                     let mixed = [0, 1, 2, 3].map(|i| c[i] * (1.0 - w) + under[i] * w);
                     let load = match self.load {
                         None => mixed,
-                        Some(l) => [0, 1, 2, 3].map(|i| l[i] * 0.6 + mixed[i] * 0.4),
+                        Some(l) if self.brush.advanced.wet.pull == 0.0 => {
+                            [0, 1, 2, 3].map(|i| l[i] * 0.6 + mixed[i] * 0.4)
+                        }
+                        Some(l) => {
+                            let carry = 0.6 + 0.4 * self.brush.advanced.wet.pull;
+                            [0, 1, 2, 3].map(|i| l[i] * carry + mixed[i] * (1.0 - carry))
+                        }
                     };
                     self.load = Some(load);
                     // Keep the ink's alpha so wet strokes still cover.
@@ -1143,6 +1337,23 @@ impl Stroke {
         );
         let seed = self.seed as u32;
         let tip = textures::get(self.brush.tip);
+        let grain_settings = self.brush.advanced.grain;
+        let moving_grain = grain_settings.mode == GrainMode::Moving && gstr > 0.0;
+        let grain_texture = moving_grain
+            .then(|| textures::get(self.brush.grain_tex))
+            .flatten();
+        let grain_phase = if moving_grain && grain_settings.offset_jitter > 0.0 {
+            let period = grain_texture.as_ref().map_or(64.0, |t| t.width() as f32)
+                * gs
+                * grain_settings.scale;
+            (
+                (self.rand() - 0.5) * period * grain_settings.offset_jitter,
+                (self.rand() - 0.5) * period * grain_settings.offset_jitter,
+            )
+        } else {
+            (0.0, 0.0)
+        };
+        let shape_settings = self.brush.advanced.shape;
         self.dabs = self.dabs.wrapping_add(1);
         let dab_no = self.dabs;
         // Integrate sharp procedural edges over the pixel. Sampling just its
@@ -1169,8 +1380,12 @@ impl Stroke {
                         let shape = match &tip {
                             // Image tips: sample the alpha in the dab's frame.
                             Some(t) => {
-                                let u = rx / r.max(0.5) * 0.5 + 0.5;
-                                let v = ry / r.max(0.5) * 0.5 + 0.5;
+                                let u = (if shape_settings.flip_x { -rx } else { rx }) / r.max(0.5)
+                                    * 0.5
+                                    + 0.5;
+                                let v = (if shape_settings.flip_y { -ry } else { ry }) / r.max(0.5)
+                                    * 0.5
+                                    + 0.5;
                                 if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
                                     0.0
                                 } else {
@@ -1195,6 +1410,17 @@ impl Stroke {
                             None => falloff(d, hard),
                         };
                         let mut a = shape * flow;
+                        if moving_grain {
+                            let g = transformed_grain(
+                                gk,
+                                grain_texture.as_deref(),
+                                rx + grain_phase.0,
+                                ry + grain_phase.1,
+                                gs,
+                                grain_settings,
+                            );
+                            a *= 1.0 - gstr * (1.0 - g);
+                        }
                         if a <= 0.0 {
                             continue;
                         }
@@ -1249,8 +1475,22 @@ impl Stroke {
         tilt: Option<(f32, f32)>,
         time_ms: Option<f64>,
     ) {
-        if self.finished {
+        if self.finished || !x.is_finite() || !y.is_finite() {
             return;
+        }
+        let pressure = pressure
+            .filter(|v| v.is_finite())
+            .map(|v| v.clamp(0.0, 1.0));
+        let tilt = tilt
+            .filter(|(x, y)| x.is_finite() && y.is_finite())
+            .map(|(x, y)| (x.clamp(-90.0, 90.0), y.clamp(-90.0, 90.0)));
+        let time_ms = time_ms.filter(|t| t.is_finite());
+        let elapsed_ms = match (self.raw_last, time_ms) {
+            (Some((_, _, last_time)), Some(time)) => (time - last_time).clamp(0.1, 1000.0) as f32,
+            _ => 8.0,
+        };
+        if let Some((secondary, _)) = &mut self.secondary {
+            secondary.point_full(x, y, pressure, tilt, time_ms);
         }
         // Speed, for pressure without a tablet.
         if let (Some((lx, ly, lt)), Some(t)) = (self.raw_last, time_ms) {
@@ -1269,6 +1509,11 @@ impl Stroke {
         } else {
             pressure
         };
+        let pressure = if self.brush.advanced.dynamics.pressure == ResponseCurve::default() {
+            pressure
+        } else {
+            self.brush.advanced.dynamics.pressure.sample(pressure)
+        };
         self.raw.push((x, y, time_ms.unwrap_or(0.0), pressure));
         // Stabilizer: the stamped point lags behind the pointer.
         let k = 1.0 - self.brush.stabilizer * 0.92;
@@ -1277,12 +1522,35 @@ impl Stroke {
             Some((px, py)) => (px + (x - px) * k, py + (y - py) * k),
         };
         self.smooth = Some((sx, sy));
-        self.advance(Sample {
+        let mut sample = Sample {
             x: sx,
             y: sy,
             pressure,
             tilt: tilt.unwrap_or((0.0, 0.0)),
-        });
+            speed: self.speed,
+        };
+        let filter = self.brush.advanced.stabilization;
+        if filter.amount > 0.0 || filter.pressure > 0.0 {
+            let follow = |amount: f32| {
+                if amount == 0.0 {
+                    1.0
+                } else {
+                    1.0 - (-elapsed_ms / (amount * 80.0)).exp()
+                }
+            };
+            let position_follow = follow(filter.amount);
+            let pressure_follow = follow(filter.pressure);
+            self.stabilization.resize(filter.stages as usize, sample);
+            for tracker in &mut self.stabilization {
+                tracker.x += (sample.x - tracker.x) * position_follow;
+                tracker.y += (sample.y - tracker.y) * position_follow;
+                tracker.pressure += (sample.pressure - tracker.pressure) * pressure_follow;
+                tracker.tilt = sample.tilt;
+                tracker.speed = sample.speed;
+                sample = *tracker;
+            }
+        }
+        self.advance(sample);
     }
 
     /// The raw input so far: (x, y, time ms, pressure).
@@ -1319,6 +1587,9 @@ impl Stroke {
     /// no wobble to smooth and no ends to thin). The stroke is finished
     /// afterwards, so later input is ignored until the pointer lifts.
     pub fn replay(&mut self, pts: &[(f32, f32)], pressure: f32) {
+        if let Some((secondary, _)) = &mut self.secondary {
+            secondary.replay(pts, pressure);
+        }
         self.recover_persistent();
         let touched: Vec<TileCoord> = self.paint.keys().copied().collect();
         for tile in self.paint.values_mut() {
@@ -1332,7 +1603,9 @@ impl Stroke {
         self.dir = 0.0;
         self.rng = self.seed;
         self.load = None;
+        self.dabs = 0;
         self.smooth = None;
+        self.stabilization.clear();
         let saved = self.brush;
         self.brush.stabilizer = 0.0;
         self.brush.taper_start = 0.0;
@@ -1343,6 +1616,7 @@ impl Stroke {
                 y,
                 pressure,
                 tilt: (0.0, 0.0),
+                speed: 0.0,
             });
         }
         self.brush = saved;
@@ -1358,9 +1632,17 @@ impl Stroke {
     /// Stamp from the previous input sample to `s`. `total` is the stroke
     /// length when known (a finished stroke), which enables the end taper.
     fn stamp_segment(&mut self, s: Sample, total: Option<f32>) {
-        let step = |pressure: f32, taper: f32, b: &Brush| {
-            let size = b.size * (1.0 - b.size_pressure * (1.0 - pressure)) * taper;
-            (size * b.spacing).max(0.5)
+        let step = |pressure: f32, taper: f32, speed: f32, b: &Brush| {
+            let fast = ((speed - 0.8) / 5.0).clamp(0.0, 1.0);
+            let size = b.size
+                * (1.0 - b.size_pressure * (1.0 - pressure))
+                * taper
+                * (1.0 - b.advanced.dynamics.speed_size * fast * 0.95);
+            (size.clamp(
+                b.advanced.properties.min_size,
+                b.advanced.properties.max_size,
+            ) * b.spacing)
+                .max(0.5)
         };
         let taper = |dist: f32, b: &Brush| -> f32 {
             let mut t = 1.0f32;
@@ -1371,13 +1653,19 @@ impl Stroke {
                 t = t.min(((total - dist) / b.taper_end).clamp(0.0, 1.0));
             }
             // Never vanish entirely: a hairline still reads.
+            let t = if b.advanced.taper.tip_curve == 1.0 {
+                t
+            } else {
+                t.powf(b.advanced.taper.tip_curve)
+            };
             0.08 + 0.92 * t
         };
         match self.last {
             None => {
                 let t = taper(0.0, &self.brush);
-                self.dab(s.x, s.y, s.pressure, s.tilt, t);
-                self.carry = step(s.pressure, t, &self.brush);
+                self.dab(s, t, 0.0);
+                self.carry =
+                    (step(s.pressure, t, s.speed, &self.brush) * self.spacing_variation()).max(0.5);
             }
             Some(last) => {
                 let (dx, dy) = (s.x - last.x, s.y - last.y);
@@ -1394,14 +1682,35 @@ impl Stroke {
                         last.tilt.0 + (s.tilt.0 - last.tilt.0) * f,
                         last.tilt.1 + (s.tilt.1 - last.tilt.1) * f,
                     );
-                    self.dab(last.x + dx * f, last.y + dy * f, pressure, tilt, t);
-                    d += step(pressure, t, &self.brush);
+                    let speed = last.speed + (s.speed - last.speed) * f;
+                    self.dab(
+                        Sample {
+                            x: last.x + dx * f,
+                            y: last.y + dy * f,
+                            pressure,
+                            tilt,
+                            speed,
+                        },
+                        t,
+                        self.distance + d,
+                    );
+                    d +=
+                        (step(pressure, t, speed, &self.brush) * self.spacing_variation()).max(0.5);
                 }
                 self.carry = d - len;
                 self.distance += len;
             }
         }
         self.last = Some(s);
+    }
+
+    fn spacing_variation(&mut self) -> f32 {
+        let amount = self.brush.advanced.path.spacing_jitter;
+        if amount == 0.0 {
+            1.0
+        } else {
+            1.0 + (self.rand() * 2.0 - 1.0) * amount * 0.9
+        }
     }
 
     /// The pointer lifted. Catches the stabilizer up to the last input and
@@ -1413,10 +1722,14 @@ impl Stroke {
             return false;
         }
         self.finished = true;
-        let mut changed = false;
-        if let (Some((rx, ry, _)), Some((sx, sy))) = (self.raw_last, self.smooth)
+        let mut changed = self
+            .secondary
+            .as_mut()
+            .is_some_and(|(secondary, _)| secondary.finish());
+        let last_filtered = self.path.last().map(|s| (s.x, s.y));
+        if let (Some((rx, ry, _)), Some((sx, sy))) = (self.raw_last, last_filtered)
             && (rx - sx).hypot(ry - sy) > 0.5
-            && self.brush.stabilizer > 0.0
+            && (self.brush.stabilizer > 0.0 || self.brush.advanced.stabilization.amount > 0.0)
         {
             let p = self.path.last().map_or(1.0, |s| s.pressure);
             let tilt = self.path.last().map_or((0.0, 0.0), |s| s.tilt);
@@ -1428,6 +1741,7 @@ impl Stroke {
                     y: sy + (ry - sy) * f,
                     pressure: p,
                     tilt,
+                    speed: self.path.last().map_or(0.0, |s| s.speed),
                 });
             }
             changed = true;
@@ -1447,8 +1761,10 @@ impl Stroke {
             self.last = None;
             self.carry = 0.0;
             self.distance = 0.0;
+            self.dir = 0.0;
             self.rng = self.seed;
             self.load = None;
+            self.dabs = 0;
             for s in &path {
                 self.stamp_segment(*s, Some(total));
             }
@@ -1508,16 +1824,101 @@ impl Stroke {
     }
 
     /// Render with an explicit backend for routing and CPU/GPU parity benchmarks.
+    /// Resolve a component's grain, opacity and pigment against transparency.
+    /// Only changed tiles are materialized; the layer is composited once later.
+    fn component_pixels(&self, coords: &HashSet<TileCoord>) -> Raster {
+        let blank = Arc::new(Raster::transparent(self.base.width(), self.base.height()));
+        let mut brush = self.brush;
+        brush.blend = BrushBlend::Normal;
+        let mut component =
+            Self::new_with_persistent(blank.clone(), brush, Ink::Color([1.0; 4]), None, None);
+        for coord in coords {
+            if let Some(paint) = self.paint.get(coord) {
+                component.paint.insert(*coord, paint.clone());
+                component.pending.insert(*coord);
+            }
+        }
+        component.render_with_compositor(&blank, None).0
+    }
+
+    fn dual_compositor(&self, coords: &HashSet<TileCoord>) -> Self {
+        let (secondary, blend) = self
+            .secondary
+            .as_ref()
+            .expect("dual compositor requires secondary");
+        let primary_pixels = self.component_pixels(coords);
+        let secondary_pixels = secondary.component_pixels(coords);
+        let brush = Brush {
+            opacity: 1.0,
+            blend: self.brush.blend,
+            ..Brush::default()
+        };
+        let mut composite = Self::new_with_persistent(
+            self.base.clone(),
+            brush,
+            self.ink.clone(),
+            self.clip.clone(),
+            None,
+        );
+        composite.alpha_lock = self.alpha_lock;
+        for &coord in coords {
+            let mut paint = vec![[0.0; 6]; TILE_PX];
+            let primary_tile = primary_pixels.base_tile(coord);
+            let secondary_tile = secondary_pixels.base_tile(coord);
+            for (i, pixel) in paint.iter_mut().enumerate() {
+                let a = primary_tile
+                    .as_ref()
+                    .map_or([0.0; 4], |t| color::px_to_f(t[i]));
+                let b = secondary_tile
+                    .as_ref()
+                    .map_or([0.0; 4], |t| color::px_to_f(t[i]));
+                let mixed = match blend {
+                    DualBlend::Normal => blend_px(BlendMode::Normal, BlendSpace::Linear, a, b, 0.0),
+                    DualBlend::Multiply => a.map(|v| v * b[3]),
+                    DualBlend::Screen => blend_px(BlendMode::Screen, BlendSpace::Linear, a, b, 0.0),
+                };
+                pixel[..4].copy_from_slice(&mixed);
+                pixel[4] = mixed[3];
+                pixel[5] = mixed[3];
+            }
+            composite.paint.insert(coord, paint);
+            composite.pending.insert(coord);
+        }
+        composite
+    }
+
+    fn render_dual(&mut self, current: &Raster) -> (Raster, IRect) {
+        let (secondary, _) = self.secondary.as_ref().expect("dual stroke");
+        let coords = self
+            .pending
+            .union(&secondary.pending)
+            .copied()
+            .collect::<HashSet<_>>();
+        if coords.is_empty() {
+            return (current.clone(), IRect::default());
+        }
+        let mut composite = self.dual_compositor(&coords);
+        let output = composite.render_with_compositor(current, None);
+        self.pending.clear();
+        if let Some((secondary, _)) = &mut self.secondary {
+            secondary.pending.clear();
+        }
+        output
+    }
+
     pub fn render_with_compositor(
         &mut self,
         current: &Raster,
         compositor: Option<&dyn crate::paint_accel::PaintCompositor>,
     ) -> (Raster, IRect) {
+        if self.secondary.is_some() {
+            return self.render_dual(current);
+        }
         self.recover_persistent();
         let t = TILE as i32;
         let mut changes = Vec::new();
         let mut dirty = IRect::default();
-        let opacity = self.brush.opacity.clamp(0.0, 1.0);
+        let opacity = self.stroke_opacity();
         let mode = self.brush.blend.blend_mode();
         let (gk, gs, gstr) = (
             self.brush.grain,
@@ -1525,13 +1926,16 @@ impl Stroke {
             self.brush.grain_strength,
         );
         let grain_tex = textures::get(self.brush.grain_tex);
-        let textured = gstr > 0.0
+        let grain_settings = self.brush.advanced.grain;
+        let textured = grain_settings.mode == GrainMode::Canvas
+            && gstr > 0.0
             && (grain_tex.is_some()
                 || matches!(
                     gk,
                     GrainKind::Paper | GrainKind::Canvas | GrainKind::Chalk | GrainKind::Speckle
                 ));
-        let patterned = grain_tex.is_none()
+        let patterned = grain_settings.mode == GrainMode::Canvas
+            && grain_tex.is_none()
             && (gk == GrainKind::Halftone
                 || (gstr > 0.0 && matches!(gk, GrainKind::Hatch | GrainKind::CrossHatch)));
         let tone_radius = if patterned && gk == GrainKind::Halftone {
@@ -1600,7 +2004,31 @@ impl Stroke {
                 .map(|t| t.to_vec())
                 .unwrap_or_else(|| vec![base_fill; TILE_PX]);
             let mut out = src.clone();
-            let pattern = patterned.then(|| pattern_tile(gk, gs, tone_radius, c));
+            let pattern = patterned.then(|| {
+                if grain_settings == GrainSettings::default() {
+                    pattern_tile(gk, gs, tone_radius, c)
+                } else {
+                    let (s, cosine) = grain_settings.rotation.to_radians().sin_cos();
+                    (0..TILE_PX)
+                        .map(|i| {
+                            let x = (c.x * t + i as i32 % t) as f32;
+                            let y = (c.y * t + i as i32 / t) as f32;
+                            let value = pattern_coverage(
+                                gk,
+                                x * cosine - y * s,
+                                x * s + y * cosine,
+                                gs * grain_settings.scale,
+                                tone_radius,
+                            );
+                            ((value - 0.5) * grain_settings.contrast
+                                + 0.5
+                                + grain_settings.brightness)
+                                .clamp(0.0, 1.0)
+                        })
+                        .collect::<Vec<_>>()
+                        .into()
+                }
+            });
             // Paint thickness of a neighbour inside this tile, compressed so
             // heavy strokes still show ridges; for relief lighting.
             let cov = |i: usize, dx: i32, dy: i32| -> f32 {
@@ -1623,12 +2051,14 @@ impl Stroke {
                     // The paper's tooth as a height the paint must reach: one
                     // light pass catches only the peaks, and scrubbing or
                     // pressing (more thickness) fills the valleys.
-                    let g = match &grain_tex {
-                        // Image grain tiles across the canvas at `grain_scale`
-                        // pixels per texture pixel.
-                        Some(t) => t.tiled(x as f32 / gs.max(0.1), y as f32 / gs.max(0.1)),
-                        None => grain(gk, x as f32, y as f32, gs),
-                    };
+                    let g = transformed_grain(
+                        gk,
+                        grain_tex.as_deref(),
+                        x as f32,
+                        y as f32,
+                        gs,
+                        grain_settings,
+                    );
                     let depth = gstr * (1.0 - g);
                     let fill = (((1.0 + p[5]).ln() - 1.2 * depth) / 0.4).clamp(0.0, 1.0);
                     k = raw * fill;
@@ -1747,6 +2177,15 @@ impl Stroke {
 
     /// Stroke coverage as a mask in layer space (for healing).
     pub fn coverage(&self) -> Mask {
+        if let Some((secondary, _)) = &self.secondary {
+            let coords = self
+                .paint
+                .keys()
+                .chain(secondary.paint.keys())
+                .copied()
+                .collect();
+            return self.dual_compositor(&coords).coverage();
+        }
         if let Some(p) = &self.persistent {
             let mut cpu = Self::new_with_persistent(
                 self.base.clone(),
@@ -1773,7 +2212,7 @@ impl Stroke {
                         } else {
                             1.0
                         };
-                        (p[4].min(1.0) * self.brush.opacity * clip * alpha * 255.0).round() as u8
+                        (p[4].min(1.0) * self.stroke_opacity() * clip * alpha * 255.0).round() as u8
                     })
                     .collect(),
             );

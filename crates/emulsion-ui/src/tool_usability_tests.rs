@@ -214,6 +214,328 @@ fn brush_quick_controls_stay_with_toolbar_and_do_not_replace_other_tool_menus(
 }
 
 #[gpui_kit::test]
+fn brush_memory_buttons_recall_transfer_and_persist_without_editing_pixels(
+    cx: &mut TestAppContext,
+) {
+    let (editor, cx) = setup(cx, Tool::Brush);
+    let (before, id) = cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            assert!(editor.apply_preset_named("Chalk", cx));
+            editor.tools.brush.size = 26.0;
+            editor.tools.brush.opacity = 0.4;
+        });
+        let id = editor.read(cx).presets.current_id.clone().unwrap();
+        let before = editor.read(cx).editor.doc.clone();
+        window.click("brush-settings", cx);
+        (before, id)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(editor.read(cx).tools.sample_merged);
+        window.click("brush-sample-current", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!editor.read(cx).tools.sample_merged);
+        window.click("brush-sample-visible", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("brush-memory-save", 0usize), cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.tools.brush.size = 70.0;
+            editor.tools.brush.opacity = 0.8;
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("brush-memory-recall", 0usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).tools.brush.size, 26.0);
+        assert_eq!(editor.read(cx).tools.brush.opacity, 0.4);
+        window.click("transfer-brush-smudge", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).paint_kind(), PaintKind::Smudge);
+        assert_eq!(editor.read(cx).presets.current_id.as_ref(), Some(&id));
+        assert_eq!(editor.read(cx).tools.brush.size, 26.0);
+        window.click(("brush-memory-save", 1usize), cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("]");
+    cx.run_until_parked();
+    let saved = emulsion_io::brush_library::load().unwrap();
+    assert_eq!(
+        saved.tool_memory("paint", &id).unwrap().marks[0]
+            .unwrap()
+            .size,
+        26.0
+    );
+    assert_eq!(
+        saved.tool_memory("smudge", &id).unwrap().marks[1]
+            .unwrap()
+            .size,
+        26.0
+    );
+    assert_eq!(saved.tool_memory("smudge", &id).unwrap().brush.size, 31.0);
+    cx.update(|_, cx| {
+        assert_eq!(editor.read(cx).editor.doc, before);
+        assert!(editor.read(cx).editor.history.is_empty());
+    });
+}
+
+#[gpui_kit::test]
+fn brush_studio_cancel_isolated_and_done_updates_the_shared_library(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, Tool::Brush);
+    let (second, library, before, count) = cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| editor.open_brush_workspace(window, cx));
+        let library = editor.read(cx).presets.library.clone().unwrap();
+        let second = cx.new(|cx| {
+            EditorView::new(
+                doc(&["Second"], None),
+                None,
+                None,
+                None,
+                "second".into(),
+                cx,
+            )
+        });
+        second.update(cx, |second, cx| second.toggle_presets(cx));
+        assert_eq!(
+            second
+                .read(cx)
+                .presets
+                .library
+                .as_ref()
+                .unwrap()
+                .entity_id(),
+            library.entity_id()
+        );
+        let before = editor.read(cx).editor.doc.clone();
+        let count = library.read(cx).catalog.brushes.len();
+        (second, library, before, count)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("brush-library-workspace").visible());
+        window.click("new-brush", cx);
+    });
+    cx.run_until_parked();
+    let pad = cx.update(|window, cx| {
+        assert!(window.find("brush-studio").visible());
+        assert_eq!(library.read(cx).catalog.brushes.len(), count);
+        window.find("brush-studio-pad").bounds()
+    });
+    cx.simulate_mouse_down(pad.center(), gpui_kit::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        pad.center() + gpui_kit::point(gpui_kit::px(30.), gpui_kit::px(10.)),
+        Some(gpui_kit::MouseButton::Left),
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_up(pad.center(), gpui_kit::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    // Workspace actions must never reach the hidden artwork while Studio owns
+    // the editing surface. Undo/redo belong to its isolated drawing pad.
+    cx.dispatch_action(crate::actions::DeleteNode);
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| editor.read(cx).editor.doc.clone()),
+        before
+    );
+    cx.dispatch_action(crate::actions::ClearPixels);
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| editor.read(cx).editor.doc.clone()),
+        before
+    );
+    cx.dispatch_action(crate::actions::NewLayer);
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| editor.read(cx).editor.doc.clone()),
+        before
+    );
+    cx.dispatch_action(crate::actions::Undo);
+    cx.dispatch_action(crate::actions::Redo);
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click("undo-pad", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_ne!(window.find("redo-pad").disabled(), Some(true));
+        window.click("redo-pad", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_ne!(window.find("undo-pad").disabled(), Some(true));
+        assert_eq!(editor.read(cx).editor.doc, before);
+        assert!(editor.read(cx).editor.history.is_empty());
+    });
+    cx.update(|window, cx| window.click("studio-cancel", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("brush-studio").is_none());
+        assert_eq!(library.read(cx).catalog.brushes.len(), count);
+        assert_eq!(editor.read(cx).editor.doc, before);
+        window.click("new-brush", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("studio-done", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("brush-studio").is_none());
+        assert_eq!(library.read(cx).catalog.brushes.len(), count + 1);
+        let other_library = second.read(cx).presets.library.clone().unwrap();
+        assert_eq!(other_library.read(cx).catalog, library.read(cx).catalog);
+        assert_eq!(editor.read(cx).editor.doc, before);
+        assert!(editor.read(cx).editor.history.is_empty());
+        window.click("close-brush-library", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("brush-library-workspace").is_none());
+        assert!(editor.read(cx).canvas_focus.is_focused(window));
+    });
+    let id = cx.update(|window, cx| {
+        let id = library.read(cx).catalog.brushes.last().unwrap().id.clone();
+        second.update(cx, |second, cx| second.apply_brush_id(&id, cx));
+        editor.update(cx, |editor, cx| {
+            editor.apply_brush_id(&id, cx);
+            editor.open_brush_workspace(window, cx);
+        });
+        id
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("edit-brush", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("Properties", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("studio-value-size", cx));
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("87");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("studio-done", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(
+            library.read(cx).catalog.brush(&id).unwrap().brush.size,
+            87.0
+        );
+        assert_eq!(editor.read(cx).tools.brush.size, 87.0);
+        assert_eq!(
+            second.read(cx).tools.brush.size,
+            87.0,
+            "saved Studio edits must reach another document using this brush"
+        );
+        assert_eq!(editor.read(cx).editor.doc, before);
+    });
+    assert_eq!(
+        emulsion_io::brush_library::load()
+            .unwrap()
+            .brush(&id)
+            .unwrap()
+            .brush
+            .size,
+        87.0
+    );
+    cx.update(|window, cx| {
+        second.update(cx, |second, cx| {
+            second.tools.brush.opacity = 0.35;
+            second.set_paint(PaintKind::Eraser, cx);
+        });
+        // Open immediately, before the workspace's catalog observer rerenders.
+        // Studio must draft the canonical library revision in this event turn.
+        window.click("edit-brush", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("Properties", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("studio-value-size", cx));
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("99");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("studio-done", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(
+            library.read(cx).catalog.brush(&id).unwrap().brush.size,
+            99.0
+        );
+        second.update(cx, |second, cx| {
+            assert_eq!(second.paint_kind(), PaintKind::Eraser);
+            second.set_paint(PaintKind::Brush, cx);
+            assert_eq!(
+                second.tools.brush.size, 99.0,
+                "inactive slots refresh the edited definition on activation"
+            );
+            assert_eq!(
+                second.tools.brush.opacity, 0.35,
+                "slot refresh preserves quick setting overrides"
+            );
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn save_current_brush_preserves_dual_sources_baselines_and_metadata(cx: &mut TestAppContext) {
+    use emulsion_io::brush_library as store;
+    use emulsion_raster::paint::Brush;
+    let (editor, cx) = setup(cx, Tool::Brush);
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::GrayImage::from_pixel(2, 2, image::Luma([255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let (hash, runtime) = store::store_texture_asset(&png.into_inner()).unwrap();
+    cx.update(|_, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.toggle_presets(cx);
+            let library = editor.presets.library.clone().unwrap();
+            let mut draft = library.read(cx).catalog.clone();
+            let id = draft
+                .add_brush(store::USER_SET, "Dual source test", Brush::default())
+                .unwrap();
+            let definition = draft.brush_mut(&id).unwrap();
+            definition.brush.tip = runtime;
+            definition.shape_asset = Some(hash.clone());
+            definition.secondary = Some(Brush {
+                size: 17.0,
+                grain_tex: runtime,
+                ..Brush::default()
+            });
+            definition.secondary_grain_asset = Some(hash.clone());
+            definition.author.name = "Fixture artist".into();
+            draft.create_reset_point(&id).unwrap();
+            let source = draft.brush(&id).unwrap().clone();
+            library
+                .update(cx, |state, cx| state.commit(draft, cx))
+                .unwrap();
+            editor.apply_brush_id(&id, cx);
+            editor.tools.brush.size = 41.0;
+            editor.save_preset(cx);
+            let copy_id = editor.presets.current_id.as_deref().unwrap();
+            assert_ne!(copy_id, id);
+            let copy = library.read(cx).catalog.brush(copy_id).unwrap();
+            assert_eq!(copy.brush.size, 41.0);
+            assert_eq!(copy.secondary, source.secondary);
+            assert_eq!(copy.shape_asset, source.shape_asset);
+            assert_eq!(copy.secondary_grain_asset, source.secondary_grain_asset);
+            assert_eq!(copy.baseline, source.baseline);
+            assert_eq!(copy.reset_point, source.reset_point);
+            assert_eq!(copy.reset_point_secondary, source.reset_point_secondary);
+            assert_eq!(copy.author, source.author);
+            assert!(editor.editor.history.is_empty());
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn leaving_canvas_focus_releases_temporary_pan(cx: &mut TestAppContext) {
     let (editor, cx) = setup(cx, Tool::Brush);
     cx.update(|window, _| window.activate_window());
@@ -281,7 +603,18 @@ fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut 
         );
         assert!(window.find("brush-presets-panel").visible());
         assert!(window.try_find("preset-close").is_none());
-        window.click(("preset-b", 1usize), cx);
+        let preset = emulsion_raster::library::library()
+            .into_iter()
+            .filter(|brush| brush.category == emulsion_raster::library::CATEGORIES[0])
+            .nth(1)
+            .expect("second builtin brush");
+        window.click(
+            gpui_kit::SharedString::from(format!(
+                "brush-brush:builtin:{}:{}",
+                preset.category, preset.name
+            )),
+            cx,
+        );
     });
     cx.run_until_parked();
     let selected_brush = cx.update(|window, cx| {
@@ -316,7 +649,7 @@ fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut 
         assert!(library.origin.x >= dock.origin.x);
         assert!(library.right() <= dock.right());
         assert_eq!(window.find("editor-canvas-column").bounds(), before.0);
-        window.click("preset-close", cx);
+        window.click("presets", cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {

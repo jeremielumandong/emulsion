@@ -1,140 +1,140 @@
-//! The brush panel: the built-in library by medium, plus brushes the
-//! person saves. Saved brushes live in `<data dir>/brush-presets.json`.
-
+//! Shared catalog and the compact library entry point.
 use super::*;
-use emulsion_raster::library::{self, BrushPreset, CATEGORIES};
-use emulsion_raster::paint::{Brush, BrushBlend, GrainKind};
+use emulsion_io::brush_library::{self as store, Catalog};
+use emulsion_raster::library::{BrushPreset, CATEGORIES};
+use emulsion_raster::paint::Brush;
+use gpui_kit::component::{
+    Sizable,
+    button::{Button, ButtonVariants},
+};
 
-pub const MAX_PRESETS: usize = 400;
-
-fn file() -> PathBuf {
-    emulsion_io::recent::data_dir().join("brush-presets.json")
+pub(crate) struct LibraryState {
+    pub catalog: Catalog,
+    pub error: Option<String>,
+    pub warnings: Vec<String>,
+    pub pending_import: Option<(Catalog, Vec<String>, usize, Catalog)>,
 }
+struct SharedLibrary(Entity<LibraryState>);
+impl Global for SharedLibrary {}
 
-/// Saved brushes at `path`. A missing file reads as none. A file that exists
-/// but cannot be parsed is moved aside to `<path>.bak` (returned) so a later
-/// save cannot overwrite it; if it cannot be read or moved, this is an error
-/// and nothing may be saved over it.
-fn load_from(path: &std::path::Path) -> std::io::Result<(Vec<BrushPreset>, Option<PathBuf>)> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), None)),
-        Err(e) => return Err(e),
+pub(crate) fn shared_library(cx: &mut App) -> Entity<LibraryState> {
+    if let Some(shared) = cx.try_global::<SharedLibrary>() {
+        return shared.0.clone();
+    }
+    let (catalog, error, warnings) = match store::load_with_report() {
+        Ok(report) => (report.catalog, None, report.warnings),
+        Err(error) => (Catalog::builtin(), Some(error.to_string()), Vec::new()),
     };
-    match serde_json::from_slice::<Vec<BrushPreset>>(&bytes) {
-        Ok(mut v) => {
-            v.truncate(MAX_PRESETS);
-            for p in &mut v {
-                p.brush = p.brush.sanitized();
+    let state = cx.new(|_| LibraryState {
+        catalog,
+        error,
+        warnings,
+        pending_import: None,
+    });
+    cx.set_global(SharedLibrary(state.clone()));
+    state
+}
+impl LibraryState {
+    pub fn commit(&mut self, draft: Catalog, cx: &mut Context<Self>) -> Result<(), String> {
+        if let Some(error) = &self.error {
+            return Err(format!("Library could not be loaded: {error}"));
+        }
+        match store::commit(draft.revision, &draft) {
+            Ok(catalog) => {
+                self.catalog = catalog;
+                cx.notify();
+                Ok(())
             }
-            Ok((v, None))
-        }
-        Err(_) => {
-            let mut bak = path.as_os_str().to_owned();
-            bak.push(".bak");
-            let bak = PathBuf::from(bak);
-            std::fs::rename(path, &bak)?;
-            Ok((Vec::new(), Some(bak)))
+            Err(store::StoreError::Conflict) => {
+                match store::load_with_report() {
+                    Ok(report) => {
+                        self.catalog = report.catalog;
+                        self.warnings = report.warnings;
+                    }
+                    Err(error) => {
+                        self.error = Some(error.to_string());
+                    }
+                }
+                cx.notify();
+                Err("The library changed elsewhere and has been reloaded. This change was not published. Retry the library action, restart the import, or save your Studio draft as a new brush.".into())
+            }
+            Err(error) => Err(error.to_string()),
         }
     }
-}
-
-fn save_to(path: &std::path::Path, presets: &[BrushPreset]) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let bytes = serde_json::to_vec_pretty(presets).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(tmp, path)
-}
-
-fn save(presets: &[BrushPreset]) -> std::io::Result<()> {
-    save_to(&file(), presets)
-}
-
-#[cfg(test)]
-mod identity_tests {
-    use super::matches;
-    use emulsion_raster::paint::Brush;
-
-    #[test]
-    fn dynamics_and_texture_changes_are_distinct_presets() {
-        let original = Brush::default();
-        for changed in [
-            Brush {
-                size_pressure: 0.6,
-                ..original
-            },
-            Brush {
-                tilt: 0.8,
-                ..original
-            },
-            Brush {
-                spacing: 0.72,
-                ..original
-            },
-            Brush {
-                taper_end: 30.0,
-                ..original
-            },
-            Brush {
-                tip: 42,
-                ..original
-            },
-            Brush {
-                grain_tex: 17,
-                ..original
-            },
-        ] {
-            assert!(!matches(&original, &changed));
-        }
-        assert!(matches(&original, &original));
-    }
-}
-
-/// Every setting affects a brush; dynamics and textures must survive saving.
-pub(crate) fn matches(a: &Brush, b: &Brush) -> bool {
-    a.sanitized() == b.sanitized()
 }
 
 #[derive(Default)]
 pub(crate) struct PresetState {
     pub open: bool,
-    /// Category shown; None = the person's saved brushes.
     pub category: Option<String>,
-    /// Loaded on first open.
-    saved: Option<Vec<BrushPreset>>,
-    /// Name of the brush last picked, for the context bar.
     pub current: Option<String>,
+    pub current_id: Option<String>,
+    pub definition: Option<Brush>,
+    pub definitions: HashMap<tools::BrushSlot, Option<Brush>>,
+    pub ids: HashMap<tools::BrushSlot, Option<String>>,
+    pub library: Option<Entity<LibraryState>>,
+    subscription: Option<Subscription>,
 }
-
 impl EditorView {
-    /// Load the saved brushes on first use. False when the file could not be
-    /// read or set aside: the caller must not save over it.
-    fn ensure_saved_presets(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.presets.saved.is_some() {
-            return true;
-        }
-        match load_from(&file()) {
-            Ok((v, bak)) => {
-                self.presets.saved = Some(v);
-                if let Some(bak) = bak {
-                    self.set_status(
-                        format!("Saved brushes were unreadable; moved to {}.", bak.display()),
-                        true,
-                        cx,
-                    );
+    pub(crate) fn publish_brush_catalog(report: store::LoadReport, cx: &mut App) {
+        if let Some(shared) = cx.try_global::<SharedLibrary>() {
+            let library = shared.0.clone();
+            library.update(cx, |state, cx| {
+                // A newer UI transaction may have finished during the reload.
+                if report.catalog.revision >= state.catalog.revision {
+                    state.catalog = report.catalog;
+                    state.warnings = report.warnings;
+                    state.error = None;
+                    cx.notify();
                 }
-                true
-            }
-            Err(e) => {
-                self.set_status(format!("Could not read saved brushes: {e}"), true, cx);
-                false
-            }
+            });
+        } else {
+            let state = cx.new(|_| LibraryState {
+                catalog: report.catalog,
+                warnings: report.warnings,
+                error: None,
+                pending_import: None,
+            });
+            cx.set_global(SharedLibrary(state));
         }
     }
-
+    pub(super) fn prepare_presets(&mut self, cx: &mut Context<Self>) {
+        if self.presets.library.is_none() {
+            let library = shared_library(cx);
+            self.presets.subscription = Some(cx.observe(&library, |this, library, cx| {
+                if let Some(id) = this.presets.current_id.as_ref() {
+                    match library.read(cx).catalog.brush(id) {
+                        Some(definition) => {
+                            if this.presets.definition != Some(definition.brush) {
+                                let mut brush = definition.brush;
+                                if let Some(old) = this.presets.definition {
+                                    if this.tools.brush.size != old.size {
+                                        brush.size = this.tools.brush.size;
+                                    }
+                                    if this.tools.brush.opacity != old.opacity {
+                                        brush.opacity = this.tools.brush.opacity;
+                                    }
+                                }
+                                this.tools.brush = brush;
+                                this.presets.definition = Some(definition.brush);
+                            }
+                            this.presets.current = Some(definition.name.clone());
+                        }
+                        None => {
+                            this.presets.current_id = None;
+                            this.presets.definition = None;
+                        }
+                    }
+                }
+                cx.notify();
+            }));
+            self.presets.library = Some(library);
+        }
+        if self.presets.category.is_none() {
+            self.presets.category = Some(CATEGORIES[0].into());
+        }
+        cx.notify();
+    }
     pub fn toggle_presets(&mut self, cx: &mut Context<Self>) {
         let tab = if self.sidebar_tab == SidebarTab::BrushPresets {
             SidebarTab::History
@@ -142,87 +142,156 @@ impl EditorView {
             SidebarTab::BrushPresets
         };
         self.select_sidebar(tab, cx);
-        self.presets.open = tab == SidebarTab::BrushPresets;
         self.prepare_presets(cx);
-        cx.notify();
     }
-
-    pub(super) fn prepare_presets(&mut self, cx: &mut Context<Self>) {
-        self.ensure_saved_presets(cx);
-        if self.presets.category.is_none() && self.presets.saved.as_ref().is_none_or(Vec::is_empty)
-        {
-            self.presets.category = Some(CATEGORIES[0].into());
-        }
-        cx.notify();
-    }
-
-    /// The current brush settings.
     pub fn brush(&self) -> Brush {
         self.tools.brush
     }
-
-    /// Switch to a brush. Erasers and smudges also switch the paint kind,
-    /// so picking "Soft eraser" erases without another click.
-    pub fn apply_preset(&mut self, p: &BrushPreset, cx: &mut Context<Self>) {
-        if !matches!(self.tool, Tool::Brush | Tool::Heal | Tool::Clone) {
-            self.set_tool(Tool::Brush, cx);
+    /// Brush selection preserves the active painting operation.
+    pub fn apply_preset(&mut self, preset: &BrushPreset, cx: &mut Context<Self>) {
+        self.remember_active_brush(cx);
+        self.finish_tool_interaction(cx);
+        if !matches!(
+            self.tool,
+            Tool::Brush | Tool::Heal | Tool::Clone | Tool::Mask
+        ) || (self.tool == Tool::Brush
+            && !matches!(
+                self.tools.paint,
+                PaintKind::Brush | PaintKind::Eraser | PaintKind::Smudge
+            ))
+        {
+            self.set_paint(PaintKind::Brush, cx);
         }
-        if self.tool == Tool::Brush {
-            let kind = match p.category.as_str() {
-                "Eraser" => PaintKind::Eraser,
-                "Smudge" => PaintKind::Smudge,
-                _ => PaintKind::Brush,
-            };
-            self.set_paint(kind, cx);
-        }
-        self.tools.brush = p.brush.sanitized();
-        self.presets.current = Some(p.name.clone());
+        self.tools.brush = preset.brush.sanitized();
+        self.presets.current = Some(preset.name.clone());
+        self.presets.current_id = None;
+        self.presets.definition = None;
         cx.notify();
     }
-
-    /// Selecting a medium also selects a brush, rather than merely filtering
-    /// the list while silently leaving the previous medium active.
+    pub(crate) fn apply_brush_id(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.prepare_presets(cx);
+        let library = self.presets.library.as_ref().unwrap().clone();
+        let Some(definition) = library.read(cx).catalog.brush(id).cloned() else {
+            return;
+        };
+        self.apply_preset(
+            &BrushPreset {
+                name: definition.name,
+                category: String::new(),
+                note: definition.note,
+                brush: definition.brush,
+            },
+            cx,
+        );
+        self.presets.current_id = Some(id.to_owned());
+        self.presets.definition = Some(definition.brush);
+        self.restore_active_brush_memory(cx);
+        let mut draft = library.read(cx).catalog.clone();
+        if draft.recent.first().is_some_and(|recent| recent == id) {
+            return;
+        }
+        let _ = draft.record_use(id);
+        if let Err(error) = library.update(cx, |state, cx| state.commit(draft, cx)) {
+            self.set_status(
+                format!("Brush selected; couldn't save recent brushes: {error}"),
+                true,
+                cx,
+            );
+        }
+    }
     pub(crate) fn select_brush_category(&mut self, category: &str, cx: &mut Context<Self>) {
-        let presets: Vec<_> = library::library()
-            .into_iter()
-            .filter(|p| p.category == category)
-            .collect();
-        let Some(first) = presets.first() else { return };
         self.presets.category = Some(category.into());
-        // Reopening the active medium must preserve the user's adjustments.
-        let already_active = presets
-            .iter()
-            .any(|p| self.presets.current.as_deref() == Some(p.name.as_str()));
-        if !already_active {
-            self.apply_preset(first, cx);
-        }
         cx.notify();
     }
-
-    /// Pick a brush by name, built-in or saved.
     pub fn apply_preset_named(&mut self, name: &str, cx: &mut Context<Self>) -> bool {
-        let found = library::find(name).or_else(|| {
-            self.ensure_saved_presets(cx);
-            let n = name.trim().to_lowercase();
-            self.presets
-                .saved
+        self.prepare_presets(cx);
+        let found = self.presets.library.as_ref().and_then(|state| {
+            state
+                .read(cx)
+                .catalog
+                .brushes
                 .iter()
-                .flatten()
-                .find(|p| p.name.to_lowercase() == n)
-                .cloned()
+                .find(|b| b.name.eq_ignore_ascii_case(name.trim()))
+                .map(|b| b.id.clone())
         });
-        match found {
-            Some(p) => {
-                self.apply_preset(&p, cx);
-                true
-            }
-            None => false,
+        if let Some(id) = found {
+            self.apply_brush_id(&id, cx);
+            true
+        } else {
+            false
         }
     }
-
-    /// Import Procreate `.brushset` / `.brush` files into the saved brushes,
-    /// keeping their tip and grain images.
+    pub(crate) fn open_brush_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_tool_interaction(cx);
+        self.prepare_presets(cx);
+        let owner = cx.entity().downgrade();
+        let library = self.presets.library.as_ref().unwrap().clone();
+        let selected = self.presets.current_id.clone();
+        let workspace = cx.new(|cx| {
+            super::brush_library_ui::BrushWorkspace::new(owner, library, selected, window, cx)
+        });
+        self.brush_workspace = Some(workspace);
+        cx.notify();
+    }
+    pub fn save_preset(&mut self, cx: &mut Context<Self>) {
+        self.prepare_presets(cx);
+        let library = self.presets.library.as_ref().unwrap().clone();
+        let mut draft = library.read(cx).catalog.clone();
+        let result = (|| -> Result<String, String> {
+            let library_id = draft.libraries.first().ok_or("No library")?.id.clone();
+            let set = match draft.sets.iter().find(|s| s.name == "My brushes") {
+                Some(set) => set.id.clone(),
+                None => draft
+                    .create_set(&library_id, "My brushes")
+                    .map_err(|e| e.to_string())?,
+            };
+            let source = self
+                .presets
+                .current_id
+                .as_deref()
+                .and_then(|id| draft.brush(id))
+                .cloned();
+            let id = draft
+                .add_brush(&set, "New brush", self.tools.brush)
+                .map_err(|e| e.to_string())?;
+            if let Some(mut source) = source {
+                source.id = id.clone();
+                source.set_id = set;
+                source.name = "New brush".into();
+                source.builtin = false;
+                if source.brush.tip != self.tools.brush.tip {
+                    source.shape_asset = None;
+                }
+                if source.brush.grain_tex != self.tools.brush.grain_tex {
+                    source.grain_asset = None;
+                }
+                source.brush = self.tools.brush.sanitized();
+                *draft.brush_mut(&id).unwrap() = source;
+            }
+            Ok(id)
+        })();
+        match result {
+            Ok(id) => match library.update(cx, |state, cx| state.commit(draft, cx)) {
+                Ok(()) => {
+                    self.presets.current_id = Some(id);
+                    self.presets.definition = Some(self.tools.brush);
+                    self.presets.current = Some("New brush".into());
+                    self.set_status(
+                        "Saved to My brushes. Open Brush Studio to name and edit it.",
+                        false,
+                        cx,
+                    );
+                }
+                Err(e) => self.set_status(format!("Couldn't save brush: {e}"), true, cx),
+            },
+            Err(e) => self.set_status(e, true, cx),
+        }
+    }
     pub fn import_brushes(&mut self, cx: &mut Context<Self>) {
+        self.prepare_presets(cx);
+        let library = self.presets.library.as_ref().unwrap().clone();
+        let mut draft = library.read(cx).catalog.clone();
+        let original = draft.clone();
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -233,155 +302,42 @@ impl EditorView {
             let Ok(Ok(Some(paths))) = rx.await else {
                 return;
             };
-            let imported = cx
+            let result = cx
                 .background_spawn(async move {
-                    let mut out: Vec<Result<Vec<emulsion_io::brushset::Imported>, String>> =
-                        Vec::new();
-                    for p in paths {
-                        let r = emulsion_io::brushset::import(&p)
-                            .and_then(|list| {
-                                for brush in &list {
-                                    for png in
-                                        [&brush.shape_png, &brush.grain_png].into_iter().flatten()
-                                    {
-                                        emulsion_io::brushset::store_texture(png)?;
-                                    }
-                                }
-                                Ok(list)
-                            })
-                            .map_err(|e| format!("{}: {e}", p.display()));
-                        out.push(r);
-                    }
-                    out
+                    let parent = draft
+                        .libraries
+                        .first()
+                        .ok_or_else(|| anyhow::anyhow!("No library"))?
+                        .id
+                        .clone();
+                    let set = draft.create_set(&parent, "Imported")?;
+                    let report = store::import_paths(&mut draft, &paths, &set)?;
+                    Ok::<_, anyhow::Error>((draft, report))
                 })
                 .await;
-            this.update(cx, |this, cx| {
-                if !this.ensure_saved_presets(cx) {
-                    return;
-                }
-                let Some(saved) = this.presets.saved.as_mut() else {
-                    return;
-                };
-                let previous = saved.clone();
-                let (mut added, mut errors) = (0usize, Vec::new());
-                for r in imported {
-                    match r {
-                        Ok(list) => {
-                            for b in list {
-                                if saved.len() >= MAX_PRESETS {
-                                    break;
-                                }
-                                if !saved.iter().any(|q| {
-                                    q.name == b.preset.name && q.category == b.preset.category
-                                }) {
-                                    saved.push(b.preset);
-                                    added += 1;
-                                }
-                            }
-                        }
-                        Err(e) => errors.push(e),
-                    }
-                }
-                if let Err(error) = save(saved) {
-                    *saved = previous;
-                    added = 0;
-                    errors.push(format!("Could not save imported brushes: {error}"));
-                }
-                this.presets.category = None;
-                if this.sidebar_tab != SidebarTab::BrushSettings {
-                    this.presets.open = true;
-                    this.select_sidebar(SidebarTab::BrushPresets, cx);
-                }
-                if errors.is_empty() {
+            this.update(cx, |this, cx| match result {
+                Ok((draft, report)) => {
+                    let count = report.added.len();
+                    library.update(cx, |state, cx| {
+                        state.pending_import = Some((draft, report.warnings, count, original));
+                        cx.notify();
+                    });
                     this.set_status(
                         format!(
-                            "Imported {added} brush{}.",
-                            if added == 1 { "" } else { "es" }
+                            "{count} brushes ready. Review the import report in the brush library."
                         ),
                         false,
                         cx,
                     );
-                } else {
-                    this.set_status(format!("Imported {added}; {}", errors.join("; ")), true, cx);
                 }
-                cx.notify();
+                Err(error) => {
+                    this.set_status(format!("Couldn't import brushes: {error}"), true, cx)
+                }
             })
             .ok();
         })
         .detach();
     }
-
-    /// Save the current brush under a name describing it.
-    pub fn save_preset(&mut self, cx: &mut Context<Self>) {
-        let b = self.tools.brush;
-        if !self.ensure_saved_presets(cx) {
-            return;
-        }
-        let Some(saved) = self.presets.saved.as_mut() else {
-            return;
-        };
-        if saved
-            .iter()
-            .chain(&library::library())
-            .any(|p| matches(&p.brush, &b))
-        {
-            self.set_status("That brush is already in the panel.", false, cx);
-            return;
-        }
-        if saved.len() >= MAX_PRESETS {
-            self.set_status(
-                format!("Remove a brush first; {MAX_PRESETS} is the limit."),
-                true,
-                cx,
-            );
-            return;
-        }
-        let medium = match (b.grain, b.wetness > 0.3, b.blend) {
-            (_, _, BrushBlend::Multiply) => "Marker",
-            (_, true, _) => "Wet",
-            (GrainKind::Chalk, _, _) => "Chalk",
-            (GrainKind::None, _, _) if b.hardness >= 0.5 => "Round",
-            (GrainKind::None, _, _) => "Soft",
-            _ => "Textured",
-        };
-        let name = format!(
-            "{medium} {:.0} · {:.0}%{}",
-            b.size,
-            b.hardness * 100.0,
-            if b.flow < 0.99 {
-                format!(" · flow {:.0}%", b.flow * 100.0)
-            } else {
-                String::new()
-            }
-        );
-        saved.push(BrushPreset {
-            name: name.clone(),
-            category: "Mine".into(),
-            note: "Saved from the current settings".into(),
-            brush: b,
-        });
-        let r = save(saved);
-        self.presets.category = None;
-        self.presets.current = Some(name);
-        match r {
-            Ok(()) => self.set_status("Saved to My brushes.", false, cx),
-            Err(e) => self.set_status(format!("Could not save the brush: {e}"), true, cx),
-        }
-    }
-
-    fn delete_preset(&mut self, i: usize, cx: &mut Context<Self>) {
-        let Some(saved) = &mut self.presets.saved else {
-            return;
-        };
-        if i < saved.len() {
-            saved.remove(i);
-            if let Err(e) = save(saved) {
-                self.set_status(format!("Could not save brushes: {e}"), true, cx);
-            }
-            cx.notify();
-        }
-    }
-
     pub(crate) fn presets_view(
         &self,
         p: &Palette,
@@ -392,179 +348,268 @@ impl EditorView {
         if !self.presets.open && !embedded {
             return None;
         }
-        let b = self.tools.brush;
-        let saved = self.presets.saved.clone().unwrap_or_default();
-        let cat = self.presets.category.clone();
-        let mut tabs = div().flex().flex_wrap().items_center().gap_1();
-        for (ci, c) in CATEGORIES.iter().enumerate() {
-            let on = cat.as_deref() == Some(c);
-            let name: String = (*c).into();
-            tabs = tabs.child(
-                chip(("bcat", ci), *c, on, p)
-                    .test_support()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select_brush_category(&name, cx);
-                        window.focus(&this.canvas_focus, cx);
-                    })),
-            );
+        let mut rows = div().flex().flex_col().gap_1();
+        if let Some(library) = &self.presets.library {
+            rows = rows.child(import_review(library, cx));
         }
-        tabs = tabs.child(
-            chip(
-                "bcat-mine",
-                format!("Mine ({})", saved.len()),
-                cat.is_none(),
-                p,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.presets.category = None;
-                cx.notify();
-            })),
-        );
-        let mut row = div().flex().flex_col().w_full().gap_1();
-        let shown: Vec<(usize, BrushPreset, bool)> = match &cat {
-            Some(c) => library::library()
-                .into_iter()
-                .filter(|q| q.category == *c)
-                .enumerate()
-                .map(|(i, q)| (i, q, false))
-                .collect(),
-            None => saved
-                .into_iter()
-                .enumerate()
-                .map(|(i, q)| (i, q, true))
-                .collect(),
-        };
-        if shown.is_empty() {
-            row = row.child(mono(
-                "No saved brushes yet. Adjust one and press Save current.",
-                10.5,
-                p.muted,
-            ));
+        if let Some(state) = &self.presets.library {
+            let catalog = &state.read(cx).catalog;
+            for brush in catalog
+                .brushes
+                .iter()
+                .filter(|b| {
+                    catalog.sets.iter().any(|s| {
+                        s.id == b.set_id
+                            && Some(s.name.as_str()) == self.presets.category.as_deref()
+                    })
+                })
+                .take(30)
+            {
+                let id = brush.id.clone();
+                rows = rows.child(
+                    Button::new(SharedString::from(format!("brush-{id}")))
+                        .ghost()
+                        .small()
+                        .label(brush.name.clone())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.apply_brush_id(&id, cx);
+                            window.focus(&this.canvas_focus, cx);
+                        })),
+                );
+            }
         }
-        let mut note = None;
-        for (i, preset, mine) in shown {
-            let on = matches(&preset.brush, &b);
-            if on {
-                note = Some(preset.note.clone());
-            }
-            let text = preset.name.clone();
-            let apply = preset.clone();
-            let mut entry = div().flex().items_center().gap_1().child(
-                chip((if mine { "preset-u" } else { "preset-b" }, i), text, on, p)
-                    .flex_1()
-                    .test_support()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.apply_preset(&apply, cx);
-                        window.focus(&this.canvas_focus, cx);
-                    })),
+        let mut categories = div().flex().flex_wrap().gap_1();
+        for (index, name) in CATEGORIES.iter().enumerate() {
+            categories = categories.child(
+                chip(
+                    ("bcat", index),
+                    *name,
+                    self.presets.category.as_deref() == Some(name),
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.select_brush_category(name, cx))),
             );
-            if mine {
-                entry =
-                    entry
-                        .child(chip(("preset-del", i), "×", false, p).on_click(
-                            cx.listener(move |this, _, _, cx| this.delete_preset(i, cx)),
-                        ));
-            }
-            row = row.child(entry);
         }
         Some(
             div()
                 .id("brush-presets-panel")
+                .test_support()
                 .flex()
                 .flex_col()
-                .min_w_0()
-                .w_full()
-                .gap_3()
-                .p_3()
-                .when(embedded, |view| view.p_0())
-                .bg(p.panel)
-                .when(!embedded, |view| {
-                    view.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(label("Brush presets", p))
-                            .child(
-                                button("preset-close", "Close", false, p)
-                                    .test_support()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.select_sidebar(SidebarTab::History, cx);
-                                        this.presets.open = false;
-                                        window.focus(&this.canvas_focus, cx);
-                                    })),
-                            ),
-                    )
-                })
-                .child(tabs)
-                .child(row)
-                .children(note.map(|n| mono(n, 10., p.muted)))
+                .gap_2()
+                .p_2()
                 .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            button("preset-save", "Save current", false, p)
-                                .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
-                        )
-                        .child(
-                            button("bcat-import", "Import…", false, p)
-                                .on_click(cx.listener(|this, _, _, cx| this.import_brushes(cx))),
+                    Button::new("open-brush-library")
+                        .label("Brush library…")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.open_brush_workspace(window, cx)
+                            }),
                         ),
                 )
-                .test_support(),
+                .child(categories)
+                .child(rows)
+                .child(
+                    Button::new("preset-save")
+                        .label("Save current")
+                        .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
+                )
+                .child(
+                    Button::new("bcat-import")
+                        .label("Import…")
+                        .on_click(cx.listener(|this, _, _, cx| this.import_brushes(cx))),
+                ),
         )
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Brush, library, load_from, matches, save_to};
-
-    #[test]
-    fn a_corrupt_presets_file_survives_the_next_save() {
-        let dir = std::env::temp_dir().join(format!(
-            "emulsion-presets-corrupt-{}-{}",
-            std::process::id(),
-            emulsion_io::recent::now()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("brush-presets.json");
-        let corrupt = b"[{\"name\": \"My favourite\", \"brush\": {truncated";
-        std::fs::write(&path, corrupt).unwrap();
-
-        let (saved, bak) = load_from(&path).unwrap();
-        assert!(saved.is_empty());
-        let bak = bak.expect("the unreadable file is set aside");
-        save_to(&path, &library::library()[..1]).unwrap();
-
-        assert_eq!(std::fs::read(&bak).unwrap(), corrupt);
-        assert_eq!(load_from(&path).unwrap().0, library::library()[..1]);
-        // A missing file is simply empty, not an error.
-        std::fs::remove_file(&path).unwrap();
-        assert_eq!(load_from(&path).unwrap(), (Vec::new(), None));
-        std::fs::remove_dir_all(&dir).ok();
+/// The draft stays unpublished until conversion warnings can be reviewed.
+pub(super) fn import_review(library: &Entity<LibraryState>, cx: &mut App) -> AnyElement {
+    let Some((_, warnings, count, _)) = &library.read(cx).pending_import else {
+        return div().into_any_element();
+    };
+    let mut report = div()
+        .id("brush-import-report")
+        .max_h_48()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap_1();
+    for warning in warnings {
+        report = report.child(div().text_sm().child(warning.clone()));
     }
+    let view = div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(format!("Import ready: {count} brushes"))
+        .child(report);
+    let accept = library.clone();
+    let cancel = library.clone();
+    view.child(
+        div()
+            .flex()
+            .gap_2()
+            .child(
+                Button::new("confirm-brush-import")
+                    .label("Import brushes")
+                    .on_click(move |_, _, cx| {
+                        accept.update(cx, |state, cx| {
+                            let Some((draft, _, _, original)) = state.pending_import.clone() else {
+                                return;
+                            };
+                            let result = merge_import(&state.catalog, &original, &draft)
+                                .and_then(|draft| state.commit(draft, cx));
+                            match result {
+                                Ok(()) => {
+                                    state.pending_import = None;
+                                }
+                                Err(error) => {
+                                    if let Some((_, warnings, _, _)) = &mut state.pending_import {
+                                        warnings.push(format!("Save failed: {error}"));
+                                    }
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("cancel-brush-import")
+                    .label("Cancel import")
+                    .on_click(move |_, _, cx| {
+                        cancel.update(cx, |state, cx| {
+                            state.pending_import = None;
+                            cx.notify();
+                        });
+                    }),
+            ),
+    )
+    .into_any_element()
+}
 
+fn merge_import(
+    latest: &Catalog,
+    original: &Catalog,
+    imported: &Catalog,
+) -> Result<Catalog, String> {
+    let mut merged = latest.clone();
+    for library in imported
+        .libraries
+        .iter()
+        .filter(|l| !original.libraries.iter().any(|old| old.id == l.id))
+    {
+        if merged.libraries.iter().any(|old| old.id == library.id) {
+            return Err("Imported library ID already exists; restart the import.".into());
+        }
+        merged.libraries.push(library.clone());
+    }
+    for set in imported
+        .sets
+        .iter()
+        .filter(|s| !original.sets.iter().any(|old| old.id == s.id))
+    {
+        if merged.sets.iter().any(|old| old.id == set.id) {
+            return Err("Imported set ID already exists; restart the import.".into());
+        }
+        merged.sets.push(set.clone());
+    }
+    for brush in imported
+        .brushes
+        .iter()
+        .filter(|b| original.brush(&b.id).is_none())
+    {
+        if merged.brush(&brush.id).is_some() {
+            return Err("Imported brush ID already exists; restart the import.".into());
+        }
+        merged.brushes.push(brush.clone());
+    }
+    merged.validate().map_err(|e| e.to_string())?;
+    Ok(merged)
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::merge_import;
+    use emulsion_io::brush_library::{Catalog, USER_SET};
+    use emulsion_raster::paint::Brush;
     #[test]
-    fn library_brushes_round_trip_through_json() {
-        let lib = library::library();
-        let json = serde_json::to_string(&lib).unwrap();
-        let back: Vec<library::BrushPreset> = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, lib);
-        // Files from before the engine grew still load: old fields, new defaults.
-        let old = r#"[{"name":"x","category":"Mine","note":"","brush":{"size":12.0,"hardness":1.0,"opacity":1.0,"flow":1.0,"spacing":0.1}}]"#;
-        let v: Vec<library::BrushPreset> = serde_json::from_str(old).unwrap();
-        assert!(matches(
-            &v[0].brush,
-            &Brush {
-                size: 12.0,
-                hardness: 1.0,
-                spacing: 0.1,
-                ..Default::default()
-            }
-        ));
+    fn import_review_keeps_concurrent_library_edits_and_memories() {
+        let base = Catalog::builtin();
+        let mut imported = base.clone();
+        let id = imported
+            .add_brush(USER_SET, "Imported", Brush::default())
+            .unwrap();
+        let mut latest = base.clone();
+        let changed = latest.brushes[0].id.clone();
+        latest
+            .rename_brush(&changed, "Renamed while reviewing")
+            .unwrap();
+        latest
+            .remember_tool(
+                "paint",
+                &changed,
+                Brush {
+                    size: 87.,
+                    ..Brush::default()
+                },
+            )
+            .unwrap();
+        latest.revision = 42;
+        let merged = merge_import(&latest, &base, &imported).unwrap();
+        assert_eq!(merged.revision, 42);
+        assert_eq!(merged.brush(&changed), latest.brush(&changed));
+        assert_eq!(merged.tool_memories, latest.tool_memories);
+        assert!(merged.brush(&id).is_some());
+        assert!(merge_import(&merged, &base, &imported).is_err());
+    }
+}
+
+#[cfg(test)]
+mod catalog_publication_tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    #[gpui_kit::test]
+    fn mcp_catalog_publication_notifies_shared_state_and_rejects_stale_reload(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let mut catalog = Catalog::builtin();
+            catalog.revision = 5;
+            EditorView::publish_brush_catalog(
+                store::LoadReport {
+                    catalog: catalog.clone(),
+                    warnings: vec![],
+                },
+                cx,
+            );
+            let first = shared_library(cx);
+            let second = shared_library(cx);
+            assert_eq!(first.entity_id(), second.entity_id());
+            let id = catalog.brushes[0].id.clone();
+            catalog.rename_brush(&id, "Changed through MCP").unwrap();
+            catalog.revision = 6;
+            EditorView::publish_brush_catalog(
+                store::LoadReport {
+                    catalog,
+                    warnings: vec!["conversion warning".into()],
+                },
+                cx,
+            );
+            assert_eq!(
+                first.read(cx).catalog.brush(&id).unwrap().name,
+                "Changed through MCP"
+            );
+            EditorView::publish_brush_catalog(
+                store::LoadReport {
+                    catalog: Catalog::builtin(),
+                    warnings: vec![],
+                },
+                cx,
+            );
+            assert_eq!(second.read(cx).catalog.revision, 6);
+            assert_eq!(second.read(cx).warnings, ["conversion warning"]);
+        });
     }
 }

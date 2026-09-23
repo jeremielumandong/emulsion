@@ -152,6 +152,9 @@ pub struct ToolState {
     pub symmetry: u32,
     /// Alpha lock: paint only where the layer already has pixels.
     pub alpha_lock: bool,
+    /// Interactive wet paint and smudge sample the visible canvas by default.
+    /// MCP's separate sample_merged option samples lower layers instead.
+    pub sample_merged: bool,
     /// Drawing guide and assist.
     pub guide: super::guides::GuideState,
     /// What the Liquify brush does.
@@ -219,6 +222,7 @@ impl Default for ToolState {
             mirror_y: false,
             symmetry: 0,
             alpha_lock: false,
+            sample_merged: true,
             guide: Default::default(),
             liquify: emulsion_raster::liquify::Mode::Push,
             liquify_session: None,
@@ -471,7 +475,7 @@ impl EditorView {
         }
         let from = BrushSlot::of(self.tool, self.tools.paint);
         self.tool = tool;
-        self.switch_slot(from, BrushSlot::of(tool, self.tools.paint));
+        self.switch_slot(from, BrushSlot::of(tool, self.tools.paint), cx);
         if self.sidebar_tab == SidebarTab::BrushSettings && !self.brushy() {
             self.select_sidebar(SidebarTab::History, cx);
         }
@@ -507,16 +511,27 @@ impl EditorView {
 
     /// Put the current brush away under `from` and take out the one saved
     /// for `to` (or its default). Nothing happens when they are the same.
-    fn switch_slot(&mut self, from: Option<BrushSlot>, to: Option<BrushSlot>) {
+    fn switch_slot(
+        &mut self,
+        from: Option<BrushSlot>,
+        to: Option<BrushSlot>,
+        cx: &mut Context<Self>,
+    ) {
         if from == to {
             return;
         }
+        self.remember_brush_for_slot(from, cx);
         if let Some(f) = from {
+            self.presets.ids.insert(f, self.presets.current_id.clone());
+            self.presets.definitions.insert(f, self.presets.definition);
             self.tools
                 .kits
                 .insert(f, (self.tools.brush, self.presets.current.clone()));
         }
         if let Some(t) = to {
+            self.presets.current_id = self.presets.ids.get(&t).cloned().flatten();
+            self.presets.definition = self.presets.definitions.get(&t).copied().flatten();
+            let previous_definition = self.presets.definition;
             let (b, name) = self
                 .tools
                 .kits
@@ -525,6 +540,33 @@ impl EditorView {
                 .unwrap_or_else(|| (t.default_brush(), None));
             self.tools.brush = b;
             self.presets.current = name;
+            if let Some(id) = self.presets.current_id.as_deref()
+                && let Some(library) = &self.presets.library
+            {
+                if let Some(definition) = library.read(cx).catalog.brush(id) {
+                    let old = self.presets.definition;
+                    if old != Some(definition.brush) {
+                        let size = old.filter(|old| b.size != old.size).map(|_| b.size);
+                        let opacity = old
+                            .filter(|old| b.opacity != old.opacity)
+                            .map(|_| b.opacity);
+                        self.tools.brush = definition.brush;
+                        if let Some(size) = size {
+                            self.tools.brush.size = size;
+                        }
+                        if let Some(opacity) = opacity {
+                            self.tools.brush.opacity = opacity;
+                        }
+                    }
+                    self.presets.current = Some(definition.name.clone());
+                    self.presets.definition = Some(definition.brush);
+                } else {
+                    self.presets.current_id = None;
+                    self.presets.current = None;
+                    self.presets.definition = None;
+                }
+            }
+            self.restore_brush_slot_memory(previous_definition, cx);
         }
     }
 
@@ -608,7 +650,7 @@ impl EditorView {
         self.tool = Tool::Brush;
         self.tools.mask_edit = mask_edit;
         self.tools.paint = kind;
-        self.switch_slot(from, Some(BrushSlot::Paint(kind)));
+        self.switch_slot(from, Some(BrushSlot::Paint(kind)), cx);
         if self.sidebar_tab == SidebarTab::BrushSettings && !self.brushy() {
             self.select_sidebar(SidebarTab::History, cx);
         }
@@ -657,6 +699,7 @@ impl EditorView {
             50.0
         };
         self.tools.brush.size = (if larger { s + step } else { s - step }).clamp(1.0, 2000.0);
+        self.remember_active_brush(cx);
         cx.notify();
     }
 
@@ -1107,10 +1150,30 @@ impl EditorView {
             }
             ink => ink,
         };
-        let wet = brush.wetness > 0.0 || matches!(ink, Ink::Smudge);
+        self.remember_active_brush(cx);
+        let secondary = self.presets.current_id.as_ref().and_then(|id| {
+            self.presets.library.as_ref().and_then(|library| {
+                let definition = library.read(cx).catalog.brush(id)?;
+                definition
+                    .secondary
+                    .map(|brush| (brush, definition.combine_mode))
+            })
+        });
+        let needs_backdrop = |brush: &Brush| {
+            brush.wetness > 0.0
+                || brush.advanced.wet.dilution > 0.0
+                || brush.advanced.wet.pull > 0.0
+        };
+        let wet = needs_backdrop(&brush)
+            || secondary.is_some_and(|(brush, _)| needs_backdrop(&brush))
+            || matches!(ink, Ink::Smudge);
         let mut stroke = Stroke::new(raster.clone(), brush, ink, clip);
+        if let Some((mut secondary, mode)) = secondary {
+            secondary.size = (secondary.size as f64 / scale) as f32;
+            stroke.set_secondary(secondary, mode);
+        }
         stroke.set_alpha_lock(self.tools.alpha_lock && !mask_mode);
-        if wet && !mask_mode {
+        if wet && !mask_mode && self.tools.sample_merged {
             // Wet media mix with what shows under this layer, not only with it.
             let backdrop = PixelSampler::new(self.tree.clone());
             let td = to_doc;
@@ -1134,11 +1197,12 @@ impl EditorView {
         self.tools.stroke_preview_pending = false;
         self.assist_begin(d);
         let p = to_local.transform_point2(dvec2(d.0, d.1));
+        let pen = crate::tablet::sample();
         stroke.point_full(
             p.x as f32,
             p.y as f32,
-            crate::tablet::pressure(),
-            crate::tablet::tilt(),
+            pen.map(|sample| sample.pressure),
+            pen.map(|sample| sample.tilt),
             Some(0.0),
         );
         let label = if mask_mode { "Paint mask" } else { label };
@@ -1619,11 +1683,12 @@ impl EditorView {
                     .map(|s| s.elapsed().as_secs_f64() * 1000.0);
                 // Keep every input sample, but compose tiles only once per displayed frame.
                 let started = Instant::now();
+                let pen = crate::tablet::sample();
                 stroke.point_full(
                     p.x as f32,
                     p.y as f32,
-                    crate::tablet::pressure(),
-                    crate::tablet::tilt(),
+                    pen.map(|sample| sample.pressure),
+                    pen.map(|sample| sample.tilt),
                     t,
                 );
                 tracing::debug!(target: "emulsion_ui::paint_timing", elapsed_us = started.elapsed().as_micros() as u64, size = stroke.brush.size, wetness = stroke.brush.wetness, "brush input processed");

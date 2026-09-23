@@ -1,7 +1,9 @@
 //! Brush discovery uses the real presets and stroke renderer.
 use crate::{preview::png_block, server::ToolResult};
+#[cfg(test)]
+use emulsion_raster::library;
 use emulsion_raster::{
-    Raster, color, library,
+    Raster, color,
     paint::{Ink, Stroke},
 };
 use serde_json::{Value, json};
@@ -15,12 +17,25 @@ pub(crate) fn list(args: &Value) -> Result<ToolResult, ToolResult> {
             .ok_or_else(|| ToolResult::error("query must be a string"))?,
     }
     .to_lowercase();
-    let presets: Vec<_> = library::library()
-        .into_iter()
-        .chain(crate::exec::saved_brushes())
+    let loaded = emulsion_io::brush_library::load_with_report()
+        .map_err(|e| ToolResult::error(e.to_string()))?;
+    let definitions: Vec<_> = loaded
+        .catalog
+        .brushes
+        .iter()
         .filter(|b| {
-            b.name.to_lowercase().contains(&query) || b.category.to_lowercase().contains(&query)
+            b.name.to_lowercase().contains(&query)
+                || b.note.to_lowercase().contains(&query)
+                || loaded
+                    .catalog
+                    .sets
+                    .iter()
+                    .any(|s| s.id == b.set_id && s.name.to_lowercase().contains(&query))
         })
+        .collect();
+    let presets: Vec<_> = definitions
+        .iter()
+        .filter_map(|b| loaded.catalog.preset(&b.id))
         .collect();
     if presets.is_empty() {
         return Err(ToolResult::error(
@@ -47,20 +62,22 @@ pub(crate) fn list(args: &Value) -> Result<ToolResult, ToolResult> {
     // every preset on every page. Detailed settings match the swatch rows.
     let catalog: Vec<_> = presets
         .iter()
-        .map(|b| json!({"name": b.name, "category": b.category, "for": b.note}))
+        .enumerate()
+        .map(|(i,b)| json!({"id": definitions[i].id, "name": b.name, "category": b.category, "for": b.note}))
         .collect();
     let brushes: Vec<_> = page
         .iter()
-        .map(|b| {
-            json!({"name": b.name, "category": b.category,
+        .enumerate()
+        .map(|(i,b)| {
+            json!({"id": definitions[offset+i].id, "secondary": definitions[offset+i].secondary, "combine_mode": definitions[offset+i].combine_mode, "name": b.name, "category": b.category,
         "for": b.note, "size": b.brush.size, "settings": b.brush})
         })
         .collect();
     let mut result = ToolResult::text(json!({
-        "catalog": catalog, "brushes": brushes,
+        "catalog": catalog, "brushes": brushes, "warnings": loaded.warnings,
         "total": presets.len(), "offset": offset, "next_offset": next_offset,
         "settings": {
-            "description": "Per-preset settings on this page are complete supported fields and current values. Use query to narrow results or next_offset for another page. Override with paint.settings; numeric values are clamped by the brush engine. Scripted paint has no tablet tilt or timestamps; tilt/speed dynamics are inactive and stabilizer is disabled. Use explicit pressure and tapers for planned marks.",
+            "description": "Per-preset settings on this page are complete supported fields and current values. Use query to narrow results or next_offset for another page. Override with paint.settings; numeric values are clamped by the brush engine. Rich paint.strokes[].samples supplies pressure, tilt degrees and monotonic time_ms to enable all dynamics and stabilization; legacy points/SVG disables stabilization and has no tilt/timing. paint accepts secondary_settings, combine_mode and a deterministic seed, with per-stroke overrides.",
             "ranges": {"size": [1,1000], "hardness": [0,1], "opacity": [0.01,1], "flow": [0.01,1], "spacing": [0.02,2], "roundness": [0.05,1], "grain_scale": [1,64], "taper_start": [0,2000], "taper_end": [0,2000]},
             "unit_interval": ["grain_strength", "size_pressure", "flow_pressure", "speed_thins", "stabilizer", "size_jitter", "scatter", "color_jitter", "wetness", "edge_darken", "relief"],
             "angle": "degrees, wraps to 0..360", "follow_path": "boolean",
@@ -70,7 +87,7 @@ pub(crate) fn list(args: &Value) -> Result<ToolResult, ToolResult> {
         "material_limits": "These are procedural brush presets: grain, pigment pickup, edge darkening and relief approximate material character. Names do not establish faithful water, drying, diffusion or physical oil simulation. paint.sample_merged opts into lower-layer pickup; default samples the current layer only.",
         "swatch_layout": {"enabled": swatches, "rows": page.iter().enumerate().map(|(i,b)| json!({"name": b.name, "rect": [0,i*72,256,72]})).collect::<Vec<_>>(),
             "next_offset": next_offset,
-            "conditions": "Top-to-bottom rows; native preset settings except size capped at 40 px to fit. Pressure rises 0.2 to 1 then falls to 0.2. Opaque white base with a coloured stripe for wet pickup, eraser and smudge. No lower-layer backdrop."}
+            "conditions": "Top-to-bottom rows; brush components share one size scale to fit 40 px, preserving their relative sizes. Pressure rises 0.2 to 1 then falls to 0.2. Opaque white base with a coloured stripe for wet pickup, eraser and smudge. No lower-layer backdrop."}
     }).to_string());
     if swatches && !page.is_empty() {
         let mut sheet = image::RgbaImage::new(256, page.len() as u32 * 72);
@@ -88,13 +105,21 @@ pub(crate) fn list(args: &Value) -> Result<ToolResult, ToolResult> {
                 .as_raw(),
             );
             let mut brush = preset.brush;
-            brush.size = brush.size.min(40.0);
+            let largest = brush
+                .size
+                .max(definitions[offset + row].secondary.map_or(0., |b| b.size));
+            let scale = (40. / largest.max(1.)).min(1.);
+            brush.size *= scale;
             let ink = match preset.category.as_str() {
                 "Eraser" => Ink::Erase,
                 "Smudge" => Ink::Smudge,
                 _ => Ink::Color(color::srgba8_to_premul([35, 65, 105, 255])),
             };
             let mut stroke = Stroke::new(Arc::new(base.clone()), brush, ink, None);
+            if let Some(mut secondary) = definitions[offset + row].secondary {
+                secondary.size *= scale;
+                stroke.set_secondary(secondary, definitions[offset + row].combine_mode);
+            }
             for i in 0..=48 {
                 let t = i as f32 / 48.0;
                 stroke.point_at(

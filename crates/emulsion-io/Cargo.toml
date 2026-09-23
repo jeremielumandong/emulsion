@@ -35,6 +35,7 @@ plist = { workspace = true }
 tracing = { workspace = true }
 emulsion-core = { workspace = true }
 emulsion-raster = { workspace = true }
+emulsion-brushes = { workspace = true }
 emulsion-filters = { workspace = true }
 emulsion-color = { workspace = true }
 

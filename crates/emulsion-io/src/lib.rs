@@ -9,6 +9,8 @@
 //! replace an open document.
 
 pub mod brushset;
+pub mod brush_library;
+pub mod abr;
 pub mod exif;
 pub mod export;
 pub mod external;

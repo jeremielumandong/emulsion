@@ -14,6 +14,8 @@ pub mod image;
 pub mod library;
 pub mod liquify;
 pub mod paint;
+pub mod paint_settings;
+pub mod preview;
 pub mod paint_accel;
 pub mod quickshape;
 pub mod select;
@@ -28,3 +30,6 @@ pub use composite::{CompositeNode, CompositeTree, NodeContent, Placement, render
 pub use geom::{IRect, TileCoord};
 pub use image::{Mask, Raster};
 pub use tile::{TILE, TILE_PX};
+
+#[cfg(test)]
+mod brush_behavior_tests;
