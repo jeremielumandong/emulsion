@@ -88,6 +88,26 @@ pub(crate) enum SidebarTab {
 }
 
 impl EditorView {
+    /// Open the panel dock on Layers, Channels or Paths.
+    pub(crate) fn show_dock_tab(
+        &mut self,
+        tab: DockTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar_layout.collapsed = false;
+        self.dock_tab = tab;
+        self.menu = None;
+        window.focus(&self.panel_focus, cx);
+        cx.notify();
+    }
+
+    /// Open the panel dock on one of its upper tabs.
+    pub(crate) fn show_sidebar_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        self.sidebar_layout.collapsed = false;
+        self.select_sidebar(tab, cx);
+    }
+
     /// Resolve temporary previews before hiding their Apply/Cancel controls.
     pub(crate) fn select_sidebar(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
         if tab != self.sidebar_tab {
@@ -176,6 +196,27 @@ impl EditorView {
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.select_sidebar(tab, cx)),
                             )
+                    }),
+                )
+                // Photoshop's collapsed dock lists the Layers group too.
+                .child(div().h(px(1.)).mx_1().my_1().bg(p.line))
+                .children(
+                    [
+                        (DockTab::Layers, "L", "Layers"),
+                        (DockTab::Channels, "C", "Channels"),
+                        (DockTab::Paths, "Pa", "Paths"),
+                    ]
+                    .into_iter()
+                    .map(|(tab, label, title)| {
+                        Button::new(("sidebar-rail-dock", tab as usize))
+                            .ghost()
+                            .xsmall()
+                            .label(label)
+                            .accessibility_label(title)
+                            .tooltip(title)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.show_dock_tab(tab, window, cx)
+                            }))
                     }),
                 )
                 .test_support()
@@ -319,12 +360,27 @@ impl EditorView {
                 .child(self.histogram_view(p, cx))
                 .into_any_element(),
         };
+        // Photoshop's Color | Swatches group heads the panel dock, unless the
+        // Colors toolbar already shows them.
+        let swatches = (compact && !self.compact.bars[super::compact::Bar::Color as usize].open)
+            .then(|| {
+                div()
+                    .id("sidebar-swatches")
+                    .test_support()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .gap_1()
+                    .p_2()
+                    .border_t_1()
+                    .border_color(p.line)
+                    .child(label("Swatches", p))
+                    .child(self.project_colors(false, p, cx))
+            });
         let dock_tabs = div()
             .flex()
             .flex_none()
-            .gap_1()
-            .p_1()
-            .when(compact, |d| d.h(rems(1.625)).p_0().gap_0())
+            .h(if compact { rems(1.625) } else { rems(2.125) })
             .border_b_1()
             .border_color(p.line)
             .children(
@@ -335,15 +391,33 @@ impl EditorView {
                 ]
                 .into_iter()
                 .map(|(tab, id, title)| {
-                    chip(id, title, self.dock_tab == tab, p)
-                        .aria_selected(self.dock_tab == tab)
-                        .flex_1()
-                        .when(compact, |d| d.min_h_0().h_full().py_0().border_0())
+                    // Photoshop's panel-group tabs: a label with an accent
+                    // underline, sized to its text.
+                    let active = self.dock_tab == tab;
+                    div()
+                        .id(id)
+                        .role(gpui_kit::Role::Tab)
+                        .aria_label(title)
+                        .aria_selected(active)
+                        .focusable()
+                        .tab_index(0)
+                        .flex()
+                        .items_center()
+                        .h_full()
+                        .px_3()
+                        .text_size(px(11.))
+                        .text_color(if active { p.ink } else { p.muted })
+                        .border_b_2()
+                        .border_color(if active {
+                            p.accent
+                        } else {
+                            transparent_black()
+                        })
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(p.ink))
+                        .child(title)
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.dock_tab = tab;
-                            this.menu = None;
-                            window.focus(&this.panel_focus, cx);
-                            cx.notify();
+                            this.show_dock_tab(tab, window, cx);
                         }))
                         .test_support()
                 }),
@@ -372,6 +446,7 @@ impl EditorView {
                     cx.stop_propagation();
                 }
             }))
+            .children(swatches)
             .child(tabs)
             .child(
                 div()

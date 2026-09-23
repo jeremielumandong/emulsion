@@ -372,3 +372,81 @@ fn painted_colours_join_the_project_palette_and_reuse_sets_foreground(cx: &mut T
         assert_eq!(e.read(cx).editor.doc.colors, [[0, 0, 0], [200, 10, 10]]);
     });
 }
+
+#[gpui_kit::test]
+fn quick_mask_paints_the_selection_not_the_layer(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (ws, cx) = open(cx, original.clone());
+    let e = editor(&ws, cx);
+    let selection = |e: &Entity<EditorView>, cx: &mut VisualTestContext, x: u32, y: u32| {
+        cx.update(|_, cx| {
+            e.read(cx)
+                .editor
+                .doc
+                .selection
+                .as_ref()
+                .map(|sel| sel.get(x, y))
+        })
+    };
+    // Entering and leaving without painting selects nothing.
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.toggle_quick_mask(cx);
+            e.toggle_quick_mask(cx);
+        })
+    });
+    assert_eq!(selection(&e, cx, 60, 60), None);
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.toggle_quick_mask(cx);
+            assert_eq!(e.tool, Tool::Brush);
+            e.set_fg([0, 0, 0, 255], cx);
+        })
+    });
+    click(&e, cx, (60.0, 60.0), false);
+    cx.run_until_parked();
+    // Black masks: the spot leaves the selection, the rest stays selected,
+    // and the layer's pixels are untouched.
+    assert!(selection(&e, cx, 60, 60).unwrap() < 128);
+    assert_eq!(selection(&e, cx, 200, 150), Some(255));
+    cx.update(|_, cx| {
+        let doc = &e.read(cx).editor.doc;
+        assert_eq!(doc.nodes, original.nodes);
+        assert!(
+            doc.colors.is_empty(),
+            "masking is not painting with a colour"
+        );
+    });
+    // The eraser clears the mask back to selected, as in Photoshop.
+    cx.update(|_, cx| e.update(cx, |e, cx| e.set_paint(PaintKind::Eraser, cx)));
+    click(&e, cx, (60.0, 60.0), false);
+    cx.run_until_parked();
+    assert!(selection(&e, cx, 60, 60).unwrap() > 200);
+    // Fills cannot paint a Quick Mask.
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.set_paint(PaintKind::Bucket, cx);
+        })
+    });
+    let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
+    click(&e, cx, (100.0, 100.0), false);
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(e.read(cx).editor.doc, before));
+    // Mask again, undo it, redo it, and finish: the selection remains.
+    cx.update(|_, cx| e.update(cx, |e, cx| e.set_paint(PaintKind::Brush, cx)));
+    click(&e, cx, (120.0, 60.0), false);
+    cx.run_until_parked();
+    assert!(selection(&e, cx, 120, 60).unwrap() < 128);
+    cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
+    assert!(selection(&e, cx, 120, 60).unwrap_or(255) > 200);
+    cx.update(|_, cx| e.update(cx, |e, cx| e.redo(cx)));
+    assert!(selection(&e, cx, 120, 60).unwrap() < 128);
+    cx.update(|_, cx| e.update(cx, |e, cx| e.toggle_quick_mask(cx)));
+    assert!(selection(&e, cx, 120, 60).unwrap() < 128);
+    assert_eq!(selection(&e, cx, 200, 150), Some(255));
+    cx.update(|_, cx| {
+        let e = e.read(cx);
+        assert!(!e.tools.quick_mask);
+        assert_eq!(e.editor.doc.nodes, original.nodes);
+    });
+}

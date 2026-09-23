@@ -26,6 +26,7 @@ gpui_kit::actions!(
         ResetRotation,
         ToggleRulers,
         ToggleDrawMode,
+        ToggleQuickMask,
         ToggleTheme,
         ShowHome,
         ShowEditor,
@@ -143,7 +144,7 @@ macro_rules! make_binding {
 pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> {
     make_binding!(name, keys, ctx;
         NewDocument, Open, Save, SaveAs, Export, SynchronizeRaw, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
-        Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleDrawMode, ToggleTheme, ShowHome,
+        Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleDrawMode, ToggleQuickMask, ToggleTheme, ShowHome,
         ShowEditor, DeleteNode, NewLayer, DuplicateNode, GroupNodes, Ungroup, RenameLayer, MergeLayers, MergeVisible, FlattenImage, LinkLayers, UnlinkLayers, CopyLayerStyle, PasteLayerStyle, ApplyLayerMask, MoveNodeUp, MoveNodeDown,
         ToggleNodeVisible, NextBlendMode, PreviousBlendMode, Ask, ToolHand, ToolRotateView, RepeatFilter, ToolMove, ToolPen, ToolType, ToolVerticalType, ConvertToSmartObject, ConvertSmartToLayers, RasterizeLayer, ToolMarquee, ToolLasso,
         ToolWand, ToolBrush, ToolEraser, ToolBucket, ToolGradient, ToolHeal, ToolClone,
@@ -231,7 +232,8 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("canvas", "ToolSmudge", "shift-b"),
     ("canvas", "ToolLiquify", "shift-j"),
     ("canvas", "ToolEllipse", "shift-u"),
-    ("canvas", "ToolMask", "q"),
+    // Photoshop: Q toggles Quick Mask. The Mask tool stays bindable.
+    ("canvas", "ToggleQuickMask", "q"),
     ("canvas", "ToolGrade", "shift-q"),
     ("workspace", "ImageSizeDialog", "ctrl-alt-i"),
     ("workspace", "CanvasSizeDialog", "ctrl-alt-c"),

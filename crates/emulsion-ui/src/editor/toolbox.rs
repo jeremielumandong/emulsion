@@ -218,8 +218,11 @@ impl EditorView {
             .iter()
             .filter_map(|id| find_tool(id))
             .collect();
-        let slots =
+        let mut slots =
             (((available_length + 0.125) / 1.875).floor() as usize).clamp(1, items.len().max(1));
+        if self.compact.tool_columns >= 2 {
+            slots = slots.min(items.len().max(1).div_ceil(2));
+        }
         let tracks = items.len().max(1).div_ceil(slots);
         let length = rems(slots as f32 * 1.875 - 0.125);
         let breadth = rems(tracks as f32 * 1.875 - 0.125);
@@ -241,7 +244,11 @@ impl EditorView {
                     .w(rems(1.75))
                     .h(rems(1.75))
                     .accessibility_label(item.name)
-                    .tooltip(format!("{} ({})", item.name, item.key))
+                    .tooltip(if item.key.is_empty() {
+                        item.name.to_string()
+                    } else {
+                        format!("{} ({})", item.name, item.key)
+                    })
                     .when(active, |button| {
                         button.bg(p.soft_bg).border_1().border_color(p.accent)
                     })

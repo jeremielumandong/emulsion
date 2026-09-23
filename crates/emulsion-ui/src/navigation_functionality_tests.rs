@@ -118,7 +118,7 @@ fn rotate_view_rail_group_snaps_and_escape_cancels_rotation(cx: &mut TestAppCont
     cx.run_until_parked();
     cx.update(|window, cx| window.click("Hand", cx));
     cx.run_until_parked();
-    cx.update(|window, cx| window.click(("rail-flyout-item", 16usize * 16 + 1), cx));
+    cx.update(|window, cx| window.click(("rail-flyout-item", 17usize * 16 + 1), cx));
     cx.run_until_parked();
     let center = cx.update(|_, cx| {
         let e = editor.read(cx);

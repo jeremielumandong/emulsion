@@ -28,7 +28,7 @@ fn free_pen_rail_choice_draws_one_editable_path_per_gesture(cx: &mut TestAppCont
     let (editor, cx) = setup(cx, PenMode::Pen);
     cx.update(|window, cx| window.click("Pen", cx));
     cx.run_until_parked();
-    cx.update(|window, cx| window.click(("rail-flyout-item", 11usize * 16 + 1), cx));
+    cx.update(|window, cx| window.click(("rail-flyout-item", 12usize * 16 + 1), cx));
     cx.run_until_parked();
     let before = cx.update(|_, cx| {
         assert_eq!(editor.read(cx).tools.pen.mode, PenMode::Free);
