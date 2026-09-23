@@ -38,6 +38,7 @@ mod toolbox;
 mod workspace_layout;
 pub(crate) use pen::PenMode;
 mod presets;
+mod quick_mask;
 #[cfg(test)]
 pub(crate) use presets::shared_library;
 mod rail;
@@ -425,6 +426,7 @@ pub struct EditorView {
     /// The workspace's document tabs, handed over while the header renders
     /// so Photo mode can show them above the canvas, as Photoshop does.
     document_tabs: Option<AnyElement>,
+    quick_mask_cache: Rc<quick_mask::QuickMaskCache>,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
     pub(crate) recipes: recipes::RecipeState,
     pub(crate) smart: smart::SmartUi,
@@ -554,6 +556,7 @@ impl EditorView {
             brush_workspace: None,
             draw_ui: Default::default(),
             document_tabs: None,
+            quick_mask_cache: Default::default(),
             adjust_ui: Default::default(),
             recipes: Default::default(),
             smart: Default::default(),
@@ -2180,6 +2183,12 @@ impl EditorView {
         let replay = self.replay_overlay(p, cx);
         let accent = p.accent;
         let view_for_overlay = self.view;
+        let quick_mask = self
+            .tools
+            .quick_mask
+            .then(|| self.editor.doc.selection.clone())
+            .flatten();
+        let quick_mask_cache = self.quick_mask_cache.clone();
         // Fit once the canvas has been laid out.
         if self.fit_pending
             && let Some(b) = self.canvas_bounds()
@@ -2440,6 +2449,15 @@ impl EditorView {
                     move |bounds, plan, window, cx| {
                         if let Some(plan) = plan {
                             viewport::paint(plan, &scene2, &cache2, window, cx);
+                        }
+                        if let Some(selection) = &quick_mask {
+                            quick_mask::paint(
+                                selection,
+                                &view_for_overlay,
+                                bounds,
+                                &quick_mask_cache,
+                                window,
+                            );
                         }
                         tools::paint_overlay(&overlay, &view_for_overlay, bounds, accent, window);
                         if let Some(editor) = w4.upgrade() {

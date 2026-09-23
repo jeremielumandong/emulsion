@@ -58,6 +58,7 @@ impl EditorView {
             }
             .into(),
             toolbars_overlay: Some(self.compact.overlay),
+            tool_columns: self.compact.tool_columns,
         }
     }
 
@@ -104,6 +105,7 @@ impl EditorView {
                 self.compact.tool_ids.push(name.clone());
             }
         }
+        self.compact.tool_columns = layout.tool_columns.clamp(1, 2);
         if let Some(overlay) = layout.toolbars_overlay {
             self.compact.overlay = overlay;
         }

@@ -772,3 +772,45 @@ fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut Tes
         assert!(tabs.bottom() <= header.bottom() + gpui_kit::px(1.));
     });
 }
+
+#[gpui_kit::test]
+fn tools_panel_has_quick_mask_and_a_double_column_toggle(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
+    let single = cx.update(|window, cx| {
+        // Photoshop: the Quick Mask button sits under the colour swatches.
+        let swatches = window.find("fg-swatch").bounds();
+        let quick = window.find("quick-mask-toggle").bounds();
+        assert!(quick.origin.y >= swatches.bottom() - gpui_kit::px(1.));
+        window.click("quick-mask-toggle", cx);
+        window.find("tool-rail").bounds()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(editor.read(cx).tools.quick_mask);
+        window.click("quick-mask-toggle", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!editor.read(cx).tools.quick_mask);
+        window.click("tool-columns-toggle", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let double = window.find("tool-rail").bounds();
+        assert!(
+            double.size.width > single.size.width * 1.6,
+            "two columns: {single:?} -> {double:?}"
+        );
+        assert!(double.size.height < single.size.height * 0.7);
+        let layout = editor.read(cx).workspace_snapshot();
+        assert_eq!(layout.tool_columns, 2);
+        let mut factory = layout.clone();
+        factory.tool_columns = 1;
+        editor.update(cx, |e, cx| e.apply_workspace_layout(&factory, cx));
+        assert_eq!(editor.read(cx).workspace_snapshot().tool_columns, 1);
+        editor.update(cx, |e, cx| e.apply_workspace_layout(&layout, cx));
+        assert_eq!(editor.read(cx).workspace_snapshot().tool_columns, 2);
+        assert_eq!(editor.read(cx).editor.doc, original);
+    });
+}

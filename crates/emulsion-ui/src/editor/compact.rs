@@ -86,6 +86,8 @@ pub(super) struct CompactLayout {
     /// Docked toolbars float over the canvas (Procreate) instead of
     /// taking their own space beside it (Photoshop).
     pub(super) overlay: bool,
+    /// Tools panel columns: 1, or 2 for Photoshop's double-column toolbar.
+    pub(super) tool_columns: u8,
 }
 
 impl CompactLayout {
@@ -124,6 +126,7 @@ impl CompactLayout {
             tool_ids: Vec::new(),
             hidden_menu_ids: Vec::new(),
             overlay: draw,
+            tool_columns: 1,
         }
     }
 }
@@ -857,23 +860,46 @@ impl EditorView {
                         )
                         .into_any_element()
                     };
-                    if swatches {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .when(!horizontal, |d| d.flex_col())
-                            .child(rail)
-                            .child(
+                    // Photoshop's » toggle switches one and two columns.
+                    let double = self.compact.tool_columns >= 2;
+                    let columns = control("tool-columns-toggle", if double { "«" } else { "»" })
+                        .accessibility_label(if double {
+                            "Show tools in one column"
+                        } else {
+                            "Show tools in two columns"
+                        })
+                        .tooltip(if double {
+                            "One column of tools"
+                        } else {
+                            "Two columns of tools"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.compact.tool_columns =
+                                if this.compact.tool_columns >= 2 { 1 } else { 2 };
+                            this.rail.flyout = None;
+                            cx.notify();
+                        }));
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .when(!horizontal, |d| d.flex_col())
+                        .child(columns)
+                        .child(rail)
+                        .when(swatches, |d| {
+                            d.child(
                                 div()
                                     .id("tool-rail-swatches")
                                     .test_support()
-                                    .child(self.swatches(p, cx)),
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .when(!horizontal, |d| d.flex_col())
+                                    .child(self.swatches(p, cx))
+                                    .child(self.quick_mask_button(p, cx)),
                             )
-                            .into_any_element()
-                    } else {
-                        rail
-                    }
+                        })
+                        .into_any_element()
                 }
                 Bar::Options => self.compact_options(p, window, cx),
                 Bar::View => div()
@@ -903,6 +929,7 @@ impl EditorView {
                         .gap_1()
                         .when(vertical, |d| d.flex_col())
                         .child(self.swatches(p, cx))
+                        .child(self.quick_mask_button(p, cx))
                         .child(mono(
                             format!(
                                 "#{:02X}{:02X}{:02X}",

@@ -174,6 +174,8 @@ pub struct ToolState {
     pub pen: super::pen::PenState,
     /// Brush and eraser paint the selected node's mask instead of pixels.
     pub mask_edit: bool,
+    /// Quick Mask mode: paint tools edit the selection, shown in red.
+    pub quick_mask: bool,
     pub pointer: Option<Point<Pixels>>,
     pub ants_phase: bool,
     pub picker: bool,
@@ -233,6 +235,7 @@ impl Default for ToolState {
             quick_shape: true,
             pen: super::pen::PenState::fresh(),
             mask_edit: false,
+            quick_mask: false,
             pointer: None,
             ants_phase: false,
             picker: false,
@@ -899,6 +902,10 @@ impl EditorView {
         let Some(d) = self.doc_point(e.position) else {
             return;
         };
+        if let Some(reason) = self.quick_mask_blocks() {
+            self.set_status(reason, true, cx);
+            return;
+        }
         match self.tool {
             Tool::Select => {
                 self.selection_request = self.selection_request.wrapping_add(1);
@@ -1106,13 +1113,22 @@ impl EditorView {
             );
             return;
         }
-        let mask_mode = self.tools.mask_edit;
+        let quick = self.tools.quick_mask;
+        let mask_mode = self.tools.mask_edit || quick;
         let (id, raster, to_doc, ink) = if mask_mode {
-            let Some((id, m, to_doc)) = self.mask_target(cx) else {
-                return;
+            let (id, m, to_doc) = if quick {
+                // The selection is document-sized; node 0 stands for it.
+                (0, self.quick_mask_target(), DAffine2::IDENTITY)
+            } else {
+                let Some(target) = self.mask_target(cx) else {
+                    return;
+                };
+                target
             };
-            // White reveals, black hides; the eraser hides.
+            // White reveals, black hides; the eraser hides a layer mask
+            // and, as in Photoshop, clears Quick Mask back to selected.
             let ink = match ink {
+                Ink::Erase if quick => Ink::Color([1.0, 1.0, 1.0, 1.0]),
                 Ink::Erase => Ink::Color([0.0, 0.0, 0.0, 1.0]),
                 Ink::Color(c) => {
                     let gray = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
@@ -1134,12 +1150,16 @@ impl EditorView {
         let scale = to_doc.matrix2.determinant().abs().sqrt().max(1e-6);
         let mut brush = self.tools.brush;
         brush.size = (brush.size as f64 / scale) as f32;
-        let clip = self
-            .editor
-            .doc
-            .selection
-            .clone()
-            .map(|m| local_clip(m, to_doc));
+        // Quick Mask paints the selection itself, so it is never clipped by it.
+        let clip = if quick {
+            None
+        } else {
+            self.editor
+                .doc
+                .selection
+                .clone()
+                .map(|m| local_clip(m, to_doc))
+        };
         let ink = match ink {
             Ink::Clone { dx, dy } => {
                 let offset = to_local.transform_vector2(dvec2(dx as f64, dy as f64));
@@ -1205,7 +1225,13 @@ impl EditorView {
             pen.map(|sample| sample.tilt),
             Some(0.0),
         );
-        let label = if mask_mode { "Paint mask" } else { label };
+        let label = if quick {
+            "Quick Mask"
+        } else if mask_mode {
+            "Paint mask"
+        } else {
+            label
+        };
         self.editor.begin(label);
         let (r, dirty) = stroke.render(&raster);
         let mask_raster = mask_mode.then(|| Arc::new(r.clone()));
@@ -1427,22 +1453,26 @@ impl EditorView {
             return;
         }
         if mask {
-            let Some(old) = self.editor.doc.node(id).and_then(|n| n.mask.clone()) else {
-                return;
+            let old = if self.tools.quick_mask {
+                self.quick_mask_target()
+            } else {
+                let Some(old) = self.editor.doc.node(id).and_then(|n| n.mask.clone()) else {
+                    return;
+                };
+                old
             };
             let px: Vec<u8> = r
                 .read_rect(dirty)
                 .into_iter()
                 .map(|p| (color::linear_to_srgb(color::u16_to_f(p[0])) * 255.0).round() as u8)
                 .collect();
-            let m = old.write_rect(dirty, &px);
-            self.execute(
-                Command::SetMask {
-                    id,
-                    mask: Some(Arc::new(m)),
-                },
-                cx,
-            );
+            let m = Arc::new(old.write_rect(dirty, &px));
+            let command = if self.tools.quick_mask {
+                Command::SetSelection { selection: Some(m) }
+            } else {
+                Command::SetMask { id, mask: Some(m) }
+            };
+            self.execute(command, cx);
         } else {
             self.note_painted_color();
             self.execute(
@@ -2676,7 +2706,12 @@ impl EditorView {
         assist.extend(wl);
         vanishing.extend(wp);
         let mut o = Overlay {
-            ants: self.ants(level),
+            // Quick Mask shows the selection in red instead of as ants.
+            ants: if self.tools.quick_mask {
+                None
+            } else {
+                self.ants(level)
+            },
             phase: self.tools.ants_phase,
             guides,
             snaps,

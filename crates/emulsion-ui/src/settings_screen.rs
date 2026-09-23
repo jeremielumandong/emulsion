@@ -57,7 +57,7 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
     ) || action.starts_with("Nudge")
     {
         "Edit"
-    } else if action.contains("Select") || action == "Deselect" {
+    } else if action.contains("Select") || matches!(action, "Deselect" | "ToggleQuickMask") {
         "Selection"
     } else if action.contains("Node")
         || matches!(

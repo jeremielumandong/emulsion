@@ -65,6 +65,8 @@ pub struct WorkspaceLayout {
     /// Docked toolbars float over the canvas instead of sitting beside it.
     /// `None` uses the mode's default: beside in Photo, over in Draw.
     pub toolbars_overlay: Option<bool>,
+    /// Columns in the Tools panel: 1, or 2 (Photoshop's double column).
+    pub tool_columns: u8,
 }
 
 impl Default for WorkspaceLayout {
@@ -78,6 +80,7 @@ impl Default for WorkspaceLayout {
             sidebar_width: 320.0,
             sidebar_tab: "properties".into(),
             toolbars_overlay: None,
+            tool_columns: 1,
         }
     }
 }
@@ -346,6 +349,7 @@ mod tests {
             sidebar_width: 380.0,
             sidebar_tab: "histogram".into(),
             toolbars_overlay: Some(true),
+            tool_columns: 2,
         };
         let settings = Settings {
             workspace_default: Some(layout.clone()),

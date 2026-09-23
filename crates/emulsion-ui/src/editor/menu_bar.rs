@@ -98,6 +98,8 @@ impl EditorView {
             menu.menu("All", Box::new(SelectAll))
                 .menu("Deselect", Box::new(Deselect))
                 .menu("Inverse", Box::new(InvertSelection))
+                .separator()
+                .menu("Edit in Quick Mask Mode", Box::new(ToggleQuickMask))
         })
     }
 

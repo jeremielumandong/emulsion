@@ -544,8 +544,11 @@ impl EditorView {
             });
         let groups = self.rail_groups();
         if let Some((horizontal, available_length)) = compact_layout {
-            let slots =
+            let mut slots =
                 (((available_length + 0.125) / 1.875).floor() as usize).clamp(1, groups.len());
+            if self.compact.tool_columns >= 2 {
+                slots = slots.min(groups.len().div_ceil(2));
+            }
             let tracks = groups.len().div_ceil(slots);
             let length = rems(slots as f32 * 1.875 - 0.125);
             let breadth = rems(tracks as f32 * 1.875 - 0.125);
@@ -809,8 +812,13 @@ impl EditorView {
                     div()
                         .id("tool-rail-swatches")
                         .flex_none()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap_1()
                         .py(px(8.))
                         .child(self.swatches(p, cx))
+                        .child(self.quick_mask_button(p, cx))
                         .test_support(),
                 )
             })
