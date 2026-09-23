@@ -422,6 +422,9 @@ pub struct EditorView {
     pub(crate) presets: presets::PresetState,
     brush_workspace: Option<Entity<brush_library_ui::BrushWorkspace>>,
     draw_ui: draw_workspace::DrawUi,
+    /// The workspace's document tabs, handed over while the header renders
+    /// so Photo mode can show them above the canvas, as Photoshop does.
+    document_tabs: Option<AnyElement>,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
     pub(crate) recipes: recipes::RecipeState,
     pub(crate) smart: smart::SmartUi,
@@ -550,6 +553,7 @@ impl EditorView {
             presets: Default::default(),
             brush_workspace: None,
             draw_ui: Default::default(),
+            document_tabs: None,
             adjust_ui: Default::default(),
             recipes: Default::default(),
             smart: Default::default(),

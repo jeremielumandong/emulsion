@@ -715,3 +715,60 @@ fn photo_mode_matches_photoshop_essentials_layout(cx: &mut TestAppContext) {
         assert_eq!(editor.read(cx).editor.history.len(), 0);
     });
 }
+
+#[gpui_kit::test]
+fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
+    cx.update(|window, cx| {
+        // Photoshop: menus in the header, document tabs under the options
+        // bar, between the Tools panel and the panel dock.
+        let header = window.find("editor-document-bar").bounds();
+        let tab_bar = window.find("document-tab-bar").bounds();
+        let tabs = window.find("compact-document-tabs").bounds();
+        let options = window.find("canvas-toolbar-options").bounds();
+        let tools = window.find("canvas-toolbar-tools").bounds();
+        let canvas = window.find("canvas").bounds();
+        assert!(tabs.origin.y >= tab_bar.origin.y && tabs.bottom() <= tab_bar.bottom());
+        assert!(tab_bar.origin.y >= header.bottom());
+        assert!(tab_bar.origin.y >= options.bottom() - gpui_kit::px(1.));
+        assert!(tab_bar.bottom() <= canvas.origin.y + gpui_kit::px(1.));
+        assert!(tab_bar.origin.x >= tools.right() - gpui_kit::px(1.));
+        window.click("dock-channels", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).dock_tab, crate::editor::DockTab::Channels);
+        window.click("sidebar-collapse", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("sidebar-rail-dock", 2usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            window.find("sidebar-collapse").visible(),
+            "the collapsed strip reopens the dock"
+        );
+        assert_eq!(editor.read(cx).dock_tab, crate::editor::DockTab::Paths);
+        window.click("window-menu-button", cx);
+    });
+    cx.run_until_parked();
+    // Window ▸ Layers.
+    let point = cx.update(|window, _| window.within("popup-menu").find(19usize).bounds().center());
+    cx.simulate_click(point, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(editor.read(cx).dock_tab, crate::editor::DockTab::Layers);
+        assert_eq!(editor.read(cx).editor.doc, original);
+    });
+    // Draw mode keeps the tabs in the header, where Procreate-style
+    // overlays leave the canvas edge-to-edge.
+    cx.update(|window, cx| window.click("mode-draw", cx));
+    cx.run_until_parked();
+    cx.update(|window, _| {
+        assert!(window.try_find("document-tab-bar").is_none());
+        let header = window.find("editor-document-bar").bounds();
+        let tabs = window.find("compact-document-tabs").bounds();
+        assert!(tabs.bottom() <= header.bottom() + gpui_kit::px(1.));
+    });
+}

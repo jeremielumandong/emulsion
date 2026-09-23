@@ -223,6 +223,14 @@ impl EditorView {
             .on_click(
                 cx.listener(|this, _, window, cx| this.toggle_workspace_customizer(window, cx)),
             );
+        // Photo mode docks the tabs above the canvas; the header keeps the
+        // menus alone, like Photoshop's menu bar.
+        let tabs = if self.compact.overlay {
+            tabs
+        } else {
+            self.document_tabs = Some(tabs);
+            div().into_any_element()
+        };
         let d = &self.editor.doc;
         let dimensions = format!(
             "{}×{} · {} bit",
@@ -256,7 +264,7 @@ impl EditorView {
                     .flex_none()
                     .window_control_area(WindowControlArea::Drag),
             )
-            .child(tabs)
+            .when(self.compact.overlay, |d| d.child(tabs))
             .child(
                 div()
                     .id("compact-window-drag")
@@ -941,6 +949,11 @@ impl EditorView {
         let [tops, lefts, rights, bottoms] = sides;
         let overlay = self.compact.overlay;
         let status = self.status_strip(p, cx);
+        let tab_bar = if overlay {
+            None
+        } else {
+            self.document_tabs.take()
+        };
         stage = stage
             .child(
                 div()
@@ -959,14 +972,39 @@ impl EditorView {
                             .children(lefts)
                             .child(
                                 div()
-                                    .relative()
                                     .flex()
                                     .flex_col()
                                     .flex_1()
                                     .min_w_0()
                                     .min_h_0()
-                                    .overflow_hidden()
-                                    .child(canvas_view),
+                                    .when_some(tab_bar, |d, tabs| {
+                                        d.child(
+                                            div()
+                                                .id("document-tab-bar")
+                                                .test_support()
+                                                .flex()
+                                                .flex_none()
+                                                .items_end()
+                                                .min_w_0()
+                                                .h(rems(1.875))
+                                                .px_1()
+                                                .bg(p.paper)
+                                                .border_b_1()
+                                                .border_color(p.line)
+                                                .child(tabs),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .relative()
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .min_h_0()
+                                            .overflow_hidden()
+                                            .child(canvas_view),
+                                    ),
                             )
                             .children(rights),
                     )

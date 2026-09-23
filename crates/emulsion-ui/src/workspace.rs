@@ -562,6 +562,7 @@ impl Workspace {
             .child(home);
         let mut tabs = div()
             .id("compact-document-tabs")
+            .test_support()
             .flex()
             .items_center()
             .max_w(rems(30.))

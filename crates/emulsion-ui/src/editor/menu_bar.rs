@@ -174,15 +174,37 @@ impl EditorView {
                     },
                 ));
             }
+            // Photoshop lists each panel by name; choosing one opens the
+            // dock on it.
+            menu = menu
+                .separator()
+                .label("Panels")
+                .item(item("Properties", false, |this, _, cx| {
+                    this.show_sidebar_tab(SidebarTab::Properties, cx)
+                }))
+                .item(item("Adjustments", false, |this, _, cx| {
+                    this.show_sidebar_tab(SidebarTab::Adjustments, cx)
+                }))
+                .item(item("History", false, |this, _, cx| {
+                    this.show_sidebar_tab(SidebarTab::History, cx)
+                }))
+                .item(item("Info", false, |this, _, cx| {
+                    this.show_sidebar_tab(SidebarTab::Info, cx)
+                }))
+                .item(item("Layers", false, |this, window, cx| {
+                    this.show_dock_tab(DockTab::Layers, window, cx)
+                }))
+                .item(item("Channels", false, |this, window, cx| {
+                    this.show_dock_tab(DockTab::Channels, window, cx)
+                }))
+                .item(item("Paths", false, |this, window, cx| {
+                    this.show_dock_tab(DockTab::Paths, window, cx)
+                }));
             menu.separator()
-                .item(item(
-                    "Panels (Layers, Properties…)",
-                    panels,
-                    |this, _, cx| {
-                        this.sidebar_layout.collapsed = !this.sidebar_layout.collapsed;
-                        cx.notify();
-                    },
-                ))
+                .item(item("Show Panel Dock", panels, |this, _, cx| {
+                    this.sidebar_layout.collapsed = !this.sidebar_layout.collapsed;
+                    cx.notify();
+                }))
                 .item(item(
                     "Toolbars Beside the Canvas",
                     !overlay,
