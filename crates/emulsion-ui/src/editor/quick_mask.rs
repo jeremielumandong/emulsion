@@ -138,10 +138,32 @@ pub(crate) fn paint(
     cache: &QuickMaskCache,
     window: &mut Window,
 ) {
+    paint_mask(selection, view, bounds, cache, true, window);
+}
+
+pub(crate) fn paint_coverage(
+    selection: &Mask,
+    view: &View,
+    bounds: Bounds<Pixels>,
+    cache: &QuickMaskCache,
+    window: &mut Window,
+) {
+    paint_mask(selection, view, bounds, cache, false, window);
+}
+
+fn paint_mask(
+    selection: &Mask,
+    view: &View,
+    bounds: Bounds<Pixels>,
+    cache: &QuickMaskCache,
+    invert: bool,
+    window: &mut Window,
+) {
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         selection.content_id().hash(&mut h);
+        invert.hash(&mut h);
         for v in [view.zoom, view.center.0, view.center.1, view.rotation] {
             v.to_bits().hash(&mut h);
         }
@@ -185,7 +207,8 @@ pub(crate) fn paint(
                         if x < 0. || y < 0. || x >= w || y >= h {
                             continue;
                         }
-                        let masked = 255 - selection.get(x as u32, y as u32);
+                        let coverage = selection.get(x as u32, y as u32);
+                        let masked = if invert { 255 - coverage } else { coverage };
                         let a = (masked as f32 * OPACITY).round() as u8;
                         // Premultiplied BGRA red.
                         line[col * 4..col * 4 + 4].copy_from_slice(&[0, 0, a, a]);

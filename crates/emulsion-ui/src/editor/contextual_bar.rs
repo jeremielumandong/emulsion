@@ -7,6 +7,7 @@ impl EditorView {
         let title = self.active_tool_name().to_string();
         let mask_actions = self.mask_taskbar_actions(cx);
         let tool_actions = self.contextual_tool_actions(cx);
+        let generation_actions = self.generation_taskbar_actions(cx);
         div()
             .id("contextual-taskbar")
             .test_support()
@@ -30,6 +31,7 @@ impl EditorView {
             )
             .children(mask_actions)
             .children(tool_actions)
+            .children(generation_actions)
             .into_any_element()
     }
 }

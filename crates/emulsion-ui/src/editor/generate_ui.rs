@@ -9,11 +9,16 @@ use emulsion_ai::generate::{self, Config, Provider};
 use emulsion_ai::jobs::Job;
 use emulsion_raster::IRect;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{
+    Disableable, Sizable,
+    button::{Button, ButtonVariants},
+};
 
 #[derive(Default)]
 pub struct GenState {
     prompt: Option<(Entity<InputState>, Subscription)>,
     pub busy: bool,
+    pub show_in_taskbar: bool,
     /// Ctrl-K choice, retained when its prompt is closed and reopened.
     pub ask_provider: Option<Provider>,
 }
@@ -46,9 +51,8 @@ impl EditorView {
             return;
         }
         let state = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(
-                "describe what to put here, then Enter (selection = fill; none = new layer)",
-            )
+            InputState::new(window, cx)
+                .placeholder("Describe the fill, or leave blank to remove the selection")
         });
         let sub = cx.subscribe_in(&state, window, |this, _st, ev: &InputEvent, _, cx| {
             if let InputEvent::PressEnter { .. } = ev {
@@ -90,9 +94,28 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let prompt = prompt.trim().to_string();
-        if prompt.is_empty() {
-            return Err("Type what to generate first.".into());
+        let removing = prompt.is_empty();
+        let sel = self.editor.doc.selection.clone();
+        if removing && sel.is_none() {
+            return Err("Select an object to remove, or type what to generate.".into());
         }
+        if sel.as_ref().is_some_and(|mask| {
+            emulsion_raster::select::bounds(mask)
+                .intersect(&IRect::new(
+                    0,
+                    0,
+                    self.editor.doc.width as i32,
+                    self.editor.doc.height as i32,
+                ))
+                .is_empty()
+        }) {
+            return Err("Select an area of the image to fill.".into());
+        }
+        let prompt = if removing {
+            "Remove the object inside the masked area. Fill the area with a natural continuation of the surrounding background, matching its lighting, texture and perspective. Preserve the rest of the image.".to_string()
+        } else {
+            prompt
+        };
         if self.generate.busy {
             return Err("Still generating the last request.".into());
         }
@@ -103,7 +126,6 @@ impl EditorView {
             return Err("Wait for the current image task to finish.".into());
         }
         cfg.validate().map_err(|error| error.to_string())?;
-        let sel = self.editor.doc.selection.clone();
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         // The displayed tree may lag edits while rendering catches up.
         let source = sel.as_ref().map(|_| self.editor.doc.clone());
@@ -111,7 +133,11 @@ impl EditorView {
         self.watch_job(job.clone(), cx);
         let j = job.clone();
         let slot = self.insertion_slot();
-        let label = format!("Generated: {}", short_prompt(&prompt));
+        let label = if removing {
+            "Generative removal".to_string()
+        } else {
+            format!("Generated: {}", short_prompt(&prompt))
+        };
         let model_id = cfg.model_id();
         self.generate.busy = true;
         self.set_status(
@@ -198,6 +224,9 @@ impl EditorView {
     /// The prompt field and its button for the options bar.
     pub(crate) fn generate_row(&mut self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut v = Vec::new();
+        if self.generate.show_in_taskbar {
+            return v;
+        }
         let Some((st, _)) = &self.generate.prompt else {
             return v;
         };
@@ -232,6 +261,54 @@ impl EditorView {
             .into_any_element(),
         );
         v
+    }
+
+    pub(super) fn open_generative_fill(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_gen_prompt(window, cx);
+        self.generate.show_in_taskbar = true;
+        if let Some((state, _)) = &self.generate.prompt {
+            state.update(cx, |state, cx| state.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn generation_taskbar_actions(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if !self.generate.show_in_taskbar || self.tool != Tool::Select {
+            return Vec::new();
+        }
+        let Some((state, _)) = &self.generate.prompt else {
+            return Vec::new();
+        };
+        vec![
+            div()
+                .w_80()
+                .child(Input::new(state).small())
+                .into_any_element(),
+            Button::new("context-generate-submit")
+                .small()
+                .primary()
+                .label(if self.generate.busy {
+                    "Generating…"
+                } else {
+                    "Generate"
+                })
+                .disabled(self.generate.busy)
+                .on_click(cx.listener(|this, _, _, cx| this.generate_from_prompt(cx)))
+                .into_any_element(),
+            Button::new("context-generate-cancel")
+                .small()
+                .ghost()
+                .label("Cancel")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if this.generate.busy {
+                        this.cancel_ai(cx);
+                    }
+                    this.generate.show_in_taskbar = false;
+                    window.focus(&this.canvas_focus, cx);
+                    cx.notify();
+                }))
+                .into_any_element(),
+        ]
     }
 }
 

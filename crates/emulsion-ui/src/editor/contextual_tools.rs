@@ -7,6 +7,10 @@ impl EditorView {
     pub(super) fn contextual_tool_actions(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut actions = Vec::new();
         let ready = self.layer_menu_ready();
+        let can_remove = ready
+            && !self.generate.busy
+            && self.pending_edit_job.is_none()
+            && !self.tools.remove.running;
         let editable = self
             .selected
             .is_some_and(|id| self.editor.doc.locked_ancestor(id).is_none());
@@ -32,6 +36,9 @@ impl EditorView {
                         "context-gradient-linear" => !self.tools.radial,
                         "context-gradient-radial" => self.tools.radial,
                         "context-fill-contiguous" => self.tools.contiguous,
+                        "context-heal-mode" => !self.tools.remove.enabled,
+                        "context-remove-mode" => self.tools.remove.enabled,
+                        "context-remove-after-stroke" => self.tools.remove.after_stroke,
                         _ => false,
                     })
                     .disabled(!enabled)
@@ -119,6 +126,12 @@ impl EditorView {
             }
             Tool::Select => {
                 add(
+                    "context-remove-selection",
+                    "Remove selection",
+                    can_remove && has_selection,
+                    Self::content_aware_fill,
+                );
+                add(
                     "context-subject",
                     "Select subject",
                     true,
@@ -152,6 +165,39 @@ impl EditorView {
                 );
             }
             Tool::Brush | Tool::Heal | Tool::Clone => {
+                if self.tool == Tool::Heal {
+                    add("context-heal-mode", "Heal", ready, |this, cx| {
+                        this.set_remove_mode(false, cx)
+                    });
+                    add("context-remove-mode", "Remove", ready, |this, cx| {
+                        this.set_remove_mode(true, cx)
+                    });
+                    if self.tools.remove.enabled {
+                        add(
+                            "context-remove-after-stroke",
+                            "Remove after each stroke",
+                            ready,
+                            |this, cx| {
+                                this.tools.remove.after_stroke = !this.tools.remove.after_stroke;
+                                cx.notify();
+                            },
+                        );
+                        add(
+                            "context-remove-apply",
+                            "Remove now",
+                            can_remove && self.remove_pending(),
+                            Self::apply_remove,
+                        );
+                        add(
+                            "context-remove-cancel",
+                            "Cancel",
+                            self.remove_pending(),
+                            |this, cx| {
+                                this.cancel_remove(cx);
+                            },
+                        );
+                    }
+                }
                 if self.brushy() || self.tools.paint == PaintKind::Liquify {
                     add(
                         "context-smaller-brush",
@@ -316,6 +362,18 @@ impl EditorView {
                     Self::default_colors,
                 );
             }
+        }
+        if self.tool == Tool::Select {
+            actions.push(
+                Button::new("context-generative-fill")
+                    .small()
+                    .label("Generative fill")
+                    .disabled(!can_remove || !has_selection)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_generative_fill(window, cx);
+                    }))
+                    .into_any_element(),
+            );
         }
         actions
     }

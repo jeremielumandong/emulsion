@@ -117,6 +117,7 @@ pub enum ShapeKind {
 }
 
 pub struct ToolState {
+    pub(crate) remove: super::remove_tool::RemoveState,
     pub transform_lift: Option<super::clipboard::TransformLift>,
     pub rotate_view: bool,
     pub select: SelectShape,
@@ -197,6 +198,7 @@ pub struct ToolState {
 impl Default for ToolState {
     fn default() -> Self {
         Self {
+            remove: Default::default(),
             transform_lift: None,
             rotate_view: false,
             select: SelectShape::Rect,
@@ -251,6 +253,9 @@ impl Default for ToolState {
 }
 
 pub enum ToolDrag {
+    Remove {
+        stroke: Box<Stroke>,
+    },
     Stroke {
         id: NodeId,
         stroke: Box<Stroke>,
@@ -473,6 +478,7 @@ impl EditorView {
 
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         if tool != self.tool {
+            self.cancel_remove(cx);
             self.finish_tool_interaction(cx);
             self.type_tool.selection = None;
         }
@@ -1006,6 +1012,7 @@ impl EditorView {
                 let ink = Ink::Color(premul(self.tools.fg));
                 self.start_stroke(d, ink, false, "Paint mask", cx);
             }
+            Tool::Heal if self.tools.remove.enabled => self.start_remove(d, cx),
             Tool::Heal => self.start_stroke(
                 d,
                 Ink::Color([0.45, 0.05, 0.03, 0.5]),
@@ -1739,6 +1746,10 @@ impl EditorView {
             return;
         };
         match t {
+            ToolDrag::Remove { stroke } => {
+                stroke.point(d.0 as f32, d.1 as f32);
+                cx.notify();
+            }
             ToolDrag::Stroke {
                 stroke, to_local, ..
             } => {
@@ -1807,6 +1818,10 @@ impl EditorView {
     pub(crate) fn tool_up(&mut self, t: ToolDrag, cx: &mut Context<Self>) {
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         match t {
+            ToolDrag::Remove { mut stroke } => {
+                stroke.finish();
+                self.finish_remove_stroke(*stroke, cx);
+            }
             ToolDrag::Stroke {
                 id,
                 mut stroke,
@@ -1938,6 +1953,10 @@ impl EditorView {
 
     /// Enter: commit whatever the tool has pending.
     pub fn tool_commit(&mut self, cx: &mut Context<Self>) {
+        if self.tool == Tool::Heal && self.tools.remove.enabled {
+            self.apply_remove(cx);
+            return;
+        }
         if self.warp.is_none() {
             self.tools.transform_lift = None;
         }
@@ -2005,7 +2024,8 @@ impl EditorView {
             cx.notify();
             return true;
         }
-        let mut had = self.cancel_move(cx);
+        let mut had = self.cancel_remove(cx);
+        had |= self.cancel_move(cx);
         if matches!(self.drag, Some(Drag::Transform(_))) {
             self.drag = None;
             self.snap_lines.clear();
@@ -2438,10 +2458,17 @@ impl EditorView {
 
     /// Fill the selection from its surroundings into a new node.
     pub fn content_aware_fill(&mut self, cx: &mut Context<Self>) {
+        if !self.layer_menu_ready() || self.generate.busy || self.pending_edit_job.is_some() {
+            return;
+        }
         let Some(sel) = self.editor.doc.selection.clone() else {
             self.set_status("Select the area to fill first.", false, cx);
             return;
         };
+        if select::bounds(&sel).is_empty() {
+            return;
+        }
+        let slot = self.insertion_slot();
         let doc = self.editor.doc.clone();
         self.set_status("Filling from the surroundings…", false, cx);
         let ticket = self.begin_edit_job();
@@ -2465,7 +2492,6 @@ impl EditorView {
                     Arc::new(layer),
                     Placement::at(reg.x as f64, reg.y as f64),
                 );
-                let slot = this.insertion_slot();
                 if let Some(id) = this.execute(
                     Command::AddNode {
                         node: Box::new(node),
@@ -2708,6 +2734,7 @@ impl EditorView {
 /// What the canvas draws over the image this frame.
 #[derive(Clone, Default)]
 pub struct Overlay {
+    pub removal: Option<(Mask, std::rc::Rc<super::quick_mask::QuickMaskCache>)>,
     pub ants: Option<Segments>,
     pub phase: bool,
     /// Document-space polylines (closed when the flag is set).
@@ -2774,8 +2801,12 @@ impl EditorView {
         };
         let rect_pts =
             |x: f64, y: f64, w: f64, h: f64| vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)];
+        o.removal = self
+            .remove_coverage()
+            .map(|mask| (mask, self.tools.remove.cache.clone()));
         if let Some(Drag::Tool(t)) = &self.drag {
             match t {
+                ToolDrag::Remove { .. } => {}
                 ToolDrag::Marquee {
                     start,
                     end,
@@ -2890,6 +2921,9 @@ pub(crate) fn paint_overlay(
         point(px(s.0 as f32), px(s.1 as f32))
     };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        if let Some((mask, cache)) = &o.removal {
+            super::quick_mask::paint_coverage(mask, view, bounds, cache, window);
+        }
         let full_line = |vertical: bool, pos: f64, color: Hsla, window: &mut Window| {
             let s = to_screen(if vertical { (pos, 0.0) } else { (0.0, pos) });
             let q = if vertical {
@@ -3843,6 +3877,12 @@ impl EditorView {
                 let hint = match self.tool {
                     Tool::Clone if self.tools.clone_source.is_none() => "alt-click sets the source",
                     Tool::Clone => "alt-click to move the source",
+                    Tool::Heal if self.tools.remove.enabled && !self.tools.remove.after_stroke => {
+                        "Paint to mark objects; Enter removes; Escape cancels; samples visible layers"
+                    }
+                    Tool::Heal if self.tools.remove.enabled => {
+                        "Paint to remove; samples visible layers; creates a new layer"
+                    }
                     Tool::Heal => "paint over a blemish",
                     _ if self.tools.paint == PaintKind::Smudge => {
                         "drag to smear the colour under the brush"

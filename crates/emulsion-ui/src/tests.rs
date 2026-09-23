@@ -20,6 +20,9 @@ mod editor_layout_tests;
 #[path = "contextual_taskbar_tests.rs"]
 mod contextual_taskbar_tests;
 
+#[path = "generation_removal_tests.rs"]
+mod generation_removal_tests;
+
 #[path = "tool_usability_tests.rs"]
 mod tool_usability_tests;
 

@@ -38,6 +38,7 @@ mod menu_bar;
 mod movement;
 mod panels;
 mod pen;
+mod remove_tool;
 mod toolbox;
 mod workspace_layout;
 pub(crate) use pen::PenMode;

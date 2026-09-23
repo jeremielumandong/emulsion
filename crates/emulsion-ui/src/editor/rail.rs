@@ -26,6 +26,7 @@ pub struct RailItem {
     pub pen: Option<PenMode>,
     pub rotate_view: bool,
     pub vertical_type: bool,
+    pub remove: bool,
 }
 
 const fn item(name: &'static str, glyph: &'static str, key: &'static str, tool: Tool) -> RailItem {
@@ -40,6 +41,7 @@ const fn item(name: &'static str, glyph: &'static str, key: &'static str, tool: 
         pen: None,
         rotate_view: false,
         vertical_type: false,
+        remove: false,
     }
 }
 
@@ -133,7 +135,13 @@ pub const GROUPS: &[&[RailItem]] = &[
     ],
     &[item("Crop", "crop", "C", Tool::Crop)],
     &[item("Eyedropper", "pipette", "I", Tool::Eyedropper)],
-    &[item("Heal", "bandage", "J", Tool::Heal)],
+    &[
+        item("Heal", "bandage", "J", Tool::Heal),
+        RailItem {
+            remove: true,
+            ..item("Remove", "bandage", "J", Tool::Heal)
+        },
+    ],
     &[paint("Brush", "brush", "B", PaintKind::Brush)],
     &[item("Clone stamp", "stamp", "S", Tool::Clone)],
     &[paint("Eraser", "eraser", "E", PaintKind::Eraser)],
@@ -427,6 +435,9 @@ impl EditorView {
         if it.tool == Tool::Type {
             return self.type_tool.spec.vertical == it.vertical_type;
         }
+        if it.tool == Tool::Heal {
+            return self.tools.remove.enabled == it.remove;
+        }
         if let Some(mode) = it.pen {
             return self.tools.pen.mode == mode;
         }
@@ -460,6 +471,10 @@ impl EditorView {
 
     pub(super) fn activate_tool_item(&mut self, it: RailItem, cx: &mut Context<Self>) {
         self.rail.flyout = None;
+        if it.tool == Tool::Heal {
+            self.set_remove_mode(it.remove, cx);
+            return;
+        }
         if it.tool == Tool::Hand {
             self.set_hand_mode(it.rotate_view, cx);
             return;

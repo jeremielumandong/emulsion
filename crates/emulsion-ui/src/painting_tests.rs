@@ -535,3 +535,51 @@ fn quick_mask_selection_limits_new_hue_saturation_layer(cx: &mut TestAppContext)
         })
     });
 }
+
+#[gpui_kit::test]
+fn remove_brush_batch_cancel_apply_and_undo_preserve_photo(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, doc(&["Photo"], Some(speck())));
+    let e = editor(&ws, cx);
+    let original = pixels(&e, cx);
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.set_remove_mode(true, cx);
+            e.tools.remove.after_stroke = false;
+            e.tools.brush.size = 16.;
+        })
+    });
+    cx.run_until_parked();
+    click(&e, cx, (180., 96.), false);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        e.update(cx, |e, _| {
+            assert!(e.remove_pending());
+            assert_eq!(e.editor.doc.nodes.len(), 1);
+        })
+    });
+    cx.simulate_keystrokes("escape");
+    cx.update(|_, cx| assert!(!e.read(cx).remove_pending()));
+    click(&e, cx, (180., 96.), false);
+    click(&e, cx, (170., 96.), false);
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(Arc::ptr_eq(&original, &pixels(&e, cx)));
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            assert_eq!(e.editor.doc.nodes.len(), 2);
+            assert_eq!(e.editor.doc.nodes[1].name, "Object removal");
+            let NodeKind::Raster { raster, .. } = &e.editor.doc.nodes[1].kind else {
+                panic!("repair raster")
+            };
+            assert!(raster.get(180, 96)[0] < 20000);
+            assert_eq!(raster.get(0, 0), [0; 4]);
+            e.undo(cx);
+            assert_eq!(e.editor.doc.nodes.len(), 1);
+            e.tools.remove.after_stroke = true;
+        })
+    });
+    click(&e, cx, (180., 96.), false);
+    cx.run_until_parked();
+    cx.update(|_, cx| e.update(cx, |e, _| assert_eq!(e.editor.doc.nodes.len(), 2)));
+}
