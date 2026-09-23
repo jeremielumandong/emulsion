@@ -78,6 +78,9 @@ struct Manifest {
     raw: Option<emulsion_core::raw::RawDocument>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     raw_originals: Vec<std::path::PathBuf>,
+    /// Colours painted with, most recent first. Absent in older files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    colors: Vec<[u8; 3]>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -539,6 +542,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         info: doc.info.clone(),
         raw: doc.raw.clone(),
         raw_originals: doc.raw_originals.clone(),
+        colors: doc.colors.clone(),
     };
     Ok(Encoded {
         patterns,
@@ -1007,6 +1011,9 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     doc.info = m.info.clone();
     doc.raw = m.raw.clone();
     doc.raw_originals = m.raw_originals.clone();
+    doc.colors = m.colors.clone();
+    doc.colors
+        .truncate(emulsion_core::document::MAX_PROJECT_COLORS);
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     let mut paths = crate::path_data::PathReader::default();
     for mut n in m.nodes {
@@ -2310,10 +2317,12 @@ mod tests {
                 pos: 40.0,
             },
         ];
+        d.colors = vec![[200, 30, 10], [0, 0, 0]];
         let p = tmp("roundtrip.ora");
         write(&d, &p).unwrap();
         let back = read(&p).unwrap();
         assert_eq!(back.guides, d.guides);
+        assert_eq!(back.colors, d.colors);
         assert_eq!(back.nodes.len(), d.nodes.len());
         for (a, b) in d.nodes.iter().zip(&back.nodes) {
             assert_eq!(a.id, b.id);

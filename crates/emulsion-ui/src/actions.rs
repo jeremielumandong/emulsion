@@ -25,6 +25,7 @@ gpui_kit::actions!(
         RotateCcw,
         ResetRotation,
         ToggleRulers,
+        ToggleDrawMode,
         ToggleTheme,
         ShowHome,
         ShowEditor,
@@ -142,7 +143,7 @@ macro_rules! make_binding {
 pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> {
     make_binding!(name, keys, ctx;
         NewDocument, Open, Save, SaveAs, Export, SynchronizeRaw, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
-        Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleTheme, ShowHome,
+        Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleDrawMode, ToggleTheme, ShowHome,
         ShowEditor, DeleteNode, NewLayer, DuplicateNode, GroupNodes, Ungroup, RenameLayer, MergeLayers, MergeVisible, FlattenImage, LinkLayers, UnlinkLayers, CopyLayerStyle, PasteLayerStyle, ApplyLayerMask, MoveNodeUp, MoveNodeDown,
         ToggleNodeVisible, NextBlendMode, PreviousBlendMode, Ask, ToolHand, ToolRotateView, RepeatFilter, ToolMove, ToolPen, ToolType, ToolVerticalType, ConvertToSmartObject, ConvertSmartToLayers, RasterizeLayer, ToolMarquee, ToolLasso,
         ToolWand, ToolBrush, ToolEraser, ToolBucket, ToolGradient, ToolHeal, ToolClone,
@@ -182,6 +183,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "ZoomFit", "ctrl-0"),
     ("workspace", "Zoom100", "ctrl-1"),
     ("workspace", "ToggleRulers", "ctrl-r"),
+    ("workspace", "ToggleDrawMode", "ctrl-shift-d"),
     ("workspace", "NewLayer", "ctrl-shift-n"),
     ("workspace", "DuplicateNode", "ctrl-j"),
     ("workspace", "GroupNodes", "ctrl-g"),

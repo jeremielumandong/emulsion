@@ -71,7 +71,7 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
         || action.starts_with("Rotate")
         || matches!(
             action,
-            "ResetRotation" | "ToggleRulers" | "ToggleTheme" | "ShowEditor"
+            "ResetRotation" | "ToggleRulers" | "ToggleDrawMode" | "ToggleTheme" | "ShowEditor"
         )
     {
         "View"

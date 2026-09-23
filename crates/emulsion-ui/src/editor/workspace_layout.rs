@@ -1,5 +1,5 @@
 //! Saved workspace presentation. Never changes image pixels or history.
-use super::compact::{Bar, CompactLayout, Edge};
+use super::compact::{Bar, CompactLayout, Edge, MAX_SCALE, MIN_SCALE};
 use super::*;
 use emulsion_io::settings::{ToolbarPlacement, WorkspaceLayout, WorkspacePreset};
 use gpui_kit::component::{
@@ -43,6 +43,7 @@ impl EditorView {
                         visible: bar.open,
                         x: f32::from(bar.position.x),
                         y: f32::from(bar.position.y),
+                        scale: bar.scale,
                     }
                 })
                 .collect(),
@@ -69,7 +70,8 @@ impl EditorView {
         layout: &WorkspaceLayout,
         cx: &mut Context<Self>,
     ) {
-        self.compact = CompactLayout::new(cx);
+        // Bars a layout does not mention (older saves) take the mode's defaults.
+        self.compact = CompactLayout::for_mode(layout.draw_mode, cx);
         for saved in &layout.toolbar_placements {
             let Some(id) = Bar::ALL.into_iter().find(|id| id.name() == saved.id) else {
                 continue;
@@ -92,6 +94,9 @@ impl EditorView {
                 }
             };
             bar.position = point(px(coordinate(saved.x)), px(coordinate(saved.y)));
+            if saved.scale.is_finite() {
+                bar.scale = saved.scale.clamp(MIN_SCALE, MAX_SCALE);
+            }
         }
         for name in &layout.tool_ids {
             if rail::GROUPS
@@ -128,10 +133,15 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Restore the factory arrangement of the current mode.
     pub(super) fn reset_workspace(&mut self, cx: &mut Context<Self>) {
-        self.apply_workspace_layout(&WorkspaceLayout::default(), cx);
+        let layout = WorkspaceLayout {
+            draw_mode: self.draw_mode,
+            ..Default::default()
+        };
+        self.apply_workspace_layout(&layout, cx);
         self.set_status(
-            "Factory workspace restored. Save as default to use it for new images.",
+            "Factory workspace restored for this mode. Save as default to use it for new images.",
             false,
             cx,
         );
@@ -225,9 +235,9 @@ impl EditorView {
             }))
             .child(div().flex().items_center().justify_between().child(label("Customize workspace", p)).child(
                 Button::new("workspace-customizer-close").label("Done").small().on_click(cx.listener(|this, _, window, cx| this.toggle_workspace_customizer(window, cx)))))
-            .child(mono("Drag toolbar grips to float or dock. Choose your tools below.", 11., p.muted))
+            .child(mono("Every panel below is its own toolbar: show it, size it, dock it to any side or float it. Drag a grip ⠿ to place it freely. Photo and Draw each remember their own setup.", 11., p.muted))
             .child(self.workspace_presets(p, cx))
-            .child(label("Visible toolbars", p)).child(self.toolbar_toggles(p, cx))
+            .child(label("Toolbars", p)).child(self.toolbar_toggles(p, cx))
             .child(label("Visible menus", p))
             .child(div().flex().flex_wrap().gap_1().children(MENUS.into_iter().map(|(id, name)| {
                 let shown = self.menu_visible(id);

@@ -1444,6 +1444,7 @@ impl EditorView {
                 cx,
             );
         } else {
+            self.note_painted_color();
             self.execute(
                 Command::ReplacePixels {
                     id,

@@ -333,3 +333,42 @@ fn brush_smudge_sampling_switches_between_current_and_visible_layers(cx: &mut Te
     );
     assert_eq!((sampled[1], sampled[2]), (0, 0));
 }
+
+#[gpui_kit::test]
+fn painted_colours_join_the_project_palette_and_reuse_sets_foreground(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    let e = editor(&ws, cx);
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.set_paint(PaintKind::Brush, cx);
+            e.set_fg([200, 10, 10, 255], cx);
+        })
+    });
+    cx.run_until_parked();
+    click(&e, cx, (60.0, 60.0), false);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            assert_eq!(e.editor.doc.colors, [[200, 10, 10]]);
+            e.set_paint(PaintKind::Eraser, cx);
+        })
+    });
+    click(&e, cx, (90.0, 60.0), false);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            assert_eq!(
+                e.editor.doc.colors,
+                [[200, 10, 10]],
+                "erasing lays down no colour"
+            );
+            e.set_fg([0, 0, 0, 255], cx);
+            e.set_paint(PaintKind::Brush, cx);
+        })
+    });
+    click(&e, cx, (120.0, 60.0), false);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(e.read(cx).editor.doc.colors, [[0, 0, 0], [200, 10, 10]]);
+    });
+}

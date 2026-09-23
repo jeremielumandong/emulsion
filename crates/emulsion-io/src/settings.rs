@@ -32,6 +32,8 @@ pub struct ToolbarPlacement {
     pub visible: bool,
     pub x: f32,
     pub y: f32,
+    /// Size multiplier for the toolbar's controls; 1 is the standard size.
+    pub scale: f32,
 }
 
 impl Default for ToolbarPlacement {
@@ -42,6 +44,7 @@ impl Default for ToolbarPlacement {
             visible: true,
             x: 0.0,
             y: 0.0,
+            scale: 1.0,
         }
     }
 }
@@ -89,6 +92,11 @@ pub struct Settings {
     pub starred_files: Vec<PathBuf>,
     pub workspace_default: Option<WorkspaceLayout>,
     pub workspace_presets: Vec<WorkspacePreset>,
+    /// The workspace Photo mode last used: toolbars, tools and panels,
+    /// restored when switching back from Draw mode.
+    pub photo_workspace: Option<WorkspaceLayout>,
+    /// The workspace Draw mode last used, restored when switching to it.
+    pub draw_workspace: Option<WorkspaceLayout>,
     pub shape_stroke_presets: Vec<ShapeStrokePreset>,
     /// Per-effect defaults used when adding a layer style.
     pub layer_style_defaults: Vec<emulsion_core::styles::LayerStyle>,
@@ -172,6 +180,8 @@ impl Default for Settings {
             starred_files: Vec::new(),
             workspace_default: None,
             workspace_presets: Vec::new(),
+            photo_workspace: None,
+            draw_workspace: None,
             provider: "claude".into(),
             cli_path: None,
             model: None,
@@ -289,6 +299,7 @@ mod tests {
         assert!(settings.draw_mode);
         assert!(settings.workspace_default.is_none());
         assert!(settings.workspace_presets.is_empty());
+        assert!(settings.photo_workspace.is_none() && settings.draw_workspace.is_none());
 
         let settings: Settings = serde_json::from_str(
             r#"{"workspace_default":{"tool_ids":["brush"],"toolbar_placements":[{"id":"tools"}]},"workspace_presets":[{"name":"Sketch"}]}"#,
@@ -322,6 +333,7 @@ mod tests {
                 visible: false,
                 x: 125.5,
                 y: 80.0,
+                scale: 1.5,
             }],
             tool_ids: vec!["brush".into(), "eraser".into()],
             hidden_menu_ids: vec!["filter".into()],

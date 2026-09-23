@@ -319,6 +319,24 @@ fn icon_bytes(id: &str) -> &'static [u8] {
         "emulsion-mask" => MASK_SVG.as_bytes(),
         "emulsion-vertical-type" => VERTICAL_TYPE_SVG.as_bytes(),
         "emulsion-liquify" => LIQUIFY_SVG.as_bytes(),
+        "layers" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/layers.svg")
+        }
+        "undo-2" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/undo-2.svg")
+        }
+        "redo-2" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/redo-2.svg")
+        }
+        "star" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/star.svg")
+        }
+        "star-fill" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/star-fill.svg")
+        }
+        "library" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/library.svg")
+        }
         _ => include_bytes!(
             "../../../../vendor/gpui/gpui-kit-assets/assets/icons/circle-question-mark.svg"
         ),
@@ -809,6 +827,32 @@ impl EditorView {
         if !self.draw_mode {
             return None;
         }
+        let [size, opacity] = self.brush_vsliders(170., p, cx)?;
+        Some(
+            div()
+                .flex()
+                .flex_none()
+                .flex_col()
+                .justify_center()
+                .gap(px(18.))
+                .w(px(40.))
+                .py(px(12.))
+                .border_r_1()
+                .border_color(p.line)
+                .child(size)
+                .child(opacity)
+                .into_any_element(),
+        )
+    }
+
+    /// Tall size and opacity sliders for the active brush, or `None` when
+    /// the current tool paints no brush strokes.
+    pub(crate) fn brush_vsliders(
+        &mut self,
+        height: f32,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Option<[AnyElement; 2]> {
         let brushy = matches!(
             self.tool,
             Tool::Brush | Tool::Heal | Tool::Clone | Tool::Mask
@@ -830,71 +874,62 @@ impl EditorView {
                 .flex_col()
                 .items_center()
                 .gap(px(4.))
-                .h(px(170.))
+                .h(px(height))
                 .child(div().flex_1().min_h_0().child(el))
                 .child(mono(value, 9.5, p.ink))
                 .child(mono(label, 9., p.muted))
         };
-        Some(
-            div()
-                .flex()
-                .flex_none()
-                .flex_col()
-                .justify_center()
-                .gap(px(18.))
-                .w(px(40.))
-                .py(px(12.))
-                .border_r_1()
-                .border_color(p.line)
-                .child(column(
-                    "size",
-                    format!("{:.0}", b.size),
-                    crate::widgets::vslider(
-                        "side-size",
-                        size_norm,
-                        size_track,
-                        p,
-                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                            this.vslider_down(SliderKey::SideSize, (1.0, 500.0, 1.0), e, cx)
-                        }),
-                    )
-                    .tab_index(0)
-                    .key_context("Slider")
-                    .role(Role::Slider)
-                    .aria_label("Brush size")
-                    .aria_value(format!("{:.0} pixels", b.size))
-                    .aria_orientation(Orientation::Vertical)
-                    .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
-                    .on_key_down(cx.listener(move |this, e, _, cx| {
-                        this.slider_key(SliderKey::SideSize, size_norm, (1., 500., 1.), e, cx);
-                    }))
-                    .into_any_element(),
-                ))
-                .child(column(
-                    "opacity",
-                    format!("{:.0}%", b.opacity * 100.0),
-                    crate::widgets::vslider(
-                        "side-opacity",
-                        b.opacity,
-                        op_track,
-                        p,
-                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                            this.vslider_down(SliderKey::SideOpacity, (1.0, 100.0, 1.0), e, cx)
-                        }),
-                    )
-                    .tab_index(0)
-                    .key_context("Slider")
-                    .role(Role::Slider)
-                    .aria_label("Brush opacity")
-                    .aria_value(format!("{:.0} percent", b.opacity * 100.))
-                    .aria_orientation(Orientation::Vertical)
-                    .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
-                    .on_key_down(cx.listener(move |this, e, _, cx| {
-                        this.slider_key(SliderKey::SideOpacity, b.opacity, (1., 100., 1.), e, cx);
-                    }))
-                    .into_any_element(),
-                ))
+        Some([
+            column(
+                "size",
+                format!("{:.0}", b.size),
+                crate::widgets::vslider(
+                    "side-size",
+                    size_norm,
+                    size_track,
+                    p,
+                    cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                        this.vslider_down(SliderKey::SideSize, (1.0, 500.0, 1.0), e, cx)
+                    }),
+                )
+                .tab_index(0)
+                .key_context("Slider")
+                .role(Role::Slider)
+                .aria_label("Brush size")
+                .aria_value(format!("{:.0} pixels", b.size))
+                .aria_orientation(Orientation::Vertical)
+                .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
+                .on_key_down(cx.listener(move |this, e, _, cx| {
+                    this.slider_key(SliderKey::SideSize, size_norm, (1., 500., 1.), e, cx);
+                }))
                 .into_any_element(),
-        )
+            )
+            .into_any_element(),
+            column(
+                "opacity",
+                format!("{:.0}%", b.opacity * 100.0),
+                crate::widgets::vslider(
+                    "side-opacity",
+                    b.opacity,
+                    op_track,
+                    p,
+                    cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                        this.vslider_down(SliderKey::SideOpacity, (1.0, 100.0, 1.0), e, cx)
+                    }),
+                )
+                .tab_index(0)
+                .key_context("Slider")
+                .role(Role::Slider)
+                .aria_label("Brush opacity")
+                .aria_value(format!("{:.0} percent", b.opacity * 100.))
+                .aria_orientation(Orientation::Vertical)
+                .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
+                .on_key_down(cx.listener(move |this, e, _, cx| {
+                    this.slider_key(SliderKey::SideOpacity, b.opacity, (1., 100., 1.), e, cx);
+                }))
+                .into_any_element(),
+            )
+            .into_any_element(),
+        ])
     }
 }
