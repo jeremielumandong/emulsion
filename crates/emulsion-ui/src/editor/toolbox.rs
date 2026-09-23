@@ -244,7 +244,11 @@ impl EditorView {
                     .w(rems(1.75))
                     .h(rems(1.75))
                     .accessibility_label(item.name)
-                    .tooltip(format!("{} ({})", item.name, item.key))
+                    .tooltip(if item.key.is_empty() {
+                        item.name.to_string()
+                    } else {
+                        format!("{} ({})", item.name, item.key)
+                    })
                     .when(active, |button| {
                         button.bg(p.soft_bg).border_1().border_color(p.accent)
                     })

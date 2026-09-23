@@ -232,7 +232,8 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("canvas", "ToolSmudge", "shift-b"),
     ("canvas", "ToolLiquify", "shift-j"),
     ("canvas", "ToolEllipse", "shift-u"),
-    ("canvas", "ToolMask", "q"),
+    // Photoshop: Q toggles Quick Mask. The Mask tool stays bindable.
+    ("canvas", "ToggleQuickMask", "q"),
     ("canvas", "ToolGrade", "shift-q"),
     ("workspace", "ImageSizeDialog", "ctrl-alt-i"),
     ("workspace", "CanvasSizeDialog", "ctrl-alt-c"),

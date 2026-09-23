@@ -175,7 +175,7 @@ pub const GROUPS: &[&[RailItem]] = &[
         shape("Rectangle", "square", "U", ShapeKind::Rect),
         shape("Ellipse", "circle", "Shift+U", ShapeKind::Ellipse),
     ],
-    &[item("Mask", "emulsion-mask", "Q", Tool::Mask)],
+    &[item("Mask", "emulsion-mask", "", Tool::Mask)],
     &[item("Grade", "contrast", "Shift+Q", Tool::Grade)],
     &[
         item("Hand", "hand", "H", Tool::Hand),
@@ -226,7 +226,7 @@ pub const DRAW_GROUPS: &[&[RailItem]] = &[
         ),
     ],
     &[item("Move", "move", "V", Tool::Move)],
-    &[item("Mask", "emulsion-mask", "Q", Tool::Mask)],
+    &[item("Mask", "emulsion-mask", "", Tool::Mask)],
     &[
         item("Hand", "hand", "H", Tool::Hand),
         RailItem {

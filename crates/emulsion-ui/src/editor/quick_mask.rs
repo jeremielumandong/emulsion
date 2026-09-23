@@ -34,7 +34,7 @@ impl EditorView {
                 self.set_paint(PaintKind::Brush, cx);
             }
             self.set_status(
-                "Quick Mask: paint black to mask (red), white or the eraser to select. Click the Quick Mask button again to finish.",
+                "Quick Mask: paint black to mask (red), white or the eraser to select. Press Q again to finish.",
                 false,
                 cx,
             );
@@ -110,9 +110,9 @@ impl EditorView {
                 "Edit in Quick Mask mode"
             })
             .tooltip(if on {
-                "Exit Quick Mask: turn the painted mask into the selection"
+                "Exit Quick Mask (Q): turn the painted mask into the selection"
             } else {
-                "Edit in Quick Mask mode: paint the selection, with the masked area in red"
+                "Edit in Quick Mask mode (Q): paint the selection, with the masked area in red"
             })
             .when(on, |b| b.bg(p.soft_bg).border_1().border_color(p.accent))
             .child(

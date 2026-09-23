@@ -190,9 +190,17 @@ fn explicit_subtool_shortcuts_reach_the_advertised_tools(cx: &mut TestAppContext
             assert_eq!(editor.read(cx).tools.shape, kind);
         });
     }
+    // Q is Photoshop's Quick Mask toggle; it keeps a painting tool.
     cx.simulate_keystrokes("q");
     cx.run_until_parked();
-    assert_eq!(cx.update(|_, cx| editor.read(cx).tool), Tool::Mask);
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert!(e.tools.quick_mask);
+        assert_eq!(e.tool, Tool::Brush);
+    });
+    cx.simulate_keystrokes("q");
+    cx.run_until_parked();
+    assert!(!cx.update(|_, cx| editor.read(cx).tools.quick_mask));
     cx.simulate_keystrokes("shift-q");
     cx.run_until_parked();
     assert_eq!(cx.update(|_, cx| editor.read(cx).tool), Tool::Grade);
