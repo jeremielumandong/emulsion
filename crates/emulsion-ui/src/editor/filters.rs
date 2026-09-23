@@ -75,7 +75,7 @@ impl EditorView {
             .gap_1()
             .flex_none()
             .child(
-                div().id("image-menu").test_support().child(
+                div().id("image-menu").when(!self.menu_visible("image"), |d| d.hidden()).test_support().child(
                     Button::new("image-menu-button")
                         .label("Image")
                         .small()
@@ -163,9 +163,9 @@ impl EditorView {
                         }),
                 ),
             )
-            .child(self.layer_menu_button(cx))
+            .child(div().when(!self.menu_visible("layer"), |d| d.hidden()).child(self.layer_menu_button(cx)))
             .child(
-                div().id("filter-menu").test_support().child(
+                div().id("filter-menu").when(!self.menu_visible("filter"), |d| d.hidden()).test_support().child(
                     Button::new("filter-menu-button")
                         .label("Filter")
                         .small()
@@ -260,6 +260,7 @@ impl EditorView {
             )
             .child(
                 Button::new("recipes-menu")
+                    .when(!self.menu_visible("recipes"), |b| b.hidden())
                     .label("Recipes")
                     .small()
                     .ghost()

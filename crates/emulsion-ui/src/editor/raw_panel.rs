@@ -637,6 +637,16 @@ impl EditorView {
         );
         body = body.child(
             div()
+                .id("raw-histogram")
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(label("Histogram", p))
+                .child(self.histogram_view(p, cx))
+                .test_support(),
+        );
+        body = body.child(
+            div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(description),

@@ -17,7 +17,7 @@ pub(super) enum Edge {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Bar {
+pub(super) enum Bar {
     Tools,
     Options,
     View,
@@ -25,9 +25,9 @@ enum Bar {
 }
 
 impl Bar {
-    const ALL: [Self; 4] = [Self::Tools, Self::Options, Self::View, Self::Color];
+    pub(super) const ALL: [Self; 4] = [Self::Tools, Self::Options, Self::View, Self::Color];
 
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             Self::Tools => "tools",
             Self::Options => "options",
@@ -37,18 +37,20 @@ impl Bar {
     }
 }
 
-struct Toolbar {
+pub(super) struct Toolbar {
     focus: FocusHandle,
-    edge: Edge,
-    open: bool,
-    position: Point<Pixels>,
+    pub(super) edge: Edge,
+    pub(super) open: bool,
+    pub(super) position: Point<Pixels>,
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 pub(super) struct CompactLayout {
-    bars: [Toolbar; 4],
+    pub(super) bars: [Toolbar; 4],
     area: Rc<Cell<Option<Bounds<Pixels>>>>,
     drop_edge: Option<Edge>,
+    pub(super) tool_ids: Vec<String>,
+    pub(super) hidden_menu_ids: Vec<String>,
 }
 
 impl CompactLayout {
@@ -63,6 +65,8 @@ impl CompactLayout {
             }),
             area: Default::default(),
             drop_edge: None,
+            tool_ids: Vec::new(),
+            hidden_menu_ids: Vec::new(),
         }
     }
 }
@@ -86,42 +90,14 @@ impl EditorView {
         tabs: AnyElement,
         theme_controls: AnyElement,
         p: &Palette,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let wide =
-            f32::from(window.viewport_size().width) / f32::from(window.rem_size()) * 16. >= 1500.;
-        let editor = cx.entity().downgrade();
-        let layout = if wide {
-            self.layout_controls(p, cx)
-        } else {
-            Popover::new("compact-layout-menu")
-                .trigger(
-                    control("compact-layout-trigger", "⋯")
-                        .tooltip("Workspace presets and toolbars"),
-                )
-                .content(move |_, _, cx| {
-                    editor
-                        .update(cx, |this, cx| {
-                            let p = theme::palette(cx);
-                            div()
-                                .id("compact-layout-menu-content")
-                                .test_support()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .w(rems(11.875))
-                                .p_2()
-                                .child(label("Workspace", &p))
-                                .child(this.workspace_presets(&p, cx))
-                                .child(label("Toolbars", &p))
-                                .child(this.toolbar_toggles(&p, cx))
-                                .into_any_element()
-                        })
-                        .unwrap_or_else(|_| div().into_any_element())
-                })
-                .into_any_element()
-        };
+        let layout = control("compact-layout-trigger", "Workspace")
+            .tooltip("Customize tools, menus and workspace presets")
+            .on_click(
+                cx.listener(|this, _, window, cx| this.toggle_workspace_customizer(window, cx)),
+            );
         let d = &self.editor.doc;
         let dimensions = format!(
             "{}×{} · {} bit",
@@ -200,18 +176,7 @@ impl EditorView {
             .into_any_element()
     }
 
-    fn layout_controls(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(self.workspace_presets(p, cx))
-            .child(div().w_px().h_4().bg(p.line))
-            .child(self.toolbar_toggles(p, cx))
-            .into_any_element()
-    }
-
-    fn workspace_presets(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn workspace_presets(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let minimal = !self.compact.bars[Bar::Options as usize].open
             && !self.compact.bars[Bar::View as usize].open;
         div()
@@ -247,7 +212,7 @@ impl EditorView {
             .into_any_element()
     }
 
-    fn toolbar_toggles(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn toolbar_toggles(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         div()
             .flex()
             .flex_wrap()
@@ -273,8 +238,7 @@ impl EditorView {
                 control("layout-reset", "Reset")
                     .tooltip("Restore default toolbar positions and panel width")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.compact = CompactLayout::new(cx);
-                        this.sidebar_layout = Default::default();
+                        this.reset_workspace(cx);
                         cx.notify();
                     })),
             )
@@ -590,13 +554,22 @@ impl EditorView {
                     } else {
                         f32::from(area.height) - 200.
                     };
-                    self.compact_tool_rail(
-                        horizontal,
-                        (available / f32::from(window.rem_size())).max(3.5),
-                        p,
-                        cx,
-                    )
-                    .into_any_element()
+                    if !self.compact.tool_ids.is_empty() {
+                        self.custom_tool_rail(
+                            horizontal,
+                            (available / f32::from(window.rem_size())).max(3.5),
+                            p,
+                            cx,
+                        )
+                    } else {
+                        self.compact_tool_rail(
+                            horizontal,
+                            (available / f32::from(window.rem_size())).max(3.5),
+                            p,
+                            cx,
+                        )
+                        .into_any_element()
+                    }
                 }
                 Bar::Options => self.compact_options(p, window, cx),
                 Bar::View => div()
@@ -632,6 +605,7 @@ impl EditorView {
             };
             stage = stage.child(self.toolbar_shell(bar, content, p, cx));
         }
+        stage = stage.children(self.workspace_customizer(p, window, cx));
         if let Some(edge) = self.compact.drop_edge {
             let guide = div()
                 .absolute()

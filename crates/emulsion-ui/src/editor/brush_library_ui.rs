@@ -46,26 +46,38 @@ impl BrushWorkspace {
         owner: WeakEntity<EditorView>,
         library: Entity<LibraryState>,
         selected: Option<String>,
+        selected_library: Option<String>,
+        selected_set: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let catalog = library.read(cx).catalog.clone();
-        let set_id = selected
-            .as_ref()
-            .and_then(|id| catalog.brush(id).map(|b| b.set_id.clone()))
-            .or_else(|| {
-                catalog
-                    .sets
-                    .iter()
-                    .find(|s| s.builtin)
-                    .map(|s| s.id.clone())
-            });
-        let library_id = catalog
-            .sets
-            .iter()
-            .find(|s| Some(&s.id) == set_id.as_ref())
-            .map(|s| s.library_id.clone())
-            .unwrap_or_default();
+        let set_id = selected_set.or_else(|| {
+            selected
+                .as_ref()
+                .and_then(|id| catalog.brush(id).map(|b| b.set_id.clone()))
+                .or_else(|| {
+                    catalog
+                        .sets
+                        .iter()
+                        .find(|s| s.builtin)
+                        .map(|s| s.id.clone())
+                })
+        });
+        let library_id = selected_library.unwrap_or_else(|| {
+            catalog
+                .sets
+                .iter()
+                .find(|s| Some(&s.id) == set_id.as_ref())
+                .map(|s| s.library_id.clone())
+                .unwrap_or_default()
+        });
+        let set_id = set_id.filter(|id| {
+            catalog
+                .sets
+                .iter()
+                .any(|set| &set.id == id && set.library_id == library_id)
+        });
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search brushes and sets"));
         let subscriptions = vec![
@@ -231,6 +243,10 @@ impl BrushWorkspace {
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.owner
             .update(cx, |owner, cx| {
+                owner.select_brush_library(&self.library_id, cx);
+                if let Some(set) = &self.set_id {
+                    owner.select_brush_set(set, cx);
+                }
                 owner.brush_workspace = None;
                 window.focus(&owner.canvas_focus, cx);
                 cx.notify();
@@ -372,6 +388,44 @@ impl BrushWorkspace {
         window.focus(&self.focus, cx);
         cx.notify();
         true
+    }
+    pub(super) fn complete_studio_save(
+        &mut self,
+        saved: Catalog,
+        previous: Catalog,
+        saved_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let saved_revision = saved.revision;
+        self.library.update(cx, |state, cx| {
+            if saved.revision >= state.catalog.revision {
+                state.catalog = saved;
+                cx.notify();
+            }
+        });
+        let catalog = self.library.read(cx).catalog.clone();
+        if catalog.revision == saved_revision {
+            self.undo.push((catalog.revision, previous));
+        }
+        self.replace_catalog(catalog, cx);
+        if let Some(brush) = self.catalog.brush(saved_id) {
+            self.set_id = Some(brush.set_id.clone());
+            self.filter = "set";
+            self.query.clear();
+            self.search
+                .update(cx, |search, cx| search.set_value("", window, cx));
+            self.selected.clear();
+            self.selected.insert(saved_id.to_owned());
+            self.refresh(cx);
+            self.owner
+                .update(cx, |owner, cx| owner.apply_committed_brush_id(saved_id, cx))
+                .ok();
+        }
+        self.error = None;
+        self.studio = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
     fn duplicate(&mut self, cx: &mut Context<Self>) {
         let mut draft = self.catalog.clone();

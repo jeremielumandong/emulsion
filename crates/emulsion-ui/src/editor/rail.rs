@@ -397,7 +397,7 @@ impl EditorView {
     }
 
     /// Does the current tool state match this item?
-    fn rail_item_active(&self, it: &RailItem) -> bool {
+    pub(super) fn rail_item_active(&self, it: &RailItem) -> bool {
         if self.tool != it.tool {
             return false;
         }
@@ -435,6 +435,10 @@ impl EditorView {
     pub(crate) fn activate_rail_item(&mut self, g: usize, i: usize, cx: &mut Context<Self>) {
         let it = self.rail_groups()[g][i];
         self.rail.pick.insert(g, i);
+        self.activate_tool_item(it, cx);
+    }
+
+    pub(super) fn activate_tool_item(&mut self, it: RailItem, cx: &mut Context<Self>) {
         self.rail.flyout = None;
         if it.tool == Tool::Hand {
             self.set_hand_mode(it.rotate_view, cx);

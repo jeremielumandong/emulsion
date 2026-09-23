@@ -3,6 +3,147 @@ use super::*;
 use gpui_kit::test::TestWindowExt;
 
 #[gpui_kit::test]
+fn custom_toolbox_drag_add_reorder_and_activation_preserve_document(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(1600.)));
+    let editor = cx.update(|window, cx| {
+        cx.global_mut::<AppSettings>().0.compact_chrome = true;
+        window.refresh();
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("compact-layout-trigger", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let source = window.find("toolbox-source-Move").bounds().center();
+        let target = window.find("toolbox-selected").bounds().center();
+        window.drag(source, target, cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).workspace_snapshot().tool_ids, ["Move"]);
+        window.click("toolbox-add-Rectangular marquee", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let source = window.find("toolbox-row-Rectangular marquee").bounds();
+        let target = window.find("toolbox-row-Move").bounds();
+        // Drag the label area, clear of the row's Up/Down/Remove buttons.
+        window.drag(
+            source.origin + gpui_kit::point(gpui_kit::px(30.), source.size.height / 2.),
+            target.origin + gpui_kit::point(gpui_kit::px(30.), target.size.height / 2.),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(
+            editor.read(cx).workspace_snapshot().tool_ids,
+            ["Rectangular marquee", "Move"]
+        );
+        window.click("toolbox-up-Move", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(
+            editor.read(cx).workspace_snapshot().tool_ids,
+            ["Move", "Rectangular marquee"]
+        );
+        window.click("workspace-customizer-close", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("custom-tool-Rectangular marquee", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let editor = editor.read(cx);
+        assert_eq!(editor.tool, crate::editor::Tool::Select);
+        assert_eq!(editor.tools.select, crate::editor::SelectShape::Rect);
+        assert_eq!(editor.editor.doc, original);
+        assert_eq!(editor.editor.history.len(), 0);
+    });
+}
+
+#[gpui_kit::test]
+fn saved_workspace_default_initializes_next_document_and_can_reset(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, doc(&["First"], None));
+    let second = doc(&["Second"], None);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(1200.)));
+    let expected = cx.update(|window, cx| {
+        let mut layout = ws
+            .read(cx)
+            .editor
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .workspace_snapshot();
+        layout.tool_ids = vec!["Brush".into(), "Eraser".into()];
+        layout.hidden_menu_ids = vec!["image".into()];
+        layout.sidebar_width = 400.;
+        layout.draw_mode = true;
+        let tools = layout
+            .toolbar_placements
+            .iter_mut()
+            .find(|bar| bar.id == "tools")
+            .unwrap();
+        tools.edge = "floating".into();
+        tools.x = 100.;
+        tools.y = 140.;
+        let settings = &mut cx.global_mut::<AppSettings>().0;
+        settings.compact_chrome = true;
+        settings.workspace_default = Some(layout.clone());
+        ws.update(cx, |ws, cx| {
+            ws.install(
+                second.clone(),
+                None,
+                None,
+                None,
+                "second".into(),
+                window,
+                cx,
+            )
+        });
+        layout
+    });
+    cx.run_until_parked();
+    let editor = cx.update(|window, cx| {
+        let editor = ws.read(cx).editor.clone().unwrap();
+        assert_eq!(editor.read(cx).workspace_snapshot(), expected);
+        assert!(window.find("custom-tool-Brush").visible());
+        assert!(!window.find("image-menu").visible());
+        window.click("compact-layout-trigger", cx);
+        editor
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("workspace-menu-image", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("image-menu").visible());
+        window.click("workspace-restore-default", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).workspace_snapshot(), expected);
+        assert!(!window.find("image-menu").visible());
+        window.click("layout-reset", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("image-menu").visible());
+        assert!(window.try_find("custom-tool-Brush").is_none());
+        assert!(editor.read(cx).workspace_snapshot().tool_ids.is_empty());
+        assert!(!editor.read(cx).draw_mode);
+        assert_eq!(editor.read(cx).editor.doc, second);
+        assert_eq!(editor.read(cx).editor.history.len(), 0);
+        // Reset affects the current workspace; a saved default remains available.
+        assert_eq!(
+            cx.global::<AppSettings>().0.workspace_default.as_ref(),
+            Some(&expected)
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn history_and_paths_docks_work_without_changing_the_document(cx: &mut TestAppContext) {
     let mut original = doc(&["Photo"], None);
     let path_id = Command::AddNode {

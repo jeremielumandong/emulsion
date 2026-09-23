@@ -563,6 +563,7 @@ pub(super) struct BrushStudio {
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     revision: u64,
     busy: bool,
+    saving: bool,
     error: Option<String>,
     source_request: u64,
     source_loading: bool,
@@ -779,6 +780,7 @@ impl BrushStudio {
             bounds: Default::default(),
             revision: 0,
             busy: false,
+            saving: false,
             error: None,
             source_request: 0,
             source_loading: false,
@@ -1050,6 +1052,9 @@ impl BrushStudio {
         }
     }
     fn finish(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
         if save {
             if self.source_loading {
                 self.error =
@@ -1091,9 +1096,13 @@ impl BrushStudio {
             definition.baseline_secondary_shape_asset = definition.secondary_shape_asset.clone();
             definition.baseline_secondary_grain_asset = definition.secondary_grain_asset.clone();
         }
-        let result = self.parent.update(cx, |parent, cx| {
-            parent.finish_studio(save.then(|| self.draft.clone()), window, cx)
-        });
+        if save {
+            self.save_draft(self.draft.clone(), self.id.clone(), window, cx);
+            return;
+        }
+        let result = self
+            .parent
+            .update(cx, |parent, cx| parent.finish_studio(None, window, cx));
         if !matches!(result, Ok(true)) {
             self.error=Some("Couldn't save the brush. The library may have changed; keep this draft and retry after resolving the library error.".into());
             cx.notify();
@@ -1101,7 +1110,7 @@ impl BrushStudio {
     }
 
     fn save_as_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.source_loading || !self.invalid.is_empty() {
+        if self.saving || self.source_loading || !self.invalid.is_empty() {
             return;
         }
         let mut definition = self.draft.brush(&self.id).expect("draft brush").clone();
@@ -1127,25 +1136,117 @@ impl BrushStudio {
                 .or_else(|| fresh.sets.iter().find(|set| !set.builtin))
                 .or_else(|| fresh.sets.first())
                 .map(|set| set.id.clone());
-            let Some(target) = target else {
-                return false;
-            };
+            let target = target?;
             let Ok(id) = fresh.add_brush(&target, &definition.name, definition.brush) else {
-                return false;
+                return None;
             };
             definition.id = id.clone();
             definition.set_id = target;
             definition.builtin = false;
             *fresh.brush_mut(&id).expect("new brush") = definition;
-            parent.finish_studio(Some(fresh), window, cx)
+            Some((fresh, id))
         });
-        if !matches!(result, Ok(true)) {
+        if let Ok(Some((draft, id))) = result {
+            self.save_draft(draft, id, window, cx);
+        } else {
             self.error = Some(
                 "Couldn't save a new brush. Your draft is retained; reload the library and retry."
                     .into(),
             );
             cx.notify();
         }
+    }
+
+    fn save_draft(
+        &mut self,
+        mut draft: Catalog,
+        saved_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok((library, previous, error, memory)) = self.parent.update(cx, |parent, cx| {
+            let state = parent.library.read(cx);
+            let memory = parent.owner.upgrade().and_then(|owner| {
+                let owner = owner.read(cx);
+                Some((
+                    owner.active_memory_key()?,
+                    owner.presets.current_id.clone()?,
+                    owner.tools.brush.sanitized(),
+                ))
+            });
+            (
+                parent.library.clone(),
+                state.catalog.clone(),
+                state.error.clone(),
+                memory,
+            )
+        }) else {
+            return;
+        };
+        if let Some(error) = error {
+            self.error = Some(format!("Library could not be loaded: {error}"));
+            cx.notify();
+            return;
+        }
+        self.saving = true;
+        self.error = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let id = saved_id.clone();
+            // Validation, texture hydration and durable writes must not block input/painting.
+            let (result, reload) = cx
+                .background_spawn(async move {
+                    let result = (|| -> store::StoreResult<Catalog> {
+                        if let Some((key, previous_id, brush)) = memory
+                            && draft.brush(&previous_id).is_some()
+                        {
+                            draft.remember_tool(key, &previous_id, brush)?;
+                        }
+                        draft.record_use(&id)?;
+                        store::commit(draft.revision, &draft)
+                    })();
+                    let reload = matches!(result, Err(store::StoreError::Conflict))
+                        .then(store::load_with_report);
+                    (result, reload)
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.saving = false;
+                match result {
+                    Ok(saved) => {
+                        this.parent
+                            .update(cx, |parent, cx| {
+                                parent.complete_studio_save(saved, previous, &saved_id, window, cx)
+                            })
+                            .ok();
+                    }
+                    Err(error) => {
+                        if let Some(reload) = reload {
+                            library.update(cx, |state, cx| {
+                                match reload {
+                                    Ok(report)
+                                        if report.catalog.revision >= state.catalog.revision =>
+                                    {
+                                        state.catalog = report.catalog;
+                                        state.warnings = report.warnings;
+                                    }
+                                    Ok(_) => {}
+                                    Err(error) => state.error = Some(error.to_string()),
+                                }
+                                cx.notify();
+                            });
+                        }
+                        this.error = Some(format!(
+                            "Couldn't save brush: {error}. Your draft is retained."
+                        ));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
     fn reset(&mut self, original: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.invalidate_source();
@@ -1869,6 +1970,7 @@ impl Render for BrushStudio {
         div()
             .id("brush-studio")
             .test_support()
+            .relative()
             .track_focus(&self.focus)
             .size_full()
             .flex()
@@ -1884,6 +1986,10 @@ impl Render for BrushStudio {
                 cx.stop_propagation();
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.saving {
+                    cx.stop_propagation();
+                    return;
+                }
                 if event.keystroke.key == "escape" {
                     this.finish(false, window, cx);
                     cx.stop_propagation();
@@ -1902,13 +2008,22 @@ impl Render for BrushStudio {
                         div()
                             .flex()
                             .gap_2()
-                            .child(Button::new("studio-cancel").label("Cancel").on_click(
-                                cx.listener(|this, _, window, cx| this.finish(false, window, cx)),
-                            ))
+                            .child(
+                                Button::new("studio-cancel")
+                                    .label("Cancel")
+                                    .disabled(self.saving)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.finish(false, window, cx)
+                                    })),
+                            )
                             .child(
                                 Button::new("studio-save-copy")
                                     .label("Save as new brush")
-                                    .disabled(!self.invalid.is_empty() || self.source_loading)
+                                    .disabled(
+                                        self.saving
+                                            || !self.invalid.is_empty()
+                                            || self.source_loading,
+                                    )
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.save_as_new(window, cx)
                                     })),
@@ -1916,8 +2031,12 @@ impl Render for BrushStudio {
                             .child(
                                 Button::new("studio-done")
                                     .primary()
-                                    .disabled(!self.invalid.is_empty() || self.source_loading)
-                                    .label("Done")
+                                    .disabled(
+                                        self.saving
+                                            || !self.invalid.is_empty()
+                                            || self.source_loading,
+                                    )
+                                    .label(if self.saving { "Saving…" } else { "Done" })
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.finish(true, window, cx)
                                     })),
@@ -1970,6 +2089,22 @@ impl Render for BrushStudio {
                     ),
                 ),
             )
+            .when(self.saving, |view| {
+                view.child(
+                    div()
+                        .id("studio-saving")
+                        .test_support()
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .bg(background.opacity(0.9))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child("Saving brush…"),
+                )
+            })
     }
 }
 

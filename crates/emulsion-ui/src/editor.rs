@@ -32,6 +32,8 @@ mod lens;
 mod movement;
 mod panels;
 mod pen;
+mod toolbox;
+mod workspace_layout;
 pub(crate) use pen::PenMode;
 mod presets;
 mod rail;
@@ -348,6 +350,8 @@ pub struct EditorView {
     /// Tool rail fly-outs and remembered picks.
     pub(crate) rail: rail::RailState,
     compact: compact::CompactLayout,
+    workspace_customizer: Option<Entity<gpui_kit::component::input::InputState>>,
+    workspace_customizer_focus: FocusHandle,
     sidebar_layout: sidebar::SidebarState,
     /// Draw mode: painter's rail and a Layers-only sidebar.
     pub(crate) draw_mode: bool,
@@ -450,7 +454,7 @@ impl EditorView {
         let tree = Arc::new(editor.doc.composite_tree());
         let rev = editor.revision;
         let commit = editor.committed_revision;
-        Self {
+        let mut view = Self {
             editor,
             name,
             source,
@@ -462,6 +466,8 @@ impl EditorView {
             generate: Default::default(),
             rail: Default::default(),
             compact: compact::CompactLayout::new(cx),
+            workspace_customizer: None,
+            workspace_customizer_focus: cx.focus_handle(),
             sidebar_layout: Default::default(),
             export_prefs: Default::default(),
             draw_mode: cx
@@ -550,7 +556,18 @@ impl EditorView {
             history_epoch: 0,
             selection_request: 0,
             pending_edit_job: None,
+        };
+        if let Some(layout) = cx
+            .try_global::<crate::app_state::AppSettings>()
+            .and_then(|s| s.0.workspace_default.clone())
+        {
+            view.apply_workspace_layout(&layout, cx);
         }
+        if view.editor.doc.raw.is_some() {
+            view.sidebar_tab = SidebarTab::Properties;
+            view.sidebar_layout.collapsed = false;
+        }
+        view
     }
 
     /// Animate the marching ants while there is a selection.

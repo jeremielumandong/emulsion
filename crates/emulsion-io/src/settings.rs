@@ -23,11 +23,72 @@ pub struct ShapeStrokePreset {
     pub style: emulsion_raster::vector::PathStyle,
 }
 
+/// A toolbar's saved dock or floating position, in logical pixels.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ToolbarPlacement {
+    pub id: String,
+    pub edge: String,
+    pub visible: bool,
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Default for ToolbarPlacement {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            edge: "top".into(),
+            visible: true,
+            x: 0.0,
+            y: 0.0,
+        }
+    }
+}
+
+/// Reusable editor chrome preferences, independent of the open document.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WorkspaceLayout {
+    /// An empty list uses the standard toolbar arrangement.
+    pub toolbar_placements: Vec<ToolbarPlacement>,
+    /// An empty list uses the standard tool selection and order.
+    pub tool_ids: Vec<String>,
+    pub hidden_menu_ids: Vec<String>,
+    pub draw_mode: bool,
+    pub sidebar_collapsed: bool,
+    pub sidebar_width: f32,
+    pub sidebar_tab: String,
+}
+
+impl Default for WorkspaceLayout {
+    fn default() -> Self {
+        Self {
+            toolbar_placements: Vec::new(),
+            tool_ids: Vec::new(),
+            hidden_menu_ids: Vec::new(),
+            draw_mode: false,
+            sidebar_collapsed: false,
+            sidebar_width: 320.0,
+            sidebar_tab: "properties".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WorkspacePreset {
+    pub name: String,
+    pub layout: WorkspaceLayout,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
     /// Home items starred by the user, stored by their canonical recent path.
     pub starred_files: Vec<PathBuf>,
+    pub workspace_default: Option<WorkspaceLayout>,
+    pub workspace_presets: Vec<WorkspacePreset>,
     pub shape_stroke_presets: Vec<ShapeStrokePreset>,
     /// Per-effect defaults used when adding a layer style.
     pub layer_style_defaults: Vec<emulsion_core::styles::LayerStyle>,
@@ -109,6 +170,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             starred_files: Vec::new(),
+            workspace_default: None,
+            workspace_presets: Vec::new(),
             provider: "claude".into(),
             cli_path: None,
             model: None,
@@ -219,6 +282,66 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_settings_keep_standard_workspace_and_partial_layouts_get_defaults() {
+        let settings: Settings = serde_json::from_str(r#"{"draw_mode":true}"#).unwrap();
+        assert!(settings.draw_mode);
+        assert!(settings.workspace_default.is_none());
+        assert!(settings.workspace_presets.is_empty());
+
+        let settings: Settings = serde_json::from_str(
+            r#"{"workspace_default":{"tool_ids":["brush"],"toolbar_placements":[{"id":"tools"}]},"workspace_presets":[{"name":"Sketch"}]}"#,
+        )
+        .unwrap();
+        let layout = settings.workspace_default.unwrap();
+        assert_eq!(layout.tool_ids, ["brush"]);
+        assert!(layout.hidden_menu_ids.is_empty());
+        assert!(!layout.sidebar_collapsed);
+        assert_eq!(layout.sidebar_width, 320.0);
+        assert_eq!(layout.sidebar_tab, "properties");
+        assert_eq!(
+            layout.toolbar_placements,
+            [ToolbarPlacement {
+                id: "tools".into(),
+                ..Default::default()
+            }]
+        );
+        assert_eq!(
+            settings.workspace_presets[0].layout,
+            WorkspaceLayout::default()
+        );
+    }
+
+    #[test]
+    fn workspace_defaults_and_named_presets_round_trip() {
+        let layout = WorkspaceLayout {
+            toolbar_placements: vec![ToolbarPlacement {
+                id: "tools".into(),
+                edge: "floating".into(),
+                visible: false,
+                x: 125.5,
+                y: 80.0,
+            }],
+            tool_ids: vec!["brush".into(), "eraser".into()],
+            hidden_menu_ids: vec!["filter".into()],
+            draw_mode: true,
+            sidebar_collapsed: true,
+            sidebar_width: 380.0,
+            sidebar_tab: "histogram".into(),
+        };
+        let settings = Settings {
+            workspace_default: Some(layout.clone()),
+            workspace_presets: vec![WorkspacePreset {
+                name: "Painting".into(),
+                layout,
+            }],
+            ..Default::default()
+        };
+        let decoded: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(decoded, settings);
+    }
 
     #[test]
     fn save_is_owner_only_and_corrupt_file_is_kept_as_backup() {

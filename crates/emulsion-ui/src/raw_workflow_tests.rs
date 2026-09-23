@@ -33,6 +33,38 @@ impl Drop for SidecarFixture {
 }
 
 #[gpui_kit::test]
+fn opening_raw_shows_histogram_alongside_develop_controls(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+
+    let fixture = SidecarFixture::new();
+    let document = emulsion_io::open(&fixture.0).unwrap();
+    let before = document.clone();
+    let (ws, cx) = open(cx, document);
+    let ed = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("raw-histogram").visible());
+        assert!(window.find("raw-adjust").visible());
+        window.click("raw-curve", cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1600.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("raw-histogram").visible());
+        assert!(window.find("raw-curve-linear").visible());
+        ed.update(cx, |e, cx| {
+            assert!(
+                e.histogram(cx).is_some(),
+                "histogram finishes in the background"
+            );
+            assert_eq!(e.editor.doc, before);
+            assert!(e.editor.history.is_empty());
+        });
+    });
+}
+
+#[gpui_kit::test]
 fn raw_ctrl_s_saves_sidecar_and_reopen_restores_edits(cx: &mut TestAppContext) {
     let fixture = SidecarFixture::new();
     let original = std::fs::read(&fixture.0).unwrap();
@@ -545,6 +577,16 @@ fn raw_real_dng_preview_and_clipping_buttons_leave_history_unchanged_and_escape_
     for control in ["raw-tone-preview", "raw-clipping"] {
         let prior_generation = cx.update(|_, cx| ed.read(cx).render_gen);
         cx.update(|window, cx| {
+            if !window.find(control).visible() {
+                window.scroll(
+                    ("sidebar-content", ed.read(cx).sidebar_tab as usize),
+                    gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                        gpui_kit::px(0.),
+                        gpui_kit::px(-160.),
+                    )),
+                    cx,
+                );
+            }
             assert!(
                 window.find(control).visible(),
                 "{control} must be discoverable in RAW properties"

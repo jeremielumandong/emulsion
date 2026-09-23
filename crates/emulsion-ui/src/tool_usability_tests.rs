@@ -3,6 +3,106 @@ use crate::editor::{EditorView, PaintKind, SelectShape, ShapeKind, Tool};
 use gpui_kit::Modifiers;
 use gpui_kit::test::TestWindowExt;
 
+#[gpui_kit::test]
+fn created_brush_library_and_saved_brush_remain_available_on_canvas(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, Tool::Brush);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(1200.)));
+    let (library, before) = cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| editor.open_brush_workspace(window, cx));
+        (
+            editor.read(cx).presets.library.clone().unwrap(),
+            editor.read(cx).editor.doc.clone(),
+        )
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("new-library", cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("Canvas library regression");
+    cx.update(|window, cx| window.click("save-brush-name", cx));
+    cx.run_until_parked();
+    let library_id = cx.update(|window, cx| {
+        let id = library
+            .read(cx)
+            .catalog
+            .libraries
+            .iter()
+            .find(|item| item.name == "Canvas library regression")
+            .unwrap()
+            .id
+            .clone();
+        window.click("close-brush-library", cx);
+        id
+    });
+    cx.update(|_, cx| editor.update(cx, |editor, cx| editor.toggle_presets(cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!(
+                    "preset-library-{library_id}"
+                )))
+                .visible()
+        );
+        assert_eq!(
+            editor.read(cx).presets.library_id.as_deref(),
+            Some(library_id.as_str())
+        );
+        assert!(editor.read(cx).presets.set_id.is_none());
+        window.click("open-brush-library", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("new-brush", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("studio-done", cx));
+    cx.run_until_parked();
+    let (brush_id, set_id) = cx.update(|window, cx| {
+        assert!(
+            window.try_find("brush-studio").is_none(),
+            "Studio must complete the save"
+        );
+        let id = editor
+            .read(cx)
+            .presets
+            .current_id
+            .clone()
+            .expect("saved brush is active");
+        let brush = library.read(cx).catalog.brush(&id).unwrap();
+        let set_id = brush.set_id.clone();
+        assert_eq!(editor.read(cx).brush(), brush.brush);
+        assert_eq!(library.read(cx).catalog.recent.first(), Some(&id));
+        assert!(
+            library
+                .read(cx)
+                .catalog
+                .sets
+                .iter()
+                .any(|set| set.id == set_id && set.library_id == library_id)
+        );
+        window.click("close-brush-library", cx);
+        (id, set_id)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!("preset-set-{set_id}")))
+                .visible()
+        );
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!("brush-{brush_id}")))
+                .visible()
+        );
+        assert_eq!(
+            editor.read(cx).presets.current_id.as_deref(),
+            Some(brush_id.as_str())
+        );
+        assert_eq!(editor.read(cx).editor.doc, before);
+        assert!(editor.read(cx).editor.history.is_empty());
+    });
+}
+
 fn setup(cx: &mut TestAppContext, tool: Tool) -> (Entity<EditorView>, &mut VisualTestContext) {
     let (ws, cx) = open(cx, doc(&["Photo"], None));
     let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
@@ -385,7 +485,11 @@ fn brush_studio_cancel_isolated_and_done_updates_the_shared_library(cx: &mut Tes
         window.click("new-brush", cx);
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.click("studio-done", cx));
+    cx.update(|window, cx| {
+        window.click("studio-done", cx);
+        assert!(window.find("studio-saving").visible());
+        assert_eq!(library.read(cx).catalog.brushes.len(), count);
+    });
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.try_find("brush-studio").is_none());
@@ -595,26 +699,27 @@ fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut 
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("brush-settings-panel").visible());
-        // On a short window the library uses the sidebar's existing scroll area.
-        window.scroll(
-            ("sidebar-content", editor.read(cx).sidebar_tab as usize),
-            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-200.))),
-            cx,
-        );
-        assert!(window.find("brush-presets-panel").visible());
-        assert!(window.try_find("preset-close").is_none());
         let preset = emulsion_raster::library::library()
             .into_iter()
             .filter(|brush| brush.category == emulsion_raster::library::CATEGORIES[0])
             .nth(1)
             .expect("second builtin brush");
-        window.click(
-            gpui_kit::SharedString::from(format!(
-                "brush-brush:builtin:{}:{}",
-                preset.category, preset.name
-            )),
+        let id = gpui_kit::SharedString::from(format!(
+            "brush-brush:builtin:{}:{}",
+            preset.category, preset.name
+        ));
+        let sidebar = ("sidebar-content", editor.read(cx).sidebar_tab as usize);
+        let delta =
+            window.find(sidebar).bounds().center().y - window.find(id.clone()).bounds().center().y;
+        // Library names and set counts vary; scroll the requested brush into view.
+        window.scroll(
+            sidebar,
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), delta)),
             cx,
         );
+        assert!(window.find("brush-presets-panel").visible());
+        assert!(window.try_find("preset-close").is_none());
+        window.click(id, cx);
     });
     cx.run_until_parked();
     let selected_brush = cx.update(|window, cx| {
@@ -624,7 +729,7 @@ fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut 
         let brush = editor.read(cx).brush();
         window.scroll(
             ("sidebar-content", editor.read(cx).sidebar_tab as usize),
-            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(200.))),
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(10000.))),
             cx,
         );
         window.click("brush-settings-tip", cx);

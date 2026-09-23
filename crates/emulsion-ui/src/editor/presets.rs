@@ -65,8 +65,13 @@ impl LibraryState {
 
 #[derive(Default)]
 pub(crate) struct PresetState {
+    /// Studio already saved recent use and the outgoing brush memory atomically.
+    pub(super) applying_committed_brush: bool,
     pub open: bool,
     pub category: Option<String>,
+    pub library_id: Option<String>,
+    pub set_id: Option<String>,
+    scroll: UniformListScrollHandle,
     pub current: Option<String>,
     pub current_id: Option<String>,
     pub definition: Option<Brush>,
@@ -185,6 +190,10 @@ impl EditorView {
         );
         self.presets.current_id = Some(id.to_owned());
         self.presets.definition = Some(definition.brush);
+        self.select_brush_set(&definition.set_id, cx);
+        if self.presets.applying_committed_brush {
+            return;
+        }
         self.restore_active_brush_memory(cx);
         let mut draft = library.read(cx).catalog.clone();
         if draft.recent.first().is_some_and(|recent| recent == id) {
@@ -199,8 +208,78 @@ impl EditorView {
             );
         }
     }
+    pub(super) fn apply_committed_brush_id(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.presets.applying_committed_brush = true;
+        self.apply_brush_id(id, cx);
+        self.presets.applying_committed_brush = false;
+        cx.notify();
+    }
+    #[cfg(test)]
     pub(crate) fn select_brush_category(&mut self, category: &str, cx: &mut Context<Self>) {
         self.presets.category = Some(category.into());
+        let set = self.presets.library.as_ref().and_then(|library| {
+            library
+                .read(cx)
+                .catalog
+                .sets
+                .iter()
+                .find(|set| set.name == category)
+                .map(|set| set.id.clone())
+        });
+        if let Some(set) = set {
+            self.select_brush_set(&set, cx);
+        }
+        cx.notify();
+    }
+    pub(super) fn select_brush_set(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(set) = self.presets.library.as_ref().and_then(|library| {
+            library
+                .read(cx)
+                .catalog
+                .sets
+                .iter()
+                .find(|set| set.id == id)
+                .cloned()
+        }) {
+            self.presets.library_id = Some(set.library_id);
+            self.presets.set_id = Some(set.id);
+            self.presets.category = Some(set.name);
+            let index = self
+                .presets
+                .library
+                .as_ref()
+                .and_then(|library| {
+                    library
+                        .read(cx)
+                        .catalog
+                        .brushes
+                        .iter()
+                        .filter(|brush| Some(&brush.set_id) == self.presets.set_id.as_ref())
+                        .position(|brush| Some(&brush.id) == self.presets.current_id.as_ref())
+                })
+                .unwrap_or(0);
+            self.presets
+                .scroll
+                .scroll_to_item(index, ScrollStrategy::Nearest);
+            cx.notify();
+        }
+    }
+    pub(super) fn select_brush_library(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.presets.library_id = Some(id.to_owned());
+        self.presets.set_id = None;
+        self.presets.category = None;
+        let set = self.presets.library.as_ref().and_then(|library| {
+            library
+                .read(cx)
+                .catalog
+                .sets
+                .iter()
+                .find(|set| set.library_id == id)
+                .map(|set| set.id.clone())
+        });
+        if let Some(set) = set {
+            self.select_brush_set(&set, cx);
+        }
         cx.notify();
     }
     pub fn apply_preset_named(&mut self, name: &str, cx: &mut Context<Self>) -> bool {
@@ -228,7 +307,15 @@ impl EditorView {
         let library = self.presets.library.as_ref().unwrap().clone();
         let selected = self.presets.current_id.clone();
         let workspace = cx.new(|cx| {
-            super::brush_library_ui::BrushWorkspace::new(owner, library, selected, window, cx)
+            super::brush_library_ui::BrushWorkspace::new(
+                owner,
+                library,
+                selected,
+                self.presets.library_id.clone(),
+                self.presets.set_id.clone(),
+                window,
+                cx,
+            )
         });
         self.brush_workspace = Some(workspace);
         cx.notify();
@@ -352,43 +439,119 @@ impl EditorView {
         if let Some(library) = &self.presets.library {
             rows = rows.child(import_review(library, cx));
         }
+        let mut categories = div().flex().flex_wrap().gap_1();
+        let mut libraries = div().flex().flex_wrap().gap_1();
         if let Some(state) = &self.presets.library {
             let catalog = &state.read(cx).catalog;
-            for brush in catalog
-                .brushes
-                .iter()
-                .filter(|b| {
-                    catalog.sets.iter().any(|s| {
-                        s.id == b.set_id
-                            && Some(s.name.as_str()) == self.presets.category.as_deref()
-                    })
-                })
-                .take(30)
-            {
-                let id = brush.id.clone();
-                rows = rows.child(
-                    Button::new(SharedString::from(format!("brush-{id}")))
-                        .ghost()
+            let selected_set = self
+                .presets
+                .set_id
+                .as_deref()
+                .and_then(|id| catalog.sets.iter().find(|set| set.id == id))
+                .or_else(|| {
+                    self.presets
+                        .library_id
+                        .is_none()
+                        .then(|| {
+                            catalog.sets.iter().find(|set| {
+                                Some(set.name.as_str()) == self.presets.category.as_deref()
+                            })
+                        })
+                        .flatten()
+                });
+            let library_id = self
+                .presets
+                .library_id
+                .as_deref()
+                .or_else(|| selected_set.map(|set| set.library_id.as_str()))
+                .or_else(|| catalog.libraries.first().map(|library| library.id.as_str()));
+            for library in &catalog.libraries {
+                let id = library.id.clone();
+                libraries = libraries.child(
+                    Button::new(SharedString::from(format!("preset-library-{id}")))
                         .small()
-                        .label(brush.name.clone())
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.apply_brush_id(&id, cx);
-                            window.focus(&this.canvas_focus, cx);
-                        })),
+                        .ghost()
+                        .label(library.name.clone())
+                        .when(Some(library.id.as_str()) == library_id, |button| {
+                            button.bg(p.soft_bg).border_1().border_color(p.line)
+                        })
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.select_brush_library(&id, cx)),
+                        ),
                 );
             }
-        }
-        let mut categories = div().flex().flex_wrap().gap_1();
-        for (index, name) in CATEGORIES.iter().enumerate() {
-            categories = categories.child(
-                chip(
-                    ("bcat", index),
-                    *name,
-                    self.presets.category.as_deref() == Some(name),
-                    p,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| this.select_brush_category(name, cx))),
-            );
+            for set in catalog
+                .sets
+                .iter()
+                .filter(|set| Some(set.library_id.as_str()) == library_id)
+            {
+                let id = set.id.clone();
+                let selected = selected_set.is_some_and(|selected| selected.id == set.id);
+                let button = Button::new(SharedString::from(format!("preset-set-{id}")))
+                    .small()
+                    .ghost()
+                    .label(set.name.clone())
+                    .when(selected, |button| {
+                        button.bg(p.soft_bg).border_1().border_color(p.line)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| this.select_brush_set(&id, cx)));
+                let wrapper = if set.builtin
+                    && let Some(index) = CATEGORIES.iter().position(|name| *name == set.name)
+                {
+                    div()
+                        .id(("bcat", index))
+                        .test_support()
+                        .child(button)
+                        .into_any_element()
+                } else {
+                    div().child(button).into_any_element()
+                };
+                categories = categories.child(wrapper);
+            }
+            let brushes: Vec<_> = catalog
+                .brushes
+                .iter()
+                .filter(|brush| selected_set.is_some_and(|set| brush.set_id == set.id))
+                .map(|brush| (brush.id.clone(), brush.name.clone()))
+                .collect();
+            if brushes.is_empty() {
+                rows = rows.child(if selected_set.is_none() {
+                    "No sets in this library yet. Open Brush library to create a set."
+                } else {
+                    "No brushes in this set. Open Brush library to create or import brushes."
+                });
+            } else {
+                let height = (brushes.len() as f32 * 2.).min(18.);
+                rows = rows.child(
+                    uniform_list(
+                        "preset-brush-list",
+                        brushes.len(),
+                        cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                            range
+                                .map(|index| {
+                                    let (id, name) = &brushes[index];
+                                    let id = id.clone();
+                                    let selected =
+                                        this.presets.current_id.as_deref() == Some(id.as_str());
+                                    div().h(rems(2.)).child(
+                                        Button::new(SharedString::from(format!("brush-{id}")))
+                                            .small()
+                                            .ghost()
+                                            .label(name.clone())
+                                            .when(selected, |button| button.outline())
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.apply_brush_id(&id, cx);
+                                                window.focus(&this.canvas_focus, cx);
+                                            })),
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        }),
+                    )
+                    .track_scroll(&self.presets.scroll)
+                    .h(rems(height)),
+                );
+            }
         }
         Some(
             div()
@@ -407,6 +570,7 @@ impl EditorView {
                             }),
                         ),
                 )
+                .child(libraries)
                 .child(categories)
                 .child(rows)
                 .child(

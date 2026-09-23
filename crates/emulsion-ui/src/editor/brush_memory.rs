@@ -67,6 +67,9 @@ impl EditorView {
         slot: Option<tools::BrushSlot>,
         cx: &mut Context<Self>,
     ) {
+        if self.presets.applying_committed_brush {
+            return;
+        }
         let Some(key) = slot_key(slot) else { return };
         let Some(id) = self.presets.current_id.clone() else {
             return;
