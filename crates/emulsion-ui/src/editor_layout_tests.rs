@@ -289,7 +289,12 @@ fn compact_editor_gives_canvas_more_room_and_contains_toolbars(cx: &mut TestAppC
             let canvas = window.find("editor-canvas-column").bounds();
             assert!(canvas.size.width > legacy_canvas.size.width);
             assert!(canvas.size.height > legacy_canvas.size.height);
-            for name in ["tools", "options", "view", "color"] {
+            // Photoshop's Essentials: the colour swatches sit at the foot
+            // of the Tools panel and in the panel dock, not in their own bar.
+            assert!(window.try_find("canvas-toolbar-color").is_none());
+            assert!(window.find("tool-rail-swatches").visible());
+            assert!(window.find("sidebar-swatches").visible());
+            for name in ["tools", "options", "view"] {
                 let toolbar = window
                     .find(gpui_kit::SharedString::from(format!(
                         "canvas-toolbar-{name}"
@@ -374,7 +379,7 @@ fn compact_toolbars_restore_and_presets_preserve_document(cx: &mut TestAppContex
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        for name in ["tools", "options", "view", "color"] {
+        for name in ["tools", "options", "view"] {
             assert!(
                 window
                     .find(gpui_kit::SharedString::from(format!(
@@ -383,6 +388,7 @@ fn compact_toolbars_restore_and_presets_preserve_document(cx: &mut TestAppContex
                     .visible()
             );
         }
+        assert!(window.try_find("canvas-toolbar-color").is_none());
         assert!(window.find("sidebar-collapse").visible());
         let editor = ws.read(cx).editor.as_ref().unwrap().read(cx);
         assert_eq!(editor.editor.doc, original);
@@ -644,5 +650,68 @@ fn brush_gallery_and_project_colours_pick_in_one_click(cx: &mut TestAppContext) 
         let mut expected = original.clone();
         expected.colors = e.editor.doc.colors.clone();
         assert_eq!(e.editor.doc, expected);
+    });
+}
+
+#[gpui_kit::test]
+fn photo_mode_matches_photoshop_essentials_layout(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
+    cx.update(|window, cx| {
+        // Menu bar in Photoshop's order.
+        let menus: Vec<_> = [
+            "file", "edit", "image", "layer", "select", "filter", "view", "window",
+        ]
+        .into_iter()
+        .map(|id| {
+            window
+                .find(gpui_kit::SharedString::from(format!("{id}-menu-button")))
+                .bounds()
+                .origin
+                .x
+        })
+        .collect();
+        assert!(menus.windows(2).all(|pair| pair[0] < pair[1]), "{menus:?}");
+        // Tools docked left and the options bar across the top, both beside
+        // the canvas rather than over it.
+        let column = window.find("editor-canvas-column").bounds();
+        let canvas = window.find("canvas").bounds();
+        let tools = window.find("canvas-toolbar-tools").bounds();
+        let options = window.find("canvas-toolbar-options").bounds();
+        assert!(
+            tools.right() <= canvas.origin.x + gpui_kit::px(1.),
+            "{tools:?} {canvas:?}"
+        );
+        assert!(
+            options.bottom() <= canvas.origin.y + gpui_kit::px(1.),
+            "{options:?} {canvas:?}"
+        );
+        assert!(
+            tools.size.height > column.size.height * 0.7,
+            "full-height tools"
+        );
+        assert!(
+            options.size.width > column.size.width * 0.95,
+            "full-width options"
+        );
+        // Foreground and background colours at the foot of the tools.
+        let swatches = window.find("tool-rail-swatches").bounds();
+        assert!(swatches.origin.y > window.find("tool-rail").bounds().bottom() - gpui_kit::px(1.));
+        window.click("compact-layout-trigger", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("toolbar-placement-over", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let canvas = window.find("canvas").bounds();
+        let tools = window.find("canvas-toolbar-tools").bounds();
+        assert!(
+            tools.origin.x >= canvas.origin.x,
+            "overlay floats over the canvas"
+        );
+        let layout = editor.read(cx).workspace_snapshot();
+        assert_eq!(layout.toolbars_overlay, Some(true));
+        assert_eq!(editor.read(cx).editor.doc, original);
+        assert_eq!(editor.read(cx).editor.history.len(), 0);
     });
 }

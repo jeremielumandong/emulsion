@@ -50,7 +50,7 @@ impl Bar {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::Tools => "Tools",
             Self::Options => "Options",
@@ -83,6 +83,9 @@ pub(super) struct CompactLayout {
     drop_edge: Option<Edge>,
     pub(super) tool_ids: Vec<String>,
     pub(super) hidden_menu_ids: Vec<String>,
+    /// Docked toolbars float over the canvas (Procreate) instead of
+    /// taking their own space beside it (Photoshop).
+    pub(super) overlay: bool,
 }
 
 impl CompactLayout {
@@ -98,7 +101,9 @@ impl CompactLayout {
             Edge::Top,
             Edge::Right,
         ];
-        let open = [true, !draw, true, true, draw, draw];
+        // Photo matches Photoshop's Essentials: Tools left with the colour
+        // swatches at their foot, the options bar across the top.
+        let open = [true, !draw, true, false, draw, draw];
         // Painting favours bigger targets: tools and colours at L size.
         let scale = if draw {
             [1.25, 1., 1., 1.25, 1., 1.]
@@ -118,6 +123,7 @@ impl CompactLayout {
             drop_edge: None,
             tool_ids: Vec::new(),
             hidden_menu_ids: Vec::new(),
+            overlay: draw,
         }
     }
 }
@@ -523,6 +529,9 @@ impl EditorView {
         cx.notify();
     }
 
+    /// A toolbar's frame. Returns the edge it occupies when it is docked
+    /// beside the canvas (placed in the layout by the caller), or `None`
+    /// when it is positioned over the canvas.
     fn toolbar_shell(
         &self,
         bar: Bar,
@@ -530,8 +539,9 @@ impl EditorView {
         p: &Palette,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> (Option<Edge>, AnyElement) {
         let state = &self.compact.bars[bar as usize];
+        let attached = !self.compact.overlay && state.edge != Edge::Floating;
         let vertical = match bar {
             Bar::Tools | Bar::Color | Bar::Dock => !matches!(state.edge, Edge::Top | Edge::Bottom),
             Bar::Brushes => matches!(state.edge, Edge::Left | Edge::Right),
@@ -573,7 +583,14 @@ impl EditorView {
                 cx.stop_propagation(); cx.notify();
             }))
             .when(vertical, |d| d.flex_col())
-            .bg(p.panel).border_1().border_color(p.line).shadow_md()
+            .bg(p.panel).border_color(p.line)
+            .when(!attached, |d| d.border_1().shadow_md())
+            .when(attached, |d| match edge {
+                Edge::Left => d.h_full().border_r_1(),
+                Edge::Right => d.h_full().border_l_1(),
+                Edge::Top => d.w_full().border_b_1(),
+                _ => d.w_full().border_t_1(),
+            })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(control(SharedString::from(format!("toolbar-grip-{}", bar.name())), "⠿")
                 .accessibility_label(format!("Move {} toolbar", bar.name()))
@@ -598,6 +615,7 @@ impl EditorView {
                     cx.stop_propagation(); cx.notify();
                 })))
             .child(content)
+            .when(attached, |d| d.child(div().flex_1()))
             .child(control(SharedString::from(format!("toolbar-close-{}", bar.name())), "×").tooltip(format!("Hide {} toolbar", bar.name()))
                 .accessibility_label(format!("Hide {} toolbar", bar.name()))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -611,9 +629,12 @@ impl EditorView {
             rem: window.rem_size() * scale,
             child: shell.into_any_element(),
         };
+        if attached {
+            return (Some(edge), shell.into_any_element());
+        }
         let offset = px(8. + lane);
         let wrapper = div().absolute().flex();
-        match edge {
+        let wrapper = match edge {
             Edge::Left => wrapper
                 .left(offset)
                 .top(rems(3.))
@@ -653,8 +674,8 @@ impl EditorView {
                     .unwrap_or(position.y);
                 wrapper.left(x).top(y).child(shell)
             }
-        }
-        .into_any_element()
+        };
+        (None, wrapper.into_any_element())
     }
 
     fn compact_options(
@@ -671,7 +692,15 @@ impl EditorView {
             .unwrap_or(f32::from(window.viewport_size().width) - 320.);
         // Reserve the tool name, grip and disclosure before exposing controls.
         // The remainder stays in a keyboard-accessible popover at every width.
-        let count = if self.brushy() {
+        let attached_row = !self.compact.overlay
+            && matches!(
+                self.compact.bars[Bar::Options as usize].edge,
+                Edge::Top | Edge::Bottom
+            );
+        let count = if attached_row {
+            // A full-width options bar, as in Photoshop: show what fits.
+            ((available - 260.) / 150.).max(0.) as usize
+        } else if self.brushy() {
             if available > 780. {
                 3
             } else if available > 610. {
@@ -763,23 +792,22 @@ impl EditorView {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .bg(p.stage)
-            .child(canvas_view)
-            .child(
-                canvas(
-                    move |bounds, _, cx| {
-                        if area_bounds.replace(Some(bounds)) != Some(bounds) {
-                            let editor = editor.clone();
-                            cx.defer(move |cx| {
-                                editor.update(cx, |_, cx| cx.notify()).ok();
-                            });
-                        }
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .size_full(),
-            );
+            .bg(p.stage);
+        let measure_area = canvas(
+            move |bounds, _, cx| {
+                if area_bounds.replace(Some(bounds)) != Some(bounds) {
+                    let editor = editor.clone();
+                    cx.defer(move |cx| {
+                        editor.update(cx, |_, cx| cx.notify()).ok();
+                    });
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+        let mut docked: Vec<(Edge, AnyElement)> = Vec::new();
+        let mut overlays: Vec<AnyElement> = Vec::new();
         for bar in Bar::ALL {
             if !self.compact.bars[bar as usize].open {
                 continue;
@@ -796,12 +824,16 @@ impl EditorView {
                         .get()
                         .map(|b| b.size)
                         .unwrap_or(window.viewport_size());
-                    let available = if horizontal {
+                    // Photoshop keeps the colour swatches at the foot of the
+                    // Tools panel; they live here unless the Colors bar is shown.
+                    let swatches = !self.compact.bars[Bar::Color as usize].open;
+                    let available = (if horizontal {
                         f32::from(area.width) - 140.
                     } else {
                         f32::from(area.height) - 200.
-                    } / self.compact.bars[bar as usize].scale;
-                    if !self.compact.tool_ids.is_empty() {
+                    } - if swatches { 56. } else { 0. })
+                        / self.compact.bars[bar as usize].scale;
+                    let rail = if !self.compact.tool_ids.is_empty() {
                         self.custom_tool_rail(
                             horizontal,
                             (available / f32::from(window.rem_size())).max(3.5),
@@ -816,6 +848,23 @@ impl EditorView {
                             cx,
                         )
                         .into_any_element()
+                    };
+                    if swatches {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .when(!horizontal, |d| d.flex_col())
+                            .child(rail)
+                            .child(
+                                div()
+                                    .id("tool-rail-swatches")
+                                    .test_support()
+                                    .child(self.swatches(p, cx)),
+                            )
+                            .into_any_element()
+                    } else {
+                        rail
                     }
                 }
                 Bar::Options => self.compact_options(p, window, cx),
@@ -872,8 +921,60 @@ impl EditorView {
                     self.draw_dock(horizontal, p, cx)
                 }
             };
-            stage = stage.child(self.toolbar_shell(bar, content, p, window, cx));
+            match self.toolbar_shell(bar, content, p, window, cx) {
+                (Some(edge), element) => docked.push((edge, element)),
+                (None, element) => overlays.push(element),
+            }
         }
+        // Docked toolbars sit beside the canvas, Photoshop-style; the canvas
+        // keeps whatever room is left.
+        let mut sides: [Vec<AnyElement>; 4] = Default::default();
+        for (edge, element) in docked {
+            let side = match edge {
+                Edge::Top => 0,
+                Edge::Left => 1,
+                Edge::Right => 2,
+                _ => 3,
+            };
+            sides[side].push(element);
+        }
+        let [tops, lefts, rights, bottoms] = sides;
+        let overlay = self.compact.overlay;
+        let status = self.status_strip(p, cx);
+        stage = stage
+            .child(
+                div()
+                    .id("editor-dock-frame")
+                    .test_support()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .children(tops)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_h_0()
+                            .children(lefts)
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .child(canvas_view),
+                            )
+                            .children(rights),
+                    )
+                    .children(bottoms)
+                    .when(!overlay, |d| d.child(div().flex_none().child(status))),
+            )
+            .child(measure_area)
+            .children(overlays);
         stage = stage.children(self.brush_gallery(p, window, cx));
         stage = stage.children(self.workspace_customizer(p, window, cx));
         if let Some(edge) = self.compact.drop_edge {
@@ -889,14 +990,16 @@ impl EditorView {
                 _ => guide.left_0().bottom_0().right_0().h_8(),
             });
         }
-        stage = stage.child(
-            div()
-                .absolute()
-                .bottom_0()
-                .left_0()
-                .right_0()
-                .child(self.status_strip(p, cx)),
-        );
+        if overlay {
+            stage = stage.child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .child(self.status_strip(p, cx)),
+            );
+        }
         div()
             .flex()
             .flex_col()

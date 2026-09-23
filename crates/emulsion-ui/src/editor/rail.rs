@@ -1,7 +1,8 @@
 //! The left tool rail, arranged the way Photoshop and GIMP users expect:
 //! Move · Marquee · Lasso · Quick select · Crop · Eyedropper · Heal ·
-//! Brush · Clone · Eraser · Gradient · Pen · Type · Shape · Mask · Grade ·
-//! Hand · Zoom, with the foreground/background swatches at the bottom.
+//! Brush · Clone · Eraser · Gradient · Smudge · Pen · Type · Shape · Mask ·
+//! Grade · Hand · Zoom, with the foreground/background swatches at the
+//! bottom, matching Photoshop's single-column Tools panel.
 //! Related tools share one slot; the slot shows the member last used, and
 //! a right-click (or the corner mark) opens a fly-out with the others.
 
@@ -133,11 +134,7 @@ pub const GROUPS: &[&[RailItem]] = &[
     &[item("Crop", "crop", "C", Tool::Crop)],
     &[item("Eyedropper", "pipette", "I", Tool::Eyedropper)],
     &[item("Heal", "bandage", "J", Tool::Heal)],
-    &[
-        paint("Brush", "brush", "B", PaintKind::Brush),
-        paint("Smudge", "pointer", "Shift+B", PaintKind::Smudge),
-        paint("Liquify", "emulsion-liquify", "Shift+J", PaintKind::Liquify),
-    ],
+    &[paint("Brush", "brush", "B", PaintKind::Brush)],
     &[item("Clone stamp", "stamp", "S", Tool::Clone)],
     &[paint("Eraser", "eraser", "E", PaintKind::Eraser)],
     &[
@@ -148,6 +145,11 @@ pub const GROUPS: &[&[RailItem]] = &[
             PaintKind::Gradient,
         ),
         paint("Paint bucket", "paint-bucket", "G", PaintKind::Bucket),
+    ],
+    // Photoshop's Blur / Sharpen / Smudge slot.
+    &[
+        paint("Smudge", "pointer", "Shift+B", PaintKind::Smudge),
+        paint("Liquify", "emulsion-liquify", "Shift+J", PaintKind::Liquify),
     ],
     &[
         pen("Pen", "pen-tool", PenMode::Pen),
@@ -188,7 +190,7 @@ pub const GROUPS: &[&[RailItem]] = &[
 /// Small gaps after these `GROUPS` slots, Photoshop's clusters: move ·
 /// selection · crop and sampling · retouch and paint · vector · Emulsion's
 /// mask and grade · navigation.
-pub const DIVIDERS: &[usize] = &[0, 3, 5, 10, 13, 15];
+pub const DIVIDERS: &[usize] = &[0, 3, 5, 11, 14, 16];
 
 /// Draw mode: the painter's rail, in the order Procreate users reach for.
 pub const DRAW_GROUPS: &[&[RailItem]] = &[

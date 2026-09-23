@@ -8,12 +8,7 @@ use gpui_kit::component::{
     input::{Input, InputState},
 };
 
-const MENUS: [(&str, &str); 4] = [
-    ("image", "Image"),
-    ("layer", "Layer"),
-    ("filter", "Filter"),
-    ("recipes", "Recipes"),
-];
+use super::menu_bar::MENUS;
 
 impl EditorView {
     pub(super) fn menu_visible(&self, id: &str) -> bool {
@@ -62,6 +57,7 @@ impl EditorView {
                 _ => "properties",
             }
             .into(),
+            toolbars_overlay: Some(self.compact.overlay),
         }
     }
 
@@ -107,6 +103,9 @@ impl EditorView {
             {
                 self.compact.tool_ids.push(name.clone());
             }
+        }
+        if let Some(overlay) = layout.toolbars_overlay {
+            self.compact.overlay = overlay;
         }
         self.compact.hidden_menu_ids = MENUS
             .iter()
@@ -237,7 +236,18 @@ impl EditorView {
                 Button::new("workspace-customizer-close").label("Done").small().on_click(cx.listener(|this, _, window, cx| this.toggle_workspace_customizer(window, cx)))))
             .child(mono("Every panel below is its own toolbar: show it, size it, dock it to any side or float it. Drag a grip ⠿ to place it freely. Photo and Draw each remember their own setup.", 11., p.muted))
             .child(self.workspace_presets(p, cx))
-            .child(label("Toolbars", p)).child(self.toolbar_toggles(p, cx))
+            .child(label("Toolbars", p))
+            .child(div().flex().flex_wrap().items_center().gap_2()
+                .child(mono("Docked toolbars", 10., p.muted))
+                .children([("beside", "Beside the canvas", false), ("over", "Over the canvas", true)].map(|(id, name, over)| {
+                    let on = self.compact.overlay == over;
+                    Button::new(SharedString::from(format!("toolbar-placement-{id}"))).label(name).small()
+                        .when(on, |b| b.bg(p.ink).text_color(p.paper))
+                        .when(!on, |b| b.ghost())
+                        .tooltip(if over { "Toolbars float over the canvas, like Procreate" } else { "Toolbars take their own space and the canvas fits between them, like Photoshop" })
+                        .on_click(cx.listener(move |this, _, _, cx| { this.compact.overlay = over; cx.notify(); }))
+                })))
+            .child(self.toolbar_toggles(p, cx))
             .child(label("Visible menus", p))
             .child(div().flex().flex_wrap().gap_1().children(MENUS.into_iter().map(|(id, name)| {
                 let shown = self.menu_visible(id);

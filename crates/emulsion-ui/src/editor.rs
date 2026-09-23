@@ -30,6 +30,7 @@ mod layer_menu;
 mod layer_selection;
 mod layers_panel;
 mod lens;
+mod menu_bar;
 mod movement;
 mod panels;
 mod pen;
@@ -2234,6 +2235,7 @@ impl EditorView {
         };
         div()
             .id("canvas")
+            .test_support()
             .relative()
             .flex_1()
             .min_h_0()

@@ -62,6 +62,9 @@ pub struct WorkspaceLayout {
     pub sidebar_collapsed: bool,
     pub sidebar_width: f32,
     pub sidebar_tab: String,
+    /// Docked toolbars float over the canvas instead of sitting beside it.
+    /// `None` uses the mode's default: beside in Photo, over in Draw.
+    pub toolbars_overlay: Option<bool>,
 }
 
 impl Default for WorkspaceLayout {
@@ -74,6 +77,7 @@ impl Default for WorkspaceLayout {
             sidebar_collapsed: false,
             sidebar_width: 320.0,
             sidebar_tab: "properties".into(),
+            toolbars_overlay: None,
         }
     }
 }
@@ -341,6 +345,7 @@ mod tests {
             sidebar_collapsed: true,
             sidebar_width: 380.0,
             sidebar_tab: "histogram".into(),
+            toolbars_overlay: Some(true),
         };
         let settings = Settings {
             workspace_default: Some(layout.clone()),

@@ -319,6 +319,23 @@ impl EditorView {
                 .child(self.histogram_view(p, cx))
                 .into_any_element(),
         };
+        // Photoshop's Color | Swatches group heads the panel dock, unless the
+        // Colors toolbar already shows them.
+        let swatches = (compact && !self.compact.bars[super::compact::Bar::Color as usize].open)
+            .then(|| {
+                div()
+                    .id("sidebar-swatches")
+                    .test_support()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .gap_1()
+                    .p_2()
+                    .border_t_1()
+                    .border_color(p.line)
+                    .child(label("Swatches", p))
+                    .child(self.project_colors(false, p, cx))
+            });
         let dock_tabs = div()
             .flex()
             .flex_none()
@@ -372,6 +389,7 @@ impl EditorView {
                     cx.stop_propagation();
                 }
             }))
+            .children(swatches)
             .child(tabs)
             .child(
                 div()
