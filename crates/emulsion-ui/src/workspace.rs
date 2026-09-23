@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod photoshop_shortcuts;
 mod raw_sync;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1832,7 +1833,11 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.set_type_mode(false, cx))
             }))
             .on_action(cx.listener(|this, _: &ToolVerticalType, _, cx| {
-                this.with_editor(cx, |e, cx| e.set_type_mode(true, cx))
+                // Shift+T steps between the two type tools, as in Photoshop.
+                this.with_editor(cx, |e, cx| {
+                    let vertical = e.tool == crate::editor::Tool::Type && e.type_tool.spec.vertical;
+                    e.set_type_mode(!vertical, cx)
+                })
             }))
             .on_action(cx.listener(|this, _: &ConvertToSmartObject, _, cx| {
                 this.with_editor(cx, |e, cx| e.convert_smart(cx))
@@ -1931,8 +1936,10 @@ impl Render for Workspace {
                 })
             }))
             .on_action(cx.listener(|this, _: &ToolBucket, _, cx| {
+                // Shift+G steps between the bucket and the gradient.
                 this.with_editor(cx, |e, cx| {
-                    e.set_paint(crate::editor::PaintKind::Bucket, cx)
+                    use crate::editor::PaintKind;
+                    e.cycle_paint(&[PaintKind::Bucket, PaintKind::Gradient], cx)
                 })
             }))
             .on_action(cx.listener(|this, _: &ToolGradient, _, cx| {
@@ -2001,6 +2008,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Suggestion4, _, cx| {
                 this.with_editor(cx, |e, cx| e.accept_suggestion(3, cx))
             }))
+            .map(|d| Self::photoshop_actions(d, cx))
             .relative()
             .on_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
                 if this.splash {

@@ -553,7 +553,7 @@ fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContex
     });
     cx.dispatch_action(crate::actions::ToggleDrawMode);
     cx.run_until_parked();
-    cx.update(|_, cx| assert!(!editor.read(cx).draw_mode, "Ctrl+Shift+D switches too"));
+    cx.update(|_, cx| assert!(!editor.read(cx).draw_mode, "Ctrl+Alt+Shift+D switches too"));
 }
 
 #[gpui_kit::test]

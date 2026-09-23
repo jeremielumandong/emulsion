@@ -92,6 +92,9 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &ShowLayersPanel, window, cx| {
                 this.with_editor(cx, |e, cx| e.show_layers_panel(window, cx))
             }))
+            .on_action(cx.listener(|this, _: &FindLayers, window, cx| {
+                this.with_editor(cx, |e, cx| e.find_layers(window, cx))
+            }))
             .on_action(cx.listener(|this, _: &ShowInfoPanel, _, cx| {
                 this.with_editor(cx, |e, cx| e.show_info_panel(cx))
             }))

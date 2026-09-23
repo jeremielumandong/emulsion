@@ -185,6 +185,8 @@ pub struct ToolState {
     ants: Option<(usize, u32, Segments)>,
     /// Selection bounds by selection identity, for the Info panel.
     pub(crate) sel_bounds: Option<(usize, IRect)>,
+    /// The selection Deselect last dropped, for Reselect.
+    pub(crate) last_selection: Option<Arc<emulsion_raster::Mask>>,
     /// Whether the SAM model is installed, checked at most every 2 s (it
     /// is a filesystem stat and the options bar asks every frame).
     sam_ok: Option<(Instant, bool)>,
@@ -244,6 +246,7 @@ impl Default for ToolState {
             hue: 0.0,
             ants: None,
             sel_bounds: None,
+            last_selection: None,
             sam_ok: None,
             magnetic_live: Vec::new(),
             edges: None,
@@ -720,6 +723,66 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Photoshop's Shift+[ / Shift+]: hardness in 25 % steps.
+    pub(crate) fn brush_hardness(&mut self, harder: bool, cx: &mut Context<Self>) {
+        let h = self.tools.brush.hardness;
+        let next = if harder {
+            ((h * 4.0 + 1e-3).floor() + 1.0) / 4.0
+        } else {
+            ((h * 4.0 - 1e-3).ceil() - 1.0) / 4.0
+        };
+        self.tools.brush.hardness = next.clamp(0.0, 1.0);
+        self.remember_active_brush(cx);
+        self.set_status(
+            format!("Hardness {:.0}%", self.tools.brush.hardness * 100.0),
+            false,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// Photoshop's number keys: the tool's opacity while a painting tool is
+    /// active, otherwise the selected layers' opacity.
+    pub(crate) fn opacity_shortcut(&mut self, percent: u8, cx: &mut Context<Self>) {
+        let opacity = f32::from(percent.min(100)) / 100.0;
+        if matches!(self.tool, Tool::Brush | Tool::Clone | Tool::Mask) {
+            self.tools.brush.opacity = opacity;
+            self.remember_active_brush(cx);
+            self.set_status(format!("Tool opacity {percent}%"), false, cx);
+            cx.notify();
+            return;
+        }
+        let commands = self
+            .selected_layer_ids()
+            .into_iter()
+            .map(|id| Command::SetOpacity { id, opacity })
+            .collect::<Vec<_>>();
+        if commands.is_empty() {
+            return;
+        }
+        self.close_text_field(cx);
+        self.execute_layer_commands("Layer opacity", commands, cx);
+    }
+
+    /// Shift+letter steps through a tool group: the first shape unless one
+    /// in `order` is active, then the next one.
+    pub(crate) fn cycle_select(&mut self, order: &[SelectShape], cx: &mut Context<Self>) {
+        let next = order
+            .iter()
+            .position(|s| self.tool == Tool::Select && self.tools.select == *s)
+            .map_or(order[0], |i| order[(i + 1) % order.len()]);
+        self.set_select(next, cx)
+    }
+
+    /// Like [`Self::cycle_select`], for the paint kinds sharing a letter.
+    pub(crate) fn cycle_paint(&mut self, order: &[PaintKind], cx: &mut Context<Self>) {
+        let next = order
+            .iter()
+            .position(|k| self.tool == Tool::Brush && self.tools.paint == *k)
+            .map_or(order[0], |i| order[(i + 1) % order.len()]);
+        self.set_paint(next, cx)
+    }
+
     /// The pixel node strokes go into: the selected one, or a new empty
     /// layer above the selection when that is not a pixel node.
     /// Is the SAM quick-select model installed? Cached briefly.
@@ -860,7 +923,31 @@ impl EditorView {
     }
 
     pub fn deselect(&mut self, cx: &mut Context<Self>) {
+        if let Some(selection) = self.editor.doc.selection.clone() {
+            self.tools.last_selection = Some(selection);
+        }
         self.execute(Command::SetSelection { selection: None }, cx);
+    }
+
+    /// Photoshop's Reselect: bring back the selection last deselected.
+    pub(crate) fn reselect(&mut self, cx: &mut Context<Self>) {
+        let Some(selection) = self.tools.last_selection.clone() else {
+            self.set_status("There is no selection to reselect.", false, cx);
+            return;
+        };
+        if (selection.width(), selection.height())
+            != (self.editor.doc.width, self.editor.doc.height)
+        {
+            self.tools.last_selection = None;
+            self.set_status("The canvas changed size since that selection.", false, cx);
+            return;
+        }
+        self.execute(
+            Command::SetSelection {
+                selection: Some(selection),
+            },
+            cx,
+        );
     }
 
     pub fn invert_selection(&mut self, cx: &mut Context<Self>) {
@@ -2299,7 +2386,7 @@ impl EditorView {
             self.tools.polygon.extend(fixed);
         }
         self.tools.magnetic_live = live;
-        cx.notify();
+        self.notify_canvas(cx);
     }
 
     fn wand(&mut self, d: (f64, f64), combine: Combine, cx: &mut Context<Self>) {
@@ -2413,7 +2500,16 @@ impl EditorView {
     /// Fill the selection (or everything) on the target layer with the
     /// foreground colour.
     pub fn fill_selection(&mut self, cx: &mut Context<Self>) {
-        if self.fill_object_or_mask(None, self.tools.fg, cx) {
+        self.fill_selection_with(self.tools.fg, cx)
+    }
+
+    /// Photoshop's Ctrl+Backspace: fill with the background colour.
+    pub(crate) fn fill_background(&mut self, cx: &mut Context<Self>) {
+        self.fill_selection_with(self.tools.bg, cx)
+    }
+
+    fn fill_selection_with(&mut self, fill: [u8; 4], cx: &mut Context<Self>) {
+        if self.fill_object_or_mask(None, fill, cx) {
             return;
         }
         let Some(id) = self.paint_target(cx) else {
@@ -2422,7 +2518,7 @@ impl EditorView {
         let Some((raster, to_doc)) = self.target_raster(id) else {
             return;
         };
-        let color = premul(self.tools.fg);
+        let color = premul(fill);
         let sel = self.editor.doc.selection.clone();
         let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {

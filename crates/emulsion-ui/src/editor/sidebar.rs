@@ -12,7 +12,7 @@ pub(crate) struct SidebarState {
 }
 
 impl SidebarState {
-    fn width_for_viewport(&self, viewport_width: f32, rem_size: f32) -> Option<f32> {
+    pub(super) fn width_for_viewport(&self, viewport_width: f32, rem_size: f32) -> Option<f32> {
         let available = (viewport_width - 280.).max(0.);
         let minimum = 13.75 * rem_size;
         if self.collapsed || available < minimum {
@@ -111,6 +111,17 @@ impl EditorView {
     /// Photoshop's F7: the Layers panel.
     pub(crate) fn show_layers_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_dock_tab(DockTab::Layers, window, cx)
+    }
+
+    /// Ctrl+F: the Layers panel with its search field focused.
+    pub(crate) fn find_layers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_layers_panel(window, cx);
+        self.layer_panel.controls_open = true;
+        self.ensure_layer_search(window, cx);
+        if let Some((state, _)) = &self.layer_panel.search {
+            state.update(cx, |state, cx| state.focus(window, cx));
+        }
+        cx.notify();
     }
 
     /// Photoshop's F8: the Info panel.

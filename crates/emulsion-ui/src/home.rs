@@ -500,7 +500,6 @@ impl Workspace {
             .h(rems(2.25))
             .px_2()
             .gap_2()
-            .child(div().flex().items_center().child(navigation))
             .child(
                 div()
                     .id("home-brand")
@@ -518,6 +517,7 @@ impl Workspace {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Emulsion"),
             )
+            .child(div().flex().items_center().child(navigation))
             .child(
                 div()
                     .id("home-header-filters")

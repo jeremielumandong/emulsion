@@ -2,12 +2,8 @@
 //! bar, and a welcome hint above the canvas until the user closes it.
 use super::*;
 
-/// The Ask shortcut as this platform writes it.
-pub(crate) const ASK_SHORTCUT: &str = if cfg!(target_os = "macos") {
-    "⌘F"
-} else {
-    "Ctrl+F"
-};
+/// The Ask shortcut: F1, the Help key, on every platform.
+pub(crate) const ASK_SHORTCUT: &str = "F1";
 
 fn open_ask(window: &mut Window, cx: &mut App) {
     window.dispatch_action(Box::new(crate::actions::Ask), cx);

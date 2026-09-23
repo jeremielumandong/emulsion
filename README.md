@@ -55,7 +55,7 @@ work on manually, with editable layers and document history.
 
 Emulsion includes the assistant interface and MCP integration. It connects to an
 installed, authenticated **Claude Code, Codex, OpenCode, or Kimi Code** CLI; a
-model or provider subscription is not bundled. Open **Ctrl-K → Assistant** to
+model or provider subscription is not bundled. Open **F1 → Assistant** to
 work with the connected provider. Proposed document changes have **Apply/Skip**
 controls, so you can review what the assistant is about to do.
 
@@ -372,9 +372,16 @@ changes immediately. Hold Shift while drawing a shape for a square or circle.
 Escape cancels an active tool gesture. Delete/Backspace removes the last point
 of an unfinished polygon or magnetic selection instead of deleting the layer.
 
-Additional canvas shortcuts: Shift-M ellipse marquee, Shift-L polygon lasso,
-Alt-L magnetic lasso, Shift-W quick selection, Shift-B smudge, Shift-J liquify,
-Shift-U ellipse, Q mask, and Shift-Q grade. U selects a rectangle. These keys
+Default shortcuts follow Photoshop's wherever Emulsion has the feature, so
+Photoshop habits carry over: tool letters (V M L W C I J B S E G P T U H R Z),
+Shift+letter to step through a tool group, D/X colours, Q Quick Mask, [ ] brush
+size, Shift+[ ] hardness, 1–0 opacity, Shift+Alt+letter blend modes, Ctrl+L/M/U/B/I
+adjustments, Ctrl+J/G/E, Ctrl+Shift+E merge visible, Ctrl+Alt+G clipping mask,
+Alt+[ ] layer selection, Ctrl+Shift+D reselect, Ctrl+Alt+F last filter,
+Ctrl+Shift+X Liquify, Ctrl+K preferences, F toggles full screen, Tab hides the
+panels, and F5/F7/F8 open Brush Settings, Layers and Info. Emulsion extras:
+F1 asks the assistant, Ctrl+F searches layers, Shift-Q grade, Alt-L magnetic lasso, and
+Ctrl+Alt+Shift+D switches Draw mode. Settings lists every binding. Bare keys
 apply while the canvas has focus; text fields retain normal typing behavior.
 
 ## Batch controls
@@ -387,7 +394,7 @@ folder in the dock, then use **Export** in the top bar.
 
 ## Image generation
 
-Press **Ctrl-K** and choose **Assistant**, **Local SD**, **OpenAI**, or **Google**.
+Press **F1** and choose **Assistant**, **Local SD**, **OpenAI**, or **Google**.
 Assistant keeps the editing and drawing workflow. The image providers create
 a new raster layer; with an active selection they fill that area using the
 surrounding canvas as context. Enter your prompt and press **Enter**. Generated

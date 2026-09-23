@@ -47,6 +47,13 @@ impl EditorView {
         self.apply_filter(filter, cx);
     }
 
+    /// Apply the catalogue filter called `key`, for keyboard shortcuts.
+    pub(crate) fn apply_filter_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        if let Some(filter) = Filter::catalogue().into_iter().find(|f| f.key() == key) {
+            self.apply_filter(filter, cx);
+        }
+    }
+
     pub(super) fn apply_filter(&mut self, filter: Filter, cx: &mut Context<Self>) {
         if !self.can_filter() {
             self.set_status(

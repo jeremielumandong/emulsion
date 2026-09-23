@@ -14,6 +14,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[path = "canvas_invalidation_tests.rs"]
+mod canvas_invalidation_tests;
+
 #[path = "editor_layout_tests.rs"]
 mod editor_layout_tests;
 
@@ -294,7 +297,7 @@ fn ask_image_choices_preserve_prompt_and_busy_requests_do_not_edit(cx: &mut Test
     let (ws, cx) = open(cx, doc(&["Photo"], None));
     let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
     let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("f1");
     cx.simulate_input("hide Photo");
     cx.run_until_parked();
     for (id, choice) in [
@@ -334,7 +337,7 @@ fn ask_image_choices_preserve_prompt_and_busy_requests_do_not_edit(cx: &mut Test
         assert!(!e.assistant.running);
     });
     cx.simulate_keystrokes("escape");
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("f1");
     cx.run_until_parked();
     cx.update(|_, cx| {
         e.update(cx, |e, cx| {
@@ -559,7 +562,7 @@ mod generated_images {
 #[gpui_kit::test]
 fn ask_bar_plans_offline_applies_as_one_step_and_undoes(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Grass", "Sun", "Clouds"], None));
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("f1");
     cx.simulate_input("hide the top two nodes and rename the third to Sky");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -602,7 +605,7 @@ fn ask_bar_plans_offline_applies_as_one_step_and_undoes(cx: &mut TestAppContext)
 #[gpui_kit::test]
 fn escape_closes_the_ask_bar_and_shortcuts_keep_working(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Grass", "Sun"], None));
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("f1");
     cx.simulate_input("hide sun");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
@@ -613,7 +616,7 @@ fn escape_closes_the_ask_bar_and_shortcuts_keep_working(cx: &mut TestAppContext)
         vec![("Grass".into(), true), ("Sun".into(), true)],
         "nothing was submitted"
     );
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("f1");
     cx.simulate_input("hide sun");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -633,7 +636,7 @@ fn escape_closes_the_ask_bar_and_shortcuts_keep_working(cx: &mut TestAppContext)
 #[gpui_kit::test]
 fn requests_that_need_the_assistant_say_so_when_it_is_missing(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Grass", "Sun"], None));
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("f1");
     cx.simulate_input("remove the person on the left");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -904,7 +907,7 @@ fn assistant_turn_through_the_ui_with_the_real_cli(cx: &mut TestAppContext) {
             version: String::new(),
         },
     );
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("f1");
     cx.simulate_input("Look at the image, then hide whichever node is yellow.");
     cx.simulate_keystrokes("enter");
 

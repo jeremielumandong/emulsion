@@ -291,6 +291,7 @@ impl EditorView {
                         }
                     })),
             )
+            .child(self.ask_ai_button(p, cx))
             .child(self.mode_switch(p, cx))
             .child(div().flex().items_center().child(layout))
             .child(
@@ -785,8 +786,8 @@ impl EditorView {
                 .into_any_element();
         }
         self.refresh_suggestions(cx);
-        let panel = self.node_panel(p, window, cx);
-        let canvas_view = self.canvas_area(p, window, cx);
+        let panel = self.sidebar_region(window, cx);
+        let canvas_view = self.canvas_region();
         let area_bounds = self.compact.area.clone();
         let editor = cx.entity().downgrade();
         let mut stage = div()
@@ -1081,15 +1082,16 @@ impl EditorView {
             }))
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 this.drag_shift = event.modifiers.shift;
-                if matches!(this.tool, Tool::Zoom | Tool::Shape)
-                    || matches!(this.drag, Some(Drag::Transform(_)))
+                if this.tool == Tool::Zoom {
+                    this.notify_canvas(cx);
+                } else if this.tool == Tool::Shape || matches!(this.drag, Some(Drag::Transform(_)))
                 {
                     cx.notify();
                 }
             }))
             .children(self.size_panel_view(p, cx))
             .children(self.export_panel_view(p, cx))
-            .children(self.ask_bar(p, cx))
+            .children(self.ask_area(p, cx))
             .child(
                 div()
                     .id("editor-work-area")

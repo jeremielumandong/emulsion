@@ -44,6 +44,7 @@ mod movement;
 mod panels;
 mod pen;
 mod remove_tool;
+mod render_regions;
 mod toolbox;
 mod workspace_layout;
 pub(crate) use pen::PenMode;
@@ -346,6 +347,8 @@ impl Render for DraggedColor {
 
 pub struct EditorView {
     pub editor: Editor,
+    pub(crate) canvas_view: Entity<render_regions::CanvasView>,
+    pub(crate) sidebar_view: Entity<render_regions::SidebarView>,
     /// Display name (file stem of what was opened).
     pub name: String,
     /// Where it came from, for Save As suggestions.
@@ -477,8 +480,13 @@ impl EditorView {
         let draw_mode = cx
             .try_global::<crate::app_state::AppSettings>()
             .is_some_and(|s| s.0.draw_mode);
+        let owner = cx.weak_entity();
+        let canvas_view = cx.new(|_| render_regions::CanvasView::new(owner.clone()));
+        let sidebar_view = cx.new(|cx| render_regions::SidebarView::new(owner, cx));
         let mut view = Self {
             editor,
+            canvas_view,
+            sidebar_view,
             name,
             source,
             view: View::default(),
@@ -613,9 +621,13 @@ impl EditorView {
                     .timer(std::time::Duration::from_millis(400))
                     .await;
                 let alive = this.update(cx, |this, cx| {
-                    if this.editor.doc.selection.is_some() {
+                    if this.editor.doc.selection.is_some()
+                        && !this.tools.quick_mask
+                        && !this.history.open
+                        && this.brush_workspace.is_none()
+                    {
                         this.tools.ants_phase = !this.tools.ants_phase;
-                        cx.notify();
+                        this.notify_canvas(cx);
                     }
                 });
                 if alive.is_err() {
@@ -624,6 +636,15 @@ impl EditorView {
             }
         })
         .detach();
+    }
+
+    /// Canvas-only state does not invalidate the cached sidebar sibling.
+    pub(crate) fn notify_canvas(&self, cx: &mut Context<Self>) {
+        self.canvas_view.update(cx, |_, cx| cx.notify());
+    }
+
+    pub(crate) fn notify_sidebar(&self, cx: &mut Context<Self>) {
+        self.sidebar_view.update(cx, |_, cx| cx.notify());
     }
 
     pub fn set_status(
@@ -946,7 +967,7 @@ impl EditorView {
                     c.in_flight = false;
                     c.last_batch = Some((n, elapsed));
                 }
-                cx.notify();
+                this.notify_canvas(cx);
             })
             .ok();
         })
@@ -1421,7 +1442,7 @@ impl EditorView {
         }
     }
 
-    fn drag_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
+    fn drag_move(&mut self, pos: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
         if self.text_pointer_move(pos, cx) {
             return;
         }
@@ -1433,7 +1454,7 @@ impl EditorView {
             || (self.tool == Tool::Pen && self.tools.pen.building.is_some());
         let pointer = inside.then_some(pos);
         if inside {
-            self.note_pointer(pos, cx);
+            self.note_pointer(pos, window, cx);
         }
         if wants_pointer && pointer != self.tools.pointer {
             self.tools.pointer = pointer;
@@ -1443,7 +1464,7 @@ impl EditorView {
             {
                 self.magnetic_track(d, cx);
             }
-            cx.notify();
+            self.notify_canvas(cx);
         }
         let Some(drag) = &self.drag else { return };
         match drag {
@@ -2377,7 +2398,7 @@ impl EditorView {
             .cursor(cursor)
             .on_hover(cx.listener(|this, _, _, cx| {
                 if this.tool == Tool::Zoom {
-                    cx.notify();
+                    this.notify_canvas(cx);
                 }
             }))
             .on_mouse_down(
@@ -2478,7 +2499,7 @@ impl EditorView {
                                         match wakeup {
                                             viewport::SettleWakeup::Wait(delay) => Some(delay),
                                             viewport::SettleWakeup::Redraw => {
-                                                cx.notify();
+                                                this.notify_canvas(cx);
                                                 None
                                             }
                                             viewport::SettleWakeup::Cancel => None,
@@ -2528,12 +2549,12 @@ impl EditorView {
                                 .paint_text_editing(bounds, window, cx, editor.clone());
                         }
                         // Drags continue outside the canvas, so listen window-wide.
-                        window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
+                        window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
                             if phase == DispatchPhase::Bubble {
                                 w2.update(cx, |this, cx| {
                                     this.snap_bypass = e.modifiers.control;
                                     this.drag_shift = e.modifiers.shift;
-                                    this.drag_move(e.position, cx)
+                                    this.drag_move(e.position, window, cx)
                                 })
                                 .ok();
                             }
@@ -2859,7 +2880,7 @@ impl EditorView {
             .test_support()
     }
 
-    fn node_panel(
+    fn render_sidebar(
         &mut self,
         p: &Palette,
         window: &mut Window,
@@ -3923,7 +3944,7 @@ impl Render for EditorView {
         }
         let rail = self.tool_rail(&p, cx);
         let context = self.context_bar(&p, cx);
-        let canvas = self.canvas_area(&p, window, cx);
+        let canvas = self.canvas_region();
         let picker = self.picker(&p, cx);
         self.refresh_suggestions(cx);
         let strip = self.status_strip(&p, cx);
@@ -3931,7 +3952,7 @@ impl Render for EditorView {
         let size_panel = self.size_panel_view(&p, cx);
         let export_panel = self.export_panel_view(&p, cx);
         let dock = self.assistant_dock(&p, cx);
-        let panel = self.node_panel(&p, window, cx);
+        let panel = self.sidebar_region(window, cx);
         div()
             .flex()
             .flex_col()
@@ -3940,8 +3961,9 @@ impl Render for EditorView {
             .track_focus(&self.focus)
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 this.drag_shift = event.modifiers.shift;
-                if matches!(this.tool, Tool::Zoom | Tool::Shape)
-                    || matches!(this.drag, Some(Drag::Transform(_)))
+                if this.tool == Tool::Zoom {
+                    this.notify_canvas(cx);
+                } else if this.tool == Tool::Shape || matches!(this.drag, Some(Drag::Transform(_)))
                 {
                     cx.notify();
                 }

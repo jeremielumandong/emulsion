@@ -33,7 +33,7 @@ ratio, or identify which Qt rendering path the quoted mail app uses. See the
 | Area | Finding | Action |
 | --- | --- | --- |
 | Canvas settle redraw | Every prepaint while movement was pending spawned a detached 100 ms timer. Each timer notified the whole editor; induced frames could spawn more timers while movement continued. | Coalesce into one worker per tile cache. Recheck the latest movement deadline, wait again without notifying while moving, and notify once when the crisp image is due. Exit without notification if a subsequent frame no longer needs settling. |
-| Editor ownership | `EditorView::render` builds the canvas, tools, panels, status, and other controls together. Pointer overlays and marching ants notify this same entity. | Next architectural improvement: give canvas/overlay animation its own entity and keep stable sidebar siblings independently cacheable. Use explicit data/events to preserve shared state correctness. |
+| Editor ownership | Pointer overlays and marching ants formerly notified the same entity that built the panels. | Canvas redraws now notify a separate `CanvasView`; an independently cached sibling `SidebarView` observes editor notifications for document, tool, and panel changes. Visible Info updates explicitly invalidate the sidebar. |
 | Layers list | Formerly built every matching layer and effect before scrolling. | Now uses GPUI's variable-height `ListState`: layers, effect headers, and individual effects render only in the viewport (plus an offscreen focused rename field). Domain IDs preserve scroll anchors; revision, rem, density, and topology changes invalidate measurements. |
 | Document drawing | Composite trees and image tiles already have revision-aware caches. For unrotated magnification, movement avoids the expensive crisp screen path, then restores it after settling. Rotation still requires the screen path. | Preserve these optimizations; measure image processing separately from GPUI tree/layout work. |
 
@@ -43,7 +43,11 @@ Layers list and retains estimated heights in the vendored GPUI list across
 initial layout and resize, allowing wheel scrolling to unmeasured items.
 The list still prepares lightweight row identities in proportion to the layer
 and effect count; expensive elements and thumbnails are restricted to visible
-rows. The larger canvas/entity split remains a future improvement.
+rows. Canvas and sidebar rendering now have separate entity boundaries.
+The composition shell remains uncached: GPUI still visits the editor root, but
+can reuse the sidebar subtree during canvas-only frames. Toolbars and other
+root-owned controls still rebuild. Pan, zoom, and document edits continue to
+notify the editor because other controls depend on their state.
 
 ## Event documentation
 
@@ -109,3 +113,37 @@ Validation completed:
 - These are headless UI construction and interaction checks, not a real-window
   CPU benchmark. Lightweight row identity preparation remains linear in the
   number of layers/effects.
+
+### Canvas and panel invalidation follow-up
+
+- Added sibling `CanvasView` and cached `SidebarView` entities. The sidebar
+  observes editor notifications, so document, tool, and panel changes still
+  rebuild it. Its geometry matches the regular and compact layouts, including
+  automatic collapse at narrow widths.
+- Pointer overlays, marching ants, zoom cursor modifiers, magnetic lasso
+  previews, settled-image redraws, and completed tile batches notify only the
+  canvas. Hidden marching ants no longer request frames. Visible Info updates
+  notify the sidebar directly; hidden Info retains pointer state without
+  invalidating its cache.
+- `cargo test -p emulsion-ui --lib canvas_invalidation_tests`: 7 passed.
+  Real pointer/key dispatch and the test clock verify canvas rendering while
+  sidebar render counts stay unchanged. Coverage includes both layouts,
+  document commands, visible/hidden/collapsed Info, and zoom cursor modifiers.
+  Measured interactions do not force a global window refresh.
+- The editor composition shell still runs and builds root-owned controls.
+  This removes repeated sidebar construction/layout/paint work on canvas-only
+  frames; it does not implement transform-only rendering in GPUI or establish
+  a measured process CPU reduction.
+
+- Full parallel UI run: 423 passed, 3 failed, 1 ignored. The landing test expects
+  2172x724, while the bundled asset and its own import test use 2508x627. The two
+  brush save failures pass separately and all 11 brush usability tests pass
+  serially; parallel App contexts share one process-wide storage directory and
+  can reject each other's stale catalog revisions.
+- Clippy passed with the existing explicit-lifetime warning in
+  `photoshop_shortcut_tests.rs`. New files and changed small modules passed
+  rustfmt checks; unrelated module ordering in `editor.rs` was preserved.
+- Re-ran the compiled UI suite with `--test-threads=1`, excluding only
+  `tests::splash_dismisses_and_the_landing_image_opens_for_editing`: 425 passed,
+  1 existing ignored test, 1 excluded stale landing assertion, no failures.
+  This includes the seven new cache regressions and both brush save workflows.

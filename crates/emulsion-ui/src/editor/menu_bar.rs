@@ -71,7 +71,9 @@ impl EditorView {
 
     pub(super) fn help_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
         self.menu_button("help", "Help", p, cx, |menu, _, _| {
-            menu.menu("About Emulsion", Box::new(ShowAbout))
+            menu.menu("Ask AI Assistant…", Box::new(crate::actions::Ask))
+                .separator()
+                .menu("About Emulsion", Box::new(ShowAbout))
         })
     }
 

@@ -295,7 +295,7 @@ impl Workspace {
             .child(
                 section(&p)
                     .child(tier(0, "Built in", true, "on", &p))
-                    .child(body("Nodes, masks, blend modes, adjustments, OpenRaster and image formats, the offline request planner behind Ctrl+F, and suggestions from image statistics.", &p))
+                    .child(body("Nodes, masks, blend modes, adjustments, OpenRaster and image formats, the offline request planner behind F1, and suggestions from image statistics.", &p))
                     .child(
                         div().flex().gap(px(8.)).child(chip("sugg", "suggestions", s.suggestions, &p).on_click(cx.listener(|_, _, _, cx| {
                             app_state::update_settings(cx, |s| s.suggestions = !s.suggestions);
@@ -311,7 +311,7 @@ impl Workspace {
             .child(
                 section(&p)
                     .child(tier(2, "Coding CLI assistant", cli_on, cli_state, &p))
-                    .child(body("Multi-step requests from Ctrl+F go to a coding CLI that can only use Emulsion's tools. Every change it proposes is shown as an Apply / Skip card unless you turn on auto-apply. Claude Code asks before each tool; Codex, OpenCode and Kimi run one process per request and Emulsion holds their changes for you instead.", &p))
+                    .child(body("Multi-step requests from F1 go to a coding CLI that can only use Emulsion's tools. Every change it proposes is shown as an Apply / Skip card unless you turn on auto-apply. Claude Code asks before each tool; Codex, OpenCode and Kimi run one process per request and Emulsion holds their changes for you instead.", &p))
                     .child(
                         div()
                             .flex()
@@ -416,7 +416,7 @@ impl Workspace {
             .child(
                 section(&p)
                     .child(tier(3, "Jev decision model", jev.is_some(), if jev.is_some() { "on" } else { "off" }, &p))
-                    .child(body("TypeSafe's Jev answers small typed questions with calibrated confidence. With a key, Ctrl+F requests are planned by Jev, which copes with looser phrasing than the offline planner, and only text leaves the machine: the request and layer names, never pixels.", &p))
+                    .child(body("TypeSafe's Jev answers small typed questions with calibrated confidence. With a key, F1 requests are planned by Jev, which copes with looser phrasing than the offline planner, and only text leaves the machine: the request and layer names, never pixels.", &p))
                     .child(mono(
                         match &jev {
                             Some((_, "environment")) => "key: from TYPESAFE_API_KEY".to_string(),
@@ -709,7 +709,7 @@ impl Workspace {
             .border_b_1().border_color(p.line)
             .child(tier(4, "Image generation", on, if on { "on" } else { "off" }, p))
             .child(div().max_w(px(700.)).text_size(px(13.)).text_color(p.muted)
-                .child("Use Ctrl+F to choose Assistant, Local SD, OpenAI, or Google. Image modes create a new layer, or fill the selected area. The Select tool uses the default provider below."))
+                .child("Press F1 to choose Assistant, Local SD, OpenAI, or Google. Image modes create a new layer, or fill the selected area. The Select tool uses the default provider below."))
             .child(choices);
         let Some(provider) = selected else {
             return panel;
