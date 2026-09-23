@@ -14,6 +14,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[path = "inactive_tab_tests.rs"]
+mod inactive_tab_tests;
+
 #[path = "canvas_invalidation_tests.rs"]
 mod canvas_invalidation_tests;
 

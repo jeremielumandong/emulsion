@@ -542,8 +542,9 @@ impl Workspace {
                     )
                     .child(rows)
             })
-            .child(div().px(px(40.)).py(px(24.)).child(button("done", "Back to the editor", false, &p).on_click(cx.listener(|this, _, _, cx| {
-                this.screen = if this.editor.is_some() { crate::workspace::Screen::Editor } else { crate::workspace::Screen::Home };
+            .child(div().px(px(40.)).py(px(24.)).child(button("done", "Back to the editor", false, &p).on_click(cx.listener(|this, _, window, cx| {
+                let screen = if this.editor.is_some() { crate::workspace::Screen::Editor } else { crate::workspace::Screen::Home };
+                this.set_screen(screen, window, cx);
                 cx.notify();
             }))))
     }

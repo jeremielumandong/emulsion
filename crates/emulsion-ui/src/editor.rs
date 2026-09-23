@@ -37,6 +37,7 @@ mod layers_footer;
 mod layers_list;
 mod layers_panel;
 mod lens;
+mod lifecycle;
 mod mask_taskbar;
 mod mask_view;
 mod menu_bar;
@@ -347,6 +348,11 @@ impl Render for DraggedColor {
 
 pub struct EditorView {
     pub editor: Editor,
+    pub(crate) visible: bool,
+    pub(crate) ants_task: Option<Task<()>>,
+    pub(crate) render_epoch: u64,
+    tile_task: Option<Task<()>>,
+    tile_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) canvas_view: Entity<render_regions::CanvasView>,
     pub(crate) sidebar_view: Entity<render_regions::SidebarView>,
     /// Display name (file stem of what was opened).
@@ -468,7 +474,6 @@ impl EditorView {
     ) -> Self {
         crate::tablet::start();
         let selected = doc.nodes.last().map(|n| n.id);
-        Self::start_ants(cx);
         Self::start_autosave(cx);
         let editor = match graph {
             Some(g) => Editor::with_graph(doc, path, g),
@@ -485,6 +490,11 @@ impl EditorView {
         let sidebar_view = cx.new(|cx| render_regions::SidebarView::new(owner, cx));
         let mut view = Self {
             editor,
+            visible: true,
+            ants_task: Some(Self::start_ants(cx)),
+            render_epoch: 0,
+            tile_task: None,
+            tile_cancel: None,
             canvas_view,
             sidebar_view,
             name,
@@ -614,14 +624,16 @@ impl EditorView {
     }
 
     /// Animate the marching ants while there is a selection.
-    fn start_ants(cx: &mut Context<Self>) {
+    fn start_ants(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(400))
                     .await;
                 let alive = this.update(cx, |this, cx| {
-                    if this.editor.doc.selection.is_some()
+                    if this.visible
+                        && !cx.reduce_motion()
+                        && this.editor.doc.selection.is_some()
                         && !this.tools.quick_mask
                         && !this.history.open
                         && this.brush_workspace.is_none()
@@ -635,12 +647,13 @@ impl EditorView {
                 }
             }
         })
-        .detach();
     }
 
     /// Canvas-only state does not invalidate the cached sidebar sibling.
     pub(crate) fn notify_canvas(&self, cx: &mut Context<Self>) {
-        self.canvas_view.update(cx, |_, cx| cx.notify());
+        if self.visible {
+            self.canvas_view.update(cx, |_, cx| cx.notify());
+        }
     }
 
     pub(crate) fn notify_sidebar(&self, cx: &mut Context<Self>) {
@@ -785,6 +798,9 @@ impl EditorView {
 
     /// Refresh render trees when the document or its commit point moved.
     fn sync_trees(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
         let checker = theme::palette(cx).checker;
         if checker != self.checker {
             self.checker = checker;
@@ -859,6 +875,7 @@ impl EditorView {
         let rev = self.editor.revision;
         let displayed_tree = self.tree.clone();
         let request = self.tree_request;
+        let epoch = self.render_epoch;
         self.tree_building = Some(rev);
         let doc = self.render_doc();
         cx.spawn(async move |this, cx| {
@@ -867,6 +884,13 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 this.tree_building = None;
+                if !this.visible || this.render_epoch != epoch {
+                    this.seen_rev = u64::MAX;
+                    if this.visible {
+                        cx.notify();
+                    }
+                    return;
+                }
                 this.install_completed_tree(tree, rev, request, &displayed_tree);
                 if this.editor.revision != rev || this.tree_request != request {
                     this.build_tree_async(cx);
@@ -907,6 +931,9 @@ impl EditorView {
     }
 
     fn dispatch_render(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
         let batch = {
             let mut c = self.cache.borrow_mut();
             if c.in_flight {
@@ -924,7 +951,10 @@ impl EditorView {
         let before = self.raw_split_tree().or_else(|| self.before_tree.clone());
         let (light, dark) = self.checker;
         let channel = self.channels.view;
-        cx.spawn(async move |this, cx| {
+        let epoch = self.render_epoch;
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.tile_cancel = Some(cancelled.clone());
+        self.tile_task = Some(cx.spawn(async move |this, cx| {
             let started = Instant::now();
             let n = batch.len();
             let out: Vec<(viewport::Request, Vec<u8>)> = cx
@@ -932,6 +962,9 @@ impl EditorView {
                     batch
                         .into_par_iter()
                         .filter_map(|r| {
+                            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                                return None;
+                            }
                             let tree = match r.key.which {
                                 Which::Current => &cur,
                                 Which::Before => before.as_ref()?,
@@ -950,28 +983,10 @@ impl EditorView {
             let elapsed = started.elapsed();
             tracing::debug!(target: "emulsion_ui::paint_timing", tiles = n, elapsed_us = elapsed.as_micros() as u64, "viewport tile batch completed");
             this.update(cx, |this, cx| {
-                {
-                    let mut c = this.cache.borrow_mut();
-                    for (r, bytes) in out {
-                        // Switching channels clears pending tiles; an older
-                        // background batch must not put its colors back.
-                        if this.channels.view != channel {
-                            continue;
-                        }
-                        c.insert(
-                            r.key,
-                            r.rev,
-                            Arc::new(viewport::bgra_image(256, 256, bytes)),
-                        );
-                    }
-                    c.in_flight = false;
-                    c.last_batch = Some((n, elapsed));
-                }
-                this.notify_canvas(cx);
+                this.install_tile_batch(epoch, channel, out, elapsed, cx);
             })
             .ok();
-        })
-        .detach();
+        }));
     }
 
     // ── View ────────────────────────────────────────────────────────────
@@ -2487,11 +2502,15 @@ impl EditorView {
                             // for the latest view change without generating
                             // additional frames while the user is still moving.
                             let w = w1.clone();
+                            let epoch = w.read_with(cx, |this, _| this.render_epoch).ok();
                             cx.spawn(async move |cx| {
                                 let mut delay = viewport::SETTLE;
                                 loop {
                                     cx.background_executor().timer(delay).await;
                                     let next = w.update(cx, |this, cx| {
+                                        if !this.visible || Some(this.render_epoch) != epoch {
+                                            return None;
+                                        }
                                         let wakeup = this
                                             .cache
                                             .borrow_mut()

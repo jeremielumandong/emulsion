@@ -147,3 +147,14 @@ Validation completed:
   `tests::splash_dismisses_and_the_landing_image_opens_for_editing`: 425 passed,
   1 existing ignored test, 1 excluded stale landing assertion, no failures.
   This includes the seven new cache regressions and both brush save workflows.
+
+
+### Inactive-tab lifecycle follow-up
+
+Inactive tabs now cancel presentation timers/playback and release canvas display
+images immediately, while preserving documents, undo, and background document
+jobs. This fixes `TileCache::clear` retaining images in its deferred disposal
+queue until an inactive tab next painted. Stale rendering completions cannot
+repopulate a suspended cache. See [Performance strategy](performance-strategy.md)
+for the implementation boundaries, benchmark workload matrix, and the separate
+upstream work required for persistent element/layout trees and damage tracking.

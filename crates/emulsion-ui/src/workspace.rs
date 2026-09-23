@@ -228,12 +228,29 @@ impl Workspace {
         }
     }
 
+    /// Keep UI-only work aligned with the document actually on screen.
+    pub(crate) fn set_screen(
+        &mut self,
+        screen: Screen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(editor) = &self.editor {
+            editor.update(cx, |editor, cx| {
+                editor.set_visible(screen == Screen::Editor, window, cx);
+            });
+        }
+        self.screen = screen;
+        if screen != Screen::Editor {
+            // The hidden editor no longer participates in action dispatch.
+            self.focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
     fn show_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_style_dialog(window, cx);
-        self.screen = Screen::Home;
-        // The editor remains alive in its tab, but leaves the dispatch tree.
-        // Move focus to Home so actions don't target the hidden editor.
-        self.focus.focus(window, cx);
+        self.set_screen(Screen::Home, window, cx);
         cx.notify();
     }
 
@@ -254,8 +271,8 @@ impl Workspace {
         then(self, window, cx);
     }
 
-    /// Make tab `i` the active document. The tab leaving the screen drops
-    /// its rendered tiles; they come back on demand.
+    /// Make tab `i` the active document. Suspend the previous tab's UI work
+    /// and release its rendered tiles; they come back on demand.
     pub fn activate_tab(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ed) = self.tabs.get(i).cloned() else {
             return;
@@ -264,7 +281,7 @@ impl Workspace {
         if let Some(old) = &self.editor
             && old != &ed
         {
-            old.update(cx, |e, _| e.cache.borrow_mut().clear());
+            old.update(cx, |e, cx| e.set_visible(false, window, cx));
         }
         let focus = {
             let editor = ed.read(cx);
@@ -275,7 +292,7 @@ impl Workspace {
             }
         };
         self.editor = Some(ed);
-        self.screen = Screen::Editor;
+        self.set_screen(Screen::Editor, window, cx);
         focus.focus(window, cx);
         cx.notify();
     }
@@ -301,13 +318,19 @@ impl Workspace {
             return;
         };
         self.cancel_style_dialog(window, cx);
+        // A gesture may not publish its final document change until mouse-up.
+        // Commit it before deciding whether closing needs a discard prompt.
+        ed.update(cx, |editor, cx| editor.finish_pointer_gesture(cx));
         let dirty = ed.read(cx).has_unsaved_changes();
         let name = ed.read(cx).name.clone();
         let finish = move |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
             let Some(i) = this.tabs.iter().position(|t| t == &ed) else {
                 return;
             };
-            ed.update(cx, |e, _| e.discard_recovery());
+            ed.update(cx, |e, cx| {
+                e.set_visible(false, window, cx);
+                e.discard_recovery();
+            });
             this.tabs.remove(i);
             this.refresh_raw_peers(cx);
             if this.editor.as_ref() == Some(&ed) {
@@ -738,14 +761,14 @@ impl Workspace {
             return;
         }
         if let Some(old) = &self.editor {
-            old.update(cx, |e, _| e.cache.borrow_mut().clear());
+            old.update(cx, |e, cx| e.set_visible(false, window, cx));
         }
         let ed = cx.new(|cx| EditorView::new(doc, graph, path, source, name, cx));
         let focus = ed.read(cx).canvas_focus.clone();
         self.tabs.push(ed.clone());
         self.refresh_raw_peers(cx);
         self.editor = Some(ed);
-        self.screen = Screen::Editor;
+        self.set_screen(Screen::Editor, window, cx);
         self.error = None;
         focus.focus(window, cx);
         cx.notify();
@@ -1331,9 +1354,9 @@ impl Workspace {
                     self.screen == Screen::Editor,
                     has_editor,
                 )
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
                     if has_editor {
-                        this.screen = Screen::Editor;
+                        this.set_screen(Screen::Editor, window, cx);
                         cx.notify();
                     }
                 })),
@@ -1349,7 +1372,7 @@ impl Workspace {
                 tab("tab-batch", "Batch", self.screen == Screen::Batch, true).on_click(
                     cx.listener(|this, _, window, cx| {
                         this.cancel_style_dialog(window, cx);
-                        this.screen = Screen::Batch;
+                        this.set_screen(Screen::Batch, window, cx);
                         this.refresh_batch_recipes(cx);
                     }),
                 ),
@@ -1363,7 +1386,7 @@ impl Workspace {
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.cancel_style_dialog(window, cx);
-                    this.screen = Screen::Settings;
+                    this.set_screen(Screen::Settings, window, cx);
                     cx.notify();
                 })),
             )
@@ -1371,7 +1394,7 @@ impl Workspace {
                 tab("tab-about", "About", self.screen == Screen::About, true).on_click(
                     cx.listener(|this, _, window, cx| {
                         this.cancel_style_dialog(window, cx);
-                        this.screen = Screen::About;
+                        this.set_screen(Screen::About, window, cx);
                         cx.notify();
                     }),
                 ),
@@ -1606,14 +1629,14 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ShowBatch, window, cx| {
                 this.cancel_style_dialog(window, cx);
-                this.screen = Screen::Batch;
+                this.set_screen(Screen::Batch, window, cx);
                 this.refresh_batch_recipes(cx);
                 window.focus(&this.focus, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ShowAbout, window, cx| {
                 this.cancel_style_dialog(window, cx);
-                this.screen = Screen::About;
+                this.set_screen(Screen::About, window, cx);
                 window.focus(&this.focus, cx);
                 cx.notify();
             }))
@@ -1821,7 +1844,7 @@ impl Render for Workspace {
                     return;
                 }
                 if let Some(e) = this.editor.clone() {
-                    this.screen = Screen::Editor;
+                    this.set_screen(Screen::Editor, window, cx);
                     e.update(cx, |e, cx| e.open_ask(window, cx));
                     cx.notify();
                 }
@@ -1993,7 +2016,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ShowSettings, window, cx| {
                 this.cancel_style_dialog(window, cx);
-                this.screen = Screen::Settings;
+                this.set_screen(Screen::Settings, window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Suggestion1, _, cx| {

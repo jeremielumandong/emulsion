@@ -344,6 +344,33 @@ impl TileCache {
         self.generation += 1;
     }
 
+    /// Hidden canvases cannot paint again to drain deferred GPU disposals.
+    pub(crate) fn release(&mut self, window: &mut Window) {
+        self.clear();
+        for image in self.to_drop.drain(..) {
+            let _ = window.drop_image(image);
+        }
+        self.entries.shrink_to_fit();
+        self.pending.shrink_to_fit();
+        self.queue.shrink_to_fit();
+        self.to_drop.shrink_to_fit();
+        self.in_flight = false;
+        self.last_view = None;
+        self.view_changed_at = None;
+        self.settle_pending = false;
+        self.settle_wakeup_running = false;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resident_image_count(&self) -> usize {
+        self.entries.len() + usize::from(self.screen.is_some()) + self.to_drop.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_request_count(&self) -> usize {
+        self.pending.len() + self.queue.len()
+    }
+
     /// Drop tiles for `which` (the before/after reference changed).
     pub fn clear_which(&mut self, which: Which) {
         let keys: Vec<Key> = self

@@ -13,6 +13,14 @@ pub(crate) struct MaskViewState {
 #[derive(Default)]
 pub(crate) struct MaskViewCache(RefCell<Option<(u64, Arc<RenderImage>)>>);
 
+impl MaskViewCache {
+    pub(super) fn release(&self, window: &mut Window) {
+        if let Some((_, image)) = self.0.borrow_mut().take() {
+            let _ = window.drop_image(image);
+        }
+    }
+}
+
 pub(super) struct MaskView {
     mask: Arc<Mask>,
     from_doc: glam::DAffine2,

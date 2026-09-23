@@ -438,6 +438,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     // ── Assistant ── F1 is the Help key; Omarchy's Hyprland binds neither it
     // nor Ctrl+F.
     ("workspace", "Ask", "f1"),
+    ("workspace", "Ask", "alt-f1"),
     ("workspace", "Suggestion1", "alt-1"),
     ("workspace", "Suggestion2", "alt-2"),
     ("workspace", "Suggestion3", "alt-3"),
@@ -730,6 +731,7 @@ mod tests {
             ("workspace", "ShowInfoPanel", "f8"),
             ("workspace", "FindLayers", "ctrl-f"),
             ("workspace", "Ask", "f1"),
+            ("workspace", "Ask", "alt-f1"),
             // Tools
             ("canvas", "ToolMove", "v"),
             ("canvas", "ToolMarquee", "m"),

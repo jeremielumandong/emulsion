@@ -105,7 +105,10 @@ impl EditorView {
             .xsmall()
             .ghost()
             .accessibility_label("Add layer mask")
-            .child(rail::tool_icon("emulsion-mask").size_4())
+            .child(rail::tool_icon("emulsion-mask").size_4().text_color({
+                let p = theme::palette(cx);
+                if disabled { p.muted } else { p.ink }
+            }))
             .disabled(disabled)
             .tooltip("Add layer mask · Alt-click to add an inverted mask")
             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {

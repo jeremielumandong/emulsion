@@ -264,9 +264,9 @@ mod tests {
             window.click(path_id("home-check", Path::new("photos/Portrait.png")), cx)
         });
         cx.run_until_parked();
-        cx.update(|_, cx| {
+        cx.update(|window, cx| {
             workspace.update(cx, |workspace, cx| {
-                workspace.batch_home_selection(cx);
+                workspace.batch_home_selection(window, cx);
                 assert_eq!(workspace.screen, crate::workspace::Screen::Batch);
                 assert_eq!(workspace.batch.items.len(), 1);
                 assert_eq!(
@@ -642,26 +642,29 @@ impl Workspace {
         }
         let checked = self.home_state.checked.len();
         if checked > 0 {
-            actions = actions
-                .child(
-                    div()
-                        .text_size(rems(0.625))
-                        .text_color(p.muted)
-                        .child(format!("{checked} selected")),
-                )
-                .child(
-                    control("home-batch", "Batch…", &p)
-                        .disabled(self.batch.running.is_some())
-                        .on_click(cx.listener(|this, _, _, cx| this.batch_home_selection(cx))),
-                )
-                .child(
-                    control("home-clear-checked", "Clear", &p).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.home_state.checked.clear();
-                            cx.notify();
-                        },
-                    )),
-                );
+            actions =
+                actions
+                    .child(
+                        div()
+                            .text_size(rems(0.625))
+                            .text_color(p.muted)
+                            .child(format!("{checked} selected")),
+                    )
+                    .child(
+                        control("home-batch", "Batch…", &p)
+                            .disabled(self.batch.running.is_some())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.batch_home_selection(window, cx)
+                            })),
+                    )
+                    .child(
+                        control("home-clear-checked", "Clear", &p).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.home_state.checked.clear();
+                                cx.notify();
+                            },
+                        )),
+                    );
         }
         actions = actions.child(
             div()
@@ -840,8 +843,8 @@ impl Workspace {
                         control("home-import-folder", "Batch folder…", p)
                             .w_full()
                             .justify_start()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.screen = crate::workspace::Screen::Batch;
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_screen(crate::workspace::Screen::Batch, window, cx);
                                 this.refresh_batch_recipes(cx);
                                 this.pick_batch_folder(cx);
                             })),
@@ -856,7 +859,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn batch_home_selection(&mut self, cx: &mut Context<Self>) {
+    fn batch_home_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.batch.running.is_some() {
             return;
         }
@@ -879,7 +882,7 @@ impl Workspace {
             item.selected = true;
         }
         self.home_state.checked.clear();
-        self.screen = crate::workspace::Screen::Batch;
+        self.set_screen(crate::workspace::Screen::Batch, window, cx);
         self.refresh_batch_recipes(cx);
         cx.notify();
     }

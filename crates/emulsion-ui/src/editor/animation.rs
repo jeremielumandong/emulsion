@@ -23,7 +23,7 @@ pub struct AnimState {
     pub fps: u32,
     pub frame: usize,
     pub onion: bool,
-    tick_running: bool,
+    playback_task: Option<Task<()>>,
     // ── Replay ──
     pub replay: Option<Replay>,
 }
@@ -38,6 +38,8 @@ pub struct Replay {
     shown: Option<(usize, Arc<RenderImage>)>,
     /// A frame is being rendered off the UI thread.
     rendering: bool,
+    render_task: Option<Task<()>>,
+    playback_task: Option<Task<()>>,
     /// Bumped when playback starts, so an old loop stops itself.
     run: u64,
 }
@@ -146,6 +148,27 @@ fn encode_gif(
 }
 
 impl EditorView {
+    /// Hidden tabs retain their playback position, but run no preview timers.
+    pub(crate) fn suspend_playback(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+        self.anim.playing = false;
+        self.anim.playback_task = None;
+        if let Some(replay) = &mut self.anim.replay {
+            replay.playing = false;
+            replay.run = replay.run.wrapping_add(1);
+            replay.playback_task = None;
+            replay.render_task = None;
+            replay.rendering = false;
+            if let Some((_, image)) = replay.shown.take() {
+                let _ = window.drop_image(image);
+            }
+        }
+    }
+
+    /// Restore the paused replay picture without restarting playback.
+    pub(crate) fn resume_rendering(&mut self, cx: &mut Context<Self>) {
+        self.replay_render_current(cx);
+    }
+
     pub(crate) fn frame_count(&self) -> usize {
         self.editor.doc.children(None).len()
     }
@@ -184,6 +207,7 @@ impl EditorView {
             cx,
         );
         self.anim.playing = false;
+        self.anim.playback_task = None;
         if self.anim.fps == 0 {
             self.anim.fps = 8;
         }
@@ -197,10 +221,11 @@ impl EditorView {
     }
 
     pub(crate) fn anim_play(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.anim.playing = on;
-        if on && !self.anim.tick_running {
-            self.anim.tick_running = true;
-            cx.spawn(async move |this, cx| {
+        self.anim.playing = on && self.visible;
+        self.anim.playback_task = None;
+        if self.anim.playing {
+            let epoch = self.render_epoch;
+            self.anim.playback_task = Some(cx.spawn(async move |this, cx| {
                 loop {
                     let fps = this
                         .read_with(cx, |this, _| this.anim.fps.max(1))
@@ -209,8 +234,11 @@ impl EditorView {
                         .timer(std::time::Duration::from_millis(1000 / fps as u64))
                         .await;
                     let more = this.update(cx, |this, cx| {
-                        if !this.anim.playing || !this.anim.open {
-                            this.anim.tick_running = false;
+                        if !this.visible
+                            || this.render_epoch != epoch
+                            || !this.anim.playing
+                            || !this.anim.open
+                        {
                             return false;
                         }
                         this.anim_step(1, cx);
@@ -220,8 +248,7 @@ impl EditorView {
                         break;
                     }
                 }
-            })
-            .detach();
+            }));
         }
         cx.notify();
     }
@@ -333,6 +360,8 @@ impl EditorView {
                 playing: false,
                 shown: None,
                 rendering: false,
+                render_task: None,
+                playback_task: None,
                 run: 0,
             });
         }
@@ -351,11 +380,16 @@ impl EditorView {
         };
         r.frame = i.min(r.len() - 1);
         r.playing = false;
-        r.run += 1;
+        r.playback_task = None;
+        r.run = r.run.wrapping_add(1);
         self.replay_render_current(cx);
     }
 
     fn replay_render_current(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
+        let epoch = self.render_epoch;
         let Some(r) = &mut self.anim.replay else {
             return;
         };
@@ -365,7 +399,7 @@ impl EditorView {
         }
         r.rendering = true;
         let (i, doc) = (r.frame, r.docs[r.frame].clone());
-        cx.spawn(async move |this, cx| {
+        r.render_task = Some(cx.spawn(async move |this, cx| {
             let img = cx
                 .background_spawn(async move {
                     let level = level_for(doc.width, doc.height);
@@ -374,6 +408,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !this.visible || this.render_epoch != epoch {
+                    return;
+                }
                 if let Some(r) = &mut this.anim.replay {
                     r.rendering = false;
                     r.shown = Some((i, img));
@@ -384,21 +421,24 @@ impl EditorView {
                 cx.notify();
             })
             .ok();
-        })
-        .detach();
+        }));
         cx.notify();
     }
 
     /// Play from the current moment to the end at `REPLAY_FPS`, rendering
     /// each frame as it comes; `false` pauses.
     pub(crate) fn replay_play(&mut self, on: bool, cx: &mut Context<Self>) {
+        let epoch = self.render_epoch;
         let Some(r) = &mut self.anim.replay else {
             return;
         };
-        r.playing = on;
-        r.run += 1;
+        r.playing = on && self.visible;
+        r.playback_task = None;
+        r.render_task = None;
+        r.rendering = false;
+        r.run = r.run.wrapping_add(1);
         let run = r.run;
-        if !on {
+        if !r.playing {
             cx.notify();
             return;
         }
@@ -407,9 +447,12 @@ impl EditorView {
             r.shown = None;
         }
         let n = r.len();
-        cx.spawn(async move |this, cx| {
+        r.playback_task = Some(cx.spawn(async move |this, cx| {
             loop {
                 let Ok(Some((i, doc))) = this.read_with(cx, |this, _| {
+                    if !this.visible || this.render_epoch != epoch {
+                        return None;
+                    }
                     this.anim
                         .replay
                         .as_ref()
@@ -427,6 +470,9 @@ impl EditorView {
                     })
                     .await;
                 let more = this.update(cx, |this, cx| {
+                    if !this.visible || this.render_epoch != epoch {
+                        return false;
+                    }
                     let Some(r) = &mut this.anim.replay else {
                         return false;
                     };
@@ -451,8 +497,7 @@ impl EditorView {
                     cx.background_executor().timer(rest).await;
                 }
             }
-        })
-        .detach();
+        }));
         cx.notify();
     }
 

@@ -380,7 +380,7 @@ adjustments, Ctrl+J/G/E, Ctrl+Shift+E merge visible, Ctrl+Alt+G clipping mask,
 Alt+[ ] layer selection, Ctrl+Shift+D reselect, Ctrl+Alt+F last filter,
 Ctrl+Shift+X Liquify, Ctrl+K preferences, F toggles full screen, Tab hides the
 panels, and F5/F7/F8 open Brush Settings, Layers and Info. Emulsion extras:
-F1 asks the assistant, Ctrl+F searches layers, Shift-Q grade, Alt-L magnetic lasso, and
+F1 (or Alt+F1) asks the assistant, Ctrl+F searches layers, Shift-Q grade, Alt-L magnetic lasso, and
 Ctrl+Alt+Shift+D switches Draw mode. Settings lists every binding. Bare keys
 apply while the canvas has focus; text fields retain normal typing behavior.
 

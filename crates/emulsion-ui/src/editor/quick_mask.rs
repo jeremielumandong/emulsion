@@ -18,6 +18,14 @@ const OPACITY: f32 = 0.5;
 #[derive(Default)]
 pub(crate) struct QuickMaskCache(RefCell<Option<(u64, Arc<RenderImage>)>>);
 
+impl QuickMaskCache {
+    pub(super) fn release(&self, window: &mut Window) {
+        if let Some((_, image)) = self.0.borrow_mut().take() {
+            let _ = window.drop_image(image);
+        }
+    }
+}
+
 impl EditorView {
     /// Enter or leave Quick Mask. Leaving keeps what was painted as the
     /// selection; a mask left entirely white means nothing is selected.

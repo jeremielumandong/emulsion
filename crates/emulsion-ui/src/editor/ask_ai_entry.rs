@@ -53,7 +53,7 @@ impl EditorView {
                         open_ask(window, cx);
                     }
                 })),
-            format!("AI Assistance: describe an edit or an image in plain words ({ASK_SHORTCUT})"),
+            format!("AI Assistance: describe an edit or an image in plain words ({ASK_SHORTCUT} or Alt+F1)"),
         )
         .into_any_element()
     }

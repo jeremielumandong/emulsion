@@ -47,6 +47,13 @@ const ADJUSTMENTS: [&[(&str, &str)]; 4] = [
     &[("grain", "Grain…"), ("vignette", "Vignette…")],
 ];
 
+/// Lucide drawings take their colour from the element, not the button.
+fn footer_icon(glyph: &'static str, enabled: bool, p: &Palette) -> Svg {
+    rail::tool_icon(glyph)
+        .size_4()
+        .text_color(if enabled { p.ink } else { p.muted })
+}
+
 fn adjustment(key: &str) -> Option<Adjustment> {
     Adjustment::catalogue().into_iter().find(|a| a.key() == key)
 }
@@ -82,7 +89,7 @@ impl EditorView {
                 Button::new("layers-link")
                     .xsmall()
                     .ghost()
-                    .child(rail::tool_icon("link").size_4())
+                    .child(footer_icon("link", link || unlink, p))
                     .accessibility_label("Link layers")
                     .tooltip(if unlink && !link {
                         "Unlink layers"
@@ -120,7 +127,7 @@ impl EditorView {
                 Button::new("layers-adjust")
                     .xsmall()
                     .ghost()
-                    .child(rail::tool_icon("contrast").size_4())
+                    .child(footer_icon("contrast", ready, p))
                     .accessibility_label("Create new fill or adjustment layer")
                     .tooltip("Create new fill or adjustment layer")
                     .disabled(!ready)
@@ -157,7 +164,7 @@ impl EditorView {
                         Button::new("layers-new")
                             .xsmall()
                             .ghost()
-                            .child(rail::tool_icon("file-plus").size_4())
+                            .child(footer_icon("file-plus", ready, p))
                             .accessibility_label("Create a new layer")
                             .tooltip("Create a new layer")
                             .disabled(!ready)

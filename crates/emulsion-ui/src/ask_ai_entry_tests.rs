@@ -58,6 +58,12 @@ fn f1_asks_and_ctrl_f_finds_layers(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|_, cx| assert!(e.read(cx).ask.is_some()));
     cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(e.read(cx).ask.is_none()));
+    cx.simulate_keystrokes("alt-f1");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(e.read(cx).ask.is_some()));
+    cx.simulate_keystrokes("escape");
     cx.simulate_keystrokes("ctrl-f");
     cx.run_until_parked();
     cx.simulate_input("sky");

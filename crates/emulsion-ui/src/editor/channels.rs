@@ -31,6 +31,16 @@ pub(crate) struct ChannelState {
     thumbs: Option<(Arc<CompositeTree>, Vec<Arc<RenderImage>>)>,
 }
 
+impl ChannelState {
+    pub(super) fn release_images(&mut self, window: &mut Window) {
+        if let Some((_, images)) = self.thumbs.take() {
+            for image in images {
+                let _ = window.drop_image(image);
+            }
+        }
+    }
+}
+
 impl EditorView {
     pub(crate) fn select_channel(&mut self, channel: ChannelView, cx: &mut Context<Self>) {
         if self.channels.view == channel {
