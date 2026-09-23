@@ -3,6 +3,8 @@
 //! them all — the same non-destructive pipeline the editor uses, run one
 //! picture at a time off the UI thread.
 
+mod recipe_previews;
+
 use crate::theme::{self, MONO_FONT};
 use crate::viewport::bgra_image;
 use crate::widgets::{button, chip, label, mono};
@@ -52,6 +54,7 @@ pub(crate) struct BatchState {
     pub(crate) recipes: Option<Arc<Vec<Recipe>>>,
     pub(crate) tag: Option<String>,
     recipe_browser: bool,
+    recipe_previews: recipe_previews::RecipePreviews,
     tag_browser: bool,
     pub(crate) search: Option<(Entity<InputState>, Subscription)>,
     /// Large preview for (path, recipe).
@@ -612,6 +615,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.prepare_batch_recipe_previews(cx);
         let p = theme::palette(cx);
         if self.batch.recipe_browser && self.batch.search.is_none() {
             let input =
@@ -780,71 +784,126 @@ impl Workspace {
                             || r.tags.iter().any(|tag| tag.to_lowercase().contains(&query)))
                 })
                 .collect();
-            let mut list = div().flex().flex_col().gap(px(4.)).child(
-                chip(
-                    "batch-rc-none",
-                    "No recipe",
-                    self.batch.recipe.is_none(),
-                    &p,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.batch.recipe = None;
-                    this.batch.recipe_browser = false;
-                    cx.notify();
-                }))
-                .test_support(),
-            );
-            for (index, item) in &filtered {
-                let name = item.name.clone();
-                let on = self.batch.recipe.as_ref() == Some(&name);
-                list = list.child(
-                    div()
-                        .id(("batch-rc", *index))
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.))
-                        .p(px(8.))
-                        .border_1()
-                        .border_color(if on { p.accent } else { p.line })
-                        .bg(if on { p.accent.opacity(0.1) } else { p.soft_bg })
-                        .cursor_pointer()
-                        .text_size(px(12.))
-                        .child(
-                            div()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_ellipsis()
-                                .child(name.clone()),
-                        )
-                        .child(mono(
-                            item.tags
-                                .iter()
-                                .take(3)
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .join(" · "),
-                            9.,
-                            p.muted,
-                        ))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.batch.recipe = Some(name.clone());
-                            this.batch.recipe_browser = false;
-                            cx.notify();
-                        }))
-                        .test_support(),
-                );
-            }
+            let indices: Vec<_> = filtered.iter().map(|(index, _)| *index).collect();
+            let count = indices.len();
+            let library = self.batch_recipes();
+            let list_id: SharedString = format!("batch-recipe-rows:{tag:?}:{query}").into();
+            let list = uniform_list(
+                list_id,
+                count.div_ceil(2),
+                cx.processor(move |this, rows: Range<usize>, window, cx| {
+                    this.batch.recipe_previews.visible =
+                        indices[rows.start * 2..(rows.end * 2).min(indices.len())].to_vec();
+                    // Measurement and viewport callbacks share the latest range.
+                    cx.defer_in(window, |this, _, cx| this.load_batch_recipe_previews(cx));
+                    rows.map(|row_index| {
+                        let mut row = div().flex().gap_2().pt_2().h(px(114.));
+                        for &index in
+                            &indices[row_index * 2..((row_index + 1) * 2).min(indices.len())]
+                        {
+                            let item = &library[index];
+                            let name = item.name.clone();
+                            let on = this.batch.recipe.as_ref() == Some(&name);
+                            let previews = &this.batch.recipe_previews;
+                            let image = match previews.images.get(&index) {
+                                Some(image) => div()
+                                    .id(("batch-rc-image", index))
+                                    .size_full()
+                                    .child(
+                                        img(ImageSource::Render(image.clone()))
+                                            .object_fit(ObjectFit::Contain)
+                                            .size_full(),
+                                    )
+                                    .test_support()
+                                    .into_any_element(),
+                                None => div()
+                                    .size_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(mono(
+                                        if previews.path.is_none() {
+                                            "Select photo"
+                                        } else if previews.failed_source
+                                            || (!previews.busy
+                                                && previews.attempted.contains(&index))
+                                        {
+                                            "Unavailable"
+                                        } else {
+                                            "Loading…"
+                                        },
+                                        9.,
+                                        p.muted,
+                                    ))
+                                    .into_any_element(),
+                            };
+                            row = row.child(
+                                div()
+                                    .id(("batch-rc", index))
+                                    .w(px(110.))
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .cursor_pointer()
+                                    .child(
+                                        div()
+                                            .id(("batch-rc-preview", index))
+                                            .w_full()
+                                            .h(px(74.))
+                                            .overflow_hidden()
+                                            .border_2()
+                                            .border_color(if on { p.accent } else { p.line })
+                                            .bg(p.stage)
+                                            .child(image)
+                                            .test_support(),
+                                    )
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .text_size(px(10.))
+                                            .text_color(if on { p.accent } else { p.ink })
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(name.clone()),
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.batch.recipe = Some(name.clone());
+                                        this.batch.recipe_browser = false;
+                                        cx.notify();
+                                    }))
+                                    .test_support(),
+                            );
+                        }
+                        row
+                    })
+                    .collect()
+                }),
+            )
+            .w_full()
+            .h(px(260.));
             browser = browser
-                .child(mono(format!("{} recipes", filtered.len()), 9., p.muted))
+                .child(mono(format!("{count} recipes"), 9., p.muted))
+                .when(self.batch.current.is_none(), |d| {
+                    d.child(mono("Select a photo to preview recipes", 10., p.muted))
+                })
                 .child(
-                    div()
-                        .id("batch-recipe-list")
-                        .max_h(px(260.))
-                        .overflow_y_scroll()
-                        .child(list)
-                        .test_support(),
+                    chip(
+                        "batch-rc-none",
+                        "No recipe",
+                        self.batch.recipe.is_none(),
+                        &p,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.recipe = None;
+                        this.batch.recipe_browser = false;
+                        cx.notify();
+                    }))
+                    .test_support(),
                 )
-                .when(filtered.is_empty(), |d| {
+                .child(div().id("batch-recipe-list").child(list).test_support())
+                .when(count == 0, |d| {
                     d.child(mono("No matching recipes", 10., p.muted))
                 });
             recipe = recipe.child(browser.test_support());

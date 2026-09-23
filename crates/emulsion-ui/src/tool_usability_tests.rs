@@ -123,6 +123,97 @@ fn brush_option_slider_supports_keyboard_limits_without_editing_pixels(cx: &mut 
 }
 
 #[gpui_kit::test]
+fn brush_quick_controls_open_at_pointer_and_change_settings_without_painting(
+    cx: &mut TestAppContext,
+) {
+    let (editor, cx) = setup(cx, Tool::Brush);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(3840.), gpui_kit::px(2160.)));
+    cx.run_until_parked();
+    let (before, position) = cx.update(|_, cx| {
+        let editor = editor.read(cx);
+        let canvas = editor.canvas_bounds.get().unwrap();
+        (
+            editor.editor.doc.clone(),
+            canvas.origin + gpui_kit::point(gpui_kit::px(200.), gpui_kit::px(220.)),
+        )
+    });
+    cx.simulate_mouse_down(position, gpui_kit::MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let panel = window.find("brush-quick-controls").bounds();
+        assert!((f32::from(panel.origin.x - position.x)).abs() < 80.);
+        assert!(panel.right() < window.viewport_size().width / 2.);
+        assert!(window.try_find("brush-settings-panel").is_none());
+        let size = window.find("QuickBrushSize").bounds();
+        let toolbar_size = window.find("ToolSize").bounds();
+        assert_ne!(size, toolbar_size);
+        window.drag(
+            gpui_kit::point(size.origin.x + size.size.width * 0.2, size.center().y),
+            gpui_kit::point(size.origin.x + size.size.width * 0.8, size.center().y),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(editor.read(cx).tools.brush.size > 250.);
+        assert!(window.find("brush-quick-controls").visible());
+        window.click("QuickBrushHardness", cx);
+        assert!(
+            !editor.read(cx).has_active_gesture(),
+            "popup click must finish slider gesture"
+        );
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("home");
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| editor.read(cx).tools.brush.hardness), 0.);
+    cx.simulate_keystrokes("right");
+    cx.run_until_parked();
+    assert!((cx.update(|_, cx| editor.read(cx).tools.brush.hardness) - 0.01).abs() < 0.0001);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("brush-quick-controls").is_none());
+        let editor = editor.read(cx);
+        assert!(editor.canvas_focus.is_focused(window));
+        assert!(!editor.has_active_gesture());
+        assert_eq!(editor.editor.doc, before);
+        assert!(editor.editor.history.is_empty());
+    });
+}
+
+#[gpui_kit::test]
+fn brush_quick_controls_stay_with_toolbar_and_do_not_replace_other_tool_menus(
+    cx: &mut TestAppContext,
+) {
+    let (editor, cx) = setup(cx, Tool::Brush);
+    let canvas_before = cx.update(|window, cx| {
+        let bounds = window.find("editor-canvas-column").bounds();
+        window.click("brush-settings", cx);
+        bounds
+    });
+    cx.run_until_parked();
+    cx.update(|window, _| {
+        assert!(window.find("brush-quick-controls").visible());
+        assert!(window.find("QuickBrushOpacity").visible());
+        assert!(window.find("QuickBrushFlow").visible());
+        assert_eq!(window.find("editor-canvas-column").bounds(), canvas_before);
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    let position = cx.update(|_, cx| {
+        editor.update(cx, |editor, cx| editor.set_tool(Tool::Move, cx));
+        editor.read(cx).canvas_bounds.get().unwrap().center()
+    });
+    cx.simulate_mouse_down(position, gpui_kit::MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, _| {
+        assert!(window.find("popup-menu").visible());
+        assert!(window.try_find("brush-quick-controls").is_none());
+    });
+}
+
+#[gpui_kit::test]
 fn leaving_canvas_focus_releases_temporary_pan(cx: &mut TestAppContext) {
     let (editor, cx) = setup(cx, Tool::Brush);
     cx.update(|window, _| window.activate_window());
@@ -159,6 +250,11 @@ fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut 
         before
     });
     cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("brush-quick-controls").visible());
+        window.within("popup-menu").click(2usize, cx); // All brush settings.
+    });
+    cx.run_until_parked();
     for tab in [
         "brush-settings-tip",
         "brush-settings-texture",
@@ -173,7 +269,41 @@ fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut 
             assert_eq!(editor.read(cx).editor.doc, before.1);
         });
     }
-    cx.update(|window, cx| window.click("brush-settings-close", cx));
+    cx.update(|window, cx| window.click("brush-settings-presets", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("brush-settings-panel").visible());
+        // On a short window the library uses the sidebar's existing scroll area.
+        window.scroll(
+            ("sidebar-content", editor.read(cx).sidebar_tab as usize),
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-200.))),
+            cx,
+        );
+        assert!(window.find("brush-presets-panel").visible());
+        assert!(window.try_find("preset-close").is_none());
+        window.click(("preset-b", 1usize), cx);
+    });
+    cx.run_until_parked();
+    let selected_brush = cx.update(|window, cx| {
+        assert!(window.find("brush-settings-panel").visible());
+        assert!(editor.read(cx).presets.current.is_some());
+        assert_eq!(window.find("editor-canvas-column").bounds(), before.0);
+        let brush = editor.read(cx).brush();
+        window.scroll(
+            ("sidebar-content", editor.read(cx).sidebar_tab as usize),
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(200.))),
+            cx,
+        );
+        window.click("brush-settings-tip", cx);
+        brush
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("brush-presets-panel").is_none());
+        assert_eq!(editor.read(cx).brush(), selected_brush);
+        assert_eq!(editor.read(cx).editor.doc, before.1);
+        window.click("brush-settings-close", cx);
+    });
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("sidebar-history-content").visible());

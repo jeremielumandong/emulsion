@@ -363,6 +363,14 @@ pub fn bind(cx: &mut App) {
             bindings.push(b);
         }
     }
+    // Let embedded sliders receive arrows instead of navigating their menu.
+    for key in ["left", "right", "up", "down"] {
+        bindings.push(KeyBinding::new(
+            key,
+            gpui_kit::NoAction,
+            Some("PopupMenu > Slider"),
+        ));
+    }
     cx.bind_keys(bindings);
 }
 

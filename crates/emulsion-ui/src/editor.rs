@@ -9,6 +9,7 @@ mod adjust_ui;
 mod ai_tools;
 mod alignment;
 mod animation;
+mod brush_quick;
 mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
@@ -136,6 +137,11 @@ pub(crate) enum SliderKey {
     ToolHardness,
     ToolOpacity,
     ToolFlow,
+    // Popup controls must not share the toolbar's measured slider tracks.
+    QuickBrushSize,
+    QuickBrushHardness,
+    QuickBrushOpacity,
+    QuickBrushFlow,
     ToolSpacing,
     ToolRoundness,
     ToolAngle,
@@ -177,6 +183,16 @@ pub(crate) enum SliderKey {
 }
 
 impl SliderKey {
+    fn is_quick_brush(self) -> bool {
+        matches!(
+            self,
+            Self::QuickBrushSize
+                | Self::QuickBrushHardness
+                | Self::QuickBrushOpacity
+                | Self::QuickBrushFlow
+        )
+    }
+
     /// Keys that edit the document (their drags are one history step).
     fn edits_document(self) -> bool {
         matches!(
@@ -1665,21 +1681,21 @@ impl EditorView {
 
     fn apply_slider(&mut self, key: SliderKey, v: f32, cx: &mut Context<Self>) {
         match key {
-            SliderKey::ToolSize => {
+            SliderKey::ToolSize | SliderKey::QuickBrushSize => {
                 // The track is square-root scaled so small sizes get room.
                 let f = ((v - 1.0) / 499.0).clamp(0.0, 1.0);
                 self.tools.brush.size = (1.0 + f * f * 499.0).round().max(1.0);
                 cx.notify();
             }
-            SliderKey::ToolHardness => {
+            SliderKey::ToolHardness | SliderKey::QuickBrushHardness => {
                 self.tools.brush.hardness = v / 100.0;
                 cx.notify();
             }
-            SliderKey::ToolOpacity => {
+            SliderKey::ToolOpacity | SliderKey::QuickBrushOpacity => {
                 self.tools.brush.opacity = v / 100.0;
                 cx.notify();
             }
-            SliderKey::ToolFlow => {
+            SliderKey::ToolFlow | SliderKey::QuickBrushFlow => {
                 self.tools.brush.flow = v / 100.0;
                 cx.notify();
             }
@@ -2455,6 +2471,11 @@ impl EditorView {
                 move |menu, window, cx| {
                     let Some(editor) = editor.upgrade() else {
                         return menu;
+                    };
+                    let menu = if editor.read(cx).brushy() {
+                        brush_quick::menu(menu, &editor, cx).separator()
+                    } else {
+                        menu
                     };
                     let menu = editor.update(cx, |editor, cx| {
                         editor.clipboard_menu(menu, focus.clone(), cx)

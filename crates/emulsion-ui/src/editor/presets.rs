@@ -143,6 +143,11 @@ impl EditorView {
         };
         self.select_sidebar(tab, cx);
         self.presets.open = tab == SidebarTab::BrushPresets;
+        self.prepare_presets(cx);
+        cx.notify();
+    }
+
+    pub(super) fn prepare_presets(&mut self, cx: &mut Context<Self>) {
         self.ensure_saved_presets(cx);
         if self.presets.category.is_none() && self.presets.saved.as_ref().is_none_or(Vec::is_empty)
         {
@@ -283,8 +288,10 @@ impl EditorView {
                     errors.push(format!("Could not save imported brushes: {error}"));
                 }
                 this.presets.category = None;
-                this.presets.open = true;
-                this.select_sidebar(SidebarTab::BrushPresets, cx);
+                if this.sidebar_tab != SidebarTab::BrushSettings {
+                    this.presets.open = true;
+                    this.select_sidebar(SidebarTab::BrushPresets, cx);
+                }
                 if errors.is_empty() {
                     this.set_status(
                         format!(
@@ -380,7 +387,9 @@ impl EditorView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
-        if !self.presets.open {
+        let embedded = self.sidebar_tab == SidebarTab::BrushSettings
+            && self.brush_settings_section == tools::BrushSettingsSection::Presets;
+        if !self.presets.open && !embedded {
             return None;
         }
         let b = self.tools.brush;
@@ -467,23 +476,26 @@ impl EditorView {
                 .w_full()
                 .gap_3()
                 .p_3()
+                .when(embedded, |view| view.p_0())
                 .bg(p.panel)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(label("Brush presets", p))
-                        .child(
-                            button("preset-close", "Close", false, p)
-                                .test_support()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.select_sidebar(SidebarTab::History, cx);
-                                    this.presets.open = false;
-                                    window.focus(&this.canvas_focus, cx);
-                                })),
-                        ),
-                )
+                .when(!embedded, |view| {
+                    view.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(label("Brush presets", p))
+                            .child(
+                                button("preset-close", "Close", false, p)
+                                    .test_support()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.select_sidebar(SidebarTab::History, cx);
+                                        this.presets.open = false;
+                                        window.focus(&this.canvas_focus, cx);
+                                    })),
+                            ),
+                    )
+                })
                 .child(tabs)
                 .child(row)
                 .children(note.map(|n| mono(n, 10., p.muted)))

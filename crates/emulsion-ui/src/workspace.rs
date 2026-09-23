@@ -406,10 +406,11 @@ impl Workspace {
         let is_home = self.screen == Screen::Home;
         let home_rows = self.home_uses_rows();
         Button::new("compact-app-menu")
-            .label("E")
-            .tooltip("Emulsion menu")
-            .xsmall()
-            .ghost()
+            .label("Menu")
+            .dropdown_caret(true)
+            .tooltip("Open the Emulsion menu")
+            .small()
+            .outline()
             .rounded_none()
             .text_color(p.ink)
             .dropdown_menu(move |mut menu, _, _| {

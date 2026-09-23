@@ -1185,8 +1185,18 @@ fn batch_recipe_browser_preserves_photo_selection_and_export_settings(cx: &mut T
     cx.update(|window, cx| {
         assert!(window.find("batch-recipe-browser").visible());
         assert!(window.try_find("batch-tag-list").is_none());
+        assert!(window.find(("batch-rc-image", 0usize)).visible());
         let list = window.find("batch-recipe-list").bounds();
         let row = window.find(("batch-rc", 0usize)).bounds();
+        let second = window.find(("batch-rc", 1usize)).bounds();
+        let preview = window.find(("batch-rc-preview", 0usize)).bounds();
+        assert_eq!(row.origin.y, second.origin.y, "recipe previews form a grid");
+        assert!(second.origin.x > row.origin.x);
+        assert!(preview.size.height >= gpui_kit::px(60.));
+        assert!(
+            window.try_find(("batch-rc", 39usize)).is_none(),
+            "offscreen recipes are virtualized"
+        );
         assert!(list.size.height > gpui_kit::px(0.));
         assert!(
             list.size.height < row.size.height * 40.,

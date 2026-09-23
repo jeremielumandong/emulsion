@@ -19,6 +19,7 @@ mod shape_fill;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum BrushSettingsSection {
+    Presets,
     #[default]
     Tip,
     Texture,
@@ -3017,43 +3018,62 @@ impl EditorView {
     ) -> AnyElement {
         let track = self.tracks.entry(key).or_default().clone();
         let compact = crate::app_state::settings(cx).compact_chrome;
+        let quick_brush = key.is_quick_brush();
         div()
             .flex()
             .items_center()
             .gap(px(6.))
             .flex_none()
-            .child(div().child(name.to_string()))
             .child(
-                div().w(if compact { rems(4.) } else { rems(5.25) }).child(
-                    slider(
-                        SharedString::from(format!("{key:?}")),
-                        norm,
-                        track,
-                        p,
-                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                            this.slider_down(key, spec, e, cx)
-                        }),
-                    )
-                    .tab_index(0)
-                    .key_context("Slider")
-                    .role(Role::Slider)
-                    .aria_label(name.to_string())
-                    .aria_value(display.clone())
-                    .aria_min_numeric_value(spec.0 as f64)
-                    .aria_max_numeric_value(spec.1 as f64)
-                    .aria_description(
-                        "Arrow keys adjust; Shift adjusts faster; Home and End go to limits",
-                    )
-                    .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
-                    .on_key_down(
-                        cx.listener(move |this, e, _, cx| this.slider_key(key, norm, spec, e, cx)),
-                    )
-                    .test_support(),
-                ),
+                div()
+                    .when(quick_brush, |d| d.w(rems(4.5)))
+                    .child(name.to_string()),
             )
             .child(
                 div()
-                    .w(if compact { rems(2.) } else { rems(2.5) })
+                    .w(if quick_brush {
+                        rems(7.5)
+                    } else if compact {
+                        rems(4.)
+                    } else {
+                        rems(5.25)
+                    })
+                    .child(
+                        slider(
+                            SharedString::from(format!("{key:?}")),
+                            norm,
+                            track,
+                            p,
+                            cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                this.slider_down(key, spec, e, cx)
+                            }),
+                        )
+                        .tab_index(0)
+                        .key_context("Slider")
+                        .role(Role::Slider)
+                        .aria_label(name.to_string())
+                        .aria_value(display.clone())
+                        .aria_min_numeric_value(spec.0 as f64)
+                        .aria_max_numeric_value(spec.1 as f64)
+                        .aria_description(
+                            "Arrow keys adjust; Shift adjusts faster; Home and End go to limits",
+                        )
+                        .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
+                        .on_key_down(cx.listener(move |this, e, _, cx| {
+                            this.slider_key(key, norm, spec, e, cx)
+                        }))
+                        .test_support(),
+                    ),
+            )
+            .child(
+                div()
+                    .w(if quick_brush {
+                        rems(3.5)
+                    } else if compact {
+                        rems(2.)
+                    } else {
+                        rems(2.5)
+                    })
                     .text_color(p.ink)
                     .child(display),
             )
@@ -3153,23 +3173,24 @@ impl EditorView {
         let mut v: Vec<AnyElement> = Vec::new();
         let b = self.tools.brush;
         if self.brushy() {
+            let editor = cx.weak_entity();
             v.push(
-                chip(
-                    "brush-settings",
-                    "Brush settings",
-                    self.sidebar_tab == SidebarTab::BrushSettings,
-                    p,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    let tab = if this.sidebar_tab == SidebarTab::BrushSettings {
-                        SidebarTab::History
-                    } else {
-                        SidebarTab::BrushSettings
-                    };
-                    this.select_sidebar(tab, cx);
-                }))
-                .test_support()
-                .into_any_element(),
+                div()
+                    .id("brush-settings")
+                    .test_support()
+                    .child(
+                        Button::new("brush-settings-trigger")
+                            .label("Brush settings ▾")
+                            .small()
+                            .tooltip("Adjust your brush here or right-click the canvas. [ and ] change size.")
+                            .dropdown_menu(move |menu, _, cx| {
+                                let Some(editor) = editor.upgrade() else {
+                                    return menu;
+                                };
+                                super::brush_quick::menu(menu, &editor, cx)
+                            }),
+                    )
+                    .into_any_element(),
             );
         }
         match self.tool {
@@ -4117,6 +4138,11 @@ impl EditorView {
         let current = self.brush_settings_section;
         let navigation = div().flex().flex_wrap().gap_1().children(
             [
+                (
+                    BrushSettingsSection::Presets,
+                    "brush-settings-presets",
+                    "Presets",
+                ),
                 (BrushSettingsSection::Tip, "brush-settings-tip", "Tip"),
                 (
                     BrushSettingsSection::Texture,
@@ -4139,12 +4165,22 @@ impl EditorView {
                 chip(id, label, current == section, p)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.brush_settings_section = section;
+                        if section == BrushSettingsSection::Presets {
+                            this.prepare_presets(cx);
+                        }
                         cx.notify();
                     }))
                     .test_support()
             }),
         );
-        let controls = self.brush_settings_controls(p, cx);
+        let controls = if current == BrushSettingsSection::Presets {
+            self.presets_view(p, cx)
+                .map(IntoElement::into_any_element)
+                .into_iter()
+                .collect()
+        } else {
+            self.brush_settings_controls(p, cx)
+        };
         div()
             .id("brush-settings-panel")
             .test_support()
