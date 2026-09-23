@@ -227,6 +227,15 @@ impl Workspace {
         }
     }
 
+    fn show_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_style_dialog(window, cx);
+        self.screen = Screen::Home;
+        // The editor remains alive in its tab, but leaves the dispatch tree.
+        // Move focus to Home so actions don't target the hidden editor.
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
     /// Does any open document have unsaved changes?
     fn modified(&self, cx: &App) -> bool {
         self.tabs.iter().any(|e| e.read(cx).has_unsaved_changes())
@@ -303,7 +312,7 @@ impl Workspace {
             if this.editor.as_ref() == Some(&ed) {
                 this.editor = None;
                 if this.tabs.is_empty() {
-                    this.screen = Screen::Home;
+                    this.show_home(window, cx);
                 } else {
                     let j = i.min(this.tabs.len() - 1);
                     this.activate_tab(j, window, cx);
@@ -441,6 +450,10 @@ impl Workspace {
                     menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
                         workspace
                             .update(cx, |this, cx| {
+                                if screen == Screen::Home {
+                                    this.show_home(window, cx);
+                                    return;
+                                }
                                 this.cancel_style_dialog(window, cx);
                                 this.screen = screen;
                                 if screen == Screen::Batch {
@@ -550,9 +563,7 @@ impl Workspace {
             .xsmall()
             .outline()
             .on_click(cx.listener(|this, _, window, cx| {
-                this.cancel_style_dialog(window, cx);
-                this.screen = Screen::Home;
-                cx.notify();
+                this.show_home(window, cx);
             }));
         let navigation = div()
             .flex()
@@ -1325,13 +1336,11 @@ impl Workspace {
                 })),
             )
             .child(
-                tab("tab-home", "Home", self.screen == Screen::Home, true).on_click(cx.listener(
-                    |this, _, window, cx| {
-                        this.cancel_style_dialog(window, cx);
-                        this.screen = Screen::Home;
-                        cx.notify();
-                    },
-                )),
+                tab("tab-home", "Home", self.screen == Screen::Home, true)
+                    .test_support()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_home(window, cx);
+                    })),
             )
             .child(
                 tab("tab-batch", "Batch", self.screen == Screen::Batch, true).on_click(
@@ -1585,9 +1594,7 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
             .on_action(cx.listener(|this, _: &ShowHome, window, cx| {
-                this.cancel_style_dialog(window, cx);
-                this.screen = Screen::Home;
-                cx.notify();
+                this.show_home(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ShowEditor, _, cx| {
                 if this.editor.is_some() {
@@ -2097,6 +2104,18 @@ mod compact_tests {
             assert!(window.find("home-header-filters").visible());
             assert!(window.find("home-window-drag").bounds().size.width >= px(48.));
         });
+        for button in ["home-import-files", "open"] {
+            cx.update(|window, cx| window.click(button, cx));
+            cx.run_until_parked();
+            assert!(cx.did_prompt_for_paths());
+            cx.simulate_path_prompt_response(|_| None);
+            cx.run_until_parked();
+        }
+        cx.update(|window, cx| window.press("ctrl-o", cx));
+        cx.run_until_parked();
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| None);
+        cx.run_until_parked();
         cx.update(|window, cx| window.click("home-filter-today", cx));
         cx.run_until_parked();
         cx.update(|window, cx| window.click("home-header-search-button", cx));

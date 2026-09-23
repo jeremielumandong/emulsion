@@ -152,6 +152,64 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn returning_home_keeps_open_actions_reachable(cx: &mut TestAppContext) {
+        let (workspace, cx) = browser(cx);
+        for route in ["tab", "action", "menu", "close"] {
+            cx.update(|window, cx| {
+                cx.global_mut::<AppSettings>().0.compact_chrome = route == "menu";
+                workspace.update(cx, |workspace, cx| {
+                    workspace.install(
+                        Document::new(64, 64),
+                        None,
+                        None,
+                        None,
+                        "Focus regression".into(),
+                        window,
+                        cx,
+                    );
+                });
+            });
+            cx.run_until_parked();
+            match route {
+                "tab" => cx.update(|window, cx| window.click("tab-home", cx)),
+                "action" => cx.update(|window, cx| {
+                    window.dispatch_action(Box::new(crate::actions::ShowHome), cx)
+                }),
+                "menu" => {
+                    cx.update(|window, cx| window.click("compact-app-menu", cx));
+                    cx.run_until_parked();
+                    cx.update(|window, cx| window.within("popup-menu").click(4usize, cx));
+                }
+                "close" => cx.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| workspace.close_tab(0, window, cx));
+                }),
+                _ => unreachable!(),
+            }
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert_eq!(workspace.read(cx).screen, crate::workspace::Screen::Home);
+                window.click("home-import-files", cx);
+            });
+            cx.run_until_parked();
+            assert!(cx.did_prompt_for_paths(), "Open after {route}");
+            cx.simulate_path_prompt_response(|_| None);
+            cx.run_until_parked();
+            cx.update(|window, cx| window.press("ctrl-o", cx));
+            cx.run_until_parked();
+            assert!(cx.did_prompt_for_paths(), "keyboard Open after {route}");
+            cx.simulate_path_prompt_response(|_| None);
+            cx.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    if !workspace.tabs.is_empty() {
+                        workspace.close_tab(0, window, cx);
+                    }
+                });
+            });
+            cx.run_until_parked();
+        }
+    }
+
+    #[gpui_kit::test]
     fn home_search_folder_filters_and_row_selection_use_real_recent_paths(cx: &mut TestAppContext) {
         let (workspace, cx) = browser(cx);
         cx.update(|window, cx| window.click("home-filter-today", cx));
