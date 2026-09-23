@@ -35,6 +35,7 @@ impl EditorView {
     }
 
     pub(crate) fn set_layer_selection(&mut self, ids: Vec<NodeId>, active: Option<NodeId>) {
+        self.mask_view.layer = None;
         self.commit_shape_color_edit();
         self.type_tool.selection = None;
         self.selected = active;

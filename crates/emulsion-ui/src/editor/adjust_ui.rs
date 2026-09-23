@@ -702,17 +702,7 @@ impl EditorView {
         let Some(a) = Adjustment::catalogue().into_iter().find(|a| a.key() == key) else {
             return;
         };
-        self.select_sidebar(SidebarTab::Properties, cx);
-        let node = Node::adjust(0, a);
-        let slot = self.insertion_slot();
-        if let Some(id) = self.execute(
-            Command::AddNode {
-                node: Box::new(node),
-                slot,
-            },
-            cx,
-        ) {
-            self.set_layer_selection(vec![id], Some(id));
+        if self.add_node(Node::adjust(0, a), cx).is_some() {
             self.set_status("Added adjustment layer — edit it in Properties.", false, cx);
         }
     }

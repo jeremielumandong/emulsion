@@ -17,6 +17,8 @@ mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
 mod compact;
+mod contextual_bar;
+mod contextual_tools;
 pub(crate) mod crop;
 mod draw_workspace;
 pub(crate) mod export_ui;
@@ -30,6 +32,8 @@ mod layer_menu;
 mod layer_selection;
 mod layers_panel;
 mod lens;
+mod mask_taskbar;
+mod mask_view;
 mod menu_bar;
 mod movement;
 mod panels;
@@ -427,6 +431,7 @@ pub struct EditorView {
     /// so Photo mode can show them above the canvas, as Photoshop does.
     document_tabs: Option<AnyElement>,
     quick_mask_cache: Rc<quick_mask::QuickMaskCache>,
+    pub(crate) mask_view: mask_view::MaskViewState,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
     pub(crate) recipes: recipes::RecipeState,
     pub(crate) smart: smart::SmartUi,
@@ -557,6 +562,7 @@ impl EditorView {
             draw_ui: Default::default(),
             document_tabs: None,
             quick_mask_cache: Default::default(),
+            mask_view: Default::default(),
             adjust_ui: Default::default(),
             recipes: Default::default(),
             smart: Default::default(),
@@ -1199,19 +1205,25 @@ impl EditorView {
         }
     }
 
-    fn add_node(&mut self, node: Node, cx: &mut Context<Self>) {
+    fn add_node(&mut self, mut node: Node, cx: &mut Context<Self>) -> Option<NodeId> {
+        if matches!(node.kind, NodeKind::Adjust(_)) && node.mask.is_none() {
+            // Snapshot the selection so deselecting later does not expand the effect.
+            node.mask = self.editor.doc.selection.clone();
+        }
         self.select_sidebar(SidebarTab::Properties, cx);
         let slot = self.insertion_slot();
-        if let Some(id) = self.execute(
+        let added = self.execute(
             Command::AddNode {
                 node: Box::new(node),
                 slot,
             },
             cx,
-        ) {
+        );
+        if let Some(id) = added {
             self.set_layer_selection(vec![id], Some(id));
         }
         self.menu = None;
+        added
     }
 
     /// Drop `dragged` onto the row for `target`: into a group, otherwise
@@ -2189,6 +2201,8 @@ impl EditorView {
             .then(|| self.editor.doc.selection.clone())
             .flatten();
         let quick_mask_cache = self.quick_mask_cache.clone();
+        let mask_view = self.mask_view_snapshot();
+        let mask_view_cache = self.mask_view.cache.clone();
         // Fit once the canvas has been laid out.
         if self.fit_pending
             && let Some(b) = self.canvas_bounds()
@@ -2246,7 +2260,7 @@ impl EditorView {
             _ if matches!(self.tool, Tool::Move | Tool::Grade) => CursorStyle::Arrow,
             _ => CursorStyle::Crosshair,
         };
-        div()
+        let canvas = div()
             .id("canvas")
             .test_support()
             .relative()
@@ -2450,6 +2464,15 @@ impl EditorView {
                         if let Some(plan) = plan {
                             viewport::paint(plan, &scene2, &cache2, window, cx);
                         }
+                        if let Some(mask) = &mask_view {
+                            mask_view::paint(
+                                mask,
+                                &view_for_overlay,
+                                bounds,
+                                &mask_view_cache,
+                                window,
+                            );
+                        }
                         if let Some(selection) = &quick_mask {
                             quick_mask::paint(
                                 selection,
@@ -2579,7 +2602,15 @@ impl EditorView {
                     });
                     clipboard::transform_menu(menu, &editor, focus.clone(), window, cx)
                 }
-            })
+            });
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(canvas)
+            .child(self.contextual_taskbar(cx))
     }
 
     /// GPUI has no native zoom cursor. Keep a platform-independent magnifier
@@ -2800,6 +2831,9 @@ impl EditorView {
     }
 
     fn scene_graph(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use gpui_kit::assets::IconName;
+        use gpui_kit::component::Sizable;
+        use gpui_kit::component::button::{Button, ButtonVariants};
         let rows = self.filtered_layer_rows();
         let accent = p.accent;
         let header = div()
@@ -2837,10 +2871,11 @@ impl EditorView {
                     .test_support(),
             );
         let actions = div()
+            .id("layers-footer")
             .flex()
             .flex_none()
-            .flex_wrap()
-            .gap(px(5.))
+            .items_center()
+            .gap_1()
             .pt(px(6.))
             .child(
                 chip("add", "+ Layer", self.menu == Some(Menu::Add), p).on_click(cx.listener(
@@ -2854,16 +2889,32 @@ impl EditorView {
                     },
                 )),
             )
+            .child(self.layer_mask_button(cx))
             .child(
-                chip("grp", "Group", false, p)
+                Button::new("grp")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::Folder)
+                    .accessibility_label("Group layers")
+                    .tooltip("Group layers")
                     .on_click(cx.listener(|this, _, _, cx| this.group_selected(cx))),
             )
             .child(
-                chip("dup", "Duplicate", false, p)
+                Button::new("dup")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::Copy)
+                    .accessibility_label("Duplicate layers")
+                    .tooltip("Duplicate layers")
                     .on_click(cx.listener(|this, _, _, cx| this.duplicate_selected(cx))),
             )
             .child(
-                chip("del", "Delete", false, p)
+                Button::new("del")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::Trash)
+                    .accessibility_label("Delete layers")
+                    .tooltip("Delete layers")
                     .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
             );
 
@@ -3167,6 +3218,7 @@ impl EditorView {
             .capture_any_mouse_down(
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     if event.button == MouseButton::Right {
+                        this.layer_panel.mask_context = None;
                         window.focus(&this.panel_focus, cx);
                         this.menu = None;
                         this.select_layer_context(id, cx);
@@ -3251,16 +3303,37 @@ impl EditorView {
                 )
             })
             .children(mask_thumb.map(|thumb| {
+                use gpui_kit::component::ActiveTheme;
+                let disabled_color = cx.theme().danger;
                 div()
                     .id(("layer-mask", id))
+                    .relative()
                     .flex_none()
                     .p_0p5()
                     .border_1()
                     .border_color(if mask_active { p.accent } else { p.line })
                     .opacity(if n.mask_enabled { 1. } else { 0.45 })
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         cx.stop_propagation();
+                        if event.modifiers().shift {
+                            if this.layer_menu_ready()
+                                && this.editor.doc.locked_ancestor(id).is_none()
+                                && let Some(node) = this.editor.doc.node(id)
+                            {
+                                this.execute(
+                                    Command::SetMaskEnabled {
+                                        id,
+                                        enabled: !node.mask_enabled,
+                                    },
+                                    cx,
+                                );
+                            }
+                            return;
+                        }
+                        let show = event.modifiers().alt && this.mask_view.layer != Some(id);
                         this.select_layer_mask(id, cx);
+                        this.mask_view.layer = show.then_some(id);
+                        cx.notify();
                         window.focus(&this.panel_focus, cx);
                     }))
                     .child(
@@ -3268,10 +3341,33 @@ impl EditorView {
                             .size_5()
                             .object_fit(ObjectFit::Contain),
                     )
-                    .tooltip(|window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new("Edit layer mask")
-                            .build(window, cx)
+                    .when(!n.mask_enabled, |mask| {
+                        mask.child(
+                            div()
+                                .id(("layer-mask-disabled", id))
+                                .test_support()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(disabled_color)
+                                .text_lg()
+                                .child("×"),
+                        )
                     })
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(
+                            "Edit layer mask; Alt-click to view; Shift-click to disable or enable",
+                        )
+                        .build(window, cx)
+                    })
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _, _, _| {
+                            this.layer_panel.mask_context = Some(id);
+                        }),
+                    )
                     .test_support()
             }))
             .child(name_el)
@@ -3324,7 +3420,11 @@ impl EditorView {
                     let Some(editor) = editor.upgrade() else {
                         return menu;
                     };
-                    layer_menu::layer_context_menu(menu, &editor, id, focus.clone(), window, cx)
+                    if editor.read(cx).layer_panel.mask_context == Some(id) {
+                        layer_menu::mask_context_menu(menu, &editor, id, cx)
+                    } else {
+                        layer_menu::layer_context_menu(menu, &editor, id, focus.clone(), window, cx)
+                    }
                 }
             })
     }
@@ -3480,7 +3580,9 @@ impl EditorView {
                     false,
                     p,
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.add_mask(cx)))
+                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                    this.add_mask_inverted(event.modifiers().alt, cx);
+                }))
                 .test_support(),
             );
         }
@@ -3820,7 +3922,9 @@ impl EditorView {
                             MenuAction::Add(node) if node.name == "__lut__" => {
                                 this.import_lut(None, cx)
                             }
-                            MenuAction::Add(node) => this.add_node((**node).clone(), cx),
+                            MenuAction::Add(node) => {
+                                this.add_node((**node).clone(), cx);
+                            }
                             MenuAction::NewLayer => {
                                 if this.new_empty_layer(cx).is_some() {
                                     this.set_status(

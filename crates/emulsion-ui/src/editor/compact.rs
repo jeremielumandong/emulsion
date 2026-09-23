@@ -254,8 +254,6 @@ impl EditorView {
             .gap_1()
             .px_2()
             .bg(p.paper)
-            .border_b_1()
-            .border_color(p.line)
             .child(div().flex().items_center().child(navigation))
             .child(div().flex().items_center().child(self.effect_menus(p, cx)))
             .child(

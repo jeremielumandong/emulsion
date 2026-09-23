@@ -450,3 +450,88 @@ fn quick_mask_paints_the_selection_not_the_layer(cx: &mut TestAppContext) {
         assert_eq!(e.editor.doc.nodes, original.nodes);
     });
 }
+
+#[gpui_kit::test]
+fn quick_mask_selection_limits_new_hue_saturation_layer(cx: &mut TestAppContext) {
+    use emulsion_raster::composite::flatten;
+
+    let photo = Raster::solid(256, 192, [0.8, 0.2, 0.1, 1.0]);
+    let (ws, cx) = open(cx, doc(&["Photo"], Some(photo)));
+    let e = editor(&ws, cx);
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.toggle_quick_mask(cx);
+            e.set_fg([0, 0, 0, 255], cx);
+        })
+    });
+    click(&e, cx, (60.0, 60.0), false);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.toggle_quick_mask(cx);
+            // Red paint protects the eye; invert to select that painted area.
+            e.invert_selection(cx);
+            let selection = e.editor.doc.selection.clone().unwrap();
+            assert!(selection.get(60, 60) > 127);
+            assert_eq!(selection.get(200, 150), 0);
+            let before = flatten(&e.editor.doc.composite_tree(), 0);
+
+            e.quick_adjust("hue_saturation", cx);
+            let adjustment = e
+                .editor
+                .doc
+                .nodes
+                .iter()
+                .find(|n| matches!(n.kind, NodeKind::Adjust(_)))
+                .unwrap();
+            let id = adjustment.id;
+            assert_eq!(
+                adjustment.mask.as_ref().unwrap().to_gray8(),
+                selection.to_gray8()
+            );
+            e.undo(cx);
+            assert_eq!(e.editor.doc.nodes.len(), 1);
+            e.redo(cx);
+            assert_eq!(
+                e.editor
+                    .doc
+                    .node(id)
+                    .unwrap()
+                    .mask
+                    .as_ref()
+                    .unwrap()
+                    .to_gray8(),
+                selection.to_gray8()
+            );
+
+            e.execute(
+                Command::SetParam {
+                    id,
+                    key: "hue".into(),
+                    value: 120.0,
+                },
+                cx,
+            );
+            let adjusted = flatten(&e.editor.doc.composite_tree(), 0);
+            assert_ne!(adjusted.get(60, 60), before.get(60, 60));
+            assert_eq!(adjusted.get(200, 150), before.get(200, 150));
+
+            e.deselect(cx);
+            assert!(e.editor.doc.selection.is_none());
+            assert_eq!(
+                e.editor
+                    .doc
+                    .node(id)
+                    .unwrap()
+                    .mask
+                    .as_ref()
+                    .unwrap()
+                    .to_gray8(),
+                selection.to_gray8()
+            );
+            let deselected = flatten(&e.editor.doc.composite_tree(), 0);
+            assert_eq!(deselected.get(60, 60), adjusted.get(60, 60));
+            assert_eq!(deselected.get(200, 150), before.get(200, 150));
+        })
+    });
+}

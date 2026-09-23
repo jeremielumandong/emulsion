@@ -17,6 +17,9 @@ use std::sync::Arc;
 #[path = "editor_layout_tests.rs"]
 mod editor_layout_tests;
 
+#[path = "contextual_taskbar_tests.rs"]
+mod contextual_taskbar_tests;
+
 #[path = "tool_usability_tests.rs"]
 mod tool_usability_tests;
 

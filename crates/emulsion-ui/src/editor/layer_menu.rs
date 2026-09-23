@@ -29,6 +29,48 @@ fn item(
         })
 }
 
+pub(super) fn mask_context_menu(
+    menu: PopupMenu,
+    editor: &Entity<EditorView>,
+    id: NodeId,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    editor.update(cx, |e, cx| e.select_layer_mask(id, cx));
+    let e = editor.read(cx);
+    let enabled = e.layer_menu_ready() && e.editor.doc.locked_ancestor(id).is_none();
+    let mask_enabled = e.editor.doc.node(id).is_some_and(|node| node.mask_enabled);
+    menu.item(item(editor, "Delete Layer Mask", enabled, |e, _, cx| {
+        e.remove_mask(cx)
+    }))
+    .item(item(editor, "Invert Layer Mask", enabled, |e, _, cx| {
+        e.invert_mask(cx)
+    }))
+    .item(item(
+        editor,
+        if mask_enabled {
+            "Disable Layer Mask"
+        } else {
+            "Enable Layer Mask"
+        },
+        enabled,
+        move |e, _, cx| {
+            e.execute(
+                Command::SetMaskEnabled {
+                    id,
+                    enabled: !mask_enabled,
+                },
+                cx,
+            );
+        },
+    ))
+    .item(item(
+        editor,
+        "Apply Layer Mask",
+        e.can_apply_layer_mask(),
+        |e, _, cx| e.apply_layer_mask(cx),
+    ))
+}
+
 pub(super) fn layer_context_menu(
     menu: PopupMenu,
     editor: &Entity<EditorView>,
@@ -323,7 +365,7 @@ impl EditorView {
             })
             .into_any_element()
     }
-    fn layer_menu_ready(&self) -> bool {
+    pub(super) fn layer_menu_ready(&self) -> bool {
         !self.assistant.running
             && self.drag.is_none()
             && !self.editor.in_transaction()

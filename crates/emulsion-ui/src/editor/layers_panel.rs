@@ -2,9 +2,9 @@
 use super::*;
 use emulsion_core::document::PanelRow;
 use emulsion_core::node::LayerColor;
-use gpui_kit::component::Sizable;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::{Disableable, Sizable};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum LayerKindFilter {
@@ -60,6 +60,7 @@ impl LayerKindFilter {
 
 #[derive(Default)]
 pub(crate) struct LayerPanelState {
+    pub mask_context: Option<NodeId>,
     pub search: Option<(Entity<InputState>, Subscription)>,
     pub query: String,
     pub kind: LayerKindFilter,
@@ -86,6 +87,42 @@ pub(super) fn label_color(label: LayerColor, p: &Palette) -> Hsla {
 }
 
 impl EditorView {
+    pub(super) fn layer_mask_button(&self, cx: &Context<Self>) -> AnyElement {
+        let disabled = self.assistant.running
+            || self.drag.is_some()
+            || self.editor.in_transaction()
+            || self.warp.is_some()
+            || self.selected.is_none_or(|id| {
+                self.editor
+                    .doc
+                    .node(id)
+                    .is_none_or(|node| node.mask.is_some())
+                    || self.editor.doc.locked_ancestor(id).is_some()
+            });
+        Button::new("layers-add-mask")
+            .xsmall()
+            .ghost()
+            .accessibility_label("Add layer mask")
+            .child(rail::tool_icon("emulsion-mask").size_4())
+            .disabled(disabled)
+            .tooltip("Add layer mask · Alt-click to add an inverted mask")
+            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                this.close_text_field(cx);
+                this.add_mask_inverted(event.modifiers().alt, cx);
+                if let Some(id) = this.selected
+                    && this
+                        .editor
+                        .doc
+                        .node(id)
+                        .is_some_and(|node| node.mask.is_some())
+                {
+                    this.select_layer_mask(id, cx);
+                }
+                window.focus(&this.panel_focus, cx);
+            }))
+            .into_any_element()
+    }
+
     pub(crate) fn cycle_blend_mode(&mut self, forward: bool, cx: &mut Context<Self>) {
         let ids = self.selected_layer_ids();
         let Some(current) = self

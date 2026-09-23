@@ -22,6 +22,7 @@ impl EditorView {
     /// Enter or leave Quick Mask. Leaving keeps what was painted as the
     /// selection; a mask left entirely white means nothing is selected.
     pub fn toggle_quick_mask(&mut self, cx: &mut Context<Self>) {
+        self.mask_view.layer = None;
         self.finish_tool_interaction(cx);
         self.tools.quick_mask = !self.tools.quick_mask;
         if self.tools.quick_mask {

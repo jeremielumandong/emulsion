@@ -579,6 +579,9 @@ impl EditorView {
 
     pub fn set_mask_edit(&mut self, on: bool, cx: &mut Context<Self>) {
         self.tools.mask_edit = on;
+        if !on {
+            self.mask_view.layer = None;
+        }
         cx.notify();
     }
 
@@ -686,8 +689,13 @@ impl EditorView {
     }
 
     pub fn default_colors(&mut self, cx: &mut Context<Self>) {
-        self.tools.bg = [255, 255, 255, 255];
-        self.set_fg([10, 10, 11, 255], cx);
+        if self.tools.mask_edit {
+            self.tools.bg = [0, 0, 0, 255];
+            self.set_fg([255; 4], cx);
+        } else {
+            self.tools.bg = [255; 4];
+            self.set_fg([0, 0, 0, 255], cx);
+        }
     }
 
     pub fn brush_size(&mut self, larger: bool, cx: &mut Context<Self>) {
@@ -1539,10 +1547,21 @@ impl EditorView {
 
     /// Add a mask from the selection (or one that reveals everything).
     pub fn add_mask(&mut self, cx: &mut Context<Self>) {
+        self.create_layer_mask(false, true, cx);
+    }
+
+    pub(crate) fn add_mask_inverted(&mut self, inverted: bool, cx: &mut Context<Self>) {
+        self.create_layer_mask(inverted, false, cx);
+    }
+
+    fn create_layer_mask(&mut self, inverted: bool, replace: bool, cx: &mut Context<Self>) {
         let Some(id) = self.selected else { return };
         let Some(n) = self.editor.doc.node(id) else {
             return;
         };
+        if n.mask.is_some() && !replace {
+            return;
+        }
         let (w, h, to_doc) = match &n.kind {
             NodeKind::Raster { raster, placement }
             | NodeKind::Smart {
@@ -1582,12 +1601,27 @@ impl EditorView {
             },
             None => Arc::new(Mask::white(w, h)),
         };
+        let m = if inverted && self.editor.doc.selection.is_none() {
+            Arc::new(Mask::empty(w, h, 0))
+        } else if inverted {
+            Arc::new(select::invert(&m))
+        } else {
+            m
+        };
         let commands = vec![
             Command::SetMask { id, mask: None },
             Command::SetMask { id, mask: Some(m) },
         ];
         if self
-            .execute_layer_commands("Mask from selection", commands, cx)
+            .execute_layer_commands(
+                if inverted {
+                    "Add inverted layer mask"
+                } else {
+                    "Add layer mask"
+                },
+                commands,
+                cx,
+            )
             .is_none()
         {
             return;
@@ -1603,6 +1637,7 @@ impl EditorView {
         if let Some(id) = self.selected {
             self.execute(Command::SetMask { id, mask: None }, cx);
             self.tools.mask_edit = false;
+            self.mask_view.layer = None;
         }
     }
 

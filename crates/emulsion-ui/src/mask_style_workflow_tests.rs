@@ -4,6 +4,172 @@ use emulsion_core::styles::LayerStyle;
 use emulsion_raster::{Mask, paint::Brush};
 
 #[gpui_kit::test]
+fn mask_taskbar_paints_inverts_and_toggles_view(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+    let document = doc(&["Photo"], None);
+    let id = document.nodes[0].id;
+    let original_pixels = document.nodes[0].kind.clone();
+    let (ws, cx) = open(cx, document);
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("layers-add-mask", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(editor.read(cx).tools.mask_edit);
+        window.click("mask-subtract-paint", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_eq!(e.tool, Tool::Brush);
+        assert_eq!(e.tools.paint, PaintKind::Brush);
+        assert_eq!(e.tools.fg, [0, 0, 0, 255]);
+        assert!(e.tools.mask_edit);
+    });
+    cx.update(|window, cx| window.click("mask-add-paint", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).tools.fg, [255; 4]));
+    cx.update(|window, cx| window.click("mask-taskbar-invert", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_eq!(
+            e.editor
+                .doc
+                .node(id)
+                .unwrap()
+                .mask
+                .as_ref()
+                .unwrap()
+                .get(64, 64),
+            0
+        );
+        assert_eq!(e.editor.doc.node(id).unwrap().kind, original_pixels);
+    });
+    for expected in [Some(id), None] {
+        cx.update(|window, cx| window.click("mask-taskbar-view", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(editor.read(cx).mask_view.layer, expected));
+    }
+}
+
+#[gpui_kit::test]
+fn mask_defaults_swap_and_gradient_keep_source_pixels(cx: &mut TestAppContext) {
+    let mut document = doc(&["Photo"], None);
+    let id = document.nodes[0].id;
+    document.nodes[0].mask = Some(Arc::new(Mask::white(256, 192)));
+    let original = document.clone();
+    let (ws, cx) = open(cx, document);
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| {
+        editor.update(cx, |e, cx| {
+            e.set_tool(Tool::Mask, cx);
+            e.default_colors(cx);
+            assert_eq!(e.tools.fg, [255; 4]);
+            assert_eq!(e.tools.bg, [0, 0, 0, 255]);
+            e.swap_colors(cx);
+            assert_eq!(e.tools.fg, [0, 0, 0, 255]);
+            assert_eq!(e.tools.bg, [255; 4]);
+            e.set_paint(PaintKind::Gradient, cx);
+            assert!(e.tools.mask_edit);
+        })
+    });
+    cx.run_until_parked();
+    let (a, b) = cx.update(|_, cx| {
+        let e = editor.read(cx);
+        (
+            e.doc_to_window((32., 96.)).unwrap(),
+            e.doc_to_window((224., 96.)).unwrap(),
+        )
+    });
+    cx.simulate_mouse_down(a, gpui_kit::MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(b, Some(gpui_kit::MouseButton::Left), Default::default());
+    cx.simulate_mouse_up(b, gpui_kit::MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_eq!(e.editor.doc.nodes.len(), 1);
+        let node = e.editor.doc.node(id).unwrap();
+        assert_eq!(node.kind, original.node(id).unwrap().kind);
+        let mask = node.mask.as_ref().unwrap();
+        assert_eq!(mask.get(16, 96), 0);
+        assert!((120..136).contains(&mask.get(128, 96)));
+        assert_eq!(mask.get(240, 96), 255);
+        editor.update(cx, |e, cx| e.undo(cx));
+        assert_eq!(editor.read(cx).editor.doc, original);
+    });
+}
+
+#[gpui_kit::test]
+fn footer_add_mask_supports_alt_inversion_and_undo(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+    for selected in [false, true] {
+        for inverted in [false, true] {
+            let mut document = doc(&["Photo"], None);
+            let id = document.nodes[0].id;
+            if selected {
+                document.selection = Some(Arc::new(Mask::from_fn(256, 192, 0, |x, _| {
+                    if x < 128 { 96 } else { 0 }
+                })));
+            }
+            let original = document.clone();
+            let (ws, cx) = open(cx, document);
+            let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+            cx.run_until_parked();
+            let point = cx.update(|window, _| window.find("layers-add-mask").bounds().center());
+            cx.simulate_click(
+                point,
+                gpui_kit::Modifiers {
+                    alt: inverted,
+                    ..Default::default()
+                },
+            );
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                let e = editor.read(cx);
+                let mask = e.editor.doc.node(id).unwrap().mask.as_ref().unwrap();
+                let expected = if selected { 96 } else { 255 };
+                assert_eq!(
+                    mask.get(32, 32),
+                    if inverted { 255 - expected } else { expected }
+                );
+                let outside = if selected { 0 } else { 255 };
+                assert_eq!(
+                    mask.get(200, 32),
+                    if inverted { 255 - outside } else { outside }
+                );
+                assert_eq!(e.editor.history.len(), 1);
+                if !selected {
+                    assert_eq!(mask.tile_count(), 0);
+                }
+                editor.update(cx, |e, cx| e.undo(cx));
+                assert_eq!(editor.read(cx).editor.doc, original);
+            });
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn add_mask_preserves_existing_masks_and_rejects_locked_layers(cx: &mut TestAppContext) {
+    for existing in [false, true] {
+        let mut document = doc(&["Photo"], None);
+        if existing {
+            document.nodes[0].mask = Some(Arc::new(Mask::from_fn(256, 192, 0, |_, _| 96)));
+        } else {
+            document.nodes[0].locked = true;
+        }
+        let original = document.clone();
+        let (ws, cx) = open(cx, document);
+        cx.update(|_, cx| {
+            let editor = ws.read(cx).editor.clone().unwrap();
+            editor.update(cx, |e, cx| e.add_mask_inverted(true, cx));
+            assert_eq!(editor.read(cx).editor.doc, original);
+            assert_eq!(editor.read(cx).editor.history.len(), 0);
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn add_mask_preserves_source_shares_aligned_selection_and_undo(cx: &mut TestAppContext) {
     use gpui_kit::test::TestWindowExt;
     for selected in [false, true] {

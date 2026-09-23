@@ -2081,6 +2081,7 @@ mod compact_tests {
         });
         let workspace = slot.borrow().clone().unwrap();
         cx.run_until_parked();
+        let menu_bounds = cx.update(|window, _| window.find("compact-app-menu").bounds());
         cx.update(|window, _| {
             assert!(window.find("editor-document-bar").bounds().size.height >= px(36.));
             assert!(window.find("compact-tab-leading-drag").bounds().size.width >= px(24.));
@@ -2104,6 +2105,7 @@ mod compact_tests {
             assert_eq!(workspace.editor.as_ref(), Some(&first));
         });
         cx.update(|window, _| {
+            assert_eq!(window.find("compact-app-menu").bounds(), menu_bounds);
             assert!(window.find("home-brand").visible());
             assert!(window.find("home-header-filters").visible());
             assert!(window.find("home-window-drag").bounds().size.width >= px(48.));
@@ -2151,6 +2153,7 @@ mod compact_tests {
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(workspace.read(cx).screen, Screen::Batch);
+            assert_eq!(window.find("compact-app-menu").bounds(), menu_bounds);
             assert!(window.find("compact-page-header").bounds().size.height >= px(36.));
             assert!(window.find("compact-page-window-drag").bounds().size.width >= px(64.));
         });

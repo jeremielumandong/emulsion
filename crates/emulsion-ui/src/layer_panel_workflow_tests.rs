@@ -110,6 +110,22 @@ fn mask_and_content_thumbnails_choose_independent_edit_targets(cx: &mut TestAppC
         assert!(e.tools.mask_edit);
         assert_eq!(e.editor.doc, document);
     });
+    let alt = gpui_kit::Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+    cx.simulate_click(mask, alt);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_eq!(e.mask_view.layer, Some(id));
+        assert_eq!(e.editor.doc, document);
+    });
+    cx.simulate_click(mask, alt);
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).mask_view.layer, None));
+    cx.simulate_click(mask, alt);
+    cx.run_until_parked();
     let content = cx.update(|window, _| window.find(("layer-content", id)).bounds().center());
     cx.simulate_click(content, Default::default());
     cx.run_until_parked();
@@ -118,8 +134,34 @@ fn mask_and_content_thumbnails_choose_independent_edit_targets(cx: &mut TestAppC
         assert_eq!(e.selected, Some(id));
         assert_eq!(e.tool, Tool::Brush);
         assert!(!e.tools.mask_edit);
+        assert_eq!(e.mask_view.layer, None);
         assert_eq!(e.editor.doc, document);
     });
+    let shift = gpui_kit::Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    cx.simulate_click(mask, shift);
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!editor.read(cx).editor.doc.node(id).unwrap().mask_enabled);
+        assert!(window.find(("layer-mask-disabled", id)).visible());
+    });
+    cx.simulate_click(mask, shift);
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(editor.read(cx).editor.doc.node(id).unwrap().mask_enabled));
+    let mask = cx.update(|window, _| window.find(("layer-mask", id)).bounds().center());
+    cx.simulate_mouse_down(mask, gpui_kit::MouseButton::Right, Default::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(
+            window.within("popup-menu").find(0usize).label(),
+            Some("Delete Layer Mask")
+        );
+        window.within("popup-menu").click(0usize, cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(editor.read(cx).editor.doc.node(id).unwrap().mask.is_none()));
 }
 
 #[gpui_kit::test]
