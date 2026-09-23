@@ -19,3 +19,6 @@ smallvec = { workspace = true }
 glam = { workspace = true }
 i_overlay = "8.1"
 tiny-skia = { version = "0.11.4", default-features = false, features = ["std", "simd"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

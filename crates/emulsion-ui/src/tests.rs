@@ -20,6 +20,12 @@ mod editor_layout_tests;
 #[path = "contextual_taskbar_tests.rs"]
 mod contextual_taskbar_tests;
 
+#[path = "auto_correction_tests.rs"]
+mod auto_correction_tests;
+
+#[path = "subject_matching_tests.rs"]
+mod subject_matching_tests;
+
 #[path = "generation_removal_tests.rs"]
 mod generation_removal_tests;
 
@@ -49,6 +55,9 @@ mod context_menu_tests;
 
 #[path = "blending_workflow_tests.rs"]
 mod blending_workflow_tests;
+
+#[path = "selective_color_workflow_tests.rs"]
+mod selective_color_workflow_tests;
 
 #[path = "versioning_workflow_tests.rs"]
 mod versioning_workflow_tests;

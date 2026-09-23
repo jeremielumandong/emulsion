@@ -89,9 +89,12 @@ impl EditorView {
                             };
                             let enabled = editor.read(cx).effects_ready();
                             let blend_space = editor.read(cx).editor.doc.blend_space;
+                            let auto_ready = editor.read(cx).auto_correction_ready();
+                            let auto_focus = editor.read(cx).canvas_focus.clone();
                             let adjustment_editor = image_editor.clone();
                             let blend_editor = image_editor.clone();
                             let menu = menu
+                                .action_context(auto_focus)
                                 .submenu("Adjustments", window, cx, move |mut menu, _, _| {
                                     for adjustment in Adjustment::catalogue() {
                                         let editor = adjustment_editor.clone();
@@ -111,6 +114,11 @@ impl EditorView {
                                     }
                                     menu
                                 })
+                                .separator()
+                                .item(PopupMenuItem::new("Auto Tone").action(Box::new(crate::actions::AutoTone)).disabled(!auto_ready))
+                                .item(PopupMenuItem::new("Auto Contrast").action(Box::new(crate::actions::AutoContrast)).disabled(!auto_ready))
+                                .item(PopupMenuItem::new("Auto Color").action(Box::new(crate::actions::AutoColor)).disabled(!auto_ready))
+                                .separator()
                                 .submenu("Blend space", window, cx, move |menu, _, _| {
                                     let mut menu = menu;
                                     for (space, label) in [

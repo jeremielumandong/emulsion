@@ -366,8 +366,21 @@ fn merge_punch(target: &mut Option<Vec<f32>>, incoming: Vec<f32>) {
 /// group boundaries.
 fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec<f32>> {
     let mut deep_punch: Option<Vec<f32>> = None;
+    // Every member of a clipping stack shares the bottom layer's shape.
+    // Intermediate adjustments must not turn the upper members global.
+    let mut clip_bases = vec![None; nodes.len()];
+    for (i, node) in nodes.iter().enumerate() {
+        if let Some(j) = node.clip_to.filter(|j| *j < i) {
+            clip_bases[i] = Some(clip_bases[j].unwrap_or(j));
+        }
+    }
     let is_source: Vec<bool> = (0..nodes.len())
-        .map(|i| nodes.iter().any(|n| n.visible && n.clip_to == Some(i)))
+        .map(|i| {
+            nodes
+                .iter()
+                .zip(&clip_bases)
+                .any(|(n, base)| n.visible && *base == Some(i))
+        })
         .collect();
     let mut alphas: Vec<Option<Vec<f32>>> = (0..nodes.len()).map(|_| None).collect();
 
@@ -410,7 +423,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
             fused_until = end;
             continue;
         }
-        let clip: Option<Vec<f32>> = match node.clip_to {
+        let clip: Option<Vec<f32>> = match clip_bases[i] {
             Some(j) if j < i => {
                 if !nodes[j].visible {
                     continue; // clipped to a hidden base: hidden too
@@ -515,6 +528,15 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 if node.blend == BlendMode::PassThrough
                     && node.blending == BlendingOptions::default()
                 {
+                    if is_source[i] {
+                        let mut shape = ftile();
+                        render_list(children, &mut shape, ctx);
+                        let mut alpha: Vec<f32> = shape.iter().map(|p| p[3]).collect();
+                        if let Some(mask) = &mask {
+                            alpha.iter_mut().zip(mask).for_each(|(a, m)| *a *= m);
+                        }
+                        alphas[i] = Some(alpha);
+                    }
                     match coverage(mask.as_ref()) {
                         None => {
                             if let Some(punch) = render_list(children, acc, ctx) {
@@ -615,6 +637,9 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
             }
             NodeContent::Adjust(op) => {
                 let mask = mask_doc(&node.mask);
+                if is_source[i] {
+                    alphas[i] = Some(mask.clone().unwrap_or_else(|| vec![1.0; TILE_PX]));
+                }
                 let mut cov = coverage(mask.as_ref()).unwrap_or_else(|| vec![1.0; TILE_PX]);
                 cov.iter_mut()
                     .for_each(|v| *v *= node.blending.fill_opacity);
@@ -1459,6 +1484,29 @@ mod tests {
     }
 
     #[test]
+    fn selective_color_preserves_alpha_and_transparent_pixels() {
+        for alpha in [0.0, 0.25, 0.75, 1.0] {
+            let base = layer(
+                1,
+                Raster::solid(300, 300, [0.8 * alpha, 0.1 * alpha, 0.05 * alpha, alpha]),
+            );
+            let before = render_tile_cpu(&tree(vec![base.clone()]), 0, TileCoord::new(0, 0));
+            let mut adjustment = layer(2, Raster::empty(1, 1, [0; 4]));
+            adjustment.content = NodeContent::Adjust(Arc::new(
+                Adjustment::selective_color_saturation_check().prepare(),
+            ));
+            let after = render_tile_cpu(&tree(vec![base, adjustment]), 0, TileCoord::new(0, 0));
+            let pixel = at(&after, 5, 5);
+            assert_eq!(pixel[3], at(&before, 5, 5)[3]);
+            if alpha == 0.0 {
+                assert_eq!(pixel, [0.0; 4]);
+            } else {
+                assert_ne!(pixel, at(&before, 5, 5));
+            }
+        }
+    }
+
+    #[test]
     fn adjustment_applies_to_backdrop_only_below() {
         let grey = layer(1, Raster::solid(300, 300, [0.2, 0.2, 0.2, 1.0]));
         let adj = CompositeNode {
@@ -1502,6 +1550,74 @@ mod tests {
         assert_eq!(at(&out, 200, 10)[3], 0.0, "nothing outside the base");
     }
 
+    #[test]
+    fn clipped_adjustment_chains_share_the_base() {
+        for group_blend in [None, Some(BlendMode::Normal), Some(BlendMode::PassThrough)] {
+            for base_visible in [false, true] {
+                for middle_visible in [false, true] {
+                    for grouped in [false, true] {
+                        let scene = |chain| {
+                            let background =
+                                layer(1, Raster::solid(300, 300, [0.1, 0.1, 0.1, 1.0]));
+                            let subject = layer(2, Raster::solid(150, 300, [0.2, 0.2, 0.2, 1.0]));
+                            let mut base = if let Some(blend) = group_blend {
+                                CompositeNode {
+                                    content: NodeContent::Group(vec![subject]),
+                                    blend,
+                                    ..layer(3, Raster::empty(300, 300, [0; 4]))
+                                }
+                            } else {
+                                subject
+                            };
+                            base.visible = base_visible;
+                            base.opacity = 0.5;
+                            base.blending.blend_clipped_layers_as_group = grouped;
+                            let adjustment = |id, clip_to| CompositeNode {
+                                clip_to: Some(clip_to),
+                                content: NodeContent::Adjust(Arc::new(
+                                    Adjustment::Exposure {
+                                        exposure: 1.0,
+                                        offset: 0.0,
+                                        gamma: 1.0,
+                                    }
+                                    .prepare(),
+                                )),
+                                ..layer(id, Raster::empty(300, 300, [0; 4]))
+                            };
+                            let mut middle = adjustment(4, 1);
+                            middle.visible = middle_visible;
+                            middle.opacity = 0.25;
+                            middle.mask = Some(Arc::new(Mask::empty(300, 300, 0)));
+                            tree(vec![
+                                background,
+                                base,
+                                middle,
+                                adjustment(5, if chain { 2 } else { 1 }),
+                            ])
+                        };
+                        let direct = render_tile(&scene(false), 0, TileCoord::new(0, 0));
+                        let chained = render_tile(&scene(true), 0, TileCoord::new(0, 0));
+                        assert_eq!(direct, chained, "chain must share base shape and blending");
+                        assert!(
+                            (at(&chained, 200, 10)[0] - 0.1).abs() < 2e-3,
+                            "background unchanged"
+                        );
+                        if base_visible {
+                            assert!(
+                                at(&chained, 10, 10)[0] > 0.2,
+                                "upper adjustment remains active"
+                            );
+                        } else {
+                            assert!(
+                                (at(&chained, 10, 10)[0] - 0.1).abs() < 2e-3,
+                                "hidden base hides stack"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn isolated_group_vs_pass_through() {
         // Multiply inside a group: isolated sees a transparent backdrop.

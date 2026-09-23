@@ -1869,6 +1869,21 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToolZoom, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Zoom, cx))
             }))
+            .on_action(cx.listener(|this, _: &AutoTone, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.auto_correct(emulsion_raster::auto::AutoCorrection::Tone, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &AutoContrast, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.auto_correct(emulsion_raster::auto::AutoCorrection::Contrast, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &AutoColor, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.auto_correct(emulsion_raster::auto::AutoCorrection::Color, cx)
+                })
+            }))
             .on_action(cx.listener(|this, _: &ImageSizeDialog, window, cx| {
                 if this.style_dialog_open(cx) {
                     return;

@@ -95,6 +95,12 @@ impl EditorView {
                 }
             }
             Tool::Move => {
+                add(
+                    "context-match-subject",
+                    "Set up subject match",
+                    self.can_match_subject(),
+                    Self::match_subject_stack,
+                );
                 if self.warp.is_some() {
                     add("context-warp-apply", "Apply warp", true, Self::finish_warp);
                     add(
@@ -259,6 +265,41 @@ impl EditorView {
                 }
             }
             Tool::Grade => {
+                add(
+                    "context-auto-tone",
+                    "Auto Tone",
+                    self.auto_correction_ready(),
+                    |this, cx| this.auto_correct(emulsion_raster::auto::AutoCorrection::Tone, cx),
+                );
+                add(
+                    "context-auto-contrast",
+                    "Auto Contrast",
+                    self.auto_correction_ready(),
+                    |this, cx| {
+                        this.auto_correct(emulsion_raster::auto::AutoCorrection::Contrast, cx)
+                    },
+                );
+                add(
+                    "context-auto-color",
+                    "Auto Color",
+                    self.auto_correction_ready(),
+                    |this, cx| this.auto_correct(emulsion_raster::auto::AutoCorrection::Color, cx),
+                );
+                add(
+                    "context-check-brightness",
+                    "Check brightness",
+                    ready,
+                    |this, cx| this.add_blending_check("brightness", cx),
+                );
+                add(
+                    "context-check-saturation",
+                    "Check saturation",
+                    ready,
+                    |this, cx| this.add_blending_check("saturation", cx),
+                );
+                add("context-check-color", "Check color", ready, |this, cx| {
+                    this.add_blending_check("color", cx)
+                });
                 add("context-hsl", "Hue / Saturation", true, |this, cx| {
                     this.quick_adjust("hue_saturation", cx)
                 });

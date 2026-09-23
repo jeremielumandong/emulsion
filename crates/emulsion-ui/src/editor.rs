@@ -9,6 +9,8 @@ mod adjust_ui;
 mod ai_tools;
 mod alignment;
 mod animation;
+mod auto_correct;
+mod blend_match;
 mod brush_library_ui;
 mod brush_memory;
 mod brush_quick;
@@ -3609,7 +3611,7 @@ impl EditorView {
                 for extra in self.adjust_extras(id, &a, p, cx) {
                     body = body.child(extra);
                 }
-                for spec in a.params() {
+                for spec in self.adjust_visible_params(&a) {
                     let ParamSpec {
                         key,
                         label: l,

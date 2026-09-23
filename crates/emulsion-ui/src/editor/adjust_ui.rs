@@ -3,6 +3,10 @@
 
 use super::*;
 use emulsion_raster::adjust::{Cube, Histogram, Stop, curve_at, straight_curve};
+use emulsion_raster::adjust::{SELECTIVE_COLOR_KEYS, SELECTIVE_COLOR_RANGES};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::{Disableable, Selectable, Sizable};
 
 /// Which curve of a Curves node is being edited.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -64,6 +68,7 @@ pub struct CurveDrag {
 #[derive(Default)]
 pub(crate) struct AdjustUi {
     pub channel: Channel,
+    pub selective_range: usize,
     /// Histogram of the composite, by revision.
     hist: Option<(u64, Arc<Histogram>)>,
     hist_loading: Option<u64>,
@@ -72,6 +77,88 @@ pub(crate) struct AdjustUi {
 const CURVE_PX: f32 = 200.0;
 
 impl EditorView {
+    /// Only the selected color range's four channels belong in Properties.
+    pub(crate) fn adjust_visible_params(&self, adjustment: &Adjustment) -> Vec<ParamSpec> {
+        let mut params = adjustment.params();
+        if matches!(adjustment, Adjustment::SelectiveColor { .. }) {
+            let keys = SELECTIVE_COLOR_KEYS[self.adjust_ui.selective_range.min(8)];
+            params.retain(|param| keys.contains(&param.key));
+        }
+        params
+    }
+
+    fn selective_color_controls(
+        &self,
+        id: NodeId,
+        relative: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let range = self.adjust_ui.selective_range.min(8);
+        let weak = cx.entity().downgrade();
+        let disabled = !self.effects_ready() || self.editor.doc.locked_ancestor(id).is_some();
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                Button::new("selective-color-range")
+                    .small()
+                    .label(format!("Colors: {}", SELECTIVE_COLOR_RANGES[range]))
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for (index, name) in SELECTIVE_COLOR_RANGES.iter().enumerate() {
+                            let weak = weak.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(*name)
+                                    .checked(range == index)
+                                    .on_click(move |_, _, cx| {
+                                        if let Some(editor) = weak.upgrade() {
+                                            editor.update(cx, |this, cx| {
+                                                this.adjust_ui.selective_range = index;
+                                                cx.notify();
+                                            });
+                                        }
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .child(div().flex().gap_1().children(
+                [("selective-relative", "Relative", true), ("selective-absolute", "Absolute", false)]
+                    .into_iter()
+                    .map(|(key, label, value)| {
+                        Button::new(key)
+                            .small()
+                            .ghost()
+                            .label(label)
+                            .selected(relative == value)
+                            .disabled(disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let Some(NodeKind::Adjust(Adjustment::SelectiveColor { colors, .. })) =
+                                    this.editor.doc.node(id).map(|node| &node.kind)
+                                else { return };
+                                let adjustment = Adjustment::SelectiveColor { colors: *colors, relative: value };
+                                this.execute(Command::SetAdjustment { id, adjustment }, cx);
+                            }))
+                    }),
+            ))
+            .child(
+                Button::new("selective-saturation-check")
+                    .small()
+                    .ghost()
+                    .label("Saturation check preset")
+                    .tooltip("Reveal saturation differences using absolute Selective Color; hide this layer when finished")
+                    .disabled(disabled)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.execute(Command::SetAdjustment {
+                            id,
+                            adjustment: Adjustment::selective_color_saturation_check(),
+                        }, cx);
+                    })),
+            )
+            .into_any_element()
+    }
+
     /// The composite histogram, refreshed in the background when the
     /// document changes.
     pub(crate) fn histogram(&mut self, cx: &mut Context<Self>) -> Option<Arc<Histogram>> {
@@ -178,6 +265,9 @@ impl EditorView {
     ) -> Vec<AnyElement> {
         let mut v = Vec::new();
         match a {
+            Adjustment::SelectiveColor { relative, .. } => {
+                v.push(self.selective_color_controls(id, *relative, cx));
+            }
             Adjustment::Curves { .. } => {
                 let cur = self.adjust_ui.channel;
                 let mut chips = div().flex().gap(px(6.));
@@ -666,6 +756,7 @@ const QUICK_ADJUST: &[(&str, &[&str])] = &[
             "white_balance",
             "hue_saturation",
             "color_balance",
+            "selective_color",
             "vibrance",
             "photo_filter",
             "black_and_white",

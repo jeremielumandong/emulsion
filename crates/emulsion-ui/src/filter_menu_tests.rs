@@ -157,10 +157,10 @@ fn image_blend_space_is_discoverable_and_undoable(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         window.click("image-menu", cx);
         assert_eq!(
-            window.within("popup-menu").find(1usize).label(),
+            window.within("popup-menu").find(6usize).label(),
             Some("Blend space")
         );
-        window.within("popup-menu").hover(1usize, cx);
+        window.within("popup-menu").hover(6usize, cx);
         window.press("right", cx);
         assert_eq!(
             window.within("submenu").find(0usize).label(),

@@ -5,6 +5,7 @@
 //! in sparse 256×256 tiles shared through `Arc`. All math runs in `f32`.
 
 pub mod adjust;
+pub mod auto;
 pub mod blend;
 pub mod color;
 pub mod composite;

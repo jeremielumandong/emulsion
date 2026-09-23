@@ -76,6 +76,7 @@ fn supported_adjust(op: &Prepared, depth: usize) -> bool {
         }
         *remaining -= 1;
         match op {
+            Prepared::SelectiveColor { .. } => false,
             Prepared::Chain(ops) => {
                 ops.len() <= 64 && ops.iter().all(|op| visit(op, depth + 1, remaining))
             }
@@ -206,6 +207,7 @@ impl Program<'_> {
                 }));
                 (20, values)
             }
+            Prepared::SelectiveColor { .. } => return None,
             Prepared::Chain(_) => unreachable!(),
         };
         if self.sources.len().checked_add(payload.len())? > MAX_SOURCE_PIXELS {
@@ -950,6 +952,16 @@ mod tests {
             space: BlendSpace::Srgb,
             nodes: vec![base, hidden, zero, clipped]
         }));
+    }
+
+    #[test]
+    fn selective_color_declines_gpu_including_fused_chains() {
+        let op = Arc::new(
+            emulsion_raster::adjust::Adjustment::selective_color_saturation_check().prepare(),
+        );
+        assert!(!supported_adjust(&op, 0));
+        assert!(!supported_adjust(&Prepared::Chain(vec![op.clone()]), 0));
+        assert!(!supported(&[node(NodeContent::Adjust(op))], 0, &mut 0));
     }
 
     #[test]

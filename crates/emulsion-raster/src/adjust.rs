@@ -13,6 +13,53 @@ use crate::color::{linear_to_srgb, srgb_to_linear};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// Selective Color range order used in serialized adjustment values.
+pub const SELECTIVE_COLOR_RANGES: [&str; 9] = [
+    "Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas", "Whites", "Neutrals", "Blacks",
+];
+/// CMYK parameter keys for each Selective Color range.
+pub const SELECTIVE_COLOR_KEYS: [[&str; 4]; 9] = [
+    ["reds_cyan", "reds_magenta", "reds_yellow", "reds_black"],
+    [
+        "yellows_cyan",
+        "yellows_magenta",
+        "yellows_yellow",
+        "yellows_black",
+    ],
+    [
+        "greens_cyan",
+        "greens_magenta",
+        "greens_yellow",
+        "greens_black",
+    ],
+    ["cyans_cyan", "cyans_magenta", "cyans_yellow", "cyans_black"],
+    ["blues_cyan", "blues_magenta", "blues_yellow", "blues_black"],
+    [
+        "magentas_cyan",
+        "magentas_magenta",
+        "magentas_yellow",
+        "magentas_black",
+    ],
+    [
+        "whites_cyan",
+        "whites_magenta",
+        "whites_yellow",
+        "whites_black",
+    ],
+    [
+        "neutrals_cyan",
+        "neutrals_magenta",
+        "neutrals_yellow",
+        "neutrals_black",
+    ],
+    [
+        "blacks_cyan",
+        "blacks_magenta",
+        "blacks_yellow",
+        "blacks_black",
+    ],
+];
+
 /// A colour stop of a gradient map: position 0–1 and straight sRGB.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Stop {
@@ -163,6 +210,11 @@ pub enum Adjustment {
         highlights: [f32; 3],
         preserve_luminosity: bool,
     },
+    /// CMYK percentages for the nine SELECTIVE_COLOR_RANGES, in encoded sRGB.
+    SelectiveColor {
+        colors: [[f32; 4]; 9],
+        relative: bool,
+    },
     Vibrance {
         vibrance: f32,
         saturation: f32,
@@ -245,6 +297,44 @@ fn b2f(b: bool) -> f32 {
     if b { 1.0 } else { 0.0 }
 }
 
+// Range weighting and bounded CMYK deltas follow the normalized selective-color
+// model documented at https://blog.pkh.me/p/22-understanding-selective-coloring-in-adobe-photoshop.html.
+// Calculations remain floating point; integer Photoshop output is not assumed bit-exact.
+fn selective_color(rgb: [f32; 3], colors: &[[f32; 4]; 9], relative: bool) -> [f32; 3] {
+    let [r, g, b] = rgb;
+    let min = r.min(g).min(b);
+    let max = r.max(g).max(b);
+    let middle = r + g + b - min - max;
+    let primary = max - middle;
+    let secondary = middle - min;
+    let weights = [
+        if r == max { primary } else { 0.0 },
+        if b == min { secondary } else { 0.0 },
+        if g == max { primary } else { 0.0 },
+        if r == min { secondary } else { 0.0 },
+        if b == max { primary } else { 0.0 },
+        if g == min { secondary } else { 0.0 },
+        (2.0 * min - 1.0).max(0.0),
+        1.0 - (max - 0.5).abs() - (min - 0.5).abs(),
+        (1.0 - 2.0 * max).max(0.0),
+    ];
+    std::array::from_fn(|channel| {
+        let value = rgb[channel];
+        let mut result = value;
+        for (weight, cmyk) in weights.into_iter().zip(colors) {
+            let ink = cmyk[channel];
+            let delta = -ink - cmyk[3] * (1.0 + ink);
+            let delta = if relative {
+                delta * (1.0 - value)
+            } else {
+                delta
+            };
+            result += weight * delta.clamp(-value, 1.0 - value);
+        }
+        result.clamp(0.0, 1.0)
+    })
+}
+
 /// The straight curve: identity.
 pub fn straight_curve() -> Vec<[f32; 2]> {
     vec![[0.0, 0.0], [255.0, 255.0]]
@@ -286,6 +376,10 @@ impl Adjustment {
                 midtones: [0.0; 3],
                 highlights: [0.0; 3],
                 preserve_luminosity: true,
+            },
+            Adjustment::SelectiveColor {
+                colors: [[0.0; 4]; 9],
+                relative: true,
             },
             Adjustment::Vibrance {
                 vibrance: 0.0,
@@ -349,6 +443,7 @@ impl Adjustment {
             Adjustment::Curves { .. } => "Curves",
             Adjustment::HueSaturation { .. } => "Hue / Saturation",
             Adjustment::ColorBalance { .. } => "Color balance",
+            Adjustment::SelectiveColor { .. } => "Selective color",
             Adjustment::Vibrance { .. } => "Vibrance",
             Adjustment::BlackAndWhite { .. } => "Black & white",
             Adjustment::PhotoFilter { .. } => "Photo filter",
@@ -372,6 +467,7 @@ impl Adjustment {
             Adjustment::Curves { .. } => "curves",
             Adjustment::HueSaturation { .. } => "hue_saturation",
             Adjustment::ColorBalance { .. } => "color_balance",
+            Adjustment::SelectiveColor { .. } => "selective_color",
             Adjustment::Vibrance { .. } => "vibrance",
             Adjustment::BlackAndWhite { .. } => "black_and_white",
             Adjustment::PhotoFilter { .. } => "photo_filter",
@@ -452,6 +548,32 @@ impl Adjustment {
                 ),
                 p("lightness", "lightness", -100.0, 100.0, 1.0, *lightness, ""),
             ],
+            Adjustment::SelectiveColor { colors, relative } => {
+                let mut params = Vec::with_capacity(37);
+                for (range, keys) in SELECTIVE_COLOR_KEYS.iter().enumerate() {
+                    for (channel, key) in keys.iter().enumerate() {
+                        params.push(p(
+                            key,
+                            ["Cyan", "Magenta", "Yellow", "Black"][channel],
+                            -100.0,
+                            100.0,
+                            1.0,
+                            colors[range][channel],
+                            "%",
+                        ));
+                    }
+                }
+                params.push(p(
+                    "relative",
+                    "Relative",
+                    0.0,
+                    1.0,
+                    1.0,
+                    b2f(*relative),
+                    "on",
+                ));
+                params
+            }
             Adjustment::ColorBalance {
                 shadows,
                 midtones,
@@ -672,7 +794,23 @@ impl Adjustment {
         let Some(spec) = self.params().into_iter().find(|s| s.key == key) else {
             return false;
         };
+        if !value.is_finite() {
+            return false;
+        }
         let v = value.clamp(spec.min, spec.max);
+        if let Adjustment::SelectiveColor { colors, relative } = self {
+            if key == "relative" {
+                *relative = v >= 0.5;
+                return true;
+            }
+            for (range, keys) in SELECTIVE_COLOR_KEYS.iter().enumerate() {
+                if let Some(channel) = keys.iter().position(|k| *k == key) {
+                    colors[range][channel] = v;
+                    return true;
+                }
+            }
+            return false;
+        }
         let on = v >= 0.5;
         let slot: &mut f32 = match (self, key) {
             (Adjustment::Exposure { exposure, .. }, "exposure") => exposure,
@@ -755,6 +893,17 @@ impl Adjustment {
         true
     }
 
+    /// Temporary saturation diagnostic used while matching a composite.
+    /// Disable or delete the adjustment once the subject matches the background.
+    pub fn selective_color_saturation_check() -> Adjustment {
+        let colors =
+            std::array::from_fn(|range| [0.0, 0.0, 0.0, if range < 6 { -100.0 } else { 100.0 }]);
+        Adjustment::SelectiveColor {
+            colors,
+            relative: false,
+        }
+    }
+
     /// Levels that stretch the histogram so `clip` percent of pixels clip
     /// at each end (Photoshop's Auto uses 0.1 %).
     pub fn auto_levels(hist: &Histogram, clip: f32) -> Adjustment {
@@ -800,6 +949,18 @@ impl Adjustment {
                 hue: hue / 360.0,
                 sat: saturation / 100.0,
                 light: lightness / 100.0,
+            },
+            Adjustment::SelectiveColor { colors, relative } => Prepared::SelectiveColor {
+                colors: colors.map(|range| {
+                    range.map(|v| {
+                        if v.is_finite() {
+                            v.clamp(-100.0, 100.0) / 100.0
+                        } else {
+                            0.0
+                        }
+                    })
+                }),
+                relative: *relative,
             },
             Adjustment::ColorBalance {
                 shadows,
@@ -1117,6 +1278,10 @@ pub enum Prepared {
         sat: f32,
         light: f32,
     },
+    SelectiveColor {
+        colors: [[f32; 4]; 9],
+        relative: bool,
+    },
     ColorBalance {
         s: [f32; 3],
         m: [f32; 3],
@@ -1218,6 +1383,9 @@ impl Prepared {
                     l * (1.0 + light)
                 };
                 dec(hsl_to_rgb(h, s.clamp(0.0, 1.0), l.clamp(0.0, 1.0)))
+            }
+            Prepared::SelectiveColor { colors, relative } => {
+                dec(selective_color(enc(c), colors, *relative))
             }
             Prepared::ColorBalance { s, m, h, preserve } => {
                 let e = enc(c);
@@ -1415,6 +1583,92 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selective_color_round_trip_and_parameters() {
+        let mut adjustment = Adjustment::SelectiveColor {
+            colors: [[0.0; 4]; 9],
+            relative: true,
+        };
+        for keys in SELECTIVE_COLOR_KEYS {
+            for key in keys {
+                assert!(adjustment.set_param(key, 23.0));
+                assert_eq!(
+                    adjustment
+                        .params()
+                        .iter()
+                        .find(|p| p.key == key)
+                        .unwrap()
+                        .value,
+                    23.0
+                );
+            }
+        }
+        assert!(adjustment.set_param("blacks_black", 200.0));
+        assert!(adjustment.set_param("relative", 0.0));
+        assert!(!adjustment.set_param("reds_cyan", f32::NAN));
+        assert!(!adjustment.set_param("unknown", 0.0));
+        let json = serde_json::to_string(&adjustment).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Adjustment>(&json).unwrap(),
+            adjustment
+        );
+        assert!(json.contains("selective-color"));
+        let Adjustment::SelectiveColor { colors, relative } = adjustment else {
+            unreachable!()
+        };
+        assert!(!relative);
+        assert_eq!(colors[8][3], 100.0);
+    }
+
+    #[test]
+    fn selective_color_targets_range_and_relative_scales_ink() {
+        let mut colors = [[0.0; 4]; 9];
+        colors[0][0] = 0.2;
+        let red = [0.8, 0.3, 0.1];
+        assert!(close(
+            selective_color(red, &colors, false),
+            [0.7, 0.3, 0.1],
+            1e-6
+        ));
+        assert!(close(
+            selective_color(red, &colors, true),
+            [0.78, 0.3, 0.1],
+            1e-6
+        ));
+        for other in [[0.1, 0.8, 0.3], [0.3, 0.1, 0.8], [0.4; 3]] {
+            assert!(close(selective_color(other, &colors, false), other, 1e-6));
+        }
+    }
+
+    #[test]
+    fn selective_color_saturation_diagnostic_and_bounds() {
+        let check = Adjustment::selective_color_saturation_check().prepare();
+        let gray = check.apply(dec([0.5; 3]));
+        let saturated = check.apply(dec([0.9, 0.1, 0.1]));
+        assert!(gray.iter().all(|v| v.abs() < 1e-6));
+        assert!(saturated.iter().sum::<f32>() > 1.0);
+        for relative in [false, true] {
+            for value in [-100.0, 100.0] {
+                let op = Adjustment::SelectiveColor {
+                    colors: [[value; 4]; 9],
+                    relative,
+                }
+                .prepare();
+                for r in 0..=10 {
+                    for g in 0..=10 {
+                        for b in 0..=10 {
+                            assert!(
+                                op.apply([r as f32 / 10.0, g as f32 / 10.0, b as f32 / 10.0])
+                                    .iter()
+                                    .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     use super::*;
 
     fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
