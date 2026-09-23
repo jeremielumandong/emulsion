@@ -17,6 +17,7 @@ use emulsion_raster::{Placement, Raster};
 use emulsion_recipes::Recipe;
 use emulsion_recipes::store;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::progress::Progress;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::{HashSet, VecDeque};
@@ -68,6 +69,7 @@ pub(crate) struct BatchState {
     pub out_dir: Option<PathBuf>,
     /// Export progress: done, total.
     pub running: Option<(usize, usize)>,
+    pub(crate) exporting: Option<PathBuf>,
     run_generation: u64,
     pub note: Option<(SharedString, bool)>,
 }
@@ -237,12 +239,14 @@ fn process_one(
     out_dir: &Path,
     ext: &str,
 ) -> Result<PathBuf, String> {
-    let doc = emulsion_io::open(path).map_err(|e| e.to_string())?;
+    let doc = emulsion_io::open(path).map_err(|e| format!("Could not open input: {e}"))?;
     let mut ed = Editor::new(doc, None);
     let (w, h) = (ed.doc.width, ed.doc.height);
     if let Some(r) = recipe {
-        let compiled = emulsion_recipes::compile_sized(r, w, h).map_err(|e| e.to_string())?;
-        store::add_to(&mut ed, compiled, Slot::TOP).map_err(|e| e.to_string())?;
+        let compiled = emulsion_recipes::compile_sized(r, w, h)
+            .map_err(|e| format!("Could not apply recipe {}: {e}", r.name))?;
+        store::add_to(&mut ed, compiled, Slot::TOP)
+            .map_err(|e| format!("Could not apply recipe {}: {e}", r.name))?;
     }
     let stem = path
         .file_stem()
@@ -251,12 +255,14 @@ fn process_one(
     let suffix = recipe
         .map(|r| format!("-{}", slug(&r.name)))
         .unwrap_or_default();
-    std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
-    let stage = BatchStage::new(out_dir, ext).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(out_dir)
+        .map_err(|e| format!("Could not create output folder {}: {e}", out_dir.display()))?;
+    let stage = BatchStage::new(out_dir, ext)
+        .map_err(|e| format!("Could not write to {}: {e}", out_dir.display()))?;
     emulsion_io::export::export(&ed.doc, &stage.0, ExportOptions::for_doc(&ed.doc))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("Could not encode {ext}: {e}"))?;
     publish_batch_file(&stage.0, out_dir, &format!("{stem}{suffix}"), ext)
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("Could not save output in {}: {e}", out_dir.display()))
 }
 
 /// Encode privately, then publish with an exclusive hard link. Unlike an
@@ -550,11 +556,27 @@ impl Workspace {
         self.batch.run_generation = self.batch.run_generation.wrapping_add(1);
         let generation = self.batch.run_generation;
         self.batch.running = Some((0, total));
+        self.batch.exporting = paths.first().cloned();
         self.batch.note = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let mut failed = 0;
+            let mut first_failure = None;
             for (i, path) in paths.into_iter().enumerate() {
+                let go_on = this
+                    .update(cx, |this, cx| {
+                        if this.batch.run_generation != generation || this.batch.running.is_none() {
+                            return false;
+                        }
+                        this.batch.exporting = Some(path.clone());
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !go_on {
+                    return;
+                }
+                let input = path.display().to_string();
                 let r = cx
                     .background_spawn({
                         let (recipe, out_dir, ext) = (recipe.clone(), out_dir.clone(), ext.clone());
@@ -568,7 +590,10 @@ impl Workspace {
                         }
                         if let Err(e) = r {
                             failed += 1;
-                            this.batch.note = Some((e.into(), true));
+                            tracing::warn!(input = %input, error = %e, "Batch export failed");
+                            let detail = format!("{input}: {e}");
+                            first_failure.get_or_insert_with(|| detail.clone());
+                            this.batch.note = Some((detail.into(), true));
                         }
                         this.batch.running = Some((i + 1, total));
                         cx.notify();
@@ -584,6 +609,7 @@ impl Workspace {
                     return;
                 }
                 this.batch.running = None;
+                this.batch.exporting = None;
                 if failed == 0 {
                     this.batch.note = Some((
                         format!("Exported {total} to {}", out_dir.display()).into(),
@@ -591,7 +617,12 @@ impl Workspace {
                     ));
                 } else {
                     this.batch.note = Some((
-                        format!("Exported {} of {total}; {failed} failed", total - failed).into(),
+                        format!(
+                            "Exported {} of {total}; {failed} failed. First error: {}",
+                            total - failed,
+                            first_failure.as_deref().unwrap_or("Unknown export error")
+                        )
+                        .into(),
                         true,
                     ));
                 }
@@ -605,6 +636,7 @@ impl Workspace {
     pub fn cancel_batch(&mut self, cx: &mut Context<Self>) {
         self.batch.run_generation = self.batch.run_generation.wrapping_add(1);
         self.batch.running = None;
+        self.batch.exporting = None;
         self.batch.note = Some(("Export stopped.".into(), false));
         cx.notify();
     }
@@ -1025,12 +1057,11 @@ impl Workspace {
             )
             .child(mono(format!("{selected} / {total} selected"), 10., p.ink).whitespace_nowrap());
         bar = match self.batch.running {
-            Some((done, count)) => bar
-                .child(mono(format!("Exporting {done}/{count}"), 10., p.accent))
-                .child(
-                    chip("batch-stop", "Stop", false, &p)
-                        .on_click(cx.listener(|this, _, _, cx| this.cancel_batch(cx))),
-                ),
+            Some(_) => bar.child(
+                chip("batch-stop", "Stop", false, &p)
+                    .on_click(cx.listener(|this, _, _, cx| this.cancel_batch(cx)))
+                    .test_support(),
+            ),
             None => bar.child(
                 button("batch-run", format!("Export {selected}"), selected > 0, &p)
                     .py(px(5.))
@@ -1249,6 +1280,63 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .child(bar.test_support())
+            .children(self.batch.running.map(|(done, count)| {
+                let percent = if count == 0 {
+                    0.
+                } else {
+                    100. * done as f32 / count as f32
+                };
+                let filename = self
+                    .batch
+                    .exporting
+                    .as_ref()
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                div()
+                    .id("batch-export-progress")
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .gap_2()
+                    .px_4()
+                    .py_3()
+                    .border_b_1()
+                    .border_color(p.line)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .id("batch-export-file")
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .text_sm()
+                                    .child(format!("Exporting {filename}"))
+                                    .test_support(),
+                            )
+                            .child(
+                                div()
+                                    .id("batch-export-count")
+                                    .flex_none()
+                                    .text_sm()
+                                    .child(format!("{done} / {count} processed · {percent:.0}%"))
+                                    .test_support(),
+                            ),
+                    )
+                    .child(
+                        Progress::new("batch-export-bar")
+                            .accessibility_label("Batch export progress")
+                            .value(percent)
+                            .loading(done == 0),
+                    )
+                    .test_support()
+            }))
             .children(self.batch.note.as_ref().map(|(message, error)| {
                 div()
                     .flex_none()
@@ -1637,6 +1725,68 @@ mod export_safety_tests {
                 .to_string_lossy()
                 .starts_with(".emulsion-batch-")
         }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn jpeg_png_and_raw_batch_exports_support_every_offered_format_with_a_recipe() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "emulsion-batch-formats-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let png = dir.join("photo.png");
+        std::fs::write(
+            &png,
+            emulsion_io::export::png8(36, 24, &[80, 110, 150, 255].repeat(36 * 24)).unwrap(),
+        )
+        .unwrap();
+        let jpeg = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(36, 24, image::Rgb([80, 110, 150]))
+            .save(&jpeg)
+            .unwrap();
+        let raw = dir.join("camera.dng");
+        crate::raw_test_fixture::write_dng(&raw);
+        let recipe = emulsion_recipes::Recipe {
+            name: "Warm grade".into(),
+            exposure_compensation: "+1/3".into(),
+            color: 2.0,
+            shadow: 1.0,
+            ..Default::default()
+        };
+        for input in [&jpeg, &png, &raw] {
+            let original = std::fs::read(input).unwrap();
+            let source = emulsion_io::open(input).unwrap();
+            for ext in ["jpg", "png", "webp", "tif"] {
+                let output = super::process_one(input, Some(&recipe), &dir.join("exports"), ext)
+                    .unwrap_or_else(|error| panic!("{} -> {ext}: {error}", input.display()));
+                let decoded = image::open(&output).unwrap();
+                assert_eq!(
+                    (decoded.width(), decoded.height()),
+                    (source.width, source.height)
+                );
+                assert!(decoded.to_rgba8().pixels().all(|pixel| pixel[3] == 255));
+                if input == &raw && ["png", "tif"].contains(&ext) {
+                    assert_eq!(decoded.color(), image::ColorType::Rgba16);
+                }
+            }
+            assert_eq!(std::fs::read(input).unwrap(), original);
+        }
+        assert!(
+            std::fs::read_dir(dir.join("exports"))
+                .unwrap()
+                .all(|entry| {
+                    !entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with('.')
+                })
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

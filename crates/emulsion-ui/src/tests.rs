@@ -1002,6 +1002,48 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
 
 // ── Phase 3 tools, driven through real pointer and key events ────────────
 
+#[path = "batch/progress_tests.rs"]
+mod batch_progress_tests;
+
+#[gpui_kit::test]
+fn batch_export_keeps_the_failed_filename_and_reason(cx: &mut TestAppContext) {
+    use crate::workspace::Screen;
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    let dir = std::env::temp_dir().join(format!(
+        "emulsion-batch-failure-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    let input = dir.join("broken-photo.jpg");
+    std::fs::write(&input, b"not a JPEG").unwrap();
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(dir.clone(), vec![input.clone()], cx);
+            ws.batch.items[0].selected = true;
+            ws.batch.format = "png".into();
+            ws.screen = Screen::Batch;
+            ws.run_batch(cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let batch = &ws.read(cx).batch;
+        assert!(batch.running.is_none());
+        let (message, error) = batch.note.as_ref().unwrap();
+        assert!(*error);
+        assert!(message.contains("broken-photo.jpg"), "{message}");
+        assert!(message.contains("Could not open input:"), "{message}");
+        assert!(message.contains("1 failed"), "{message}");
+    });
+    assert!(!dir.join("emulsion-export").exists());
+    std::fs::remove_file(input).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
 #[gpui_kit::test]
 fn batch_folder_loads_thumbnails_without_selecting_or_exporting(cx: &mut TestAppContext) {
     use crate::workspace::Screen;
