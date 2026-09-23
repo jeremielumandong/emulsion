@@ -87,10 +87,10 @@ const fn pen(name: &'static str, glyph: &'static str, mode: PenMode) -> RailItem
         ..item(
             name,
             glyph,
-            if matches!(mode, PenMode::Pen) {
-                "P"
-            } else {
-                ""
+            match mode {
+                PenMode::Pen => "P",
+                PenMode::Free | PenMode::Curvature => "Shift+P",
+                _ => "",
             },
             Tool::Pen,
         )
@@ -139,25 +139,25 @@ pub const GROUPS: &[&[RailItem]] = &[
         item("Heal", "bandage", "J", Tool::Heal),
         RailItem {
             remove: true,
-            ..item("Remove", "bandage", "J", Tool::Heal)
+            ..item("Remove", "bandage", "Shift+J", Tool::Heal)
         },
     ],
     &[paint("Brush", "brush", "B", PaintKind::Brush)],
     &[item("Clone stamp", "stamp", "S", Tool::Clone)],
     &[paint("Eraser", "eraser", "E", PaintKind::Eraser)],
     &[
-        paint(
-            "Gradient",
-            "emulsion-gradient",
-            "Shift+G",
-            PaintKind::Gradient,
-        ),
-        paint("Paint bucket", "paint-bucket", "G", PaintKind::Bucket),
+        paint("Gradient", "emulsion-gradient", "G", PaintKind::Gradient),
+        paint("Paint bucket", "paint-bucket", "Shift+G", PaintKind::Bucket),
     ],
     // Photoshop's Blur / Sharpen / Smudge slot.
     &[
         paint("Smudge", "pointer", "Shift+B", PaintKind::Smudge),
-        paint("Liquify", "emulsion-liquify", "Shift+J", PaintKind::Liquify),
+        paint(
+            "Liquify",
+            "emulsion-liquify",
+            "Ctrl+Shift+X",
+            PaintKind::Liquify,
+        ),
     ],
     &[
         pen("Pen", "pen-tool", PenMode::Pen),
@@ -204,19 +204,19 @@ pub const DIVIDERS: &[usize] = &[0, 3, 5, 11, 14, 16];
 pub const DRAW_GROUPS: &[&[RailItem]] = &[
     &[
         paint("Brush", "brush", "B", PaintKind::Brush),
-        paint("Liquify", "emulsion-liquify", "Shift+J", PaintKind::Liquify),
+        paint(
+            "Liquify",
+            "emulsion-liquify",
+            "Ctrl+Shift+X",
+            PaintKind::Liquify,
+        ),
     ],
     &[paint("Smudge", "pointer", "Shift+B", PaintKind::Smudge)],
     &[paint("Eraser", "eraser", "E", PaintKind::Eraser)],
     &[item("Eyedropper", "pipette", "I", Tool::Eyedropper)],
     &[
-        paint("Paint bucket", "paint-bucket", "G", PaintKind::Bucket),
-        paint(
-            "Gradient",
-            "emulsion-gradient",
-            "Shift+G",
-            PaintKind::Gradient,
-        ),
+        paint("Paint bucket", "paint-bucket", "Shift+G", PaintKind::Bucket),
+        paint("Gradient", "emulsion-gradient", "G", PaintKind::Gradient),
     ],
     &[
         select(
@@ -346,6 +346,10 @@ fn icon_bytes(id: &str) -> &'static [u8] {
         }
         "library" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/library.svg")
+        }
+        "link" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/link.svg"),
+        "file-plus" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/file-plus.svg")
         }
         _ => include_bytes!(
             "../../../../vendor/gpui/gpui-kit-assets/assets/icons/circle-question-mark.svg"

@@ -30,6 +30,8 @@ gpui_kit::actions!(
         ToggleTheme,
         ShowHome,
         ShowEditor,
+        ShowBatch,
+        ShowAbout,
         DeleteNode,
         NewLayer,
         DuplicateNode,
@@ -148,7 +150,7 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
     make_binding!(name, keys, ctx;
         NewDocument, Open, Save, SaveAs, Export, SynchronizeRaw, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
         Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleDrawMode, ToggleQuickMask, ToggleTheme, ShowHome,
-        ShowEditor, DeleteNode, NewLayer, DuplicateNode, GroupNodes, Ungroup, RenameLayer, MergeLayers, MergeVisible, FlattenImage, LinkLayers, UnlinkLayers, CopyLayerStyle, PasteLayerStyle, ApplyLayerMask, MoveNodeUp, MoveNodeDown,
+        ShowEditor, ShowBatch, ShowAbout, DeleteNode, NewLayer, DuplicateNode, GroupNodes, Ungroup, RenameLayer, MergeLayers, MergeVisible, FlattenImage, LinkLayers, UnlinkLayers, CopyLayerStyle, PasteLayerStyle, ApplyLayerMask, MoveNodeUp, MoveNodeDown,
         ToggleNodeVisible, NextBlendMode, PreviousBlendMode, Ask, ToolHand, ToolRotateView, RepeatFilter, ToolMove, ToolPen, ToolType, ToolVerticalType, ConvertToSmartObject, ConvertSmartToLayers, RasterizeLayer, ToolMarquee, ToolLasso,
         ToolWand, ToolBrush, ToolEraser, ToolBucket, ToolGradient, ToolHeal, ToolClone,
         ToolCrop, ToolShape, ToolEyedropper, ToolZoom, AutoTone, AutoContrast, AutoColor, ImageSizeDialog, CanvasSizeDialog, NextTab, PrevTab, CloseTab, SwapColors, DefaultColors, BrushSmaller, BrushLarger, CommitTool,

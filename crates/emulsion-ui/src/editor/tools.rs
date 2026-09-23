@@ -4949,6 +4949,14 @@ impl EditorView {
                                         }))
                                 }),
                             ))
+                            .child(
+                                Button::new("foreground-cmyk")
+                                    .label("CMYK\u{2026}")
+                                    .small()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_foreground_color_dialog(window, cx);
+                                    })),
+                            )
                             .child(mono(format!("{hex} · x swaps · d resets"), 10., p.muted)),
                     ),
             )

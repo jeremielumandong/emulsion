@@ -214,7 +214,6 @@ fn control(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
 impl EditorView {
     pub(crate) fn compact_header(
         &mut self,
-        navigation: AnyElement,
         tabs: AnyElement,
         theme_controls: AnyElement,
         p: &Palette,
@@ -254,7 +253,6 @@ impl EditorView {
             .gap_1()
             .px_2()
             .bg(p.paper)
-            .child(div().flex().items_center().child(navigation))
             .child(div().flex().items_center().child(self.effect_menus(p, cx)))
             .child(
                 div()

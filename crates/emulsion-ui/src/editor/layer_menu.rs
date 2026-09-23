@@ -5,7 +5,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 
-fn item(
+pub(super) fn item(
     editor: &Entity<EditorView>,
     label: impl Into<SharedString>,
     enabled: bool,
@@ -370,6 +370,30 @@ impl EditorView {
             && self.drag.is_none()
             && !self.editor.in_transaction()
             && self.warp.is_none()
+    }
+
+    /// Photoshop's Ctrl+Alt+G: clip the active layer to the one below, or
+    /// release it when it is already clipped.
+    pub(crate) fn toggle_clipping_mask(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected else {
+            return;
+        };
+        if !self.layer_menu_ready() || self.editor.doc.locked_ancestor(id).is_some() {
+            return;
+        }
+        let Some(node) = self.editor.doc.node(id) else {
+            return;
+        };
+        let clip_to = if node.clip_to.is_some() {
+            None
+        } else {
+            let Some(below) = self.layer_below(id) else {
+                self.set_status("There is no layer below to clip to.", false, cx);
+                return;
+            };
+            Some(below)
+        };
+        self.execute(Command::SetClip { id, clip_to }, cx);
     }
 
     fn layer_below(&self, id: NodeId) -> Option<NodeId> {

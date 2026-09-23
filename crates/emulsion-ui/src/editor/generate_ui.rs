@@ -19,7 +19,7 @@ pub struct GenState {
     prompt: Option<(Entity<InputState>, Subscription)>,
     pub busy: bool,
     pub show_in_taskbar: bool,
-    /// Ctrl-K choice, retained when its prompt is closed and reopened.
+    /// Ctrl-F choice, retained when its prompt is closed and reopened.
     pub ask_provider: Option<Provider>,
 }
 
@@ -86,7 +86,7 @@ impl EditorView {
         }
     }
 
-    /// Shared by Ctrl-K and the Select tool. Validation leaves the input intact.
+    /// Shared by Ctrl-F and the Select tool. Validation leaves the input intact.
     pub(crate) fn generate_text(
         &mut self,
         prompt: String,

@@ -224,8 +224,8 @@ fn move_does_not_restore_preview_over_a_newer_edit(cx: &mut TestAppContext) {
 fn arrows_inside_text_fields_do_not_nudge_artwork(cx: &mut TestAppContext) {
     let (d, group) = artwork();
     let (e, cx) = setup(cx, d, group);
-    // Ctrl-K gives a real text field focus while Move remains the active tool.
-    cx.simulate_keystrokes("ctrl-k");
+    // Ctrl-F (Ask) gives a real text field focus while Move remains the active tool.
+    cx.simulate_keystrokes("ctrl-f");
     cx.simulate_keystrokes("a b c");
     let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
     cx.simulate_keystrokes("left shift-right up shift-down");

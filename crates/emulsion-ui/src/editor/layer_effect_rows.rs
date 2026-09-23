@@ -40,7 +40,7 @@ impl EditorView {
         );
     }
 
-    pub(super) fn layer_effect_rows(
+    pub(super) fn layer_effect_header(
         &self,
         id: NodeId,
         depth: usize,
@@ -58,79 +58,94 @@ impl EditorView {
             || self.editor.in_transaction()
             || self.warp.is_some();
         let disabled = busy || self.editor.doc.locked_ancestor(id).is_some();
-        let mut rows = div()
+        let rows = effect_row_container(depth, p)
             .id(("layer-effects", id))
-            .flex()
-            .flex_col()
-            .flex_none()
-            .pl(rems((depth as f32 + 1.) * 0.875))
-            .text_xs()
-            .text_color(p.muted);
-        rows = rows.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        Button::new(("effects-visible", id))
+                            .icon(if enabled {
+                                IconName::Eye
+                            } else {
+                                IconName::EyeOff
+                            })
+                            .xsmall()
+                            .ghost()
+                            .disabled(disabled)
+                            .tooltip(if enabled {
+                                "Hide layer effects"
+                            } else {
+                                "Show layer effects"
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                window.focus(&this.panel_focus, cx);
+                                this.execute(
+                                    Command::SetEffectsEnabled {
+                                        id,
+                                        enabled: !enabled,
+                                    },
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(
+                        Button::new(("effects-expand", id))
+                            .icon(if collapsed {
+                                IconName::ChevronRight
+                            } else {
+                                IconName::ChevronDown
+                            })
+                            .label("Effects")
+                            .xsmall()
+                            .ghost()
+                            .tooltip(if collapsed {
+                                "Expand layer effects"
+                            } else {
+                                "Collapse layer effects"
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                window.focus(&this.panel_focus, cx);
+                                if !this.layer_panel.effects_collapsed.remove(&id) {
+                                    this.layer_panel.effects_collapsed.insert(id);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            );
+        Some(rows.into_any_element())
+    }
+
+    pub(super) fn layer_effect_row(
+        &self,
+        id: NodeId,
+        depth: usize,
+        effect_index: usize,
+        p: &Palette,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let node = self.editor.doc.node(id)?;
+        let style = node.styles.get(effect_index)?;
+        let options = options_for(node);
+        let option = options.get(effect_index)?;
+        let effect_id = option.id;
+        let label = style.label().to_string();
+        let effect_enabled = option.enabled;
+        let enabled = node.effects_enabled;
+        let identity = format!("{id}-{effect_id}");
+        let busy = self.assistant.running
+            || self.drag.is_some()
+            || self.editor.in_transaction()
+            || self.warp.is_some();
+        let disabled = busy || self.editor.doc.locked_ancestor(id).is_some();
+        Some(
+            effect_row_container(depth, p)
+                .id(SharedString::from(format!("layer-effect-{identity}")))
                 .child(
-                    Button::new(("effects-visible", id))
-                        .icon(if enabled {
-                            IconName::Eye
-                        } else {
-                            IconName::EyeOff
-                        })
-                        .xsmall()
-                        .ghost()
-                        .disabled(disabled)
-                        .tooltip(if enabled {
-                            "Hide layer effects"
-                        } else {
-                            "Show layer effects"
-                        })
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            window.focus(&this.panel_focus, cx);
-                            this.execute(
-                                Command::SetEffectsEnabled {
-                                    id,
-                                    enabled: !enabled,
-                                },
-                                cx,
-                            );
-                        })),
-                )
-                .child(
-                    Button::new(("effects-expand", id))
-                        .icon(if collapsed {
-                            IconName::ChevronRight
-                        } else {
-                            IconName::ChevronDown
-                        })
-                        .label("Effects")
-                        .xsmall()
-                        .ghost()
-                        .tooltip(if collapsed {
-                            "Expand layer effects"
-                        } else {
-                            "Collapse layer effects"
-                        })
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            window.focus(&this.panel_focus, cx);
-                            if !this.layer_panel.effects_collapsed.remove(&id) {
-                                this.layer_panel.effects_collapsed.insert(id);
-                            }
-                            cx.notify();
-                        })),
-                ),
-        );
-        if !collapsed {
-            let options = options_for(node);
-            for (style, option) in node.styles.iter().zip(options) {
-                let effect_id = option.id;
-                let label = style.label().to_string();
-                let effect_enabled = option.enabled;
-                let identity = format!("{id}-{effect_id}");
-                rows = rows.child(
                     div()
                         .flex()
                         .items_center()
@@ -180,9 +195,18 @@ impl EditorView {
                                     },
                                 )),
                         ),
-                );
-            }
-        }
-        Some(rows.into_any_element())
+                )
+                .into_any_element(),
+        )
     }
+}
+
+fn effect_row_container(depth: usize, p: &Palette) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_none()
+        .pl(rems((depth as f32 + 1.) * 0.875))
+        .text_xs()
+        .text_color(p.muted)
 }

@@ -8,6 +8,7 @@ use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fract
 mod adjust_ui;
 mod ai_tools;
 mod alignment;
+mod ask_ai_entry;
 mod animation;
 mod auto_correct;
 mod blend_match;
@@ -32,6 +33,8 @@ mod layer_effect_rows;
 mod layer_links_ui;
 mod layer_menu;
 mod layer_selection;
+mod layers_footer;
+mod layers_list;
 mod layers_panel;
 mod lens;
 mod mask_taskbar;
@@ -301,7 +304,6 @@ enum Drag {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Menu {
     Blend,
-    Add,
     /// The Type tool's font list, each family shown in itself.
     Font,
 }
@@ -988,13 +990,13 @@ impl EditorView {
         if on {
             self.set_paint(PaintKind::Brush, cx);
             self.set_status(
-                "Draw mode: brushes, colours and paint controls up front. Ctrl+Shift+D or Photo returns to the photo tools.",
+                "Draw mode: brushes, colours and paint controls up front. Ctrl+Alt+Shift+D or Photo returns to the photo tools.",
                 false,
                 cx,
             );
         } else {
             self.set_status(
-                "Photo mode: every photo tool and panel. Ctrl+Shift+D returns to Draw.",
+                "Photo mode: every photo tool and panel. Ctrl+Alt+Shift+D returns to Draw.",
                 false,
                 cx,
             );
@@ -1310,6 +1312,7 @@ impl EditorView {
             }
         });
         self.renaming = Some((id, state, sub));
+        self.layer_panel.reveal = Some(id);
         cx.notify();
     }
 
@@ -2133,6 +2136,7 @@ impl EditorView {
                 )
             })
             .child(div().flex_1())
+            .child(self.ask_ai_button(p, cx))
             .child(
                 crate::widgets::tip(
                     chip("draw-mode", "Draw", self.draw_mode, p)
@@ -2319,12 +2323,19 @@ impl EditorView {
             )
             .on_action(
                 cx.listener(|this, _: &crate::actions::ToolEllipseMarquee, _, cx| {
-                    this.set_select(tools::SelectShape::Ellipse, cx)
+                    this.cycle_select(&[tools::SelectShape::Ellipse, tools::SelectShape::Rect], cx)
                 }),
             )
             .on_action(
                 cx.listener(|this, _: &crate::actions::ToolPolygonLasso, _, cx| {
-                    this.set_select(tools::SelectShape::Polygon, cx)
+                    this.cycle_select(
+                        &[
+                            tools::SelectShape::Polygon,
+                            tools::SelectShape::Magnetic,
+                            tools::SelectShape::Lasso,
+                        ],
+                        cx,
+                    )
                 }),
             )
             .on_action(
@@ -2334,18 +2345,24 @@ impl EditorView {
             )
             .on_action(
                 cx.listener(|this, _: &crate::actions::ToolQuickSelect, _, cx| {
-                    this.set_select(tools::SelectShape::Quick, cx)
+                    this.cycle_select(&[tools::SelectShape::Quick, tools::SelectShape::Wand], cx)
                 }),
             )
             .on_action(cx.listener(|this, _: &crate::actions::ToolSmudge, _, cx| {
-                this.set_paint(tools::PaintKind::Smudge, cx)
+                this.cycle_paint(&[tools::PaintKind::Smudge, tools::PaintKind::Brush], cx)
             }))
             .on_action(cx.listener(|this, _: &crate::actions::ToolLiquify, _, cx| {
                 this.set_paint(tools::PaintKind::Liquify, cx)
             }))
             .on_action(cx.listener(|this, _: &crate::actions::ToolEllipse, _, cx| {
+                let next =
+                    if this.tool == Tool::Shape && this.tools.shape == tools::ShapeKind::Ellipse {
+                        tools::ShapeKind::Rect
+                    } else {
+                        tools::ShapeKind::Ellipse
+                    };
                 this.set_tool(Tool::Shape, cx);
-                this.tools.shape = tools::ShapeKind::Ellipse;
+                this.tools.shape = next;
             }))
             .on_action(cx.listener(|this, _: &crate::actions::ToolShape, _, cx| {
                 this.set_tool(Tool::Shape, cx);
@@ -2444,15 +2461,34 @@ impl EditorView {
                             b,
                             window.scale_factor(),
                         );
-                        if cache.borrow().settle_pending {
-                            // The view is moving: redraw once it has rested so
-                            // the crisp image replaces the GPU tiles.
+                        if cache.borrow_mut().start_settle_wakeup() {
+                            // Share one worker across moving frames. It waits
+                            // for the latest view change without generating
+                            // additional frames while the user is still moving.
                             let w = w1.clone();
                             cx.spawn(async move |cx| {
-                                cx.background_executor()
-                                    .timer(viewport::SETTLE + std::time::Duration::from_millis(10))
-                                    .await;
-                                w.update(cx, |_, cx| cx.notify()).ok();
+                                let mut delay = viewport::SETTLE;
+                                loop {
+                                    cx.background_executor().timer(delay).await;
+                                    let next = w.update(cx, |this, cx| {
+                                        let wakeup = this
+                                            .cache
+                                            .borrow_mut()
+                                            .poll_settle_wakeup(Instant::now());
+                                        match wakeup {
+                                            viewport::SettleWakeup::Wait(delay) => Some(delay),
+                                            viewport::SettleWakeup::Redraw => {
+                                                cx.notify();
+                                                None
+                                            }
+                                            viewport::SettleWakeup::Cancel => None,
+                                        }
+                                    });
+                                    match next {
+                                        Ok(Some(next)) => delay = next,
+                                        _ => break,
+                                    }
+                                }
                             })
                             .detach();
                         }
@@ -2833,10 +2869,12 @@ impl EditorView {
         self.sidebar(p, window, cx)
     }
 
-    fn scene_graph(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        use gpui_kit::assets::IconName;
-        use gpui_kit::component::Sizable;
-        use gpui_kit::component::button::{Button, ButtonVariants};
+    fn scene_graph(
+        &mut self,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let rows = self.filtered_layer_rows();
         let accent = p.accent;
         let header = div()
@@ -2873,91 +2911,6 @@ impl EditorView {
                     }))
                     .test_support(),
             );
-        let actions = div()
-            .id("layers-footer")
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap_1()
-            .pt(px(6.))
-            .child(
-                chip("add", "+ Layer", self.menu == Some(Menu::Add), p).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.menu = if this.menu == Some(Menu::Add) {
-                            None
-                        } else {
-                            Some(Menu::Add)
-                        };
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(self.layer_mask_button(cx))
-            .child(
-                Button::new("grp")
-                    .xsmall()
-                    .ghost()
-                    .icon(IconName::Folder)
-                    .accessibility_label("Group layers")
-                    .tooltip("Group layers")
-                    .on_click(cx.listener(|this, _, _, cx| this.group_selected(cx))),
-            )
-            .child(
-                Button::new("dup")
-                    .xsmall()
-                    .ghost()
-                    .icon(IconName::Copy)
-                    .accessibility_label("Duplicate layers")
-                    .tooltip("Duplicate layers")
-                    .on_click(cx.listener(|this, _, _, cx| this.duplicate_selected(cx))),
-            )
-            .child(
-                Button::new("del")
-                    .xsmall()
-                    .ghost()
-                    .icon(IconName::Trash)
-                    .accessibility_label("Delete layers")
-                    .tooltip("Delete layers")
-                    .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
-            );
-
-        let add_menu = (self.menu == Some(Menu::Add)).then(|| {
-            let mut items: Vec<(SharedString, Node)> = Adjustment::catalogue()
-                .into_iter()
-                .map(|a| (SharedString::from(a.label()), Node::adjust(0, a)))
-                .collect();
-            items.push((
-                "Solid fill".into(),
-                Node::new(
-                    0,
-                    "Fill",
-                    NodeKind::Fill {
-                        rgba: [255, 255, 255, 255],
-                    },
-                ),
-            ));
-            items.push(("LUT from .cube file…".into(), Node::group(0, "__lut__")));
-            items.push(("Empty group".into(), Node::group(0, "Group")));
-            let mut list: Vec<(SharedString, MenuAction)> =
-                vec![("Empty layer (transparent)".into(), MenuAction::NewLayer)];
-            list.extend(
-                items
-                    .into_iter()
-                    .map(|(l, n)| (l, MenuAction::Add(Box::new(n)))),
-            );
-            list.push((
-                "Remove background (AI)".into(),
-                MenuAction::RemoveBackground,
-            ));
-            list.push(("Depth map (AI)".into(), MenuAction::DepthMap));
-            list.push(("Restore faces (AI)".into(), MenuAction::RestoreFaces));
-            list.push((
-                format!("Upscale ×{} (AI)", emulsion_ai::upscale::factor()).into(),
-                MenuAction::Upscale,
-            ));
-            self.menu_list("add-menu", list, p, cx)
-        });
-
         let controls = (!self.layer_panel.compact || self.layer_panel.controls_open).then(|| {
             div()
                 .id("layer-controls")
@@ -2971,13 +2924,7 @@ impl EditorView {
                 .children(self.layer_blend_controls(p, cx))
                 .children(self.layer_lock_controls(p, cx))
         });
-        let mut row_els: Vec<AnyElement> = Vec::new();
-        for row in &rows {
-            row_els.push(self.node_row(row.id, row.depth, p, cx).into_any_element());
-            if let Some(effects) = self.layer_effect_rows(row.id, row.depth, p, cx) {
-                row_els.push(effects);
-            }
-        }
+        let list = self.layers_list(&rows, p, window, cx);
         div()
             .flex()
             .flex_col()
@@ -3008,26 +2955,15 @@ impl EditorView {
                     .id("sidebar-layers-list")
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    // Rows stop the click; what reaches here is empty space.
+                    .overflow_hidden()
+                    // The virtual list owns scrolling; empty space deselects.
                     .on_click(cx.listener(|this, _, _, cx| this.deselect_layer(cx)))
-                    .children(row_els)
-                    // Always a little empty space to click, even when the
-                    // list is full.
-                    .child(div().h(px(10.)).flex_none())
+                    .child(list)
                     .test_support(),
             )
-            .child(actions)
-            .child(
-                div()
-                    .id("layer-add-menu")
-                    .max_h(px(180.))
-                    .overflow_y_scroll()
-                    .children(add_menu),
-            )
+            .child(self.layers_footer(p, cx))
     }
 
     fn node_row(
@@ -3163,6 +3099,7 @@ impl EditorView {
                 .into_any_element(),
             _ => div()
                 .id(("layer-name", id))
+                .test_support()
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
@@ -3922,25 +3859,6 @@ impl EditorView {
                                 let (id, m) = (*id, *m);
                                 this.execute(Command::SetBlend { id, blend: m }, cx);
                             }
-                            MenuAction::Add(node) if node.name == "__lut__" => {
-                                this.import_lut(None, cx)
-                            }
-                            MenuAction::Add(node) => {
-                                this.add_node((**node).clone(), cx);
-                            }
-                            MenuAction::NewLayer => {
-                                if this.new_empty_layer(cx).is_some() {
-                                    this.set_status(
-                                        "Empty transparent layer added. Paint on it, or fill a selection.",
-                                        false,
-                                        cx,
-                                    );
-                                }
-                            }
-                            MenuAction::RemoveBackground => this.remove_background(cx),
-                            MenuAction::DepthMap => this.depth_layer(cx),
-                            MenuAction::RestoreFaces => this.restore_faces(cx),
-                            MenuAction::Upscale => this.ai_upscale(cx),
                         }
                         this.menu = None;
                         cx.notify();
@@ -3952,13 +3870,6 @@ impl EditorView {
 
 enum MenuAction {
     Blend(NodeId, BlendMode),
-    /// An empty, transparent pixel layer.
-    NewLayer,
-    Add(Box<Node>),
-    RemoveBackground,
-    DepthMap,
-    RestoreFaces,
-    Upscale,
 }
 
 impl Render for EditorView {
@@ -4016,7 +3927,7 @@ impl Render for EditorView {
         let picker = self.picker(&p, cx);
         self.refresh_suggestions(cx);
         let strip = self.status_strip(&p, cx);
-        let ask = self.ask_bar(&p, cx);
+        let ask = self.ask_area(&p, cx);
         let size_panel = self.size_panel_view(&p, cx);
         let export_panel = self.export_panel_view(&p, cx);
         let dock = self.assistant_dock(&p, cx);

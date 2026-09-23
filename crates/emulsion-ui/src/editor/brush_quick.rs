@@ -195,9 +195,9 @@ impl EditorView {
                 }
                 cx.stop_propagation();
             }))
-            .on_mouse_move(cx.listener(|editor, event: &MouseMoveEvent, _, cx| {
+            .on_mouse_move(cx.listener(|editor, event: &MouseMoveEvent, window, cx| {
                 if editor.dragging_quick_brush_slider() {
-                    editor.drag_move(event.position, cx);
+                    editor.drag_move(event.position, window, cx);
                     cx.stop_propagation();
                 }
             }))

@@ -60,6 +60,8 @@ impl LayerKindFilter {
 
 #[derive(Default)]
 pub(crate) struct LayerPanelState {
+    pub list: Option<super::layers_list::LayerList>,
+    pub reveal: Option<NodeId>,
     pub mask_context: Option<NodeId>,
     pub search: Option<(Entity<InputState>, Subscription)>,
     pub query: String,
@@ -150,6 +152,20 @@ impl EditorView {
             .into_iter()
             .map(|id| Command::SetBlend { id, blend: next })
             .collect();
+        self.close_text_field(cx);
+        self.execute_layer_commands("Layer blend mode", commands, cx);
+    }
+
+    /// Photoshop's Shift+Alt+letter: one blend mode for the selected layers.
+    pub(crate) fn set_layer_blend(&mut self, blend: BlendMode, cx: &mut Context<Self>) {
+        let commands: Vec<_> = self
+            .selected_layer_ids()
+            .into_iter()
+            .map(|id| Command::SetBlend { id, blend })
+            .collect();
+        if commands.is_empty() {
+            return;
+        }
         self.close_text_field(cx);
         self.execute_layer_commands("Layer blend mode", commands, cx);
     }

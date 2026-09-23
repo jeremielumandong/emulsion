@@ -1,11 +1,24 @@
-//! Application-owned HSV color selection, sharing the existing native color state.
+//! Application-owned HSV, RGB, and approximate CMYK color selection, sharing the existing native color state.
 use super::*;
+use emulsion_raster::color::{cmyk_to_rgb, rgb_to_cmyk};
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::{Sizable, button::Button};
 use std::cell::Cell;
 
-const FIELD_IDS: [&str; 7] = ["h", "s", "b", "r", "g", "b-channel", "alpha"];
-const FIELD_NAMES: [&str; 7] = [
+const FIELD_IDS: [&str; 11] = [
+    "h",
+    "s",
+    "b",
+    "r",
+    "g",
+    "b-channel",
+    "alpha",
+    "cyan",
+    "magenta",
+    "yellow",
+    "black",
+];
+const FIELD_NAMES: [&str; 11] = [
     "Hue",
     "Saturation",
     "Brightness",
@@ -13,8 +26,14 @@ const FIELD_NAMES: [&str; 7] = [
     "Green",
     "Blue",
     "Opacity",
+    "Cyan %",
+    "Magenta %",
+    "Yellow %",
+    "Black %",
 ];
-const LIMITS: [f32; 7] = [360., 100., 100., 255., 255., 255., 100.];
+const LIMITS: [f32; 11] = [
+    360., 100., 100., 255., 255., 255., 100., 100., 100., 100., 100.,
+];
 const SWATCHES: [[u8; 3]; 12] = [
     [0, 0, 0],
     [255, 255, 255],
@@ -40,6 +59,7 @@ pub(super) struct StyleColorPicker {
     original: Hsla,
     hsv: [f32; 3],
     alpha: f32,
+    cmyk: [f32; 4],
     fields: Vec<Entity<InputState>>,
     expected: Vec<String>,
     invalid: Option<usize>,
@@ -62,7 +82,8 @@ impl StyleColorPicker {
         let original = state.read(cx).value().unwrap_or_else(gpui_kit::black);
         let rgb = original.to_rgb();
         let hsv = rgb_to_hsv([rgb.r, rgb.g, rgb.b], 0.);
-        let values = field_values(hsv, [rgb.r, rgb.g, rgb.b], rgb.a);
+        let cmyk = rgb_to_cmyk([rgb.r, rgb.g, rgb.b]);
+        let values = field_values(hsv, [rgb.r, rgb.g, rgb.b], rgb.a, cmyk);
         let fields: Vec<_> = values
             .iter()
             .map(|v| cx.new(|cx| InputState::new(window, cx).default_value(v.clone())))
@@ -85,6 +106,11 @@ impl StyleColorPicker {
             |this, _, event: &ColorPickerEvent, window, cx| {
                 if let ColorPickerEvent::Change(Some(color)) = event {
                     let rgb = color.to_rgb();
+                    // Keep the user's ink separation when our own RGB preview
+                    // comes back through the shared state (including alpha edits).
+                    if !same_rgb(cmyk_to_rgb(this.cmyk), [rgb.r, rgb.g, rgb.b]) {
+                        this.cmyk = rgb_to_cmyk([rgb.r, rgb.g, rgb.b]);
+                    }
                     let next = rgb_to_hsv([rgb.r, rgb.g, rgb.b], this.hsv[0]);
                     this.hsv = if next[2] == 0. {
                         [this.hsv[0], this.hsv[1], 0.]
@@ -134,6 +160,7 @@ impl StyleColorPicker {
             original,
             hsv,
             alpha: rgb.a,
+            cmyk,
             fields,
             expected: values,
             invalid: None,
@@ -159,7 +186,7 @@ impl StyleColorPicker {
     }
     fn sync_fields(&mut self, skip: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
         let rgb = hsv_to_rgb(self.hsv);
-        let values = field_values(self.hsv, rgb, self.alpha);
+        let values = field_values(self.hsv, rgb, self.alpha, self.cmyk);
         for (index, value) in values.into_iter().enumerate() {
             if skip == Some(index)
                 || self.fields[index]
@@ -176,6 +203,9 @@ impl StyleColorPicker {
         }
     }
     fn publish(&mut self, skip: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        if skip.is_none_or(|index| index < 6) {
+            self.cmyk = rgb_to_cmyk(hsv_to_rgb(self.hsv));
+        }
         self.invalid = None;
         self.hex_invalid = false;
         self.sync_fields(skip, window, cx);
@@ -205,7 +235,12 @@ impl StyleColorPicker {
                 rgb[index - 3] = value / 255.;
                 self.hsv = rgb_to_hsv(rgb, self.hsv[0]);
             }
-            _ => self.alpha = value / 100.,
+            6 => self.alpha = value / 100.,
+            7..=10 => {
+                self.cmyk[index - 7] = value / 100.;
+                self.hsv = rgb_to_hsv(cmyk_to_rgb(self.cmyk), self.hsv[0]);
+            }
+            _ => unreachable!(),
         }
         self.publish(Some(index), window, cx);
     }
@@ -574,6 +609,25 @@ impl Render for StyleColorPicker {
                     .child(inputs),
             )
             .child(swatches)
+            .child(
+                div()
+                    .text_xs()
+                    .child("CMYK (%) - approximate RGB conversion"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .child(self.field(7))
+                    .child(self.field(8)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .child(self.field(9))
+                    .child(self.field(10)),
+            )
             .children(error.map(|error| div().text_xs().text_color(p.accent).child(error)))
             .test_support()
     }
@@ -582,7 +636,7 @@ fn number(text: &str, max: f32) -> Option<f32> {
     let value = text.trim().parse::<f32>().ok()?;
     (value.is_finite() && (0. ..=max).contains(&value)).then_some(value)
 }
-fn field_values(hsv: [f32; 3], rgb: [f32; 3], alpha: f32) -> Vec<String> {
+fn field_values(hsv: [f32; 3], rgb: [f32; 3], alpha: f32, cmyk: [f32; 4]) -> Vec<String> {
     [
         hsv[0] * 360.,
         hsv[1] * 100.,
@@ -591,9 +645,16 @@ fn field_values(hsv: [f32; 3], rgb: [f32; 3], alpha: f32) -> Vec<String> {
         rgb[1] * 255.,
         rgb[2] * 255.,
         alpha * 100.,
+        cmyk[0] * 100.,
+        cmyk[1] * 100.,
+        cmyk[2] * 100.,
+        cmyk[3] * 100.,
     ]
     .map(|v| format!("{v:.0}"))
     .to_vec()
+}
+fn same_rgb(a: [f32; 3], b: [f32; 3]) -> bool {
+    a.into_iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5)
 }
 fn hsv_to_rgb([h, s, v]: [f32; 3]) -> [f32; 3] {
     let h = h.rem_euclid(1.) * 6.;
@@ -718,7 +779,7 @@ mod interaction_tests {
             *slot.borrow_mut() = Some(picker.clone());
             Root::new(picker, window, cx)
         });
-        cx.simulate_resize(size(px(650.), px(430.)));
+        cx.simulate_resize(size(px(650.), px(560.)));
         cx.update(|window, cx| window.render_frame(cx));
         let picker = result.borrow_mut().take().unwrap();
         (picker, cx)
@@ -785,6 +846,47 @@ mod interaction_tests {
         cx.update(|window, cx| {
             assert!(!picker.update(cx, |picker, cx| picker.commit_pending(window, cx)));
             assert_eq!(picker.read(cx).invalid, Some(3));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn cmyk_edits_keep_ink_separation_alpha_and_validate_percentages(cx: &mut TestAppContext) {
+        let (picker, cx) = open(cx);
+        // Equal C/M/Y with no K is deliberately different from canonical gray.
+        for (index, text) in [(7, "50"), (8, "50"), (9, "50"), (10, "25")] {
+            cx.update(|window, cx| {
+                let input = picker.read(cx).fields[index].clone();
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+                window.press("ctrl-a", cx);
+                window.input(text, cx);
+            });
+            cx.run_until_parked();
+        }
+        cx.update(|window, cx| {
+            let view = picker.read(cx);
+            assert_eq!(view.cmyk, [0.5, 0.5, 0.5, 0.25]);
+            assert_eq!(
+                rgba_bytes(view.state.read(cx).value().unwrap()),
+                [96, 96, 96, 102]
+            );
+            let input = view.fields[6].clone();
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+            window.press("ctrl-a", cx);
+            window.input("60", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(picker.read(cx).cmyk, [0.5, 0.5, 0.5, 0.25]);
+            assert!((picker.read(cx).alpha - 0.6).abs() < 1e-5);
+            let input = picker.read(cx).fields[10].clone();
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+            window.press("ctrl-a", cx);
+            window.input("101", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(!picker.update(cx, |picker, cx| picker.commit_pending(window, cx)));
+            assert_eq!(picker.read(cx).invalid, Some(10));
         });
     }
 

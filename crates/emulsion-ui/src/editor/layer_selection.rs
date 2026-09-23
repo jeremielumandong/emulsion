@@ -126,6 +126,103 @@ impl EditorView {
         }
     }
 
+    /// Photoshop's Alt+] / Alt+[ (and with Shift, add to the selection):
+    /// the next layer up or down the Layers panel.
+    pub(crate) fn select_adjacent_layer(&mut self, up: bool, extend: bool, cx: &mut Context<Self>) {
+        let rows = self.filtered_layer_rows();
+        let target = match self
+            .selected
+            .and_then(|id| rows.iter().position(|row| row.id == id))
+        {
+            // Rows run top to bottom.
+            Some(i) if up => i.checked_sub(1),
+            Some(i) => Some(i + 1).filter(|next| *next < rows.len()),
+            None => (!rows.is_empty()).then_some(0),
+        };
+        if let Some(row) = target.and_then(|i| rows.get(i)) {
+            let id = row.id;
+            if extend && self.layer_is_selected(id) {
+                return;
+            }
+            self.layer_panel.reveal = Some(id);
+            self.select_layer_row(id, extend, false, cx);
+        }
+    }
+
+    /// Photoshop's Alt+. / Alt+, : the top or bottom layer.
+    pub(crate) fn select_edge_layer(&mut self, top: bool, cx: &mut Context<Self>) {
+        let rows = self.filtered_layer_rows();
+        let row = if top { rows.first() } else { rows.last() };
+        if let Some(id) = row.map(|row| row.id) {
+            self.layer_panel.reveal = Some(id);
+            self.select_layer_row(id, false, false, cx);
+        }
+    }
+
+    /// Photoshop's Ctrl+Alt+A: every layer in the panel.
+    pub(crate) fn select_all_layers(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<_> = self
+            .filtered_layer_rows()
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        let Some(first) = ids.first().copied() else {
+            return;
+        };
+        let active = self.selected.filter(|id| ids.contains(id)).or(Some(first));
+        self.cancel_move(cx);
+        self.close_text_field(cx);
+        self.set_layer_selection(ids, active);
+        cx.notify();
+    }
+
+    /// Photoshop's Ctrl+Shift+] / Ctrl+Shift+[: move the selection to the
+    /// top or bottom of its siblings, as one undo step.
+    pub(crate) fn shift_selected_to_end(&mut self, up: bool, cx: &mut Context<Self>) {
+        let selected = self.selected_layer_roots();
+        let mut trial = self.editor.doc.clone();
+        let mut commands = Vec::new();
+        loop {
+            let mut moved = false;
+            let mut ids = selected.clone();
+            if up {
+                ids.reverse();
+            }
+            for id in ids {
+                let Some(node) = trial.node(id) else { continue };
+                let parent = node.parent;
+                let siblings = trial.children(parent);
+                let Some(index) = siblings.iter().position(|other| *other == id) else {
+                    continue;
+                };
+                let target = if up { index + 1 } else { index.wrapping_sub(1) };
+                if target >= siblings.len() || selected.contains(&siblings[target]) {
+                    continue;
+                }
+                let command = Command::MoveNode {
+                    id,
+                    slot: Slot {
+                        parent,
+                        index: target,
+                    },
+                };
+                if let Err(error) = command.clone().apply(&mut trial) {
+                    self.set_status(error.to_string(), true, cx);
+                    return;
+                }
+                commands.push(command);
+                moved = true;
+            }
+            if !moved {
+                break;
+            }
+        }
+        if commands.is_empty() {
+            return;
+        }
+        self.execute_layer_commands("Reorder layers", commands, cx);
+    }
+
     /// Selected parents already include their descendants for structural edits.
     pub(crate) fn selected_layer_roots(&self) -> Vec<NodeId> {
         emulsion_core::layer_links::selected_roots(&self.editor.doc, &self.selected_layer_ids())

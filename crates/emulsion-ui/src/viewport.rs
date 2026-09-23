@@ -194,11 +194,18 @@ pub struct TileCache {
     view_changed_at: Option<std::time::Instant>,
     /// The crisp image is due once the view settles; the editor schedules
     /// a redraw for it.
-    pub settle_pending: bool,
+    settle_pending: bool,
+    settle_wakeup_running: bool,
 }
 
 /// How long the view must rest before the crisp screen image is built.
 pub const SETTLE: std::time::Duration = std::time::Duration::from_millis(90);
+
+pub(crate) enum SettleWakeup {
+    Wait(std::time::Duration),
+    Redraw,
+    Cancel,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ScreenKey {
@@ -210,6 +217,32 @@ struct ScreenKey {
 }
 
 impl TileCache {
+    /// Only one worker may wait for the crisp image, regardless of frame rate.
+    pub(crate) fn start_settle_wakeup(&mut self) -> bool {
+        if !self.settle_pending || self.settle_wakeup_running {
+            return false;
+        }
+        self.settle_wakeup_running = true;
+        true
+    }
+
+    /// Continued movement extends the wait without producing another frame.
+    pub(crate) fn poll_settle_wakeup(&mut self, now: std::time::Instant) -> SettleWakeup {
+        if !self.settle_pending {
+            self.settle_wakeup_running = false;
+            return SettleWakeup::Cancel;
+        }
+        if let Some(changed) = self.view_changed_at {
+            let remaining = SETTLE.saturating_sub(now.saturating_duration_since(changed));
+            if !remaining.is_zero() {
+                return SettleWakeup::Wait(remaining);
+            }
+        }
+        self.settle_pending = false;
+        self.settle_wakeup_running = false;
+        SettleWakeup::Redraw
+    }
+
     pub fn begin_frame(&mut self) {
         self.frame += 1;
     }
@@ -975,11 +1008,131 @@ pub type CanvasBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 #[cfg(test)]
 mod tests {
     // Import explicitly: GPUI's glob exports its own `test` macro.
-    use super::{View, level_tiles, visible_tiles};
+    use super::{
+        SETTLE, Scene, SettleWakeup, TileCache, View, level_tiles, prepaint, visible_tiles,
+    };
     use gpui_kit::{Bounds, Pixels, point, px, size};
 
     fn canvas() -> Bounds<Pixels> {
         Bounds::new(point(px(100.), px(50.)), size(px(800.), px(600.)))
+    }
+
+    #[test]
+    fn settle_wakeup_coalesces_frames_and_waits_for_last_movement() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let frame = Duration::from_millis(8);
+        let mut cache = TileCache {
+            settle_pending: true,
+            view_changed_at: Some(start),
+            ..Default::default()
+        };
+        assert!(cache.start_settle_wakeup());
+        // A second of movement must neither start more workers nor ask for
+        // frames when an earlier deadline expires during the gesture.
+        for index in 1..=120 {
+            let now = start + frame * index;
+            cache.view_changed_at = Some(now);
+            assert!(!cache.start_settle_wakeup());
+            assert!(matches!(cache.poll_settle_wakeup(now), SettleWakeup::Wait(d) if d == SETTLE));
+        }
+        let deadline = start + frame * 120 + SETTLE;
+        assert!(
+            matches!(cache.poll_settle_wakeup(deadline - frame), SettleWakeup::Wait(d) if d == frame)
+        );
+        assert!(matches!(
+            cache.poll_settle_wakeup(deadline),
+            SettleWakeup::Redraw
+        ));
+        assert!(!cache.start_settle_wakeup());
+        assert!(matches!(
+            cache.poll_settle_wakeup(deadline),
+            SettleWakeup::Cancel
+        ));
+
+        // A later gesture still gets its own final crisp frame.
+        cache.settle_pending = true;
+        cache.view_changed_at = Some(deadline);
+        assert!(cache.start_settle_wakeup());
+        assert!(matches!(
+            cache.poll_settle_wakeup(deadline + SETTLE),
+            SettleWakeup::Redraw
+        ));
+    }
+
+    #[test]
+    fn settle_wakeup_cancels_when_screen_image_is_no_longer_needed() {
+        let now = std::time::Instant::now();
+        let mut cache = TileCache {
+            settle_pending: true,
+            view_changed_at: Some(now),
+            ..Default::default()
+        };
+        assert!(cache.start_settle_wakeup());
+        // Zooming out or another frame completing the crisp image removes
+        // the need for the delayed redraw.
+        cache.settle_pending = false;
+        assert!(matches!(
+            cache.poll_settle_wakeup(now + SETTLE),
+            SettleWakeup::Cancel
+        ));
+        assert!(!cache.start_settle_wakeup());
+        cache.settle_pending = true;
+        assert!(cache.start_settle_wakeup());
+    }
+
+    #[test]
+    fn prepaint_cancels_redundant_settle_wakeups() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(16.), px(16.)));
+        let mut scene = Scene {
+            view: View {
+                zoom: 2.0,
+                ..Default::default()
+            },
+            doc_size: (16, 16),
+            max_level: 4,
+            rev: 0,
+            before: None,
+            raw_compare: false,
+            stage: Default::default(),
+            ink: Default::default(),
+            accent: Default::default(),
+            rulers: false,
+        };
+        let mut cache = TileCache::default();
+        prepaint(&scene, &mut cache, bounds, 1.0);
+        assert!(cache.start_settle_wakeup());
+
+        // Zooming below the crisp-image threshold needs no delayed frame.
+        scene.view.zoom = 1.0;
+        prepaint(&scene, &mut cache, bounds, 1.0);
+        assert!(matches!(
+            cache.poll_settle_wakeup(std::time::Instant::now()),
+            SettleWakeup::Cancel
+        ));
+
+        scene.view.zoom = 2.0;
+        prepaint(&scene, &mut cache, bounds, 1.0);
+        assert!(cache.start_settle_wakeup());
+        // Rotation paints the screen image immediately, even while moving.
+        scene.view.rotation = 15.0;
+        prepaint(&scene, &mut cache, bounds, 1.0);
+        assert!(matches!(
+            cache.poll_settle_wakeup(std::time::Instant::now()),
+            SettleWakeup::Cancel
+        ));
+
+        scene.view.rotation = 0.0;
+        prepaint(&scene, &mut cache, bounds, 1.0);
+        assert!(cache.start_settle_wakeup());
+        // An unrelated frame after the deadline can already finish the crisp
+        // image before the worker runs. It must not cause another redraw.
+        cache.view_changed_at = Some(std::time::Instant::now() - SETTLE);
+        prepaint(&scene, &mut cache, bounds, 1.0);
+        assert!(matches!(
+            cache.poll_settle_wakeup(std::time::Instant::now()),
+            SettleWakeup::Cancel
+        ));
     }
 
     #[test]

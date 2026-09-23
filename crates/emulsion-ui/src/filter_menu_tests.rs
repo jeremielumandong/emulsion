@@ -95,9 +95,9 @@ fn repeat_filter_shortcut_retains_tuned_parameters_and_is_undoable(cx: &mut Test
         before
     });
     cx.simulate_keystrokes(if cfg!(target_os = "macos") {
-        "cmd-f"
+        "cmd-alt-f"
     } else {
-        "ctrl-f"
+        "ctrl-alt-f"
     });
     cx.run_until_parked();
     cx.update(|_, cx| {

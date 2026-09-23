@@ -9,7 +9,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 
 /// Menus a workspace may hide, in menu-bar order.
-pub(super) const MENUS: [(&str, &str); 9] = [
+pub(super) const MENUS: [(&str, &str); 10] = [
     ("file", "File"),
     ("edit", "Edit"),
     ("image", "Image"),
@@ -19,6 +19,7 @@ pub(super) const MENUS: [(&str, &str); 9] = [
     ("view", "View"),
     ("window", "Window"),
     ("recipes", "Recipes"),
+    ("help", "Help"),
 ];
 
 impl EditorView {
@@ -62,8 +63,15 @@ impl EditorView {
                 .menu("Save As…", Box::new(SaveAs))
                 .separator()
                 .menu("Export…", Box::new(Export))
+                .menu("Batch…", Box::new(ShowBatch))
                 .separator()
                 .menu("Quit", Box::new(Quit))
+        })
+    }
+
+    pub(super) fn help_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+        self.menu_button("help", "Help", p, cx, |menu, _, _| {
+            menu.menu("About Emulsion", Box::new(ShowAbout))
         })
     }
 
@@ -142,6 +150,8 @@ impl EditorView {
                         })
                 };
             menu = menu
+                .menu("Home", Box::new(ShowHome))
+                .separator()
                 .label("Workspace")
                 .item(item("Photo (Essentials)", !draw, |this, _, cx| {
                     if this.draw_mode {

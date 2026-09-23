@@ -237,6 +237,19 @@ see the [tested RAW samples](crates/emulsion-io/tests/fixtures/RAW-CORPUS.md).
 The document raster uses 16-bit linear RGB; floating-point and RAW sources are
 converted to that representation, not retained as floating-point document pixels.
 
+CMYK images are converted to RGB for editing. CMYK JPEGs use the decoder's
+approximate conversion; 8-bit and 16-bit CMYK TIFFs use an embedded CMYK ICC
+profile when supported, with an approximate conversion otherwise. CMYK color
+entry is available through **CMYK…** in the foreground color popup and in the
+layer-effect color picker. Cyan, magenta, yellow, and black accept percentages
+from 0 to 100; these controls use an approximate conversion, without a printer
+profile. Native projects and exports retain RGB pixels, not CMYK ink separations.
+
+CMYK Photoshop PSD/PSB files open their saved merged appearance as one editable
+RGB layer. This supports 8-bit files with four CMYK channels and raw or RLE
+compression, using an embedded CMYK profile when supported. Extra alpha/spot
+channels, ZIP compression, and higher-bit-depth CMYK PSD files are not supported.
+
 ### Developing RAW photos
 
 RAW files are developed from sensor data, not their embedded JPEG. The RAW panel

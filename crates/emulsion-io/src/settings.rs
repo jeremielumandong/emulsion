@@ -158,6 +158,8 @@ pub struct Settings {
     pub openai_image_model: Option<String>,
     pub google_image_key: Option<String>,
     pub google_image_model: Option<String>,
+    /// The editor's "Ask AI" welcome hint was closed; it stays hidden.
+    pub ai_hint_dismissed: bool,
 }
 
 /// Whether this desktop is Omarchy (its current-theme colours exist).
@@ -215,6 +217,7 @@ impl Default for Settings {
             openai_image_model: None,
             google_image_key: None,
             google_image_model: None,
+            ai_hint_dismissed: false,
         }
     }
 }

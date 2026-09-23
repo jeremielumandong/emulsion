@@ -220,8 +220,8 @@ fn primary_tool_shortcuts_reach_tools_without_modifying_document(cx: &mut TestAp
     }
     for (key, kind) in [
         ("e", PaintKind::Eraser),
-        ("g", PaintKind::Bucket),
-        ("shift-g", PaintKind::Gradient),
+        ("g", PaintKind::Gradient),
+        ("shift-g", PaintKind::Bucket),
     ] {
         cx.simulate_keystrokes(key);
         cx.run_until_parked();

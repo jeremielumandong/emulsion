@@ -1,4 +1,4 @@
-//! The assistant surfaces inside the editor: the Ask bar (Ctrl+K), the dock
+//! The assistant surfaces inside the editor: the Ask bar (Ctrl+F), the dock
 //! that shows a turn as tool cards with Apply/Skip confirmations, and the
 //! suggestion strip.
 //!

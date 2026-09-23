@@ -2,6 +2,29 @@
 
 use std::sync::LazyLock;
 
+/// Approximate unprofiled CMYK ink amounts (0 to 1) as display RGB (0 to 1).
+/// This simple subtractive model is not an ICC printer-profile conversion.
+pub fn cmyk_to_rgb([c, m, y, k]: [f32; 4]) -> [f32; 3] {
+    let white = 1.0 - k.clamp(0.0, 1.0);
+    [c, m, y].map(|ink| (1.0 - ink.clamp(0.0, 1.0)) * white)
+}
+
+/// Approximate RGB as CMYK with maximum black generation, all channels 0 to 1.
+/// Multiple ink combinations can produce the same RGB; this chooses one.
+pub fn rgb_to_cmyk(rgb: [f32; 3]) -> [f32; 4] {
+    let [r, g, b] = rgb.map(|v| v.clamp(0.0, 1.0));
+    let white = r.max(g).max(b);
+    if white == 0.0 {
+        return [0.0, 0.0, 0.0, 1.0];
+    }
+    [
+        1.0 - r / white,
+        1.0 - g / white,
+        1.0 - b / white,
+        1.0 - white,
+    ]
+}
+
 #[inline]
 pub fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
@@ -168,6 +191,23 @@ pub fn luma(r: f32, g: f32, b: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cmyk_primaries_black_and_mixed_ink() {
+        assert_eq!(cmyk_to_rgb([0.; 4]), [1.; 3]);
+        assert_eq!(cmyk_to_rgb([1., 0., 0., 0.]), [0., 1., 1.]);
+        assert_eq!(cmyk_to_rgb([0., 1., 0., 0.]), [1., 0., 1.]);
+        assert_eq!(cmyk_to_rgb([0., 0., 1., 0.]), [1., 1., 0.]);
+        assert_eq!(cmyk_to_rgb([0., 0., 0., 1.]), [0.; 3]);
+        assert_eq!(cmyk_to_rgb([0.5, 0.25, 0., 0.5]), [0.25, 0.375, 0.5]);
+        assert_eq!(rgb_to_cmyk([0.; 3]), [0., 0., 0., 1.]);
+        for rgb in [[0.; 3], [1.; 3], [0.2, 0.7, 0.4], [1., 0., 0.]] {
+            let result = cmyk_to_rgb(rgb_to_cmyk(rgb));
+            for channel in 0..3 {
+                assert!((result[channel] - rgb[channel]).abs() < 1e-6);
+            }
+        }
+    }
 
     #[test]
     fn srgb8_roundtrip_is_exact() {

@@ -10,3 +10,12 @@ These changes remain under Apache-2.0. Original source notices are retained.
 - `src/presentation_policy.rs`: extracted decision and regression test.
 
 Archive and upstream revision information are in `../UPSTREAM.json`.
+
+## Variable-height list estimates
+
+`src/elements/list.rs` retains item height hints when invalidating measurements
+for initial layout or a width change. Visible items are still remeasured. Dropping
+all hints reduced the wheel scroll range to the few already measured rows,
+preventing Emulsion's virtual Layers list from reaching unmeasured content.
+The UI virtualization regressions cover scrolling through hundreds of layers
+and effects after window resizing without measuring the entire list.

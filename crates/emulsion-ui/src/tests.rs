@@ -29,6 +29,9 @@ mod subject_matching_tests;
 #[path = "generation_removal_tests.rs"]
 mod generation_removal_tests;
 
+#[path = "photoshop_shortcut_tests.rs"]
+mod photoshop_shortcut_tests;
+
 #[path = "tool_usability_tests.rs"]
 mod tool_usability_tests;
 
@@ -106,11 +109,17 @@ mod shape_workflow_tests;
 
 #[path = "layer_effect_rows_tests.rs"]
 mod layer_effect_rows_tests;
+#[path = "layer_virtualization_tests.rs"]
+mod layer_virtualization_tests;
 #[path = "layer_panel_workflow_tests.rs"]
 mod layer_panel_workflow_tests;
 
 #[path = "layer_menu_tests.rs"]
 mod layer_menu_tests;
+#[path = "layers_footer_tests.rs"]
+mod layers_footer_tests;
+#[path = "ask_ai_entry_tests.rs"]
+mod ask_ai_entry_tests;
 
 #[path = "advanced_style_workflow_tests.rs"]
 mod advanced_style_workflow_tests;
@@ -197,6 +206,8 @@ fn open_with(
             // Most established interaction tests target the roomy layout;
             // compact layout has its own focused integration coverage.
             compact_chrome: false,
+            // The first-run Ask AI hint has its own tests.
+            ai_hint_dismissed: true,
             ..Settings::default()
         }));
         cx.set_global(Capabilities { cli });
@@ -283,7 +294,7 @@ fn ask_image_choices_preserve_prompt_and_busy_requests_do_not_edit(cx: &mut Test
     let (ws, cx) = open(cx, doc(&["Photo"], None));
     let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
     let before = cx.update(|_, cx| e.read(cx).editor.doc.clone());
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("ctrl-f");
     cx.simulate_input("hide Photo");
     cx.run_until_parked();
     for (id, choice) in [
@@ -323,7 +334,7 @@ fn ask_image_choices_preserve_prompt_and_busy_requests_do_not_edit(cx: &mut Test
         assert!(!e.assistant.running);
     });
     cx.simulate_keystrokes("escape");
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("ctrl-f");
     cx.run_until_parked();
     cx.update(|_, cx| {
         e.update(cx, |e, cx| {
@@ -548,7 +559,7 @@ mod generated_images {
 #[gpui_kit::test]
 fn ask_bar_plans_offline_applies_as_one_step_and_undoes(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Grass", "Sun", "Clouds"], None));
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("ctrl-f");
     cx.simulate_input("hide the top two nodes and rename the third to Sky");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -591,7 +602,7 @@ fn ask_bar_plans_offline_applies_as_one_step_and_undoes(cx: &mut TestAppContext)
 #[gpui_kit::test]
 fn escape_closes_the_ask_bar_and_shortcuts_keep_working(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Grass", "Sun"], None));
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("ctrl-f");
     cx.simulate_input("hide sun");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
@@ -602,7 +613,7 @@ fn escape_closes_the_ask_bar_and_shortcuts_keep_working(cx: &mut TestAppContext)
         vec![("Grass".into(), true), ("Sun".into(), true)],
         "nothing was submitted"
     );
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("ctrl-f");
     cx.simulate_input("hide sun");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -622,7 +633,7 @@ fn escape_closes_the_ask_bar_and_shortcuts_keep_working(cx: &mut TestAppContext)
 #[gpui_kit::test]
 fn requests_that_need_the_assistant_say_so_when_it_is_missing(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Grass", "Sun"], None));
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("ctrl-f");
     cx.simulate_input("remove the person on the left");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -893,7 +904,7 @@ fn assistant_turn_through_the_ui_with_the_real_cli(cx: &mut TestAppContext) {
             version: String::new(),
         },
     );
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("ctrl-f");
     cx.simulate_input("Look at the image, then hide whichever node is yellow.");
     cx.simulate_keystrokes("enter");
 

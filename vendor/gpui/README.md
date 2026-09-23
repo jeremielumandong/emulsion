@@ -16,7 +16,8 @@ are retained. No GPUI API version upgrade accompanies this import.
 ## Local patches
 
 - [Core frame presentation](gpui-pre/EMULSION_CHANGES.md): skip unchanged-scene
-  keepalive presentation on software devices.
+  keepalive presentation on software devices; preserve virtual-list height
+  estimates across layout and resizing.
 - [Linux/wgpu](gpui-pre-wgpu/EMULSION_CHANGES.md): hardware-first ordering,
   forced software diagnostics, and software-capable device-loss recovery.
 - [Windows](gpui-pre-windows/EMULSION_CHANGES.md): explicit WARP fallback and

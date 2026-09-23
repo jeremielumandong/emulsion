@@ -408,81 +408,98 @@ impl Workspace {
         Some(row.into_any_element())
     }
 
-    fn compact_app_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The same command categories as the editor, scoped to the current page.
+    fn page_menus(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
-        let workspace = cx.entity().downgrade();
+        let screen = self.screen;
         let has_editor = self.editor.is_some();
-        let is_home = self.screen == Screen::Home;
         let home_rows = self.home_uses_rows();
-        Button::new("compact-app-menu")
-            .label("Menu")
-            .dropdown_caret(true)
-            .tooltip("Open the Emulsion menu")
-            .small()
-            .outline()
-            .rounded_none()
-            .text_color(p.ink)
-            .dropdown_menu(move |mut menu, _, _| {
-                menu = menu
-                    .menu("New document…", Box::new(NewDocument))
-                    .menu("Open…", Box::new(Open))
-                    .separator();
-                if has_editor {
-                    let workspace = workspace.clone();
-                    menu =
-                        menu.item(PopupMenuItem::new("Editor").on_click(move |_, window, cx| {
-                            workspace
-                                .update(cx, |this, cx| {
-                                    if let Some(active) = this.active_tab() {
-                                        this.activate_tab(active, window, cx);
-                                    }
-                                })
-                                .ok();
-                        }));
+        let workspace = cx.entity().downgrade();
+        let focus = self.focus.clone();
+        let button = |id, label| {
+            Button::new(id)
+                .label(label)
+                .small()
+                .ghost()
+                .text_color(p.ink)
+        };
+        div()
+            .id("page-menus")
+            .test_support()
+            .flex()
+            .items_center()
+            .flex_none()
+            .child(button("workspace-file-menu-button", "File").dropdown_menu({
+                let focus = focus.clone();
+                move |menu, _, _| {
+                    menu.action_context(focus.clone())
+                        .menu("New…", Box::new(NewDocument))
+                        .menu("Open…", Box::new(Open))
+                        .when(screen != Screen::Batch, |menu| {
+                            menu.separator().menu("Batch…", Box::new(ShowBatch))
+                        })
+                        .separator()
+                        .menu("Quit", Box::new(Quit))
                 }
-                for (label, screen) in [
-                    ("Home", Screen::Home),
-                    ("Batch", Screen::Batch),
-                    ("Settings", Screen::Settings),
-                    ("About", Screen::About),
-                ] {
-                    let workspace = workspace.clone();
-                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                        workspace
-                            .update(cx, |this, cx| {
-                                if screen == Screen::Home {
-                                    this.show_home(window, cx);
-                                    return;
-                                }
-                                this.cancel_style_dialog(window, cx);
-                                this.screen = screen;
-                                if screen == Screen::Batch {
-                                    this.refresh_batch_recipes(cx);
-                                }
-                                cx.notify();
-                            })
-                            .ok();
-                    }));
-                }
-                menu = menu.separator().item(
-                    PopupMenuItem::new("Toggle theme").on_click(|_, _, cx| theme::toggle(cx)),
-                );
-                if is_home {
-                    menu = menu.separator();
-                    for (label, rows) in [("Grid view", false), ("Rows view", true)] {
-                        let workspace = workspace.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(home_rows == rows)
-                                .on_click(move |_, _, cx| {
-                                    workspace
-                                        .update(cx, |this, cx| this.set_home_rows(rows, cx))
-                                        .ok();
-                                }),
-                        );
+            }))
+            .when(screen != Screen::Settings, |bar| {
+                let focus = focus.clone();
+                bar.child(button("workspace-edit-menu-button", "Edit").dropdown_menu(
+                    move |menu, _, _| {
+                        menu.action_context(focus.clone()).menu(
+                            "Keyboard Shortcuts and Preferences…",
+                            Box::new(ShowSettings),
+                        )
+                    },
+                ))
+            })
+            .child(button("workspace-view-menu-button", "View").dropdown_menu({
+                let focus = focus.clone();
+                move |menu, _, _| {
+                    let mut menu = menu
+                        .action_context(focus.clone())
+                        .menu("Light or Dark Interface", Box::new(ToggleTheme));
+                    if screen == Screen::Home {
+                        menu = menu.separator();
+                        for (label, rows) in [("Grid view", false), ("Rows view", true)] {
+                            let workspace = workspace.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .checked(home_rows == rows)
+                                    .on_click(move |_, _, cx| {
+                                        workspace
+                                            .update(cx, |this, cx| this.set_home_rows(rows, cx))
+                                            .ok();
+                                    }),
+                            );
+                        }
                     }
+                    menu
                 }
-                menu
+            }))
+            .when(screen != Screen::Home || has_editor, |bar| {
+                let focus = focus.clone();
+                bar.child(
+                    button("workspace-window-menu-button", "Window").dropdown_menu(
+                        move |menu, _, _| {
+                            menu.action_context(focus.clone())
+                                .when(screen != Screen::Home, |menu| {
+                                    menu.menu("Home", Box::new(ShowHome))
+                                })
+                                .when(has_editor, |menu| {
+                                    menu.menu("Return to document", Box::new(ShowEditor))
+                                })
+                        },
+                    ),
+                )
+            })
+            .when(screen != Screen::About, |bar| {
+                bar.child(button("workspace-help-menu-button", "Help").dropdown_menu(
+                    move |menu, _, _| {
+                        menu.action_context(focus.clone())
+                            .menu("About Emulsion", Box::new(ShowAbout))
+                    },
+                ))
             })
             .into_any_element()
     }
@@ -554,23 +571,8 @@ impl Workspace {
     }
 
     /// Navigation and document tabs share the compact editor's single header.
-    fn compact_tabs(&self, cx: &mut Context<Self>) -> (AnyElement, AnyElement) {
+    fn compact_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
-        let app_menu = self.compact_app_menu(cx);
-        let home = Button::new("compact-home")
-            .label("← Home")
-            .tooltip("Back to Home (Esc)")
-            .xsmall()
-            .outline()
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.show_home(window, cx);
-            }));
-        let navigation = div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(app_menu)
-            .child(home);
         let mut tabs = div()
             .id("compact-document-tabs")
             .test_support()
@@ -623,7 +625,7 @@ impl Workspace {
                     ),
             );
         }
-        let tabs = div()
+        div()
             .flex()
             .items_center()
             .min_w_0()
@@ -681,8 +683,7 @@ impl Workspace {
                         }),
                 )
             })
-            .into_any_element();
-        (navigation.into_any_element(), tabs)
+            .into_any_element()
     }
 
     /// Run `then` now, or after the user agrees to drop unsaved changes.
@@ -1513,11 +1514,11 @@ impl Render for Workspace {
         let compact_editor = compact && self.screen == Screen::Editor && self.editor.is_some();
         let compact_page = compact && !compact_editor;
         let top = if compact_editor {
-            let (navigation, tabs) = self.compact_tabs(cx);
+            let tabs = self.compact_tabs(cx);
             let theme_controls = self.compact_theme_controls(cx);
             let editor = self.editor.as_ref().unwrap().clone();
             let header = editor.update(cx, |editor, cx| {
-                editor.compact_header(navigation, tabs, theme_controls, &p, window, cx)
+                editor.compact_header(tabs, theme_controls, &p, window, cx)
             });
             gpui_kit::component::TitleBar::new()
                 .draggable(false)
@@ -1529,7 +1530,7 @@ impl Render for Workspace {
                 .child(header)
                 .into_any_element()
         } else if compact_page {
-            let navigation = self.compact_app_menu(cx);
+            let navigation = self.page_menus(cx);
             let theme_controls = self.compact_theme_controls(cx);
             let header = if self.screen == Screen::Home {
                 self.home_header(navigation, theme_controls, window, cx)
@@ -1597,11 +1598,23 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ShowHome, window, cx| {
                 this.show_home(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &ShowEditor, _, cx| {
-                if this.editor.is_some() {
-                    this.screen = Screen::Editor;
-                    cx.notify();
+            .on_action(cx.listener(|this, _: &ShowEditor, window, cx| {
+                if let Some(active) = this.active_tab() {
+                    this.activate_tab(active, window, cx);
                 }
+            }))
+            .on_action(cx.listener(|this, _: &ShowBatch, window, cx| {
+                this.cancel_style_dialog(window, cx);
+                this.screen = Screen::Batch;
+                this.refresh_batch_recipes(cx);
+                window.focus(&this.focus, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ShowAbout, window, cx| {
+                this.cancel_style_dialog(window, cx);
+                this.screen = Screen::About;
+                window.focus(&this.focus, cx);
+                cx.notify();
             }))
             .on_action(cx.listener(|_, _: &ToggleTheme, _, cx| {
                 theme::toggle(cx);
@@ -2096,13 +2109,13 @@ mod compact_tests {
         });
         let workspace = slot.borrow().clone().unwrap();
         cx.run_until_parked();
-        let menu_bounds = cx.update(|window, _| window.find("compact-app-menu").bounds());
         cx.update(|window, _| {
             assert!(window.find("editor-document-bar").bounds().size.height >= px(36.));
+            assert!(window.try_find("compact-app-menu").is_none());
             assert!(window.find("compact-tab-leading-drag").bounds().size.width >= px(24.));
             assert!(window.find("compact-window-drag").bounds().size.width >= px(64.));
         });
-        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.update(|window, cx| window.click("file-menu-button", cx));
         cx.run_until_parked();
         cx.update(|window, _| assert!(window.find("popup-menu").visible()));
         cx.update(|window, cx| window.press("escape", cx));
@@ -2112,7 +2125,9 @@ mod compact_tests {
         cx.run_until_parked();
         cx.update(|_, cx| assert_eq!(workspace.read(cx).editor.as_ref(), Some(&first)));
 
-        cx.update(|window, cx| window.click("compact-home", cx));
+        cx.update(|window, cx| window.click("window-menu-button", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(0usize, cx));
         cx.run_until_parked();
         cx.update(|_, cx| {
             let workspace = workspace.read(cx);
@@ -2120,7 +2135,8 @@ mod compact_tests {
             assert_eq!(workspace.editor.as_ref(), Some(&first));
         });
         cx.update(|window, _| {
-            assert_eq!(window.find("compact-app-menu").bounds(), menu_bounds);
+            assert!(window.find("workspace-file-menu-button").visible());
+            assert!(window.try_find("compact-app-menu").is_none());
             assert!(window.find("home-brand").visible());
             assert!(window.find("home-header-filters").visible());
             assert!(window.find("home-window-drag").bounds().size.width >= px(48.));
@@ -2152,9 +2168,9 @@ mod compact_tests {
         cx.update(|window, cx| window.click("compact-theme-dark", cx));
         cx.run_until_parked();
         cx.update(|_, cx| assert!(theme::palette(cx).dark));
-        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.update(|window, cx| window.click("workspace-window-menu-button", cx));
         cx.run_until_parked();
-        cx.update(|window, cx| window.within("popup-menu").click(3usize, cx));
+        cx.update(|window, cx| window.within("popup-menu").click(0usize, cx));
         cx.run_until_parked();
         cx.update(|_, cx| {
             let workspace = workspace.read(cx);
@@ -2162,19 +2178,20 @@ mod compact_tests {
             assert_eq!(workspace.editor.as_ref(), Some(&first));
         });
 
-        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.update(|window, cx| window.click("file-menu-button", cx));
         cx.run_until_parked();
-        cx.update(|window, cx| window.within("popup-menu").click(5usize, cx));
+        cx.update(|window, cx| window.within("popup-menu").click(8usize, cx));
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(workspace.read(cx).screen, Screen::Batch);
-            assert_eq!(window.find("compact-app-menu").bounds(), menu_bounds);
+            assert!(window.try_find("compact-app-menu").is_none());
+            assert!(window.find("workspace-file-menu-button").visible());
             assert!(window.find("compact-page-header").bounds().size.height >= px(36.));
             assert!(window.find("compact-page-window-drag").bounds().size.width >= px(64.));
         });
-        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.update(|window, cx| window.click("workspace-window-menu-button", cx));
         cx.run_until_parked();
-        cx.update(|window, cx| window.within("popup-menu").click(3usize, cx));
+        cx.update(|window, cx| window.within("popup-menu").click(1usize, cx));
         cx.run_until_parked();
 
         cx.update(|window, cx| window.click(("compact-document-close", first.entity_id()), cx));
@@ -2187,11 +2204,42 @@ mod compact_tests {
         });
         cx.update(|window, cx| window.click(("compact-document-close", last.entity_id()), cx));
         cx.run_until_parked();
-        cx.update(|_, cx| {
+        cx.update(|window, cx| {
             let workspace = workspace.read(cx);
             assert!(workspace.tabs.is_empty());
             assert!(workspace.editor.is_none());
             assert_eq!(workspace.screen, Screen::Home);
+            assert!(window.try_find("workspace-window-menu-button").is_none());
+        });
+
+        cx.update(|window, cx| window.click("workspace-edit-menu-button", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(0usize, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(workspace.read(cx).screen, Screen::Settings);
+            assert!(window.try_find("workspace-edit-menu-button").is_none());
+            assert!(window.try_find("compact-app-menu").is_none());
+        });
+
+        cx.update(|window, cx| window.click("workspace-help-menu-button", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(0usize, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(workspace.read(cx).screen, Screen::About);
+            assert!(window.try_find("workspace-help-menu-button").is_none());
+            assert!(window.try_find("compact-app-menu").is_none());
+        });
+
+        cx.update(|window, cx| window.click("workspace-window-menu-button", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(0usize, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(workspace.read(cx).screen, Screen::Home);
+            assert!(window.try_find("workspace-window-menu-button").is_none());
+            assert!(window.try_find("compact-app-menu").is_none());
         });
     }
 }

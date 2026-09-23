@@ -64,7 +64,7 @@ impl EditorView {
                         .when(on, |b| b.bg(p.ink).text_color(p.paper))
                         .when(!on, |b| b.ghost())
                         .tooltip(format!(
-                            "{label} mode: its own toolbars, tools and panels (Ctrl+Shift+D switches)"
+                            "{label} mode: its own toolbars, tools and panels (Ctrl+Alt+Shift+D switches)"
                         ))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if this.draw_mode != draw {

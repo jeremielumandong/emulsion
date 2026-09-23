@@ -36,6 +36,31 @@ impl EditorView {
         self.styles_ui.expanded = index.map(|index| (id, index));
         self.open_layer_styles_dialog(id, window, cx);
     }
+    /// Open Layer Style on `key`, adding the effect when the layer lacks it.
+    pub(crate) fn open_layer_effect_kind(
+        &mut self,
+        id: NodeId,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(node) = self.editor.doc.node(id) else {
+            return;
+        };
+        if let Some(index) = node.styles.iter().position(|s| s.key() == key) {
+            let effect = controls::effect_options(node)[index].id;
+            self.open_layer_effect(id, effect, window, cx);
+            return;
+        }
+        let Some(style) = LayerStyle::catalogue().into_iter().find(|s| s.key() == key) else {
+            return;
+        };
+        self.open_layer_styles_dialog(id, window, cx);
+        // Inside the dialog's transaction, so Cancel removes the new effect.
+        if self.styles_ui.dialog_for == Some(id) {
+            self.add_style(id, style, cx);
+        }
+    }
     pub(crate) fn open_layer_styles_dialog(
         &mut self,
         id: NodeId,

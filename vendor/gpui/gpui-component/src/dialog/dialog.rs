@@ -790,6 +790,9 @@ impl RenderOnce for Dialog {
                                             .trigger(|button| {
                                                 Button::new("close")
                                                     .with_base(button)
+                                                    // Keep the movable title underneath from
+                                                    // starting a drag and consuming mouse-up.
+                                                    .occlude()
                                                     .small()
                                                     .ghost()
                                                     .icon(IconName::Close)

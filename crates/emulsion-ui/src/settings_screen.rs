@@ -25,7 +25,13 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
     if action.starts_with("Tool")
         || matches!(
             action,
-            "SwapColors" | "DefaultColors" | "BrushSmaller" | "BrushLarger" | "CommitTool"
+            "SwapColors"
+                | "DefaultColors"
+                | "BrushSmaller"
+                | "BrushLarger"
+                | "BrushSofter"
+                | "BrushHarder"
+                | "CommitTool"
         )
     {
         "Tools"
@@ -39,8 +45,6 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
             | "Quit"
             | "ShowHome"
             | "ShowSettings"
-            | "ImageSizeDialog"
-            | "CanvasSizeDialog"
     ) {
         "Files"
     } else if matches!(
@@ -48,6 +52,7 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
         "Undo"
             | "Redo"
             | "FillSelection"
+            | "FillBackground"
             | "ContentAwareFill"
             | "CutPixels"
             | "CopyPixels"
@@ -57,21 +62,50 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
     ) || action.starts_with("Nudge")
     {
         "Edit"
-    } else if action.contains("Select") || matches!(action, "Deselect" | "ToggleQuickMask") {
-        "Selection"
-    } else if action.contains("Node")
+    } else if action.starts_with("Adjust")
+        || action.starts_with("Auto")
+        || action.starts_with("Filter")
         || matches!(
             action,
-            "NewLayer" | "GroupNodes" | "Ungroup" | "CanvasDelete"
+            "RepeatFilter" | "ImageSizeDialog" | "CanvasSizeDialog"
+        )
+    {
+        "Image"
+    } else if action.contains("Node")
+        || action.contains("Layer")
+        || action.starts_with("Blend")
+        || action.ends_with("BlendMode")
+        || action.starts_with("Opacity")
+        || matches!(
+            action,
+            "NewLayer"
+                | "GroupNodes"
+                | "Ungroup"
+                | "CanvasDelete"
+                | "MergeVisible"
+                | "BringToFront"
+                | "SendToBack"
+                | "ToggleClippingMask"
         )
         || ctx == "panel"
     {
         "Layers"
+    } else if action.contains("Select")
+        || matches!(action, "Deselect" | "Reselect" | "ToggleQuickMask")
+    {
+        "Selection"
     } else if action.starts_with("Zoom")
         || action.starts_with("Rotate")
+        || action.starts_with("Show")
         || matches!(
             action,
-            "ResetRotation" | "ToggleRulers" | "ToggleDrawMode" | "ToggleTheme" | "ShowEditor"
+            "ResetRotation"
+                | "ToggleRulers"
+                | "ToggleSnap"
+                | "TogglePanels"
+                | "ToggleScreenMode"
+                | "ToggleDrawMode"
+                | "ToggleTheme"
         )
     {
         "View"
@@ -84,9 +118,15 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
     }
 }
 
-/// "ctrl-shift-s" → "Ctrl+Shift+S".
+/// "ctrl-shift-s" → "Ctrl+Shift+S"; "ctrl--" → "Ctrl+-".
 fn pretty_keys(keys: &str) -> String {
-    keys.split('-')
+    let (mods, key) = match keys.strip_suffix("--") {
+        Some(mods) => (mods, "-"),
+        None => keys.rsplit_once('-').unwrap_or(("", keys)),
+    };
+    mods.split('-')
+        .filter(|part| !part.is_empty())
+        .chain(std::iter::once(key))
         .map(|part| match part {
             "ctrl" => "Ctrl".to_string(),
             "shift" => "Shift".to_string(),
@@ -255,7 +295,7 @@ impl Workspace {
             .child(
                 section(&p)
                     .child(tier(0, "Built in", true, "on", &p))
-                    .child(body("Nodes, masks, blend modes, adjustments, OpenRaster and image formats, the offline request planner behind Ctrl+K, and suggestions from image statistics.", &p))
+                    .child(body("Nodes, masks, blend modes, adjustments, OpenRaster and image formats, the offline request planner behind Ctrl+F, and suggestions from image statistics.", &p))
                     .child(
                         div().flex().gap(px(8.)).child(chip("sugg", "suggestions", s.suggestions, &p).on_click(cx.listener(|_, _, _, cx| {
                             app_state::update_settings(cx, |s| s.suggestions = !s.suggestions);
@@ -271,7 +311,7 @@ impl Workspace {
             .child(
                 section(&p)
                     .child(tier(2, "Coding CLI assistant", cli_on, cli_state, &p))
-                    .child(body("Multi-step requests from Ctrl+K go to a coding CLI that can only use Emulsion's tools. Every change it proposes is shown as an Apply / Skip card unless you turn on auto-apply. Claude Code asks before each tool; Codex, OpenCode and Kimi run one process per request and Emulsion holds their changes for you instead.", &p))
+                    .child(body("Multi-step requests from Ctrl+F go to a coding CLI that can only use Emulsion's tools. Every change it proposes is shown as an Apply / Skip card unless you turn on auto-apply. Claude Code asks before each tool; Codex, OpenCode and Kimi run one process per request and Emulsion holds their changes for you instead.", &p))
                     .child(
                         div()
                             .flex()
@@ -376,7 +416,7 @@ impl Workspace {
             .child(
                 section(&p)
                     .child(tier(3, "Jev decision model", jev.is_some(), if jev.is_some() { "on" } else { "off" }, &p))
-                    .child(body("TypeSafe's Jev answers small typed questions with calibrated confidence. With a key, Ctrl+K requests are planned by Jev, which copes with looser phrasing than the offline planner, and only text leaves the machine: the request and layer names, never pixels.", &p))
+                    .child(body("TypeSafe's Jev answers small typed questions with calibrated confidence. With a key, Ctrl+F requests are planned by Jev, which copes with looser phrasing than the offline planner, and only text leaves the machine: the request and layer names, never pixels.", &p))
                     .child(mono(
                         match &jev {
                             Some((_, "environment")) => "key: from TYPESAFE_API_KEY".to_string(),
@@ -443,7 +483,7 @@ impl Workspace {
                         None => g.1.push((label, vec![pretty_keys(keys)])),
                     }
                 }
-                let order = ["Tools", "Files", "Edit", "Selection", "Layers", "View", "Documents", "Assistant"];
+                let order = ["Tools", "Files", "Edit", "Image", "Layers", "Selection", "View", "Documents", "Assistant"];
                 groups.sort_by_key(|(t, _)| order.iter().position(|o| o == t).unwrap_or(99));
                 let mut rows = div().flex().flex_wrap().gap(px(28.)).items_start();
                 for (title, items) in groups {
@@ -669,7 +709,7 @@ impl Workspace {
             .border_b_1().border_color(p.line)
             .child(tier(4, "Image generation", on, if on { "on" } else { "off" }, p))
             .child(div().max_w(px(700.)).text_size(px(13.)).text_color(p.muted)
-                .child("Use Ctrl-K to choose Assistant, Local SD, OpenAI, or Google. Image modes create a new layer, or fill the selected area. The Select tool uses the default provider below."))
+                .child("Use Ctrl+F to choose Assistant, Local SD, OpenAI, or Google. Image modes create a new layer, or fill the selected area. The Select tool uses the default provider below."))
             .child(choices);
         let Some(provider) = selected else {
             return panel;
@@ -835,5 +875,26 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pretty_keys, shortcut_group};
+
+    #[test]
+    fn every_default_shortcut_has_a_heading_and_readable_keys() {
+        for (ctx, action, keys) in crate::actions::DEFAULTS {
+            assert_ne!(
+                shortcut_group(action, ctx),
+                "Other",
+                "{action} has no heading"
+            );
+            assert!(!pretty_keys(keys).is_empty());
+        }
+        assert_eq!(pretty_keys("ctrl--"), "Ctrl+-");
+        assert_eq!(pretty_keys("ctrl-alt-shift-w"), "Ctrl+Alt+Shift+W");
+        assert_eq!(pretty_keys("alt-shift-["), "Alt+Shift+[");
+        assert_eq!(pretty_keys("0"), "0");
     }
 }

@@ -285,6 +285,7 @@ impl EditorView {
                         window.focus(&this.panel_focus, cx);
                     })),
             )
+            .child(self.help_menu(p, cx))
             .into_any_element()
     }
 

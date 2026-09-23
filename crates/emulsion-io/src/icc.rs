@@ -2,10 +2,12 @@
 //! (Display P3 phone photos, Adobe RGB camera JPEGs, ProPhoto TIFFs) are
 //! converted to sRGB as they are decoded, so the working space is always
 //! sRGB and every adjustment and recipe sees the colours the photographer
-//! saw. Profiles that fail to parse are ignored and the picture is treated
-//! as sRGB, which is what happened before.
+//! saw. CMYK TIFF and PSD inks are converted with their embedded profile,
+//! with a subtractive approximation for missing or unusable profiles. JPEG
+//! decoders already return RGB; their CMYK profiles must not be reapplied.
+//! Unusable RGB profiles leave the decoded RGB values unchanged.
 
-use moxcms::{ColorProfile, Layout, TransformExecutor, TransformOptions};
+use moxcms::{ColorProfile, DataColorSpace, Layout, TransformExecutor, TransformOptions};
 
 /// Does the transform leave colours alone (the profile is sRGB, or close
 /// enough)? Probed on a handful of colours so a no-op pass is skipped.
@@ -30,6 +32,10 @@ pub fn to_srgb_8(icc: &[u8], rgba: &mut [u8]) -> bool {
     let Ok(src) = ColorProfile::new_from_slice(icc) else {
         return false;
     };
+    // RGB decoders may already have converted CMYK. Never reinterpret alpha as K.
+    if src.color_space == DataColorSpace::Cmyk {
+        return false;
+    }
     let dst = ColorProfile::new_srgb();
     let Ok(t) = src.create_transform_8bit(
         Layout::Rgba,
@@ -64,6 +70,10 @@ pub fn to_srgb_16(icc: &[u8], rgba: &mut [u16]) -> bool {
     let Ok(src) = ColorProfile::new_from_slice(icc) else {
         return false;
     };
+    // RGB decoders may already have converted CMYK. Never reinterpret alpha as K.
+    if src.color_space == DataColorSpace::Cmyk {
+        return false;
+    }
     let dst = ColorProfile::new_srgb();
     if let Ok(t8) = src.create_transform_8bit(
         Layout::Rgba,
@@ -155,5 +165,109 @@ mod tests {
         assert!(!to_srgb_8(&srgb, &mut same));
         assert_eq!(same, [10, 20, 30, 255]);
         assert!(!to_srgb_8(b"not a profile", &mut same));
+    }
+}
+
+// moxcms uses Layout::Rgba for four CMYK inks; RGB output avoids treating K as alpha.
+macro_rules! cmyk_converter {
+    ($name:ident, $sample:ty, $transform:ident) => {
+        /// Convert conventional CMYK ink samples to opaque sRGB pixels.
+        /// Missing or unusable profiles use a subtractive approximation.
+        pub(crate) fn $name(icc: Option<&[u8]>, cmyk: &[$sample]) -> Vec<$sample> {
+            let mut rgb = vec![0; cmyk.len() / 4 * 3];
+            let managed = icc
+                .and_then(|bytes| ColorProfile::new_from_slice(bytes).ok())
+                .filter(|profile| profile.color_space == DataColorSpace::Cmyk)
+                .and_then(|profile| {
+                    profile
+                        .$transform(
+                            Layout::Rgba,
+                            &ColorProfile::new_srgb(),
+                            Layout::Rgb,
+                            TransformOptions::default(),
+                        )
+                        .ok()
+                })
+                .is_some_and(|transform| transform.transform(cmyk, &mut rgb).is_ok());
+            if !managed {
+                let max = <$sample>::MAX as u64;
+                for (inks, out) in cmyk.chunks_exact(4).zip(rgb.chunks_exact_mut(3)) {
+                    for channel in 0..3 {
+                        out[channel] = (((max - inks[channel] as u64) * (max - inks[3] as u64)
+                            + max / 2)
+                            / max) as $sample;
+                    }
+                }
+            }
+            rgb.chunks_exact(3)
+                .flat_map(|p| [p[0], p[1], p[2], <$sample>::MAX])
+                .collect()
+        }
+    };
+}
+
+cmyk_converter!(cmyk_to_srgba8, u8, create_transform_8bit);
+cmyk_converter!(cmyk_to_srgba16, u16, create_transform_16bit);
+
+#[cfg(test)]
+mod cmyk_tests {
+    use super::*;
+
+    // A valid four-input ICC LUT whose PCS output is always black. This makes
+    // the managed result observably different from unprofiled white paper.
+    fn black_cmyk_profile() -> Vec<u8> {
+        let mut profile = srgb_profile().unwrap()[..128].to_vec();
+        profile[16..20].copy_from_slice(b"CMYK");
+        let mut lut = b"mft1\0\0\0\0\x04\x03\x02\0".to_vec();
+        for i in 0..9 {
+            lut.extend_from_slice(&(if i % 4 == 0 { 65536u32 } else { 0 }).to_be_bytes());
+        }
+        for _ in 0..4 {
+            lut.extend(0..=255u8);
+        }
+        lut.extend([0; 16 * 3]);
+        for _ in 0..3 {
+            lut.extend(0..=255u8);
+        }
+        profile.extend_from_slice(&1u32.to_be_bytes());
+        profile.extend_from_slice(b"A2B0");
+        profile.extend_from_slice(&144u32.to_be_bytes());
+        profile.extend_from_slice(&(lut.len() as u32).to_be_bytes());
+        profile.extend(lut);
+        let len = profile.len() as u32;
+        profile[..4].copy_from_slice(&len.to_be_bytes());
+        profile
+    }
+
+    #[test]
+    fn cmyk_profiles_transform_inks_and_never_rgb_alpha() {
+        let profile = black_cmyk_profile();
+        assert_eq!(cmyk_to_srgba8(None, &[0, 0, 0, 0]), [255; 4]);
+        assert_eq!(
+            cmyk_to_srgba8(Some(&profile), &[0, 0, 0, 0]),
+            [0, 0, 0, 255]
+        );
+        assert_eq!(
+            cmyk_to_srgba16(Some(&profile), &[0, 0, 0, 0]),
+            [0, 0, 0, 65535]
+        );
+        let mut rgba = [255; 4];
+        assert!(!to_srgb_8(&profile, &mut rgba));
+        assert_eq!(rgba, [255; 4]);
+        let mut wide = [65535; 4];
+        assert!(!to_srgb_16(&profile, &mut wide));
+        assert_eq!(wide, [65535; 4]);
+    }
+
+    #[test]
+    fn unprofiled_inks_have_opaque_black_and_full_precision() {
+        assert_eq!(
+            cmyk_to_srgba8(Some(b"invalid"), &[0, 0, 0, 255, 255, 0, 0, 0]),
+            [0, 0, 0, 255, 0, 255, 255, 255]
+        );
+        assert_eq!(
+            cmyk_to_srgba16(None, &[1, 0, 0, 0]),
+            [65534, 65535, 65535, 65535]
+        );
     }
 }

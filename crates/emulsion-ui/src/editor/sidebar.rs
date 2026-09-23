@@ -102,6 +102,27 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Photoshop's Tab: hide or show the panel dock.
+    pub(crate) fn toggle_panel_dock(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_layout.collapsed = !self.sidebar_layout.collapsed;
+        cx.notify();
+    }
+
+    /// Photoshop's F7: the Layers panel.
+    pub(crate) fn show_layers_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_dock_tab(DockTab::Layers, window, cx)
+    }
+
+    /// Photoshop's F8: the Info panel.
+    pub(crate) fn show_info_panel(&mut self, cx: &mut Context<Self>) {
+        self.show_sidebar_tab(SidebarTab::Info, cx)
+    }
+
+    /// Photoshop's F5: the Brush Settings panel.
+    pub(crate) fn show_brush_settings(&mut self, cx: &mut Context<Self>) {
+        self.show_sidebar_tab(SidebarTab::BrushSettings, cx)
+    }
+
     /// Open the panel dock on one of its upper tabs.
     pub(crate) fn show_sidebar_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
         self.sidebar_layout.collapsed = false;
@@ -423,7 +444,7 @@ impl EditorView {
                 }),
             );
         let dock_content = match self.dock_tab {
-            DockTab::Layers => self.scene_graph(p, cx).into_any_element(),
+            DockTab::Layers => self.scene_graph(p, window, cx).into_any_element(),
             DockTab::Channels => self.channels_panel(p, cx),
             DockTab::Paths => self.paths_panel(p, cx),
         };

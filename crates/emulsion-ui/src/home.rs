@@ -176,9 +176,9 @@ mod tests {
                     window.dispatch_action(Box::new(crate::actions::ShowHome), cx)
                 }),
                 "menu" => {
-                    cx.update(|window, cx| window.click("compact-app-menu", cx));
+                    cx.update(|window, cx| window.click("window-menu-button", cx));
                     cx.run_until_parked();
-                    cx.update(|window, cx| window.within("popup-menu").click(4usize, cx));
+                    cx.update(|window, cx| window.within("popup-menu").click(0usize, cx));
                 }
                 "close" => cx.update(|window, cx| {
                     workspace.update(cx, |workspace, cx| workspace.close_tab(0, window, cx));
@@ -238,9 +238,9 @@ mod tests {
         });
         cx.run_until_parked();
         cx.update(|_, cx| assert_eq!(workspace.read(cx).visible_recents(cx).len(), 1));
-        cx.update(|window, cx| window.click("compact-app-menu", cx));
+        cx.update(|window, cx| window.click("workspace-view-menu-button", cx));
         cx.run_until_parked();
-        cx.update(|window, cx| window.within("popup-menu").click(11usize, cx));
+        cx.update(|window, cx| window.within("popup-menu").click(3usize, cx));
         cx.run_until_parked();
         cx.update(|window, cx| {
             window.click(path_id("home-recent", Path::new("photos/Portrait.png")), cx)

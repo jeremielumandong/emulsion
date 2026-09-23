@@ -53,6 +53,44 @@ fn click(cx: &mut VisualTestContext, id: impl Into<gpui_kit::ElementId>) {
 }
 
 #[gpui_kit::test]
+fn native_style_dialog_close_cancels_preview_and_allows_reopening(cx: &mut TestAppContext) {
+    let original = styled_doc();
+    let (ws, cx) = open(cx, original.clone());
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    for height in [720., 1500.] {
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(height)));
+        for _ in 0..2 {
+            cx.update(|window, cx| {
+                view.update(cx, |e, cx| e.open_blending_options(1, window, cx));
+                assert!(window.has_active_dialog(cx));
+            });
+            click(cx, "style-dialog-enabled-10");
+            cx.update(|_, cx| {
+                let e = view.read(cx);
+                assert!(!e.editor.doc.nodes[0].style_options[0].enabled);
+                assert!(e.editor.in_transaction());
+                assert!(e.editor.history.is_empty());
+            });
+            let close = cx.update(|window, cx| {
+                window.render_frame(cx);
+                window.find("close").bounds().center()
+            });
+            cx.simulate_mouse_down(close, gpui_kit::MouseButton::Left, Default::default());
+            cx.simulate_mouse_up(close, gpui_kit::MouseButton::Left, Default::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert!(!window.has_active_dialog(cx));
+                let e = view.read(cx);
+                assert!(e.styles_ui.dialog_for.is_none());
+                assert!(!e.editor.in_transaction());
+                assert!(e.editor.history.is_empty());
+                assert_eq!(e.editor.doc, original);
+            });
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn effect_enable_reorder_and_undo_keep_options_attached_to_stable_effect(cx: &mut TestAppContext) {
     let original = styled_doc();
     let (ws, cx) = open(cx, original.clone());

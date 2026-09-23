@@ -276,6 +276,9 @@ fn finish_node(
 /// Open a Photoshop file as a layered document.
 pub fn read(path: &Path) -> Result<Document> {
     let bytes = std::fs::read(path)?;
+    if bytes.get(..4) == Some(b"8BPS") && bytes.get(24..26) == Some(&[0, 4]) {
+        return read_cmyk_composite(&bytes);
+    }
     let opts = ReadOptions {
         skip_thumbnail: Some(true),
         skip_composite_image_data: Some(false),
@@ -286,6 +289,140 @@ pub fn read(path: &Path) -> Result<Document> {
     let psd =
         ag_psd::read_psd(&bytes, &opts).map_err(|e| IoError::Unsupported(format!("PSD: {e:?}")))?;
     from_psd(&psd)
+}
+
+/// CMYK blending cannot be reconstructed by compositing converted RGB layers.
+/// Import the saved merged appearance instead. PSD stores inverted CMYK samples;
+/// use an embedded CMYK ICC profile when available, otherwise generic conversion.
+fn read_cmyk_composite(bytes: &[u8]) -> Result<Document> {
+    fn invalid() -> IoError {
+        IoError::Unsupported("CMYK PSD: truncated or invalid image data".into())
+    }
+    fn take<'a>(input: &mut &'a [u8], len: usize) -> Result<&'a [u8]> {
+        let (head, tail) = input.split_at_checked(len).ok_or_else(invalid)?;
+        *input = tail;
+        Ok(head)
+    }
+    fn number(input: &mut &[u8], len: usize) -> Result<usize> {
+        let value = take(input, len)?
+            .iter()
+            .fold(0u64, |n, b| (n << 8) | u64::from(*b));
+        usize::try_from(value).map_err(|_| invalid())
+    }
+    let mut input = bytes;
+    if take(&mut input, 4)? != b"8BPS" {
+        return Err(invalid());
+    }
+    let version = number(&mut input, 2)?;
+    if !matches!(version, 1 | 2) {
+        return Err(invalid());
+    }
+    take(&mut input, 6)?;
+    let channels = number(&mut input, 2)?;
+    let height = number(&mut input, 4)? as u32;
+    let width = number(&mut input, 4)? as u32;
+    crate::import::check_size(width, height)?;
+    let depth = number(&mut input, 2)?;
+    if number(&mut input, 2)? != 4 || depth != 8 || channels != 4 {
+        return Err(IoError::Unsupported(
+            "CMYK PSD opening requires 8-bit CMYK with four channels (no extra alpha or spot channels)".into(),
+        ));
+    }
+    let color_data_len = number(&mut input, 4)?;
+    take(&mut input, color_data_len)?;
+    let resources_len = number(&mut input, 4)?;
+    let mut resources = take(&mut input, resources_len)?;
+    let mut icc = None;
+    while !resources.is_empty() {
+        if take(&mut resources, 4)? != b"8BIM" {
+            return Err(invalid());
+        }
+        let id = number(&mut resources, 2)?;
+        let name_len = number(&mut resources, 1)?;
+        take(&mut resources, name_len)?;
+        if (name_len + 1) % 2 != 0 {
+            take(&mut resources, 1)?;
+        }
+        let data_len = number(&mut resources, 4)?;
+        let data = take(&mut resources, data_len)?;
+        if id == 1039 {
+            icc = Some(data);
+        }
+        if data_len % 2 != 0 {
+            take(&mut resources, 1)?;
+        }
+    }
+    let layer_len = number(&mut input, if version == 2 { 8 } else { 4 })?;
+    take(&mut input, layer_len)?;
+    let compression = number(&mut input, 2)?;
+    let pixels = width as usize * height as usize;
+    let planes = match compression {
+        0 => take(&mut input, pixels * 4)?.to_vec(),
+        1 => {
+            let rows = height as usize * 4;
+            let row_lengths = (0..rows)
+                .map(|_| number(&mut input, if version == 2 { 4 } else { 2 }))
+                .collect::<Result<Vec<_>>>()?;
+            let mut output = Vec::with_capacity(pixels * 4);
+            for len in row_lengths {
+                let mut row = take(&mut input, len)?;
+                let end = output.len() + width as usize;
+                while !row.is_empty() {
+                    let count = take(&mut row, 1)?[0] as i8;
+                    match count {
+                        0..=127 => {
+                            let len = count as usize + 1;
+                            if output.len() + len > end {
+                                return Err(invalid());
+                            }
+                            output.extend_from_slice(take(&mut row, len)?);
+                        }
+                        -127..=-1 => {
+                            let len = (1 - i16::from(count)) as usize;
+                            if output.len() + len > end {
+                                return Err(invalid());
+                            }
+                            let value = take(&mut row, 1)?[0];
+                            output.resize(output.len() + len, value);
+                        }
+                        -128 => {}
+                    }
+                }
+                if output.len() != end {
+                    return Err(invalid());
+                }
+            }
+            output
+        }
+        _ => {
+            return Err(IoError::Unsupported(
+                "CMYK PSD opening currently supports raw and RLE compression".into(),
+            ));
+        }
+    };
+    let mut cmyk = Vec::with_capacity(pixels * 4);
+    for i in 0..pixels {
+        for channel in 0..4 {
+            cmyk.push(255 - planes[pixels * channel + i]);
+        }
+    }
+    let rgba = crate::icc::cmyk_to_srgba8(icc, &cmyk);
+    let mut doc = Document::new(width, height);
+    doc.blend_space = emulsion_raster::blend::BlendSpace::Srgb;
+    doc.source_depth = 8;
+    add(
+        &mut doc,
+        Node::raster(
+            0,
+            "CMYK PSD appearance (converted to RGB, flattened)",
+            Arc::new(Raster::from_srgba8(width, height, &rgba)),
+            Placement::default(),
+        ),
+        None,
+    )?;
+    doc.validate()
+        .map_err(|e| IoError::Unsupported(format!("PSD: {e}")))?;
+    Ok(doc)
 }
 
 /// Build a document from a parsed PSD, rejecting sizes and pixel blocks
@@ -666,6 +803,96 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cmyk_fixture(version: u16, rle: bool) -> Vec<u8> {
+        let mut bytes = b"8BPS".to_vec();
+        bytes.extend_from_slice(&version.to_be_bytes());
+        bytes.extend_from_slice(&[0; 6]);
+        bytes.extend_from_slice(&4u16.to_be_bytes());
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(&2u32.to_be_bytes());
+        bytes.extend_from_slice(&8u16.to_be_bytes());
+        bytes.extend_from_slice(&4u16.to_be_bytes());
+        bytes.extend_from_slice(&[0; 8]);
+        bytes.extend_from_slice(&vec![0; if version == 2 { 8 } else { 4 }]);
+        bytes.extend_from_slice(&u16::from(rle).to_be_bytes());
+        // Cyan and 50% black, in PSD's inverted planar CMYK encoding.
+        let planes = [[0, 255], [255, 255], [255, 255], [255, 127]];
+        if rle {
+            for _ in 0..4 {
+                if version == 2 {
+                    bytes.extend_from_slice(&3u32.to_be_bytes());
+                } else {
+                    bytes.extend_from_slice(&3u16.to_be_bytes());
+                }
+            }
+        }
+        for plane in planes {
+            if rle {
+                bytes.push(1); // two literal bytes
+            }
+            bytes.extend_from_slice(&plane);
+        }
+        bytes
+    }
+
+    #[test]
+    fn cmyk_psd_and_psb_composites_open_with_correct_ink_polarity() {
+        for version in [1, 2] {
+            for rle in [false, true] {
+                let bytes = cmyk_fixture(version, rle);
+                let path = std::env::temp_dir().join(format!(
+                    "emulsion-cmyk-{}-{version}-{rle}.psd",
+                    std::process::id()
+                ));
+                std::fs::write(&path, &bytes).unwrap();
+                let doc = read(&path).unwrap();
+                std::fs::remove_file(path).unwrap();
+                assert_eq!(
+                    flatten(&doc.composite_tree(), 0).to_srgba8(),
+                    [0, 255, 255, 255, 127, 127, 127, 255]
+                );
+                assert!(doc.nodes[0].name.contains("flattened"));
+            }
+        }
+    }
+
+    #[test]
+    fn cmyk_psd_resources_and_packbits_repeats_are_read() {
+        let mut bytes = cmyk_fixture(1, true);
+        // A three-byte ICC payload exercises both Pascal-name and data padding.
+        // An invalid profile uses the documented generic conversion fallback.
+        let resource = [b'8', b'B', b'I', b'M', 4, 15, 0, 0, 0, 0, 0, 3, 1, 2, 3, 0];
+        bytes[30..34].copy_from_slice(&(resource.len() as u32).to_be_bytes());
+        bytes.splice(34..34, resource);
+        // Replace the magenta row with a two-pixel repeat plus PackBits no-op.
+        bytes[67..70].copy_from_slice(&[255, 255, 128]);
+        let doc = read_cmyk_composite(&bytes).unwrap();
+        assert_eq!(
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+            [0, 255, 255, 255, 127, 127, 127, 255]
+        );
+    }
+
+    #[test]
+    fn cmyk_psd_rejects_truncated_and_unsupported_data() {
+        for rle in [false, true] {
+            let bytes = cmyk_fixture(1, rle);
+            for len in 0..bytes.len() {
+                assert!(read_cmyk_composite(&bytes[..len]).is_err(), "length {len}");
+            }
+        }
+        for (offset, value) in [(23, 16), (13, 5), (39, 2)] {
+            let mut bytes = cmyk_fixture(1, false);
+            bytes[offset] = value;
+            assert!(read_cmyk_composite(&bytes).is_err());
+        }
+        let mut bytes = cmyk_fixture(1, true);
+        bytes[48] = 2; // literal run exceeds two-pixel row
+        assert!(read_cmyk_composite(&bytes).is_err());
+        bytes[48] = 254; // repeated run exceeds two-pixel row
+        assert!(read_cmyk_composite(&bytes).is_err());
+    }
 
     fn roundtrip(doc: &Document, name: &str) -> Document {
         let path =

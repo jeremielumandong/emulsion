@@ -49,10 +49,26 @@ impl EditorView {
     }
 
     /// Remember where the pointer is for the Info panel.
-    pub(crate) fn note_pointer(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(crate) fn note_pointer(
+        &mut self,
+        pos: Point<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.panels.info && self.panels.pointer != Some(pos) {
             self.panels.pointer = Some(pos);
-            cx.notify();
+            if self.sidebar_tab == SidebarTab::Info
+                && (!crate::app_state::settings(cx).compact_chrome
+                    || self
+                        .sidebar_layout
+                        .width_for_viewport(
+                            f32::from(window.viewport_size().width),
+                            f32::from(window.rem_size()),
+                        )
+                        .is_some())
+            {
+                self.notify_sidebar(cx);
+            }
         }
     }
 

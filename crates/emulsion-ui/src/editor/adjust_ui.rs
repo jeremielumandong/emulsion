@@ -798,6 +798,27 @@ impl EditorView {
         }
     }
 
+    /// Photoshop's Desaturate (Ctrl+Shift+U), as an editable Hue/Saturation
+    /// layer at -100 saturation.
+    pub(crate) fn quick_desaturate(&mut self, cx: &mut Context<Self>) {
+        if !self.effects_ready() {
+            self.set_status(
+                "Finish the current edit before adding an adjustment.",
+                false,
+                cx,
+            );
+            return;
+        }
+        let a = Adjustment::HueSaturation {
+            hue: 0.0,
+            saturation: -100.0,
+            lightness: 0.0,
+        };
+        if self.add_node(Node::adjust(0, a), cx).is_some() {
+            self.set_status("Desaturated with a Hue/Saturation layer.", false, cx);
+        }
+    }
+
     /// Add a filter to the selected pixel node, making it a smart layer
     /// first if it is plain pixels.
     pub fn quick_filter(&mut self, label: &str, cx: &mut Context<Self>) {

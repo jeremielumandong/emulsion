@@ -754,7 +754,7 @@ fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut Tes
     });
     cx.run_until_parked();
     // Window ▸ Layers.
-    let point = cx.update(|window, _| window.within("popup-menu").find(19usize).bounds().center());
+    let point = cx.update(|window, _| window.within("popup-menu").find(21usize).bounds().center());
     cx.simulate_click(point, Default::default());
     cx.run_until_parked();
     cx.update(|_, cx| {

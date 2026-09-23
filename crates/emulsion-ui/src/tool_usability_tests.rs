@@ -174,13 +174,47 @@ fn explicit_subtool_shortcuts_reach_the_advertised_tools(cx: &mut TestAppContext
             assert_eq!(editor.read(cx).tools.select, shape);
         });
     }
-    for (keys, kind) in [
-        ("shift-b", PaintKind::Smudge),
-        ("shift-j", PaintKind::Liquify),
+    // Shift+letter steps through the group, as with Photoshop's default
+    // "Use Shift Key for Tool Switch".
+    for (keys, shape) in [
+        ("shift-w", SelectShape::Wand),
+        ("shift-l", SelectShape::Polygon),
+        ("shift-l", SelectShape::Magnetic),
+        ("shift-l", SelectShape::Lasso),
+        ("shift-m", SelectShape::Ellipse),
+        ("shift-m", SelectShape::Rect),
     ] {
         cx.simulate_keystrokes(keys);
         cx.run_until_parked();
-        assert_eq!(cx.update(|_, cx| editor.read(cx).tools.paint), kind);
+        assert_eq!(
+            cx.update(|_, cx| editor.read(cx).tools.select),
+            shape,
+            "{keys}"
+        );
+    }
+    for (keys, kind) in [
+        ("shift-b", PaintKind::Smudge),
+        ("shift-b", PaintKind::Brush),
+        // Photoshop: Filter > Liquify.
+        ("ctrl-shift-x", PaintKind::Liquify),
+    ] {
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| editor.read(cx).tools.paint),
+            kind,
+            "{keys}"
+        );
+    }
+    // Shift+J steps from Heal to Remove and back.
+    for removing in [true, false] {
+        cx.simulate_keystrokes("shift-j");
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = editor.read(cx);
+            assert_eq!(e.tool, Tool::Heal);
+            assert_eq!(e.tools.remove.enabled, removing);
+        });
     }
     for (keys, kind) in [("shift-u", ShapeKind::Ellipse), ("u", ShapeKind::Rect)] {
         cx.simulate_keystrokes(keys);

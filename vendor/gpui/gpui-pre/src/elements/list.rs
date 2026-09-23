@@ -1,3 +1,4 @@
+// Emulsion: preserve virtual-list height estimates across initial layout and resizing.
 //! A list element that can be used to render a large number of differently sized elements
 //! efficiently. Clients of this API need to ensure that elements outside of the scrolled
 //! area do not change their height for this element to function correctly. If your elements
@@ -1547,7 +1548,10 @@ impl Element for List {
         {
             let new_items = SumTree::from_iter(
                 state.items.iter().map(|item| ListItem::Unmeasured {
-                    size_hint: None,
+                    // Keep estimates for offscreen items: clearing them makes
+                    // the scroll range collapse to only the measured viewport.
+                    // Visible items are still remeasured at the new width.
+                    size_hint: item.size_hint(),
                     focus_handle: item.focus_handle(),
                 }),
                 (),
