@@ -132,7 +132,10 @@ fn saved_workspace_default_initializes_next_document_and_can_reset(cx: &mut Test
         assert!(window.find("image-menu").visible());
         assert!(window.try_find("custom-tool-Brush").is_none());
         assert!(editor.read(cx).workspace_snapshot().tool_ids.is_empty());
-        assert!(!editor.read(cx).draw_mode);
+        assert!(
+            editor.read(cx).draw_mode,
+            "reset restores this mode's factory layout without leaving it"
+        );
         assert_eq!(editor.read(cx).editor.doc, second);
         assert_eq!(editor.read(cx).editor.history.len(), 0);
         // Reset affects the current workspace; a saved default remains available.
@@ -473,4 +476,173 @@ fn grouped_tools_remain_clickable_outside_the_scrolling_rail(cx: &mut TestAppCon
     );
     cx.run_until_parked();
     cx.update(|window, _| assert!(window.try_find(("rail-flyout", 1usize)).is_none()));
+}
+
+fn compact(
+    cx: &mut TestAppContext,
+    original: Document,
+    width: f32,
+    height: f32,
+) -> (
+    Entity<Workspace>,
+    Entity<crate::editor::EditorView>,
+    &mut VisualTestContext,
+) {
+    let (ws, cx) = open(cx, original);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height)));
+    let editor = cx.update(|window, cx| {
+        cx.global_mut::<AppSettings>().0.compact_chrome = true;
+        window.refresh();
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    (ws, editor, cx)
+}
+
+#[gpui_kit::test]
+fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
+    cx.update(|window, cx| {
+        assert!(window.find("mode-photo").visible());
+        assert!(window.try_find("canvas-toolbar-dock").is_none());
+        assert!(window.find("canvas-toolbar-options").visible());
+        window.click("mode-draw", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(editor.read(cx).draw_mode);
+        assert!(window.find("canvas-toolbar-dock").visible());
+        assert!(window.find("canvas-toolbar-brushes").visible());
+        assert!(window.find("dock-paint").visible());
+        assert!(window.try_find("canvas-toolbar-options").is_none());
+        window.click("toolbar-close-tools", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("canvas-toolbar-tools").is_none());
+        window.click("mode-photo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!editor.read(cx).draw_mode);
+        assert!(
+            window.find("canvas-toolbar-tools").visible(),
+            "photo keeps its tools"
+        );
+        assert!(window.try_find("canvas-toolbar-dock").is_none());
+        window.click("mode-draw", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            window.try_find("canvas-toolbar-tools").is_none(),
+            "draw restores the toolbox it was left with"
+        );
+        assert!(window.find("canvas-toolbar-dock").visible());
+        let settings = &cx.global::<AppSettings>().0;
+        assert!(settings.photo_workspace.is_some());
+        assert_eq!(editor.read(cx).editor.doc, original);
+        assert_eq!(editor.read(cx).editor.history.len(), 0);
+    });
+    cx.dispatch_action(crate::actions::ToggleDrawMode);
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(!editor.read(cx).draw_mode, "Ctrl+Shift+D switches too"));
+}
+
+#[gpui_kit::test]
+fn toolbars_scale_and_dock_from_the_customizer(cx: &mut TestAppContext) {
+    let (_ws, editor, cx) = compact(cx, doc(&["Photo"], None), 1440., 1000.);
+    let before = cx.update(|window, cx| {
+        window.click("compact-layout-trigger", cx);
+        window.find("canvas-toolbar-tools").bounds()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("toolbar-scale-tools-XL", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let after = window.find("canvas-toolbar-tools").bounds();
+        assert!(
+            after.size.width > before.size.width * 1.3,
+            "XL tools: {before:?} -> {after:?}"
+        );
+        assert_eq!(
+            editor.read(cx).workspace_snapshot().toolbar_placements[0].scale,
+            1.5
+        );
+        window.click("toolbar-dock-tools-dock-right", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let canvas = window.find("editor-canvas-column").bounds();
+        let tools = window.find("canvas-toolbar-tools").bounds();
+        assert!(tools.origin.x > canvas.center().x);
+        window.click("toolbar-dock-tools-float-over-the-canvas", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let layout = editor.read(cx).workspace_snapshot();
+        assert_eq!(layout.toolbar_placements[0].edge, "floating");
+        window.click("toolbar-scale-all-S", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let layout = editor.read(cx).workspace_snapshot();
+        assert!(
+            layout
+                .toolbar_placements
+                .iter()
+                .all(|bar| bar.scale == 0.85)
+        );
+        let mut restored = layout.clone();
+        editor.update(cx, |e, cx| e.apply_workspace_layout(&restored, cx));
+        restored = editor.read(cx).workspace_snapshot();
+        assert_eq!(restored, layout);
+    });
+}
+
+#[gpui_kit::test]
+fn brush_gallery_and_project_colours_pick_in_one_click(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 1000.);
+    cx.update(|window, cx| {
+        // Tests share one data directory; keep this library in memory only so
+        // recording the picked brush as recent cannot race other tests' saves.
+        crate::editor::shared_library(cx).update(cx, |library, _| {
+            library.error = Some("read-only for this test".into())
+        });
+        editor.update(cx, |e, _| {
+            e.editor.doc.colors = vec![[10, 200, 30], [1, 2, 3]]
+        });
+        window.click("mode-draw", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find(("shelf-brush", 0usize)).visible());
+        window.click("brush-gallery-toggle", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("brush-gallery").visible());
+        window.click(("gallery-brush", 0usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(editor.read(cx).presets.current_id.is_some());
+        window.click("gallery-close", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("brush-gallery").is_none());
+        window.click(("project-color", 0usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_eq!(e.tools.fg, [10, 200, 30, 255]);
+        assert_eq!(e.editor.history.len(), 0);
+        let mut expected = original.clone();
+        expected.colors = e.editor.doc.colors.clone();
+        assert_eq!(e.editor.doc, expected);
+    });
 }

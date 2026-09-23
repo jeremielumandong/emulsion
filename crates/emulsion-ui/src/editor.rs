@@ -18,6 +18,7 @@ pub(crate) mod channels;
 mod clipboard;
 mod compact;
 pub(crate) mod crop;
+mod draw_workspace;
 pub(crate) mod export_ui;
 mod filters;
 pub(crate) mod generate_ui;
@@ -36,6 +37,8 @@ mod toolbox;
 mod workspace_layout;
 pub(crate) use pen::PenMode;
 mod presets;
+#[cfg(test)]
+pub(crate) use presets::shared_library;
 mod rail;
 mod raw_panel;
 mod raw_settings_ui;
@@ -417,6 +420,7 @@ pub struct EditorView {
     pub(crate) rotation_fields: Option<rotation::RotationFields>,
     pub(crate) presets: presets::PresetState,
     brush_workspace: Option<Entity<brush_library_ui::BrushWorkspace>>,
+    draw_ui: draw_workspace::DrawUi,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
     pub(crate) recipes: recipes::RecipeState,
     pub(crate) smart: smart::SmartUi,
@@ -454,6 +458,9 @@ impl EditorView {
         let tree = Arc::new(editor.doc.composite_tree());
         let rev = editor.revision;
         let commit = editor.committed_revision;
+        let draw_mode = cx
+            .try_global::<crate::app_state::AppSettings>()
+            .is_some_and(|s| s.0.draw_mode);
         let mut view = Self {
             editor,
             name,
@@ -465,14 +472,12 @@ impl EditorView {
             raw_peers: Vec::new(),
             generate: Default::default(),
             rail: Default::default(),
-            compact: compact::CompactLayout::new(cx),
+            compact: compact::CompactLayout::for_mode(draw_mode, cx),
             workspace_customizer: None,
             workspace_customizer_focus: cx.focus_handle(),
             sidebar_layout: Default::default(),
             export_prefs: Default::default(),
-            draw_mode: cx
-                .try_global::<crate::app_state::AppSettings>()
-                .is_some_and(|s| s.0.draw_mode),
+            draw_mode,
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
@@ -543,6 +548,7 @@ impl EditorView {
             rotation_fields: None,
             presets: Default::default(),
             brush_workspace: None,
+            draw_ui: Default::default(),
             adjust_ui: Default::default(),
             recipes: Default::default(),
             smart: Default::default(),
@@ -557,9 +563,19 @@ impl EditorView {
             selection_request: 0,
             pending_edit_job: None,
         };
+        // An explicit default wins; otherwise reopen the current mode the
+        // way it was last arranged.
         if let Some(layout) = cx
             .try_global::<crate::app_state::AppSettings>()
-            .and_then(|s| s.0.workspace_default.clone())
+            .and_then(|s| {
+                s.0.workspace_default.clone().or_else(|| {
+                    if draw_mode {
+                        s.0.draw_workspace.clone()
+                    } else {
+                        s.0.photo_workspace.clone()
+                    }
+                })
+            })
         {
             view.apply_workspace_layout(&layout, cx);
         }
@@ -924,21 +940,47 @@ impl EditorView {
         self.canvas_bounds.get()
     }
 
-    /// Switch between the painter's shell and the full photo shell.
+    /// Switch between the painter's shell and the full photo shell. Each
+    /// mode keeps its own workspace (toolbars, tools and panels): leaving
+    /// one remembers it, entering the other restores how it was left.
     pub fn toggle_draw_mode(&mut self, cx: &mut Context<Self>) {
-        self.draw_mode = !self.draw_mode;
-        let on = self.draw_mode;
-        crate::app_state::update_settings(cx, |s| s.draw_mode = on);
+        let leaving = self.workspace_snapshot();
+        let on = !self.draw_mode;
+        let mut restore = None;
+        crate::app_state::update_settings(cx, |s| {
+            s.draw_mode = on;
+            let (save, load) = if on {
+                (&mut s.photo_workspace, &s.draw_workspace)
+            } else {
+                (&mut s.draw_workspace, &s.photo_workspace)
+            };
+            *save = Some(leaving);
+            restore = load.clone();
+        });
+        match restore {
+            Some(mut layout) => {
+                layout.draw_mode = on;
+                self.apply_workspace_layout(&layout, cx);
+            }
+            None => {
+                self.draw_mode = on;
+                self.compact = compact::CompactLayout::for_mode(on, cx);
+            }
+        }
         self.rail = Default::default();
         if on {
             self.set_paint(PaintKind::Brush, cx);
             self.set_status(
-                "Draw mode: brush, smudge, eraser and colour up front. Tap Draw again for the photo tools.",
+                "Draw mode: brushes, colours and paint controls up front. Ctrl+Shift+D or Photo returns to the photo tools.",
                 false,
                 cx,
             );
         } else {
-            self.set_status("Full shell: every tool and panel.", false, cx);
+            self.set_status(
+                "Photo mode: every photo tool and panel. Ctrl+Shift+D returns to Draw.",
+                false,
+                cx,
+            );
         }
         cx.notify();
     }

@@ -1641,6 +1641,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleRulers, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_rulers(cx))
             }))
+            .on_action(cx.listener(|this, _: &ToggleDrawMode, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_draw_mode(cx))
+            }))
             .on_action(cx.listener(|this, _: &DeleteNode, _, cx| {
                 this.with_editor(cx, |e, cx| {
                     if !(e.tool == crate::editor::Tool::Pen && e.pen_delete(cx)) {

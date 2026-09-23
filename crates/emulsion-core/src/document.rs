@@ -75,7 +75,13 @@ pub struct Document {
     pub raw: Option<crate::raw::RawDocument>,
     /// Original files remain protected even after baking or painting detaches a recipe.
     pub raw_originals: Vec<std::path::PathBuf>,
+    /// Colours painted with in this project, most recent first, for the
+    /// draw palette. Not rendered into pixels and not part of history.
+    pub colors: Vec<[u8; 3]>,
 }
+
+/// How many painted colours a project remembers.
+pub const MAX_PROJECT_COLORS: usize = 32;
 
 /// Camera metadata carried from the source file (EXIF), for the Info
 /// panel, lens profiles and the assistant.
@@ -170,7 +176,20 @@ impl Document {
             info: None,
             raw: None,
             raw_originals: Vec::new(),
+            colors: Vec::new(),
         }
+    }
+
+    /// Remember a colour painted with: moves it to the front, keeping at
+    /// most [`MAX_PROJECT_COLORS`]. Returns whether the palette changed.
+    pub fn note_color(&mut self, rgb: [u8; 3]) -> bool {
+        if self.colors.first() == Some(&rgb) {
+            return false;
+        }
+        self.colors.retain(|c| *c != rgb);
+        self.colors.insert(0, rgb);
+        self.colors.truncate(MAX_PROJECT_COLORS);
+        true
     }
 
     pub fn alloc_id(&mut self) -> NodeId {
@@ -889,5 +908,28 @@ mod retained_buffer_tests {
             if x == 0 { 255 } else { 0 }
         })));
         assert!(doc.buffers().len() > after.len());
+    }
+}
+
+#[cfg(test)]
+mod project_color_tests {
+    use super::*;
+
+    #[test]
+    fn painted_colors_are_most_recent_first_without_duplicates() {
+        let mut doc = Document::new(4, 4);
+        assert!(doc.note_color([1, 2, 3]));
+        assert!(doc.note_color([4, 5, 6]));
+        assert!(
+            !doc.note_color([4, 5, 6]),
+            "repainting the newest is a no-op"
+        );
+        assert!(doc.note_color([1, 2, 3]));
+        assert_eq!(doc.colors, vec![[1, 2, 3], [4, 5, 6]]);
+        for i in 0..100u8 {
+            doc.note_color([i, i, 0]);
+        }
+        assert_eq!(doc.colors.len(), MAX_PROJECT_COLORS);
+        assert_eq!(doc.colors[0], [99, 99, 0]);
     }
 }

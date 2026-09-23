@@ -22,10 +22,22 @@ pub(super) enum Bar {
     Options,
     View,
     Color,
+    /// One-click brush shelf: pinned and recent brushes.
+    Brushes,
+    /// Draw mode's large paint, smudge, erase, layers and colour controls
+    /// with size and opacity sliders, like Procreate's side bar.
+    Dock,
 }
 
 impl Bar {
-    pub(super) const ALL: [Self; 4] = [Self::Tools, Self::Options, Self::View, Self::Color];
+    pub(super) const ALL: [Self; 6] = [
+        Self::Tools,
+        Self::Options,
+        Self::View,
+        Self::Color,
+        Self::Brushes,
+        Self::Dock,
+    ];
 
     pub(super) fn name(self) -> &'static str {
         match self {
@@ -33,20 +45,40 @@ impl Bar {
             Self::Options => "options",
             Self::View => "view",
             Self::Color => "color",
+            Self::Brushes => "brushes",
+            Self::Dock => "dock",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Tools => "Tools",
+            Self::Options => "Options",
+            Self::View => "View",
+            Self::Color => "Colors",
+            Self::Brushes => "Brushes",
+            Self::Dock => "Draw dock",
         }
     }
 }
+
+/// Toolbar sizes offered in the workspace customizer: (label, scale).
+pub(super) const SCALES: [(&str, f32); 4] = [("S", 0.85), ("M", 1.0), ("L", 1.25), ("XL", 1.5)];
+pub(super) const MIN_SCALE: f32 = 0.75;
+pub(super) const MAX_SCALE: f32 = 2.0;
 
 pub(super) struct Toolbar {
     focus: FocusHandle,
     pub(super) edge: Edge,
     pub(super) open: bool,
+    /// Multiplies the toolbar's rem-based sizes; 1 is standard.
+    pub(super) scale: f32,
     pub(super) position: Point<Pixels>,
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 pub(super) struct CompactLayout {
-    pub(super) bars: [Toolbar; 4],
+    pub(super) bars: [Toolbar; 6],
     area: Rc<Cell<Option<Bounds<Pixels>>>>,
     drop_edge: Option<Edge>,
     pub(super) tool_ids: Vec<String>,
@@ -54,12 +86,31 @@ pub(super) struct CompactLayout {
 }
 
 impl CompactLayout {
-    pub(super) fn new(cx: &App) -> Self {
+    /// The factory arrangement for Photo (`draw == false`) or Draw mode.
+    /// Photo keeps every tool option in reach; Draw puts brushes, colours
+    /// and large paint controls up front and hides the options bar.
+    pub(super) fn for_mode(draw: bool, cx: &App) -> Self {
+        let edges = [
+            Edge::Left,
+            Edge::Top,
+            Edge::Bottom,
+            Edge::Bottom,
+            Edge::Top,
+            Edge::Right,
+        ];
+        let open = [true, !draw, true, true, draw, draw];
+        // Painting favours bigger targets: tools and colours at L size.
+        let scale = if draw {
+            [1.25, 1., 1., 1.25, 1., 1.]
+        } else {
+            [1.; 6]
+        };
         Self {
-            bars: [Edge::Left, Edge::Top, Edge::Bottom, Edge::Bottom].map(|edge| Toolbar {
+            bars: std::array::from_fn(|i| Toolbar {
                 focus: cx.focus_handle(),
-                edge,
-                open: true,
+                edge: edges[i],
+                open: open[i],
+                scale: scale[i],
                 position: point(px(20.), px(60.)),
                 bounds: Default::default(),
             }),
@@ -77,6 +128,74 @@ pub(super) struct ToolbarDrag {
     offset: Point<Pixels>,
     original_edge: Edge,
     original_position: Point<Pixels>,
+}
+
+/// Lays out and paints its child at another rem size, so a whole toolbar
+/// (icons, text, padding) grows or shrinks together.
+struct WithRemSize {
+    rem: Pixels,
+    child: AnyElement,
+}
+
+impl IntoElement for WithRemSize {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for WithRemSize {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let child = &mut self.child;
+        let id = window.with_rem_size(Some(self.rem), |window| child.request_layout(window, cx));
+        (id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let child = &mut self.child;
+        window.with_rem_size(Some(self.rem), |window| {
+            child.prepaint(window, cx);
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let child = &mut self.child;
+        window.with_rem_size(Some(self.rem), |window| child.paint(window, cx));
+    }
 }
 
 fn control(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
@@ -159,6 +278,7 @@ impl EditorView {
                         }
                     })),
             )
+            .child(self.mode_switch(p, cx))
             .child(div().flex().items_center().child(layout))
             .child(
                 control("save", "Save")
@@ -196,14 +316,15 @@ impl EditorView {
                         control(SharedString::from(format!("layout-preset-{id}")), name)
                             .when(selected, |b| b.bg(p.ink).text_color(p.paper))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.compact = CompactLayout::new(cx);
+                                if id != "minimal" && this.draw_mode != (id == "draw") {
+                                    this.toggle_draw_mode(cx);
+                                }
+                                this.compact = CompactLayout::for_mode(this.draw_mode, cx);
                                 this.sidebar_layout.collapsed = id == "minimal";
                                 if id == "minimal" {
-                                    for bar in [Bar::Options, Bar::View, Bar::Color] {
+                                    for bar in [Bar::Options, Bar::View, Bar::Color, Bar::Brushes] {
                                         this.compact.bars[bar as usize].open = false;
                                     }
-                                } else if this.draw_mode != (id == "draw") {
-                                    this.toggle_draw_mode(cx);
                                 }
                                 cx.notify();
                             }))
@@ -212,37 +333,137 @@ impl EditorView {
             .into_any_element()
     }
 
+    /// One row per toolbar: show or hide it, pick its size, and dock it to
+    /// an edge or float it, all without dragging.
     pub(super) fn toolbar_toggles(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_1()
-            .children(Bar::ALL.into_iter().map(|bar| {
-                let open = self.compact.bars[bar as usize].open;
-                control(
-                    SharedString::from(format!("toolbar-toggle-{}", bar.name())),
-                    bar.name(),
+        let chip = move |b: Button, on: bool| {
+            b.when(on, |b| b.bg(p.soft_bg).border_1().border_color(p.accent))
+        };
+        let all = self.compact.bars[0].scale;
+        let uniform = self
+            .compact
+            .bars
+            .iter()
+            .all(|b| (b.scale - all).abs() < 0.01);
+        let mut all_sizes = div().flex().gap_1();
+        for (name, scale) in SCALES {
+            all_sizes = all_sizes.child(
+                chip(
+                    control(
+                        SharedString::from(format!("toolbar-scale-all-{name}")),
+                        name,
+                    )
+                    .tooltip(format!(
+                        "Every toolbar at {name} size ({:.0}%)",
+                        scale * 100.
+                    )),
+                    uniform && (all - scale).abs() < 0.01,
                 )
-                .tooltip(format!("Show or hide the {} toolbar", bar.name()))
-                .when(open, |b| b.bg(p.soft_bg).border_1().border_color(p.line))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    for bar in &mut this.compact.bars {
+                        bar.scale = scale;
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        let mut rows = div().flex().flex_col().gap_1().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .w(rems(6.))
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child("All toolbars"),
+                )
+                .child(all_sizes),
+        );
+        for bar in Bar::ALL {
+            let state = &self.compact.bars[bar as usize];
+            let (open, edge, scale) = (state.open, state.edge, state.scale);
+            let name = bar.name();
+            let mut row = div().flex().flex_wrap().items_center().gap_2().child(
+                chip(
+                    control(
+                        SharedString::from(format!("toolbar-toggle-{name}")),
+                        bar.label(),
+                    )
+                    .w(rems(6.))
+                    .tooltip(format!("Show or hide the {} toolbar", bar.label())),
+                    open,
+                )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.compact.bars[bar as usize].open = !open;
                     if bar == Bar::Tools {
                         this.rail.flyout = None;
                     }
                     cx.notify();
-                }))
-            }))
-            .child(
+                })),
+            );
+            let mut sizes = div().flex().gap_1();
+            for (label, value) in SCALES {
+                sizes = sizes.child(
+                    chip(
+                        control(
+                            SharedString::from(format!("toolbar-scale-{name}-{label}")),
+                            label,
+                        )
+                        .tooltip(format!("{} toolbar at {label} size", bar.label())),
+                        (scale - value).abs() < 0.01,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.compact.bars[bar as usize].scale = value;
+                        this.compact.bars[bar as usize].open = true;
+                        cx.notify();
+                    })),
+                );
+            }
+            let mut docks = div().flex().gap_1();
+            for (label, tip, target) in [
+                ("◧", "Dock left", Edge::Left),
+                ("⬒", "Dock top", Edge::Top),
+                ("◨", "Dock right", Edge::Right),
+                ("⬓", "Dock bottom", Edge::Bottom),
+                ("❐", "Float over the canvas", Edge::Floating),
+            ] {
+                docks = docks.child(
+                    chip(
+                        control(
+                            SharedString::from(format!(
+                                "toolbar-dock-{name}-{}",
+                                tip.to_lowercase().replace(' ', "-")
+                            )),
+                            label,
+                        )
+                        .accessibility_label(format!("{tip}: {}", bar.label()))
+                        .tooltip(format!("{tip}: {}", bar.label())),
+                        edge == target,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let state = &mut this.compact.bars[bar as usize];
+                        state.edge = target;
+                        state.open = true;
+                        cx.notify();
+                    })),
+                );
+            }
+            row = row.child(sizes).child(docks);
+            rows = rows.child(row);
+        }
+        rows.child(
+            div().child(
                 control("layout-reset", "Reset")
-                    .tooltip("Restore default toolbar positions and panel width")
+                    .tooltip("Restore this mode's default toolbar positions, sizes and panel width")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.reset_workspace(cx);
                         cx.notify();
                     })),
-            )
-            .into_any_element()
+            ),
+        )
+        .into_any_element()
     }
 
     pub(super) fn move_toolbar(
@@ -290,16 +511,32 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Move a toolbar one step through the size presets.
+    pub(super) fn step_toolbar_scale(&mut self, bar: Bar, step: i32, cx: &mut Context<Self>) {
+        let current = self.compact.bars[bar as usize].scale;
+        let index = SCALES
+            .iter()
+            .position(|(_, s)| *s >= current - 0.001)
+            .unwrap_or(SCALES.len() - 1) as i32;
+        let next = (index + step).clamp(0, SCALES.len() as i32 - 1) as usize;
+        self.compact.bars[bar as usize].scale = SCALES[next].1;
+        cx.notify();
+    }
+
     fn toolbar_shell(
         &self,
         bar: Bar,
         content: AnyElement,
         p: &Palette,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = &self.compact.bars[bar as usize];
-        let vertical = matches!(bar, Bar::Tools | Bar::Color)
-            && !matches!(state.edge, Edge::Top | Edge::Bottom);
+        let vertical = match bar {
+            Bar::Tools | Bar::Color | Bar::Dock => !matches!(state.edge, Edge::Top | Edge::Bottom),
+            Bar::Brushes => matches!(state.edge, Edge::Left | Edge::Right),
+            _ => false,
+        };
         let bounds = state.bounds.clone();
         let measure = bounds.clone();
         let edge = state.edge;
@@ -326,6 +563,7 @@ impl EditorView {
             })
             .sum();
         let focus = state.focus.clone();
+        let scale = state.scale;
         let shell = div().id(SharedString::from(format!("canvas-toolbar-{}", bar.name()))).test_support()
             .occlude().relative().flex().items_center().gap_1().p_1()
             .track_focus(&state.focus)
@@ -339,7 +577,7 @@ impl EditorView {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(control(SharedString::from(format!("toolbar-grip-{}", bar.name())), "⠿")
                 .accessibility_label(format!("Move {} toolbar", bar.name()))
-                .tooltip("Drag to move; release near an edge to dock. Arrow keys dock; Escape cancels dragging.")
+                .tooltip("Drag to move; release near an edge to dock or anywhere to float. Arrow keys dock, + and - resize; Escape cancels dragging.")
                 .cursor(CursorStyle::OpenHand)
                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     if let Some(bounds) = bounds.get() {
@@ -350,7 +588,12 @@ impl EditorView {
                     }
                 }))
                 .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
-                    let next = match e.keystroke.key.as_str() { "left" => Edge::Left, "right" => Edge::Right, "up" => Edge::Top, "down" => Edge::Bottom, _ => return };
+                    let next = match e.keystroke.key.as_str() {
+                        "left" => Edge::Left, "right" => Edge::Right, "up" => Edge::Top, "down" => Edge::Bottom,
+                        "=" | "+" => { this.step_toolbar_scale(bar, 1, cx); cx.stop_propagation(); return }
+                        "-" => { this.step_toolbar_scale(bar, -1, cx); cx.stop_propagation(); return }
+                        _ => return,
+                    };
                     this.compact.bars[bar as usize].edge = next;
                     cx.stop_propagation(); cx.notify();
                 })))
@@ -364,6 +607,10 @@ impl EditorView {
                     cx.notify();
                 })))
             .child(canvas(move |bounds, _, _| measure.set(Some(bounds)), |_, _, _, _| {}).absolute().size_full());
+        let shell = WithRemSize {
+            rem: window.rem_size() * scale,
+            child: shell.into_any_element(),
+        };
         let offset = px(8. + lane);
         let wrapper = div().absolute().flex();
         match edge {
@@ -553,7 +800,7 @@ impl EditorView {
                         f32::from(area.width) - 140.
                     } else {
                         f32::from(area.height) - 200.
-                    };
+                    } / self.compact.bars[bar as usize].scale;
                     if !self.compact.tool_ids.is_empty() {
                         self.custom_tool_rail(
                             horizontal,
@@ -586,25 +833,48 @@ impl EditorView {
                         - 150.))
                     .children(self.view_controls(p, cx))
                     .into_any_element(),
-                Bar::Color => div()
-                    .id("tool-rail-swatches")
-                    .test_support()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(self.swatches(p, cx))
-                    .child(mono(
-                        format!(
-                            "#{:02X}{:02X}{:02X}",
-                            self.tools.fg[0], self.tools.fg[1], self.tools.fg[2]
-                        ),
-                        9.5,
-                        p.muted,
-                    ))
-                    .into_any_element(),
+                Bar::Color => {
+                    let vertical = !matches!(
+                        self.compact.bars[bar as usize].edge,
+                        Edge::Top | Edge::Bottom
+                    );
+                    div()
+                        .id("tool-rail-swatches")
+                        .test_support()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .when(vertical, |d| d.flex_col())
+                        .child(self.swatches(p, cx))
+                        .child(mono(
+                            format!(
+                                "#{:02X}{:02X}{:02X}",
+                                self.tools.fg[0], self.tools.fg[1], self.tools.fg[2]
+                            ),
+                            9.5,
+                            p.muted,
+                        ))
+                        .child(self.project_colors(vertical, p, cx))
+                        .into_any_element()
+                }
+                Bar::Brushes => {
+                    let vertical = matches!(
+                        self.compact.bars[bar as usize].edge,
+                        Edge::Left | Edge::Right
+                    );
+                    self.brush_shelf(vertical, p, cx)
+                }
+                Bar::Dock => {
+                    let horizontal = matches!(
+                        self.compact.bars[bar as usize].edge,
+                        Edge::Top | Edge::Bottom
+                    );
+                    self.draw_dock(horizontal, p, cx)
+                }
             };
-            stage = stage.child(self.toolbar_shell(bar, content, p, cx));
+            stage = stage.child(self.toolbar_shell(bar, content, p, window, cx));
         }
+        stage = stage.children(self.brush_gallery(p, window, cx));
         stage = stage.children(self.workspace_customizer(p, window, cx));
         if let Some(edge) = self.compact.drop_edge {
             let guide = div()
