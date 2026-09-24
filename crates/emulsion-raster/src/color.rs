@@ -57,24 +57,38 @@ const ENC_N: usize = 1 << ENC_BITS;
 
 /// Linear [0,1] quantised to 12 bits → 8-bit sRGB. Accurate to ±1 code at
 /// the darkest end, exact elsewhere.
-static LINEAR_TO_SRGB8: LazyLock<Vec<u8>> = LazyLock::new(|| {
-    (0..ENC_N)
-        .map(|i| {
-            let l = i as f32 / (ENC_N - 1) as f32;
-            (linear_to_srgb(l) * 255.0 + 0.5).clamp(0.0, 255.0) as u8
-        })
-        .collect()
+static LINEAR_TO_SRGB8: LazyLock<[u8; ENC_N]> = LazyLock::new(|| {
+    let mut t = [0u8; ENC_N];
+    for (i, v) in t.iter_mut().enumerate() {
+        let l = i as f32 / (ENC_N - 1) as f32;
+        *v = (linear_to_srgb(l) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+    }
+    t
 });
+
+/// The [`linear_to_srgb8`] table, for loops that encode many pixels: one
+/// `LazyLock` dereference per loop instead of one per channel.
+pub type Srgb8Table = [u8; ENC_N];
+
+pub fn linear_to_srgb8_table() -> &'static Srgb8Table {
+    &LINEAR_TO_SRGB8
+}
+
+/// [`linear_to_srgb8`] through an already dereferenced table.
+#[inline(always)]
+pub fn linear_to_srgb8_with(table: &Srgb8Table, l: f32) -> u8 {
+    let l = l.clamp(0.0, 1.0);
+    if l < 0.01 {
+        return (linear_to_srgb(l) * 255.0 + 0.5) as u8;
+    }
+    table[((l * (ENC_N - 1) as f32 + 0.5) as usize).min(ENC_N - 1)]
+}
 
 /// Linear [0,1] f32 → 8-bit sRGB via table. Dark values use the exact curve
 /// so shadows do not band.
 #[inline]
 pub fn linear_to_srgb8(l: f32) -> u8 {
-    let l = l.clamp(0.0, 1.0);
-    if l < 0.01 {
-        return (linear_to_srgb(l) * 255.0 + 0.5) as u8;
-    }
-    LINEAR_TO_SRGB8[(l * (ENC_N - 1) as f32 + 0.5) as usize]
+    linear_to_srgb8_with(&LINEAR_TO_SRGB8, l)
 }
 
 /// Linear (16-bit steps) → 16-bit sRGB, built once. The toe below the

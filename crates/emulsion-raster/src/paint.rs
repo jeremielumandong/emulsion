@@ -1998,12 +1998,13 @@ impl Stroke {
         }
         for c in std::mem::take(&mut self.pending) {
             let paint = &self.paint[&c];
-            let src = self
+            // Painted in place: each pixel reads its own base value before
+            // it is overwritten, so no second copy of the tile is needed.
+            let mut out = self
                 .base
                 .base_tile(c)
                 .map(|t| t.to_vec())
                 .unwrap_or_else(|| vec![base_fill; TILE_PX]);
-            let mut out = src.clone();
             let pattern = patterned.then(|| {
                 if grain_settings == GrainSettings::default() {
                     pattern_tile(gk, gs, tone_radius, c)
@@ -2080,7 +2081,7 @@ impl Stroke {
                 if k <= 0.0 {
                     continue;
                 }
-                let b = color::px_to_f(src[i]);
+                let b = color::px_to_f(out[i]);
                 if self.alpha_lock && b[3] <= 0.0 {
                     continue;
                 }

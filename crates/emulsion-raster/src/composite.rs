@@ -18,6 +18,8 @@ use crate::tile::{FTile, TILE, TILE_PX, ftile};
 use glam::{DAffine2, DVec2, dvec2};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, OnceLock};
 
 /// Optional compositor installed by the desktop app. Unsupported scenes and
@@ -302,24 +304,50 @@ pub fn tiles_at(width: u32, height: u32, level: u32) -> (i32, i32) {
 
 /// Render one output tile. Pixels outside the document are transparent.
 pub fn render_tile(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTile {
+    let mut acc = FTile::new();
+    render_tile_into(tree, level, tile, &mut acc);
+    acc
+}
+
+/// [`render_tile`] into a caller-owned buffer. Reusing `acc` across tiles
+/// saves a 1 MiB zeroed allocation (and its page faults) per tile.
+pub fn render_tile_into(tree: &CompositeTree, level: u32, tile: TileCoord, acc: &mut FTile) {
     if let Some(accelerator) = ACCELERATOR.get()
         && let Some(pixels) = accelerator.render_tile(tree, level, tile)
         && pixels.len() == TILE_PX
     {
-        return pixels;
+        *acc = pixels;
+        return;
     }
-    render_tile_cpu(tree, level, tile)
+    render_tile_cpu_into(tree, level, tile, acc);
 }
 
 /// Reference renderer, also used for exact source sampling by accelerators.
 /// This entry point never recursively invokes an installed accelerator.
 pub fn render_tile_cpu(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTile {
-    let mut acc = ftile();
+    let mut acc = FTile::new();
+    render_tile_cpu_into(tree, level, tile, &mut acc);
+    acc
+}
+
+/// Reset `acc` to a transparent tile, allocating only when it is not
+/// already tile-sized.
+fn reset_tile(acc: &mut FTile) {
+    if acc.len() == TILE_PX {
+        acc.fill([0.0; 4]);
+    } else {
+        *acc = ftile();
+    }
+}
+
+/// [`render_tile_cpu`] into a caller-owned buffer; see [`render_tile_into`].
+pub fn render_tile_cpu_into(tree: &CompositeTree, level: u32, tile: TileCoord, acc: &mut FTile) {
+    reset_tile(acc);
     let (lw, lh) = level_size(tree.width, tree.height, level);
     let ox = tile.x as i64 * TILE as i64;
     let oy = tile.y as i64 * TILE as i64;
     if ox >= lw as i64 || oy >= lh as i64 || tile.x < 0 || tile.y < 0 {
-        return acc;
+        return;
     }
     let ctx = Ctx {
         level,
@@ -330,7 +358,7 @@ pub fn render_tile_cpu(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTi
         width: tree.width,
         height: tree.height,
     };
-    render_list(&tree.nodes, &mut acc, ctx);
+    render_list(&tree.nodes, acc, ctx);
     // Clip to the canvas.
     let vw = (lw as i64 - ox).min(TILE as i64) as usize;
     let vh = (lh as i64 - oy).min(TILE as i64) as usize;
@@ -343,7 +371,57 @@ pub fn render_tile_cpu(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTi
             }
         }
     }
-    acc
+}
+
+thread_local! {
+    static SCRATCH: RefCell<Vec<FTile>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Tiles kept warm per thread; deeper nesting simply allocates.
+const SCRATCH_CAP: usize = 4;
+
+/// A transparent tile from a per-thread pool, returned on drop. A tile-sized
+/// `calloc` is served from fresh pages that fault on first write; a warm
+/// buffer costs one memset instead.
+struct Scratch(FTile);
+
+impl Scratch {
+    fn zeroed() -> Self {
+        match SCRATCH.with(|pool| pool.borrow_mut().pop()) {
+            Some(mut tile) => {
+                tile.fill([0.0; 4]);
+                Self(tile)
+            }
+            None => Self(ftile()),
+        }
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let tile = std::mem::take(&mut self.0);
+        if tile.len() == TILE_PX {
+            SCRATCH.with(|pool| {
+                let mut pool = pool.borrow_mut();
+                if pool.len() < SCRATCH_CAP {
+                    pool.push(tile);
+                }
+            });
+        }
+    }
+}
+
+impl Deref for Scratch {
+    type Target = FTile;
+    fn deref(&self) -> &FTile {
+        &self.0
+    }
+}
+
+impl DerefMut for Scratch {
+    fn deref_mut(&mut self) -> &mut FTile {
+        &mut self.0
+    }
 }
 
 fn apply_punch(acc: &mut FTile, punch: &[f32]) {
@@ -462,16 +540,16 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
 
         match &node.content {
             NodeContent::Pixels { raster, placement } => {
-                let mut src = ftile();
+                let mut src = Scratch::zeroed();
                 let sampled = sample_raster(&mut src, raster, placement, ctx);
                 let knockout_shape = if node.blending.knockout != Knockout::None
                     && !node.blending.transparency_shapes_layer
                 {
                     let bounds =
                         Raster::solid(raster.width(), raster.height(), [0.0, 0.0, 0.0, 1.0]);
-                    let mut shape = ftile();
+                    let mut shape = Scratch::zeroed();
                     sample_raster(&mut shape, &bounds, placement, ctx);
-                    Some(shape.into_iter().map(|pixel| pixel[3]).collect::<Vec<_>>())
+                    Some(shape.iter().map(|pixel| pixel[3]).collect::<Vec<_>>())
                 } else {
                     None
                 };
@@ -502,8 +580,15 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 );
             }
             NodeContent::Fill(c) => {
-                let mut src = vec![*c; TILE_PX];
                 let mask = mask_doc(&node.mask);
+                if mask.is_none() && plain_normal(node, node.opacity < 1.0 || clip.is_some()) {
+                    if is_source[i] {
+                        alphas[i] = Some(vec![c[3]; TILE_PX]);
+                    }
+                    fill_over(acc, *c);
+                    continue;
+                }
+                let mut src = vec![*c; TILE_PX];
                 if let Some(m) = &mask {
                     src.iter_mut()
                         .zip(m)
@@ -529,7 +614,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     && node.blending == BlendingOptions::default()
                 {
                     if is_source[i] {
-                        let mut shape = ftile();
+                        let mut shape = Scratch::zeroed();
                         render_list(children, &mut shape, ctx);
                         let mut alpha: Vec<f32> = shape.iter().map(|p| p[3]).collect();
                         if let Some(mask) = &mask {
@@ -556,7 +641,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                         }
                     }
                 } else {
-                    let mut sub = ftile();
+                    let mut sub = Scratch::zeroed();
                     if let Some(punch) = render_list(children, &mut sub, ctx) {
                         apply_punch(acc, &punch);
                         merge_punch(&mut deep_punch, punch);
@@ -586,7 +671,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 clip_source,
                 effect_mask,
             } => {
-                let mut sub = ftile();
+                let mut sub = Scratch::zeroed();
                 if let Some(punch) = render_list(children, &mut sub, ctx) {
                     apply_punch(acc, &punch);
                     merge_punch(&mut deep_punch, punch);
@@ -613,14 +698,14 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 if node.blending.layer_mask_hides_effects
                     && let Some(mask_node) = effect_mask
                 {
-                    let mut mask = ftile();
+                    let mut mask = Scratch::zeroed();
                     render_list(std::slice::from_ref(mask_node.as_ref()), &mut mask, ctx);
-                    sub.iter_mut().zip(mask).for_each(|(pixel, mask)| {
+                    sub.iter_mut().zip(mask.iter()).for_each(|(pixel, mask)| {
                         pixel.iter_mut().for_each(|v| *v *= mask[3]);
                     });
                 }
                 if is_source[i] {
-                    let mut shape = ftile();
+                    let mut shape = Scratch::zeroed();
                     render_list(std::slice::from_ref(clip_source.as_ref()), &mut shape, ctx);
                     alphas[i] = Some(shape.iter().map(|p| p[3]).collect());
                 }
@@ -677,6 +762,39 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
     deep_punch
 }
 
+/// True when the node reduces to a plain premultiplied source-over: Normal
+/// blend, full coverage, all channels, no Blend If, knockout or fill
+/// opacity. `covered` says whether a per-pixel coverage plane applies.
+fn plain_normal(node: &CompositeNode, covered: bool) -> bool {
+    !covered
+        && matches!(node.blend, BlendMode::Normal | BlendMode::PassThrough)
+        && node.blending.knockout == Knockout::None
+        && node.blending.blend_if == BlendIf::default()
+        && node.blending.channels == [true; 3]
+        && node.blending.fill_opacity == 1.0
+}
+
+/// Premultiplied source-over of one pixel; bit-identical to
+/// [`blend_px`] with [`BlendMode::Normal`].
+#[inline(always)]
+fn over(a: &mut [f32; 4], s: [f32; 4]) {
+    let k = 1.0 - s[3];
+    *a = [
+        s[0] + a[0] * k,
+        s[1] + a[1] * k,
+        s[2] + a[2] * k,
+        s[3] + a[3] * k,
+    ];
+}
+
+/// Source-over a solid colour on the whole tile.
+fn fill_over(acc: &mut FTile, c: [f32; 4]) {
+    if c[3] <= 0.0 {
+        return;
+    }
+    acc.iter_mut().for_each(|a| over(a, c));
+}
+
 /// Scale `src` by coverage and blend it into `acc` with the node's mode.
 fn composite_into(
     acc: &mut FTile,
@@ -692,6 +810,16 @@ fn composite_into(
     } else {
         node.blend
     };
+    if plain_normal(node, cov.is_some()) {
+        // The general loop below would scale `src` by 1.0 and call
+        // `blend_px(Normal)`, which is exactly `over`.
+        for (a, s) in acc.iter_mut().zip(src.iter()) {
+            if s[3] > 0.0 {
+                over(a, *s);
+            }
+        }
+        return;
+    }
     for (idx, (a, s)) in acc.iter_mut().zip(src.iter_mut()).enumerate() {
         let k = cov.map_or(1.0, |c| c[idx]);
         if k <= 0.0 {
@@ -960,6 +1088,62 @@ impl<P: Pix> Window<P> {
     }
 }
 
+impl Window<[u16; 4]> {
+    /// Row `y`, level pixels `x0..x0 + out.len()`, converted to f32 in runs
+    /// of one source tile each. Pixel for pixel this equals [`Self::get`]
+    /// with a transparent `outside`, without its per-pixel tile arithmetic.
+    fn row_to_f(&self, x0: i64, y: i64, out: &mut [[f32; 4]]) {
+        let t = TILE as i64;
+        let outside = [0.0; 4];
+        if y < 0 || y >= self.lh {
+            out.fill(outside);
+            return;
+        }
+        let cy = (y / t) as i32 - self.ty0;
+        if cy < 0 || cy >= self.rows {
+            out.fill(outside);
+            return;
+        }
+        let ly = (y % t) as usize;
+        let mut x = x0;
+        let mut i = 0usize;
+        while i < out.len() {
+            if x < 0 {
+                let n = ((-x) as usize).min(out.len() - i);
+                out[i..i + n].fill(outside);
+                i += n;
+                x += n as i64;
+                continue;
+            }
+            if x >= self.lw {
+                out[i..].fill(outside);
+                return;
+            }
+            let cx = (x / t) as i32 - self.tx0;
+            let lx = (x % t) as usize;
+            let run = (t as usize - lx)
+                .min(out.len() - i)
+                .min((self.lw - x) as usize);
+            let dst = &mut out[i..i + run];
+            if cx < 0 || cx >= self.cols {
+                dst.fill(outside);
+            } else {
+                match &self.tiles[(cy * self.cols + cx) as usize] {
+                    Some(tile) => {
+                        let base = ly * t as usize + lx;
+                        for (o, p) in dst.iter_mut().zip(&tile[base..base + run]) {
+                            *o = color::px_to_f(*p);
+                        }
+                    }
+                    None => dst.fill(color::px_to_f(self.fill)),
+                }
+            }
+            i += run;
+            x += run as i64;
+        }
+    }
+}
+
 #[inline]
 fn is_integral(v: f64) -> bool {
     (v - v.round()).abs() < 1e-9
@@ -984,10 +1168,8 @@ fn sample_raster(dst: &mut FTile, raster: &Raster, placement: &Placement, ctx: C
     if exact {
         let sx = (g.p0.x - 0.5).round() as i64;
         let sy = (g.p0.y - 0.5).round() as i64;
-        for y in 0..t {
-            for x in 0..t {
-                dst[y * t + x] = color::px_to_f(win.get(sx + x as i64, sy + y as i64, [0; 4]));
-            }
+        for (y, row) in dst.chunks_exact_mut(t).enumerate() {
+            win.row_to_f(sx, sy + y as i64, row);
         }
         return true;
     }
@@ -1170,27 +1352,30 @@ pub fn tile_to_bgra8(
     let t = TILE as usize;
     let ll = color::SRGB8_TO_LINEAR[light as usize];
     let ld = color::SRGB8_TO_LINEAR[dark as usize];
+    let lut = color::linear_to_srgb8_table();
     let mut out = vec![0u8; TILE_PX * 4];
-    for y in 0..t {
-        let gy = origin.1 + y as i64;
-        for x in 0..t {
-            let gx = origin.0 + x as i64;
-            if gx >= valid.0 as i64 || gy >= valid.1 as i64 {
-                continue;
-            }
-            let p = tile[y * t + x];
+    // Rows and columns past `valid` stay transparent; the checker cell index
+    // depends on the column or the row alone, so both are computed once.
+    let vw = (valid.0 as i64 - origin.0).clamp(0, t as i64) as usize;
+    let vh = (valid.1 as i64 - origin.1).clamp(0, t as i64) as usize;
+    let cell = cell as i64;
+    let col_cell: Vec<i64> = (0..vw).map(|x| (origin.0 + x as i64) / cell).collect();
+    for (y, (row, out_row)) in tile
+        .chunks_exact(t)
+        .zip(out.chunks_exact_mut(t * 4))
+        .take(vh)
+        .enumerate()
+    {
+        let row_cell = (origin.1 + y as i64) / cell;
+        let (out_px, _) = out_row.as_chunks_mut::<4>();
+        for ((p, o), cx) in row.iter().zip(out_px).zip(&col_cell) {
             let a = p[3].clamp(0.0, 1.0);
-            let bg = if ((gx / cell as i64) + (gy / cell as i64)) % 2 == 0 {
-                ll
-            } else {
-                ld
-            };
+            let bg = if (cx + row_cell) % 2 == 0 { ll } else { ld };
             let k = 1.0 - a;
-            let i = (y * t + x) * 4;
-            out[i] = color::linear_to_srgb8(p[2] + bg * k);
-            out[i + 1] = color::linear_to_srgb8(p[1] + bg * k);
-            out[i + 2] = color::linear_to_srgb8(p[0] + bg * k);
-            out[i + 3] = 255;
+            o[0] = color::linear_to_srgb8_with(lut, p[2] + bg * k);
+            o[1] = color::linear_to_srgb8_with(lut, p[1] + bg * k);
+            o[2] = color::linear_to_srgb8_with(lut, p[0] + bg * k);
+            o[3] = 255;
         }
     }
     out

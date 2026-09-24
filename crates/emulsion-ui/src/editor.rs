@@ -76,7 +76,7 @@ pub use canvas_size::SizeMode;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
 use emulsion_raster::adjust::ParamSpec;
-use emulsion_raster::composite::{CompositeTree, level_size, render_tile, tile_to_bgra8};
+use emulsion_raster::composite::{CompositeTree, level_size, render_tile_into, tile_to_bgra8};
 use emulsion_raster::{Adjustment, BlendMode, Placement, Raster, TileCoord, color};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::ContextMenuExt;
@@ -979,11 +979,20 @@ impl EditorView {
                                 Which::Current => &cur,
                                 Which::Before => before.as_ref()?,
                             };
-                            let t =
-                                render_tile(tree, r.key.level, TileCoord::new(r.key.x, r.key.y));
                             let lsz = level_size(tree.width, tree.height, r.key.level);
                             let origin = (r.key.x as i64 * 256, r.key.y as i64 * 256);
-                            let mut bytes = tile_to_bgra8(&t, origin, lsz, 8, light, dark);
+                            // One float accumulator per render thread, reused
+                            // across tiles instead of a 1 MiB allocation each.
+                            let mut bytes = TILE_SCRATCH.with(|scratch| {
+                                let mut t = scratch.borrow_mut();
+                                render_tile_into(
+                                    tree,
+                                    r.key.level,
+                                    TileCoord::new(r.key.x, r.key.y),
+                                    &mut t,
+                                );
+                                tile_to_bgra8(&t, origin, lsz, 8, light, dark)
+                            });
                             channel.apply(&mut bytes);
                             Some((r, bytes))
                         })
@@ -2123,6 +2132,11 @@ fn snap(v: f32, step: f32) -> f32 {
 
 /// Window width from which the menu row shows the app name beside its icon.
 const WIDE_CHROME: f32 = 1000.;
+
+thread_local! {
+    /// Float tile reused by the viewport render threads; see `render_tile_into`.
+    static TILE_SCRATCH: RefCell<Vec<[f32; 4]>> = const { RefCell::new(Vec::new()) };
+}
 
 // ── Render ──────────────────────────────────────────────────────────────
 
