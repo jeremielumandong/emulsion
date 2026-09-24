@@ -254,7 +254,12 @@ impl EditorView {
             .gap_1()
             .px_2()
             .bg(p.paper)
-            .child(div().flex().items_center().child(self.effect_menus(p, wide, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(self.effect_menus(p, wide, cx)),
+            )
             .child(
                 div()
                     .id("compact-tab-leading-drag")

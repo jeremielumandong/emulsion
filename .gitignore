@@ -17,3 +17,7 @@
 !.env.*.example
 
 .perf-baselines**
+
+# Website dependencies and build output
+/site/node_modules/
+/site/dist/

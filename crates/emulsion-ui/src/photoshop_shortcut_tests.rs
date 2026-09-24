@@ -4,9 +4,7 @@ use crate::editor::{EditorView, Tool};
 use emulsion_core::NodeId;
 use emulsion_raster::blend::BlendMode;
 
-fn setup<'a>(
-    cx: &'a mut TestAppContext,
-) -> (Entity<EditorView>, Vec<NodeId>, &'a mut VisualTestContext) {
+fn setup(cx: &mut TestAppContext) -> (Entity<EditorView>, Vec<NodeId>, &mut VisualTestContext) {
     let (ws, cx) = open(cx, doc(&["A", "B", "C"], None));
     let e = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
     let ids = cx.update(|_, cx| e.read(cx).editor.doc.nodes.iter().map(|n| n.id).collect());

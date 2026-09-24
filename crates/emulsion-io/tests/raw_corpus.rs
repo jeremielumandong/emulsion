@@ -42,7 +42,13 @@ fn real_camera_open_edit_reopen_export() {
         let size = (raster.width(), raster.height());
         assert!(size.0 > 1000 && size.1 > 1000);
         let pixels = raster.to_srgba8();
-        assert!(pixels.as_chunks::<4>().0.iter().any(|p| p[0] > 10 && p[0] < 245));
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[0] > 10 && p[0] < 245)
+        );
         let mut doc = emulsion_core::Document::new(size.0, size.1);
         emulsion_core::Command::AddNode {
             node: Box::new(emulsion_core::Node::raster(

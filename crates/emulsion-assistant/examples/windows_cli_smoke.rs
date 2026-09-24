@@ -69,13 +69,12 @@ fn check(app: &std::path::Path, dir: &std::path::Path) -> Result<(), Box<dyn std
             };
             match line {
                 Line::Stdout(line) if id == "claude" => {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                        if value["type"] == "control_response"
-                            && value["response"]["subtype"] == "success"
-                        {
-                            success = true;
-                            break;
-                        }
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line)
+                        && value["type"] == "control_response"
+                        && value["response"]["subtype"] == "success"
+                    {
+                        success = true;
+                        break;
                     }
                 }
                 Line::Stdout(line) => saw_emulsion |= line.contains("emulsion"),

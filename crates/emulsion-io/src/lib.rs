@@ -8,9 +8,9 @@
 //! Every reader validates fully before returning, so a bad file can never
 //! replace an open document.
 
-pub mod brushset;
-pub mod brush_library;
 pub mod abr;
+pub mod brush_library;
+pub mod brushset;
 pub mod exif;
 pub mod export;
 pub mod external;

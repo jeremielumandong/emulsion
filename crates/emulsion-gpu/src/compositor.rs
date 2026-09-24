@@ -688,6 +688,16 @@ mod tests {
                     nodes: vec![base, adjust],
                 };
                 eprintln!("adjustment parity family {index}, masked={masked}");
+                // Selective Color deliberately uses the CPU fallback. Verify
+                // that contract instead of requiring a GPU result for it.
+                if matches!(op.as_ref(), Prepared::SelectiveColor { .. }) {
+                    assert!(
+                        render_tile_gpu(&gpu, &tree, 0, TileCoord::new(0, 0))
+                            .unwrap()
+                            .is_none()
+                    );
+                    continue;
+                }
                 check(&gpu, &tree, 0, TileCoord::new(0, 0));
                 if op.positional() {
                     check(&gpu, &tree, 2, TileCoord::new(0, 0));

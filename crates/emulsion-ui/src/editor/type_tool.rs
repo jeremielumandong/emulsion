@@ -883,7 +883,12 @@ impl EditorView {
 
     /// The font list under the options bar: every installed family, each
     /// name set in its own face so the choice can be made by eye.
-    pub(crate) fn font_picker(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn font_picker(
+        &self,
+        p: &Palette,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         if self.menu != Some(super::Menu::Font) || self.tool != Tool::Type {
             return None;
         }

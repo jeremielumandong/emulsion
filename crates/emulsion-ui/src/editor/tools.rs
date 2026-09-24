@@ -4871,7 +4871,12 @@ impl EditorView {
             .into_any_element()
     }
 
-    pub(crate) fn picker(&mut self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn picker(
+        &mut self,
+        p: &Palette,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         if !self.tools.picker {
             return None;
         }

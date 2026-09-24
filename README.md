@@ -93,8 +93,12 @@ open document without that connection.
 
 ## Automated checks included
 
-CI builds and tests the Rust project only. Changes confined to `site/` skip the
-Rust jobs after a lightweight change check; the website has no build or test job.
+CI builds and tests the Rust project. Changes confined to `site/` skip the
+Rust jobs after a lightweight change check. The separate
+[website container workflow](.github/workflows/site.yml) builds and smoke-tests
+the site image on website pull requests and pushes. Successful builds on `main`
+publish `ghcr.io/jeremielumandong/emulsion-site:latest` and a `sha-<commit>` tag
+for manual VM deployment; CI does not deploy the website.
 
 The repository includes [GitHub Actions CI](.github/workflows/ci.yml). Pushes to
 `main` and pull requests run formatting, linting, workspace tests, vendored-license

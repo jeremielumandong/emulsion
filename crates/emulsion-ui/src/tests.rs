@@ -121,19 +121,19 @@ mod shape_workflow_tests;
 
 #[path = "layer_effect_rows_tests.rs"]
 mod layer_effect_rows_tests;
-#[path = "layer_virtualization_tests.rs"]
-mod layer_virtualization_tests;
 #[path = "layer_panel_workflow_tests.rs"]
 mod layer_panel_workflow_tests;
+#[path = "layer_virtualization_tests.rs"]
+mod layer_virtualization_tests;
 
-#[path = "layer_menu_tests.rs"]
-mod layer_menu_tests;
-#[path = "layers_footer_tests.rs"]
-mod layers_footer_tests;
 #[path = "ask_ai_entry_tests.rs"]
 mod ask_ai_entry_tests;
 #[path = "busy_card_tests.rs"]
 mod busy_card_tests;
+#[path = "layer_menu_tests.rs"]
+mod layer_menu_tests;
+#[path = "layers_footer_tests.rs"]
+mod layers_footer_tests;
 
 #[path = "advanced_style_workflow_tests.rs"]
 mod advanced_style_workflow_tests;

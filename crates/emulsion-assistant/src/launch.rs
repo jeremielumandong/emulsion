@@ -522,6 +522,18 @@ mod tests {
             let example = block.split_once("\n```").expect("closed JSON example").0;
             let calls: Vec<serde_json::Value> = serde_json::from_str(example).unwrap();
             assert!(!calls.is_empty(), "example {index}: empty study");
+            // Some studies demonstrate a single editable title. Check that
+            // every created layer survives instead of requiring two layers.
+            let expected_nodes = calls
+                .iter()
+                .filter(|call| {
+                    matches!(
+                        call["name"].as_str(),
+                        Some("add_layer" | "add_text" | "draw_path" | "draw_shape")
+                    )
+                })
+                .count();
+            assert!(expected_nodes > 0, "example {index}: creates artwork");
             for call in calls {
                 call_count += 1;
                 let name = call["name"].as_str().unwrap();
@@ -568,8 +580,9 @@ mod tests {
                     }
                 }
             }
-            assert!(
-                editor.doc.nodes.len() >= 2,
+            assert_eq!(
+                editor.doc.nodes.len(),
+                expected_nodes,
                 "example {index}: study keeps independently editable layers/nodes"
             );
             assert!(

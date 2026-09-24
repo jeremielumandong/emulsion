@@ -854,7 +854,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.add_tab_then(window, cx, move |this, window, cx| {
-            this.start_busy(crate::busy_card::Busy::new("Recovering your work"), window, cx);
+            this.start_busy(
+                crate::busy_card::Busy::new("Recovering your work"),
+                window,
+                cx,
+            );
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
                 let result = cx
@@ -896,7 +900,11 @@ impl Workspace {
     /// Open the bundled landing image as a new document to edit.
     pub(crate) fn open_landing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.add_tab_then(window, cx, |this, window, cx| {
-            this.start_busy(crate::busy_card::Busy::new("Opening the landing image"), window, cx);
+            this.start_busy(
+                crate::busy_card::Busy::new("Opening the landing image"),
+                window,
+                cx,
+            );
             cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async {
@@ -1539,10 +1547,7 @@ impl Workspace {
     fn banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let p = theme::palette(cx);
         // Busy work shows as a progress card; the banner is for errors.
-        let (msg, err) = match &self.error {
-            Some(e) => (e.clone(), true),
-            None => return None,
-        };
+        let (msg, err) = (self.error.as_ref()?.clone(), true);
         Some(
             div()
                 .flex()
@@ -2126,9 +2131,10 @@ impl Render for Workspace {
 
 /// "Opening IMG_0042.CR3", with the kind of file and its size underneath.
 fn open_busy(path: &Path) -> crate::busy_card::Busy {
-    let name = path
-        .file_name()
-        .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into());
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into(),
+    );
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_uppercase())

@@ -1,0 +1,87 @@
+name: Website container
+
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/site.yml']
+  pull_request:
+    paths: ['site/**', '.github/workflows/site.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build website container
+        env:
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          docker build --pull \
+            --label "org.opencontainers.image.source=$SOURCE_URL" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.description=Emulsion website" \
+            --tag emulsion-site:check site
+      - name: Smoke test the built website
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --name emulsion-site-check -p 127.0.0.1:8080:8080 emulsion-site:check
+          trap 'docker logs emulsion-site-check; docker rm -f emulsion-site-check' EXIT
+          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/healthz
+          curl --fail http://127.0.0.1:8080/ -o /tmp/emulsion-site.html
+          grep -q 'id="documentation"' /tmp/emulsion-site.html
+          grep -q 'id="guide-raw"' /tmp/emulsion-site.html
+          curl --fail http://127.0.0.1:8080/icons.svg -o /dev/null
+          curl --fail http://127.0.0.1:8080/assets/editor.png -o /dev/null
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from urllib.request import urlopen
+          class Assets(HTMLParser):
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  path = attrs.get('src') if tag == 'script' else attrs.get('href') if tag == 'link' and attrs.get('rel') == 'stylesheet' else None
+                  if path and path.startswith('/'):
+                      with urlopen('http://127.0.0.1:8080' + path) as response:
+                          assert response.status == 200
+          Assets().feed(open('/tmp/emulsion-site.html').read())
+          PY
+      - name: Publish image for manual deployment
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${REPOSITORY,,}-site"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker tag emulsion-site:check "$image:sha-$GITHUB_SHA"
+          docker tag emulsion-site:check "$image:latest"
+          docker push "$image:sha-$GITHUB_SHA"
+          docker push "$image:latest"
+          {
+            echo '### Website image ready for manual deployment'
+            echo
+            echo 'Platform: linux/amd64. No VM deployment is performed.'
+            echo
+            echo '```sh'
+            echo "docker pull $image:sha-$GITHUB_SHA"
+            echo "docker run -d --name emulsion-site --restart unless-stopped -p 8080:8080 $image:sha-$GITHUB_SHA"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

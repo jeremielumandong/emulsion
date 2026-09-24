@@ -8,8 +8,8 @@ use crate::widgets::{TrackBounds, button, chip, label, mono, slider, track_fract
 mod adjust_ui;
 mod ai_tools;
 mod alignment;
-mod ask_ai_entry;
 mod animation;
+mod ask_ai_entry;
 mod auto_correct;
 mod blend_match;
 mod brush_library_ui;
@@ -2233,7 +2233,12 @@ impl EditorView {
             )
     }
 
-    fn context_bar(&mut self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn context_bar(
+        &mut self,
+        p: &Palette,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let tool = self.active_tool_name();
         let options = self.tool_options(p, cx);
         let row = |p: &Palette| {
