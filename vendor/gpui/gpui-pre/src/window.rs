@@ -3242,7 +3242,7 @@ impl Window {
                 });
         }
 
-        self.layout_engine.as_mut().unwrap().clear();
+        self.layout_engine.as_mut().unwrap().finish_frame();
         self.text_system().finish_frame();
         self.next_frame.finish(&mut self.rendered_frame);
 
@@ -4936,6 +4936,62 @@ impl Window {
                     .into(),
                 )
             })
+    }
+
+    /// Enable experimental cross-frame reuse of layout nodes in this window.
+    ///
+    /// Disabled by default. This reuses only Taffy layout calculations; render,
+    /// opaque measurement callbacks, painting and input dispatch retain their ordinary
+    /// lifecycle. Call between frames, not from a measurement callback.
+    pub fn set_layout_reuse_enabled(&mut self, enabled: bool) {
+        assert!(
+            self.invalidator.not_drawing(),
+            "layout reuse must be configured between frames"
+        );
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .set_reuse_enabled(enabled);
+        self.refresh();
+    }
+
+    /// Control the intrinsic-text specialization independently for comparisons.
+    /// Available to tests/benchmarks; normal windows use it when layout reuse is enabled.
+    #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
+    pub fn set_intrinsic_text_layout_reuse(&mut self, enabled: bool) {
+        assert!(
+            self.invalidator.not_drawing(),
+            "layout reuse must be configured between frames"
+        );
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .set_intrinsic_text_reuse(enabled);
+        self.refresh();
+    }
+
+    pub(crate) fn can_reuse_intrinsic_text_layout(&self) -> bool {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .can_reuse_intrinsic_text()
+    }
+
+    /// Internal pure-measurement path. Callers must prepare fresh paint state
+    /// independently, and the size must not depend on available layout space.
+    pub(crate) fn request_intrinsic_layout(&mut self, size: Size<Pixels>) -> LayoutId {
+        self.invalidator.debug_assert_prepaint();
+        let rem_size = self.rem_size();
+        let scale_factor = self.scale_factor();
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .request_intrinsic_layout(Style::default(), rem_size, scale_factor, size)
+    }
+
+    /// Layout allocation and reconciliation counts for the last completed frame.
+    pub fn layout_reuse_stats(&self) -> crate::LayoutReuseStats {
+        self.layout_engine.as_ref().unwrap().reuse_stats()
     }
 
     /// Add a node to the layout tree for the current frame. Takes the `Style` of the element for which

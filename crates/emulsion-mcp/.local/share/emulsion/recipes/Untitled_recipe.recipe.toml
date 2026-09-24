@@ -1,0 +1,53 @@
+name = "Untitled recipe"
+author = ""
+source_url = ""
+license = ""
+notes = ""
+sensor = []
+tags = []
+film_simulation = "velvia"
+dynamic_range = "dr100"
+color_chrome_effect = "off"
+color_chrome_fx_blue = "off"
+highlight = 1.0
+shadow = 0.0
+color = 0.0
+sharpness = 0.0
+noise_reduction = 0.0
+clarity = 0.0
+exposure_compensation = ""
+iso = ""
+vignette = 0.0
+fade = 0.0
+split_shadows = [
+    0.0,
+    0.0,
+    0.0,
+]
+split_highlights = [
+    0.0,
+    0.0,
+    0.0,
+]
+negative = false
+light_leak = 0.0
+leak_color = [
+    255,
+    140,
+    60,
+]
+leak_side = "right"
+dust = 0.0
+frame = "none"
+date_stamp = false
+date = ""
+seed = 7
+
+[grain]
+strength = "weak"
+size = "small"
+
+[white_balance]
+preset = "auto"
+red = 0
+blue = 0

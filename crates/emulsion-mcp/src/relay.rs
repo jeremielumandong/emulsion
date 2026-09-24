@@ -10,6 +10,7 @@
 //! ← {"content": [...], "isError": false}
 //! ```
 
+use crate::recovery::{ErrorCode, ExecutionState, RetryPolicy, tool_error};
 use crate::server::{ToolDef, ToolHost, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -154,11 +155,22 @@ fn serve_conn(
             Ok(w) if same(&w.token, token) => w,
             // Reply, then hang up: no second guess on the same connection.
             rejected => {
-                let why = match rejected {
-                    Err(e) => format!("bad relay request: {e}"),
-                    Ok(_) => "relay token rejected".into(),
+                let (code, why) = match rejected {
+                    Err(e) => (ErrorCode::InvalidRequest, format!("bad relay request: {e}")),
+                    Ok(_) => (
+                        ErrorCode::AuthenticationRejected,
+                        "relay token rejected".into(),
+                    ),
                 };
-                return reply(&mut writer, &ToolResult::error(why));
+                return reply(
+                    &mut writer,
+                    &tool_error(
+                        code,
+                        why,
+                        ExecutionState::NotStarted,
+                        RetryPolicy::DoNotRetry,
+                    ),
+                );
             }
         };
         if !authenticated {
@@ -174,13 +186,38 @@ fn serve_conn(
             })
             .is_err()
         {
-            ToolResult::error("the document was closed")
+            tool_error(
+                ErrorCode::DocumentClosed,
+                "the document was closed",
+                ExecutionState::NotStarted,
+                RetryPolicy::DoNotRetry,
+            )
         } else {
-            rrx.recv_timeout(CALL_TIMEOUT)
-                .unwrap_or_else(|_| ToolResult::error("Emulsion did not answer in time"))
+            wait_for_reply(&rrx, CALL_TIMEOUT)
         };
         reply(&mut writer, &result)?;
         reader.set_limit(MAX_LINE);
+    }
+}
+
+fn wait_for_reply(
+    receiver: &std::sync::mpsc::Receiver<ToolResult>,
+    timeout: Duration,
+) -> ToolResult {
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => tool_error(
+            ErrorCode::ToolTimeout,
+            "Emulsion did not answer in time; the call may still be running. Do not repeat it before checking the document.",
+            ExecutionState::Unknown,
+            RetryPolicy::InspectBeforeRetry,
+        ),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => tool_error(
+            ErrorCode::ConnectionLost,
+            "Emulsion stopped answering this call; it may or may not have run. Check the document before repeating it.",
+            ExecutionState::Unknown,
+            RetryPolicy::InspectBeforeRetry,
+        ),
     }
 }
 
@@ -287,10 +324,10 @@ impl ToolHost for RelayHost {
             other => other,
         };
         result.unwrap_or_else(|(stage, e)| match stage {
-            Stage::Connect => ToolResult::error(format!("Emulsion is not reachable: {e}")),
-            Stage::Exchange => ToolResult::error(format!(
+            Stage::Connect => tool_error(ErrorCode::AppUnavailable, format!("Emulsion is not reachable: {e}"), ExecutionState::NotStarted, RetryPolicy::Reconnect),
+            Stage::Exchange => tool_error(ErrorCode::ConnectionLost, format!(
                 "the connection to Emulsion broke during the call, so it may or may not have run; check before repeating it: {e}"
-            )),
+            ), ExecutionState::Unknown, RetryPolicy::InspectBeforeRetry),
         })
     }
 }
@@ -299,6 +336,11 @@ impl ToolHost for RelayHost {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn envelope(result: &ToolResult) -> Value {
+        assert!(result.is_error);
+        serde_json::from_str(result.content[1]["text"].as_str().unwrap()).unwrap()
+    }
 
     #[test]
     fn calls_reach_the_app_and_bad_tokens_are_rejected() {
@@ -320,6 +362,9 @@ mod tests {
         let mut evil = RelayHost::new(relay.addr.to_string(), "0".repeat(32));
         let r = evil.call("double", &json!({ "n": 1 }));
         assert!(r.is_error && r.content[0]["text"].as_str().unwrap().contains("token"));
+        assert_eq!(envelope(&r)["code"], "authentication_rejected");
+        assert_eq!(envelope(&r)["execution_state"], "not_started");
+        assert_eq!(envelope(&r)["retry_policy"], "do_not_retry");
         drop(relay);
         drop(app);
     }
@@ -388,6 +433,9 @@ mod tests {
             r.content
         );
         assert_eq!(received.load(Ordering::SeqCst), 1, "sent once");
+        assert_eq!(envelope(&r)["code"], "connection_lost");
+        assert_eq!(envelope(&r)["execution_state"], "unknown");
+        assert_eq!(envelope(&r)["retry_policy"], "inspect_before_retry");
 
         // Nothing listening: the call never left, so it is tried again.
         let closed = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -400,5 +448,45 @@ mod tests {
                 .unwrap()
                 .contains("not reachable")
         );
+        assert_eq!(envelope(&r)["code"], "app_unavailable");
+        assert_eq!(envelope(&r)["execution_state"], "not_started");
+        assert_eq!(envelope(&r)["retry_policy"], "reconnect");
+    }
+
+    #[test]
+    fn timed_out_reply_is_unknown_and_does_not_cancel_the_work() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let result = wait_for_reply(&receiver, Duration::ZERO);
+        assert_eq!(envelope(&result)["code"], "tool_timeout");
+        assert_eq!(envelope(&result)["execution_state"], "unknown");
+        assert_eq!(envelope(&result)["retry_policy"], "inspect_before_retry");
+        // A wait timeout does not mean the app stopped or rolled back the edit.
+        sender.send(ToolResult::text("paint completed")).unwrap();
+        assert_eq!(
+            receiver.recv().unwrap().content[0]["text"],
+            "paint completed"
+        );
+    }
+
+    #[test]
+    fn dropped_reply_is_disconnection_not_timeout() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        drop(sender);
+        let result = wait_for_reply(&receiver, Duration::ZERO);
+        assert_eq!(envelope(&result)["code"], "connection_lost");
+        assert_eq!(envelope(&result)["execution_state"], "unknown");
+        assert_eq!(envelope(&result)["retry_policy"], "inspect_before_retry");
+    }
+
+    #[test]
+    fn closed_document_rejects_submission() {
+        let relay = Relay::start().unwrap();
+        relay.calls.close();
+        let result =
+            RelayHost::new(relay.addr.to_string(), relay.token.clone()).call("paint", &json!({}));
+        assert_eq!(envelope(&result)["code"], "document_closed");
+        assert_eq!(envelope(&result)["execution_state"], "not_started");
+        assert_eq!(envelope(&result)["retry_policy"], "do_not_retry");
+        assert!(relay.calls.try_recv().is_err());
     }
 }

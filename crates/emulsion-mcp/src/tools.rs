@@ -226,7 +226,10 @@ pub fn definitions() -> Vec<ToolDef> {
             "describe_document",
             "Describe the open document: canvas size, every node from the top of the stack down \
              (id, row, depth, name, kind, visibility, opacity, blend mode, clipping, adjustment \
-             parameters, placement), and recent history. Call this before changing anything.",
+             parameters, placement), and recent history. Pixel and smart nodes include numeric \
+             source_size, signed placement scale_x/scale_y factors, flip flags and source_bounds \
+             (outward-rounded document-space source rectangle, not visible alpha or effects). \
+             Call this before changing anything; pair with get_view to verify appearance.",
             json!({}),
             &[],
         ),
@@ -560,7 +563,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "critique",
-            "Intent-aware metric observations with conditional suggestions, plus images for your visual review. Pass medium, stage, composition intent and constraints in context. Inspect the returned full view and optional detail region for anatomy, perspective and subject fidelity; metrics cannot establish those qualities. Jev optionally ranks measurements only.",
+            "Intent-aware metric observations, images and an actionable visual review contract. Pass medium, style, stage, composition intent and constraints in context. Inspect full and detail views; prioritize subject/action readability, structure and overlaps before polish. Give up to three evidenced, located repairs with visual recheck criteria while preserving intended style. Metrics cannot establish anatomy, perspective, subject fidelity or quality; Jev optionally ranks measurements only.",
             json!({ "count": { "type": "integer", "minimum": 1, "maximum": 8 },
                 "context": critique_context(), "region": view_region(),
                 "include_images": {"type": "boolean", "default": true, "description": "Return full composition and optional region images for the calling assistant to review."} }),
@@ -802,7 +805,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "list_brushes",
-            "Discover brushes by name or category, intended uses, actual preset settings and supported ranges. The lightweight catalog indexes all matches; detailed settings and optional rendered swatches are paged together, up to 12 brushes at a time. Use query to narrow the catalog and offset/next_offset for further pages. Preset names are approximations, not proof of material simulation. Use stable IDs or unambiguous names with paint.",
+            "Discover the real brush palette before choosing marks for a drawing or new medium: pencils, broad ink, fine nibs, screentone, markers, watercolour, oil and other saved brushes. Search names, intended uses or categories. The lightweight catalog indexes all matches; detailed settings and optional rendered swatches are paged together, up to 12 brushes at a time. Use query to narrow the catalog and offset/next_offset for further pages; the first page is not the whole palette. Preset names are approximations, not proof of material simulation. Use returned stable IDs or unambiguous names with paint; preview_brush can test candidate settings without editing the canvas.",
             json!({"query": {"type": "string", "description": "Case-insensitive name/category substring; default all."},
                 "swatches": {"type": "boolean", "default": true}, "offset": {"type": "integer", "minimum": 0, "description": "First brush in the filtered page of detailed settings and swatches; catalog indexes all matches."}}),
             &[],
@@ -810,7 +813,7 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "paint",
             concat!(
-                "Paint strokes on a pixel layer with a brush from list_brushes. Each stroke is a polyline in document pixels; ",
+                "Paint with any discovered raster brush (pencil, ink, tone, marker, wet paint, etc.) on a pixel layer. Choose brush explicitly from list_brushes for the intended medium and mark; omitting it uses a generic default, not the UI's active brush. Each stroke is a trajectory in document pixels; ",
                 "A stroke must give exactly one of samples (1-2000 objects {x,y,pressure?,tilt:[x,y]?,time_ms?}), points (1–2000 samples [x, y] or [x, y, pressure 0-1]) or nonempty d (SVG path data: M L C Q Z, absolute or relative) for smooth curves, with at most 4000 flattened points. SVG subpaths preserve pen lifts; the optional pressure envelope [start, end], both numeric 0–1, restarts for each subpath. Invalid pressure is rejected. ",
                 "color is #RRGGBB (ignored by Eraser and Smudge brushes). settings overrides brush fields for the whole call, e.g. ",
                 "{\"size\": 6, \"opacity\": 0.5, \"hardness\": 1, \"flow\": 0.3, \"wetness\": 0.5, \"taper_end\": 20}. ",

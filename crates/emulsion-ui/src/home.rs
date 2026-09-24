@@ -73,7 +73,7 @@ fn control(id: impl Into<ElementId>, label: impl Into<SharedString>, p: &Palette
         .text_color(p.ink)
 }
 
-fn app_icon() -> Arc<Image> {
+pub(crate) fn app_icon() -> Arc<Image> {
     static ICON: OnceLock<Arc<Image>> = OnceLock::new();
     ICON.get_or_init(|| {
         Arc::new(Image::from_bytes(

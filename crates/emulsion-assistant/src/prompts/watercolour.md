@@ -11,6 +11,7 @@ Worked mark study: reserve a white rectangular highlight, lay a pale wash, add a
 
 ```json
 [
+  {"name":"list_brushes","arguments":{"query":"Watercolour"}},
   {"name":"add_layer","arguments":{"name":"Washes"}},
   {"name":"select_all","arguments":{}},
   {"name":"select_rect","arguments":{"x":385,"y":245,"width":30,"height":65,"mode":"subtract"}},

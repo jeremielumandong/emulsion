@@ -348,6 +348,7 @@ fn icon_bytes(id: &str) -> &'static [u8] {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/library.svg")
         }
         "link" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/link.svg"),
+        "trash" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/trash.svg"),
         "file-plus" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/file-plus.svg")
         }
@@ -366,21 +367,23 @@ pub(crate) fn tool_icon(id: &'static str) -> Svg {
 mod icon_tests {
     #[test]
     fn every_rail_icon_is_a_real_drawing() {
-        for group in super::GROUPS.iter().chain(super::DRAW_GROUPS.iter()) {
-            for it in group.iter() {
-                let bytes = super::icon_bytes(it.glyph);
-                assert!(
-                    std::str::from_utf8(bytes).is_ok_and(|s| s.contains("<svg")),
-                    "{} has no icon",
-                    it.name
-                );
-                assert_ne!(
-                    bytes,
-                    super::icon_bytes("nothing-like-this"),
-                    "{} falls back to the placeholder",
-                    it.name
-                );
-            }
+        let rail_icons = super::GROUPS
+            .iter()
+            .chain(super::DRAW_GROUPS.iter())
+            .flat_map(|group| group.iter())
+            .map(|it| (it.glyph, it.name));
+        let footer_icons = ["link", "contrast", "file-plus", "trash"].map(|id| (id, id));
+        for (glyph, name) in rail_icons.chain(footer_icons) {
+            let bytes = super::icon_bytes(glyph);
+            assert!(
+                std::str::from_utf8(bytes).is_ok_and(|s| s.contains("<svg")),
+                "{name} has no icon"
+            );
+            assert_ne!(
+                bytes,
+                super::icon_bytes("nothing-like-this"),
+                "{name} falls back to the placeholder"
+            );
         }
     }
 }

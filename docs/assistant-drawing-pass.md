@@ -20,6 +20,70 @@ Regression coverage includes translucent shading, erasing, selection strength, t
 
 Live model drawing quality still needs representative artist review: run the same briefs and reference images before and after this change, with the same provider/model and budget. Compare composition, proportions, edge control, medium character, and retained editability. These code and tool tests cannot prove that every model will make better artistic decisions.
 
+## Drawing strategy and visual critique follow-up
+
+The studio and manga playbooks now make stage progression depend on readable
+construction. Interacting subjects share a construction pass and contact point;
+difficult grips, joints and overlaps are inspected before decorative effects.
+Organic contours follow gesture and volumes while preserving intentional angular
+design. The final review prompt and MCP critique guidance use the same sequence:
+visible evidence and location, effect on readability, concrete repair, then a
+visual success check. Critique-only requests produce advice without editing.
+
+The critique tool still computes measurements rather than running an independent
+vision critic. Its response contract guides the calling assistant; it does not
+contain generated findings or certify that the assistant actually reviewed the
+image. Existing metric fields remain compatible.
+
+An independent instruction-following review of the supplied manga screenshot
+produced specific contact, arm-construction and visual-emphasis findings, with
+repairs and recheck criteria. It treated faint screenshot seams as uncertain and
+preserved angular styling. That exercise also exposed selection-preservation and
+attached-image scope ambiguities, which were corrected in the playbooks. This was
+a critique exercise, not a before/after drawing-quality benchmark.
+
+Follow-up validation: 33 assistant, 38 AI and 110 MCP library tests passed.
+Clippy with `--lib --tests -- -D warnings`, formatting and diff checks passed.
+The broader `--all-targets` Clippy run encounters an existing `collapsible_if`
+warning in `emulsion-assistant/examples/windows_cli_smoke.rs:72`.
+
+For a live drawing comparison, use the same model, reference and budget for a
+two-character contact scene, a foreshortened grip, and a centred angular emblem
+with intentionally flat shading. Compare early construction and final output:
+does the action read without effects, do contact and limb connections remain
+clear, do corrections improve the identified relationship, and does the emblem
+retain its intentional symmetry and flat design? Record unresolved problems and
+budget limits rather than substituting numeric image metrics for artist review.
+
+## Brush selection and MCP access follow-up
+
+The installed Windows app's `mcp-serve tools/list` advertises all 115 current
+tools, including brush discovery, library inspection, standalone previews and
+brush authoring. Read-only preapproval controls confirmation, not visibility.
+The workspace debug binary was older; its 96-tool catalog did not describe the
+running installed app. Tool advertisement alone does not establish that a model
+selects the right brush or that optional generation backends are configured.
+
+A JSON-RPC regression through the authenticated local relay compares the complete
+tool catalog, follows all brush-discovery pages and paints with discovered stable
+IDs for Fude brush, Screentone 40% and Ink wash. It verifies distinct settings and
+rendered images. No tool permission changes were needed.
+
+Studio guidance now requires discovery for a new drawing or medium, explicit
+brush selection and mark roles. Manga construction can combine with the requested
+medium; its ink-layer and tone instructions apply only to ink-and-tone passages.
+The guidance distinguishes brush-rendered paint trajectories from vector paths,
+uses previews to test uncertain marks and avoids persistent library edits for
+temporary drawing settings. A static review covers ink-and-tone manga, no-ink
+watercolour manga and intentional pen-only sketches; live model choice remains
+to be evaluated after loading the rebuilt app and a new assistant session.
+
+Validation: 33 assistant and 111 MCP library tests passed, including the relay
+brush regression. Clippy for the affected libraries/tests, formatting and diff
+checks passed. The Windows debug app builds successfully; querying the rebuilt
+executable confirms 115 tools and the updated paint-selection description.
+The running installed application has not been replaced or restarted.
+
 ## Results
 
 - `EMULSION_DRAWING_WORKFLOW_ARTIFACT=1 cargo test --release --workspace --lib --tests --no-fail-fast`: **403 passed, 0 failed, 1 ignored** (live Claude CLI). This includes 13 new regressions compared with the preceding alignment pass.

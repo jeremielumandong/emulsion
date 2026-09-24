@@ -217,9 +217,10 @@ impl EditorView {
         tabs: AnyElement,
         theme_controls: AnyElement,
         p: &Palette,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let wide = window.viewport_size().width >= px(WIDE_CHROME);
         let layout = control("compact-layout-trigger", "Workspace")
             .tooltip("Customize tools, menus and workspace presets")
             .on_click(
@@ -253,7 +254,7 @@ impl EditorView {
             .gap_1()
             .px_2()
             .bg(p.paper)
-            .child(div().flex().items_center().child(self.effect_menus(p, cx)))
+            .child(div().flex().items_center().child(self.effect_menus(p, wide, cx)))
             .child(
                 div()
                     .id("compact-tab-leading-drag")

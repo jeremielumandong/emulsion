@@ -41,6 +41,54 @@ pub fn update_settings(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     cx.refresh_windows();
 }
 
+/// Effective runtime choice, separate from the saved preference so a launch
+/// override never locks the live Settings switch or rewrites preferences.
+struct LayoutReuse(bool);
+impl Global for LayoutReuse {}
+
+pub(crate) fn layout_reuse_launch_override() -> Option<bool> {
+    parse_layout_reuse_override(std::env::var_os("EMULSION_RETAINED_LAYOUT").as_deref())
+}
+
+fn parse_layout_reuse_override(value: Option<&std::ffi::OsStr>) -> Option<bool> {
+    match value.and_then(std::ffi::OsStr::to_str) {
+        Some("1") => Some(true),
+        Some("0") => Some(false),
+        _ => None,
+    }
+}
+
+/// Seed once per app; later windows inherit any choice made in Settings.
+pub(crate) fn initialize_layout_reuse(cx: &mut App) -> bool {
+    if !cx.has_global::<LayoutReuse>() {
+        let enabled =
+            layout_reuse_launch_override().unwrap_or(settings(cx).experimental_layout_reuse);
+        cx.set_global(LayoutReuse(enabled));
+    }
+    layout_reuse_enabled(cx)
+}
+
+pub(crate) fn layout_reuse_enabled(cx: &App) -> bool {
+    cx.try_global::<LayoutReuse>()
+        .map_or(settings(cx).experimental_layout_reuse, |state| state.0)
+}
+
+/// Called by the Settings control between frames. Refreshing every window also
+/// discards cached view paint/layout ranges before rendering with the new mode.
+pub(crate) fn set_layout_reuse_enabled(enabled: bool, window: &mut Window, cx: &mut App) {
+    cx.set_global(LayoutReuse(enabled));
+    update_settings(cx, |settings| settings.experimental_layout_reuse = enabled);
+    window.set_layout_reuse_enabled(enabled);
+    for other in cx.windows() {
+        // The active window is already borrowed by its input callback.
+        if other.window_id() != window.window_handle().window_id() {
+            let _ = cx.update_window(other, |_, window, _| {
+                window.set_layout_reuse_enabled(enabled);
+            });
+        }
+    }
+}
+
 pub fn cli(cx: &App) -> CliStatus {
     cx.global::<Capabilities>().cli.clone()
 }
@@ -68,4 +116,25 @@ pub fn detect_cli(cx: &mut App) {
         });
     })
     .detach();
+}
+
+#[cfg(test)]
+mod layout_reuse_preference_tests {
+    use super::parse_layout_reuse_override;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn launch_override_accepts_explicit_on_and_off_only() {
+        assert_eq!(
+            parse_layout_reuse_override(Some(OsStr::new("1"))),
+            Some(true)
+        );
+        assert_eq!(
+            parse_layout_reuse_override(Some(OsStr::new("0"))),
+            Some(false)
+        );
+        for value in [None, Some(OsStr::new("")), Some(OsStr::new("invalid"))] {
+            assert_eq!(parse_layout_reuse_override(value), None);
+        }
+    }
 }

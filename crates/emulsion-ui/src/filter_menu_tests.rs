@@ -245,3 +245,15 @@ fn filter_menu_liquify_opens_existing_pixel_tool(cx: &mut TestAppContext) {
         assert_eq!(e.editor.doc, before);
     });
 }
+
+#[gpui_kit::test]
+fn app_icon_and_name_lead_the_menu_row(cx: &mut TestAppContext) {
+    let (_, cx) = setup(cx);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1280.), gpui_kit::px(800.)));
+    cx.run_until_parked();
+    cx.update(|window, _| {
+        let app = window.find("app-menu").bounds();
+        let file = window.find("file-menu").bounds();
+        assert!(app.right() <= file.left(), "{app:?} before {file:?}");
+    });
+}

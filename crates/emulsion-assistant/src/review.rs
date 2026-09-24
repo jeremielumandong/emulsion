@@ -108,10 +108,14 @@ pub fn review_request(brief: &str) -> String {
          Call get_view with no node or region to inspect the current full composition. Inspect a \
          detail region if needed for a face, hand, silhouette or perspective junction. Compare the \
          returned images with the original request and available references; preserve the intended \
-         style. Describe the single most consequential visible mismatch with document coordinates, \
-         if there is one. Make only a targeted correction within the remaining budget, then call \
+         style. Prioritize action readability, construction and overlaps before decorative finish. \
+         For the single most consequential supported mismatch, give its document region, visible \
+         evidence, effect on readability, targeted repair and a visible success check. State \
+         uncertainty when a crop or reference cannot support a judgment; do not equate deliberate \
+         stylization with a defect. Make only a targeted correction within the remaining budget, then call \
          get_view again on the full canvas after the last change. Do not repaint the whole picture \
-         or invent a flaw. If no correction is justified, finish. If a limit prevents review or \
+         or invent a flaw. Compare the repaired region against the success check as well as the full \
+         composition. If no correction is justified, finish. If a limit prevents review or \
          correction, state that limitation plainly. Numeric critique observations alone do not \
          establish anatomy, perspective, resemblance, or artistic quality."
     )

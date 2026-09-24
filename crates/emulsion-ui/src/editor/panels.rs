@@ -57,16 +57,7 @@ impl EditorView {
     ) {
         if self.panels.info && self.panels.pointer != Some(pos) {
             self.panels.pointer = Some(pos);
-            if self.sidebar_tab == SidebarTab::Info
-                && (!crate::app_state::settings(cx).compact_chrome
-                    || self
-                        .sidebar_layout
-                        .width_for_viewport(
-                            f32::from(window.viewport_size().width),
-                            f32::from(window.rem_size()),
-                        )
-                        .is_some())
-            {
+            if self.sidebar_tab == SidebarTab::Info && self.sidebar_content_visible(window, cx) {
                 self.notify_sidebar(cx);
             }
         }

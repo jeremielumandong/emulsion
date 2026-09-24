@@ -42,6 +42,8 @@ mod mask_taskbar;
 mod mask_view;
 mod menu_bar;
 mod movement;
+#[cfg(feature = "layout-bench")]
+pub mod navigation_benchmark;
 mod panels;
 mod pen;
 mod remove_tool;
@@ -472,9 +474,17 @@ impl EditorView {
         name: String,
         cx: &mut Context<Self>,
     ) -> Self {
-        crate::tablet::start();
+        // The isolated render benchmark owns its clock and does not start
+        // application services; normal editors retain their usual lifecycle.
+        #[cfg(feature = "layout-bench")]
+        let start_services = !cx.has_global::<navigation_benchmark::NavigationBenchmark>();
+        #[cfg(not(feature = "layout-bench"))]
+        let start_services = true;
+        if start_services {
+            crate::tablet::start();
+            Self::start_autosave(cx);
+        }
         let selected = doc.nodes.last().map(|n| n.id);
-        Self::start_autosave(cx);
         let editor = match graph {
             Some(g) => Editor::with_graph(doc, path, g),
             None => Editor::new(doc, path),
@@ -491,7 +501,7 @@ impl EditorView {
         let mut view = Self {
             editor,
             visible: true,
-            ants_task: Some(Self::start_ants(cx)),
+            ants_task: start_services.then(|| Self::start_ants(cx)),
             render_epoch: 0,
             tile_task: None,
             tile_cancel: None,
@@ -1516,13 +1526,13 @@ impl EditorView {
                     degrees
                 }
                 .rem_euclid(360.0);
-                cx.notify();
+                self.notify_canvas_navigation(window, cx);
             }
             Drag::Pan { last } => {
                 let d = pos - *last;
                 self.view.pan(f32::from(d.x) as f64, f32::from(d.y) as f64);
                 self.drag = Some(Drag::Pan { last: pos });
-                cx.notify();
+                self.notify_canvas_navigation(window, cx);
             }
             Drag::Move(gesture) => {
                 let gesture = *gesture;
@@ -1661,7 +1671,7 @@ impl EditorView {
         self.drag.is_some()
     }
 
-    fn scroll(&mut self, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
+    fn scroll(&mut self, e: &ScrollWheelEvent, window: &Window, cx: &mut Context<Self>) {
         let Some(b) = self.canvas_bounds() else {
             return;
         };
@@ -1682,7 +1692,7 @@ impl EditorView {
         } else {
             self.view.pan(dx, dy);
         }
-        cx.notify();
+        self.notify_canvas_navigation(window, cx);
     }
 
     fn slider_down(
@@ -2096,10 +2106,13 @@ fn snap(v: f32, step: f32) -> f32 {
     }
 }
 
+/// Window width from which the menu row shows the app name beside its icon.
+const WIDE_CHROME: f32 = 1000.;
+
 // ── Render ──────────────────────────────────────────────────────────────
 
 impl EditorView {
-    fn doc_bar(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn doc_bar(&self, p: &Palette, wide: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let d = &self.editor.doc;
         let ink = p.ink;
         let compact = crate::app_state::settings(cx).compact_chrome;
@@ -2119,7 +2132,7 @@ impl EditorView {
             .py(if compact { px(3.) } else { px(5.) })
             .border_b_1()
             .border_color(p.line)
-            .child(self.effect_menus(p, cx))
+            .child(self.effect_menus(p, wide, cx))
             .child(
                 div()
                     .flex()
@@ -2429,12 +2442,12 @@ impl EditorView {
                     window.focus(&this.canvas_focus, cx);
                 }
             }))
-            .on_scroll_wheel(cx.listener(|this, e, _, cx| this.scroll(e, cx)))
+            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.scroll(e, window, cx)))
             .on_drop(cx.listener(|this, d: &DraggedColor, window, cx| {
                 let pos = window.mouse_position();
                 this.color_drop(d.0, pos, cx);
             }))
-            .on_pinch(cx.listener(|this, e: &PinchEvent, _, cx| {
+            .on_pinch(cx.listener(|this, e: &PinchEvent, window, cx| {
                 if let Some(b) = this.canvas_bounds() {
                     this.view.zoom_at(
                         1.0 + e.delta as f64,
@@ -2444,7 +2457,7 @@ impl EditorView {
                         ),
                         &b,
                     );
-                    cx.notify();
+                    this.notify_canvas_navigation(window, cx);
                 }
             }))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
@@ -2745,10 +2758,11 @@ impl EditorView {
         let can_compare = self.editor.differs_from_base() || self.raw_split_active();
         let track = self.tracks.entry(SliderKey::Compare).or_default().clone();
         let compare = self.compare;
-        let tip = crate::widgets::tip;
+        use crate::widgets::tip;
         let mut v: Vec<AnyElement> = vec![
             tip(
                 chip("zoom", zoom, false, p)
+                    .test_support()
                     .flex_none()
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_100(cx))),
                 "Zoom · click for 100% (Ctrl-1) · Ctrl-scroll on the canvas",
@@ -2763,6 +2777,7 @@ impl EditorView {
             .into_any_element(),
             tip(
                 chip("rot", rot, self.view.rotation != 0.0, p)
+                    .test_support()
                     .flex_none()
                     .on_click(cx.listener(|this, _, _, cx| this.rotate(0.0, cx))),
                 "Canvas rotation · click to reset",
@@ -3948,7 +3963,8 @@ impl Render for EditorView {
         if crate::app_state::settings(cx).compact_chrome {
             return self.compact_editor(&p, window, cx);
         }
-        let doc_bar = self.doc_bar(&p, cx);
+        let wide = window.viewport_size().width >= px(WIDE_CHROME);
+        let doc_bar = self.doc_bar(&p, wide, cx);
         if self.history.open {
             let page = self.history_page(&p, cx);
             return div()

@@ -1,0 +1,313 @@
+{
+  "metadata": {
+    "sha256": "ce6e1032d8fba67884401a3a1ddca62105344051dbba6d5b25dfb155fe437a01",
+    "started_utc": "2026-09-23T23:37:53.676209+00:00",
+    "cpu": "AMD Ryzen 7 8700G",
+    "logical_processors": 16,
+    "profile": "release",
+    "samples": 50,
+    "warmup_seconds": 2,
+    "measurement_seconds": 5,
+    "rows": 256,
+    "gpu_submission": false,
+    "os": "Windows 10.0.26200 x86_64",
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "source_revision": "b30c5784d700442f39c6d6b18942626505ad5f8b",
+    "source_dirty": true,
+    "release_lto": "thin",
+    "release_codegen_units": 1,
+    "finished_utc": "2026-09-23T23:44:00.269116+00:00",
+    "concurrent_build_app_or_ui_test_observations": []
+  },
+  "synthetic_results": [
+    {
+      "order": "cold-first",
+      "workload": "fixed_geometry",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 2.350665539895166,
+        "ci95_lower_ms": 2.1741241430800993,
+        "ci95_upper_ms": 2.6162709658728156
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 0.9084540990099009,
+        "ci95_lower_ms": 0.905133655599124,
+        "ci95_upper_ms": 0.9115002077365254
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.9134874311007571,
+        "ci95_lower_ms": 0.9093645781438469,
+        "ci95_upper_ms": 0.9177071104447833
+      },
+      "new_vs_cold_duration_change_percent": -61.139200128764536,
+      "new_vs_geometry_only_duration_change_percent": 0.5540546403326241
+    },
+    {
+      "order": "cold-first",
+      "workload": "changing_text",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.58947177014172,
+        "ci95_lower_ms": 1.5758669779434358,
+        "ci95_upper_ms": 1.6059514781050745
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 1.554193048340128,
+        "ci95_lower_ms": 1.5480391045137323,
+        "ci95_upper_ms": 1.5604340246261288
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 1.5550592506309455,
+        "ci95_lower_ms": 1.5495536314663154,
+        "ci95_upper_ms": 1.5609324234410054
+      },
+      "new_vs_cold_duration_change_percent": -2.1650286690971687,
+      "new_vs_geometry_only_duration_change_percent": 0.05573324959486925
+    },
+    {
+      "order": "cold-first",
+      "workload": "structural_churn",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 0.964881273383809,
+        "ci95_lower_ms": 0.9621004890773406,
+        "ci95_upper_ms": 0.968175262977026
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 0.9453280703552709,
+        "ci95_lower_ms": 0.9433881572666929,
+        "ci95_upper_ms": 0.9474962538749181
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.9498983995340711,
+        "ci95_lower_ms": 0.9454401050313769,
+        "ci95_upper_ms": 0.9553063365208931
+      },
+      "new_vs_cold_duration_change_percent": -1.552820462272364,
+      "new_vs_geometry_only_duration_change_percent": 0.48346487554131734
+    },
+    {
+      "order": "cold-first",
+      "workload": "stable_text",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.122959037856727,
+        "ci95_lower_ms": 1.1176186709226745,
+        "ci95_upper_ms": 1.128733545973463
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 1.1008631869539895,
+        "ci95_lower_ms": 1.0972940269565574,
+        "ci95_upper_ms": 1.1046493057458435
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.616623221565854,
+        "ci95_lower_ms": 0.6154393573113555,
+        "ci95_upper_ms": 0.617856360541174
+      },
+      "new_vs_cold_duration_change_percent": -45.089428841256975,
+      "new_vs_geometry_only_duration_change_percent": -43.98729752495342
+    },
+    {
+      "order": "cold-first",
+      "workload": "changing_nowrap_text",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.4262639899048728,
+        "ci95_lower_ms": 1.4185085331541392,
+        "ci95_upper_ms": 1.4353947125831563
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 1.382396354882547,
+        "ci95_lower_ms": 1.374742628736958,
+        "ci95_upper_ms": 1.3915380330060727
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 1.3057267932440304,
+        "ci95_lower_ms": 1.3004104270986745,
+        "ci95_upper_ms": 1.31126445168714
+      },
+      "new_vs_cold_duration_change_percent": -8.451254291912802,
+      "new_vs_geometry_only_duration_change_percent": -5.54613453426176
+    },
+    {
+      "order": "cold-first",
+      "workload": "cached_sidebar_canvas",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 0.045492192104074916,
+        "ci95_lower_ms": 0.04493792465803057,
+        "ci95_upper_ms": 0.04617088822481832
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 0.04287027763287838,
+        "ci95_lower_ms": 0.04271621390957949,
+        "ci95_upper_ms": 0.043015611470492654
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.043070554161039894,
+        "ci95_lower_ms": 0.04293301962662587,
+        "ci95_upper_ms": 0.043226120386364426
+      },
+      "new_vs_cold_duration_change_percent": -5.323194664910657,
+      "new_vs_geometry_only_duration_change_percent": 0.46716872206098436
+    },
+    {
+      "order": "retained-first",
+      "workload": "fixed_geometry",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.8809549229275868,
+        "ci95_lower_ms": 1.8649781162104988,
+        "ci95_upper_ms": 1.9021713521995791
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 0.908892319161328,
+        "ci95_lower_ms": 0.8998673335076481,
+        "ci95_upper_ms": 0.9209961049637282
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.9050467098427489,
+        "ci95_lower_ms": 0.9009588047195622,
+        "ci95_upper_ms": 0.9098631926590605
+      },
+      "new_vs_cold_duration_change_percent": -51.883657667133185,
+      "new_vs_geometry_only_duration_change_percent": -0.4231094528477808
+    },
+    {
+      "order": "retained-first",
+      "workload": "changing_text",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.5669723944865075,
+        "ci95_lower_ms": 1.5625939838956213,
+        "ci95_upper_ms": 1.5712339663942598
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 1.550026185206756,
+        "ci95_lower_ms": 1.543291416800701,
+        "ci95_upper_ms": 1.5569019742443595
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 1.550718644923316,
+        "ci95_lower_ms": 1.543759629289808,
+        "ci95_upper_ms": 1.5600180488602904
+      },
+      "new_vs_cold_duration_change_percent": -1.0372709577004313,
+      "new_vs_geometry_only_duration_change_percent": 0.04467406571375676
+    },
+    {
+      "order": "retained-first",
+      "workload": "structural_churn",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 0.9637802045428072,
+        "ci95_lower_ms": 0.9592883578276079,
+        "ci95_upper_ms": 0.9692351834511868
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 0.9360569411764706,
+        "ci95_lower_ms": 0.9338141144720564,
+        "ci95_upper_ms": 0.9386420266069875
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.9370789195107747,
+        "ci95_lower_ms": 0.9352370771300913,
+        "ci95_upper_ms": 0.9388791413407123
+      },
+      "new_vs_cold_duration_change_percent": -2.7704745237737027,
+      "new_vs_geometry_only_duration_change_percent": 0.1091790776124757
+    },
+    {
+      "order": "retained-first",
+      "workload": "stable_text",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.132105299941759,
+        "ci95_lower_ms": 1.1250182998324596,
+        "ci95_upper_ms": 1.143782614768419
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 1.1143370262085033,
+        "ci95_lower_ms": 1.1097186344973424,
+        "ci95_upper_ms": 1.1194829600910328
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.6272288113819786,
+        "ci95_lower_ms": 0.6254378047087964,
+        "ci95_upper_ms": 0.6293573613796818
+      },
+      "new_vs_cold_duration_change_percent": -44.59624812159731,
+      "new_vs_geometry_only_duration_change_percent": -43.71282685310162
+    },
+    {
+      "order": "retained-first",
+      "workload": "changing_nowrap_text",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.4158880038827413,
+        "ci95_lower_ms": 1.4120044163386833,
+        "ci95_upper_ms": 1.420076176847437
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 1.4047606600660067,
+        "ci95_lower_ms": 1.394946162658398,
+        "ci95_upper_ms": 1.4175785048799607
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 1.3591036691904486,
+        "ci95_lower_ms": 1.3500255595445274,
+        "ci95_upper_ms": 1.3676100471118047
+      },
+      "new_vs_cold_duration_change_percent": -4.0105103324962865,
+      "new_vs_geometry_only_duration_change_percent": -3.250161552318309
+    },
+    {
+      "order": "retained-first",
+      "workload": "cached_sidebar_canvas",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 0.04508431148408959,
+        "ci95_lower_ms": 0.044699123056585556,
+        "ci95_upper_ms": 0.0456555993307914
+      },
+      "retained_geometry_only": {
+        "estimator": "slope",
+        "estimate_ms": 0.043929577738950364,
+        "ci95_lower_ms": 0.04363307528883508,
+        "ci95_upper_ms": 0.0442651402291258
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.043969463592757156,
+        "ci95_lower_ms": 0.043721584330017244,
+        "ci95_upper_ms": 0.04424473699408049
+      },
+      "new_vs_cold_duration_change_percent": -2.472806736165567,
+      "new_vs_geometry_only_duration_change_percent": 0.0907949856559398
+    }
+  ],
+  "excluded_run": "The interrupted first attempt overlapped external Cargo/rustc processes; none of its samples are included."
+}

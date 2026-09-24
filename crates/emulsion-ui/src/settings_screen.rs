@@ -6,7 +6,9 @@ use crate::theme::{self, Palette};
 use crate::widgets::{button, chip, label, mono};
 use crate::workspace::Workspace;
 use emulsion_io::settings::DrawingPace;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::input::Input;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -291,6 +293,40 @@ impl Workspace {
                     .child(label("Settings · capability ladder", &p))
                     .child(div().text_size(px(40.)).font_weight(FontWeight::SEMIBOLD).child("Every tier is optional."))
                     .child(body("Emulsion is a complete editor with none of these. Each tier you add makes it better, and anything that needs a missing tier falls back or stays hidden.", &p)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .px_10()
+                    .py_6()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child("Experimental"))
+                    .child(
+                        Switch::new("experimental-layout-reuse")
+                            .label("Reuse interface layout")
+                            .checked(app_state::layout_reuse_enabled(cx))
+                            .on_change(|enabled, window, cx| {
+                                app_state::set_layout_reuse_enabled(*enabled, window, cx);
+                            }),
+                    )
+                    .child(
+                        div()
+                            .max_w(rems(40.))
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("May reduce CPU use by reusing unchanged layout. Performance varies by workload; turn it off if rendering looks wrong or feels slower. Applies immediately to all windows. Your choice is saved."),
+                    )
+                    .when(app_state::layout_reuse_launch_override().is_some(), |section| {
+                        section.child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("A launch override will set the starting value again after restart."),
+                        )
+                    }),
             )
             .child(
                 section(&p)

@@ -73,7 +73,8 @@ impl EditorView {
         );
     }
 
-    pub(super) fn effect_menus(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+    /// `wide`: room for the app name beside its icon.
+    pub(super) fn effect_menus(&self, p: &Palette, wide: bool, cx: &Context<Self>) -> AnyElement {
         let image_editor = cx.entity().downgrade();
         let filter_editor = image_editor.clone();
         div()
@@ -81,6 +82,7 @@ impl EditorView {
             .items_center()
             .gap_1()
             .flex_none()
+            .child(self.app_menu(p, wide, cx))
             .child(self.file_menu(p, cx))
             .child(self.edit_menu(p, cx))
             .child(

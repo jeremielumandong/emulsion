@@ -3,7 +3,7 @@ use super::*;
 
 pub(crate) struct CanvasView {
     owner: WeakEntity<EditorView>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "layout-bench"))]
     pub(crate) render_count: usize,
 }
 
@@ -11,7 +11,7 @@ impl CanvasView {
     pub(super) fn new(owner: WeakEntity<EditorView>) -> Self {
         Self {
             owner,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "layout-bench"))]
             render_count: 0,
         }
     }
@@ -19,7 +19,7 @@ impl CanvasView {
 
 impl Render for CanvasView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "layout-bench"))]
         {
             self.render_count += 1;
         }
@@ -35,7 +35,7 @@ impl Render for CanvasView {
 pub(crate) struct SidebarView {
     owner: WeakEntity<EditorView>,
     _owner_subscription: Subscription,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "layout-bench"))]
     pub(crate) render_count: usize,
 }
 
@@ -48,7 +48,7 @@ impl SidebarView {
         Self {
             owner,
             _owner_subscription: subscription,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "layout-bench"))]
             render_count: 0,
         }
     }
@@ -56,7 +56,7 @@ impl SidebarView {
 
 impl Render for SidebarView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "layout-bench"))]
         {
             self.render_count += 1;
         }
@@ -73,6 +73,31 @@ impl Render for SidebarView {
 }
 
 impl EditorView {
+    pub(super) fn sidebar_content_visible(&self, window: &Window, cx: &App) -> bool {
+        !crate::app_state::settings(cx).compact_chrome
+            || self
+                .sidebar_layout
+                .width_for_viewport(
+                    f32::from(window.viewport_size().width),
+                    f32::from(window.rem_size()),
+                )
+                .is_some()
+    }
+
+    /// Navigation changes the canvas and the view-dependent sidebar panels.
+    /// Uncached ancestors still rebuild the zoom and rotation controls.
+    pub(super) fn notify_canvas_navigation(&self, window: &Window, cx: &mut Context<Self>) {
+        self.notify_canvas(cx);
+        let view_dependent_panel = match self.sidebar_tab {
+            SidebarTab::Info => self.panels.info,
+            SidebarTab::Navigator => self.panels.navigator,
+            _ => false,
+        };
+        if view_dependent_panel && self.sidebar_content_visible(window, cx) {
+            self.notify_sidebar(cx);
+        }
+    }
+
     pub(super) fn canvas_region(&self) -> impl IntoElement + use<> {
         // Keep ancestors of the cached sidebar uncached: refreshing a cached
         // ancestor also refreshes all of its cached descendants in GPUI.

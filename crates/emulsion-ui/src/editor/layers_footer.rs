@@ -190,7 +190,7 @@ impl EditorView {
                         Button::new("layers-delete")
                             .xsmall()
                             .ghost()
-                            .icon(IconName::Trash)
+                            .child(footer_icon("trash", structural, p))
                             .accessibility_label("Delete layer")
                             .tooltip("Delete layer")
                             .disabled(!structural)

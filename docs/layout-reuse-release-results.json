@@ -1,0 +1,200 @@
+{
+  "metadata": {
+    "sha256": "7c91574f944e4eb54cfb1b4ab02083cb298df9419bca1c87feb748b55a10d505",
+    "started_utc": "2026-09-23T23:04:30.959294+00:00",
+    "cpu": "AMD Ryzen 7 8700G",
+    "logical_processors": 16,
+    "profile": "release",
+    "samples": 50,
+    "warmup_seconds": 3,
+    "measurement_seconds": 10,
+    "orders": [
+      "cold-first",
+      "retained-first"
+    ],
+    "date": "2026-09-23",
+    "os": "Windows 10.0.26200 x86_64",
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "source_revision": "b30c5784d700442f39c6d6b18942626505ad5f8b",
+    "source_dirty": true,
+    "gpu_submission": false,
+    "rows": 256,
+    "release_lto": "thin",
+    "release_codegen_units": 1
+  },
+  "synthetic_results": [
+    {
+      "order": "cold-first",
+      "workload": "fixed_geometry",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.9058518080372744,
+        "ci95_lower_ms": 1.8953451973971862,
+        "ci95_upper_ms": 1.9174359882827703,
+        "draw_p50_ms_including_warmup": 1.772,
+        "draw_p95_ms_including_warmup": 2.146,
+        "draw_p99_ms_including_warmup": 2.654
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.9197146534653465,
+        "ci95_lower_ms": 0.9152945782518634,
+        "ci95_upper_ms": 0.9246363443821243,
+        "draw_p50_ms_including_warmup": 0.816,
+        "draw_p95_ms_including_warmup": 0.999,
+        "draw_p99_ms_including_warmup": 1.273
+      },
+      "retained_duration_change_percent": -51.742593543382206
+    },
+    {
+      "order": "cold-first",
+      "workload": "changing_text",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.5911073411764705,
+        "ci95_lower_ms": 1.5838757802330659,
+        "ci95_upper_ms": 1.5983755642530415,
+        "draw_p50_ms_including_warmup": 1.507,
+        "draw_p95_ms_including_warmup": 1.907,
+        "draw_p99_ms_including_warmup": 2.322
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 1.5731367940205785,
+        "ci95_lower_ms": 1.5641673999417758,
+        "ci95_upper_ms": 1.5831770777741445,
+        "draw_p50_ms_including_warmup": 1.483,
+        "draw_p95_ms_including_warmup": 1.848,
+        "draw_p99_ms_including_warmup": 2.226
+      },
+      "retained_duration_change_percent": -1.129436505685688
+    },
+    {
+      "order": "cold-first",
+      "workload": "structural_churn",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 0.9664950575292823,
+        "ci95_lower_ms": 0.9642330074155436,
+        "ci95_upper_ms": 0.9688890104060495,
+        "draw_p50_ms_including_warmup": 0.896,
+        "draw_p95_ms_including_warmup": 1.031,
+        "draw_p99_ms_including_warmup": 1.346
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.9558837892965768,
+        "ci95_lower_ms": 0.9520482025422287,
+        "ci95_upper_ms": 0.9610822211912695,
+        "draw_p50_ms_including_warmup": 0.883,
+        "draw_p95_ms_including_warmup": 1.021,
+        "draw_p99_ms_including_warmup": 1.288
+      },
+      "retained_duration_change_percent": -1.0979123121262369
+    },
+    {
+      "order": "retained-first",
+      "workload": "fixed_geometry",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.9238238425160161,
+        "ci95_lower_ms": 1.9174708992799534,
+        "ci95_upper_ms": 1.9312860989338205,
+        "draw_p50_ms_including_warmup": 1.788,
+        "draw_p95_ms_including_warmup": 2.171,
+        "draw_p99_ms_including_warmup": 2.656
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.923469177505986,
+        "ci95_lower_ms": 0.9190931129512956,
+        "ci95_upper_ms": 0.9291727137975695,
+        "draw_p50_ms_including_warmup": 0.82,
+        "draw_p95_ms_including_warmup": 1.002,
+        "draw_p99_ms_including_warmup": 1.294
+      },
+      "retained_duration_change_percent": -51.9982465599213
+    },
+    {
+      "order": "retained-first",
+      "workload": "changing_text",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 1.577851002446127,
+        "ci95_lower_ms": 1.5723161337025715,
+        "ci95_upper_ms": 1.5834137488856994,
+        "draw_p50_ms_including_warmup": 1.494,
+        "draw_p95_ms_including_warmup": 1.815,
+        "draw_p99_ms_including_warmup": 2.32
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 1.5689168983110076,
+        "ci95_lower_ms": 1.5557655477291341,
+        "ci95_upper_ms": 1.5827157017850662,
+        "draw_p50_ms_including_warmup": 1.48,
+        "draw_p95_ms_including_warmup": 1.87,
+        "draw_p99_ms_including_warmup": 2.337
+      },
+      "retained_duration_change_percent": -0.5662197584733297
+    },
+    {
+      "order": "retained-first",
+      "workload": "structural_churn",
+      "cold": {
+        "estimator": "slope",
+        "estimate_ms": 0.9777435299294636,
+        "ci95_lower_ms": 0.9726115265919785,
+        "ci95_upper_ms": 0.9842736209091029,
+        "draw_p50_ms_including_warmup": 0.901,
+        "draw_p95_ms_including_warmup": 1.055,
+        "draw_p99_ms_including_warmup": 1.378
+      },
+      "retained": {
+        "estimator": "slope",
+        "estimate_ms": 0.9560552156862745,
+        "ci95_lower_ms": 0.953401747299482,
+        "ci95_upper_ms": 0.9591941539972514,
+        "draw_p50_ms_including_warmup": 0.884,
+        "draw_p95_ms_including_warmup": 1.033,
+        "draw_p99_ms_including_warmup": 1.365
+      },
+      "retained_duration_change_percent": -2.218200742760601
+    }
+  ],
+  "manual_observations": [
+    {
+      "Label": "cold-canvas-pan-1",
+      "MeasuredSeconds": 30.3484113,
+      "CpuSeconds": 13.21875,
+      "MeanCpuPercentMachine": 2.722290359232083,
+      "PeakSampleCpuPercentMachine": 6.153898869090612,
+      "InitialPrivateMiB": 637.97265625,
+      "FinalPrivateMiB": 643.8125,
+      "PeakPrivateMiB": 680.84765625,
+      "InitialWorkingSetMiB": 476.00390625,
+      "FinalWorkingSetMiB": 481.8359375,
+      "PeakWorkingSetMiB": 518.8046875
+    },
+    {
+      "Label": "retained-canvas-pan-1",
+      "MeasuredSeconds": 30.289536899999998,
+      "CpuSeconds": 14.171875,
+      "MeanCpuPercentMachine": 2.924251336110722,
+      "PeakSampleCpuPercentMachine": 6.348807452321002,
+      "InitialPrivateMiB": 518.75390625,
+      "FinalPrivateMiB": 519.1640625,
+      "PeakPrivateMiB": 520.09375,
+      "InitialWorkingSetMiB": 350.09375,
+      "FinalWorkingSetMiB": 350.4296875,
+      "PeakWorkingSetMiB": 351.46484375
+    }
+  ],
+  "manual_limitations": [
+    "One user-driven 30-second trial per mode; mouse rate, viewport, FPS and frame times were not captured.",
+    "Cold session had prior editing/open tabs; retained session reopened a saved 17-layer document. Memory state was not matched.",
+    "The earlier unclear Layers-scroll recording was excluded."
+  ],
+  "manual_gpu": "AMD Radeon RX 7700 XT, hardware D3D11.1",
+  "app_binary_sha256": "d19cc72ac9f655a5c7ef93bc6484268c5dd3b5044628f8d3af1c584158c8c3a8"
+}

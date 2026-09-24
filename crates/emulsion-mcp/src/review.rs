@@ -49,7 +49,22 @@ pub(crate) fn critique(doc: &Document, args: &Value) -> Result<ToolResult, ToolR
         "legacy_fields": "issues/severity are compatibility aliases for observations/review priority, not defects or quality scores",
         "metrics": c.metrics,
         "visual_review": {"status": "pending_assistant_review", "images_included": include_images,
-            "instruction": "Inspect the supplied images against the user's brief and references. Check subject identity and required features, anatomy/proportions and perspective where relevant to the requested style, overlaps, composition intent, and medium character. Preserve deliberate abstraction, flattened space, invented proportions and symmetry when requested; judge custom and hybrid styles against their stated traits. Cite visible evidence and document coordinates; label uncertain judgments unproven. If needed request a detail get_view region. Do not claim these checks were completed by the metric analyzer. Correct only brief-relevant problems at the current stage within the playbook's remaining iteration budget."}
+            "evidence_available": if include_images { "current_composition_and_optional_detail" } else { "metrics_only" },
+            "instruction": "Inspect current images against the user's brief and available references before writing a visual critique. If images are omitted, get a current get_view first; if a feature is too small, request a detail get_view region. Read the whole composition first, then inspect the highest-risk relationship at detail scale. Check subject identity and required features, gesture, silhouette, anatomy/proportions and perspective where relevant to the requested style, contact and overlap order, focal hierarchy, and medium character. For interacting figures or objects, trace which form connects to which and what is in front at the contact point. Preserve deliberate abstraction, flattened space, invented proportions and symmetry when requested; judge custom and hybrid styles against their stated traits. Separate intended style from an accidental loss of readability. Confirm suspected seams or guide lines in document images before treating screen overlays as artwork. Cite visible evidence and document coordinates using the returned image mapping; label uncertain judgments unproven and resolve them with a crop when useful. Do not claim these checks were completed by the metric analyzer. Correct only brief-relevant problems at the current stage within the playbook's remaining iteration budget.",
+            "response_contract": {
+                "purpose": "Guidance for the calling assistant's review; these are not generated findings or completed checks.",
+                "preserve": "Name the effective visual choices that repairs must preserve.",
+                "priorities": "Report up to three image-supported problems in impact order, with structure and action readability before surface polish. Fewer or no problems are valid; do not fill a quota.",
+                "finding_fields": {
+                    "priority": "blocking, important or polish; no numeric quality score",
+                    "location": "Named feature and document-space [x, y, width, height] when supported by the image mapping; do not invent precise coordinates",
+                    "evidence": "Describe the visible relationship and why it conflicts with the intended result; distinguish observation from inference",
+                    "repair": "Specify the smallest concrete redraw, placement, overlap, value or edge change that addresses the cause while preserving the intended style",
+                    "recheck": "State what should read clearly in a fresh full view and relevant detail crop after the repair"
+                },
+                "repair_loop": "When editing is requested, repair the highest-impact problem first, then inspect fresh full and detail views against its recheck criterion. Do not hide unresolved construction with hatching, effects or added detail. If the repair fails, revise the underlying shapes instead of repeating cosmetic edits. If only critique is requested, return the repair plan without modifying the drawing.",
+                "completion": "Report which checks passed, what remains unresolved or unproven, and whether the current stage is ready to advance. Do not infer completion from tool success, metrics or exhausted iteration budget."
+            }}
     }).to_string());
     result.content.extend(images);
     Ok(result)
@@ -82,6 +97,11 @@ mod tests {
             serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(meta["context"], context);
         assert_eq!(meta["visual_review"]["status"], "pending_assistant_review");
+        assert_eq!(
+            meta["visual_review"]["evidence_available"],
+            "current_composition_and_optional_detail"
+        );
+        assert!(meta["visual_review"].get("findings").is_none());
         let mapping: Value =
             serde_json::from_str(result.content[4]["text"].as_str().unwrap()).unwrap();
         assert_eq!(mapping["region"], json!([40, 20, 80, 60]));
@@ -99,13 +119,36 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(
-            critique(&doc, &json!({"include_images": false}))
+        let result = critique(&doc, &json!({"include_images": false})).unwrap();
+        assert_eq!(result.content.len(), 1);
+        let meta: Value =
+            serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap();
+        let review = &meta["visual_review"];
+        assert_eq!(review["status"], "pending_assistant_review");
+        assert_eq!(review["images_included"], false);
+        assert_eq!(review["evidence_available"], "metrics_only");
+        assert!(
+            review["instruction"]
+                .as_str()
                 .unwrap()
-                .content
-                .len(),
-            1
+                .contains("get_view first")
         );
+        assert!(review.get("findings").is_none());
+        let contract = &review["response_contract"];
+        for field in ["priority", "location", "evidence", "repair", "recheck"] {
+            assert!(contract["finding_fields"][field].is_string());
+        }
+        // The new assistant guidance leaves existing observation clients intact.
+        for (observation, legacy) in meta["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(meta["issues"].as_array().unwrap())
+        {
+            assert_eq!(observation["key"], legacy["key"]);
+            assert_eq!(observation["note"], legacy["note"]);
+            assert_eq!(observation["priority"], legacy["severity"]);
+        }
     }
 
     #[test]

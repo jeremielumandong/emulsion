@@ -25,11 +25,45 @@ type MeasureFn =
     dyn FnMut(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>;
 type NodeMeasureFn = StackSafe<Box<MeasureFn>>;
 
-struct NodeContext {
-    measure: NodeMeasureFn,
+enum NodeContext {
+    Callback(NodeMeasureFn),
+    // A pure measurement in snapped device pixels. No frame-local captures.
+    Intrinsic(TaffySize<f32>),
 }
+/// Diagnostics for the last completed frame's experimental layout reuse.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutReuseStats {
+    /// Newly allocated Taffy nodes.
+    pub nodes_created: usize,
+    /// Existing layout slots reconciled with this frame's requests.
+    pub nodes_reused: usize,
+    /// Existing node styles changed during reconciliation.
+    pub style_changes: usize,
+    /// Existing child lists changed during reconciliation.
+    pub children_changes: usize,
+    /// Measurement callbacks installed and invalidated this frame.
+    pub measured_nodes: usize,
+    /// Actual invocations of opaque measurement callbacks.
+    pub measurement_calls: usize,
+    /// Requests with a constraint-independent intrinsic measurement.
+    pub intrinsic_nodes: usize,
+    /// Intrinsic requests whose snapped size matched the previous layout slot.
+    pub intrinsic_reused: usize,
+    /// Nodes kept for the next frame (zero in the default cold mode).
+    pub retained_nodes: usize,
+}
+
 pub struct TaffyLayoutEngine {
     taffy: TaffyTree<NodeContext>,
+    // These are layout allocation slots, never identities for elements or input.
+    reuse_enabled: bool,
+    intrinsic_text_reuse: bool,
+    nodes: Vec<NodeId>,
+    requested: usize,
+    measured_nodes: Vec<NodeId>,
+    current_parents: FxHashSet<NodeId>,
+    frame_stats: LayoutReuseStats,
+    last_stats: LayoutReuseStats,
     absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
     /// Unrounded absolute border-box top-left per-node coordinate in device pixels.
     absolute_outer_origins: FxHashMap<LayoutId, Point<f32>>,
@@ -45,6 +79,14 @@ impl TaffyLayoutEngine {
         taffy.disable_rounding();
         TaffyLayoutEngine {
             taffy,
+            reuse_enabled: false,
+            intrinsic_text_reuse: true,
+            nodes: Vec::new(),
+            requested: 0,
+            measured_nodes: Vec::new(),
+            current_parents: FxHashSet::default(),
+            frame_stats: LayoutReuseStats::default(),
+            last_stats: LayoutReuseStats::default(),
             absolute_layout_bounds: FxHashMap::default(),
             absolute_outer_origins: FxHashMap::default(),
             computed_layouts: FxHashSet::default(),
@@ -52,11 +94,172 @@ impl TaffyLayoutEngine {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.taffy.clear();
+    fn clear_frame_bounds(&mut self) {
         self.absolute_layout_bounds.clear();
         self.absolute_outer_origins.clear();
         self.computed_layouts.clear();
+        self.current_parents.clear();
+    }
+
+    fn drop_measurements(&mut self) {
+        // Taffy 0.13's clear/remove do not empty the context side map. More
+        // importantly, measurement closures capture frame-local text/paint state.
+        for node in self.measured_nodes.drain(..) {
+            self.taffy
+                .set_node_context(node, None)
+                .expect(EXPECT_MESSAGE);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.drop_measurements();
+        // Taffy's clear does not drop its separate context map. Intrinsic
+        // contexts survive ordinary frame boundaries, but not a hard reset.
+        for &node in &self.nodes {
+            if self.taffy.get_node_context(node).is_some() {
+                self.taffy
+                    .set_node_context(node, None)
+                    .expect(EXPECT_MESSAGE);
+            }
+        }
+        self.taffy.clear();
+        self.nodes.clear();
+        self.requested = 0;
+        self.frame_stats = LayoutReuseStats::default();
+        self.clear_frame_bounds();
+    }
+
+    pub fn set_reuse_enabled(&mut self, enabled: bool) {
+        if self.reuse_enabled != enabled {
+            self.clear();
+            self.reuse_enabled = enabled;
+        }
+    }
+
+    pub fn can_reuse_intrinsic_text(&self) -> bool {
+        self.reuse_enabled && self.intrinsic_text_reuse
+    }
+
+    #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
+    pub fn set_intrinsic_text_reuse(&mut self, enabled: bool) {
+        if self.intrinsic_text_reuse != enabled {
+            self.clear();
+            self.intrinsic_text_reuse = enabled;
+        }
+    }
+
+    pub fn reuse_stats(&self) -> LayoutReuseStats {
+        self.last_stats
+    }
+
+    pub fn finish_frame(&mut self) {
+        self.drop_measurements();
+        if self.reuse_enabled {
+            // Remove parents before children. Callback captures were dropped
+            // above; retire numeric intrinsic contexts explicitly as well.
+            for node in self.nodes.drain(self.requested..).rev() {
+                if self.taffy.get_node_context(node).is_some() {
+                    self.taffy
+                        .set_node_context(node, None)
+                        .expect(EXPECT_MESSAGE);
+                }
+                self.taffy.remove(node).expect(EXPECT_MESSAGE);
+            }
+            self.frame_stats.retained_nodes = self.nodes.len();
+        } else {
+            self.taffy.clear();
+            self.nodes.clear();
+        }
+        self.last_stats = self.frame_stats;
+        self.frame_stats = LayoutReuseStats::default();
+        self.requested = 0;
+        self.clear_frame_bounds();
+    }
+
+    fn request_node(
+        &mut self,
+        style: taffy::Style,
+        children: &[LayoutId],
+        context: Option<NodeContext>,
+    ) -> LayoutId {
+        let node = if self.reuse_enabled && self.requested < self.nodes.len() {
+            let node = self.nodes[self.requested];
+            self.frame_stats.nodes_reused += 1;
+            if self.taffy.style(node).expect(EXPECT_MESSAGE) != &style {
+                self.taffy.set_style(node, style).expect(EXPECT_MESSAGE);
+                self.frame_stats.style_changes += 1;
+            }
+            if !self
+                .taffy
+                .child_ids(node)
+                .eq(children.iter().map(|id| id.0))
+            {
+                // This also detaches children from their previous parents.
+                self.taffy
+                    .set_children(node, LayoutId::to_taffy_slice(children))
+                    .expect(EXPECT_MESSAGE);
+                self.frame_stats.children_changes += 1;
+            }
+            node
+        } else {
+            let node = if self.reuse_enabled {
+                let node = self.taffy.new_leaf(style).expect(EXPECT_MESSAGE);
+                if !children.is_empty() {
+                    self.taffy
+                        .set_children(node, LayoutId::to_taffy_slice(children))
+                        .expect(EXPECT_MESSAGE);
+                }
+                node
+            } else {
+                self.taffy
+                    .new_with_children(style, LayoutId::to_taffy_slice(children))
+                    .expect(EXPECT_MESSAGE)
+            };
+            if self.reuse_enabled {
+                self.nodes.push(node);
+            }
+            self.frame_stats.nodes_created += 1;
+            node
+        };
+        self.requested += 1;
+        if self.reuse_enabled {
+            self.current_parents.extend(children.iter().map(|id| id.0));
+        }
+        match context {
+            Some(NodeContext::Intrinsic(size)) => {
+                self.frame_stats.intrinsic_nodes += 1;
+                if matches!(self.taffy.get_node_context(node), Some(NodeContext::Intrinsic(previous)) if *previous == size)
+                {
+                    self.frame_stats.intrinsic_reused += 1;
+                } else {
+                    self.taffy
+                        .set_node_context(node, Some(NodeContext::Intrinsic(size)))
+                        .expect(EXPECT_MESSAGE);
+                }
+                if !self.reuse_enabled {
+                    self.measured_nodes.push(node);
+                }
+            }
+            Some(context @ NodeContext::Callback(_)) => {
+                // Arbitrary callbacks may initialize frame-local paint state.
+                // Replace/invalidate even when the prior size happened to match.
+                self.taffy
+                    .set_node_context(node, Some(context))
+                    .expect(EXPECT_MESSAGE);
+                self.measured_nodes.push(node);
+                self.frame_stats.measured_nodes += 1;
+            }
+            None => {
+                // Allocation slots are not identities: an intrinsic text leaf
+                // can become an ordinary leaf or parent in this frame.
+                if self.reuse_enabled && self.taffy.get_node_context(node).is_some() {
+                    self.taffy
+                        .set_node_context(node, None)
+                        .expect(EXPECT_MESSAGE);
+                }
+            }
+        }
+        node.into()
     }
 
     pub fn request_layout(
@@ -66,20 +269,7 @@ impl TaffyLayoutEngine {
         scale_factor: f32,
         children: &[LayoutId],
     ) -> LayoutId {
-        let taffy_style = style.to_taffy(rem_size, scale_factor);
-
-        if children.is_empty() {
-            self.taffy
-                .new_leaf(taffy_style)
-                .expect(EXPECT_MESSAGE)
-                .into()
-        } else {
-            self.taffy
-                // This is safe because LayoutId is repr(transparent) to taffy::tree::NodeId.
-                .new_with_children(taffy_style, LayoutId::to_taffy_slice(children))
-                .expect(EXPECT_MESSAGE)
-                .into()
-        }
+        self.request_node(style.to_taffy(rem_size, scale_factor), children, None)
     }
 
     pub fn request_measured_layout(
@@ -95,15 +285,32 @@ impl TaffyLayoutEngine {
         ) -> Size<Pixels>
         + 'static,
     ) -> LayoutId {
-        let taffy_style = style.to_taffy(rem_size, scale_factor);
         let measure = Box::new(measure) as Box<MeasureFn>;
         #[cfg(feature = "stacker")]
         let measure = StackSafe::new(measure);
+        self.request_node(
+            style.to_taffy(rem_size, scale_factor),
+            &[],
+            Some(NodeContext::Callback(measure)),
+        )
+    }
 
-        self.taffy
-            .new_leaf_with_context(taffy_style, NodeContext { measure })
-            .expect(EXPECT_MESSAGE)
-            .into()
+    /// A pure, constraint-independent leaf measurement. Unlike explicit CSS
+    /// dimensions this preserves Taffy's intrinsic/flex sizing semantics.
+    pub fn request_intrinsic_layout(
+        &mut self,
+        style: Style,
+        rem_size: Pixels,
+        scale_factor: f32,
+        intrinsic_size: Size<Pixels>,
+    ) -> LayoutId {
+        self.request_node(
+            style.to_taffy(rem_size, scale_factor),
+            &[],
+            Some(NodeContext::Intrinsic(
+                snap_measured_size_to_device_pixels(intrinsic_size, scale_factor).into(),
+            )),
+        )
     }
 
     /// Treats any `auto` dimension of the given node's style as filling `size`.
@@ -202,6 +409,16 @@ impl TaffyLayoutEngine {
         // }
         //
 
+        // An allocation that used to be a child may now be an independent
+        // root (tooltip, cached view miss, or a custom element's measurement).
+        // Only an edge installed this frame is allowed to affect its origin.
+        if self.reuse_enabled
+            && !self.current_parents.contains(&id.0)
+            && let Some(parent) = self.taffy.parent(id.0)
+        {
+            self.taffy.remove_child(parent, id.0).expect(EXPECT_MESSAGE);
+        }
+
         if !self.computed_layouts.insert(id) {
             let stack = &mut self.layout_bounds_scratch_space;
             stack.push(id);
@@ -232,14 +449,18 @@ impl TaffyLayoutEngine {
             transform(available_space.height),
         );
 
+        let measurement_calls = &mut self.frame_stats.measurement_calls;
         self.taffy
             .compute_layout_with_measure(
                 id.into(),
                 available_space.into(),
                 |known_dimensions, available_space, _id, node_context, _style| {
-                    let Some(node_context) = node_context else {
-                        return taffy::geometry::Size::default();
+                    let measure = match node_context {
+                        Some(NodeContext::Intrinsic(size)) => return *size,
+                        Some(NodeContext::Callback(measure)) => measure,
+                        None => return taffy::geometry::Size::default(),
                     };
+                    *measurement_calls += 1;
 
                     let known_dimensions = Size {
                         width: known_dimensions.width.map(|e| Pixels(e / scale_factor)),
@@ -260,7 +481,7 @@ impl TaffyLayoutEngine {
                     );
 
                     let measured_size: Size<Pixels> =
-                        (node_context.measure)(known_dimensions, available_space, window, cx);
+                        (measure)(known_dimensions, available_space, window, cx);
                     snap_measured_size_to_device_pixels(measured_size, scale_factor).into()
                 },
             )

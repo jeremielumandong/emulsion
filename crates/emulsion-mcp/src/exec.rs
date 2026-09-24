@@ -3769,6 +3769,23 @@ pub fn history_json(editor: &Editor) -> Value {
     })
 }
 
+fn describe_source_geometry(o: &mut Map<String, Value>, w: u32, h: u32, p: &Placement) {
+    let bounds = p.doc_bounds(w, h);
+    o.insert("source_size".into(), json!({ "width": w, "height": h }));
+    o.insert(
+        "placement".into(),
+        json!({
+            "x": p.x, "y": p.y, "scale": p.scale_x.abs() * 100.0,
+            "scale_x": p.scale_x, "scale_y": p.scale_y,
+            "rotation": p.rotation, "flip_x": p.flip_x, "flip_y": p.flip_y,
+        }),
+    );
+    o.insert(
+        "source_bounds".into(),
+        json!({ "x": bounds.x, "y": bounds.y, "width": bounds.w, "height": bounds.h }),
+    );
+}
+
 pub fn describe(editor: &Editor) -> Value {
     let doc = &editor.doc;
     let mut rows = Vec::new();
@@ -3838,17 +3855,14 @@ pub fn describe(editor: &Editor) -> Value {
                 }
                 NodeKind::Raster { raster, placement } => {
                     o.insert("pixels".into(), json!(format!("{}×{}", raster.width(), raster.height())));
-                    o.insert(
-                        "placement".into(),
-                        json!({ "x": placement.x, "y": placement.y, "scale": placement.scale_x.abs() * 100.0, "rotation": placement.rotation }),
-                    );
+                    describe_source_geometry(o, raster.width(), raster.height(), placement);
                 }
                 NodeKind::Fill { rgba } => {
                     o.insert("color".into(), json!(format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])));
                 }
                 NodeKind::Smart { source, filters, filter_styles, placement, .. } => {
                     o.insert("pixels".into(), json!(format!("{}×{}", source.width(), source.height())));
-                    o.insert("placement".into(), json!({ "x": placement.x, "y": placement.y, "scale": placement.scale_x.abs() * 100.0, "rotation": placement.rotation }));
+                    describe_source_geometry(o, source.width(), source.height(), placement);
                     let fs: Vec<Value> = filters
                         .iter()
                         .enumerate()
@@ -3907,6 +3921,7 @@ pub fn describe(editor: &Editor) -> Value {
         "looks_like": looks_like,
         "selection": selection,
         "rows": "row 1 is the top of the stack; depth > 0 means inside the group listed above it",
+        "geometry": "source_size is in source pixels; placement x/y are document pixels, scale_x/scale_y are signed factors (1 = 100%), scale is legacy absolute x percent, rotation is clockwise degrees, flip_x/flip_y are additional source flips. source_bounds is the axis-aligned source rectangle in document pixels, rounded outward; it ignores alpha, masks, filters and effects, and is not clipped to the canvas",
         "nodes": nodes,
         "recent_history": history,
     })
@@ -4818,6 +4833,83 @@ mod tests {
         assert_eq!(v["nodes"][0]["name"], "top");
         assert_eq!(v["nodes"][0]["row"], 1);
         assert_eq!(v["nodes"][2]["name"], "bottom");
+    }
+
+    #[test]
+    fn describe_document_preserves_transformed_source_geometry_without_edits() {
+        let source = Arc::new(Raster::solid(8, 4, [0.0; 4]));
+        let raster_placement = Placement {
+            x: 0.25,
+            y: 0.5,
+            scale_x: -2.0,
+            scale_y: 0.5,
+            rotation: 90.0,
+            flip_x: true,
+            flip_y: false,
+        };
+        let smart_placement = Placement {
+            x: 30.25,
+            y: 20.5,
+            scale_x: 0.5,
+            scale_y: -3.0,
+            rotation: 90.0,
+            flip_x: false,
+            flip_y: true,
+        };
+        let mut doc = Document::new(100, 80);
+        doc.nodes.push(Node::raster(
+            1,
+            "Transparent raster",
+            source.clone(),
+            raster_placement,
+        ));
+        doc.nodes.push(Node::smart(
+            2,
+            "Expanded smart cache",
+            source,
+            vec![emulsion_filters::Filter::GaussianBlur { radius: 2.0 }],
+            smart_placement,
+        ));
+        let NodeKind::Smart { cache, offset, .. } = &doc.node(2).unwrap().kind else {
+            panic!("smart fixture");
+        };
+        assert!(cache.width() > 8 && cache.height() > 4 && offset.0 < 0);
+        let mut e = Editor::new(doc, None);
+        let before = e.doc.clone();
+        let history = e.history.len();
+        let uncommitted = e.uncommitted();
+        let result = execute(&mut e, "describe_document", &json!({}));
+        assert!(!result.is_error, "{}", text(&result));
+        let description: Value = serde_json::from_str(&text(&result)).unwrap();
+        let nodes = description["nodes"].as_array().unwrap();
+        for (id, placement, bounds) in [
+            (
+                1,
+                raster_placement,
+                json!({ "x": -9, "y": -7, "width": 3, "height": 17 }),
+            ),
+            (
+                2,
+                smart_placement,
+                json!({ "x": 26, "y": 12, "width": 13, "height": 5 }),
+            ),
+        ] {
+            let node = nodes.iter().find(|n| n["id"] == id).unwrap();
+            assert_eq!(node["pixels"], "8×4");
+            assert_eq!(node["source_size"], json!({ "width": 8, "height": 4 }));
+            assert_eq!(node["placement"]["x"], placement.x);
+            assert_eq!(node["placement"]["y"], placement.y);
+            assert_eq!(node["placement"]["scale"], placement.scale_x.abs() * 100.0);
+            assert_eq!(node["placement"]["scale_x"], placement.scale_x);
+            assert_eq!(node["placement"]["scale_y"], placement.scale_y);
+            assert_eq!(node["placement"]["rotation"], placement.rotation);
+            assert_eq!(node["placement"]["flip_x"], placement.flip_x);
+            assert_eq!(node["placement"]["flip_y"], placement.flip_y);
+            assert_eq!(node["source_bounds"], bounds);
+        }
+        assert_eq!(e.doc, before);
+        assert_eq!(e.history.len(), history);
+        assert_eq!(e.uncommitted(), uncommitted);
     }
 
     #[test]

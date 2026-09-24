@@ -21,6 +21,7 @@ mod preview;
 pub(crate) mod raw_fixture;
 pub mod raw_preview;
 mod raw_tools;
+pub mod recovery;
 pub mod reference;
 pub mod relay;
 mod review;

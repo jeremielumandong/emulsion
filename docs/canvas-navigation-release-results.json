@@ -1,0 +1,265 @@
+{
+  "metadata": {
+    "sha256": "1f0983ef495112b5c0264f89459a26f226bc1e7d143f46b046c93f27340127bd",
+    "started_utc": "2026-09-24T00:29:12.648964+00:00",
+    "cpu": "AMD Ryzen 7 8700G",
+    "logical_processors": 16,
+    "profile": "release",
+    "samples": 50,
+    "warmup_seconds": 2,
+    "measurement_seconds": 5,
+    "layers": 64,
+    "document_size": [
+      256,
+      192
+    ],
+    "gpu_submission": false,
+    "svg_assets": "gpui-kit default bundle",
+    "native_text": true,
+    "os": "Windows 10.0.26200 x86_64",
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "source_revision": "b30c5784d700442f39c6d6b18942626505ad5f8b",
+    "source_dirty": true,
+    "release_lto": "thin",
+    "release_codegen_units": 1,
+    "finished_utc": "2026-09-24T00:34:56.815652+00:00",
+    "concurrent_build_app_or_ui_test_observations": [],
+    "fixture": "Actual EditorView inside component Root; warm 256x192 raster document with 64 layers; no outer Workspace shell",
+    "setup": "Targeted pan endpoints warmed until two consecutive round trips reuse sidebar; maximum eight trips; normal services disabled only in marked benchmark contexts",
+    "legacy_comparison": "Both modes use the current drag handler; legacy_owner additionally notifies the editor owner, reproducing sidebar invalidation. This includes one extra canvas notification compared with the historical implementation."
+  },
+  "results": [
+    {
+      "order": "legacy-first",
+      "chrome": "compact",
+      "layout": "cold",
+      "notification": "legacy_owner",
+      "estimator": "slope",
+      "estimate_ms": 2.4115749120559116,
+      "ci95_lower_ms": 2.3884140041571396,
+      "ci95_upper_ms": 2.435136092629294
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "compact",
+      "layout": "cold",
+      "notification": "targeted",
+      "estimator": "slope",
+      "estimate_ms": 1.7269447509221512,
+      "ci95_lower_ms": 1.714029269539073,
+      "ci95_upper_ms": 1.7417781250998283
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "compact",
+      "layout": "retained",
+      "notification": "legacy_owner",
+      "estimator": "slope",
+      "estimate_ms": 2.32653565987187,
+      "ci95_lower_ms": 2.308261183774642,
+      "ci95_upper_ms": 2.3454660714013706
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "compact",
+      "layout": "retained",
+      "notification": "targeted",
+      "estimator": "slope",
+      "estimate_ms": 1.7169638485730927,
+      "ci95_lower_ms": 1.7003257367662128,
+      "ci95_upper_ms": 1.737005167915626
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "roomy",
+      "layout": "cold",
+      "notification": "legacy_owner",
+      "estimator": "slope",
+      "estimate_ms": 3.066038542807222,
+      "ci95_lower_ms": 3.0435118346088634,
+      "ci95_upper_ms": 3.092076854743768
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "roomy",
+      "layout": "cold",
+      "notification": "targeted",
+      "estimator": "slope",
+      "estimate_ms": 1.777674834401087,
+      "ci95_lower_ms": 1.7628108703564929,
+      "ci95_upper_ms": 1.7947038002173779
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "roomy",
+      "layout": "retained",
+      "notification": "legacy_owner",
+      "estimator": "slope",
+      "estimate_ms": 3.0030544554455445,
+      "ci95_lower_ms": 2.984722440414052,
+      "ci95_upper_ms": 3.0231676942431096
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "roomy",
+      "layout": "retained",
+      "notification": "targeted",
+      "estimator": "slope",
+      "estimate_ms": 1.7707405777518928,
+      "ci95_lower_ms": 1.7169988680710853,
+      "ci95_upper_ms": 1.8414337529522884
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "compact",
+      "layout": "cold",
+      "notification": "legacy_owner",
+      "estimator": "slope",
+      "estimate_ms": 2.2103157845078627,
+      "ci95_lower_ms": 2.1955775646246583,
+      "ci95_upper_ms": 2.2307083084120136
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "compact",
+      "layout": "cold",
+      "notification": "targeted",
+      "estimator": "slope",
+      "estimate_ms": 1.5988276412347118,
+      "ci95_lower_ms": 1.5883859211749392,
+      "ci95_upper_ms": 1.61612959340688
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "compact",
+      "layout": "retained",
+      "notification": "legacy_owner",
+      "estimator": "slope",
+      "estimate_ms": 2.1725748992428655,
+      "ci95_lower_ms": 2.1450596955438694,
+      "ci95_upper_ms": 2.2139196083793724
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "compact",
+      "layout": "retained",
+      "notification": "targeted",
+      "estimator": "slope",
+      "estimate_ms": 1.693504987769365,
+      "ci95_lower_ms": 1.676758827260539,
+      "ci95_upper_ms": 1.7176205347394218
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "roomy",
+      "layout": "cold",
+      "notification": "legacy_owner",
+      "estimator": "slope",
+      "estimate_ms": 3.065941435061153,
+      "ci95_lower_ms": 3.0437537519039655,
+      "ci95_upper_ms": 3.0930472600587575
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "roomy",
+      "layout": "cold",
+      "notification": "targeted",
+      "estimator": "slope",
+      "estimate_ms": 1.7888182255872647,
+      "ci95_lower_ms": 1.763172054471525,
+      "ci95_upper_ms": 1.8261037188767932
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "roomy",
+      "layout": "retained",
+      "notification": "legacy_owner",
+      "estimator": "slope",
+      "estimate_ms": 2.9479558520675595,
+      "ci95_lower_ms": 2.9323972038692405,
+      "ci95_upper_ms": 2.966389298739221
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "roomy",
+      "layout": "retained",
+      "notification": "targeted",
+      "estimator": "slope",
+      "estimate_ms": 1.7148534498155696,
+      "ci95_lower_ms": 1.6999463401880388,
+      "ci95_upper_ms": 1.7323827813327104
+    }
+  ],
+  "notification_comparisons": [
+    {
+      "order": "legacy-first",
+      "chrome": "roomy",
+      "layout": "cold",
+      "targeted_duration_change_percent": -42.02046681469722
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "roomy",
+      "layout": "retained",
+      "targeted_duration_change_percent": -41.03534904134201
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "compact",
+      "layout": "cold",
+      "targeted_duration_change_percent": -28.389338341146562
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "compact",
+      "layout": "retained",
+      "targeted_duration_change_percent": -26.200836798364325
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "roomy",
+      "layout": "cold",
+      "targeted_duration_change_percent": -41.6551730202379
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "roomy",
+      "layout": "retained",
+      "targeted_duration_change_percent": -41.82906610989947
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "compact",
+      "layout": "cold",
+      "targeted_duration_change_percent": -27.66519370485795
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "compact",
+      "layout": "retained",
+      "targeted_duration_change_percent": -22.05078921055631
+    }
+  ],
+  "retained_comparisons": [
+    {
+      "order": "legacy-first",
+      "chrome": "roomy",
+      "retained_duration_change_percent": -0.39007452403581055
+    },
+    {
+      "order": "legacy-first",
+      "chrome": "compact",
+      "retained_duration_change_percent": -0.5779514569721367
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "roomy",
+      "retained_duration_change_percent": -4.134840237744819
+    },
+    {
+      "order": "targeted-first",
+      "chrome": "compact",
+      "retained_duration_change_percent": 5.921673111776937
+    }
+  ]
+}

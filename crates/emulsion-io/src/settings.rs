@@ -130,6 +130,8 @@ pub struct Settings {
     /// Compact editor header and movable canvas toolbars, with native
     /// window controls retained in the header.
     pub compact_chrome: bool,
+    /// Opt into experimental reuse of unchanged UI layout between frames.
+    pub experimental_layout_reuse: bool,
     /// Settings migration marker for the compact single-row editor header.
     /// Version zero is the legacy layout preference written before compact
     /// became the primary editor design.
@@ -204,6 +206,7 @@ impl Default for Settings {
             follow_omarchy: false,
             approve_all: false,
             compact_chrome: true,
+            experimental_layout_reuse: false,
             compact_chrome_revision: 1,
             layers_height: 400.0,
             show_drawing: true,
@@ -420,6 +423,29 @@ mod tests {
         crate::save_config(&path, &deliberately_roomy).unwrap();
         assert!(!Settings::load_from(&path).compact_chrome);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn experimental_layout_reuse_defaults_off_for_new_and_legacy_settings() {
+        assert!(!Settings::default().experimental_layout_reuse);
+        for json in ["{}", r#"{"compact_chrome":false,"draw_mode":true}"#] {
+            let settings: Settings = serde_json::from_str(json).unwrap();
+            assert!(!settings.experimental_layout_reuse);
+        }
+    }
+
+    #[test]
+    fn experimental_layout_reuse_round_trips_both_choices() {
+        for enabled in [false, true] {
+            let settings = Settings {
+                experimental_layout_reuse: enabled,
+                ..Settings::default()
+            };
+            let json = serde_json::to_value(&settings).unwrap();
+            assert_eq!(json["experimental_layout_reuse"], enabled);
+            let restored: Settings = serde_json::from_value(json).unwrap();
+            assert_eq!(restored, settings);
+        }
     }
 
     #[test]

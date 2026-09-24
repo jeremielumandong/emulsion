@@ -21,7 +21,7 @@ For the chosen row, translate the direction into a short working contract: shape
 | Geometric abstraction, hard-edge, colour-field | Editable flat shapes or broad colour areas, deliberate intervals and edge treatment. | Are spacing and palette relationships intentional without invented demands for texture? |
 | Minimalist, reductive, monochrome | Few shapes/marks and generous negative space; keep named forms editable. | Does the smallest useful set of marks meet the brief? Avoid adding detail to fill space. |
 | Maximalist, ornamental, psychedelic | Establish hierarchy before repeated motifs, dense colour or optical rhythms. | Does the requested density remain readable at delivery size? |
-| Manga, anime, manhwa, manhua | Start with the manga technique when appropriate; choose reference-specific proportions, expression, ink hierarchy or colour/cel shading. These labels are not interchangeable recipes. | Preserve the requested character design, panel language and level of stylization. |
+| Manga, anime, manhwa, manhua | Use the manga construction guidance with the requested medium: pencil, brush ink, screentone, marker, watercolour, cel colour or paint. Select reference-specific proportions, expression and mark hierarchy; these labels are not interchangeable recipes or a mandate to use a pen. | Preserve character design and panel language; do the actual marks express the requested medium and level of stylization? |
 | Western comics, superhero, bande dessinée, graphic novel | Select gesture, contour, blacks, hatching, flat colour or painterly treatment from the brief. | Are action, panel readability and character features clear at reading size? |
 | Ligne claire, clean-line, cel-shaded | Controlled contour and separated flat colour; keep uniform line weight when intentional. | Are overlaps legible without imposing painterly gradients or heavier contours? |
 | Cartoon, caricature, chibi, kawaii | Choose an explicit exaggeration hierarchy; preserve identity through key shapes. | Are deliberate proportions retained and expression readable? Do not normalize anatomy automatically. |
@@ -57,6 +57,7 @@ Worked hybrid mark study — geometric/cubist shapes with transparent watercolou
 
 ```json
 [
+  {"name":"list_brushes","arguments":{"query":"Watercolour"}},
   {"name":"add_layer","arguments":{"name":"Geometric washes"}},
   {"name":"select_rect","arguments":{"x":240,"y":180,"width":150,"height":220}},
   {"name":"paint","arguments":{"node":1,"brush":"Wash","color":"#769CAF","settings":{"size":120,"opacity":0.3,"flow":0.2,"wetness":0},"strokes":[{"points":[[310,210,0.8],[310,370,0.8]]}]}},

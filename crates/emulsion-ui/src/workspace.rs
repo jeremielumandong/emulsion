@@ -95,6 +95,8 @@ impl Workspace {
     }
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let retained_layout = crate::app_state::initialize_layout_reuse(cx);
+        window.set_layout_reuse_enabled(retained_layout);
         // Imported brush tips and grains register into a shared registry;
         // decoding them off the UI thread keeps the first frame quick.
         std::thread::Builder::new()

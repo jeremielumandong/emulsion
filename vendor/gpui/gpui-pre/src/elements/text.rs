@@ -644,6 +644,39 @@ impl TextLayout {
         } else {
             vec![text_style.to_run(text.len())]
         };
+        // Only this form has a size independent of Taffy's constraint probes.
+        // Hydrate fresh paint data every frame, including text/color/font changes;
+        // Taffy may retain the numeric intrinsic size without retaining any Rc,
+        // glyph decorations, bounds or callbacks from the old element.
+        if window.can_reuse_intrinsic_text_layout()
+            && text_style.white_space == WhiteSpace::Nowrap
+            && text_style.text_overflow.is_none()
+            && text_style.line_clamp.is_none()
+        {
+            let len = text.len();
+            let lines = window
+                .text_system()
+                .shape_text(text, font_size, &runs, None, None)
+                .log_err();
+            let len = if lines.is_some() { len } else { 0 };
+            let lines = lines.unwrap_or_default();
+            let mut size = Size::<Pixels>::default();
+            for line in &lines {
+                let line_size = line.size(line_height);
+                size.height += line_size.height;
+                size.width = size.width.max(line_size.width).ceil();
+            }
+            self.0.borrow_mut().replace(TextLayoutInner {
+                lines,
+                len,
+                line_height,
+                wrap_width: None,
+                truncate_width: None,
+                size: Some(size),
+                bounds: None,
+            });
+            return window.request_intrinsic_layout(size);
+        }
         window.request_measured_layout(Default::default(), {
             let element_state = self.clone();
 

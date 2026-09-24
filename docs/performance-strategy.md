@@ -7,7 +7,7 @@ in memory for every open tab. Give only the visible editor presentation resource
 Inactive documents still need their source data; this is not disk hibernation and
 cannot make twenty independent documents cost the same memory as one.
 
-Implemented in this change:
+Implemented:
 
 - Route tab and Home/Settings/Batch/About navigation through explicit visibility
   transitions. Closing a tab also releases its presentation resources.
@@ -35,6 +35,63 @@ excluding crisp screen images, GPU storage, allocation overhead, and source data
 This is a capacity calculation, not a measured saving or strict cache maximum:
 visible tiles can exceed the eviction target. CPU allocators and GPU atlases may
 retain freed capacity, so process working set need not fall immediately.
+
+## Live experimental layout setting
+
+**Settings > Experimental > Reuse interface layout** enables or disables retained
+layout immediately for all open windows and saves the preference. The default is
+off. Switching resets framework layout caches and refreshes windows, without
+reopening documents or resetting their undo history. New windows inherit the
+session's effective choice.
+
+`EMULSION_RETAINED_LAYOUT=0`/`1` remains a startup override for comparisons and
+troubleshooting. It is read once when the first workspace opens, so it cannot
+prevent live switching. It does not overwrite the saved preference unless the
+user changes the switch. Removing the variable restores the saved choice at the
+next launch. A Settings note explains when a launch override is present.
+
+Validation: the full UI suite passed 454 tests with each startup override (`0`
+and `1`), with one existing ignored test and the known stale landing-image
+assertion excluded (`tests::splash_dismisses_and_the_landing_image_opens_for_editing`).
+New regressions cover pointer/keyboard switching, persisted choice, existing and
+new windows, and document/undo preservation. Two settings compatibility tests,
+the normal application check, UI clippy, and the release build also passed;
+existing unrelated lifetime and Windows backend unused-import warnings remain.
+Logs: `target/performance-settings-{suite-0,suite-1,persistence,check,clippy,release-build}.log`.
+
+## Canvas navigation invalidation
+
+Wheel pan/zoom, hand-tool pan, canvas rotation, and pinch now notify the canvas
+view instead of the editor owner. This keeps the cached Layers/Properties sibling
+reusable during navigation. Visible Info and Navigator panels still receive a
+sidebar notification because their values depend on the current viewport.
+Manually or automatically collapsed panels do not redraw. Uncached ancestors
+continue updating zoom/rotation controls.
+
+The `editor_navigation` benchmark exercises the actual editor pan handler with
+64 in-memory raster layers, both chrome layouts, bundled icons, native text, and
+warmed canvas tiles. It compares targeted notifications with the former owner
+notification in the same binary, with cold and retained layout. Rendering counts
+and the resulting view transform are asserted. GPU presentation is excluded. [Release measurements](canvas-navigation-release-results.md)
+show 41-42% less CPU-side pan-update time in roomy chrome and 22-28% less in compact
+from targeted notifications. Additional layout-reuse gains were mixed, so it
+remains opt-in.
+
+```powershell
+cargo bench -p emulsion-ui --features layout-bench --bench editor_navigation
+```
+
+The fixture isolates its application data and disables tablet hooks, autosave,
+and selection timers. Those services retain their normal behavior outside the
+benchmark. It is a controlled UI workload, not a measurement of idle process CPU
+or arbitrary large-image rasterization.
+
+Validation: all 12 canvas invalidation regressions passed, including five new
+navigation tests covering real wheel/pinch/drag events, live zoom/rotation labels,
+painted Navigator geometry, and manual/automatic sidebar collapse. The complete
+UI suite passed 450 tests in each layout-reuse mode, with one existing ignored
+test and one excluded stale landing-image dimensions assertion. Application and
+Clippy checks passed; the existing test lifetime warning remains.
 
 ## Measurement before more caching
 
@@ -75,14 +132,16 @@ those results with a real-window process/GPU profile.
 4. Consider optional disk suspension for very large inactive documents only after
    defining transactional persistence of unsaved pixels, history, and in-flight
    jobs. It introduces I/O and reactivation latency and is not implemented here.
-5. Pursue incremental framework layout/rendering using the benchmark suite and
-   upstream collaboration, as a separate architectural project.
+5. Evaluate the opt-in [layout reuse experiment](layout-reuse-experiment.md)
+   against the workload matrix before enabling it. Continue toward incremental
+   framework rendering with explicit dependency tracking and upstream collaboration.
 
 ## The proposed persistent element tree
 
 Stable element identities, layout reuse, and damage tracking could reduce active
-frame work more deeply. Our pinned GPUI starts drawing at the root and clears its
-Taffy layout tree for the next frame (`window.rs` and `taffy.rs`). Its explicit
+frame work more deeply. Our pinned GPUI starts drawing at the root. By default it
+clears its Taffy layout tree for the next frame (`window.rs` and `taffy.rs`); the new
+opt-in experiment retains and reconciles layout nodes between frames. Its explicit
 view cache requires compatible bounds, clip, text style, dirty state, and refresh
 state (`view.rs`). A persistent element tree must define which inputs invalidate
 layout, paint, transforms, and inherited state independently.
@@ -90,11 +149,21 @@ layout, paint, transforms, and inherited state independently.
 That work also needs correct hitboxes, focus/action dispatch, text measurement,
 scroll clipping, overlays, and removal of old elements. Merely retaining Taffy
 nodes or ignoring cache bounds checks would risk stale geometry and input.
+The first framework step now retains layout allocations and reconciles styles and
+children, with fresh opaque measurement callbacks and bounds each frame. Eligible
+non-wrapping text now refreshes its glyph/paint state separately and retains only
+its numeric intrinsic size, allowing unchanged label geometry to reuse layout.
+Wrapping, truncating, clamped, and custom measurements remain conservative. Differential
+tests and same-binary benchmarks compare it with cold layout. See the
+[experiment details and validation](layout-reuse-experiment.md) and the
+[intrinsic-text release measurements](intrinsic-text-release-results.md). Element rendering,
+paint damage tracking, and stable component identities remain future work.
+
 A retained element tree can use more memory even as it reduces CPU; it does not
 replace inactive-document lifecycle management. The app-level changes here are
-useful alongside that future framework design.
+useful alongside that framework work.
 
-## Validation for this change
+## Document lifecycle validation
 
 - `cargo test -p emulsion-ui --lib inactive_tab_tests -- --nocapture`: seven
   regressions passed, including both layouts, clock-driven animation suspension,

@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
             "--out" => out = args.next().context("--out requires a directory")?.into(),
             "--help" | "-h" => {
                 println!(
-                    "playbook [--guide manga|renaissance|watercolour|media|styles|PATH] [--out DIR]"
+                    "playbook [--guide manga|renaissance|watercolour|media|styles|composition|PATH] [--out DIR]"
                 );
                 println!(
                     "Writes one PNG and editable ORA per JSON study on an 800×600 white canvas."
@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
         "watercolour" => include_str!("../src/prompts/watercolour.md").to_string(),
         "media" => include_str!("../src/prompts/media.md").to_string(),
         "styles" => include_str!("../src/prompts/styles.md").to_string(),
+        "composition" => include_str!("../src/prompts/composition.md").to_string(),
         path => std::fs::read_to_string(path).with_context(|| format!("read guide {path:?}"))?,
     };
     let studies: Vec<Vec<Call>> = text
@@ -162,6 +163,7 @@ fn offline_tool(name: &str) -> bool {
             | "get_view"
             | "critique"
             | "list_brushes"
+            | "list_fonts"
             | "describe_document"
     )
 }

@@ -7,6 +7,8 @@ use std::io::{BufRead, Write};
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 pub const SERVER_NAME: &str = "emulsion";
+/// Shared workflow bootstrap for every MCP client, including external hosts.
+pub const SERVER_INSTRUCTIONS: &str = include_str!("instructions.md");
 
 #[derive(Debug, Deserialize)]
 pub struct Request {
@@ -105,22 +107,51 @@ pub fn handle(host: &mut dyn ToolHost, req: Request) -> Option<Response> {
         "initialize" => ok(json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") }
+            "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
+            "instructions": SERVER_INSTRUCTIONS
         })),
         "ping" => ok(json!({})),
         "tools/list" => ok(json!({ "tools": host.tools() })),
         "tools/call" => {
-            let name = req
-                .params
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let args = req.params.get("arguments").cloned().unwrap_or(Value::Null);
-            let result = host.call(name, &args);
+            let result = call_tool(host, &req.params);
             ok(serde_json::to_value(result).expect("serializable"))
         }
         other => err(-32601, format!("method not found: {other}")),
     })
+}
+
+/// Reject malformed or unknown calls before they can enter the editor queue.
+fn call_tool(host: &mut dyn ToolHost, params: &Value) -> ToolResult {
+    use crate::recovery::{ErrorCode, ExecutionState, RetryPolicy, tool_error};
+    let invalid = |message| {
+        tool_error(
+            ErrorCode::InvalidRequest,
+            message,
+            ExecutionState::NotStarted,
+            RetryPolicy::CorrectRequest,
+        )
+    };
+    let Some(name) = params
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+    else {
+        return invalid("tools/call requires a nonempty string name");
+    };
+    let args = match params.get("arguments") {
+        None => json!({}),
+        Some(args) if args.is_object() => args.clone(),
+        Some(_) => return invalid("tools/call arguments must be an object"),
+    };
+    if !host.tools().iter().any(|tool| tool.name == name) {
+        return tool_error(
+            ErrorCode::UnknownTool,
+            format!("unknown tool: {name}"),
+            ExecutionState::NotStarted,
+            RetryPolicy::CorrectRequest,
+        );
+    }
+    host.call(name, &args)
 }
 
 /// Run the server over this process's stdin/stdout until EOF. When started
@@ -143,7 +174,12 @@ impl ToolHost for OfflineHost {
         crate::tools::definitions()
     }
     fn call(&mut self, _name: &str, _args: &Value) -> ToolResult {
-        ToolResult::error("Emulsion is not running. Start this server from the Emulsion app.")
+        crate::recovery::tool_error(
+            crate::recovery::ErrorCode::AppUnavailable,
+            "Emulsion is not connected. Start this server from the Emulsion app.",
+            crate::recovery::ExecutionState::NotStarted,
+            crate::recovery::RetryPolicy::Reconnect,
+        )
     }
 }
 
@@ -213,6 +249,7 @@ mod tests {
         assert_eq!(out.len(), 3, "notification must not get a reply");
         assert_eq!(out[0]["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], SERVER_NAME);
+        assert_eq!(out[0]["result"]["instructions"], SERVER_INSTRUCTIONS);
         assert_eq!(out[1]["result"]["tools"], json!([]));
         assert_eq!(out[2]["id"], 3);
     }
@@ -259,6 +296,109 @@ mod tests {
     }
 
     #[test]
+    fn relay_discovers_all_tools_and_paints_with_paged_non_pen_brush_ids() {
+        let relay = crate::relay::Relay::start().unwrap();
+        let calls = relay.calls.clone();
+        let app = std::thread::spawn(move || {
+            let mut painted = 0;
+            while let Ok(call) = calls.recv_blocking() {
+                // A fresh layer makes each returned composite a comparable swatch.
+                let mut editor =
+                    emulsion_core::Editor::new(emulsion_core::Document::new(128, 96), None);
+                let added =
+                    crate::exec::execute(&mut editor, "add_layer", &json!({"name": "Brush audit"}));
+                assert!(!added.is_error);
+                let is_paint = call.name == "paint";
+                let result = crate::exec::execute(&mut editor, &call.name, &call.arguments);
+                call.reply(result);
+                if is_paint {
+                    painted += 1;
+                    if painted == 3 {
+                        break;
+                    }
+                }
+            }
+        });
+        let mut host = crate::relay::RelayHost::new(relay.addr.to_string(), relay.token.clone());
+        let rpc = |host: &mut dyn ToolHost, method: &str, params: Value| {
+            let request = serde_json::from_value(json!({
+                "jsonrpc": "2.0", "id": 1, "method": method, "params": params
+            }))
+            .unwrap();
+            handle(host, request).unwrap().result.unwrap()
+        };
+        let listed = rpc(&mut host, "tools/list", json!({}));
+        let definitions = crate::tools::definitions();
+        assert_eq!(listed["tools"], serde_json::to_value(&definitions).unwrap());
+        for name in [
+            "list_brushes",
+            "describe_brush_library",
+            "preview_brush",
+            "edit_brush",
+            "paint",
+            "hatch",
+        ] {
+            assert!(definitions.iter().any(|tool| tool.name == name), "{name}");
+        }
+        eprintln!("MCP exposes {} tools", definitions.len());
+        let mut brushes = Vec::new();
+        let mut offset = 0;
+        loop {
+            let result = rpc(
+                &mut host,
+                "tools/call",
+                json!({
+                    "name": "list_brushes", "arguments": {"swatches": false, "offset": offset}
+                }),
+            );
+            assert_eq!(result["isError"], false, "{result}");
+            let metadata: Value =
+                serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+            brushes.extend(metadata["brushes"].as_array().unwrap().iter().cloned());
+            let Some(next) = metadata["next_offset"].as_u64() else {
+                assert_eq!(brushes.len() as u64, metadata["total"].as_u64().unwrap());
+                break;
+            };
+            assert!(next > offset, "discovery must advance");
+            offset = next;
+        }
+        let mut images = Vec::new();
+        let mut settings = Vec::new();
+        for name in ["Fude brush", "Screentone 40%", "Ink wash"] {
+            let brush = brushes.iter().find(|brush| brush["name"] == name).unwrap();
+            assert!(brush["id"].as_str().is_some_and(|id| !id.is_empty()));
+            let result = rpc(
+                &mut host,
+                "tools/call",
+                json!({
+                    "name": "paint", "arguments": {
+                        "node": 1, "brush": brush["id"], "color": "#000000",
+                        "strokes": [{"points": [[20, 48, 0.2], [64, 48, 1.0], [108, 48, 0.2]]}]
+                    }
+                }),
+            );
+            assert_eq!(result["isError"], false, "{name}: {result}");
+            let image = result["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|content| content["type"] == "image")
+                .expect("completed composite");
+            assert!(
+                !images.contains(&image["data"]),
+                "{name} rendered identically"
+            );
+            assert!(
+                !settings.contains(&brush["settings"]),
+                "{name} settings duplicated"
+            );
+            images.push(image["data"].clone());
+            settings.push(brush["settings"].clone());
+        }
+        app.join().unwrap();
+    }
+
+    #[test]
     fn unknown_method_and_tool() {
         let out = roundtrip(concat!(
             r#"{"jsonrpc":"2.0","id":1,"method":"nope"}"#,
@@ -270,5 +410,84 @@ mod tests {
         assert_eq!(out[0]["error"]["code"], -32601);
         assert_eq!(out[1]["result"]["isError"], true);
         assert_eq!(out[2]["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn invalid_tool_calls_never_reach_the_host_and_omitted_arguments_are_an_object() {
+        #[derive(Default)]
+        struct RecordingHost {
+            calls: Vec<(String, Value)>,
+        }
+        impl ToolHost for RecordingHost {
+            fn tools(&self) -> Vec<ToolDef> {
+                vec![ToolDef {
+                    name: "inspect".into(),
+                    description: "Read state".into(),
+                    input_schema: json!({"type": "object", "properties": {}}),
+                }]
+            }
+            fn call(&mut self, name: &str, args: &Value) -> ToolResult {
+                self.calls.push((name.into(), args.clone()));
+                ToolResult::text("observed")
+            }
+        }
+        let mut host = RecordingHost::default();
+        for params in [
+            Value::Null,
+            json!({}),
+            json!({"name": 7}),
+            json!({"name": " "}),
+            json!({"name": "inspect", "arguments": null}),
+            json!({"name": "inspect", "arguments": []}),
+            json!({"name": "inspect", "arguments": "{}"}),
+            json!({"name": "unknown", "arguments": {}}),
+        ] {
+            let request = serde_json::from_value(json!({
+                "jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": params
+            }))
+            .unwrap();
+            let reply = handle(&mut host, request).unwrap().result.unwrap();
+            assert_eq!(reply["isError"], true, "{params}");
+            let error: Value =
+                serde_json::from_str(reply["content"][1]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(error["execution_state"], "not_started");
+            assert_eq!(error["retry_policy"], "correct_request");
+            assert!(host.calls.is_empty());
+        }
+        assert_eq!(
+            call_tool(&mut host, &json!({"name": "inspect"})),
+            ToolResult::text("observed")
+        );
+        assert_eq!(host.calls, vec![("inspect".into(), json!({}))]);
+    }
+
+    #[test]
+    fn offline_discovery_does_not_claim_an_editor_connection() {
+        let mut host = OfflineHost;
+        assert!(!host.tools().is_empty());
+        let result = call_tool(&mut host, &json!({"name": "describe_document"}));
+        assert!(result.is_error);
+        let error: Value =
+            serde_json::from_str(result.content[1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(error["code"], "app_unavailable");
+        assert_eq!(error["execution_state"], "not_started");
+    }
+
+    #[test]
+    fn tool_errors_are_preserved_without_guessing_whether_they_changed_state() {
+        struct RefusingHost;
+        impl ToolHost for RefusingHost {
+            fn tools(&self) -> Vec<ToolDef> {
+                crate::tools::definitions()
+            }
+            fn call(&mut self, _: &str, _: &Value) -> ToolResult {
+                ToolResult::error("Skipped by the person")
+            }
+        }
+        let result = call_tool(
+            &mut RefusingHost,
+            &json!({"name": "paint", "arguments": {}}),
+        );
+        assert_eq!(result, ToolResult::error("Skipped by the person"));
     }
 }

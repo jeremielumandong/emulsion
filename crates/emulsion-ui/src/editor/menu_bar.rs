@@ -53,6 +53,49 @@ impl EditorView {
             .into_any_element()
     }
 
+    /// The app icon and name, first in the menu row, opening the app menu.
+    pub(super) fn app_menu(&self, p: &Palette, wide: bool, cx: &Context<Self>) -> AnyElement {
+        let editor = cx.entity().downgrade();
+        div()
+            .id("app-menu")
+            .test_support()
+            .child(
+                Button::new("app-menu-button")
+                    .small()
+                    .ghost()
+                    .accessibility_label("Emulsion")
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(img(crate::home::app_icon()).size(px(16.)).flex_none())
+                            .when(wide, |d| {
+                                d.child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(p.ink)
+                                        .child("Emulsion"),
+                                )
+                            }),
+                    )
+                    .dropdown_menu(move |menu, _, cx| {
+                        let Some(editor) = editor.upgrade() else {
+                            return menu;
+                        };
+                        let focus = editor.read(cx).canvas_focus.clone();
+                        menu.action_context(focus)
+                            .menu("About Emulsion", Box::new(ShowAbout))
+                            .separator()
+                            .menu("Settings…", Box::new(crate::actions::ShowSettings))
+                            .menu("Home", Box::new(crate::actions::ShowHome))
+                            .separator()
+                            .menu("Quit Emulsion", Box::new(Quit))
+                    }),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn file_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
         self.menu_button("file", "File", p, cx, |menu, _, _| {
             menu.menu("New…", Box::new(NewDocument))

@@ -552,6 +552,23 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
         }
     }
 
+    /// Installs application assets before creating benchmark windows.
+    ///
+    /// This lets application benchmarks include their normal icon loading and
+    /// SVG preparation instead of silently exercising missing-asset fallbacks.
+    pub fn with_assets(self, asset_source: impl crate::AssetSource) -> Self {
+        let mut app = self.app.borrow_mut();
+        assert!(
+            app.windows.is_empty(),
+            "install benchmark assets before opening windows"
+        );
+        let asset_source = Arc::new(asset_source);
+        app.asset_source = asset_source.clone();
+        app.svg_renderer = crate::SvgRenderer::new(asset_source);
+        drop(app);
+        self
+    }
+
     /// The benchmark function name that created this context.
     pub fn benchmark_name(&self) -> Option<&'static str> {
         self.benchmark_name

@@ -350,6 +350,7 @@ pub fn spec_for(
 /// Shared studio rules and a brief-selected catalogue for every provider.
 pub const SYSTEM_PROMPT: &str = concat!(
     include_str!("prompts/studio.md"),
+    include_str!("prompts/composition.md"),
     include_str!("prompts/manga.md"),
     include_str!("prompts/renaissance.md"),
     include_str!("prompts/watercolour.md"),

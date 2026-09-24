@@ -210,6 +210,8 @@ Choose a document-pixel grid and a small palette. Block readable clusters before
 
 Playbook: typographic-layout
 
+For posters, covers and social graphics, also follow the composition workflow's proportional sizing, font discovery, contrast and delivery-size checks.
+
 Keep titles and paragraphs editable. Use point text for a short title and a paragraph frame for copy. Apply mixed character formatting with Unicode character offsets only after checking the exact string. For text on a curve, create or reuse a vector path and attach the text to it; keep the source path if it remains part of the design. Check spelling, hierarchy, readable line length, path direction and clipping before delivery.
 
 Worked title study: editable type follows a curve, one word receives its own colour and spacing, and a separate paragraph remains justified in a bounded frame.
@@ -227,6 +229,8 @@ Worked title study: editable type follows a curve, one word receives its own col
 ```
 
 Playbook: collage-mixed-media
+
+Use the composition workflow's cover/contain calculation when arranging supplied pixel layers; verify both placement state and the visible crop.
 
 Arrange already available source layers and native cutout shapes before adding marks. Use masks, duplicate_node, move_node and set_transform for supplied pixel assets as appropriate; preserve source layers and respect crop/placement intent. Use draw_path for editable paper-like pieces and Dry brush for optional drawn texture. Layers: Back cutout, Front cutout, Drawn marks, with each supplied asset separately named. Check overlap and focal hierarchy, cutout boundaries/reference fidelity, then whether contrasting materials remain intentional. Do not invent unavailable assets or silently call an image-generation backend. Paper fibres, torn edges and physical adhesion are not simulated by a polygon.
 
