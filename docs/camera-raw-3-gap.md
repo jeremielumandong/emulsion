@@ -1,7 +1,7 @@
 # Camera Raw 3 reference: gap assessment and implementation
 
-Reference: Bruce Fraser, *Understanding Adobe Camera Raw 3* (2006), the user's
-`C:\Users\jerem\Downloads\phscs2ip_camraw3.pdf`, all 14 pages. This is a functional
+Reference: Bruce Fraser, *Understanding Adobe Camera Raw 3* (2006), a 14-page PDF
+(local reference, not included in the repository). This is a functional
 comparison, not a claim of Adobe rendering or file-format compatibility.
 
 | Reference capability | Previous gap | Emulsion implementation / remaining difference |

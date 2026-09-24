@@ -1,10 +1,13 @@
 # Intrinsic text release measurements - 2026-09-23
 
+*Snapshot from 2026-09-23. For current behavior see [layout-reuse-experiment.md](layout-reuse-experiment.md).*
+
 The new text specialization reduces CPU drawing duration for stable, non-wrapping
 labels by **43.7-44.0% compared with the previous geometry-only retention**, in
 both benchmark orders. Changing non-wrapping text improves by **3.3-5.5%**.
-These are synthetic release results, not an editor-wide CPU reduction. Layout
-reuse remains disabled by default.
+These are synthetic release results, not an editor-wide CPU reduction.
+Measured on 2026-09-23 comparing cold and retained layout in the same binary;
+the setting is on by default, see [layout-reuse-experiment.md](layout-reuse-experiment.md).
 
 ## What changed
 

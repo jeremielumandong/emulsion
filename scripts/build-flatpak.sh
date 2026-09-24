@@ -5,8 +5,9 @@
 # Needs: flatpak, flatpak-builder, and the freedesktop 24.08 runtime with the
 # rust-stable SDK extension (installed on first run from Flathub).
 # Optional: flatpak-cargo-generator (pip install flatpak-cargo-generator or
-# the flatpak-builder-tools checkout) to write cargo-sources.json for an
-# offline build; without it the build fetches crates over the network.
+# the flatpak-builder-tools checkout) writes cargo-sources.json for a future
+# offline (Flathub-style) build. The shipped manifest does not consume it and
+# always fetches crates over the network.
 #
 # Usage:
 #   scripts/build-flatpak.sh              # build + install --user

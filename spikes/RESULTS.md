@@ -1,5 +1,7 @@
 # Phase 0 spike results
 
+*Snapshot from 2026-09-18. For current behavior see [README.md](../README.md).*
+
 Machine: Arch Linux (kernel 7.2), Intel Iris Plus Graphics G7 (ICL GT2, Mesa, Vulkan 1.4),
 Apple T2 Mac hardware, Wayland/Hyprland. Rust 1.98. Claude Code 2.1.273 on PATH.
 

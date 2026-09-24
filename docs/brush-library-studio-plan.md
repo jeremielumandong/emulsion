@@ -1,5 +1,7 @@
 # Brush Library and Brush Studio implementation plan
 
+*Snapshot from 2026-09-22. For current behavior see [brush-workflow.md](brush-workflow.md) and [brush-mcp.md](brush-mcp.md).*
+
 Implementation update (2026-09-22): the library, Studio, expanded CPU engine, dual brushes, Windows input adapter, memories, and package/import workflows are implemented. See [usage](brush-workflow.md), [validation and remaining hardware gates](brush-validation.md), and [format boundaries](brush-import-formats.md). The audit below records the original baseline; its test-status notes are historical.
 
 Audit date: 2026-09-22. Scope: the current working tree, including the uncommitted Brush Settings sidebar and quick-controls work. This is a gap assessment and implementation plan; no application code was changed.
@@ -16,7 +18,7 @@ Studio supplies category navigation, settings, and a drawing pad that updates ex
 
 The detailed reference has 14 categories, including Preview and 3D Materials. Use that page as the inventory; the overview still contains an older reference to eleven attributes. [Brush Studio Settings](https://help.procreate.com/procreate/handbook/brushes/brush-studio-settings)
 
-The supplied [Part One — The Fundamentals PDF](<C:/Users/jerem/Downloads/part1-the-fundamentals.pdf>) is a 38-page beginner workbook made with Procreate 5.2 in July 2022 (PDF p.2). It supplies workflow acceptance cases, not brush algorithms or source assets. Page references below use PDF page numbers, not the offset printed numbers.
+The supplied *Part One — The Fundamentals* PDF (local reference, not included in the repository) is a 38-page beginner workbook made with Procreate 5.2 in July 2022 (PDF p.2). It supplies workflow acceptance cases, not brush algorithms or source assets. Page references below use PDF page numbers, not the offset printed numbers.
 
 The proposed target is comparable 2D brush workflows and expressive behavior. Reproducing Procreate's exact pixels or bundled brushes is not established by these documents. Preserve imported originals, report conversion limits, and develop Emulsion's own curated presets. Full 3D material painting and cloud synchronization are separate later projects, explicitly outside the first 2D release.
 
@@ -75,7 +77,7 @@ Migration must import every legacy preset and its texture references, retain a b
 
 ## Fabric reference: concrete reuse opportunities
 
-Reviewed the user-provided [Fabric-Brush-like-Procreate repository](https://github.com/DevGambles/Fabric-Brush-like-Procreate) through its local checkout at `C:\development\github\Fabric-Brush-like-Procreate`, commit `4ee583a0db30d419af1ad465cbc350d6ecda80db`. The source review supersedes the initial web-only access limitation. The checkout contains 32 brush modules and 23 PNGs, plus a Fabric.js demo and a modified Croquis engine. Source was inspected but not executed.
+Reviewed the user-provided [Fabric-Brush-like-Procreate repository](https://github.com/DevGambles/Fabric-Brush-like-Procreate) through a local checkout (not included in the repository), commit `4ee583a0db30d419af1ad465cbc350d6ecda80db`. The source review supersedes the initial web-only access limitation. The checkout contains 32 brush modules and 23 PNGs, plus a Fabric.js demo and a modified Croquis engine. Source was inspected but not executed.
 
 | Reference implementation | What it contributes | Application to Emulsion |
 | --- | --- | --- |

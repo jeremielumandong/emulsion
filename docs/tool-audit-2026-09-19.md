@@ -1,5 +1,7 @@
 # Common-tool audit — 2026-09-19
 
+*Snapshot from 2026-09-19. For current behavior see [tool-testing.md](tool-testing.md).*
+
 Audited revision: `750271a`. Scope: all 12 editor toolbar tools and their modes, painting input, selections/transforms, layers/masks, adjustments/filters, text, persistence/export, batch, and common keyboard workflows. This is a source and automated-behavior audit on macOS, not a hands-on comparison with installed Photoshop or Procreate.
 
 > Follow-up: the audit below records the original baseline. See [the repair plan and implementation results](tool-repair-plan.md) for the subsequent fixes and remaining manual checks, [moving artwork](artwork-movement.md) for group dragging and keyboard nudging, and [aligning artwork](artwork-alignment.md) for canvas and selection alignment added afterward.

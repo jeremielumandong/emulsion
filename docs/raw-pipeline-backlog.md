@@ -1,5 +1,7 @@
 # Multi-vendor RAW pipeline audit and backlog
 
+*Snapshot from 2026-09-22. For current behavior see [README › Developing RAW photos](../README.md#developing-raw-photos).*
+
 Status: original assessment with implementation update, 2026-09-22  
 Scope: import -> decode/develop -> edits -> preview -> save/reopen -> export
 

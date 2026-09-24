@@ -3,7 +3,8 @@
 Contributions through pull requests are welcome. For a substantial feature or
 architecture change, open an issue first to discuss the intended behavior and
 scope. For a bug, include your operating system, Emulsion version or commit,
-reproduction steps, and expected and actual results. Remove credentials and
+reproduction steps, and expected and actual results. Attach logs captured as
+described in [Logs](docs/files-and-environment.md#logs). Remove credentials and
 private images or paths from logs and screenshots.
 
 Report suspected vulnerabilities privately using the [security policy](SECURITY.md).
@@ -34,10 +35,18 @@ npm run build
 For Rust changes, run the checks used by [CI](.github/workflows/ci.yml):
 
 ```sh
+python3 scripts/check-gpui-vendor.py
+python3 scripts/test-license-staging.py
+bash scripts/test-renderer-policy.sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked -- --test-threads=1
 ```
+
+The Lavapipe compute checks and the renderer smoke run that follow in CI are
+described in [rendering support](docs/rendering.md) and
+[GPU image processing](docs/gpu-rendering.md); on macOS and Windows CI runs
+`cargo check --workspace --all-targets --locked`.
 
 UI fixtures modify process environment, so run tests serially as shown. Add or
 update regression coverage when changing behavior. See [tool testing](docs/tool-testing.md)

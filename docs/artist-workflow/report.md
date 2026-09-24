@@ -1,5 +1,7 @@
 # Adaptable artist workflow — style expansion report
 
+*Snapshot from 2026-09-19. For current behavior see [brush-workflow.md](../brush-workflow.md).*
+
 Feature engineering: **PASS in an isolated snapshot**. Shared-checkout integration attempt: **FAIL** on unrelated concurrent RAW/lens-import compilation errors. Live drawing and blind artistic comparison: **INCONCLUSIVE / unproven**. All changes made for this follow-up are uncommitted.
 
 ## Delivered

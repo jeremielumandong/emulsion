@@ -1,5 +1,7 @@
 # Tool repair plan
 
+*Snapshot from 2026-09-19. For current behavior see [tool-testing.md](tool-testing.md).*
+
 Baseline: `750271a`, findings in [the audit](tool-audit-2026-09-19.md).
 
 ## Implementation

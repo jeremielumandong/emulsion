@@ -1,7 +1,9 @@
 # Assistant composition workflow
 
-This change adapts workflow ideas from the supplied
-`C:\development\github\photoshop-uxp` checkout: inspect rendered pixels together
+*Snapshot from 2026-09-23. For current behavior see [raw-mcp.md](raw-mcp.md), [brush-mcp.md](brush-mcp.md) and [README › An assistant that works on your canvas](../README.md#an-assistant-that-works-on-your-canvas).*
+
+This report describes workflow ideas adapted from a supplied `photoshop-uxp`
+checkout (local reference, not included in the repository): inspect rendered pixels together
 with structured state, preserve editable sources, and plan typography and image
 placement deliberately. The source's `SKILL.md`,
 `references/reading-results.md`, `references/layers-and-composition.md` and

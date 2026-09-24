@@ -1,4 +1,6 @@
-# Brush implementation validation ? 2026-09-22
+# Brush implementation validation — 2026-09-22
+
+*Snapshot from 2026-09-22. For current behavior see [brush-workflow.md](brush-workflow.md) and [brush-mcp.md](brush-mcp.md).*
 
 4096 × 4096 canvas; 64 px brush; 65 timestamped pressure/tilt samples; three strokes per case. Update includes sampling and CPU compositing. No GPU or display/input latency measurement. Debug profile uses workspace optimization settings.
 

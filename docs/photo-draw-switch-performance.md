@@ -1,5 +1,7 @@
 # Photo/Draw switch pauses
 
+*Snapshot from 2026-09-23. For current behavior see [performance-strategy.md](performance-strategy.md).*
+
 The switch handler previously saved settings synchronously before restoring the
 next workspace. `app_state::update_settings` called `Settings::save`, which
 serialized JSON, called `File::sync_all`, and atomically renamed the temporary

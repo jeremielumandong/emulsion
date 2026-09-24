@@ -1,5 +1,7 @@
 # Photographer workflow recipes
 
+*Snapshot from 2026-09-20. For current behavior see [README › Developing RAW photos](../README.md#developing-raw-photos).*
+
 ## First release: capture and reuse current adjustments
 
 1. Capture a selected adjustment layer or flat adjustment group into versioned recipe data. Preserve values, order, names, visibility, opacity and blend modes. Embed LUT values so the recipe travels with its dependencies.

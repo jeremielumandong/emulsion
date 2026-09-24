@@ -1,5 +1,7 @@
 # Canvas navigation release measurements - 2026-09-23
 
+*Snapshot from 2026-09-23. For current behavior see [layout-reuse-experiment.md](layout-reuse-experiment.md).*
+
 Targeted navigation notifications reduce CPU-side pan-update duration by
 **41-42% in the roomy editor and 22-28% in compact** across both release benchmark
 orders and layout modes. This application optimization is enabled normally.

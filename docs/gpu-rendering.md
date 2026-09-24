@@ -70,6 +70,7 @@ Set before starting Emulsion:
 | `EMULSION_GPU=force` | Prefer available hardware compute for supported compositions, filters, and screen sampling, regardless of measured cost |
 | `EMULSION_GPU=software` | Force a CPU graphics adapter for shader validation; fails compute initialization if none exists, leaving ordinary CPU algorithms available |
 | `EMULSION_GPU_BRUSHES=1` | Also enable experimental final brush composition for eligible batches of 4–32 tiles |
+| `EMULSION_GPU_BRUSHES=persistent` | Instead install the persistent GPU brush backend described in [Making GPU brushes faster](gpu-brush-performance.md); experimental |
 
 Overrides never bypass correctness checks or device/memory limits. Unsupported
 jobs use their complete CPU reference operation. A failed shader is disabled for

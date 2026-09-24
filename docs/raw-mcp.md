@@ -18,7 +18,7 @@ an existing assistant session after updating so it discovers the new catalog.
 | `list_raw_documents` | Discover open RAW tabs and their session IDs |
 | `synchronize_raw` | Apply selected settings groups to explicit destination tab IDs, with separate undo histories |
 
-Existing `export_image` and `batch_export` now also accept `bit_depth` (8/16),
+`export_image` and `batch_export` also accept `bit_depth` (8/16),
 `color_space` (`srgb`/`adobe_rgb`), `scale` (`full`/`half`/`quarter`), and `dpi`
 (1–1200). Sixteen-bit output requires PNG or TIFF. Resolution metadata requires
 PNG/JPEG/TIFF; WebP rejects DPI. Unsupported option/format combinations fail

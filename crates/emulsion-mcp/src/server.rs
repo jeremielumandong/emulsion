@@ -36,7 +36,8 @@ pub struct RpcError {
     message: String,
 }
 
-/// A tool the server exposes. Phase 2 generates these from the Command API.
+/// A tool the server exposes; definitions are hand-written in `tools` and its
+/// sibling modules.
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolDef {
     pub name: String,
@@ -68,14 +69,14 @@ impl ToolResult {
     }
 }
 
-/// The server's behaviour, separated from transport so tests and the
-/// in-process path (§5.4) share it.
+/// The server's behaviour, separated from transport so the relay, offline and
+/// test hosts share it.
 pub trait ToolHost {
     fn tools(&self) -> Vec<ToolDef>;
     fn call(&mut self, name: &str, args: &Value) -> ToolResult;
 }
 
-/// Phase 0 host: no tools yet.
+/// A host that exposes no tools, used by the server's round-trip tests.
 #[derive(Default)]
 pub struct EmptyHost;
 

@@ -5,11 +5,22 @@ records specify CC0, with exact download URLs and SHA-256 hashes. Catalog checke
 these files only and does not imply support for every mode of the same camera.
 
 Download the files into `target/raw-corpus`, retaining the manifest filenames,
-then run from the repository root in PowerShell:
+then run from the repository root. The test is `#[ignore]`d and reads
+`EMULSION_RAW_CORPUS` as given, without canonicalizing it; a relative path would
+resolve against the test's working directory (the `crates/emulsion-io` package
+folder, not the repository root), so pass an absolute path.
+
+PowerShell:
 
 ```powershell
 $env:EMULSION_RAW_CORPUS = (Resolve-Path target/raw-corpus).Path
 cargo test -p emulsion-io --test raw_corpus -- --ignored --nocapture
+```
+
+bash:
+
+```sh
+EMULSION_RAW_CORPUS="$PWD/target/raw-corpus" cargo test -p emulsion-io --test raw_corpus -- --ignored --nocapture
 ```
 
 The test verifies source hashes before decoding, exercises Bayer NEF, X-Trans

@@ -3,7 +3,8 @@
 //! * [`open`] reads the native format (OpenRaster plus an Emulsion manifest)
 //!   or imports any common image as a one-node document.
 //! * [`save`] writes the native format atomically.
-//! * [`export`] writes a flattened PNG, JPEG, WebP or TIFF.
+//! * [`export`] writes any [`export::ExportFormat`]: a flattened raster or
+//!   converter-backed format, or a layered PSD/XCF.
 //!
 //! Every reader validates fully before returning, so a bad file can never
 //! replace an open document.
