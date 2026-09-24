@@ -55,9 +55,15 @@ currently share `public/assets/hero.jpg`. Google Fonts has system fallbacks.
 
 ## Container CI
 
-[Website container](../.github/workflows/site.yml) builds and smoke-tests the
-Docker image for website pull requests, pushes to `main`, and manual workflow
-runs. Main-branch runs publish to GHCR after those checks pass:
+The main [CI workflow](../.github/workflows/ci.yml) calls the reusable
+[Website container](../.github/workflows/site.yml) workflow on every pull request
+and push to `main`. It builds the site inside Docker with Node.js 24, `npm ci`,
+and `npm run build`, then smoke-tests the running image. This job runs independently
+of the Rust checks, including for site-only changes. The container workflow also
+supports manual runs.
+
+Pushes to `main` and manual main-branch runs publish to GitHub Packages (GHCR)
+after the container checks pass; pull requests only build and test:
 
 - `ghcr.io/jeremielumandong/emulsion-site:latest`
 - `ghcr.io/jeremielumandong/emulsion-site:sha-<full-commit-sha>`

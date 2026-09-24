@@ -2,6 +2,8 @@
 
 **Undo any edit.**
 
+**Website: [emulsion.pro](https://emulsion.pro)**
+
 Paint, retouch, and explore new looks with Emulsion—an open-source desktop image
 editor for Linux, macOS, and Windows. Combine photos, brushwork, editable text,
 vector paths, masks, and colour adjustments in one workspace. Try a different
@@ -13,9 +15,19 @@ together. Connect a supported coding CLI and ask the assistant to carry out edit
 using Emulsion's MCP tools, directly in your document. Everyday drawing and editing
 work without an AI account or subscription.
 
-The application website lives in [`site/`](site/README.md) in this repository.
+The source for [emulsion.pro](https://emulsion.pro) lives in [`site/`](site/README.md) in this repository.
 Run `cd site && npm ci && npm run dev` to work on it, or `npm run build` from
 that directory to produce the static site.
+
+## Screenshots
+
+![Emulsion photo editor showing a portrait, recipe previews, and the Layers panel](docs/images/editor-recipes.png)
+
+*Photo workspace with recipe previews for exploring different looks.*
+
+![Emulsion home library showing recent images, recovered work, and file details](docs/images/home-library.png)
+
+*Home library with recent files, recovery controls, and a preview of the selected image.*
 
 ## Why Emulsion?
 
