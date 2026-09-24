@@ -241,10 +241,10 @@ the desktop (Super-drag on Omarchy) and Ctrl-Q quits. Omarchy desktops start
 compact. The assistant panel under the canvas folds to one line with its ▾ chip.
 
 Use the Light/Dark controls in the top bar to choose Emulsion's built-in palette.
-On Linux, the **◆ omarchy** control beside them takes the colours of the active
+On Linux, the **◆ Omarchy** control beside them takes the colours of the active
 Omarchy theme and follows changes while Emulsion is running (within about a
-second); while it is on it shows the theme's name. Choosing Light or Dark, or using
-the theme toggle shortcut, switches back to Emulsion's own palette. On an Omarchy
+second); while it is on it shows the theme's name. Choosing Light or Dark, or
+**View › Light or Dark Interface**, switches back to Emulsion's own palette. On an Omarchy
 desktop a first run starts in the theme's colours; an existing settings file is
 left as it is. macOS and Windows keep the built-in theme controls. The package also
 ships a symbolic icon (`emulsion-symbolic`) that themed panels and launchers can

@@ -47,11 +47,12 @@ association or a terminal all share the same folder.
 AI model files resolve their folder separately (`crates/emulsion-ai`):
 `$EMULSION_MODELS_DIR` if set and non-empty, else `$XDG_DATA_HOME/emulsion/models`
 if `XDG_DATA_HOME` is set and non-empty, else `$HOME/.local/share/emulsion/models`.
-This differs from the list above in two ways: it does not check the legacy
-Windows `%LOCALAPPDATA%` folder, and when `HOME` is unset it falls back to `.`
-(the working directory) rather than the profile folder. On Windows, where `HOME`
-is usually unset, set `EMULSION_MODELS_DIR` or `XDG_DATA_HOME` if you need the
-models folder to be in a predictable place.
+This differs from the list above in three ways: it does not check the legacy
+Windows `%LOCALAPPDATA%` folder, it accepts a relative `XDG_DATA_HOME`, and when
+`HOME` is unset it uses `./.local/share/emulsion/models` relative to the working
+directory rather than the profile folder. On Windows, where `HOME` is usually
+unset, set `EMULSION_MODELS_DIR` or `XDG_DATA_HOME` if you need the models
+folder to be in a predictable place.
 
 ## What is stored there
 
@@ -64,13 +65,13 @@ machine or another user account.
 | `settings.json.bak`, `recent.json.bak` | Written only when the original fails to parse: the unreadable bytes are kept here (owner-only) so a later save cannot silently destroy them. | Yes. | Not needed. |
 | `recent.json` | The Recent list on the Home screen (up to 24 entries: path, open time, summary). Entries whose file no longer exists are dropped on load. | Yes; the list starts empty. | Only useful if the same absolute paths exist there. |
 | `recent-imports.json` | Windows only: which older per-launch-folder recent lists have already been merged in. | Yes; the merge may repeat. | No. |
-| `keymap.toml` | Your keyboard shortcut overrides, one `[workspace]`, `[canvas]` and `[panel]` table. Created from a commented template when you open it from Settings. Read once at launch, so restart after editing. | Yes; defaults return. | Yes; it is plain TOML. macOS defaults add `cmd-` variants automatically. |
+| `keymap.toml` | Your keyboard shortcut overrides, one `[workspace]`, `[canvas]` and `[panel]` table. Created from a commented template when you open it from Settings. Read at launch; after editing, press **reload** in Settings › Shortcuts (or restart). | Yes; defaults return. | Yes; it is plain TOML. macOS defaults add `cmd-` variants automatically. |
 | `sessions/` | Scratch folders (`<pid>-<timestamp>-<serial>`) for each assistant conversation: the generated MCP configuration for the CLI, a scoped Codex home, and so on. Removed when the conversation ends; stale ones are removed at the next launch. | Yes, while Emulsion is not running. | No; contents are per-run and hold the relay token. |
 | `autosave/` | Crash-recovery copies: `<name>-<pid>-<time>-<editor>-<generation>.ora`, a full project with its history graph. Written at most once a minute while a document is modified and unsaved, and deleted after a successful save or when the work is discarded. The Home screen lists copies left by other sessions and offers Open or Discard. | Yes, but any copy still listed on Home is unsaved work. | Yes; they are ordinary `.ora` projects. |
 | `thumbs/` | Cache of file preview thumbnails, `<hash>.png`, keyed by the file's path, size, modification time, sidecar content and requested size. | Yes; it is rebuilt. | Not needed. |
 | `recipes/` | Recipes you saved or imported, `<name>.recipe.toml`. | Yes; you lose those recipes. Built-in library recipes are not stored here. | Yes; plain TOML. |
 | `luts/` | `.cube` files that the assistant fetched from a URL through the `lut_file` argument. A URL is fetched once; the file is reused after that. | Yes; a later URL import downloads again. | Yes. |
-| `brush-library.json`, `brushes/assets/`, `brushes/sources/`, `brushes/textures/` | The brush library manifest with its imported shape/grain PNGs (`assets/<sha256>.png`), the original imported brush packages (`sources/<sha256>.archive`), and textures saved by id (`textures/<id>.png`). | Deleting removes imported and edited brushes; built-in brushes remain. | Yes, but copy the manifest and the `brushes/` folder together. |
+| `brush-library.json`, `brushes/assets/`, `brushes/sources/`, `brushes/textures/` | The brush library manifest with its imported shape/grain PNGs (`assets/<sha256>.png`), the original imported brush packages (`sources/<sha256>.archive`), and textures saved by id (`textures/<id>.png`). `brush-library.lock` guards writes to the manifest. | Deleting removes imported and edited brushes; built-in brushes remain. The lock file is safe to delete while Emulsion is not running. | Yes, but copy the manifest and the `brushes/` folder together. |
 | `raw-camera-defaults/` | Explicit per-camera RAW development defaults, one `<sha256>.json` per camera make and model. | Yes; those cameras return to as-shot defaults. | Yes. |
 | `lensfun/` | The lensfun lens-profile database, downloaded from GitHub when requested from the Settings models screen or the assistant (about 5 MB of XML, CC-BY-SA 3.0). Counts as installed once at least half the files are present. | Yes; it can be downloaded again. | Yes. |
 | `models/<id>/` | Local AI model files, downloaded only when asked for. Sizes are checked after download. Location can be overridden with `EMULSION_MODELS_DIR`. | Yes; they are downloaded again on demand. | Yes, but they are large. |
@@ -134,17 +135,17 @@ Set these before starting Emulsion; they are read at launch.
 | `EMULSION_GPU` | `cpu`, `force`, `software`, unset | `cpu` disables GPU image compute; `force` prefers GPU for every supported operation regardless of measured cost; `software` does the same on a CPU adapter for shader validation. GPUI window rendering is unaffected. See [GPU image processing](gpu-rendering.md#controls). | `crates/emulsion-gpu/src/lib.rs`, `context.rs` |
 | `EMULSION_GPU_BRUSHES` | `1`, `persistent` | Opt in to experimental GPU brush composition (`1`), or the persistent GPU brush backend (`persistent`). Ignored when GPU compute is unavailable. | `crates/emulsion-gpu/src/lib.rs` |
 | `EMULSION_MODELS_DIR` | Absolute path | Folder for AI model downloads instead of `<data dir>/models`. | `crates/emulsion-ai/src/models.rs` |
-| `EMULSION_RETAINED_LAYOUT` | `1`, `0` | Launch override for the Settings "layout reuse" option: `1` forces it on, `0` off, without changing the saved preference. Any other value is ignored. | `crates/emulsion-ui/src/app_state.rs` |
+| `EMULSION_RETAINED_LAYOUT` | `1`, `0` | Launch override for the Settings "Reuse interface layout" switch: `1` forces it on, `0` off, without changing the saved preference. Any other value is ignored. | `crates/emulsion-ui/src/app_state.rs` |
 | `OPENAI_API_KEY` | Key | Used for OpenAI image generation in preference to `openai_image_key` in `settings.json`. | `crates/emulsion-io/src/settings.rs` |
 | `GEMINI_API_KEY`, `GOOGLE_API_KEY` | Key | Used for Google image generation in preference to `google_image_key`; `GEMINI_API_KEY` is checked first. | `crates/emulsion-io/src/settings.rs` |
 | `TYPESAFE_API_KEY` | Key | Used for Jev in preference to `jev_api_key` in `settings.json`. | `crates/emulsion-io/src/settings.rs` |
 | `CODEX_HOME` | Path | Where your own Codex sign-in and config are read from when the assistant builds its scoped Codex home (default `~/.codex`). | `crates/emulsion-assistant/src/launch.rs` |
 | `XDG_CONFIG_HOME` | Path | Where your own OpenCode config is read from (default `~/.config`); also the fallback root for the Omarchy theme below. | `crates/emulsion-assistant/src/launch.rs`, `crates/emulsion-ui/src/theme/omarchy.rs` |
 | `XDG_STATE_HOME` | Absolute path | Linux: first root searched for `omarchy/current/theme/colors.toml` (default `~/.local/state`), then `XDG_CONFIG_HOME`. See [Appearance](../README.md#appearance). | `crates/emulsion-ui/src/theme/omarchy.rs`, `crates/emulsion-io/src/settings.rs` |
-| `GPUI_FORCE_SOFTWARE_RENDERING` | `1` | Force the software window renderer (Linux/wgpu and Windows); fails rather than falling back to hardware. Independent of `EMULSION_GPU`. See [Rendering and virtual machines](rendering.md). | `vendor/gpui/gpui-pre-wgpu/src/wgpu_context.rs` |
+| `GPUI_FORCE_SOFTWARE_RENDERING` | `1` | Force the software window renderer (Linux/wgpu and Windows); fails rather than falling back to hardware. Independent of `EMULSION_GPU`. See [Rendering and virtual machines](rendering.md). | `vendor/gpui/gpui-pre-wgpu/src/wgpu_context.rs`, `vendor/gpui/gpui-pre-windows/src/directx_devices.rs` |
 | `EMULSION_APPIMAGE` | Absolute path | Installer and launcher wrapper: where the AppImage is installed (default `~/Applications/Emulsion.AppImage`). | `scripts/install-appimage.sh` |
 | `EMULSION_KEEP_BACKUPS` | Integer | Installer: how many `.bak-*` copies of a previous AppImage to keep (default 2). | `scripts/install-appimage.sh` |
-| `EMULSION_TOOLS_DIR` | Path | AppImage build script: cache for appimagetool and the runtime (default `~/.cache/emulsion/tools`). | `scripts/build-appimage.sh` |
+| `EMULSION_TOOLS_DIR` | Path | AppImage build script: cache for appimagetool and the runtime (default `$XDG_CACHE_HOME/emulsion/tools`, or `~/.cache/emulsion/tools` when `XDG_CACHE_HOME` is unset). | `scripts/build-appimage.sh` |
 
 `EMULSION_RELAY` and `EMULSION_TOKEN` are set by Emulsion itself in the
 environment of the `mcp-serve` child it launches (the relay address on
@@ -174,7 +175,7 @@ Test and benchmark variables, each documented where it is used:
 | `--build` | Run `scripts/build-appimage.sh` first, then install the result. |
 | `--force` | Reinstall even when the installed file is byte-identical. |
 | `--stop-running` | Stop a running installed Emulsion (and its assistant sessions) before replacing it. Without this flag the install refuses, because a running copy may hold unsaved edits. Development builds under `target/` are never stopped. |
-| `--uninstall` | Remove the AppImage, its backups, the launcher command, the desktop entry and the icons. |
+| `--uninstall` | Remove the AppImage, its backups, the icons, and the launcher command and desktop entry when this script wrote them. Refuses while the installed copy is running unless `--stop-running` is also given. |
 | `-h`, `--help` | Print the script's header comment. |
 
 The installer never touches `settings.json`, `recent.json` or anything else in
@@ -205,4 +206,6 @@ scripts/build-appimage.sh:20-26; README.md:199-200,227-248,295,320-327 (working-
 vendor/gpui/gpui-pre-wgpu/src/wgpu_context.rs:336-337; tracing-subscriber EnvFilter::DEFAULT_ENV = "RUST_LOG";
 docs/gpu-rendering.md:62-73,86-96; docs/rendering.md:36-67; docs/nikon-he.md:19-24;
 crates/emulsion-io/tests/raw_corpus.rs:10-13; crates/emulsion-io/tests/nikon_he.rs:5-8;
-.github/workflows/ci.yml:112-116,134 -->
+.github/workflows/ci.yml:112-116,134.
+Review 2026-09-24 added: crates/emulsion-ui/src/settings_screen.rs:309,552-563; crates/emulsion-io/src/brush_library.rs:135;
+scripts/build-appimage.sh:26; scripts/install-appimage.sh:134-140; vendor/gpui/gpui-pre-windows/src/directx_devices.rs:116 -->

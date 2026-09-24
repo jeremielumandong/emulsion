@@ -22,13 +22,13 @@ Find the symptom below; when a fix needs evidence, capture the log as described 
 
 ## "no decoder for .heic" (or .avif, .pdf, …) or "could not be converted"
 
-- **Likely cause:** HEIC/HEIF/HIF, AVIF, PDF/PS/EPS/AI and formats Emulsion does not decode itself are opened through a converter found on `PATH`. The error `no decoder for .<ext>; install one of <tools> and Emulsion will open it through that` names the tools it looked for; `<file> could not be converted (<tool>: <message>)` means a tool ran and failed.
+- **Likely cause:** HEIC/HEIF/HIF, AVIF, PDF/PS/EPS/AI and formats Emulsion does not decode itself are opened through a converter found on `PATH`. The error `no decoder for .<ext>; install one of <tools> and Emulsion will open it through that` (shown after the prefix `unsupported file type:`) names the tools it looked for; `<file> could not be converted (<tool>: <message>; …)` means every listed tool ran and failed.
 - **What to do:** Install the converter for the format: `heif-convert` (libheif) for HEIC/HEIF/HIF, `avifdec` (libavif) for AVIF (`heif-convert` is tried next), `pdftoppm` (poppler) for PDF/PostScript first pages, and ImageMagick's `magick` or `convert` for everything else and unknown extensions. Make sure the binary is on `PATH`. The Flatpak sandbox cannot see host converters; use the AppImage or a native build.
 - **Read more:** [README › Opening files](../README.md#opening-files).
 
 ## AVIF, HEIC, JPEG XL or PDF is missing from Export, or "no encoder for …"
 
-- **Likely cause:** these formats are written by external tools, and **more formats…** lists only those for which an installed tool is found. The error `no encoder for .<ext>; install one of <tools> to export it` names the candidates; `.<ext> could not be written (<tool>: <message>)` means a tool ran and failed.
+- **Likely cause:** these formats are written by external tools, and **more formats…** lists only those for which an installed tool is found. The error `no encoder for .<ext>; install one of <tools> to export it` (shown after the prefix `unsupported file type:`) names the candidates; `.<ext> could not be written (<tool>: <message>; …)` means every listed tool ran and failed.
 - **What to do:** Install `avifenc` for AVIF, `heif-enc` for HEIC, `cjxl` for JPEG XL, or ImageMagick's `magick`/`convert`, which is tried for all four formats and is the only writer for PDF.
 - **Read more:** [README › Exporting](../README.md#exporting).
 
@@ -52,7 +52,7 @@ Find the symptom below; when a fix needs evidence, capture the log as described 
 
 ## "RAW memory budget is in use" or a very large RAW is refused
 
-- **Likely cause:** RAW decoding shares a 128,000,000-pixel budget (`MAX_RAW_PIXELS`) across open tabs and exports. When the budget is taken, the error is `RAW memory budget is in use; wait for development/export to finish or close another RAW document`. A single sensor larger than the budget is refused with `image is <w>×<h>, larger than Emulsion supports`.
+- **Likely cause:** RAW decoding shares a 128,000,000-pixel budget (`MAX_RAW_PIXELS`) across open tabs and exports. When the budget is taken, the error is `RAW memory budget is in use; wait for development/export to finish or close another RAW document`, shown after the prefix `unsupported RAW camera or encoding:`. A single sensor larger than the budget is refused with `image is <w>×<h>, larger than Emulsion supports`.
 - **What to do:** Wait for other RAW development or export jobs to finish, or close other RAW documents, then retry. Files above the budget cannot be opened.
 - **Read more:** [README › Developing RAW photos](../README.md#developing-raw-photos).
 
@@ -76,8 +76,8 @@ Find the symptom below; when a fix needs evidence, capture the log as described 
 
 ## Omarchy theme is not applied
 
-- **Likely cause:** Emulsion (Linux only) reads `omarchy/current/theme/colors.toml` under `$XDG_STATE_HOME` (default `~/.local/state`), then under `$XDG_CONFIG_HOME` (default `~/.config`); a relative XDG value is ignored. Without a valid palette the saved built-in Light/Dark mode is used, and a failed live reload keeps the last valid palette. Choosing Light or Dark, or the theme toggle shortcut, switches back to the built-in palette.
-- **What to do:** Check that the file exists at one of those paths and parses, then turn the **◆ omarchy** control in the top bar on again.
+- **Likely cause:** Emulsion (Linux only) reads `omarchy/current/theme/colors.toml` under `$XDG_STATE_HOME` (default `~/.local/state`), falling back to `$XDG_CONFIG_HOME` (default `~/.config`) only when the state file is absent; a relative XDG value is ignored, and a state file that exists but cannot be read or parsed yields no palette. Without a valid palette the saved built-in Light/Dark mode is used, and a failed live reload keeps the last valid palette. Choosing Light or Dark, or **View › Light or Dark Interface** (the `ToggleTheme` action, which has no default shortcut), switches back to the built-in palette.
+- **What to do:** Check that the file exists at one of those paths and parses, then turn the **◆ Omarchy** control in the top bar on again.
 - **Read more:** [README › Appearance](../README.md#appearance).
 
 ## Shortcuts differ from the README
@@ -98,4 +98,5 @@ Find the symptom below; when a fix needs evidence, capture the log as described 
 - **What to do:** Start Emulsion from a terminal and read stderr, or redirect it to a file.
 - **Read more:** [files-and-environment.md#logs](files-and-environment.md#logs).
 
-<!-- Sources rechecked 2026-09-24: docs/rendering.md:3-34,63-67; docs/gpu-rendering.md:62-78,111-117; vendor/gpui/gpui-pre-wgpu/src/wgpu_context.rs:336-337; crates/emulsion-gpu/src/lib.rs:22-55; crates/emulsion-io/src/external.rs:53-70,80-123,140-147,189-240,256-290,302-353; crates/emulsion-io/src/export.rs:136-152; crates/emulsion-ui/src/workspace.rs:1126-1128,1227-1230; crates/emulsion-io/src/raw_settings.rs:201,224,241-243; crates/emulsion-io/src/raw.rs:24-35,52-58,141; crates/emulsion-io/src/lib.rs:57-62; crates/emulsion-ui/src/editor/raw_panel.rs:544,672; crates/emulsion-assistant/src/provider.rs:47-206; crates/emulsion-ui/src/settings_screen.rs:257-267,384-392,552-562; crates/emulsion-io/src/settings.rs:115,197,238-259; crates/emulsion-io/src/recent.rs:21-27; crates/emulsion-ui/src/theme/omarchy.rs:140-183; crates/emulsion-ui/src/actions.rs:500-561; crates/emulsion-app/src/main.rs:15-45; README.md:127-136,190-193,224-230,300-338,344-349,431-446 -->
+<!-- Sources rechecked 2026-09-24: docs/rendering.md:3-34,63-67; docs/gpu-rendering.md:62-78,111-117; vendor/gpui/gpui-pre-wgpu/src/wgpu_context.rs:336-337; crates/emulsion-gpu/src/lib.rs:22-55; crates/emulsion-io/src/external.rs:53-70,80-123,140-147,189-240,256-290,302-353; crates/emulsion-io/src/export.rs:136-152; crates/emulsion-ui/src/workspace.rs:1126-1128,1227-1230; crates/emulsion-io/src/raw_settings.rs:201,224,241-243; crates/emulsion-io/src/raw.rs:24-35,52-58,141; crates/emulsion-io/src/lib.rs:57-62; crates/emulsion-ui/src/editor/raw_panel.rs:544,672; crates/emulsion-assistant/src/provider.rs:47-206; crates/emulsion-ui/src/settings_screen.rs:257-267,384-392,552-562; crates/emulsion-io/src/settings.rs:115,197,238-259; crates/emulsion-io/src/recent.rs:21-27; crates/emulsion-ui/src/theme/omarchy.rs:140-183; crates/emulsion-ui/src/actions.rs:500-561; crates/emulsion-app/src/main.rs:15-45; README.md:127-136,190-193,224-230,300-338,344-349,431-446.
+Review 2026-09-24 added: crates/emulsion-io/src/lib.rs:60-62; crates/emulsion-io/src/external.rs:237-241,349-352; crates/emulsion-ui/src/theme/omarchy.rs:118-135; crates/emulsion-ui/src/workspace.rs:488,548; crates/emulsion-ui/src/editor/menu_bar.rs:171; crates/emulsion-io/src/settings.rs:270-272 -->
