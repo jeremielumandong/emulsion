@@ -487,18 +487,6 @@ impl Workspace {
                     )
                     .children(self.jev_test.clone().map(|(msg, err)| mono(msg, 10.5, if err { p.accent } else { p.ink }))),
             )
-            .child(
-                section(&p)
-                    .child(tier(5, "Layout", s.compact_chrome, if s.compact_chrome { "compact" } else { "roomy" }, &p))
-                    .child(body("Compact layout combines document controls in one bar and places movable toolbars over the canvas. Drag a toolbar grip to dock it, use Layout to restore hidden bars, and collapse the sidebar for more canvas space. Native window controls stay available.", &p))
-                    .child(
-                        chip("compact-chrome", if s.compact_chrome { "compact chrome" } else { "roomy chrome" }, s.compact_chrome, &p)
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                app_state::update_settings(cx, |s| s.compact_chrome = !s.compact_chrome);
-                                cx.refresh_windows();
-                            })),
-                    ),
-            )
             .child({
                 let eff = probe.bindings.clone();
                 let overrides = probe.overrides;
@@ -560,7 +548,7 @@ impl Workspace {
                     rows = rows.child(col);
                 }
                 section(&p)
-                    .child(tier(6, "Shortcuts", overrides > 0, if overrides > 0 { "custom" } else { "default" }, &p))
+                    .child(tier(5, "Shortcuts", overrides > 0, if overrides > 0 { "custom" } else { "default" }, &p))
                     .child(body("Every shortcut, as it works right now. To change one, open the keymap file, uncomment a line and set its keys, then reload. Bare letters work while the canvas has focus; modifier shortcuts work anywhere.", &p))
                     .child(
                         div()

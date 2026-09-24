@@ -127,8 +127,8 @@ pub struct Settings {
     pub follow_omarchy: bool,
     /// Apply every assistant change without asking, deletes and merges too.
     pub approve_all: bool,
-    /// Compact editor header and movable canvas toolbars, with native
-    /// window controls retained in the header.
+    /// Compact editor header and movable canvas toolbars. Always enabled on
+    /// load; retained for compatibility with saved settings and layout tests.
     pub compact_chrome: bool,
     /// Reuse unchanged UI layout between frames; enabled by default, with a Settings opt-out.
     pub experimental_layout_reuse: bool,
@@ -267,7 +267,7 @@ impl Settings {
         match std::fs::read(path) {
             Ok(b) => {
                 let mut settings: Self = crate::parse_config(path, &b).unwrap_or_default();
-                if settings.compact_chrome_revision == 0 {
+                if !settings.compact_chrome || settings.compact_chrome_revision == 0 {
                     settings.compact_chrome = true;
                     settings.compact_chrome_revision = 1;
                     // Best effort: the in-memory migration still fixes this
@@ -403,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_roomy_preference_migrates_once_to_the_compact_header() {
+    fn saved_roomy_preferences_always_load_as_compact() {
         let dir = std::env::temp_dir().join(format!(
             "emulsion-compact-layout-migration-{}",
             std::process::id()
@@ -421,7 +421,7 @@ mod tests {
             ..migrated
         };
         crate::save_config(&path, &deliberately_roomy).unwrap();
-        assert!(!Settings::load_from(&path).compact_chrome);
+        assert!(Settings::load_from(&path).compact_chrome);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

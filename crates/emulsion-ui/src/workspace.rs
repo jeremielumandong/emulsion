@@ -539,6 +539,27 @@ impl Workspace {
             .flex()
             .items_center()
             .gap_1()
+            .map(|controls| {
+                #[cfg(target_os = "linux")]
+                let controls = {
+                    let on = theme::following_omarchy(cx);
+                    let label = match (theme::omarchy_theme_name(), on) {
+                        (Some(name), true) => format!("◆ {name}"),
+                        _ => "◆ Omarchy".to_string(),
+                    };
+                    controls.child(
+                        Button::new("compact-theme-omarchy")
+                            .label(label)
+                            .tooltip("Follow your Omarchy theme live; choose light or dark to stop following")
+                            .xsmall()
+                            .ghost()
+                            .rounded_none()
+                            .selected(on)
+                            .on_click(|_, _, cx| theme::follow_omarchy(cx)),
+                    )
+                };
+                controls
+            })
             .child(
                 Button::new("compact-theme-light")
                     .label("☀")
@@ -2273,9 +2294,18 @@ mod compact_tests {
         });
         cx.update(|window, cx| window.press("escape", cx));
         cx.run_until_parked();
+        #[cfg(target_os = "linux")]
+        {
+            cx.update(|window, cx| window.click("compact-theme-omarchy", cx));
+            cx.run_until_parked();
+            cx.update(|_, cx| assert!(theme::following_omarchy(cx)));
+        }
         cx.update(|window, cx| window.click("compact-theme-light", cx));
         cx.run_until_parked();
-        cx.update(|_, cx| assert!(!theme::palette(cx).dark));
+        cx.update(|_, cx| {
+            assert!(!theme::palette(cx).dark);
+            assert!(!theme::following_omarchy(cx));
+        });
         cx.update(|window, cx| window.click("compact-theme-dark", cx));
         cx.run_until_parked();
         cx.update(|_, cx| assert!(theme::palette(cx).dark));
