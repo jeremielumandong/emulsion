@@ -99,6 +99,13 @@ checks, and software GPU/rendering checks on Linux, plus compilation checks on
 macOS and Windows. See [tool behavior coverage](docs/tool-testing.md) for the
 editing behaviors tested automatically.
 
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and pull request guidance.
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+Maintainers should complete the [GitHub security setup](docs/github-security-setup.md)
+before opening the repository to public contributions.
+
 ## Status
 
 Emulsion is actively developed. The editor includes painting and retouching,
