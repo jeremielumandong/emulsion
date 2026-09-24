@@ -31,6 +31,12 @@ and links it into the binary. Under LGPL §6, you may relink Emulsion against a 
 `THIRD_PARTY_CRATES.md`, and Emulsion's own source is available under MIT so a modified
 build can be produced. The LGPL text ships with release packages.
 
+The current build pins Nicolai Buchwitz's experimental Nikon HE/HE* branch at
+`0f044c2c30d78c4ed5fcede6ab4e8db893d566f6`:
+https://github.com/nbuchwitz/dnglab/tree/0f044c2c30d78c4ed5fcede6ab4e8db893d566f6/rawler.
+This is the unmodified source used by the Cargo dependency, including its
+LGPL-2.1 JPEG XS decoder. See `docs/nikon-he.md` for validation limits.
+
 ## Community recipe library
 
 The film recipes under `crates/emulsion-recipes/library/` are camera settings

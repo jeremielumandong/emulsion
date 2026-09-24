@@ -553,6 +553,39 @@ pub fn crop(doc: &mut Document, rect: IRect, rotation: f64) {
     transform_all(doc, rect.w.max(1) as u32, rect.h.max(1) as u32, to_new);
 }
 
+/// Rotate around the canvas center, then center the result in its new bounds.
+/// Using floating-point centers avoids a half-pixel shift for mixed odd/even
+/// dimensions; quarter turns swap dimensions without rounding up an extra pixel.
+pub fn rotate_image(doc: &mut Document, degrees: f64) -> Result<(), crate::CommandError> {
+    if !degrees.is_finite() {
+        return Err(crate::DocumentError::BadValue(0, "rotation").into());
+    }
+    let degrees = degrees.rem_euclid(360.0);
+    if degrees == 0.0 {
+        return Ok(());
+    }
+    let (width, height) = (f64::from(doc.width), f64::from(doc.height));
+    let angle = degrees.to_radians();
+    let (sin, cos) = angle.sin_cos();
+    let w = (width * cos.abs() + height * sin.abs() - 1e-9)
+        .ceil()
+        .max(1.0) as u32;
+    let h = (width * sin.abs() + height * cos.abs() - 1e-9)
+        .ceil()
+        .max(1.0) as u32;
+    if w > crate::document::MAX_SIDE
+        || h > crate::document::MAX_SIDE
+        || u64::from(w) * u64::from(h) > crate::document::MAX_PIXELS
+    {
+        return Err(crate::DocumentError::CanvasSize(w, h).into());
+    }
+    let to_new = DAffine2::from_translation(dvec2(f64::from(w) / 2.0, f64::from(h) / 2.0))
+        * DAffine2::from_angle(angle)
+        * DAffine2::from_translation(dvec2(-width / 2.0, -height / 2.0));
+    transform_all(doc, w, h, to_new);
+    Ok(())
+}
+
 /// Trim pixel layers that sit unrotated and unscaled on the canvas down to
 /// the part the canvas shows, mask included; returns how many changed.
 /// Layers wholly inside stay as they are; transformed and smart layers
@@ -715,6 +748,57 @@ mod trim_tests {
 #[cfg(test)]
 mod tests {
     use super::node_bounds;
+
+    #[test]
+    fn image_rotation_swaps_odd_even_canvas_without_clipping_or_resampling_source() {
+        let source = Arc::new(Raster::from_fn(3, 2, [0; 4], |x, y| {
+            [(1 + x + y * 3) as u16 * 8000, 0, 0, 65535]
+        }));
+        let mut doc = Document::new(3, 2);
+        doc.nodes.push(Node::raster(
+            1,
+            "Photo",
+            source.clone(),
+            Placement::default(),
+        ));
+        doc.selection = Some(Arc::new(emulsion_raster::Mask::from_fn(3, 2, 0, |x, y| {
+            if x == 0 && y == 0 { 255 } else { 0 }
+        })));
+        for _ in 0..4 {
+            let (w, h) = (doc.width, doc.height);
+            Command::RotateImage { degrees: 90.0 }
+                .apply(&mut doc)
+                .unwrap();
+            assert_eq!((doc.width, doc.height), (h, w));
+            assert_eq!(
+                node_bounds(&doc, 1),
+                Some(IRect::new(0, 0, h as i32, w as i32))
+            );
+            let NodeKind::Raster { raster, .. } = &doc.nodes[0].kind else {
+                panic!()
+            };
+            assert!(Arc::ptr_eq(raster, &source));
+        }
+        let output = flatten(&doc.composite_tree(), 0);
+        assert_eq!(output.to_srgba8(), source.to_srgba8());
+        assert_eq!(doc.selection.as_ref().unwrap().get(0, 0), 255);
+    }
+
+    #[test]
+    fn image_rotation_expands_arbitrary_angles_and_rejects_invalid_angles() {
+        let mut doc = Document::new(30, 20);
+        Command::RotateImage { degrees: 45.0 }
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!((doc.width, doc.height), (36, 36));
+        let before = doc.clone();
+        assert!(
+            Command::RotateImage { degrees: f64::NAN }
+                .apply(&mut doc)
+                .is_err()
+        );
+        assert_eq!(doc, before);
+    }
     use crate::command::Slot;
     use crate::{Command, Document, Node, NodeKind};
     use emulsion_raster::composite::flatten;

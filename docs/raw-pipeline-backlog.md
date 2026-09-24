@@ -7,6 +7,11 @@ Scope: import -> decode/develop -> edits -> preview -> save/reopen -> export
 
 ## Implementation update
 
+2026-09-24: a pinned rawler branch now provides [experimental Nikon HE/HE★
+decoding](nikon-he.md), verified to open and develop one local Z9 HE★ file.
+The baseline unsupported-format statements below describe released decoders;
+the experimental path is not a reference-validated support guarantee.
+
 The assessment below records the pre-implementation baseline, not the current
 behavior. The first verified slice is now implemented with the existing rawler
 0.8 decoder: content probing, recorded camera/variant metadata with explicit

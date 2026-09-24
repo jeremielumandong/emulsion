@@ -1,11 +1,7 @@
 name: Website container
 
 on:
-  push:
-    branches: [main]
-    paths: ['site/**', '.github/workflows/site.yml']
-  pull_request:
-    paths: ['site/**', '.github/workflows/site.yml']
+  workflow_call:
   workflow_dispatch:
 
 permissions:

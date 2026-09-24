@@ -283,6 +283,8 @@ and `.svgz`, JPEG XL, Targa, PNM/PAM, Windows icons, Radiance HDR, OpenEXR, DDS,
 QOI, farbfeld, and camera RAW from Sony, Canon, Nikon, Adobe DNG, Fujifilm, Olympus,
 Panasonic, Pentax and more through rawler. Camera/model/compression support varies;
 see the [tested RAW samples](crates/emulsion-io/tests/fixtures/RAW-CORPUS.md).
+Nikon HE/HE★ sensor decoding is [experimental](docs/nikon-he.md); its color and
+tone reconstruction are approximate, and the RAW panel displays a warning.
 The document raster uses 16-bit linear RGB; floating-point and RAW sources are
 converted to that representation, not retained as floating-point document pixels.
 
@@ -440,6 +442,12 @@ shows the current photo; the right dock groups **Recipe** and **Export settings*
 Open the recipe chooser to search by name or tag, and expand **Category** when
 you need a filter. Choosing a recipe closes the list. Set the format and output
 folder in the dock, then use **Export** in the top bar.
+
+Use **Fit image** and the **− / +** controls above the preview to navigate.
+Drag or scroll to pan, Ctrl/Alt/Cmd+scroll or pinch to zoom, and double-click
+to fit again. Selecting another photo resets the view; changing its recipe
+keeps your view. Zoom inspects the rendered preview (up to 1100 pixels),
+not the full-resolution export.
 
 ## Image generation
 

@@ -22,7 +22,22 @@ pub(crate) fn decoder_error(error: rawler::RawlerError) -> IoError {
             model,
             mode,
         } => IoError::UnsupportedRaw(format!("{make} {model} ({mode}): {what}")),
-        rawler::RawlerError::DecoderFailed(message) => malformed(message),
+        rawler::RawlerError::DecoderFailed(message) => {
+            // rawler 0.8 reports these known unsupported codecs as decode
+            // failures. Do not present them as evidence of a corrupt file.
+            let mode = match message.as_str() {
+                "NEF compression Some(HighEfficencyStar) is not supported" => Some("HE★"),
+                "NEF compression Some(HighEfficency) is not supported" => Some("HE"),
+                _ => None,
+            };
+            if let Some(mode) = mode {
+                IoError::UnsupportedRaw(format!(
+                    "Nikon High Efficiency ({mode}) compression is not supported by Emulsion's RAW decoder. Convert this photo to a supported DNG or a 16-bit TIFF using software that supports Nikon HE/HE★. For future photos, select Lossless compression in the camera."
+                ))
+            } else {
+                malformed(message)
+            }
+        }
     }
 }
 
@@ -31,7 +46,7 @@ pub(crate) fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
         .unwrap_or_else(|_| Err(malformed("decoder rejected malformed RAW data")))
 }
 
-// Read only a bounded number of TIFF directory entries, never pixel data.
+// Read a bounded number of TIFF entries and a two-byte RAW codec marker.
 // Camera Make alone is deliberately insufficient: exported TIFFs retain EXIF.
 #[derive(Default)]
 struct TiffProbe {
@@ -40,6 +55,8 @@ struct TiffProbe {
     orientation: Option<u8>,
     compression: Option<u32>,
     camera_tags: bool,
+    nikon_he: bool,
+    bits_per_sample: Option<u32>,
 }
 fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
     let mut result = TiffProbe::default();
@@ -82,8 +99,17 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
         let mut jpeg_length = None;
         let mut raw_ifd = false;
         let mut compression = None;
+        let mut strip_offset = None;
+        let mut bits_per_sample = None;
         for entry in entries[..count * 12].as_chunks::<12>().0 {
             let tag = u16v(entry);
+            if tag == 258 && u32v(&entry[4..]) == 1 {
+                bits_per_sample = match u16v(&entry[2..]) {
+                    3 => Some(u32::from(u16v(&entry[8..]))),
+                    4 => Some(u32v(&entry[8..])),
+                    _ => None,
+                };
+            }
             if tag == 271 || tag == 272 {
                 result.camera_tags = true;
             }
@@ -112,6 +138,9 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
                 result.orientation = u8::try_from(u16v(&entry[8..])).ok();
             }
             if u16v(&entry[2..]) == 4 && u32v(&entry[4..]) == 1 {
+                if tag == 273 {
+                    strip_offset = Some(u32v(&entry[8..]));
+                }
                 if tag == 513 {
                     jpeg_offset = Some(u32v(&entry[8..]));
                 }
@@ -140,6 +169,16 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
         }
         if raw_ifd {
             result.compression = compression;
+            if compression == Some(34713)
+                && let Some(offset) = strip_offset
+            {
+                file.seek(SeekFrom::Start(u64::from(offset)))?;
+                let mut marker = [0; 2];
+                if file.read_exact(&mut marker).is_ok() && marker == [0xff, 0x10] {
+                    result.nikon_he = true;
+                    result.bits_per_sample = bits_per_sample;
+                }
+            }
         }
         pending.push(u32v(&entries[count * 12..]));
     }
@@ -209,7 +248,7 @@ pub fn metadata(path: &Path) -> Result<emulsion_core::raw::RawMetadata> {
             format: format!("{:?}", decoder.format_hint()),
             compression: "unknown".into(),
             sensor: "unknown".into(),
-            decoder: "rawler 0.8.0".into(),
+            decoder: "rawler 0.8.0 + Nikon HE experimental (0f044c2c30d7)".into(),
             ..Default::default()
         };
         if let Some(ifd) = decoder.ifd(WellKnownIFD::Raw).map_err(decoder_error)? {
@@ -249,13 +288,21 @@ pub fn metadata(path: &Path) -> Result<emulsion_core::raw::RawMetadata> {
             let mut header = [0; 8];
             if file.read_exact(&mut header).is_ok()
                 && (header.starts_with(b"II*\0") || header.starts_with(b"MM\0*"))
-                && let Some(code) = tiff_probe(&mut file, &header)?.compression
             {
-                result.compression = match code {
-                    1 => "uncompressed".into(),
-                    34713 => "Nikon compressed (TIFF 34713; submode unverified)".into(),
-                    other => format!("TIFF compression {other}"),
-                };
+                let probe = tiff_probe(&mut file, &header)?;
+                if result.bits_per_sample == 0 {
+                    result.bits_per_sample = probe.bits_per_sample.unwrap_or(0);
+                }
+                if probe.nikon_he {
+                    result.compression = "Nikon High Efficiency (HE/HE★)".into();
+                    result.warnings.push("Experimental Nikon HE/HE★ decoding: color and tone reconstruction are approximate and have not been validated against a reference decoder for this photo.".into());
+                } else if let Some(code) = probe.compression {
+                    result.compression = match code {
+                        1 => "uncompressed".into(),
+                        34713 => "Nikon compressed (TIFF 34713; submode unverified)".into(),
+                        other => format!("TIFF compression {other}"),
+                    };
+                }
             }
         }
         if result.bits_per_sample == 0
@@ -338,6 +385,25 @@ pub fn embedded_preview(path: &Path) -> Result<Option<image::DynamicImage>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nikon_high_efficiency_is_unsupported_not_corrupt() {
+        for (variant, label) in [("HighEfficency", "HE"), ("HighEfficencyStar", "HE★")] {
+            let error = decoder_error(rawler::RawlerError::DecoderFailed(format!(
+                "NEF compression Some({variant}) is not supported"
+            )));
+            assert!(matches!(&error, IoError::UnsupportedRaw(_)));
+            let message = error.to_string();
+            assert!(message.contains(&format!("({label})")));
+            assert!(message.contains("16-bit TIFF"));
+            assert!(!message.contains("corrupt"));
+        }
+        assert!(matches!(
+            decoder_error(rawler::RawlerError::DecoderFailed("truncated data".into())),
+            IoError::MalformedRaw(_)
+        ));
+    }
+
     struct Fixture(std::path::PathBuf);
     impl Fixture {
         fn new(extension: &str, bytes: &[u8]) -> Self {
@@ -371,6 +437,27 @@ mod tests {
         for tag in [50706, 33422] {
             let fixture = Fixture::new("bin", &tiff(tag, 1));
             assert!(is_raw(&fixture.0).unwrap());
+        }
+    }
+
+    #[test]
+    fn nikon_jpeg_xs_marker_distinguishes_high_efficiency_from_lossless() {
+        for (marker, expected) in [([0xff, 0x10], true), ([0, 0], false)] {
+            let mut bytes = b"II*\0\x08\0\0\0\x03\0".to_vec();
+            for (tag, value) in [(258u16, 14u32), (259, 34713), (273, 50)] {
+                bytes.extend(tag.to_le_bytes());
+                bytes.extend(4u16.to_le_bytes());
+                bytes.extend(1u32.to_le_bytes());
+                bytes.extend(value.to_le_bytes());
+            }
+            bytes.extend(0u32.to_le_bytes());
+            bytes.extend(marker);
+            let fixture = Fixture::new("nef", &bytes);
+            let mut file = std::fs::File::open(&fixture.0).unwrap();
+            let probe = tiff_probe(&mut file, &bytes[..8]).unwrap();
+            assert_eq!(probe.nikon_he, expected);
+            assert_eq!(probe.compression, Some(34713));
+            assert_eq!(probe.bits_per_sample, expected.then_some(14));
         }
     }
     #[test]

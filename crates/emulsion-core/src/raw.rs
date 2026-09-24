@@ -16,6 +16,10 @@ pub struct DevelopParams {
     pub saturation: f32,
     /// Output ordinates at gamma-2.2 input positions 0, .25, .5, .75, 1.
     pub tone_curve: [f32; 5],
+    /// Smooth monotone cubic interpolation. Missing in legacy recipes means
+    /// piecewise linear, preserving their existing rendering.
+    #[serde(default)]
+    pub smooth_curve: bool,
     /// Camera-channel gains, normalized to green; None uses the as-shot gains.
     pub wb_override: Option<[f32; 4]>,
 }
@@ -33,12 +37,28 @@ impl Default for DevelopParams {
             contrast: 0.0,
             saturation: 0.0,
             tone_curve: Self::LINEAR_CURVE,
+            smooth_curve: true,
             wb_override: None,
         }
     }
 }
 
 impl DevelopParams {
+    /// Evaluate in gamma-2.2 curve coordinates, shared by graph and developer.
+    pub fn curve_output(&self, input: f32) -> f32 {
+        let input = input.clamp(0.0, 1.0);
+        if self.smooth_curve {
+            let points =
+                std::array::from_fn::<_, 5, _>(|i| [i as f32 * 63.75, self.tone_curve[i] * 255.0]);
+            emulsion_raster::adjust::curve_at(&points, input * 255.0) / 255.0
+        } else {
+            let position = input * 4.0;
+            let segment = (position as usize).min(3);
+            let t = position - segment as f32;
+            self.tone_curve[segment] * (1.0 - t) + self.tone_curve[segment + 1] * t
+        }
+    }
+
     pub const LINEAR_CURVE: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
     pub const MEDIUM_CONTRAST_CURVE: [f32; 5] = [0.0, 0.20, 0.5, 0.80, 1.0];
     pub const STRONG_CONTRAST_CURVE: [f32; 5] = [0.0, 0.15, 0.5, 0.85, 1.0];
@@ -170,6 +190,8 @@ mod tests {
         let legacy: DevelopParams =
             serde_json::from_str(r#"{"exposure":1.0,"temperature":0.2}"#).unwrap();
         assert_eq!(legacy.tone_curve, DevelopParams::LINEAR_CURVE);
+        assert!(!legacy.smooth_curve);
+        assert!(DevelopParams::default().smooth_curve);
         assert_eq!(legacy.wb_override, None);
         legacy.validate().unwrap();
         let params = DevelopParams {
@@ -192,6 +214,41 @@ mod tests {
         invalid = params;
         invalid.wb_override = Some([f32::NAN; 4]);
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn smooth_raw_curve_matches_adjustment_and_has_continuous_tangents() {
+        let params = DevelopParams {
+            tone_curve: DevelopParams::STRONG_CONTRAST_CURVE,
+            ..Default::default()
+        };
+        let points: [[f32; 2]; 5] =
+            std::array::from_fn(|i| [i as f32 * 63.75, params.tone_curve[i] * 255.]);
+        for i in 0..=1000 {
+            let x = i as f32 / 1000.;
+            assert_eq!(
+                params.curve_output(x),
+                emulsion_raster::adjust::curve_at(&points, x * 255.) / 255.
+            );
+        }
+        for i in 1..4 {
+            let x = i as f32 / 4.;
+            assert!((params.curve_output(x) - params.tone_curve[i]).abs() < 1e-6);
+            let left = (params.curve_output(x) - params.curve_output(x - 0.0001)) / 0.0001;
+            let right = (params.curve_output(x + 0.0001) - params.curve_output(x)) / 0.0001;
+            assert!((left - right).abs() < 0.01);
+        }
+        let legacy = DevelopParams {
+            smooth_curve: false,
+            ..params
+        };
+        assert!((legacy.curve_output(0.125) - 0.075).abs() < 1e-6);
+        assert!((params.curve_output(0.125) - legacy.curve_output(0.125)).abs() > 0.001);
+        let saved = serde_json::to_string(&params).unwrap();
+        assert_eq!(
+            serde_json::from_str::<DevelopParams>(&saved).unwrap(),
+            params
+        );
     }
 
     #[test]

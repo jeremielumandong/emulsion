@@ -224,21 +224,20 @@ fn luminance(rgb: [f32; 3]) -> f32 {
     rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722
 }
 
-fn curve_value(value: f32, curve: [f32; 5]) -> f32 {
-    if curve == DevelopParams::LINEAR_CURVE {
+fn curve_value(value: f32, params: &DevelopParams) -> f32 {
+    if params.tone_curve == DevelopParams::LINEAR_CURVE {
         return value;
     }
-    let position = value.clamp(0.0, 1.0).powf(1.0 / 2.2) * 4.0;
-    let segment = (position as usize).min(3);
-    let t = position - segment as f32;
-    (curve[segment] * (1.0 - t) + curve[segment + 1] * t).powf(2.2)
+    params
+        .curve_output(value.clamp(0.0, 1.0).powf(1.0 / 2.2))
+        .powf(2.2)
 }
 
 fn tone(pixel: [f32; 3], params: &DevelopParams) -> [f32; 3] {
     let mut pixel = pixel.map(|v| shape(v, params));
     let before = luminance(pixel);
     if params.tone_curve != DevelopParams::LINEAR_CURVE {
-        let after = curve_value(before, params.tone_curve);
+        let after = curve_value(before, params);
         pixel = if before > 1e-8 {
             pixel.map(|v| v * after / before)
         } else {
@@ -560,16 +559,20 @@ mod tests {
             DevelopParams::MEDIUM_CONTRAST_CURVE,
             DevelopParams::STRONG_CONTRAST_CURVE,
         ] {
+            let params = DevelopParams {
+                tone_curve: curve,
+                ..Default::default()
+            };
             let mut previous = 0.0;
             for i in 0..=1000 {
                 let v = i as f32 / 1000.0;
                 assert_eq!(tone([v; 3], &DevelopParams::default()), [v; 3]);
-                let next = curve_value(v, curve);
+                let next = curve_value(v, &params);
                 assert!(next >= previous);
                 previous = next;
             }
-            assert_eq!(curve_value(0.0, curve), 0.0);
-            assert_eq!(curve_value(1.0, curve), 1.0);
+            assert_eq!(curve_value(0.0, &params), 0.0);
+            assert_eq!(curve_value(1.0, &params), 1.0);
         }
         for contrast in [-1.0, 1.0] {
             let p = DevelopParams {

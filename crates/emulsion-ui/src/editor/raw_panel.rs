@@ -83,6 +83,121 @@ type RawRow = (&'static str, &'static str, String, f32, (f32, f32, f32));
 const SETTLE_MS: u64 = 220;
 
 impl EditorView {
+    #[cfg(test)]
+    pub(crate) fn raw_curve_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.tracks
+            .get(&SliderKey::Raw("curve-graph"))
+            .and_then(|track| track.get())
+    }
+
+    fn raw_curve_graph(
+        &mut self,
+        params: DevelopParams,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let values = params.tone_curve;
+        let track = self
+            .tracks
+            .entry(SliderKey::Raw("curve-graph"))
+            .or_default()
+            .clone();
+        let paint_track = track.clone();
+        let (line, ink, accent) = (p.line, p.ink, p.accent);
+        div()
+            .w_full()
+            .p_2()
+            .bg(p.soft_bg)
+            .border_1()
+            .border_color(line)
+            .child(
+                div()
+                    .id("raw-curve-graph")
+                    .w_full()
+                    .h(px(180.))
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                            let Some(bounds) = track.get() else { return };
+                            if bounds.size.width <= px(0.) || this.raw.settings_busy {
+                                return;
+                            }
+                            let x = (f32::from(e.position.x - bounds.origin.x)
+                                / f32::from(bounds.size.width))
+                            .clamp(0., 1.);
+                            let index = (x * 4.).round() as usize;
+                            let key = SliderKey::Raw(
+                                ["curve0", "curve1", "curve2", "curve3", "curve4"][index],
+                            );
+                            if let Some(f) = crate::widgets::track_fraction_v(&track, e.position.y)
+                            {
+                                this.apply_slider(key, f * 100., cx);
+                            }
+                            this.drag = Some(Drag::Slider {
+                                key,
+                                track: track.clone(),
+                                min: 0.,
+                                max: 100.,
+                                step: 0.,
+                                vertical: true,
+                            });
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .child(
+                        canvas(
+                            move |bounds, _, _| paint_track.set(Some(bounds)),
+                            move |bounds, _, window, _| {
+                                let (w, h) =
+                                    (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                                let at = |x: f32, y: f32| {
+                                    bounds.origin + point(px(x * w), px((1. - y) * h))
+                                };
+                                for i in 1..4 {
+                                    let f = i as f32 / 4.;
+                                    window.paint_quad(fill(
+                                        Bounds::new(at(f, 1.), size(px(1.), px(h))),
+                                        line,
+                                    ));
+                                    window.paint_quad(fill(
+                                        Bounds::new(at(0., f), size(px(w), px(1.))),
+                                        line,
+                                    ));
+                                }
+                                let mut reference = PathBuilder::stroke(px(1.));
+                                reference.move_to(at(0., 0.));
+                                reference.line_to(at(1., 1.));
+                                if let Ok(path) = reference.build() {
+                                    window.paint_path(path, line);
+                                }
+                                // Use exactly the same interpolation as RAW development.
+                                let mut path = PathBuilder::stroke(px(2.));
+                                path.move_to(at(0., values[0]));
+                                for i in 1..=128 {
+                                    let x = i as f32 / 128.;
+                                    path.line_to(at(x, params.curve_output(x)));
+                                }
+                                if let Ok(path) = path.build() {
+                                    window.paint_path(path, ink);
+                                }
+                                for (i, value) in values.iter().enumerate() {
+                                    window.paint_quad(fill(
+                                        Bounds::new(
+                                            at(i as f32 / 4., *value) - point(px(4.), px(4.)),
+                                            size(px(8.), px(8.)),
+                                        ),
+                                        accent,
+                                    ));
+                                }
+                            },
+                        )
+                        .size_full(),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(crate) fn raw_comparison_wait(
         &mut self,
         request: &emulsion_mcp::raw_preview::Comparison,
@@ -235,6 +350,7 @@ impl EditorView {
                 let low = if ix == 0 { 0.0 } else { p.tone_curve[ix - 1] };
                 let high = if ix == 4 { 1.0 } else { p.tone_curve[ix + 1] };
                 p.tone_curve[ix] = (v / 100.0).clamp(low, high);
+                p.smooth_curve = true;
             }
             _ => return,
         }
@@ -741,6 +857,22 @@ impl EditorView {
             return Some(body.child(self.render_raw_settings(cx)).into_any_element());
         }
         if self.raw.section == RawSection::Curve {
+            body = body.child(self.raw_curve_graph(prm, p, cx));
+            body = body.when(!prm.smooth_curve, |body| {
+                body.child(
+                    Button::new("raw-curve-smooth")
+                        .label("Smooth saved curve")
+                        .xsmall()
+                        .ghost()
+                        .selected(prm.smooth_curve)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(mut params) = this.raw_params() {
+                                params.smooth_curve = true;
+                                this.raw_apply_params(params, cx);
+                            }
+                        })),
+                )
+            });
             let mut presets = div().flex().flex_wrap().gap_1();
             for (key, title, curve) in [
                 ("raw-curve-linear", "Linear", DevelopParams::LINEAR_CURVE),
@@ -764,13 +896,14 @@ impl EditorView {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(mut params) = this.raw_params() {
                                 params.tone_curve = curve;
+                                params.smooth_curve = true;
                                 this.raw_apply_params(params, cx);
                             }
                         })),
                 );
             }
             body = body.child(presets).child(div().text_xs().text_color(cx.theme().muted_foreground)
-                .child("Luminance curve after tone adjustments. Output levels for five fixed input points (gamma 2.2)."));
+                .child("Drag a point up or down to change brightness. Five fixed input levels, from shadows on the left to highlights on the right."));
             for (ix, key) in ["curve0", "curve1", "curve2", "curve3", "curve4"]
                 .into_iter()
                 .enumerate()

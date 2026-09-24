@@ -245,6 +245,11 @@ pub enum Command {
         rect: IRect,
         rotation: f64,
     },
+    /// Rotate the complete image and expand the canvas to contain it.
+    /// Source pixels and linked RAW recipes remain intact.
+    RotateImage {
+        degrees: f64,
+    },
     /// Cut every unrotated, unscaled pixel layer (and its mask) down to
     /// what the canvas shows, Photoshop's "delete cropped pixels": the
     /// picture looks the same, and nothing outside the canvas can come
@@ -443,6 +448,7 @@ impl Command {
                 "Crop"
             }
             .into(),
+            Command::RotateImage { .. } => "Rotate image".into(),
             Command::TrimToCanvas => "Delete cropped pixels".into(),
             Command::ImageSize { .. } => "Image size".into(),
             Command::SetGuides { .. } => "Guides".into(),
@@ -631,6 +637,7 @@ impl Command {
             | Self::SetSelection { .. }
             | Self::SetGuides { .. }
             | Self::Crop { .. }
+            | Self::RotateImage { .. }
             | Self::TrimToCanvas
             | Self::ImageSize { .. } => Ok(()),
             // Unlocking the selected node is allowed. A locked parent must
@@ -1096,6 +1103,10 @@ impl Command {
             }
             Command::Crop { rect, rotation } => {
                 crate::geometry::crop(doc, *rect, *rotation);
+                Ok(None)
+            }
+            Command::RotateImage { degrees } => {
+                crate::geometry::rotate_image(doc, *degrees)?;
                 Ok(None)
             }
             Command::TrimToCanvas => {

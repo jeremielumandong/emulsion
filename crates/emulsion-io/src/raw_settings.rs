@@ -48,7 +48,10 @@ pub fn merge_settings(
             target.contrast = source.contrast;
             target.saturation = source.saturation;
         }
-        RawSettingsGroup::Curve => target.tone_curve = source.tone_curve,
+        RawSettingsGroup::Curve => {
+            target.tone_curve = source.tone_curve;
+            target.smooth_curve = source.smooth_curve;
+        }
     }
     target
 }

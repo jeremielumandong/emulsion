@@ -294,6 +294,13 @@ impl EditorView {
     }
 
     pub(crate) fn rotate_transform_selection(&mut self, degrees: f64, cx: &mut Context<Self>) {
+        if self
+            .selected
+            .is_some_and(|id| self.rotates_photo_canvas(id))
+        {
+            self.rotate_selected_node(degrees, cx);
+            return;
+        }
         if self.collective_transform() || self.mask_transform_target().is_some() {
             self.set_tool(Tool::Move, cx);
             if let Some((_, w, h, p)) = self.transformable() {

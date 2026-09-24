@@ -16,9 +16,9 @@ document.querySelectorAll('.header nav a').forEach(link => link.addEventListener
 }));
 
 const workspaceViews = {
-  editor: { image: 'editor.png', alt: 'Emulsion editor with portrait, painting toolbar, layers and properties', copy: 'A full set of tools. One uninterrupted canvas. Paint and retouch with brushes, selections, masks, and precise controls.', tag: 'THE EDITOR / DARK MODE' },
-  colour: { image: 'editor.png', alt: 'Emulsion editor showing its layers dock, blend controls, masks, and Adjustments tab', copy: 'Build your image layer by layer. Control opacity and blending, add masks, and use the Adjustments panel to shape light and colour.', tag: 'LAYERS / MASKS / ADJUSTMENTS' },
-  home: { image: 'home.png', alt: 'Emulsion home screen with recent photography and illustration projects', copy: 'Your latest ideas, ready when you are. Reopen a recent project, bring in a photo, or start fresh with a transparent canvas.', tag: 'YOUR PROJECTS / ALL TOGETHER' },
+  editor: { image: 'editor.png', alt: 'Emulsion Photo workspace with a portrait, navigation tools, layer properties, and layers panel', copy: 'A dedicated photo workspace with the canvas at its centre. Navigate your image and keep layer properties, masks, opacity, and blend controls close at hand.', tag: 'PHOTO / LAYERS & PROPERTIES' },
+  drawing: { image: 'drawing.png', alt: 'Emulsion Draw workspace with a layered squirrel painting, photograph reference, brush presets, and assistant conversation', copy: 'Paint from a reference with brushes and editable layers. Keep your source image beside the canvas and continue working on an assistant-assisted drawing with the same tools.', tag: 'DRAW / REFERENCE / ASSISTANT' },
+  home: { image: 'home.png', alt: 'Emulsion home library showing recent photos, illustrations, and a selected squirrel project with layer and history details', copy: 'Browse recent photographs and illustrations, inspect a project’s layers and history count, or start with an open file, a new canvas, or a batch folder.', tag: 'HOME / YOUR PROJECT LIBRARY' },
 };
 function selectView(name) {
   const view = workspaceViews[name];
@@ -55,8 +55,8 @@ document.querySelectorAll('[data-look]').forEach(button => button.addEventListen
 const installDialog = document.querySelector('#install-dialog');
 const platforms = {
   linux: { requirements: 'Requires Rust, the GPUI system libraries, and a working graphics driver. The script builds and installs an AppImage.', command: 'scripts/install-appimage.sh --build', anchor: 'install-linux' },
-  macos: { requirements: 'Requires Rust and the standard macOS iconutil and sips tools. The script builds a local .app and .dmg for your Mac.', command: 'scripts/build-macos.sh', anchor: 'build-macos' },
-  windows: { requirements: 'Requires Rust (MSVC) and Visual Studio Build Tools with the Desktop development with C++ workload. Run in PowerShell.', command: '.\\scripts\\build-windows.ps1', anchor: 'build-windows' },
+  macos: { requirements: 'Requires Rust and the standard macOS iconutil and sips tools. The script builds a local .app and .dmg, signed ad hoc for local use.', command: 'scripts/build-macos.sh', anchor: 'build-macos' },
+  windows: { requirements: 'Requires Rust (MSVC) and Visual Studio Build Tools with the Desktop development with C++ workload. Run in PowerShell. This builds an unsigned executable; see the guide for installer packaging.', command: '.\\scripts\\build-windows.ps1', anchor: 'build-windows' },
 };
 function selectPlatform(name) {
   const platform = platforms[name];

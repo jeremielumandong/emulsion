@@ -20,27 +20,32 @@ npm run dev
 
 `index.html` contains the marketing copy, capability cards, three detailed
 workflows, and the documentation guide. Keep it aligned with the application
-README when features change. The guide covers editing, RAW development, recipes,
-batch export, history, file formats, optional AI setup, and workspace controls.
+README when features change. Verify shortcuts and menu paths against the UI source,
+not only README wording; see [the content audit](CONTENT_AUDIT.md) for checked sources. The guide covers editing, RAW development, recipes,
+batch export, history, file formats, optional AI setup, workspace controls, and links to troubleshooting and further guides.
 `src/style.css` provides the responsive layout; `src/main.js` handles the workspace
 tour, screenshot lightbox, illustrative colour previews, and installation dialog.
 
-Existing imagery lives in `public/assets/`. New workflow screenshots have dedicated
+Existing imagery lives in `public/assets/`. The current Photo (`editor.png`), Draw (`drawing.png`), and Home (`home.png`)
+screenshots come from the supplied September 24 captures, preserved at 2530×1377.
+The Draw capture also illustrates the assistant workflow. The supplied RAW
+(`raw-development.png`) and batch (`batch-export.png`) captures fill the remaining
+workflow sections at the same native resolution. Workflow screenshots have dedicated
 `figure[data-media-slot]` elements in `index.html`:
 
-| Slot | Suggested capture |
+| Slot | Current capture |
 | --- | --- |
-| `raw-development` | RAW Properties with controls and the before/after divider |
+| `raw-development` | RAW Properties with histogram, exposure, white balance, and tone controls |
 | `recipes-batch` | Recipe library and batch export settings |
 | `assistant-editing` | An assistant request, Apply/Skip controls, and resulting layers |
 
-Replace the corresponding `.media-placeholder` div with an image, retaining the
-figure and updating its caption. For example:
+To update a workflow screenshot, replace its asset or update the image and
+full-size link in its figure, retaining the caption and descriptive alt text. For example:
 
 ```html
-<img src="/assets/raw-development.webp"
-     alt="RAW exposure controls beside a photo with a before/after divider"
-     width="1600" height="1200" loading="lazy">
+<img src="/assets/raw-development.png"
+     alt="RAW histogram and exposure controls beside a portrait"
+     width="2530" height="1377" loading="lazy">
 ```
 
 Use real image dimensions and descriptive alt text. Existing workspace tour image

@@ -153,12 +153,7 @@ impl RawSource {
             } else {
                 known_pixels
             })?;
-            let raw = rawler::decode_file(path).map_err(|e| {
-                IoError::Unsupported(format!(
-                    "RAW {} {} ({}): {e}",
-                    metadata.make, metadata.model, metadata.compression
-                ))
-            })?;
+            let raw = rawler::decode_file(path).map_err(crate::raw_probe::decoder_error)?;
             develop::validate(&raw)?;
             let actual_pixels = raw.width as u64 * raw.height as u64;
             if actual_pixels > reservation.0 {
@@ -169,7 +164,10 @@ impl RawSource {
             }
             metadata.width = raw.width as u32;
             metadata.height = raw.height as u32;
-            metadata.bits_per_sample = raw.bps as u32;
+            // The decoder's buffer precision can be 16 even for a 14-bit sensor.
+            if metadata.bits_per_sample == 0 {
+                metadata.bits_per_sample = raw.bps as u32;
+            }
             metadata.sensor = match &raw.photometric {
                 rawler::rawimage::RawPhotometricInterpretation::Cfa(cfa) => {
                     format!("{:?}", cfa.sensor)

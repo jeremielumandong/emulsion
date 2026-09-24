@@ -3,6 +3,7 @@
 //! them all — the same non-destructive pipeline the editor uses, run one
 //! picture at a time off the UI thread.
 
+mod preview;
 mod recipe_previews;
 
 use crate::theme::{self, MONO_FONT};
@@ -64,6 +65,7 @@ pub(crate) struct BatchState {
     preview_failed: Option<(PathBuf, Option<String>)>,
     /// Invalidates renders for older recipe contents, even when names match.
     preview_generation: u64,
+    navigation: preview::Navigation,
     /// "jpg" or "png".
     pub format: String,
     pub out_dir: Option<PathBuf>,
@@ -1231,11 +1233,8 @@ impl Workspace {
         };
 
         // Large preview.
-        let preview: AnyElement = match &self.batch.preview {
-            Some((_, _, image)) => img(ImageSource::Render(image.clone()))
-                .object_fit(ObjectFit::Contain)
-                .size_full()
-                .into_any_element(),
+        let preview: AnyElement = match self.batch.preview.clone() {
+            Some((path, _, image)) => self.batch_image_preview(path, image, cx),
             None => div()
                 .size_full()
                 .flex()

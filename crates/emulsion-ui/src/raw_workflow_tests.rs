@@ -4,6 +4,85 @@ use emulsion_core::raw::{DevelopParams, RawDocument, RawMetadata};
 
 use crate::raw_test_fixture as raw_fixture;
 
+#[gpui_kit::test]
+fn raw_curve_graph_drags_points_and_keeps_monotonic_limits(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+    let mut before = raw_document();
+    before.raw.as_mut().unwrap().params.smooth_curve = false;
+    let (ws, cx) = open(cx, before.clone());
+    let ed = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1600.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("raw-curve", cx));
+    cx.run_until_parked();
+    let bounds = cx.update(|_, cx| {
+        ed.read(cx)
+            .raw_curve_bounds()
+            .expect("RAW curve graph laid out")
+    });
+    let at = |x: f32, y: f32| {
+        bounds.origin + gpui_kit::point(bounds.size.width * x, bounds.size.height * (1. - y))
+    };
+    cx.update(|window, cx| window.drag(at(0.5, 0.5), at(0.5, 0.65), cx));
+    cx.update(|_, cx| {
+        let params = ed.read(cx).raw_params().unwrap();
+        assert!(
+            params.smooth_curve,
+            "dragging upgrades a legacy curve to smooth interpolation"
+        );
+        let curve = params.tone_curve;
+        assert!((curve[2] - 0.65).abs() < 0.02, "{curve:?}");
+        assert_eq!(curve[1], 0.25);
+        assert_eq!(curve[3], 0.75);
+    });
+    cx.update(|window, cx| window.drag(at(0.5, 0.65), at(0.5, 0.95), cx));
+    cx.update(|_, cx| {
+        ed.update(cx, |e, cx| {
+            assert_eq!(e.raw_params().unwrap().tone_curve[2], 0.75);
+            e.undo(cx);
+            assert!(!e.raw.is_pending());
+            assert_eq!(e.editor.doc, before);
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn raw_image_rotation_turns_canvas_and_preserves_recipe_through_undo(cx: &mut TestAppContext) {
+    let fixture = SidecarFixture::new();
+    let original = emulsion_io::open(&fixture.0).unwrap();
+    let (width, height) = (original.width, original.height);
+    let (ws, cx) = open(cx, original.clone());
+    let ed = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| {
+        ed.update(cx, |e, _| {
+            e.draw_mode = false;
+            let id = e.editor.doc.raw.as_ref().unwrap().node_id;
+            e.set_layer_selection(vec![id], Some(id));
+        })
+    });
+    cx.dispatch_action(crate::actions::RotateLayer90Cw);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = ed.read(cx);
+        assert_eq!((e.editor.doc.width, e.editor.doc.height), (height, width));
+        assert_eq!(e.editor.doc.raw, original.raw);
+        assert_eq!(e.editor.history.len(), 1);
+        let id = original.raw.as_ref().unwrap().node_id;
+        assert_eq!(
+            emulsion_core::geometry::node_bounds(&e.editor.doc, id),
+            Some(emulsion_raster::IRect::new(
+                0,
+                0,
+                height as i32,
+                width as i32
+            ))
+        );
+    });
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(ed.read(cx).editor.doc, original));
+}
+
 struct SidecarFixture(std::path::PathBuf);
 
 impl SidecarFixture {

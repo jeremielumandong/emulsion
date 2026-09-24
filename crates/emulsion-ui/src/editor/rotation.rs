@@ -10,6 +10,31 @@ pub(crate) struct RotationFields {
 }
 
 impl EditorView {
+    pub(crate) fn rotates_photo_canvas(&self, id: NodeId) -> bool {
+        if self.draw_mode
+            || self.editor.doc.selection.is_some()
+            || self.selected_layer_ids().len() > 1
+            || self.mask_transform_target().is_some()
+        {
+            return false;
+        }
+        let doc = &self.editor.doc;
+        if doc.raw.as_ref().is_some_and(|raw| raw.node_id == id) {
+            return true;
+        }
+        doc.nodes.len() == 1
+            && doc
+                .node(id)
+                .is_some_and(|node| matches!(node.kind, NodeKind::Raster { .. }))
+            && emulsion_core::geometry::node_bounds(doc, id)
+                == Some(emulsion_raster::IRect::new(
+                    0,
+                    0,
+                    doc.width as i32,
+                    doc.height as i32,
+                ))
+    }
+
     pub(crate) fn sync_rotation_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self
             .selected
@@ -78,7 +103,12 @@ impl EditorView {
             return;
         }
         self.close_text_field(cx);
-        self.execute(Command::RotateNode { id, degrees }, cx);
+        if self.rotates_photo_canvas(id) {
+            self.execute(Command::RotateImage { degrees }, cx);
+            self.fit_pending = true;
+        } else {
+            self.execute(Command::RotateNode { id, degrees }, cx);
+        }
     }
 
     pub(crate) fn rotation_controls(
@@ -101,7 +131,15 @@ impl EditorView {
                 .flex()
                 .flex_col()
                 .gap(px(6.))
-                .child(mono("ROTATE OBJECT", 9.5, p.muted))
+                .child(mono(
+                    if self.rotates_photo_canvas(fields.node) {
+                        "ROTATE IMAGE"
+                    } else {
+                        "ROTATE OBJECT"
+                    },
+                    9.5,
+                    p.muted,
+                ))
                 .when(node.locked, |d| {
                     d.child(mono("Unlock this layer to rotate it.", 10., p.muted))
                 })
