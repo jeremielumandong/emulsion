@@ -9,7 +9,7 @@ use gpui::{
     Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Edges, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
     ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement,
-    Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px, rems,
+    Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px,
 };
 use gpui::{ClickEvent, Half, MouseDownEvent, OwnedMenuItem, Point, Subscription};
 use gpui_base::TestSupportExt as _;
@@ -345,7 +345,7 @@ impl PopupMenu {
             max_height: None,
             check_side: Side::Left,
             bounds: Bounds::default(),
-            scrollable: false,
+            scrollable: true,
             scroll_handle: ScrollHandle::default(),
             external_link_icon: true,
             size: Size::default(),
@@ -437,13 +437,13 @@ impl PopupMenu {
         self
     }
 
-    /// Set max height of the popup menu, default is half of the window height
+    /// Set max height of the popup menu, capped to the current window's viewport.
     pub fn max_h(mut self, height: impl Into<Pixels>) -> Self {
         self.max_height = Some(height.into());
         self
     }
 
-    /// Set the menu to be scrollable to show vertical scrollbar.
+    /// Set the menu to be scrollable to show vertical scrollbar (enabled by default).
     pub fn scrollable(mut self, scrollable: bool) -> Self {
         self.scrollable = scrollable;
         self
@@ -1224,6 +1224,7 @@ impl PopupMenu {
         };
 
         let this = MenuItemElement::new(ix, &group_name)
+            .flex_shrink_0()
             .relative()
             .text_sm()
             .py_0()
@@ -1306,7 +1307,7 @@ impl PopupMenu {
                     )
                 })
                 .disabled(*disabled)
-                .h(item_height)
+                .min_h(item_height)
                 .gap_x_1()
                 .children(Self::render_icon(
                     has_left_icon,
@@ -1317,11 +1318,14 @@ impl PopupMenu {
                 ))
                 .child(
                     h_flex()
-                        .w_full()
+                        .flex_1()
+                        .min_w_0()
                         .gap_3()
                         .items_center()
                         .justify_between()
-                        .when(!show_link_icon, |this| this.child(label.clone()))
+                        .when(!show_link_icon, |this| {
+                            this.child(div().flex_1().min_w_0().child(label.clone()))
+                        })
                         .children(right_check_icon)
                         .when(show_link_icon, |this| {
                             this.child(
@@ -1443,17 +1447,19 @@ impl Render for PopupMenu {
         let view = cx.entity().clone();
         let items_count = self.menu_items.len();
 
-        let max_height = self.max_height.unwrap_or_else(|| {
-            let window_half_height = window.window_bounds().get_bounds().size.height * 0.5;
-            window_half_height.min(px(450.))
-        });
+        // Recompute on every render so an open menu also fits after resizing.
+        // Leave room for the outer border and the anchor's window margin.
+        let viewport = window.viewport_size();
+        let available_height = (viewport.height - px(16.)).max(px(0.));
+        let max_height = self.max_height.unwrap_or(available_height).min(available_height);
 
         let has_left_icon = self
             .menu_items
             .iter()
             .any(|item| item.has_left_icon(self.check_side));
 
-        let max_width = self.max_width();
+        let max_width = self.max_width().min((viewport.width - px(16.)).max(px(0.)));
+        let min_width = self.min_width.unwrap_or(window.rem_size() * 8.).min(max_width);
         let options = RenderOptions {
             has_left_icon,
             check_side: self.check_side,
@@ -1482,8 +1488,7 @@ impl Render for PopupMenu {
                     .id("items")
                     .p_1()
                     .gap_y_0p5()
-                    .min_w(rems(8.))
-                    .when_some(self.min_width, |this, min_width| this.min_w(min_width))
+                    .min_w(min_width)
                     .max_w(max_width)
                     .when(self.scrollable, |this| {
                         this.max_h(max_height)

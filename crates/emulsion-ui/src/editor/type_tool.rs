@@ -883,7 +883,7 @@ impl EditorView {
 
     /// The font list under the options bar: every installed family, each
     /// name set in its own face so the choice can be made by eye.
-    pub(crate) fn font_picker(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn font_picker(&self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.menu != Some(super::Menu::Font) || self.tool != Tool::Type {
             return None;
         }
@@ -901,6 +901,7 @@ impl EditorView {
             let choose = name.clone();
             div()
                 .id(("font-row", i))
+                .flex_shrink_0()
                 .flex()
                 .items_baseline()
                 .justify_between()
@@ -949,8 +950,8 @@ impl EditorView {
                         // Wheel and clicks stop here instead of zooming
                         // the canvas underneath.
                         .occlude()
-                        .w(px(340.))
-                        .max_h(px(380.))
+                        .w(px(340.).min((window.viewport_size().width - px(16.)).max(px(0.))))
+                        .max_h(px(380.).min((window.viewport_size().height - px(16.)).max(px(0.))))
                         .flex()
                         .flex_col()
                         .border_1()

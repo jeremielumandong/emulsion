@@ -546,11 +546,12 @@ impl Workspace {
                             .ghost()
                             .rounded_none(),
                     )
-                    .content(move |_, _, _| {
+                    .content(move |_, window, _| {
                         div()
                             .id("home-search-container")
                             .test_support()
                             .w(rems(18.75))
+                            .max_w((window.viewport_size().width - px(24.)).max(px(0.)))
                             .p_1()
                             .child(Input::new(&input).small())
                             .into_any_element()

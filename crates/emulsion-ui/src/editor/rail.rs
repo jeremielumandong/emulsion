@@ -509,9 +509,10 @@ impl EditorView {
     pub(crate) fn tool_rail(
         &mut self,
         p: &Palette,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        self.render_tool_rail(None, p, cx)
+        self.render_tool_rail(None, p, window, cx)
     }
 
     /// Compact tools wrap within the available length, expressed in rem units.
@@ -520,15 +521,17 @@ impl EditorView {
         horizontal: bool,
         available_length: f32,
         p: &Palette,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        self.render_tool_rail(Some((horizontal, available_length)), p, cx)
+        self.render_tool_rail(Some((horizontal, available_length)), p, window, cx)
     }
 
     fn render_tool_rail(
         &mut self,
         compact_layout: Option<(bool, f32)>,
         p: &Palette,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let compact = compact_layout.is_some();
@@ -624,10 +627,11 @@ impl EditorView {
                             cx.notify();
                         }
                     }))
-                    .when(!compact, |d| d.absolute().left(dim::TOOL_BTN_W).top_0())
                     .flex()
                     .flex_col()
-                    .min_w(px(200.))
+                    .w(px(240.).min((window.viewport_size().width - px(16.)).max(px(0.))))
+                    .max_h((window.viewport_size().height - px(16.)).max(px(0.)))
+                    .overflow_y_scroll()
                     .border_1()
                     .border_color(line)
                     .rounded_md()
@@ -640,6 +644,7 @@ impl EditorView {
                         let active = self.rail_item_active(m);
                         div()
                             .id(("rail-flyout-item", g * 16 + i))
+                            .flex_shrink_0()
                             .test_support()
                             .focusable()
                             .tab_index(0)
@@ -813,7 +818,12 @@ impl EditorView {
                                 .child(anchored().snap_to_window().child(list))
                                 .into_any_element()
                         } else {
-                            list.into_any_element()
+                            div()
+                                .absolute()
+                                .left(dim::TOOL_BTN_W)
+                                .top_0()
+                                .child(anchored().snap_to_window().child(list))
+                                .into_any_element()
                         };
                         deferred(list).with_priority(1)
                     }))

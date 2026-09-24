@@ -2233,7 +2233,7 @@ impl EditorView {
             )
     }
 
-    fn context_bar(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn context_bar(&mut self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let tool = self.active_tool_name();
         let options = self.tool_options(p, cx);
         let row = |p: &Palette| {
@@ -2257,7 +2257,7 @@ impl EditorView {
             .child(div().text_color(p.ink).child(tool))
             .children(options)
             .child(div().flex_1().min_w(px(8.)));
-        let font_picker = self.font_picker(p, cx);
+        let font_picker = self.font_picker(p, window, cx);
         div()
             .id("editor-tool-options")
             .test_support()
@@ -4008,10 +4008,10 @@ impl Render for EditorView {
                 .child(page)
                 .into_any_element();
         }
-        let rail = self.tool_rail(&p, cx);
-        let context = self.context_bar(&p, cx);
+        let rail = self.tool_rail(&p, window, cx);
+        let context = self.context_bar(&p, window, cx);
         let canvas = self.canvas_region();
-        let picker = self.picker(&p, cx);
+        let picker = self.picker(&p, window, cx);
         self.refresh_suggestions(cx);
         let strip = self.status_strip(&p, cx);
         let ask = self.ask_area(&p, cx);

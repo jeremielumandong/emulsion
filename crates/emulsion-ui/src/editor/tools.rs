@@ -4871,7 +4871,7 @@ impl EditorView {
             .into_any_element()
     }
 
-    pub(crate) fn picker(&mut self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn picker(&mut self, p: &Palette, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.tools.picker {
             return None;
         }
@@ -4916,6 +4916,9 @@ impl EditorView {
                     .child(
                         div()
                             .id("picker")
+                            .max_w((window.viewport_size().width - px(16.)).max(px(0.)))
+                            .max_h((window.viewport_size().height - px(16.)).max(px(0.)))
+                            .overflow_y_scroll()
                             .occlude()
                             .flex()
                             .flex_col()

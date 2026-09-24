@@ -756,11 +756,12 @@ impl EditorView {
                                         .flex_col()
                                         .gap_2()
                                         .w(rems(20.))
+                                        .max_w((window.viewport_size().width - px(24.)).max(px(0.)))
                                         .max_h(window.viewport_size().height - px(80.))
                                         .overflow_y_scroll()
                                         .p_2()
                                         .children(this.tool_options(&p, cx).into_iter().skip(count))
-                                        .children(this.font_picker(&p, cx))
+                                        .children(this.font_picker(&p, window, cx))
                                         .into_any_element()
                                 })
                                 .unwrap_or_else(|_| div().into_any_element())
@@ -854,6 +855,7 @@ impl EditorView {
                             horizontal,
                             (available / f32::from(window.rem_size())).max(3.5),
                             p,
+                            window,
                             cx,
                         )
                         .into_any_element()
@@ -1104,7 +1106,7 @@ impl EditorView {
                     .child(panel),
             )
             .children(self.assistant_dock(p, cx))
-            .children(self.picker(p, cx))
+            .children(self.picker(p, window, cx))
             .into_any_element()
     }
 }
