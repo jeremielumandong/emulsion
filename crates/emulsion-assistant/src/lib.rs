@@ -13,6 +13,7 @@ pub mod protocol;
 pub mod provider;
 pub mod review;
 pub mod session;
+pub mod storage;
 
 pub use protocol::{Event, Parser};
 pub use session::{Launcher, ProdLauncher, Session};

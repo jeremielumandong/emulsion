@@ -1774,6 +1774,7 @@ name = "emulsion-app"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "emulsion-assistant",
  "emulsion-core",
  "emulsion-gpu",
  "emulsion-mcp",
@@ -1800,6 +1801,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

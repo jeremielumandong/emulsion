@@ -140,25 +140,31 @@ impl Launcher for ProdLauncher {
         let dead = Arc::new(AtomicBool::new(false));
 
         let s = sink.clone();
+        let directory = spec.directory.clone();
         let out = std::thread::Builder::new()
             .name("cli-stdout".into())
             .spawn(move || {
+                let _directory = directory;
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     s(Line::Stdout(line));
                 }
             })?;
         let s = sink.clone();
+        let directory = spec.directory.clone();
         std::thread::Builder::new()
             .name("cli-stderr".into())
             .spawn(move || {
+                let _directory = directory;
                 for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                     s(Line::Stderr(line));
                 }
             })?;
         let (s, d) = (sink, dead.clone());
+        let directory = spec.directory.clone();
         std::thread::Builder::new()
             .name("cli-wait".into())
             .spawn(move || {
+                let _directory = directory;
                 let code = child.wait().ok().and_then(|st| st.code());
                 // Reaped: its pid may be reused, so never signal it again.
                 d.store(true, Ordering::Relaxed);
@@ -436,6 +442,7 @@ mod tests {
             args: vec![],
             env: vec![],
             cwd: ".".into(),
+            directory: None,
         };
         let mut s = Session::start(
             &FakeLauncher {
@@ -517,6 +524,7 @@ mod tests {
                     args: vec![],
                     env: vec![],
                     cwd: ".".into(),
+                    directory: None,
                 })
             }),
         )
@@ -553,6 +561,57 @@ mod tests {
         assert!(matches!(s.events.try_recv(), Ok(Event::Exited(None))));
     }
 
+    #[test]
+    fn managed_directory_survives_until_child_exit() {
+        use crate::storage::SessionDirectory;
+        use std::time::{Duration, Instant};
+
+        let root =
+            std::env::temp_dir().join(format!("emulsion-child-storage-{}", std::process::id()));
+        let directory = SessionDirectory::create(&root).unwrap();
+        let path = directory.path().to_path_buf();
+        #[cfg(windows)]
+        let (program, args) = (
+            "cmd.exe",
+            vec!["/D", "/C", "echo ready & set /p input= & echo done"],
+        );
+        #[cfg(not(windows))]
+        let (program, args) = ("sh", vec!["-c", "echo ready; read input; echo done"]);
+        let spec = LaunchSpec {
+            program: program.into(),
+            args: args.into_iter().map(String::from).collect(),
+            env: vec![],
+            cwd: path.clone(),
+            directory: Some(directory),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut process = ProdLauncher
+            .spawn(
+                &spec,
+                Box::new(move |line| {
+                    let _ = tx.send(line);
+                }),
+            )
+            .unwrap();
+        drop(spec);
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(10)).unwrap(),
+            Line::Stdout(_)
+        ));
+        assert!(path.is_dir(), "running child retains the workspace");
+        process.close_stdin();
+        while !matches!(
+            rx.recv_timeout(Duration::from_secs(10)).unwrap(),
+            Line::Exit(_)
+        ) {}
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!path.exists(), "last process lease releases the workspace");
+        std::fs::remove_dir(root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_cli_ignoring_sigterm_is_killed() {
@@ -563,6 +622,7 @@ mod tests {
             args: vec!["-c".into(), "trap '' TERM; echo ready; sleep 30".into()],
             env: vec![],
             cwd: ".".into(),
+            directory: None,
         };
         let sink: LineSink = Box::new(move |line| {
             let tag = match line {

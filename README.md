@@ -59,6 +59,12 @@ model or provider subscription is not bundled. Open **F1 → Assistant** to
 work with the connected provider. Proposed document changes have **Apply/Skip**
 controls, so you can review what the assistant is about to do.
 
+Assistant workspaces are kept while a document is open so follow-up messages can
+resume the conversation. Emulsion removes its session files after the document
+closes or the next request switches providers, once the CLI has exited. Startup
+also removes abandoned Emulsion session folders from earlier runs. This cleanup
+does not touch the providers' personal configuration or history outside Emulsion.
+
 ### MCP tools for editing and automation
 
 The [MCP tool catalog](crates/emulsion-mcp/src/tools.rs) exposes operations for:

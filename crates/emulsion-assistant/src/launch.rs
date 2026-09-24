@@ -21,6 +21,8 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub cwd: PathBuf,
+    /// Keep managed session files alive until the child and its output readers exit.
+    pub directory: Option<crate::storage::SessionDirectory>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -344,6 +346,7 @@ pub fn spec_for(
         args,
         env,
         cwd: session_dir.to_path_buf(),
+        directory: None,
     })
 }
 
@@ -447,6 +450,7 @@ pub fn claude(
         args: claude_args(&config, &system_prompt, opts),
         env: common_env(),
         cwd: session_dir.to_path_buf(),
+        directory: None,
     })
 }
 

@@ -25,6 +25,14 @@ pub fn install(cx: &mut App) {
         cli: CliStatus::Checking,
     });
     detect_cli(cx);
+    let sessions = emulsion_io::recent::data_dir().join("sessions");
+    cx.background_executor()
+        .spawn(async move {
+            if let Err(error) = emulsion_assistant::storage::cleanup_stale(&sessions) {
+                tracing::warn!(%error, "could not clean abandoned assistant workspaces");
+            }
+        })
+        .detach();
 }
 
 pub fn settings(cx: &App) -> &Settings {

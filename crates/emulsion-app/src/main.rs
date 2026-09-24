@@ -46,6 +46,9 @@ fn main() -> anyhow::Result<()> {
     };
 
     run_editor(file);
+    // The window owners have released their sessions. Allow child shutdown and
+    // workspace removal to finish before background threads are terminated.
+    emulsion_assistant::storage::wait_for_cleanup(std::time::Duration::from_secs(5));
     Ok(())
 }
 

@@ -88,7 +88,7 @@ pub struct Assistant {
     relay: Option<Relay>,
     session: Option<Session>,
     session_id: Option<String>,
-    session_dir: Option<PathBuf>,
+    session_dir: Option<emulsion_assistant::storage::SessionDirectory>,
     pub turn: Option<Turn>,
     pub running: bool,
     pub history: Vec<Turn>,
@@ -608,15 +608,17 @@ impl EditorView {
 
     fn ensure_session(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         let prov = provider(cx);
-        if self.assistant.session.is_some() {
-            if self.assistant.session_provider == Some(prov.id) {
-                return Ok(());
-            }
-            // The person picked another CLI since this session started.
-            if let Some(mut s) = self.assistant.session.take() {
-                s.kill();
-            }
+        if self
+            .assistant
+            .session_provider
+            .is_some_and(|id| id != prov.id)
+        {
+            // Changing providers ends the conversation, including its workspace.
+            self.assistant.session = None;
             self.assistant.session_id = None;
+            self.assistant.session_dir = None;
+        } else if self.assistant.session.is_some() {
+            return Ok(());
         }
         let cli = match app_state::cli(cx) {
             CliStatus::Found { path, .. } => path,
@@ -647,15 +649,15 @@ impl EditorView {
             .detach();
             self.assistant.relay = Some(relay);
         }
-        let dir = self.assistant.session_dir.get_or_insert_with(|| {
-            emulsion_io::recent::data_dir()
-                .join("sessions")
-                .join(format!(
-                    "{}-{}",
-                    std::process::id(),
-                    cx.entity_id().as_u64()
-                ))
-        });
+        if self.assistant.session_dir.is_none() {
+            self.assistant.session_dir = Some(
+                emulsion_assistant::storage::SessionDirectory::create(
+                    &emulsion_io::recent::data_dir().join("sessions"),
+                )
+                .map_err(|e| format!("Could not create the assistant workspace: {e}"))?,
+            );
+        }
+        let dir = self.assistant.session_dir.as_ref().expect("created above");
         // The `mcp-serve` binary: this executable, unless overridden (tests and
         // development builds run from elsewhere).
         let exe = match std::env::var_os("EMULSION_EXE") {
@@ -675,8 +677,10 @@ impl EditorView {
             .unwrap_or_default();
         let session = match prov.mode {
             emulsion_assistant::provider::Mode::Persistent => {
-                let spec = launch::spec_for(prov, cli, dir, &exe, &relay_env, &opts, None)
-                    .map_err(|e| e.to_string())?;
+                let mut spec =
+                    launch::spec_for(prov, cli, dir.path(), &exe, &relay_env, &opts, None)
+                        .map_err(|e| e.to_string())?;
+                spec.directory = Some(dir.clone());
                 Session::start(&ProdLauncher, &spec)
                     .map_err(|e| format!("Could not start {}: {e}", prov.label))?
             }
@@ -694,23 +698,38 @@ impl EditorView {
                             model: model.clone(),
                             resume,
                         };
-                        launch::spec_for(
+                        let mut spec = launch::spec_for(
                             prov,
                             cli.clone(),
-                            &dir,
+                            dir.path(),
                             &exe,
                             &relay_env,
                             &opts,
                             Some(prompt),
-                        )
+                        )?;
+                        spec.directory = Some(dir.clone());
+                        Ok(spec)
                     }),
                 )
             }
         };
         let events = session.events.clone();
+        let directory_path = dir.path().to_path_buf();
         cx.spawn(async move |this, cx| {
             while let Ok(ev) = events.recv().await {
-                if this.update(cx, |v, cx| v.on_event(ev, cx)).is_err() {
+                let current = this.update(cx, |v, cx| {
+                    if v.assistant
+                        .session_dir
+                        .as_ref()
+                        .is_some_and(|dir| dir.path() == directory_path)
+                    {
+                        v.on_event(ev, cx);
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if !matches!(current, Ok(true)) {
                     break;
                 }
             }
@@ -734,7 +753,12 @@ impl EditorView {
         if self.assistant.running {
             return Err("The assistant is still working on the last request.".into());
         }
-        self.ensure_session(cx)?;
+        if let Err(error) = self.ensure_session(cx) {
+            if self.assistant.session_id.is_none() {
+                self.assistant.session_dir = None;
+            }
+            return Err(error);
+        }
         self.editor.begin(format!("Assistant: {}", short(&text)));
         let prompt = crate::reference::reference_prompt(&text, self.assistant.reference.as_ref());
         let sent = self
@@ -745,6 +769,9 @@ impl EditorView {
         if let Some(Err(e)) = sent {
             self.editor.end();
             self.assistant.session = None;
+            if self.assistant.session_id.is_none() {
+                self.assistant.session_dir = None;
+            }
             return Err(format!("Could not reach {}: {e}", provider(cx).label));
         }
         self.assistant.running = true;
@@ -2520,6 +2547,67 @@ mod mutation_queue_tests {
         })
     }
 
+    #[gpui_kit::test]
+    fn conversation_files_survive_turn_exit_and_release_with_document(cx: &mut TestAppContext) {
+        let view = painting(cx, false);
+        let root =
+            std::env::temp_dir().join(format!("emulsion-document-storage-{}", std::process::id()));
+        let directory = emulsion_assistant::storage::SessionDirectory::create(&root).unwrap();
+        let path = directory.path().to_path_buf();
+        std::fs::write(path.join("resume-state"), "conversation").unwrap();
+        view.update(cx, |view, cx| {
+            view.assistant.session_dir = Some(directory);
+            view.assistant.session_id = Some("conversation".into());
+            view.assistant.session = Some(Session::one_shot(
+                emulsion_assistant::protocol::Flavor::Codex,
+                Box::new(|_, _| unreachable!()),
+            ));
+            view.on_event(Event::Exited(Some(0)), cx);
+            assert!(path.join("resume-state").exists());
+            // A persistent CLI exiting also retains files for a resumed process.
+            view.assistant.session = None;
+            view.on_event(Event::Exited(Some(0)), cx);
+            assert!(path.join("resume-state").exists());
+        });
+        drop(view);
+        cx.update(|_| {}); // flush the released editor entity
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!path.exists());
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn switching_provider_releases_exited_conversation(cx: &mut TestAppContext) {
+        let view = painting(cx, false);
+        let root =
+            std::env::temp_dir().join(format!("emulsion-provider-storage-{}", std::process::id()));
+        let directory = emulsion_assistant::storage::SessionDirectory::create(&root).unwrap();
+        let path = directory.path().to_path_buf();
+        cx.update(|cx| {
+            cx.set_global(app_state::Capabilities {
+                cli: CliStatus::Missing,
+            })
+        });
+        view.update(cx, |view, cx| {
+            view.assistant.session_dir = Some(directory);
+            view.assistant.session_id = Some("old-conversation".into());
+            view.assistant.session_provider = Some("codex");
+            // The old process has already exited; the selected provider is Claude.
+            assert!(view.ensure_session(cx).is_err());
+            assert!(view.assistant.session_dir.is_none());
+            assert!(view.assistant.session_id.is_none());
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!path.exists());
+        std::fs::remove_dir(root).unwrap();
+    }
+
     fn stroke(y: u32, color: &str) -> Value {
         serde_json::json!({
             "node": 1, "brush": "Maru pen", "color": color,
@@ -2748,7 +2836,12 @@ mod mutation_queue_tests {
         assert_eq!(reply.join().unwrap()["isError"], false);
         assert_eq!(emulsion_io::settings::Settings::load(), expected);
         assert!(expected.draw_mode);
-        assert!(expected.shape_stroke_presets.iter().any(|p| p.name == "Queued preset"));
+        assert!(
+            expected
+                .shape_stroke_presets
+                .iter()
+                .any(|p| p.name == "Queued preset")
+        );
     }
 
     #[gpui_kit::test]
@@ -3260,6 +3353,7 @@ mod review_tests {
                 args: vec![],
                 env: vec![],
                 cwd: ".".into(),
+                directory: None,
             },
         )
         .unwrap();
