@@ -111,6 +111,17 @@ cannot edit an open document without that connection.
 
 ## Automated checks included
 
+Enable local formatting and lint checks before every push, once per clone:
+
+```sh
+git config --local core.hooksPath .githooks
+```
+
+The pre-push hook runs `cargo fmt --all --check` and
+`cargo clippy --workspace --all-targets --locked -- -D warnings`, matching CI.
+A failure blocks the push. Run `bash scripts/lint.sh` at any time to check manually.
+These checks inspect the working tree; commit any fixes before pushing.
+
 CI builds and tests the Rust project. Changes confined to `site/` skip the
 Rust jobs after a lightweight change check. The separate
 [website container workflow](.github/workflows/site.yml) builds and smoke-tests

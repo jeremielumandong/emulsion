@@ -34,7 +34,9 @@ fn nikon_he_decodes_sensor_and_develops_edits() {
     assert_ne!(before, after, "exposure must develop sensor data");
     let luma_sum = |pixels: &[u8]| {
         pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]))
             .sum::<u64>()
     };

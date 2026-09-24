@@ -37,7 +37,10 @@ jobs:
           set -euo pipefail
           docker run --detach --name emulsion-site-check -p 127.0.0.1:8080:8080 emulsion-site:check
           trap 'docker logs emulsion-site-check; docker rm -f emulsion-site-check' EXIT
-          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/healthz
+          # Docker may accept connections before NGINX is ready, then reset them.
+          curl --fail --silent --show-error --retry 10 --retry-all-errors \
+            --retry-delay 1 --connect-timeout 2 --max-time 5 --retry-max-time 30 \
+            http://127.0.0.1:8080/healthz
           curl --fail http://127.0.0.1:8080/ -o /tmp/emulsion-site.html
           grep -q 'id="documentation"' /tmp/emulsion-site.html
           grep -q 'id="guide-raw"' /tmp/emulsion-site.html
