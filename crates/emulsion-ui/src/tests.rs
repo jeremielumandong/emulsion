@@ -1037,7 +1037,15 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
             e.editor.doc.nodes.len(),
         )
     });
-    assert_eq!((name.as_str(), size, nodes), ("landing", (2172, 724), 1));
+    // Artwork can be replaced without changing the open-for-editing behavior.
+    // Read the PNG dimensions independently of the document importer.
+    let expected_size = image::ImageReader::with_format(
+        std::io::Cursor::new(crate::landing::LANDING_PNG),
+        image::ImageFormat::Png,
+    )
+    .into_dimensions()
+    .expect("bundled landing PNG has valid dimensions");
+    assert_eq!((name.as_str(), size, nodes), ("landing", expected_size, 1));
 }
 
 // ── Phase 3 tools, driven through real pointer and key events ────────────
