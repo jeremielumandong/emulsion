@@ -14,6 +14,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Full debug symbols and incremental state exhaust hosted-runner storage
+  # when linking the workspace tests and examples. Keep local profiles intact.
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
 
 jobs:
   changes:
@@ -78,6 +84,8 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Do not restore pre-fix artifacts through a fallback cache key.
+          prefix-key: v2-ci-no-debuginfo
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: python3 scripts/test-license-staging.py
       - run: bash scripts/test-renderer-policy.sh
@@ -125,6 +133,11 @@ jobs:
           timeout 45s xvfb-run -a -s '-screen 0 800x600x24' \
             env -u WAYLAND_DISPLAY GPUI_FORCE_SOFTWARE_RENDERING=1 \
             target/debug/examples/renderer_smoke --require-software
+      - name: Report build storage
+        if: always()
+        run: |
+          df -h .
+          du -sh target 2>/dev/null || true
 
   platform-check:
     needs: changes
@@ -145,6 +158,7 @@ jobs:
           toolchain: '1.98'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          prefix-key: v2-ci-no-debuginfo
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: cargo check --workspace --all-targets --locked
       # Windows WARP smoke requires an interactive desktop session. The same
