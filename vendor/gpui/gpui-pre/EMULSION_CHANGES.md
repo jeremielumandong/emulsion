@@ -24,8 +24,11 @@ and effects after window resizing without measuring the entire list.
 
 `src/taffy.rs`, `src/window.rs`, and the public exports in `src/gpui.rs` add
 opt-in `Window::set_layout_reuse_enabled` and last-frame `LayoutReuseStats`.
-The default renderer still builds a fresh layout tree each frame. Emulsion can
-opt in per window with `EMULSION_RETAINED_LAYOUT=1`.
+The standalone framework default still builds a fresh layout tree each frame.
+Emulsion enables reuse by default through its saved experimental setting, with a
+live switch under Settings > Experimental > Reuse interface layout. An explicit
+saved off choice is honored; `EMULSION_RETAINED_LAYOUT=0` or `=1` overrides the
+starting mode without preventing live switching.
 
 The experiment retains Taffy allocation slots and reconciles each frame's
 converted layout style and ordered child IDs. Equal inputs preserve Taffy's

@@ -2066,3 +2066,7 @@ mod dxgi {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "directx_image_sampling_tests.rs"]
+mod image_sampling_tests;

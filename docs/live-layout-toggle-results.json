@@ -1,0 +1,50 @@
+{
+  "runs": [
+    {
+      "Label": "live-toggle-off-pan-1",
+      "ProcessId": 32040,
+      "ProcessName": "emulsion",
+      "ProcessStartedUtc": "2026-09-24T01:19:26.9576226Z",
+      "MeasurementStartedUtc": "2026-09-24T01:36:29.5111693Z",
+      "LogicalProcessors": 16,
+      "RequestedSeconds": 30,
+      "MeasuredSeconds": 30.4545943,
+      "CpuSeconds": 28.5625,
+      "MeanCpuPercentMachine": 5.861697688089051,
+      "PeakSampleCpuPercentMachine": 6.535570282606303,
+      "InitialPrivateMiB": 1188.3125,
+      "FinalPrivateMiB": 1188.52734375,
+      "PeakPrivateMiB": 1188.52734375,
+      "InitialWorkingSetMiB": 923.5546875,
+      "FinalWorkingSetMiB": 923.5546875,
+      "PeakWorkingSetMiB": 923.5546875,
+      "SamplesCsv": "C:\\development\\Personal\\emulsion\\target\\performance\\20260923-213629-526-live-toggle-off-pan-1.csv",
+      "Note": "Process CPU normalized across logical processors; includes all app threads. Memory excludes GPU allocations. Does not measure frame time or input latency."
+    },
+    {
+      "Label": "live-toggle-on-pan-1",
+      "ProcessId": 32040,
+      "ProcessName": "emulsion",
+      "ProcessStartedUtc": "2026-09-24T01:19:26.9576226Z",
+      "MeasurementStartedUtc": "2026-09-24T01:37:46.2503510Z",
+      "LogicalProcessors": 16,
+      "RequestedSeconds": 30,
+      "MeasuredSeconds": 30.3995754,
+      "CpuSeconds": 28.296875,
+      "MeanCpuPercentMachine": 5.817695359981903,
+      "PeakSampleCpuPercentMachine": 6.571958548303901,
+      "InitialPrivateMiB": 1188.38671875,
+      "FinalPrivateMiB": 1188.4140625,
+      "PeakPrivateMiB": 1188.4140625,
+      "InitialWorkingSetMiB": 923.4375,
+      "FinalWorkingSetMiB": 923.4609375,
+      "PeakWorkingSetMiB": 923.4609375,
+      "SamplesCsv": "C:\\development\\Personal\\emulsion\\target\\performance\\20260923-213746-266-live-toggle-on-pan-1.csv",
+      "Note": "Process CPU normalized across logical processors; includes all app threads. Memory excludes GPU allocations. Does not measure frame time or input latency."
+    }
+  ],
+  "cpu_change_percentage_points": -0.044002328107148436,
+  "cpu_relative_change_percent": -0.7506754945169059,
+  "setting_after_on_sample": true,
+  "conclusion": "No demonstrated CPU benefit in one manual same-process panning pair. FPS and input rate were not recorded."
+}

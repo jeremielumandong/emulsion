@@ -3,8 +3,9 @@
 Targeted navigation notifications reduce CPU-side pan-update duration by
 **41-42% in the roomy editor and 22-28% in compact** across both release benchmark
 orders and layout modes. This application optimization is enabled normally.
-Layout reuse remains opt-in: its additional effect on this workload was mixed,
-including a 5.9% slower compact comparison in the reverse-order run.
+Layout reuse was opt-in when measured: its additional effect on this workload was
+mixed, including a 5.9% slower compact comparison in the reverse-order run. Emulsion
+now enables it by default as a product choice; these measurements are unchanged.
 
 ## Change
 
@@ -87,13 +88,16 @@ after that fix is not consistent:
 The compact cold estimate also varied between orders (1.7269 vs 1.5988 ms), so
 this is not proof of a universal retained-layout regression. It is evidence
 against treating the earlier synthetic 44% text improvement as an editor-wide
-saving. Keep layout reuse opt-in while trying representative documents and real
-windows. These measurements do not assess memory growth, GPU time, or other
-platforms. The current application and framework defaults remain cold layout.
+saving. These results supported keeping layout reuse opt-in while trying
+representative documents and real windows. They do not assess memory growth, GPU
+time, or other platforms. The application now defaults to retained layout by
+product choice; the standalone framework default remains cold layout.
 
 You can now toggle it live under **Settings > Experimental > Reuse interface
-layout**. The default is off; the choice is saved. To force a startup mode for a
-release comparison:
+layout**. The application defaults to on when no choice has been saved, including
+older settings without this field; an explicit saved off choice remains off.
+The switch applies immediately and saves the choice. To force a startup mode for
+a release comparison:
 
 ```powershell
 $env:EMULSION_RETAINED_LAYOUT = '1'

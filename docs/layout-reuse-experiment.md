@@ -1,8 +1,9 @@
 # Cross-frame layout reuse experiment
 
 This implements a bounded framework step toward incremental layout. It does not
-retain GPUI element objects or skip their `render` methods. The experiment is
-**disabled by default**, with a cold-layout comparison path in the same binary.
+retain GPUI element objects or skip their `render` methods. Emulsion enables it
+**by default**, with a cold-layout comparison path in the same binary. The
+standalone GPUI framework default remains cold layout.
 
 Measurements of the initial geometry-only prototype and a manual editor panning observation are available
 in [the release results](layout-reuse-release-results.md). Fixed geometry benefits;
@@ -12,7 +13,8 @@ less CPU drawing time than geometry-only retention for stable non-wrapping label
 without establishing an editor-wide CPU saving. The later
 [actual-editor navigation benchmark](canvas-navigation-release-results.md) finds
 a clear gain from narrower application notifications but mixed additional gains
-from layout reuse; the default remains off.
+from layout reuse. Enabling it by default is a product choice, not a claim of
+universal CPU savings.
 
 ## Behavior
 
@@ -39,7 +41,8 @@ layout on every frame even when descendant caches remain reusable.
 
 Open **Settings > Experimental > Reuse interface layout**. The switch applies
 immediately to every open window and saves the choice for future launches. It
-defaults to off when no choice has been saved. New windows inherit the current
+defaults to on for new settings and older settings without this field; an explicit
+saved off choice remains off. New windows inherit the current
 session's choice; switching modes preserves documents and undo history.
 
 For repeatable launch comparisons, the existing environment variable still works:
@@ -154,7 +157,7 @@ and mode order was still cold then retained.
 
 The point estimates suggest about 44% lower CPU draw duration for fixed geometry,
 little change for changing text, and about 18% higher duration for structural
-churn. This supports keeping the experiment opt-in: comparing and reconciling
+churn. This supported the original opt-in recommendation: comparing and reconciling
 unstable trees can cost more than rebuilding them. It also motivates explicit
 measurement revisions before trying to reuse text layout. These are synthetic
 CPU drawing durations, not application CPU percentages or release-build results.
@@ -162,7 +165,7 @@ CPU drawing durations, not application CPU percentages or release-build results.
 The repeat log is `target/layout-reuse-benchmark-repeat.log`. Criterion's `change`
 lines compare each case against its previous run, not cold against retained;
 use the paired mode estimates above for that comparison. The subsequent release runs are linked above; real editor workload validation
-remains necessary before adoption.
+remains necessary to establish broader performance benefits.
 
 ## Validation
 

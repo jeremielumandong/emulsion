@@ -3918,6 +3918,11 @@ pub fn describe(editor: &Editor) -> Value {
         "canvas": { "width": doc.width, "height": doc.height },
         "blend_space": doc.blend_space,
         "camera": doc.info.as_ref().map(|i| i.summary()),
+        "raw": doc.raw.as_ref().map(|raw| json!({
+            "node_id": raw.node_id,
+            "settings": raw.params,
+            "workflow": "Inspect describe_raw and get_view; prefer develop_raw on this source for supported global photo edits before adding layers. RAW controls do not clip to the selection.",
+        })),
         "looks_like": looks_like,
         "selection": selection,
         "rows": "row 1 is the top of the stack; depth > 0 means inside the group listed above it",

@@ -1342,22 +1342,56 @@ impl EditorView {
             return;
         }
         let before = self.editor.revision;
+        let mut settings_save = None;
         let r = if emulsion_mcp::shape_presets::is_tool(&call.name) {
             let mut settings = app_state::settings(cx).clone();
-            let result = emulsion_mcp::shape_presets::execute(
+            let result = emulsion_mcp::shape_presets::execute_in_memory(
                 &mut self.editor,
                 &call.name,
                 &call.arguments,
                 &mut settings,
             );
             if !result.is_error && call.name == "save_shape_stroke_preset" {
-                cx.global_mut::<app_state::AppSettings>().0 = settings;
+                cx.global_mut::<app_state::AppSettings>().0 = settings.clone();
+                settings_save = Some(crate::settings_writer::save(settings, cx));
                 cx.refresh_windows();
             }
             result
         } else {
             exec::execute(&mut self.editor, &call.name, &call.arguments)
         };
+        if let Some(save) = settings_save {
+            // A native preset save shares ordering with workspace/settings saves.
+            // Acknowledge the tool only after its snapshot has reached disk.
+            cx.spawn(async move |this, cx| {
+                let result = match save.await {
+                    Ok(()) => r,
+                    Err(error) => emulsion_mcp::server::ToolResult::error(format!(
+                        "Could not save stroke preset: {error}"
+                    )),
+                };
+                this.update(cx, |this, _| {
+                    this.observe_drawing_tool(
+                        &call.name,
+                        &call.arguments,
+                        &result,
+                        this.editor.revision,
+                        false,
+                    );
+                })
+                .ok();
+                // Persistence survives closing the originating document.
+                call.reply(result);
+                if ordered {
+                    this.update(cx, |this, cx| {
+                        this.complete_tool_work(tool_generation, cx);
+                    })
+                    .ok();
+                }
+            })
+            .detach();
+            return;
+        }
         self.observe_drawing_tool(
             &call.name,
             &call.arguments,
@@ -2684,6 +2718,37 @@ mod mutation_queue_tests {
             assert_eq!(view.editor.doc, document);
             assert!(view.editor.history.is_empty());
         });
+    }
+
+    #[gpui_kit::test]
+    fn stroke_preset_save_keeps_queued_mode_and_later_preferences(cx: &mut TestAppContext) {
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        let id = view.update(cx, |view, _| {
+            let result = exec::execute(
+                &mut view.editor,
+                "draw_path",
+                &serde_json::json!({"d":"M 8 8 L 56 8 L 56 56 Z", "stroke":"#aabbcc"}),
+            );
+            assert!(!result.is_error, "{result:?}");
+            view.editor.doc.nodes.last().unwrap().id
+        });
+        let (save, reply) = call(
+            &relay,
+            "save_shape_stroke_preset",
+            serde_json::json!({"node": id, "name": "Queued preset"}),
+        );
+        let expected = view.update(cx, |view, cx| {
+            view.toggle_draw_mode(cx);
+            view.run_tool_now(save, cx);
+            app_state::update_settings(cx, |settings| settings.layers_height = 350.);
+            app_state::settings(cx).clone()
+        });
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        assert_eq!(emulsion_io::settings::Settings::load(), expected);
+        assert!(expected.draw_mode);
+        assert!(expected.shape_stroke_presets.iter().any(|p| p.name == "Queued preset"));
     }
 
     #[gpui_kit::test]

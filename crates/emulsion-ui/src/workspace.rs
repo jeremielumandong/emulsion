@@ -41,7 +41,8 @@ pub struct Workspace {
     pub(crate) thumbs: HashMap<PathBuf, crate::home::GalleryThumbnail>,
     pub(crate) thumbs_loading: HashMap<PathBuf, u64>,
     pub(crate) thumb_generation: u64,
-    pub busy: Option<SharedString>,
+    /// A slow task, such as opening a file, shown as a progress card.
+    pub(crate) busy: Option<crate::busy_card::Busy>,
     pub error: Option<SharedString>,
     focus: FocusHandle,
     last_title: String,
@@ -778,9 +779,8 @@ impl Workspace {
 
     pub fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.add_tab_then(window, cx, move |this, window, cx| {
-            this.busy = Some(format!("Opening {}…", path.display()).into());
+            this.start_busy(open_busy(&path), window, cx);
             this.error = None;
-            cx.notify();
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
                 let result = cx
@@ -833,8 +833,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.add_tab_then(window, cx, move |this, window, cx| {
-            this.busy = Some("Recovering…".into());
-            cx.notify();
+            this.start_busy(crate::busy_card::Busy::new("Recovering your work"), window, cx);
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
                 let result = cx
@@ -876,8 +875,7 @@ impl Workspace {
     /// Open the bundled landing image as a new document to edit.
     pub(crate) fn open_landing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.add_tab_then(window, cx, |this, window, cx| {
-            this.busy = Some("Opening the landing image…".into());
-            cx.notify();
+            this.start_busy(crate::busy_card::Busy::new("Opening the landing image"), window, cx);
             cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async {
@@ -1463,12 +1461,66 @@ impl Workspace {
             )
     }
 
+    /// Show `busy` and keep its elapsed time ticking until it is replaced
+    /// or cleared.
+    fn start_busy(
+        &mut self,
+        busy: crate::busy_card::Busy,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let started = busy.started;
+        self.busy = Some(busy);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+                let current = this.update(cx, |this, cx| {
+                    let current = this.busy.as_ref().is_some_and(|b| b.started == started);
+                    if current {
+                        cx.notify();
+                    }
+                    current
+                });
+                if !matches!(current, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The progress card over a dimmed window while `busy` is set.
+    fn busy_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let busy = self
+            .busy
+            .as_ref()
+            .filter(|b| b.started.elapsed() >= crate::busy_card::SHOW_AFTER)?;
+        let p = theme::palette(cx);
+        Some(
+            div()
+                .id("busy-overlay")
+                .test_support()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(p.paper.opacity(0.55))
+                .occlude()
+                .child(crate::busy_card::busy_card("busy-card", busy, None, &p))
+                .into_any_element(),
+        )
+    }
+
     fn banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let p = theme::palette(cx);
-        let (msg, err) = match (&self.error, &self.busy) {
-            (Some(e), _) => (e.clone(), true),
-            (None, Some(b)) => (b.clone(), false),
-            _ => return None,
+        // Busy work shows as a progress card; the banner is for errors.
+        let (msg, err) = match &self.error {
+            Some(e) => (e.clone(), true),
+            None => return None,
         };
         Some(
             div()
@@ -2045,9 +2097,35 @@ impl Render for Workspace {
             .child(top)
             .children(banner)
             .child(body)
+            .children(self.busy_overlay(cx))
             .when(self.splash, |d| d.child(self.splash_view(window, cx)))
             .children(gpui_kit::component::Root::render_dialog_layer(window, cx))
     }
+}
+
+/// "Opening IMG_0042.CR3", with the kind of file and its size underneath.
+fn open_busy(path: &Path) -> crate::busy_card::Busy {
+    let name = path
+        .file_name()
+        .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into());
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_uppercase())
+        .unwrap_or_default();
+    let kind = if emulsion_io::is_native(path) {
+        "Emulsion document".to_string()
+    } else if emulsion_io::raw::is_raw(path) {
+        format!("Camera raw ({ext})")
+    } else if ext.is_empty() {
+        "Image".to_string()
+    } else {
+        format!("{ext} image")
+    };
+    let detail = match std::fs::metadata(path) {
+        Ok(meta) => format!("{kind} · {}", crate::busy_card::file_size_label(meta.len())),
+        Err(_) => kind,
+    };
+    crate::busy_card::Busy::new(format!("Opening {name}")).detail(detail)
 }
 
 /// Recovery copies from other sessions, newest first.

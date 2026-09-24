@@ -557,6 +557,34 @@ fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn rapid_mode_switches_persist_the_latest_workspace_and_settings(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
+    let expected = cx.update(|_, cx| {
+        editor.update(cx, |editor, cx| {
+            for _ in 0..3 {
+                editor.toggle_draw_mode(cx);
+            }
+            assert!(editor.draw_mode);
+            assert_eq!(editor.editor.doc, original);
+            assert_eq!(editor.editor.history.len(), 0);
+        });
+        // A later, unrelated preference must not be overwritten by a queued
+        // workspace snapshot when a slow disk finally catches up.
+        crate::app_state::update_settings(cx, |settings| settings.layers_height = 360.);
+        crate::app_state::settings(cx).clone()
+    });
+    cx.run_until_parked();
+    assert_eq!(emulsion_io::settings::Settings::load(), expected);
+    cx.update(|window, cx| {
+        assert!(window.find("canvas-toolbar-dock").visible());
+        assert!(editor.read(cx).draw_mode);
+        assert_eq!(editor.read(cx).editor.doc, original);
+        assert_eq!(editor.read(cx).editor.history.len(), 0);
+    });
+}
+
+#[gpui_kit::test]
 fn toolbars_scale_and_dock_from_the_customizer(cx: &mut TestAppContext) {
     let (_ws, editor, cx) = compact(cx, doc(&["Photo"], None), 1440., 1000.);
     let before = cx.update(|window, cx| {

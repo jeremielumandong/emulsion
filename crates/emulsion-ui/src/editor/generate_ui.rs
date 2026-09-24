@@ -130,7 +130,7 @@ impl EditorView {
         // The displayed tree may lag edits while rendering catches up.
         let source = sel.as_ref().map(|_| self.editor.doc.clone());
         let job = Job::new();
-        self.watch_job(job.clone(), cx);
+        self.watch_job(job.clone(), "Generating an image", cx);
         let j = job.clone();
         let slot = self.insertion_slot();
         let label = if removing {

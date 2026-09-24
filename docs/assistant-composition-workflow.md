@@ -39,12 +39,37 @@ and after rebuilding and starting a new session:
   flipped or stretched layer to check that its placement is inspected first.
 - Grade an existing photograph to monochrome: check recoverable adjustments,
   intended group scope, retained tonal detail and unchanged original pixels.
+  For an editable RAW, use native development settings first and verify that
+  supported global corrections leave the layer stack unchanged.
 - Diagnose dark text on a dark background, a hidden headline and an off-canvas
   asset: check state and pixels before correcting the specific cause. Obtain a
   new full preview after the final change.
 
 Tool execution and geometry tests establish compatibility and readback accuracy;
 they do not establish better artistic judgment by a live model.
+
+## RAW-first editing
+
+When an editable RAW source is attached, ordinary photo edits should develop that
+source before adding layers. `describe_document.raw` exposes the source node and
+current recipe; `describe_raw` supplies the detailed settings and source status.
+The assistant uses `develop_raw` for supported global tone, white balance and
+color changes, preserves omitted settings, then inspects the result. Monochrome
+can use native saturation rather than an immediate black-and-white layer.
+
+The quick-command planner defers RAW adjustment requests to this assistant
+workflow, and layer-only adjustment suggestions are suppressed on RAW documents.
+Explicit layer operations remain available. Layers are appropriate for requested
+layer work or operations that RAW controls cannot perform, such as localized
+retouching and compositing; the assistant should explain that need. An active
+selection does not make RAW development local. Missing originals should be
+reported or relinked rather than silently substituting adjustment layers.
+
+RAW follow-up validation: 40 AI, 33 assistant and 120 MCP library tests passed.
+Regressions cover quick-command deferral, RAW suggestion suppression, source
+discovery and development without extra layers, preserved original bytes and
+undo. Clippy with warnings denied, affected-crate formatting and diff checks
+passed. Live model behavior still needs evaluation in a new assistant session.
 
 ## Validation
 

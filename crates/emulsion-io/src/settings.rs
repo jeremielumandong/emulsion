@@ -130,7 +130,7 @@ pub struct Settings {
     /// Compact editor header and movable canvas toolbars, with native
     /// window controls retained in the header.
     pub compact_chrome: bool,
-    /// Opt into experimental reuse of unchanged UI layout between frames.
+    /// Reuse unchanged UI layout between frames; enabled by default, with a Settings opt-out.
     pub experimental_layout_reuse: bool,
     /// Settings migration marker for the compact single-row editor header.
     /// Version zero is the legacy layout preference written before compact
@@ -206,7 +206,7 @@ impl Default for Settings {
             follow_omarchy: false,
             approve_all: false,
             compact_chrome: true,
-            experimental_layout_reuse: false,
+            experimental_layout_reuse: true,
             compact_chrome_revision: 1,
             layers_height: 400.0,
             show_drawing: true,
@@ -426,11 +426,11 @@ mod tests {
     }
 
     #[test]
-    fn experimental_layout_reuse_defaults_off_for_new_and_legacy_settings() {
-        assert!(!Settings::default().experimental_layout_reuse);
+    fn experimental_layout_reuse_defaults_on_for_new_and_legacy_settings() {
+        assert!(Settings::default().experimental_layout_reuse);
         for json in ["{}", r#"{"compact_chrome":false,"draw_mode":true}"#] {
             let settings: Settings = serde_json::from_str(json).unwrap();
-            assert!(!settings.experimental_layout_reuse);
+            assert!(settings.experimental_layout_reuse);
         }
     }
 

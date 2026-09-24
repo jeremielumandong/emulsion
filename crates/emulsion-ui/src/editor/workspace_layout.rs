@@ -196,11 +196,16 @@ impl EditorView {
                 return;
             }
         }
-        match settings.save() {
-            Ok(()) => {
-                cx.global_mut::<crate::app_state::AppSettings>().0 = settings;
-                cx.refresh_windows();
-                self.set_status(
+        // Use the same ordered writer as mode switches and other preferences.
+        // Apply the draft now; completion must never replace newer UI settings.
+        cx.global_mut::<crate::app_state::AppSettings>().0 = settings.clone();
+        let save = crate::settings_writer::save(settings, cx);
+        cx.refresh_windows();
+        self.set_status("Saving workspace...", false, cx);
+        cx.spawn(async move |this, cx| {
+            let result = save.await;
+            this.update(cx, |this, cx| match result {
+                Ok(()) => this.set_status(
                     if as_default {
                         "Workspace saved as the default for new images."
                     } else {
@@ -208,10 +213,14 @@ impl EditorView {
                     },
                     false,
                     cx,
-                );
-            }
-            Err(error) => self.set_status(format!("Could not save workspace: {error}"), true, cx),
-        }
+                ),
+                Err(error) => {
+                    this.set_status(format!("Could not save workspace: {error}"), true, cx)
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(super) fn workspace_customizer(

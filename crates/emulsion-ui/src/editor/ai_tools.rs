@@ -22,6 +22,8 @@ pub(crate) struct AiState {
     sam_loading: Option<((u64, u64), u64)>,
     /// The running job, for the status line and cancel.
     pub job: Option<Arc<Job>>,
+    /// What the running job is doing and when it began, for its card.
+    pub job_busy: Option<crate::busy_card::Busy>,
     /// The last model-made selection, kept soft so it can be refined.
     pub refine: Option<Refine>,
 }
@@ -75,7 +77,8 @@ impl EditorView {
     }
 
     /// Show a job's stage and percentage until it finishes.
-    pub(crate) fn watch_job(&mut self, job: Arc<Job>, cx: &mut Context<Self>) {
+    pub(crate) fn watch_job(&mut self, job: Arc<Job>, title: &str, cx: &mut Context<Self>) {
+        self.ai.job_busy = Some(crate::busy_card::Busy::new(title.to_string()));
         if let Some(previous) = self.ai.job.replace(job.clone())
             && !Arc::ptr_eq(&previous, &job)
         {
@@ -93,6 +96,7 @@ impl EditorView {
                     if job.is_finished() || job.cancelled() {
                         if this.ai.job.as_ref().is_some_and(|j| Arc::ptr_eq(j, &job)) {
                             this.ai.job = None;
+                            this.ai.job_busy = None;
                             cx.notify();
                         }
                         return false;
@@ -209,7 +213,54 @@ impl EditorView {
         ))
     }
 
+    /// The running job's progress card, floating at the foot of the canvas.
+    /// Quick jobs finish before it appears, so it never flickers.
+    pub(super) fn ai_job_card(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let job = self.ai.job.as_ref()?;
+        let busy = self.ai.job_busy.as_ref()?;
+        if job.is_finished() || busy.started.elapsed() < crate::busy_card::SHOW_AFTER {
+            return None;
+        }
+        let stage = job.stage();
+        let busy = match stage.trim() {
+            "" => busy.clone(),
+            s => {
+                let mut chars = s.chars();
+                let first = chars.next().map(|c| c.to_uppercase().collect::<String>());
+                busy.clone()
+                    .detail(format!("{}{}", first.unwrap_or_default(), chars.as_str()))
+            }
+        };
+        let fraction = job.fraction();
+        Some(
+            div()
+                .absolute()
+                .bottom(px(24.))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    crate::busy_card::busy_card(
+                        "ai-job-card",
+                        &busy,
+                        (fraction > 0.).then_some(fraction),
+                        p,
+                    )
+                    .child(
+                        div().flex().justify_end().child(
+                            button("ai-job-cancel", "Cancel", false, p)
+                                .on_click(cx.listener(|this, _, _, cx| this.cancel_ai(cx)))
+                                .test_support(),
+                        ),
+                    ),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub fn cancel_ai(&mut self, cx: &mut Context<Self>) {
+        self.ai.job_busy = None;
         if let Some(j) = self.ai.job.take() {
             j.cancel();
             self.ai.sam_loading = None;
@@ -228,7 +279,7 @@ impl EditorView {
         let combine = self.tools.combine;
         let job = Job::new();
         job.set_stage("finding the subject");
-        self.watch_job(job.clone(), cx);
+        self.watch_job(job.clone(), "Selecting the subject", cx);
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -281,7 +332,7 @@ impl EditorView {
         let ticket = self.begin_edit_job();
         let job = Job::new();
         job.set_stage("finding the subject");
-        self.watch_job(job.clone(), cx);
+        self.watch_job(job.clone(), "Removing the background", cx);
         let j = job.clone();
         let composite = self.composite_raster();
         let slot = self.insertion_slot();
@@ -383,7 +434,7 @@ impl EditorView {
         };
         let ticket = self.selection_ticket();
         let job = Job::new();
-        self.watch_job(job.clone(), cx);
+        self.watch_job(job.clone(), "Selecting with AI", cx);
         if let Some((key, emb)) = &self.ai.sam
             && *key == ticket.0
             && (emb.width, emb.height) == (w, h)
@@ -514,7 +565,7 @@ impl EditorView {
         let ticket = self.selection_ticket();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), cx);
+        self.watch_job(job.clone(), "Filling with AI", cx);
         let j = job.clone();
         let slot = self.insertion_slot();
         cx.spawn(async move |this, cx| {
@@ -571,7 +622,7 @@ impl EditorView {
         let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), cx);
+        self.watch_job(job.clone(), "Building a depth map", cx);
         let j = job.clone();
         let slot = self.insertion_slot();
         cx.spawn(async move |this, cx| {
@@ -632,7 +683,7 @@ impl EditorView {
         let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), cx);
+        self.watch_job(job.clone(), "Upscaling", cx);
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -704,7 +755,7 @@ impl EditorView {
         let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), cx);
+        self.watch_job(job.clone(), "Restoring faces", cx);
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -879,8 +930,8 @@ mod lifecycle_tests {
             view.update(cx, |view, cx| {
                 let old = Job::new();
                 let current = Job::new();
-                view.watch_job(old.clone(), cx);
-                view.watch_job(current.clone(), cx);
+                view.watch_job(old.clone(), "Old", cx);
+                view.watch_job(current.clone(), "Current", cx);
                 assert!(old.cancelled());
                 assert!(!current.cancelled());
                 view.cancel_ai(cx);

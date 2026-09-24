@@ -346,6 +346,14 @@ pub fn plan(request: &str, doc: &Document, decider: &dyn Decide) -> anyhow::Resu
             p.unresolved.push(clause.clone());
             continue;
         }
+        // Photo edits on a linked RAW need the assistant's development workflow.
+        // This shortcut only knows how to add adjustment layers, even for requests
+        // such as "make it warmer". Let the assistant choose RAW controls first
+        // and honor explicit layer requests when appropriate.
+        if intent == Intent::AddAdjustment && doc.raw.is_some() {
+            p.unresolved.push(clause.clone());
+            continue;
+        }
         let mut ids: Vec<NodeId> = targets
             .into_iter()
             .filter(|(_, pr)| *pr >= CONFIDENCE)
@@ -608,5 +616,44 @@ mod tests {
         assert!(!p.is_complete());
         let p = plan("what's in this picture?", &d, &Keywords).unwrap();
         assert_eq!(p.unresolved.len(), 1);
+    }
+
+    #[test]
+    fn raw_photo_adjustments_defer_without_creating_layers() {
+        let mut d = doc();
+        d.raw = Some(emulsion_core::raw::RawDocument {
+            schema_version: 1,
+            node_id: d.nodes[0].id,
+            source: "photo.dng".into(),
+            source_sha256: "a".repeat(64),
+            params: Default::default(),
+            metadata: Default::default(),
+        });
+        for request in [
+            "make it warmer",
+            "brighten by 1 stop",
+            "increase contrast",
+            "add an exposure adjustment layer",
+        ] {
+            let p = plan(request, &d, &Keywords).unwrap();
+            assert!(!p.is_complete(), "{request}");
+            assert!(p.steps.is_empty(), "{request}");
+            assert_eq!(p.unresolved, vec![request], "{request}");
+        }
+
+        // Existing layer operations remain available on RAW documents.
+        let p = plan("hide the top two nodes", &d, &Keywords).unwrap();
+        assert!(p.is_complete());
+        assert_eq!(p.steps.len(), 2);
+
+        // Mixed requests must defer as a whole; the UI only applies complete plans.
+        let p = plan("hide sun and make it warmer", &d, &Keywords).unwrap();
+        assert!(!p.is_complete());
+        assert_eq!(p.unresolved, vec!["make it warmer"]);
+
+        // Provenance alone is not a live RAW development recipe.
+        d.raw = None;
+        d.raw_originals.push("photo.dng".into());
+        assert!(plan("make it warmer", &d, &Keywords).unwrap().is_complete());
     }
 }

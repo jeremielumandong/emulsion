@@ -229,7 +229,9 @@ pub fn definitions() -> Vec<ToolDef> {
              parameters, placement), and recent history. Pixel and smart nodes include numeric \
              source_size, signed placement scale_x/scale_y factors, flip flags and source_bounds \
              (outward-rounded document-space source rectangle, not visible alpha or effects). \
-             Call this before changing anything; pair with get_view to verify appearance.",
+             raw is null without an editable RAW source; otherwise it identifies the RAW node and \
+             current development settings. Prefer describe_raw/develop_raw for supported global \
+             RAW edits before adding layers. Call this before changing anything; pair with get_view to verify appearance.",
             json!({}),
             &[],
         ),

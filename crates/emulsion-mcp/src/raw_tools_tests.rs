@@ -3,6 +3,62 @@ use crate::raw_fixture;
 use emulsion_core::Editor;
 
 #[test]
+fn raw_discovery_and_development_preserve_the_layer_stack_and_original() {
+    let dir =
+        std::env::temp_dir().join(format!("emulsion-mcp-raw-workflow-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("source.dng");
+    raw_fixture::write_dng(&path);
+    let original = std::fs::read(&path).unwrap();
+    let mut editor = Editor::new(emulsion_io::raw::open(&path).unwrap(), None);
+    let before = editor.doc.clone();
+    let node_id = before.raw.as_ref().unwrap().node_id;
+    let description = crate::exec::describe(&editor);
+    assert_eq!(description["raw"]["node_id"], node_id);
+    assert_eq!(description["raw"]["settings"]["exposure"], 0.0);
+    assert_eq!(editor.doc, before);
+    assert_eq!(editor.history.len(), 0);
+
+    let inspected = crate::exec::execute(&mut editor, "describe_raw", &json!({}));
+    assert!(!inspected.is_error);
+    let developed = crate::exec::execute(
+        &mut editor,
+        "develop_raw",
+        &json!({"settings":{"exposure":0.5,"contrast":0.2,"saturation":-1.0}}),
+    );
+    assert!(!developed.is_error, "{developed:?}");
+    assert_eq!(editor.doc.nodes.len(), before.nodes.len());
+    assert_eq!(editor.doc.nodes[0].id, node_id);
+    assert_eq!(editor.doc.nodes[0].name, before.nodes[0].name);
+    let params = editor.doc.raw.as_ref().unwrap().params;
+    assert_eq!(params.exposure, 0.5);
+    assert_eq!(params.contrast, 0.2);
+    assert_eq!(params.saturation, -1.0);
+    assert_eq!(
+        params.temperature,
+        before.raw.as_ref().unwrap().params.temperature
+    );
+    assert_eq!(
+        crate::exec::describe(&editor)["raw"]["settings"],
+        json!(params)
+    );
+    let view = crate::exec::execute(&mut editor, "get_view", &json!({}));
+    assert!(!view.is_error);
+    assert!(view.content.iter().any(|block| block["type"] == "image"));
+    assert_eq!(editor.history.len(), 1);
+    editor.undo();
+    assert_eq!(editor.doc, before);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+
+    // Camera provenance alone is not evidence of an editable RAW recipe.
+    editor.doc.raw = None;
+    assert!(!editor.doc.raw_originals.is_empty());
+    assert!(crate::exec::describe(&editor)["raw"].is_null());
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
 fn raw_tools_roundtrip_validation_and_deferred_save() {
     let dir = std::env::temp_dir().join(format!("emulsion-mcp-raw-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

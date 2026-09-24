@@ -12,6 +12,15 @@ files are retained. Modified source files carry an Emulsion notice.
   every other value keeps automatic hardware-first selection.
 - `src/directx_renderer.rs`: diagnostics use the same software-device classifier
   as adapter selection, including Microsoft Basic adapter names.
+- `src/shaders.hlsl`: clamp polychrome image samples to their atlas tile's outer
+  texel centers. Linear filtering previously sampled neighboring allocations
+  along enlarged image edges, exposing faint seams between canvas tiles.
+  Clamping after interpolation preserves the interior image scale and applies
+  to cropped image tiles as well. Glyph and path sampling remain unchanged.
+  `src/directx_image_sampling_tests.rs` renders the shipping image shaders on
+  WARP and reads pixels back, covering magnified edges, unchanged interior
+  interpolation, single-texel crops and alpha at the atlas boundary. An
+  in-memory shader with the old sampling behavior verifies the regression.
 - `src/rendering_policy.rs`, `src/vsync.rs`, `src/gpui_windows.rs`: software
   rendering uses a sleeping scheduler capped at 30 Hz. Hardware keeps upstream
   DwmFlush behavior. Selection/recovery updates the policy. Forced OS paints
@@ -37,3 +46,11 @@ Native validation must additionally cover WARP startup, hardware-first startup,
 forced software startup, resize, window/input responsiveness and device recovery
 on Windows. These changes do not provide a software Metal implementation on
 macOS and do not port AgentOps' larger DirectX shader/path-cache optimizations.
+
+Image sampling validation (2026-09-23): the native WARP regression passed with
+shipping vertex/pixel shaders. Its unclamped control reproduced atlas bleed
+(corner RGBA `[1, 0, 0.68359375, 0.31640625]`); the fixed corner was `[1, 0, 0, 1]`.
+Interior interpolation, single-texel crops, and translucent atlas-edge crops also
+passed. Optimized VS/PS 4.1 compilation, backend clippy with tests, and the app
+release build passed. Logs: `target/windows-tile-seams-{tests,clippy,release-build}.log`.
+This is native offscreen validation, not a captured before/after of the user's document.

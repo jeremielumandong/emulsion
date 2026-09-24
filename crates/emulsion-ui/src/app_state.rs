@@ -31,13 +31,10 @@ pub fn settings(cx: &App) -> &Settings {
     &cx.global::<AppSettings>().0
 }
 
-/// Change settings and save them.
+/// Apply settings immediately and persist them in order off the UI thread.
 pub fn update_settings(cx: &mut App, f: impl FnOnce(&mut Settings)) {
-    let s = &mut cx.global_mut::<AppSettings>().0;
-    f(s);
-    if let Err(e) = s.save() {
-        tracing::warn!(error = %e, "could not save settings");
-    }
+    f(&mut cx.global_mut::<AppSettings>().0);
+    crate::settings_writer::save(settings(cx).clone(), cx).detach();
     cx.refresh_windows();
 }
 

@@ -1009,6 +1009,7 @@ impl EditorView {
     /// mode keeps its own workspace (toolbars, tools and panels): leaving
     /// one remembers it, entering the other restores how it was left.
     pub fn toggle_draw_mode(&mut self, cx: &mut Context<Self>) {
+        let started = std::time::Instant::now();
         let leaving = self.workspace_snapshot();
         let on = !self.draw_mode;
         let mut restore = None;
@@ -1022,6 +1023,7 @@ impl EditorView {
             *save = Some(leaving);
             restore = load.clone();
         });
+        let settings_elapsed = started.elapsed();
         match restore {
             Some(mut layout) => {
                 layout.draw_mode = on;
@@ -1032,6 +1034,7 @@ impl EditorView {
                 self.compact = compact::CompactLayout::for_mode(on, cx);
             }
         }
+        let layout_elapsed = started.elapsed();
         self.rail = Default::default();
         if on {
             self.set_paint(PaintKind::Brush, cx);
@@ -1048,6 +1051,18 @@ impl EditorView {
             );
         }
         cx.notify();
+        let elapsed = started.elapsed();
+        if elapsed >= std::time::Duration::from_millis(50) {
+            tracing::warn!(
+                target: "emulsion_ui::mode_switch",
+                draw = on,
+                elapsed_ms = elapsed.as_millis() as u64,
+                settings_ms = settings_elapsed.as_millis() as u64,
+                layout_ms = (layout_elapsed - settings_elapsed).as_millis() as u64,
+                tool_ms = (elapsed - layout_elapsed).as_millis() as u64,
+                "slow Photo/Draw switch handler"
+            );
+        }
     }
 
     pub fn zoom_step(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
@@ -2249,6 +2264,7 @@ impl EditorView {
         let overlay = self.overlay(window.scale_factor());
         let zoom_cursor = self.zoom_cursor(p, window);
         let replay = self.replay_overlay(p, cx);
+        let job_card = self.ai_job_card(p, cx);
         let accent = p.accent;
         let view_for_overlay = self.view;
         let quick_mask = self
@@ -2606,6 +2622,7 @@ impl EditorView {
             )
             .children(zoom_cursor)
             .children(replay)
+            .children(job_card)
             .when(self.raw_split_active(), |d| {
                 d.child(
                     div()

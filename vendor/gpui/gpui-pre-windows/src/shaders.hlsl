@@ -1,3 +1,4 @@
+// Modified by Emulsion: isolate image sampling from adjacent atlas allocations.
 #include "alpha_correction.hlsl"
 
 cbuffer GlobalParams: register(b0) {
@@ -1255,7 +1256,16 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
 
 float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Target {
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
-    float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
+    // Linear filtering must not read neighboring atlas allocations at magnified
+    // image edges. Clamp interpolated coordinates to the outer texel centers;
+    // insetting vertex UVs instead would rescale the entire image.
+    float2 atlas_size;
+    t_sprite.GetDimensions(atlas_size.x, atlas_size.y);
+    float2 tile_min = (float2(sprite.tile.bounds.origin) + 0.5) / atlas_size;
+    float2 tile_max = (float2(sprite.tile.bounds.origin)
+                      + max(float2(sprite.tile.bounds.size), 1.0) - 0.5) / atlas_size;
+    float2 tile_position = clamp(input.tile_position, tile_min, tile_max);
+    float4 sample = t_sprite.Sample(s_sprite, tile_position);
     float distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
 
     float4 color = sample;

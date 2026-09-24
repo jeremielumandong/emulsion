@@ -199,8 +199,12 @@ pub fn from_stats(s: &Stats) -> Vec<Suggestion> {
     out
 }
 
-/// Suggestions for `doc`, skipping any already accepted.
+/// Suggestions for `doc`, skipping any already accepted. Linked RAW documents
+/// use development controls first, rather than these adjustment-layer proposals.
 pub fn suggest(doc: &Document) -> Vec<Suggestion> {
+    if doc.raw.is_some() {
+        return vec![];
+    }
     let Some(s) = stats(doc) else { return vec![] };
     from_stats(&s)
         .into_iter()
@@ -286,5 +290,22 @@ mod tests {
         .apply(&mut d)
         .unwrap();
         assert!(suggest(&d).iter().all(|s| s.node_name != first.node_name));
+    }
+
+    #[test]
+    fn raw_documents_do_not_suggest_adjustment_layers() {
+        let mut d = doc_with(|_, _| [50, 35, 25, 255]);
+        assert!(!suggest(&d).is_empty());
+        d.raw = Some(emulsion_core::raw::RawDocument {
+            schema_version: 1,
+            node_id: d.nodes[0].id,
+            source: "photo.dng".into(),
+            source_sha256: "a".repeat(64),
+            params: Default::default(),
+            metadata: Default::default(),
+        });
+        assert!(suggest(&d).is_empty());
+        // Image statistics remain available for RAW analysis.
+        assert!(stats(&d).is_some());
     }
 }

@@ -35,6 +35,27 @@ pub fn execute(
     }
 }
 
+/// Apply a tool without writing settings to disk. A successful save updates the
+/// supplied settings; the host must persist them before reporting tool success.
+/// This lets desktop hosts serialize preset saves with other queued preferences.
+pub fn execute_in_memory(
+    editor: &mut Editor,
+    name: &str,
+    args: &Value,
+    settings: &mut Settings,
+) -> ToolResult {
+    let mut next = settings.clone();
+    match run(editor, name, args, &mut next) {
+        Err(error) => error,
+        Ok(result) => {
+            if name == "save_shape_stroke_preset" {
+                *settings = next;
+            }
+            result
+        }
+    }
+}
+
 fn run(
     editor: &mut Editor,
     name: &str,
@@ -176,6 +197,55 @@ mod tests {
             panic!()
         };
         style
+    }
+
+    #[test]
+    fn in_memory_save_changes_only_settings_and_rejects_invalid_changes() {
+        let mut editor = Editor::new(Document::new(64, 64), None);
+        let mut settings = Settings {
+            draw_mode: true,
+            layers_height: 360.,
+            ..Settings::default()
+        };
+        let id = add_path(&mut editor, json!({"width":7,"dashes":[4,2]}));
+        let document = editor.doc.clone();
+        let steps = editor.history.len();
+        let revision = editor.revision;
+        let before = settings.clone();
+        let result = execute_in_memory(
+            &mut editor,
+            "save_shape_stroke_preset",
+            &json!({"node":id,"name":"Queued preset"}),
+            &mut settings,
+        );
+        assert!(!result.is_error, "{result:?}");
+        let mut expected = before;
+        expected.shape_stroke_presets.push(ShapeStrokePreset {
+            name: "Queued preset".into(),
+            style: style(&editor, id),
+        });
+        assert_eq!(settings, expected);
+        assert_eq!(editor.doc, document);
+        assert_eq!(editor.history.len(), steps);
+        assert_eq!(editor.revision, revision);
+
+        for args in [
+            json!({"node":id,"name":"Queued preset"}),
+            json!({"node":id,"name":"Other","overwrite":"yes"}),
+            json!({"node":999,"name":"Other"}),
+        ] {
+            let result = execute_in_memory(
+                &mut editor,
+                "save_shape_stroke_preset",
+                &args,
+                &mut settings,
+            );
+            assert!(result.is_error, "{result:?}");
+            assert_eq!(settings, expected);
+            assert_eq!(editor.doc, document);
+            assert_eq!(editor.history.len(), steps);
+            assert_eq!(editor.revision, revision);
+        }
     }
 
     #[test]

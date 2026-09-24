@@ -39,9 +39,10 @@ retain freed capacity, so process working set need not fall immediately.
 ## Live experimental layout setting
 
 **Settings > Experimental > Reuse interface layout** enables or disables retained
-layout immediately for all open windows and saves the preference. The default is
-off. Switching resets framework layout caches and refreshes windows, without
-reopening documents or resetting their undo history. New windows inherit the
+layout immediately for all open windows and saves the preference. The application
+default is on for new settings and older settings without this field. An explicit
+saved off choice remains off. Switching resets framework layout caches and
+refreshes windows, without reopening documents or resetting their undo history. New windows inherit the
 session's effective choice.
 
 `EMULSION_RETAINED_LAYOUT=0`/`1` remains a startup override for comparisons and
@@ -74,8 +75,8 @@ warmed canvas tiles. It compares targeted notifications with the former owner
 notification in the same binary, with cold and retained layout. Rendering counts
 and the resulting view transform are asserted. GPU presentation is excluded. [Release measurements](canvas-navigation-release-results.md)
 show 41-42% less CPU-side pan-update time in roomy chrome and 22-28% less in compact
-from targeted notifications. Additional layout-reuse gains were mixed, so it
-remains opt-in.
+from targeted notifications. Additional layout-reuse gains were mixed. Enabling
+layout reuse by default is a product choice, not evidence of a universal CPU saving.
 
 ```powershell
 cargo bench -p emulsion-ui --features layout-bench --bench editor_navigation
@@ -132,17 +133,18 @@ those results with a real-window process/GPU profile.
 4. Consider optional disk suspension for very large inactive documents only after
    defining transactional persistence of unsaved pixels, history, and in-flight
    jobs. It introduces I/O and reactivation latency and is not implemented here.
-5. Evaluate the opt-in [layout reuse experiment](layout-reuse-experiment.md)
-   against the workload matrix before enabling it. Continue toward incremental
+5. Evaluate the [layout reuse experiment](layout-reuse-experiment.md) against the
+   workload matrix in both modes. Continue toward incremental
    framework rendering with explicit dependency tracking and upstream collaboration.
 
 ## The proposed persistent element tree
 
 Stable element identities, layout reuse, and damage tracking could reduce active
-frame work more deeply. Our pinned GPUI starts drawing at the root. By default it
-clears its Taffy layout tree for the next frame (`window.rs` and `taffy.rs`); the new
-opt-in experiment retains and reconciles layout nodes between frames. Its explicit
-view cache requires compatible bounds, clip, text style, dirty state, and refresh
+frame work more deeply. Our pinned GPUI starts drawing at the root. Its standalone
+default clears the Taffy layout tree for the next frame (`window.rs` and `taffy.rs`);
+Emulsion enables the experiment that retains and reconciles layout nodes between
+frames by default. Its explicit view cache requires compatible bounds, clip,
+text style, dirty state, and refresh
 state (`view.rs`). A persistent element tree must define which inputs invalidate
 layout, paint, transforms, and inherited state independently.
 
