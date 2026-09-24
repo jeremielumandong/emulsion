@@ -16,7 +16,47 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.paths.outputs.rust }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect changes outside the website
+        id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: python
+        run: |
+          import os
+          import subprocess
+
+          base = os.environ["BASE_SHA"]
+          head = os.environ["HEAD_SHA"]
+          # A new branch has no previous commit: run all Rust checks.
+          rust = True
+          if base and set(base) != {"0"}:
+              if os.environ["EVENT_NAME"] == "pull_request":
+                  base = subprocess.check_output(
+                      ["git", "merge-base", base, head], text=True
+                  ).strip()
+              paths = subprocess.check_output(
+                  ["git", "diff", "--name-only", "--no-renames", "-z", base, head]
+              ).split(b"\0")
+              rust = any(path and not path.startswith(b"site/") for path in paths)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"rust={str(rust).lower()}\n")
+
   check:
+    needs: changes
+    # Run conservatively if detection fails; skip only confirmed site-only changes.
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     timeout-minutes: 60
     runs-on: ubuntu-24.04
     steps:
@@ -87,6 +127,8 @@ jobs:
             target/debug/examples/renderer_smoke --require-software
 
   platform-check:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     name: Check (${{ matrix.os }})
     strategy:
       fail-fast: false

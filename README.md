@@ -93,6 +93,9 @@ open document without that connection.
 
 ## Automated checks included
 
+CI builds and tests the Rust project only. Changes confined to `site/` skip the
+Rust jobs after a lightweight change check; the website has no build or test job.
+
 The repository includes [GitHub Actions CI](.github/workflows/ci.yml). Pushes to
 `main` and pull requests run formatting, linting, workspace tests, vendored-license
 checks, and software GPU/rendering checks on Linux, plus compilation checks on
