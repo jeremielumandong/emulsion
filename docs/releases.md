@@ -1,4 +1,31 @@
-# Linux releases
+# Releases
+
+## Prepare the version
+
+When you decide to make a release, run **Actions → Prepare release → Run workflow**
+on `main`. Choose `patch`, `minor`, or `major` (default: `patch`). For example,
+patch changes `0.0.1` to `0.0.2`; minor changes it to `0.1.0`.
+
+This is a manual workflow only. Ordinary commits, PR merges, and the Linux/Windows
+package workflows do not increment the version. It opens a review PR updating the
+workspace version in `Cargo.toml` and the matching package entries in `Cargo.lock`,
+without upgrading dependencies or creating a release tag. It refuses to overwrite
+an existing version preparation branch or tag.
+
+Enable **Settings → Actions → General → Workflow permissions → Allow GitHub Actions
+to create and approve pull requests**. The workflow only creates PRs; it does not
+approve or merge them. GitHub may require you to approve CI on a bot-created PR.
+After approving the run if requested, wait for CI and merge the version PR. Wait
+for main CI, then run both packaging workflows from the same main commit. Attach
+the Windows installer to the Linux-created draft and publish when both are ready.
+
+You can preview the next version locally without changing files:
+
+```sh
+python3 scripts/bump-version.py patch --dry-run
+```
+
+## Linux downloads
 
 `curl -fsSL https://emulsion.pro/install | sh` downloads the latest published
 GitHub Release from `jeremielumandong/emulsion`. The website serves the POSIX shell
@@ -16,8 +43,7 @@ downloads; they are not an independent publisher signature.
 
 ## Build and publish
 
-1. Update the workspace version in `Cargo.toml` and its entries in `Cargo.lock`
-   for a new release, then commit and push to `main`.
+1. Run **Prepare release** and merge its version PR, as described above.
 2. Wait for CI on that exact commit to pass.
 3. Run **Linux release package** from GitHub Actions on `main`.
    The workflow refuses to package a commit whose latest CI run has not passed.
