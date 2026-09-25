@@ -64,6 +64,13 @@ The website check still runs. Code, dependencies, packaging, licenses, workflow
 changes, and unknown paths retain the full Rust checks. Mixed changes run the
 full checks whenever any changed file requires them.
 
+CI caches compiled dependencies on main and on individual PRs, including when a
+later check fails. PR caches are isolated from main; subsequent updates to the
+same PR can reuse them. Linux reports test compilation and test execution as
+separate steps and builds both smoke programs together with workspace features
+resolved consistently. Cargo timing reports are generated under
+`target/cargo-timings/`; UI tests remain serial because they modify process state.
+
 ## Pull requests
 
 - Explain the problem and resulting behavior, and link related issues.
