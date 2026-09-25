@@ -16,6 +16,22 @@ npm run dev
 
 `npm run build` produces `dist/`; `npm run preview` previews that build.
 
+## Windows downloads
+
+The Windows button links to GitHub's permanent latest-release asset URL:
+
+`https://github.com/jeremielumandong/emulsion/releases/latest/download/Emulsion-windows-x64-setup.exe`
+
+The Windows release workflow uploads this stable filename alongside the versioned
+signed installer and checksums. Both platform workflows contribute to the same
+draft release; publish it as latest only after both finish successfully. See
+[release instructions](../docs/releases.md).
+
+Deploy this site update once. Later Windows releases require no website rebuild,
+container restart, mounted version file, or R2 upload. GitHub redirects the link
+to the asset on its latest published release. Drafts and prereleases do not update
+the public download; the latest release must include the stable Windows asset.
+
 ## Content and images
 
 `index.html` contains the marketing copy, capability cards, three detailed

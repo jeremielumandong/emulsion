@@ -1,10 +1,48 @@
 # Azure Artifact Signing via the Windows SDK SignTool and Microsoft's dlib.
-# Uses the authenticated Azure CLI session in CI; no signing private key is stored.
+# Uses Azure credentials locally or the authenticated Azure CLI session in CI.
 Set-StrictMode -Version Latest
 
+function Import-TrustedSigningEnvironment {
+    param([Parameter(Mandatory)][string]$Repository)
+
+    # Parse data only: never execute dotenv contents or expand credential values.
+    $settings = @{}
+    foreach ($file in @('.env', '.env.local')) {
+        $path = Join-Path $Repository $file
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $lineNumber = 0
+        foreach ($line in (Get-Content -LiteralPath $path -Encoding UTF8)) {
+            $lineNumber++
+            if ($line -notmatch '^\s*(?:export\s+)?((?:AZURE_|EMULSION_SIGN)[A-Za-z0-9_]*)\s*=(.*)$') { continue }
+            $name = $Matches[1]
+            $value = $Matches[2].Trim()
+            if ($value.StartsWith('"') -or $value.StartsWith("'")) {
+                $quote = [regex]::Escape($value.Substring(0, 1))
+                if ($value -notmatch "^$quote(.*?)$quote\s*(?:#.*)?$") {
+                    throw "Invalid quoted signing setting in ${file} at line $lineNumber."
+                }
+                $value = $Matches[1]
+            } else {
+                $value = ($value -replace '\s+#.*$', '').TrimEnd()
+            }
+            $settings[$name] = $value
+        }
+    }
+    foreach ($name in $settings.Keys) {
+        # Existing shell / GitHub settings always take precedence.
+        if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) {
+            [Environment]::SetEnvironmentVariable($name, $settings[$name], 'Process')
+        }
+    }
+}
+
 function New-TrustedSigningContext {
+    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    Import-TrustedSigningEnvironment -Repository $root
     foreach ($name in @('AZURE_CODESIGNING_ENDPOINT', 'AZURE_CODESIGNING_ACCOUNT', 'AZURE_CODESIGNING_PROFILE')) {
-        if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing signing setting: $name" }
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+            throw "Missing signing setting: $name. Set it in the repository .env or PowerShell environment."
+        }
     }
     $signTool = $env:EMULSION_SIGN_SIGNTOOL
     if (-not $signTool) {
@@ -40,7 +78,6 @@ function New-TrustedSigningContext {
         }
     }
     if (-not (Test-Path -LiteralPath $dlib)) { throw 'Signing dlib does not exist.' }
-    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $metadataPath = Join-Path $root 'target/trusted-signing-metadata.json'
     New-Item -ItemType Directory -Path (Split-Path -Parent $metadataPath) -Force | Out-Null
     $metadata = [ordered]@{

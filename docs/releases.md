@@ -16,8 +16,8 @@ Enable **Settings → Actions → General → Workflow permissions → Allow Git
 to create and approve pull requests**. The workflow only creates PRs; it does not
 approve or merge them. GitHub may require you to approve CI on a bot-created PR.
 After approving the run if requested, wait for CI and merge the version PR. Wait
-for main CI, then run both packaging workflows from the same main commit. Attach
-the Windows installer to the Linux-created draft and publish when both are ready.
+for main CI, then run both packaging workflows from the same main commit. Both
+upload their assets to the same draft automatically; publish after both succeed.
 
 You can preview the next version locally without changing files:
 
@@ -45,14 +45,21 @@ downloads; they are not an independent publisher signature.
 
 1. Run **Prepare release** and merge its version PR, as described above.
 2. Wait for CI on that exact commit to pass.
-3. Run **Linux release package** from GitHub Actions on `main`.
-   The workflow refuses to package a commit whose latest CI run has not passed.
-4. The workflow builds on Ubuntu 24.04 and creates a **draft** release named
-   `v<workspace version>`, with the installer archive, checksum, and standalone
-   AppImage attached. Review and publish the draft when ready.
+3. Run **Linux release package** and **Windows signed release package** from
+   GitHub Actions on `main`, against the same commit. Either can run first.
+   Both refuse to package a commit whose latest CI run has not passed.
+4. The first workflow to finish creates a **draft** release named
+   `v<workspace version>`. The other adds its assets to that draft. Linux attaches
+   its installer archive, checksum, and standalone AppImage; Windows attaches
+   its signed installer and checksums, including a stable download filename.
+5. Wait for both workflows to succeed, then review and publish the shared draft
+   as the latest release. Publishing before both complete would leave one
+   platform's latest-download URL without its asset.
 
-Use a new version for each release. Existing releases are not overwritten by the
-workflow. Drafts and prereleases are not selected by the installer's default
+Use a new version for each published release. The workflows refuse to modify a
+published release or reuse a draft/tag targeting a different commit. A rerun can
+replace that platform's assets on a matching draft without removing the other
+platform's assets. Drafts and prereleases are not selected by the installer's default
 `latest` URL. CI still runs before a release; creating an installer does not bypass
 tests. The workflow does not deploy the website.
 
@@ -90,10 +97,24 @@ After merging to `main` and passing CI, run **Windows signed release package**.
 It builds on Windows x64, authenticates using Azure OIDC, signs the application,
 embedded NSIS uninstaller and setup, then checks publisher identity, timestamp
 and signature validity. The bundled third-party DLL signatures are also checked.
-Only a verified setup and its SHA-256 checksum are uploaded as a workflow artifact
-(retained for 14 days). Download that artifact from the run, extract it, and upload
-the installer to Cloudflare R2 manually. This workflow does not create a GitHub
-Release or publish to R2; the Linux release workflow remains separate.
+The verified setup and its SHA-256 checksum are retained as a workflow artifact
+for 14 days and automatically uploaded to the shared draft GitHub Release:
+
+- `emulsion_<version>_x64-setup.exe` and its `.sha256` file
+- `Emulsion-windows-x64-setup.exe` and its `.sha256` file
+
+The stable filename is a byte-for-byte copy of the signed versioned installer;
+its checksum file names the stable copy. The website and README use
+`https://github.com/jeremielumandong/emulsion/releases/latest/download/Emulsion-windows-x64-setup.exe`.
+Once the draft is published as latest, that URL follows it automatically. No R2
+upload, VM version file, or website redeployment is needed for later releases.
+GitHub's latest-release selection controls the download; this is not a directory
+scan that sorts filenames by version. Publish stable releases in version order.
+
+Both packaging workflows use `scripts/upload-release-assets.py`. They check the
+draft/tag before compilation and again before uploading, and verify the package
+checksum. Windows has `contents: write` permission for attaching release assets;
+its existing environment approval, OIDC, and signing checks still apply.
 
 The job reads signing configuration from the `windows-release` GitHub Environment.
 Keep account identifiers, profile names, and publisher details in GitHub settings;
@@ -107,6 +128,22 @@ Under **Settings → Actions → General**, add `azure/login@*` and
 are pinned to commit SHAs. The Windows runner must provide .NET 8 and the Windows
 SDK x64 signing tools; the signing helper downloads Microsoft's signing client.
 
-For a local signed build, supply signing settings through the PowerShell
-environment, authenticate with `az login`, and run
-`./scripts/build-windows.ps1 -Sign`. Ordinary `-Package` builds remain unsigned.
+For a local signed build, copy `.env.example` to `.env` in the repository root
+and fill in `AZURE_CODESIGNING_ENDPOINT`, `AZURE_CODESIGNING_ACCOUNT`,
+`AZURE_CODESIGNING_PROFILE`, and `EMULSION_SIGN_EXPECTED_SUBJECT`. Authenticate
+with `az login`, then run `./scripts/build-windows.ps1 -Sign`. The signed installer
+is written to `target/windows/`. Local signing needs the x64 .NET 8 runtime,
+Windows SDK signing tools, and cargo-packager listed above.
+
+The signing helper reads `.env` and then `.env.local`, regardless of the current
+directory. Existing PowerShell or GitHub environment values take precedence over
+both files. Only `AZURE_*` and `EMULSION_SIGN*` settings are imported, into the
+current process and its children. Values can be single- or double-quoted; they
+are read literally without variable expansion or command execution. Both local
+files are ignored by Git. Ordinary `-Package` builds remain unsigned.
+
+To package an already compiled native `target/release/emulsion.exe`, add
+`-SkipBuild` to `-Package` or `-Sign`. This uses the existing executable; rebuild
+first when source changes need to be included. CI compiles before Azure login,
+then runs `-Sign -SkipBuild` so a second compilation cannot consume the short
+GitHub OIDC assertion lifetime before signing starts.

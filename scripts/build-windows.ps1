@@ -10,18 +10,25 @@ Build Emulsion on Windows (release by default).
 .\scripts\build-windows.ps1 -Package
 .EXAMPLE
 .\scripts\build-windows.ps1 -Sign
+.EXAMPLE
+.\scripts\build-windows.ps1 -Sign -SkipBuild
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('Release', 'Debug')]
     [string]$Configuration = 'Release',
-    # Like AgentOps, packaging always builds a release executable.
+    # Packaging always uses a release executable.
     [switch]$Package,
     # Sign the application, embedded uninstaller, and installer with Azure.
-    [switch]$Sign
+    [switch]$Sign,
+    # Package an existing target/release executable without invoking cargo build.
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
+if ($SkipBuild -and -not ($Package -or $Sign)) {
+    throw '-SkipBuild requires -Package or -Sign.'
+}
 
 function Copy-Licenses {
     param([string]$Repository, [string]$Destination)
@@ -135,29 +142,35 @@ if ($runningApp) {
 # Run from the workspace so rustup and Cargo find its toolchain and configuration.
 Push-Location -LiteralPath $repoRoot
 try {
-    Write-Host "Building Emulsion ($Configuration)..."
-    if ($Package) {
-        # Capture the actual artifact path so a custom Cargo target cannot
-        # accidentally package an older native executable left in target/release.
-        $buildMessages = & cargo @cargoArgs --message-format=json-render-diagnostics
+    if ($SkipBuild) {
+        Write-Host "Packaging existing executable: $expectedBinary"
     } else {
-        & cargo @cargoArgs
+        Write-Host "Building Emulsion ($Configuration)..."
+        if ($Package) {
+            # Capture the actual artifact path so a custom Cargo target cannot
+            # accidentally package an older native executable left in target/release.
+            $buildMessages = & cargo @cargoArgs --message-format=json-render-diagnostics
+        } else {
+            & cargo @cargoArgs
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Cargo build failed with exit code $LASTEXITCODE."
+        }
+        Write-Host 'Emulsion build completed successfully. Output is under target/.'
     }
-    if ($LASTEXITCODE -ne 0) {
-        throw "Cargo build failed with exit code $LASTEXITCODE."
-    }
-    Write-Host 'Emulsion build completed successfully. Output is under target/.'
     if ($Package) {
         $binaryDir = Join-Path $targetDir 'release'
         $binary = Join-Path $binaryDir 'emulsion.exe'
-        $builtExecutables = @($buildMessages | ForEach-Object {
-            $message = $_ | ConvertFrom-Json
-            if ($message.reason -eq 'compiler-artifact' -and $message.target.name -eq 'emulsion' -and $message.executable) {
-                [IO.Path]::GetFullPath($message.executable)
+        if (-not $SkipBuild) {
+            $builtExecutables = @($buildMessages | ForEach-Object {
+                $message = $_ | ConvertFrom-Json
+                if ($message.reason -eq 'compiler-artifact' -and $message.target.name -eq 'emulsion' -and $message.executable) {
+                    [IO.Path]::GetFullPath($message.executable)
+                }
+            })
+            if ($builtExecutables.Count -ne 1 -or $builtExecutables[0] -ne $binary) {
+                throw 'NSIS packaging requires the native target/release build. Remove custom Cargo build.target or CARGO_BUILD_TARGET settings.'
             }
-        })
-        if ($builtExecutables.Count -ne 1 -or $builtExecutables[0] -ne $binary) {
-            throw 'NSIS packaging requires the native target/release build. Remove custom Cargo build.target or CARGO_BUILD_TARGET settings.'
         }
         if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
             throw "Missing $binary. Packaging expects the native Windows build without a custom Cargo build.target."

@@ -32,7 +32,7 @@ or [build from source](#build) for other platforms.
 
 ## Download (Windows x64)
 
-[Download Emulsion 0.0.1 for Windows](https://releases.emulsion.pro/emulsion/emulsion_0.0.1_x64-setup.exe)
+[Download the latest Emulsion release for Windows](https://github.com/jeremielumandong/emulsion/releases/latest/download/Emulsion-windows-x64-setup.exe)
 
 Run the downloaded setup program. No Rust compiler or Visual Studio Build Tools
 are needed to install the prebuilt release.
@@ -250,7 +250,7 @@ cannot see host converters; see [Opening files](#opening-files).
 
 ## Build (Windows)
 
-To install the prebuilt app, [download the Windows x64 installer](https://releases.emulsion.pro/emulsion/emulsion_0.0.1_x64-setup.exe).
+To install the prebuilt app, [download the Windows x64 installer](https://github.com/jeremielumandong/emulsion/releases/latest/download/Emulsion-windows-x64-setup.exe).
 The instructions below are for building from source.
 
 Install Rust and Visual Studio Build Tools with the **Desktop development with C++**
