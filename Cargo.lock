@@ -1780,6 +1780,7 @@ dependencies = [
  "emulsion-mcp",
  "emulsion-ui",
  "gpui-kit",
+ "libc",
  "tracing",
  "tracing-subscriber",
  "winresource",

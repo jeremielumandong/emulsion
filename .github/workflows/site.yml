@@ -46,6 +46,9 @@ jobs:
           grep -q 'id="guide-raw"' /tmp/emulsion-site.html
           curl --fail http://127.0.0.1:8080/icons.svg -o /dev/null
           curl --fail http://127.0.0.1:8080/assets/editor.png -o /dev/null
+          curl --fail http://127.0.0.1:8080/install -o /tmp/emulsion-install.sh
+          head -1 /tmp/emulsion-install.sh | grep -qx '#!/bin/sh'
+          sh -n /tmp/emulsion-install.sh
           python3 - <<'PY'
           from html.parser import HTMLParser
           from urllib.request import urlopen

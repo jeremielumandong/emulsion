@@ -189,6 +189,22 @@ upstream licenses; GPUI is primarily Apache-2.0. See
 
 ## Install (Linux)
 
+Install the latest published Linux x86_64 release:
+
+```sh
+curl -fsSL https://emulsion.pro/install | sh
+```
+
+The installer downloads from this repository’s GitHub Releases, checks the
+SHA-256 checksum, and installs the AppImage and desktop launcher for your user.
+No Rust compiler or sudo is needed. A working graphics driver and the AppImage’s
+system libraries are still required. Rerun the command to update; quit Emulsion
+first. To select a release, use `curl -fsSL https://emulsion.pro/install | EMULSION_VERSION=v0.0.1 sh`.
+The endpoint requires the updated website deployment and a published release
+containing the installer bundle; see [release packaging](docs/releases.md).
+
+To build and install from a source checkout instead:
+
 ```sh
 scripts/install-appimage.sh --build   # build the AppImage and install it
 scripts/install-appimage.sh --uninstall

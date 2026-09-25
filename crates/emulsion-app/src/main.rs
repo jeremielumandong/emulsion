@@ -11,11 +11,17 @@ use gpui_kit::*;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
+mod memory;
+
 fn main() -> anyhow::Result<()> {
+    let memory_configured = memory::configure();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .with_writer(std::io::stderr)
         .init();
+    if !memory_configured {
+        tracing::warn!("Large image allocation policy could not be configured");
+    }
 
     let mut args = std::env::args().skip(1);
     let file = match args.next() {

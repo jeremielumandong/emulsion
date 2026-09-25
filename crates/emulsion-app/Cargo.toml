@@ -19,9 +19,17 @@ emulsion-core = { workspace = true }
 emulsion-gpu = { workspace = true }
 emulsion-mcp = { workspace = true }
 emulsion-assistant = { workspace = true }
+
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc = { workspace = true }
+
 [[bin]]
 name = "emulsion"
 path = "src/main.rs"
+
+[[test]]
+name = "memory_release"
+harness = false
 
 [package.metadata.packager]
 product-name = "Emulsion"

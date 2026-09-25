@@ -57,6 +57,18 @@ impl Pix for u8 {
 
 pub type Tile<P> = Arc<[P]>;
 
+/// Allocate the final shared buffer directly. Converting a tile-sized Vec
+/// into an Arc copies it, and freed temporary buffers can stay resident in
+/// worker-thread allocator caches after a large image import.
+fn filled_tile<P: Pix>(fill: P) -> Tile<P> {
+    let mut tile = Arc::<[P]>::new_uninit_slice(TILE_PX);
+    for pixel in Arc::get_mut(&mut tile).expect("new tile is unique") {
+        pixel.write(fill);
+    }
+    // SAFETY: every element was initialized above, including edge padding.
+    unsafe { tile.assume_init() }
+}
+
 /// Reduced tiles by (level ≥ 1, coord). `None` = all fill.
 type MipCache<P> = HashMap<(u32, TileCoord), Option<Tile<P>>>;
 
@@ -377,10 +389,11 @@ impl<P: Pix> Plane<P> {
         let coords: Vec<TileCoord> = (0..ty)
             .flat_map(|y| (0..tx).map(move |x| TileCoord::new(x, y)))
             .collect();
-        let built: Vec<(TileCoord, Vec<P>)> = coords
+        let built: Vec<(TileCoord, Tile<P>)> = coords
             .into_par_iter()
             .map(|c| {
-                let mut t = vec![fill; TILE_PX];
+                let mut tile = filled_tile(fill);
+                let t = Arc::get_mut(&mut tile).expect("new tile is unique");
                 let x0 = c.x as u32 * TILE;
                 let y0 = c.y as u32 * TILE;
                 for ly in 0..TILE.min(height - y0) {
@@ -388,12 +401,12 @@ impl<P: Pix> Plane<P> {
                         t[(ly * TILE + lx) as usize] = f(x0 + lx, y0 + ly);
                     }
                 }
-                (c, t)
+                (c, tile)
             })
             .collect();
         for (c, t) in built {
             if t.iter().any(|p| *p != fill) {
-                plane.tiles.insert(c, t.into());
+                plane.tiles.insert(c, t);
             }
         }
         plane
@@ -447,7 +460,8 @@ fn uniform_quad<P: Pix>(children: &[Option<Tile<P>>; 4]) -> Option<Tile<P>> {
 }
 
 fn reduce<P: Pix>(children: &[Option<Tile<P>>; 4], fill: P) -> Tile<P> {
-    let mut out = vec![fill; TILE_PX];
+    let mut tile = filled_tile(fill);
+    let out = Arc::get_mut(&mut tile).expect("new tile is unique");
     let half = (TILE / 2) as usize;
     let t = TILE as usize;
     for (q, child) in children.iter().enumerate() {
@@ -463,7 +477,7 @@ fn reduce<P: Pix>(children: &[Option<Tile<P>>; 4], fill: P) -> Tile<P> {
             }
         }
     }
-    out.into()
+    tile
 }
 
 impl Raster {
@@ -766,6 +780,23 @@ mod tests {
         let r = Raster::from_srgba8(w as u32, h as u32, &data);
         assert_eq!(r.tile_count(), 1, "transparent tiles must not be stored");
         assert_eq!(r.to_srgba8(), data);
+    }
+
+    #[test]
+    fn partial_tiles_and_mips_preserve_nonzero_fill_padding() {
+        fn check<P: Pix + std::fmt::Debug>(fill: P, pixel: P) {
+            let plane = Plane::from_fn(TILE + 1, TILE + 1, fill, |_, _| pixel);
+            let edge = plane.tile(0, TileCoord::new(1, 1)).unwrap();
+            assert_eq!(edge[0], pixel);
+            assert!(edge[1..].iter().all(|p| *p == fill));
+
+            let mip = plane.tile(1, TileCoord::new(0, 0)).unwrap();
+            let corner = (TILE_PX + TILE as usize) / 2;
+            assert_eq!(mip[corner], P::avg4(pixel, fill, fill, fill));
+            assert!(mip[corner + 1..].iter().all(|p| *p == fill));
+        }
+        check([9u16; 4], [101; 4]);
+        check(7u8, 103);
     }
 
     #[test]
