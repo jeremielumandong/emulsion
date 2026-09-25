@@ -1,0 +1,86 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version increment (shared by Linux and Windows)
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  version-pr:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION_BUMP: ${{ inputs.bump }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This workflow deliberately pushes a new review branch, never main.
+          persist-credentials: true
+      - name: Prepare shared version
+        id: version
+        run: |
+          version=$(python3 scripts/bump-version.py "$VERSION_BUMP" --dry-run)
+          branch="release/v$version"
+          # Refuse to overwrite an existing release tag or preparation branch.
+          existing=$(git ls-remote origin "refs/tags/v$version" "refs/heads/$branch")
+          if [ -n "$existing" ]; then
+            echo "Version v$version already has a tag or preparation branch. Review or merge the existing version PR first." >&2
+            exit 1
+          fi
+          python3 scripts/bump-version.py "$VERSION_BUMP"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: '1.98'
+      - name: Validate version and lockfile
+        run: |
+          python3 scripts/test-version-bump.py
+          cargo metadata --locked --format-version 1 > /dev/null
+          git diff --check
+      - name: Open version PR
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_BRANCH: ${{ steps.version.outputs.branch }}
+        run: |
+          git switch -c "$RELEASE_BRANCH"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: prepare release v$RELEASE_VERSION"
+          git push origin "HEAD:refs/heads/$RELEASE_BRANCH"
+          cat > "$RUNNER_TEMP/release-pr.md" <<'BODY'
+          Update the shared workspace version and matching Cargo.lock entries for the next Linux and Windows release. Dependency versions remain unchanged.
+
+          Validation: version-bump tests and locked Cargo metadata resolution.
+
+          Approve the bot-created PR workflow if GitHub requests it, and wait for CI before merging. After main CI passes, run both release workflows against the same main commit. Attach the signed Windows installer to the Linux-created draft, then publish when ready.
+          BODY
+          url=$(gh pr create --base main --head "$RELEASE_BRANCH" \
+            --title "Prepare release v$RELEASE_VERSION" --body-file "$RUNNER_TEMP/release-pr.md")
+          {
+            echo "Version PR: $url"
+            echo
+            echo 'Approve the PR workflow if requested, then merge after CI passes.'
+            echo 'After main CI passes, run the Linux and Windows release workflows from the same commit.'
+          } >> "$GITHUB_STEP_SUMMARY"

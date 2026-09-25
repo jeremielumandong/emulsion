@@ -56,14 +56,16 @@ const installDialog = document.querySelector('#install-dialog');
 const platforms = {
   linux: { requirements: 'Downloads the latest Linux x86_64 release and installs an AppImage with a desktop launcher. Requires a working graphics driver; no Rust toolchain needed.', command: 'curl -fsSL https://emulsion.pro/install | sh', anchor: 'install-linux' },
   macos: { requirements: 'Requires Rust and the standard macOS iconutil and sips tools. The script builds a local .app and .dmg, signed ad hoc for local use.', command: 'scripts/build-macos.sh', anchor: 'build-macos' },
-  windows: { requirements: 'Requires Rust (MSVC) and Visual Studio Build Tools with the Desktop development with C++ workload. Run in PowerShell. This builds an unsigned executable; see the guide for installer packaging.', command: '.\\scripts\\build-windows.ps1', anchor: 'build-windows' },
+  windows: { requirements: 'Download Emulsion 0.0.1 for Windows x64, then run the setup program. No Rust compiler or Visual Studio Build Tools needed.', download: 'https://releases.emulsion.pro/emulsion/emulsion_0.0.1_x64-setup.exe', anchor: 'build-windows' },
 };
 function selectPlatform(name) {
   const platform = platforms[name];
   document.querySelectorAll('[data-platform]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.platform === name)));
   document.querySelector('#install-requirements').textContent = platform.requirements;
-  document.querySelector('#install-command').textContent = name === 'linux' ? platform.command : `git clone https://github.com/jeremielumandong/emulsion.git\ncd emulsion\n${platform.command}`;
-  document.querySelector('#install-guide').href = `https://github.com/jeremielumandong/emulsion#${platform.anchor}`;
+  document.querySelector('#install-dialog .command-block').hidden = Boolean(platform.download);
+  document.querySelector('#install-command').textContent = platform.download ? '' : name === 'linux' ? platform.command : `git clone https://github.com/jeremielumandong/emulsion.git\ncd emulsion\n${platform.command}`;
+  document.querySelector('#install-guide').href = platform.download || `https://github.com/jeremielumandong/emulsion#${platform.anchor}`;
+  document.querySelector('#install-guide-label').textContent = platform.download ? 'Download for Windows (x64)' : 'Open installation guide';
   document.querySelector('#copy-command span').textContent = 'Copy';
   document.querySelector('#copy-command use').setAttribute('href', '/icons.svg#copy');
   document.querySelector('#copy-status').textContent = '';

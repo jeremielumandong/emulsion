@@ -132,3 +132,6 @@ kbd { font-size: 11px; border: 1px solid #c9c9bc; border-radius: 3px; padding: 2
   .header .brand { font-size: 22px; gap: 8px; }
   .header .button { padding: 11px 10px; gap: 8px; }
 }
+
+/* Windows uses a download button in place of shell commands. */
+.command-block[hidden] { display: none; }

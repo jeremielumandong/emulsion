@@ -30,6 +30,13 @@ Emulsion with a desktop launcher. No Rust compiler or sudo is needed.
 See [Linux installation](#install-linux) for requirements and update instructions,
 or [build from source](#build) for other platforms.
 
+## Download (Windows x64)
+
+[Download Emulsion 0.0.1 for Windows](https://releases.emulsion.pro/emulsion/emulsion_0.0.1_x64-setup.exe)
+
+Run the downloaded setup program. No Rust compiler or Visual Studio Build Tools
+are needed to install the prebuilt release.
+
 ## Screenshots
 
 ![Emulsion photo editor showing a portrait, recipe previews, and the Layers panel](docs/images/editor-recipes.png)
@@ -242,6 +249,9 @@ offline build, which the shipped manifest does not yet use. The Flatpak sandbox
 cannot see host converters; see [Opening files](#opening-files).
 
 ## Build (Windows)
+
+To install the prebuilt app, [download the Windows x64 installer](https://releases.emulsion.pro/emulsion/emulsion_0.0.1_x64-setup.exe).
+The instructions below are for building from source.
 
 Install Rust and Visual Studio Build Tools with the **Desktop development with C++**
 workload (including the Windows SDK). Use the MSVC Rust toolchain; the repository's
