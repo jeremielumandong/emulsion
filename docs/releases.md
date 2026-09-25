@@ -102,6 +102,22 @@ secret. Configure the federated identity to match this repository and environmen
 restrict the environment to `main`, and grant the CI identity signing access to
 the intended certificate profile.
 
+The federated credential must match the token's `sub` claim exactly. This
+repository's tokens use GitHub's immutable-ID subject format, which includes the
+numeric owner and repository IDs:
+
+```text
+Issuer:   https://token.actions.githubusercontent.com
+Audience: api://AzureADTokenExchange
+Subject:  repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:windows-release
+```
+
+The Entra portal's "GitHub Actions deploying Azure resources" template builds the
+older `repo:<owner>/<repo>:environment:windows-release` subject, which fails with
+`AADSTS700213: No matching federated identity record found`. Use the **Other
+issuer** scenario (or edit the subject) and paste the subject from that error
+message verbatim.
+
 Under **Settings → Actions → General**, add `azure/login@*` and
 `actions/upload-artifact@*` to the existing action allowlist. All workflow actions
 are pinned to commit SHAs. The Windows runner must provide .NET 8 and the Windows
