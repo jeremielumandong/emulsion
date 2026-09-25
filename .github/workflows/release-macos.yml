@@ -1,0 +1,164 @@
+name: macOS signed release package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Shared with Linux and Windows: serialize draft creation and asset uploads.
+  group: shared-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: github.ref == 'refs/heads/main'
+    name: Package (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    environment: macos-release
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require passing CI for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&branch=main&event=push&per_page=1" > "$RUNNER_TEMP/ci-runs.json"
+          python3 - "$RUNNER_TEMP/ci-runs.json" <<'PY'
+          import json, sys
+          runs = json.load(open(sys.argv[1]))['workflow_runs']
+          if not runs or runs[0]['conclusion'] != 'success':
+              raise SystemExit('Release blocked: the latest main-branch CI run for this commit must pass first.')
+          PY
+      - name: Check shared draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/upload-release-assets.py "macos-${{ matrix.arch }}" --check
+      - name: Check runner architecture
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: '1.98'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: v1-macos-release-${{ matrix.arch }}
+          cache-on-failure: true
+      # Compile before any credentials are loaded onto the runner.
+      - name: Compile release executable
+        run: cargo build --release --locked -p emulsion-app
+      - name: Load signing certificate and notarization key
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          for name in MACOS_SIGN_IDENTITY APPLE_TEAM_ID MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD \
+            APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing macos-release environment value: $name"
+              exit 1
+            fi
+          done
+
+          keychain="$RUNNER_TEMP/emulsion-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+
+          umask 077
+          printf '%s' "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" \
+            -P "$MACOS_CERT_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          # Exported .p12 files often omit Apple's intermediate certificate.
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+            -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain" || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" >/dev/null
+          existing=$(security list-keychains -d user | tr -d '"')
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$keychain" $existing
+
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary-key.p8"
+          {
+            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/notary-key.p8"
+            echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID"
+            echo "APPLE_API_ISSUER_ID=$APPLE_API_ISSUER_ID"
+          } >> "$GITHUB_ENV"
+      - name: Package, sign, notarize, and verify disk image
+        # Start clean: the Rust cache may restore disk images from older versions.
+        run: |
+          rm -rf target/macos
+          bash scripts/build-macos.sh --no-build --sign
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/emulsion-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/notary-key.p8" "$RUNNER_TEMP/developer-id.p12"
+      - name: Write disk image checksum
+        run: |
+          cd target/macos
+          set -- Emulsion-*-"${{ matrix.arch }}".dmg
+          [ "$#" -eq 1 ] && [ -f "$1" ] || { echo "::error::Expected exactly one disk image"; exit 1; }
+          shasum -a 256 "$1" > "$1.sha256"
+      - name: Preserve notarized disk image as a workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          # Rerunning one failed architecture replaces only its own artifact.
+          name: Emulsion-macos-${{ matrix.arch }}-signed-${{ github.run_number }}
+          overwrite: true
+          path: |
+            target/macos/Emulsion-*.dmg
+            target/macos/Emulsion-*.dmg.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  # Both architectures build in parallel; one job attaches them in turn so the
+  # shared draft is never created twice.
+  upload:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: Emulsion-macos-*-signed-${{ github.run_number }}
+          path: target/macos
+          merge-multiple: true
+      - name: Upload macOS assets to shared draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/upload-release-assets.py macos-arm64
+          python3 scripts/upload-release-assets.py macos-x86_64

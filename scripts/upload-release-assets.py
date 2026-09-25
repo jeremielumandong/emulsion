@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 import tomllib
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -73,6 +74,7 @@ def check_release(api, repository, tag, sha):
 def ensure_draft(api, repository, tag, sha):
     release = check_release(api, repository, tag, sha)
     if release is None:
+        creation_error = None
         try:
             api(f'/repos/{repository}/releases', data={
                 'tag_name': tag,
@@ -82,13 +84,23 @@ def ensure_draft(api, repository, tag, sha):
                 'generate_release_notes': True,
             })
         except HTTPError as error:
-            # Linux and Windows can finish simultaneously. Reuse the winner's
-            # draft only if the subsequent check confirms the same commit.
             if error.code != 422:
                 raise
-        release = check_release(api, repository, tag, sha)
+            creation_error = error
+        # The release list can briefly lag behind a successful POST (or a
+        # conflicting creator). Retry reads only; another POST can create a
+        # duplicate draft. Workflows share a concurrency group to avoid races.
+        for delay in (0, 1, 2, 4, 8, 16):
+            if delay:
+                time.sleep(delay)
+            release = check_release(api, repository, tag, sha)
+            if release is not None:
+                break
         if release is None:
-            raise ValueError(f'Could not create draft {tag}.')
+            if creation_error is not None:
+                details = creation_error.read().decode('utf-8', errors='replace')
+                raise ValueError(f'GitHub rejected draft {tag} (HTTP 422): {details}') from creation_error
+            raise ValueError(f'Draft {tag} was created but is not yet visible. Retry this workflow; do not delete the draft.')
     return release
 
 

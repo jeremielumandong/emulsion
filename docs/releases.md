@@ -47,6 +47,8 @@ downloads; they are not an independent publisher signature.
 2. Wait for CI on that exact commit to pass.
 3. Run **Linux release package** and **Windows signed release package** from
    GitHub Actions on `main`, against the same commit. Either can run first.
+   Both workflows share a concurrency group: if started together, one waits for
+   the other to finish. This prevents duplicate drafts during release creation.
    Both refuse to package a commit whose latest CI run has not passed.
 4. The first workflow to finish creates a **draft** release named
    `v<workspace version>`. The other adds its assets to that draft. Linux attaches
@@ -62,6 +64,13 @@ replace that platform's assets on a matching draft without removing the other
 platform's assets. Drafts and prereleases are not selected by the installer's default
 `latest` URL. CI still runs before a release; creating an installer does not bypass
 tests. The workflow does not deploy the website.
+
+If a platform fails while creating or uploading a draft, keep the draft with
+successful uploads and rerun the failed job at the same commit. The uploader
+retries briefly while newly created drafts become visible in GitHub's release
+list. If older workflows created an empty duplicate draft, remove only that
+empty duplicate before retrying; keep the draft containing the other platform's
+assets. Do not publish until both sets of assets are present.
 
 For local packaging:
 
