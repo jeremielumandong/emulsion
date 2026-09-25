@@ -19,6 +19,17 @@ The source for [emulsion.pro](https://emulsion.pro) lives in [`site/`](site/READ
 Run `cd site && npm ci && npm run dev` to work on it, or `npm run build` from
 that directory to produce the static site.
 
+## Quick install (Linux x86_64)
+
+```sh
+curl -fsSL https://emulsion.pro/install | sh
+```
+
+Downloads the latest published release, verifies its checksum, and installs
+Emulsion with a desktop launcher. No Rust compiler or sudo is needed.
+See [Linux installation](#install-linux) for requirements and update instructions,
+or [build from source](#build) for other platforms.
+
 ## Screenshots
 
 ![Emulsion photo editor showing a portrait, recipe previews, and the Layers panel](docs/images/editor-recipes.png)
