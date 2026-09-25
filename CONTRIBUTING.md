@@ -58,6 +58,12 @@ For documentation changes, check links and commands. For website changes, run
 `npm run build` in `site/` and check the affected pages in a browser. Describe any
 checks you could not run and why in the pull request.
 
+CI skips Rust compilation and tests when changes are limited to `site/`, the
+root README, contributing or security guides, and Markdown or images in `docs/`.
+The website check still runs. Code, dependencies, packaging, licenses, workflow
+changes, and unknown paths retain the full Rust checks. Mixed changes run the
+full checks whenever any changed file requires them.
+
 ## Pull requests
 
 - Explain the problem and resulting behavior, and link related issues.

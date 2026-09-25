@@ -57,3 +57,30 @@ settings and projects. A source checkout can also run
 
 Omapak submissions pin their own source commit. Creating a release or committing
 these files does not change an existing Omapak submission.
+
+## Signed Windows installer
+
+After merging to `main` and passing CI, run **Windows signed release package**.
+It builds on Windows x64, authenticates using Azure OIDC, signs the application,
+embedded NSIS uninstaller and setup, then checks publisher identity, timestamp
+and signature validity. The bundled third-party DLL signatures are also checked.
+Only a verified setup and its SHA-256 checksum are uploaded as a workflow artifact
+(retained for 14 days). Download that artifact from the run, extract it, and upload
+the installer to Cloudflare R2 manually. This workflow does not create a GitHub
+Release or publish to R2; the Linux release workflow remains separate.
+
+The job reads signing configuration from the `windows-release` GitHub Environment.
+Keep account identifiers, profile names, and publisher details in GitHub settings;
+do not commit those values. Azure OIDC provides authentication without a client
+secret. Configure the federated identity to match this repository and environment,
+restrict the environment to `main`, and grant the CI identity signing access to
+the intended certificate profile.
+
+Under **Settings → Actions → General**, add `azure/login@*` and
+`actions/upload-artifact@*` to the existing action allowlist. All workflow actions
+are pinned to commit SHAs. The Windows runner must provide .NET 8 and the Windows
+SDK x64 signing tools; the signing helper downloads Microsoft's signing client.
+
+For a local signed build, supply signing settings through the PowerShell
+environment, authenticate with `az login`, and run
+`./scripts/build-windows.ps1 -Sign`. Ordinary `-Package` builds remain unsigned.

@@ -39,7 +39,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Detect changes outside the website
+      - name: Detect changes requiring Rust checks
         id: paths
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -48,7 +48,25 @@ jobs:
         shell: python
         run: |
           import os
+          from pathlib import PurePosixPath
           import subprocess
+
+          def requires_rust(path):
+              if not path:
+                  return False
+              path = os.fsdecode(path)
+              if path.startswith("site/"):
+                  return False
+              if path in {"README.md", "CONTRIBUTING.md", "SECURITY.md"}:
+                  return False
+              if path.startswith("docs/") and PurePosixPath(path).suffix in {
+                  ".md", ".png", ".jpg", ".jpeg", ".svg", ".webp",
+              }:
+                  return False
+              # Unknown paths, code, dependencies, licenses, packaging, and CI
+              # configuration retain the full checks. Do not skip all *.md:
+              # vendored and packaged notices are validated by the Rust jobs.
+              return True
 
           base = os.environ["BASE_SHA"]
           head = os.environ["HEAD_SHA"]
@@ -62,13 +80,13 @@ jobs:
               paths = subprocess.check_output(
                   ["git", "diff", "--name-only", "--no-renames", "-z", base, head]
               ).split(b"\0")
-              rust = any(path and not path.startswith(b"site/") for path in paths)
+              rust = any(requires_rust(path) for path in paths)
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"rust={str(rust).lower()}\n")
 
   check:
     needs: changes
-    # Run conservatively if detection fails; skip only confirmed site-only changes.
+    # Run conservatively if detection fails; skip only website/documentation changes.
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     timeout-minutes: 120
     runs-on: ubuntu-24.04

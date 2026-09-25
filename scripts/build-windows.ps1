@@ -8,13 +8,17 @@ Build Emulsion on Windows (release by default).
 .\scripts\build-windows.ps1 -Configuration Debug
 .EXAMPLE
 .\scripts\build-windows.ps1 -Package
+.EXAMPLE
+.\scripts\build-windows.ps1 -Sign
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('Release', 'Debug')]
     [string]$Configuration = 'Release',
     # Like AgentOps, packaging always builds a release executable.
-    [switch]$Package
+    [switch]$Package,
+    # Sign the application, embedded uninstaller, and installer with Azure.
+    [switch]$Sign
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +106,15 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $targetDir = Join-Path $repoRoot 'target'
+Remove-Item Env:EMULSION_SIGN_ENABLED -ErrorAction SilentlyContinue
+if ($Sign) {
+    $Package = $true
+    . (Join-Path $PSScriptRoot 'lib/trusted-signing.ps1')
+    $signing = New-TrustedSigningContext
+    $env:EMULSION_SIGN_SIGNTOOL = $signing.SignTool
+    $env:EMULSION_SIGN_DLIB = $signing.Dlib
+    $env:EMULSION_SIGN_METADATA = $signing.Metadata
+}
 if ($Package) {
     $Configuration = 'Release'
     if (-not (Get-Command cargo-packager -ErrorAction SilentlyContinue)) {
@@ -164,11 +177,22 @@ try {
         Copy-Licenses -Repository $repoRoot -Destination (Join-Path $binaryDir 'licenses')
 
         $outDir = Join-Path $targetDir 'windows'
+        if ($Sign) {
+            Get-ChildItem -LiteralPath $outDir -Filter '*-setup.exe' -File -ErrorAction SilentlyContinue |
+                Remove-Item -Force
+            $env:EMULSION_SIGN_ENABLED = '1'
+        }
         Write-Host 'Creating NSIS installer (downloads NSIS on first use)...'
         & cargo packager --release --manifest-path (Join-Path $repoRoot 'crates/emulsion-app/Cargo.toml') --formats nsis --binaries-dir $binaryDir --out-dir $outDir
         if ($LASTEXITCODE -ne 0) { throw "NSIS packaging failed with exit code $LASTEXITCODE." }
         Write-Host "Installer created in $outDir"
+        if ($Sign) {
+            $psHost = (Get-Process -Id $PID).Path
+            & $psHost -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'verify-windows-signatures.ps1')
+            if ($LASTEXITCODE -ne 0) { throw 'Signature verification failed; do not ship these artifacts.' }
+        }
     }
 } finally {
+    Remove-Item Env:EMULSION_SIGN_ENABLED -ErrorAction SilentlyContinue
     Pop-Location
 }

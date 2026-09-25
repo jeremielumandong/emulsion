@@ -1,0 +1,113 @@
+name: Windows signed release package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    timeout-minutes: 120
+    environment: windows-release
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      AZURE_CODESIGNING_ENDPOINT: ${{ vars.AZURE_CODESIGNING_ENDPOINT }}
+      AZURE_CODESIGNING_ACCOUNT: ${{ vars.AZURE_CODESIGNING_ACCOUNT }}
+      AZURE_CODESIGNING_PROFILE: ${{ vars.AZURE_CODESIGNING_PROFILE }}
+      EMULSION_SIGN_EXPECTED_SUBJECT: ${{ vars.EMULSION_SIGN_EXPECTED_SUBJECT }}
+      EMULSION_SIGN_AZURE_CLI_ONLY: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require passing CI for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          $response = gh api "repos/$env:REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$env:GITHUB_SHA&branch=main&event=push&per_page=1"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read CI status.' }
+          $runs = ($response | ConvertFrom-Json).workflow_runs
+          if ($runs.Count -eq 0 -or $runs[0].conclusion -ne 'success') {
+            throw 'Release blocked: the latest main-branch CI run for this commit must pass first.'
+          }
+      - name: Check signing configuration and prerequisites
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $required = @('AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID',
+            'AZURE_CODESIGNING_ENDPOINT', 'AZURE_CODESIGNING_ACCOUNT',
+            'AZURE_CODESIGNING_PROFILE', 'EMULSION_SIGN_EXPECTED_SUBJECT')
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing windows-release environment variable: $name"
+            }
+          }
+          if ($env:EMULSION_SIGN_EXPECTED_SUBJECT.StartsWith("'") -or $env:EMULSION_SIGN_EXPECTED_SUBJECT.StartsWith('"')) {
+            throw 'Enter EMULSION_SIGN_EXPECTED_SUBJECT without surrounding quotes in GitHub.'
+          }
+          $runtimes = dotnet --list-runtimes
+          if ($LASTEXITCODE -ne 0 -or -not ($runtimes -match '^Microsoft.NETCore.App 8\.')) {
+            throw 'The signing client requires the x64 .NET 8 runtime.'
+          }
+          . ./scripts/lib/trusted-signing.ps1
+          $context = New-TrustedSigningContext
+          "EMULSION_SIGN_DLIB=$($context.Dlib)" >> $env:GITHUB_ENV
+          "EMULSION_SIGN_SIGNTOOL=$($context.SignTool)" >> $env:GITHUB_ENV
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: '1.98'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: v1-windows-release
+          cache-on-failure: true
+      - name: Install packaging tool
+        run: |
+          cargo install cargo-packager --version 0.11.8 --locked
+          if ($LASTEXITCODE -ne 0) { throw 'cargo-packager installation failed.' }
+      - name: Compile release executable
+        run: ./scripts/build-windows.ps1
+      # Authenticate after compilation so the signing token is fresh.
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Package, sign, and verify Windows installer
+        run: ./scripts/build-windows.ps1 -Sign
+      - name: Write installer checksums
+        run: |
+          $installers = @(Get-ChildItem target/windows/*-setup.exe -File)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one verified installer.' }
+          foreach ($installer in $installers) {
+            $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($installer.Name)" | Set-Content -LiteralPath "$($installer.FullName).sha256" -Encoding ascii
+          }
+      - name: Upload verified installer for manual R2 publication
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Emulsion-windows-x64-signed-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            target/windows/*-setup.exe
+            target/windows/*-setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

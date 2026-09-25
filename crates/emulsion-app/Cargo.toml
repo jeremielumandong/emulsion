@@ -44,6 +44,9 @@ resources = [
     { src = "../../target/release/licenses", target = "licenses" },
 ]
 
+[package.metadata.packager.windows]
+sign-command = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ../../scripts/sign-one-windows-artifact.ps1 %1"
+
 [package.metadata.packager.nsis]
 installer-mode = "currentUser"
 installer-icon = "../../assets/icons/emulsion.ico"
