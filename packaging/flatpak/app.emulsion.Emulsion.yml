@@ -46,6 +46,7 @@ modules:
       - install -Dm755 target/release/emulsion /app/bin/emulsion
       - bash scripts/stage-licenses.sh /app/share/licenses/emulsion
       - install -Dm644 packaging/linux/app.emulsion.Emulsion.desktop /app/share/applications/app.emulsion.Emulsion.desktop
+      - desktop-file-edit --set-icon=app.emulsion.Emulsion /app/share/applications/app.emulsion.Emulsion.desktop
       - install -Dm644 packaging/linux/app.emulsion.Emulsion.metainfo.xml /app/share/metainfo/app.emulsion.Emulsion.metainfo.xml
       - install -Dm644 assets/icons/emulsion.png /app/share/icons/hicolor/512x512/apps/app.emulsion.Emulsion.png
       - install -Dm644 LICENSE /app/share/doc/emulsion/LICENSE

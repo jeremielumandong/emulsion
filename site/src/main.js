@@ -54,7 +54,7 @@ document.querySelectorAll('[data-look]').forEach(button => button.addEventListen
 
 const installDialog = document.querySelector('#install-dialog');
 const platforms = {
-  linux: { requirements: 'Requires Rust, the GPUI system libraries, and a working graphics driver. The script builds and installs an AppImage.', command: 'scripts/install-appimage.sh --build', anchor: 'install-linux' },
+  linux: { requirements: 'Downloads the latest Linux x86_64 release and installs an AppImage with a desktop launcher. Requires a working graphics driver; no Rust toolchain needed.', command: 'curl -fsSL https://emulsion.pro/install | sh', anchor: 'install-linux' },
   macos: { requirements: 'Requires Rust and the standard macOS iconutil and sips tools. The script builds a local .app and .dmg, signed ad hoc for local use.', command: 'scripts/build-macos.sh', anchor: 'build-macos' },
   windows: { requirements: 'Requires Rust (MSVC) and Visual Studio Build Tools with the Desktop development with C++ workload. Run in PowerShell. This builds an unsigned executable; see the guide for installer packaging.', command: '.\\scripts\\build-windows.ps1', anchor: 'build-windows' },
 };
@@ -62,7 +62,7 @@ function selectPlatform(name) {
   const platform = platforms[name];
   document.querySelectorAll('[data-platform]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.platform === name)));
   document.querySelector('#install-requirements').textContent = platform.requirements;
-  document.querySelector('#install-command').textContent = `git clone https://github.com/jeremielumandong/emulsion.git\ncd emulsion\n${platform.command}`;
+  document.querySelector('#install-command').textContent = name === 'linux' ? platform.command : `git clone https://github.com/jeremielumandong/emulsion.git\ncd emulsion\n${platform.command}`;
   document.querySelector('#install-guide').href = `https://github.com/jeremielumandong/emulsion#${platform.anchor}`;
   document.querySelector('#copy-command span').textContent = 'Copy';
   document.querySelector('#copy-command use').setAttribute('href', '/icons.svg#copy');
@@ -72,7 +72,7 @@ selectPlatform(/Win/.test(navigator.platform) ? 'windows' : /Mac/.test(navigator
 document.querySelectorAll('[data-platform]').forEach(button => button.addEventListener('click', () => selectPlatform(button.dataset.platform)));
 document.querySelectorAll('[data-install]').forEach(button => button.addEventListener('click', () => installDialog.showModal()));
 document.querySelector('#copy-command').addEventListener('click', async event => {
-  try { await navigator.clipboard.writeText(document.querySelector('#install-command').textContent); document.querySelector('#copy-command span').textContent = 'Copied!'; document.querySelector('#copy-command use').setAttribute('href', '/icons.svg#check'); document.querySelector('#copy-status').textContent = 'Build commands copied.'; }
+  try { await navigator.clipboard.writeText(document.querySelector('#install-command').textContent); document.querySelector('#copy-command span').textContent = 'Copied!'; document.querySelector('#copy-command use').setAttribute('href', '/icons.svg#check'); document.querySelector('#copy-status').textContent = 'Installation commands copied.'; }
   catch { document.querySelector('#copy-status').textContent = 'Clipboard unavailable. Select and copy the commands above.'; }
 });
 document.querySelectorAll('dialog').forEach(dialog => {

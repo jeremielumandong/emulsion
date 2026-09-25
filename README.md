@@ -19,6 +19,17 @@ The source for [emulsion.pro](https://emulsion.pro) lives in [`site/`](site/READ
 Run `cd site && npm ci && npm run dev` to work on it, or `npm run build` from
 that directory to produce the static site.
 
+## Quick install (Linux x86_64)
+
+```sh
+curl -fsSL https://emulsion.pro/install | sh
+```
+
+Downloads the latest published release, verifies its checksum, and installs
+Emulsion with a desktop launcher. No Rust compiler or sudo is needed.
+See [Linux installation](#install-linux) for requirements and update instructions,
+or [build from source](#build) for other platforms.
+
 ## Screenshots
 
 ![Emulsion photo editor showing a portrait, recipe previews, and the Layers panel](docs/images/editor-recipes.png)
@@ -188,6 +199,22 @@ upstream licenses; GPUI is primarily Apache-2.0. See
 [third-party notices](THIRD_PARTY_NOTICES.md) for attribution and scope.
 
 ## Install (Linux)
+
+Install the latest published Linux x86_64 release:
+
+```sh
+curl -fsSL https://emulsion.pro/install | sh
+```
+
+The installer downloads from this repository’s GitHub Releases, checks the
+SHA-256 checksum, and installs the AppImage and desktop launcher for your user.
+No Rust compiler or sudo is needed. A working graphics driver and the AppImage’s
+system libraries are still required. Rerun the command to update; quit Emulsion
+first. To select a release, use `curl -fsSL https://emulsion.pro/install | EMULSION_VERSION=v0.0.1 sh`.
+The endpoint requires the updated website deployment and a published release
+containing the installer bundle; see [release packaging](docs/releases.md).
+
+To build and install from a source checkout instead:
 
 ```sh
 scripts/install-appimage.sh --build   # build the AppImage and install it

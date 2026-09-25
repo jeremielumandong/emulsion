@@ -1,0 +1,44 @@
+#!/bin/sh
+# Install a published Emulsion Linux release. Safe to invoke through `curl | sh`:
+# the complete function is parsed before any installation starts.
+emulsion_install() (
+    set -eu
+    fail() { printf 'emulsion: %s\n' "$*" >&2; exit 1; }
+    [ "$(uname -s)" = Linux ] || fail 'This installer supports Linux only.'
+    [ "$(uname -m)" = x86_64 ] || fail 'Release packages currently support x86_64 only.'
+    for tool in curl bash tar sha256sum mktemp; do
+        command -v "$tool" >/dev/null 2>&1 || fail "Required command missing: $tool"
+    done
+    releases=https://github.com/jeremielumandong/emulsion/releases
+    tag=${EMULSION_VERSION:-}
+    if [ -z "$tag" ]; then
+        latest=$(curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 \
+            -o /dev/null -w '%{url_effective}' "$releases/latest") || fail 'Could not find a published release.'
+        case "$latest" in
+            "$releases/tag/"*) tag=${latest##*/} ;;
+            *) fail 'Could not resolve the latest release.' ;;
+        esac
+    fi
+    case "$tag" in v[0-9]*) ;; *) fail 'EMULSION_VERSION must be a release tag such as v0.0.1.' ;; esac
+    case "$tag" in *[!a-zA-Z0-9._-]*) fail 'Invalid release tag.' ;; esac
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    asset=Emulsion-linux-x86_64.tar.gz
+    printf 'Downloading Emulsion %s…\n' "$tag"
+    for file in "$asset" "$asset.sha256"; do
+        curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 \
+            "$releases/download/$tag/$file" -o "$work/$file" || fail "Download failed: $file"
+    done
+    cd "$work"
+    # Compare only the expected archive; never interpret paths from the checksum file.
+    expected=$(cut -d ' ' -f 1 "$asset.sha256")
+    [ "${#expected}" = 64 ] || fail 'Invalid release checksum.'
+    case "$expected" in *[!0-9a-f]*) fail 'Invalid release checksum.' ;; esac
+    actual=$(sha256sum "$asset")
+    [ "${actual%% *}" = "$expected" ] || fail 'Checksum mismatch; nothing was installed.'
+    tar -xzf "$asset"
+    bash scripts/install-appimage.sh "$work/Emulsion.AppImage" "$@" < /dev/null
+)
+emulsion_install "$@"

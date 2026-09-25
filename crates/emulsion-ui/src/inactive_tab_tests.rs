@@ -226,6 +226,36 @@ fn closing_the_active_tab_resumes_only_its_replacement(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
+fn closing_last_tab_releases_document_pixels_and_editor(cx: &mut TestAppContext) {
+    let pixels = Raster::from_fn(256, 192, [0; 4], |x, y| {
+        [x as u16, y as u16, 1000, u16::MAX]
+    });
+    let tile = Arc::downgrade(pixels.base_tiles().next().unwrap().1);
+    let (workspace, cx) = open(cx, doc(&["Photo"], Some(pixels)));
+    let editor = cx.update(|_, cx| workspace.read(cx).editor.as_ref().unwrap().downgrade());
+    assert!(tile.upgrade().is_some());
+
+    cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| workspace.close_tab(0, window, cx));
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let workspace = workspace.read(cx);
+        assert!(workspace.tabs.is_empty());
+        assert!(workspace.editor.is_none());
+        assert_eq!(workspace.screen, Screen::Home);
+    });
+    assert!(
+        editor.upgrade().is_none(),
+        "closed editor is still retained"
+    );
+    assert!(
+        tile.upgrade().is_none(),
+        "closed document pixels are still retained"
+    );
+}
+
+#[gpui_kit::test]
 fn hidden_timeline_and_replay_stay_paused_after_return(cx: &mut TestAppContext) {
     for replay in [false, true] {
         let (workspace, cx) = open(cx, doc(&["Frame 1", "Frame 2"], None));
