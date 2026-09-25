@@ -104,6 +104,10 @@ def ensure_draft(api, repository, tag, sha):
     return release
 
 
+MACOS_ARCHES = {'macos-arm64': 'arm64', 'macos-x86_64': 'x86_64'}
+PLATFORMS = ['linux', 'windows', *MACOS_ARCHES]
+
+
 def release_assets(root, platform, version):
     if platform == 'linux':
         assets = [
@@ -111,9 +115,15 @@ def release_assets(root, platform, version):
             root / 'target/release-assets/Emulsion-linux-x86_64.tar.gz.sha256',
             root / f'target/appimage/Emulsion-{version}-x86_64.AppImage',
         ]
-    else:
+    elif platform == 'windows':
         installer = root / f'target/windows/emulsion_{version}_x64-setup.exe'
         assets = [installer, installer.with_name(installer.name + '.sha256')]
+        stable_name = 'Emulsion-windows-x64-setup.exe'
+    else:
+        arch = MACOS_ARCHES[platform]
+        installer = root / f'target/macos/Emulsion-{version}-{arch}.dmg'
+        assets = [installer, installer.with_name(installer.name + '.sha256')]
+        stable_name = f'Emulsion-macos-{arch}.dmg'
     for asset in assets:
         if not asset.is_file() or asset.stat().st_size == 0:
             raise ValueError(f'Missing or empty release asset: {asset}')
@@ -124,11 +134,12 @@ def release_assets(root, platform, version):
     if checksum != [digest, assets[0].name]:
         raise ValueError(f'Checksum does not match {assets[0].name}.')
 
-    if platform == 'windows':
-        # Renaming a signed executable preserves its bytes and Authenticode signature.
-        alias = root / 'target/release-assets/Emulsion-windows-x64-setup.exe'
+    if platform != 'linux':
+        # Renaming a signed installer preserves its bytes and signature; the
+        # notarization ticket is stapled inside the disk image, not its name.
+        alias = root / 'target/release-assets' / stable_name
         alias.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(installer, alias)
+        shutil.copyfile(assets[0], alias)
         alias_checksum = alias.with_name(alias.name + '.sha256')
         alias_checksum.write_text(f'{digest}  {alias.name}\n', encoding='ascii')
         assets.extend([alias, alias_checksum])
@@ -148,7 +159,7 @@ def upload(root, platform, version, repository, sha, api=github_api):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('platform', choices=['linux', 'windows'])
+    parser.add_argument('platform', choices=PLATFORMS)
     parser.add_argument('--check', action='store_true', help='Check the release before compiling; do not upload.')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -166,7 +177,7 @@ def main():
     else:
         release = upload(root, args.platform, version, repository, sha)
         message = (f'{args.platform.capitalize()} assets uploaded to draft v{version}: {release["html_url"]}\n'
-                   'Publish the draft only after both Linux and Windows assets are attached.\n')
+                   'Publish the draft only after Linux, Windows, and both macOS assets are attached.\n')
         print(message)
         if os.environ.get('GITHUB_STEP_SUMMARY'):
             with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
