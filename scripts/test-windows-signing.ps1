@@ -5,7 +5,8 @@ Set-StrictMode -Version Latest
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ("emulsion-signing-test-" + [guid]::NewGuid())
 $saved = @{}
 $names = @('AZURE_CODESIGNING_ENDPOINT', 'AZURE_CODESIGNING_ACCOUNT', 'AZURE_CODESIGNING_PROFILE',
-    'EMULSION_SIGN_SIGNTOOL', 'EMULSION_SIGN_DLIB', 'EMULSION_SIGN_AZURE_CLI_ONLY', 'EMULSION_SIGN_ENABLED')
+    'EMULSION_SIGN_SIGNTOOL', 'EMULSION_SIGN_DLIB', 'EMULSION_SIGN_AZURE_CLI_ONLY', 'EMULSION_SIGN_ENABLED',
+    'EMULSION_SIGN_EXPECTED_SUBJECT', 'EMULSION_SIGN_METADATA', 'AZURE_CLIENT_SECRET', 'EMULSION_DOTENV_UNRELATED')
 foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
 function Assert-True($Condition, $Message) { if (-not $Condition) { throw $Message } }
 function Assert-Rejected([scriptblock]$Action, [string]$Pattern) {
@@ -19,6 +20,7 @@ try {
     New-Item -ItemType Directory -Path "$fixture/scripts/lib", "$fixture/target/windows", "$fixture/target/release" -Force | Out-Null
     Copy-Item "$PSScriptRoot/lib/trusted-signing.ps1" "$fixture/scripts/lib/"
     Copy-Item "$PSScriptRoot/verify-windows-signatures.ps1" "$fixture/scripts/"
+    Copy-Item "$PSScriptRoot/build-windows.ps1" "$fixture/scripts/"
     foreach ($path in @('dlib.dll', 'target/release/emulsion.exe', 'target/release/runtime.dll', 'target/windows/test-setup.exe')) {
         Set-Content -LiteralPath "$fixture/$path" -Value 'fixture'
     }
@@ -38,6 +40,57 @@ try {
     $env:AZURE_CODESIGNING_ACCOUNT = ''
     Assert-Rejected { New-TrustedSigningContext } 'Missing signing setting'
     $env:AZURE_CODESIGNING_ACCOUNT = 'test-account'
+
+    # Exercise local configuration through the same entry point as build/CI.
+    @'
+# Signing settings only; unrelated variables must not be imported.
+AZURE_CODESIGNING_ENDPOINT=https://example.invalid
+AZURE_CODESIGNING_ACCOUNT=dotenv-account
+export AZURE_CODESIGNING_PROFILE="dotenv-profile" # comment
+EMULSION_SIGN_EXPECTED_SUBJECT='CN=Local Publisher, O=Local Org'
+AZURE_CLIENT_SECRET='literal$env:USERNAME$(throw "must not execute")=with#hash'
+EMULSION_DOTENV_UNRELATED=must-not-load
+'@ | Set-Content -LiteralPath "$fixture/.env" -Encoding UTF8
+    'AZURE_CODESIGNING_PROFILE=local-profile # override' |
+        Set-Content -LiteralPath "$fixture/.env.local" -Encoding UTF8
+    foreach ($name in @('AZURE_CODESIGNING_ACCOUNT', 'AZURE_CODESIGNING_PROFILE',
+        'EMULSION_SIGN_EXPECTED_SUBJECT', 'AZURE_CLIENT_SECRET', 'EMULSION_DOTENV_UNRELATED')) {
+        [Environment]::SetEnvironmentVariable($name, $null)
+    }
+    Push-Location -LiteralPath $env:TEMP
+    try { $context = New-TrustedSigningContext } finally { Pop-Location }
+    $metadata = Get-Content -LiteralPath $context.Metadata -Raw | ConvertFrom-Json
+    Assert-True ($metadata.Endpoint -eq 'https://eus.codesigning.azure.net') 'Shell/CI endpoint was overwritten'
+    Assert-True ($metadata.CodeSigningAccountName -eq 'dotenv-account') 'Dotenv account was not loaded'
+    Assert-True ($metadata.CertificateProfileName -eq 'local-profile') 'Dotenv local override was not loaded'
+    Assert-True ($env:EMULSION_SIGN_EXPECTED_SUBJECT -eq 'CN=Local Publisher, O=Local Org') 'Quoted subject was not preserved'
+    Assert-True ($env:AZURE_CLIENT_SECRET -ceq 'literal$env:USERNAME$(throw "must not execute")=with#hash') 'Credential value was expanded or truncated'
+    Assert-True (-not $env:EMULSION_DOTENV_UNRELATED) 'Unrelated dotenv variable was imported'
+    $hostExe = (Get-Process -Id $PID).Path
+    'if ($env:EMULSION_SIGN_EXPECTED_SUBJECT -ne "CN=Local Publisher, O=Local Org") { exit 1 }' |
+        Set-Content -LiteralPath "$fixture/check-inherited-env.ps1"
+    & $hostExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$fixture/check-inherited-env.ps1"
+    Assert-True ($LASTEXITCODE -eq 0) 'Verification subprocess did not inherit signing settings'
+    Remove-Item -LiteralPath "$fixture/.env.local"
+    $env:AZURE_CODESIGNING_PROFILE = ''
+    $null = New-TrustedSigningContext
+    Assert-True ($env:AZURE_CODESIGNING_PROFILE -eq 'dotenv-profile') 'Double quotes or inline comment were not removed'
+    'AZURE_CLIENT_SECRET="unterminated-secret' | Set-Content -LiteralPath "$fixture/.env.local"
+    Assert-Rejected { New-TrustedSigningContext } 'Invalid quoted signing setting in .env.local at line 1\.'
+    Remove-Item -LiteralPath "$fixture/.env", "$fixture/.env.local"
+
+    # Packaging after OIDC login must never trigger another compilation. Mock
+    # Cargo and stop at the runtime gate so this test needs no SDK or compiler.
+    function cargo { throw 'Cargo invoked by test' }
+    function cargo-packager { }
+    $build = "$fixture/scripts/build-windows.ps1"
+    Assert-Rejected { & $build -SkipBuild } 'requires -Package or -Sign'
+    Assert-Rejected { & $build -Package } 'Cargo invoked by test'
+    Assert-Rejected { & $build -Package -SkipBuild } 'Missing runtime dependency'
+    Assert-Rejected { & $build -Sign -SkipBuild } 'Missing runtime dependency'
+    Remove-Item -LiteralPath "$fixture/target/release/emulsion.exe"
+    Assert-Rejected { & $build -Sign -SkipBuild } 'Missing .*emulsion\.exe'
+    Set-Content -LiteralPath "$fixture/target/release/emulsion.exe" -Value 'fixture'
 
     # The inactive packaging hook must work without signing configuration.
     $env:EMULSION_SIGN_ENABLED = ''

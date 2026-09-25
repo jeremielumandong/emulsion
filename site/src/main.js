@@ -56,7 +56,7 @@ const installDialog = document.querySelector('#install-dialog');
 const platforms = {
   linux: { requirements: 'Downloads the latest Linux x86_64 release and installs an AppImage with a desktop launcher. Requires a working graphics driver; no Rust toolchain needed.', command: 'curl -fsSL https://emulsion.pro/install | sh', anchor: 'install-linux' },
   macos: { requirements: 'Requires Rust and the standard macOS iconutil and sips tools. The script builds a local .app and .dmg, signed ad hoc for local use.', command: 'scripts/build-macos.sh', anchor: 'build-macos' },
-  windows: { requirements: 'Download Emulsion 0.0.1 for Windows x64, then run the setup program. No Rust compiler or Visual Studio Build Tools needed.', download: 'https://releases.emulsion.pro/emulsion/emulsion_0.0.1_x64-setup.exe', anchor: 'build-windows' },
+  windows: { requirements: 'Download the latest Emulsion release for Windows x64, then run the setup program. No Rust compiler or Visual Studio Build Tools needed.', download: 'https://github.com/jeremielumandong/emulsion/releases/latest/download/Emulsion-windows-x64-setup.exe', anchor: 'build-windows' },
 };
 function selectPlatform(name) {
   const platform = platforms[name];

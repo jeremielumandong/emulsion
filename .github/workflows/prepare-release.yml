@@ -74,7 +74,7 @@ jobs:
 
           Validation: version-bump tests and locked Cargo metadata resolution.
 
-          Approve the bot-created PR workflow if GitHub requests it, and wait for CI before merging. After main CI passes, run both release workflows against the same main commit. Attach the signed Windows installer to the Linux-created draft, then publish when ready.
+          Approve the bot-created PR workflow if GitHub requests it, and wait for CI before merging. After main CI passes, run both release workflows against the same main commit. Both workflows attach their assets to the same draft automatically. Publish the draft after both succeed.
           BODY
           url=$(gh pr create --base main --head "$RELEASE_BRANCH" \
             --title "Prepare release v$RELEASE_VERSION" --body-file "$RUNNER_TEMP/release-pr.md")

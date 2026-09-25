@@ -118,6 +118,7 @@ jobs:
       - run: python3 scripts/test-license-staging.py
       - run: python3 scripts/test-release-installer.py
       - run: python3 scripts/test-version-bump.py
+      - run: python3 scripts/test-release-assets.py
       - run: bash scripts/test-renderer-policy.sh
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked --timings -- -D warnings

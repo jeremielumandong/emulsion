@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 120
     environment: windows-release
     permissions:
-      contents: read
+      contents: write
       actions: read
       id-token: write
     env:
@@ -46,6 +46,12 @@ jobs:
           if ($runs.Count -eq 0 -or $runs[0].conclusion -ne 'success') {
             throw 'Release blocked: the latest main-branch CI run for this commit must pass first.'
           }
+      - name: Check shared draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/upload-release-assets.py windows --check
+          if ($LASTEXITCODE -ne 0) { throw 'Release preflight failed.' }
       - name: Check signing configuration and prerequisites
         env:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -84,7 +90,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'cargo-packager installation failed.' }
       - name: Compile release executable
         run: ./scripts/build-windows.ps1
-      # Authenticate after compilation so the signing token is fresh.
+      # Authenticate after compilation and do not rebuild afterward: the GitHub
+      # OIDC assertion can expire before SignTool exchanges it for a signing token.
       - name: Sign in to Azure with OIDC
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
         with:
@@ -92,7 +99,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Package, sign, and verify Windows installer
-        run: ./scripts/build-windows.ps1 -Sign
+        run: ./scripts/build-windows.ps1 -Sign -SkipBuild
       - name: Write installer checksums
         run: |
           $installers = @(Get-ChildItem target/windows/*-setup.exe -File)
@@ -101,7 +108,7 @@ jobs:
             $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($installer.Name)" | Set-Content -LiteralPath "$($installer.FullName).sha256" -Encoding ascii
           }
-      - name: Upload verified installer for manual R2 publication
+      - name: Preserve verified installer as a workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Emulsion-windows-x64-signed-${{ github.run_number }}-${{ github.run_attempt }}
@@ -111,3 +118,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+      - name: Upload signed Windows assets to shared draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/upload-release-assets.py windows
+          if ($LASTEXITCODE -ne 0) { throw 'Uploading Windows release assets failed.' }
