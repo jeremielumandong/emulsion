@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 const NONE: u32 = u32::MAX;
+/// Cache tiles filled per draw call.
+const FILLS_PER_DRAW: usize = 4;
 
 pub struct CompositeCache {
     gpu: Arc<Gpu>,
@@ -225,7 +227,12 @@ impl CompositeCache {
                     })],
                     ..Default::default()
                 });
-                compositor.fill(&mut pass, shared, &group, start as u32..end as u32);
+                // Small draws keep each one well inside GPU preemption
+                // timeouts when the program runs hundreds of ops per pixel.
+                for first in (start..end).step_by(FILLS_PER_DRAW) {
+                    let last = (first + FILLS_PER_DRAW).min(end);
+                    compositor.fill(&mut pass, shared, &group, first as u32..last as u32);
+                }
                 start = end;
             }
         }

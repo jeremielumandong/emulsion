@@ -153,18 +153,44 @@ pub fn cpu_reference(doc: &Document, level: u32) -> (Vec<f32>, (u32, u32)) {
 }
 
 /// Render `engine`'s document at `level` into a raw target and read it back.
+/// Screen-sized chunks, each submitted and awaited on its own. One draw over
+/// a whole 4K document with hundreds of ops per pixel outlasts i915's
+/// preemption timeout and hangs the GPU.
+const CHUNK: u32 = 512;
+
+/// Render `engine`'s document at `level` into raw targets and read it back.
 pub fn gpu_render(engine: &mut Engine, level: u32) -> anyhow::Result<Vec<f32>> {
     let size = level_size(engine.canvas.width, engine.canvas.height, level);
-    let target = Offscreen::new(&engine.gpu, size, wgpu::TextureFormat::Rgba32Float);
-    engine.screen = size;
+    let target = Offscreen::new(
+        &engine.gpu,
+        (CHUNK, CHUNK),
+        wgpu::TextureFormat::Rgba32Float,
+    );
+    engine.screen = (CHUNK, CHUNK);
     let zoom = 1.0 / (1u32 << level) as f64;
-    engine.camera = Camera {
-        center: [size.0 as f64 / 2.0 / zoom, size.1 as f64 / 2.0 / zoom],
-        zoom,
-    };
-    engine.render(&target.view, target.format, Output::Raw)?;
-    let bytes = target.read(&engine.gpu)?;
-    Ok(bytemuck::cast_slice::<u8, f32>(&bytes).to_vec())
+    let mut out = vec![0.0f32; size.0 as usize * size.1 as usize * 4];
+    for cy in (0..size.1).step_by(CHUNK as usize) {
+        for cx in (0..size.0).step_by(CHUNK as usize) {
+            // The chunk's top-left level pixel sits at the screen origin.
+            engine.camera = Camera {
+                center: [
+                    (cx + CHUNK / 2) as f64 / zoom,
+                    (cy + CHUNK / 2) as f64 / zoom,
+                ],
+                zoom,
+            };
+            engine.render(&target.view, target.format, Output::Raw)?;
+            let bytes = target.read(&engine.gpu)?;
+            let px: &[f32] = bytemuck::cast_slice(&bytes);
+            let w = CHUNK.min(size.0 - cx) as usize;
+            for y in 0..CHUNK.min(size.1 - cy) as usize {
+                let src = &px[y * CHUNK as usize * 4..][..w * 4];
+                let dst = ((cy as usize + y) * size.0 as usize + cx as usize) * 4;
+                out[dst..dst + w * 4].copy_from_slice(src);
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn save_png(path: &Path, size: (u32, u32), data: &[f32]) -> anyhow::Result<()> {

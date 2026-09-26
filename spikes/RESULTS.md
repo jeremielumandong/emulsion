@@ -22,7 +22,7 @@ provider here; the GPU paths get measured on other hardware.
 | 10 | Film-simulation base look fidelity | pending | | |
 | 11 | Import analysis latency | pending | | |
 | 12 | Two-stack before/after cost | pending | | |
-| 13 | Owned winit + wgpu canvas with a Vello vector layer | partial | Built and verified for fidelity on Mesa lavapipe: raster composite matches the CPU compositor within 1 display code at mip levels 0–2; opaque Vello vectors differ only at anti-aliased edges. Hardware timings not yet recorded. See [vello-canvas/RESULTS.md](vello-canvas/RESULTS.md). | Pending hardware run against the GPUI build. |
+| 13 | Owned winit + wgpu canvas with a Vello vector layer | done | Against the GPUI canvas's CPU work on the same input, on Iris Plus G7: brush input-to-pixel 2.6× (CPU stamping) and 8.3× (GPU dabs) at p50, pan p99 4.0×, vector edits 6.5×. On M1 only GPU dabs clear 2×. Raster output matches the CPU compositor within 1 display code on every driver. See [vello-canvas/RESULTS.md](vello-canvas/RESULTS.md). | Meets the ≥2× criterion: plan the shared engine crate, after one direct GPUI-build capture. |
 
 ## Findings
 
