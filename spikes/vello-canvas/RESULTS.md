@@ -45,6 +45,40 @@ inside GPUI, at p50 and p99, and the embedding costs nothing measurable:** it ma
 vsync'd standalone window on the same D3D12 backend. See
 [Embedding in GPUI](#embedding-in-gpui).
 
+### In short: is it really faster?
+
+Yes for brushes and vector edits, on every machine. Not for panning over
+content that is already cached, and not visibly on the M1 at 60 Hz.
+
+- **Brush strokes.** On the Windows desktop the GPUI path does about 21 ms of
+  CPU work per brush frame, and its input-to-pixel latency is 34 / 53 ms
+  (p50 / p99). Inside GPUI the spike shows the stroke in 9 / 12–15 ms,
+  about 3.5× lower, which is noticeable when painting.
+- **Vector edits.** 12 ms of GPUI-path work against 6 ms inside GPUI: one
+  165 Hz frame instead of two.
+- **Panning into new areas.** p99 frames are about 3× better, because new
+  tiles are filled on the GPU instead of the CPU.
+- **Iris Plus, the target laptop.** GPU dabs and vector edits keep 2× or
+  more at p50 inside GPUI.
+
+Where it doesn't help or isn't proven yet:
+
+- **Warm-cache pan/zoom:** both paths show cached tiles, so there is no gain.
+- **Apple M1 at 60 Hz:** the GPUI path's work mostly fits in one frame, so the
+  display hides the difference.
+- **Standalone ratios** like 43× or 63× on the desktop are real, but the
+  display caps what anyone sees. The GPUI-embedded numbers are what a user
+  would feel.
+- **The GPUI column is a lower bound.** It is CPU work only, without layout,
+  upload or present. The GPUI build still needs a direct Tracy capture.
+- **GPU dabs (test B)** cover only round, dry brushes at stroke opacity 1.
+- **Stalls inside GPUI** on the M1 and Iris (80–130 ms p99) are unexplained.
+  Windows has none, which points at GPUI's Linux/macOS frame scheduling.
+- **Memory:** about 1.3 GiB of GPU memory for a 4K document, which is system
+  RAM on integrated GPUs.
+- **Vector translucency:** overlaps shift by a few codes (sRGB-space blending
+  in Vello).
+
 ## Machines
 
 The M1 and Iris Plus sections list their own hardware. The lavapipe smoke run
