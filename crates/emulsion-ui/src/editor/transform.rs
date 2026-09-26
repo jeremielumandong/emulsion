@@ -99,12 +99,22 @@ fn text_transform_frame(spec: &emulsion_core::text::TextSpec) -> (u32, u32, Plac
     (w, h, placement)
 }
 
+/// Alpha below which a pixel cannot change the picture by even one 8-bit
+/// code, so it should not push the layer boundary outwards. A soft brush's
+/// falloff trails off far past anything visible, and counting every non-zero
+/// step puts the dashed box well outside the content people can see.
+const OUTLINE_MIN_ALPHA: u16 = u16::MAX / 255;
+
 fn raster_frame(
     raster: &emulsion_raster::Raster,
     placement: Placement,
     mask: Option<&emulsion_raster::Mask>,
 ) -> (emulsion_raster::IRect, Placement) {
-    let bounds = emulsion_core::geometry::ink_bounds(raster, mask);
+    let bounds = match mask {
+        // A masked layer still needs the exact masked coverage.
+        Some(_) => emulsion_core::geometry::ink_bounds(raster, mask),
+        None => raster.coverage_bounds_above(OUTLINE_MIN_ALPHA),
+    };
     let bounds = if bounds.is_empty() {
         raster.bounds()
     } else {
@@ -447,6 +457,11 @@ impl EditorView {
     /// canvas shows what a click in the Layers panel picked. The Move tool
     /// draws its own box instead.
     pub(crate) fn layer_outline(&self) -> Option<[(f64, f64); 4]> {
+        // Only after the user clicks a layer row, not for whatever happens to
+        // be selected when a document opens.
+        if !self.layer_outline_shown {
+            return None;
+        }
         if self.selected_layer_ids().len() == 1
             && self.warp.is_none()
             && let Some(id) = self.selected

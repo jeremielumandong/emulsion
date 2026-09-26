@@ -35,6 +35,10 @@ impl EditorView {
     }
 
     pub(crate) fn set_layer_selection(&mut self, ids: Vec<NodeId>, active: Option<NodeId>) {
+        // Selection changed by something other than a click on a layer row --
+        // opening a document, a tool, the keyboard -- so the boundary goes.
+        // `select_layer_row` re-arms it after calling through here.
+        self.layer_outline_shown = false;
         self.mask_view.layer = None;
         self.commit_shape_color_edit();
         self.type_tool.selection = None;
@@ -96,6 +100,9 @@ impl EditorView {
             ids.last().copied()
         };
         self.set_layer_selection(ids, active);
+        // An explicit click on a layer row: this is the one case that shows
+        // the layer's dashed boundary.
+        self.layer_outline_shown = true;
         if range {
             self.layer_selection.anchor = anchor.or(Some(id));
         }

@@ -387,6 +387,10 @@ pub struct EditorView {
     pub(crate) cache: Rc<RefCell<TileCache>>,
     /// Experimental GPU canvas; `Refused` (or off) means the tile path.
     pub(crate) gpu_canvas: Rc<RefCell<crate::viewport_gpu::Status>>,
+    /// Whether the selected layer's dashed boundary is shown. Armed by
+    /// clicking a layer row, cleared by any other selection change, so the
+    /// marquee never appears for a selection the user did not make.
+    pub(crate) layer_outline_shown: bool,
     pub(crate) seen_rev: u64,
     /// A composite tree is being built off the UI thread for this revision.
     tree_building: Option<u64>,
@@ -528,6 +532,7 @@ impl EditorView {
             canvas_bounds: Default::default(),
             cache: Default::default(),
             gpu_canvas: Default::default(),
+            layer_outline_shown: false,
             seen_rev: rev,
             tree_building: None,
             tree_request: 0,
@@ -823,6 +828,14 @@ impl EditorView {
             self.seen_commit = u64::MAX; // force the before tree to rebuild too
         }
         if self.editor.revision != self.seen_rev {
+            // The GPU canvas draws from the document directly, so nothing
+            // requests tiles and `install_tile_batch` -- which is what
+            // normally repaints the canvas after an edit -- never runs. Ask
+            // for the repaint here instead, or a stroke would commit without
+            // ever being shown.
+            if self.gpu_canvas.borrow().defers_to_gpu(&self.view) {
+                self.notify_canvas(cx);
+            }
             self.tree_request = self.tree_request.wrapping_add(1);
             self.seen_rev = self.editor.revision;
             let dirty = self.editor.take_dirty();

@@ -165,7 +165,11 @@ mod hosted {
             match canvas.engine.reload(doc, None, true) {
                 Ok(()) => {
                     canvas.revision = revision;
-                    tracing::debug!("gpu canvas reloaded at rev {revision}");
+                    tracing::debug!(
+                        "gpu canvas reloaded at rev {revision}: {} dirty rect(s), {} atlas tiles",
+                        canvas.engine.canvas.dirty.len(),
+                        canvas.engine.atlas.used(),
+                    );
                 }
                 Err(err) => {
                     tracing::info!("gpu canvas reload failed, rebuilding: {err:#}");
