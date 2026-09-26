@@ -384,6 +384,11 @@ impl App {
                         .allocated_bytes()
                         .map_or("n/a".into(), |b| format!("{:.0} MiB", b as f64 / 1048576.0))
                 ));
+                // The window manager may not honour --size (tiling).
+                let (w, h) = engine.screen;
+                report
+                    .notes
+                    .push(format!("surface {w}x{h} device px as rendered"));
                 self.report = Some(report);
                 event_loop.exit();
             }

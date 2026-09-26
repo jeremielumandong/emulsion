@@ -194,10 +194,13 @@ Each canvas paint does four things:
 
 A frame is timed from one post-wait point to the next. That covers the
 engine's work plus GPUI's layout, draw and present. Latency ends at GPU
-completion of the GPUI frame that showed the input.
+completion of the GPUI frame that showed the input. Reports list frames over
+1.5× the median (`slow_frames` in the JSON). Each is split into the wait for
+GPUI's previous frame, the canvas paint, and GPUI's own share.
 
 GPUI presents with Mailbox on Wayland and Fifo (vsync) on X11, and the reports
-record which. Limits:
+record which. Either way GPUI draws when the display asks for a frame, so
+embedded frames are paced to the refresh rate (measured on Hyprland). Limits:
 - Device loss isn't handled; `shared_gpu().generation` is there for it.
 - Windows uses GPUI's native DirectX renderer; there the flag reports that
   embedding is Linux- and macOS-only.
