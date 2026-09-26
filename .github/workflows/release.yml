@@ -8,7 +8,8 @@ permissions:
   actions: read
 
 concurrency:
-  group: linux-release
+  # Shared with Windows: GitHub can create duplicate drafts for the same tag.
+  group: shared-release
   cancel-in-progress: false
 
 jobs:

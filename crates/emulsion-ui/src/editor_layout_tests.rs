@@ -13,7 +13,7 @@ fn custom_toolbox_drag_add_reorder_and_activation_preserve_document(cx: &mut Tes
         ws.read(cx).editor.clone().unwrap()
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.click("compact-layout-trigger", cx));
+    cx.update(|window, cx| pick_workspace(window, CUSTOMIZE, cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
         let source = window.find("toolbox-source-Move").bounds().center();
@@ -111,7 +111,7 @@ fn saved_workspace_default_initializes_next_document_and_can_reset(cx: &mut Test
         assert_eq!(editor.read(cx).workspace_snapshot(), expected);
         assert!(window.find("custom-tool-Brush").visible());
         assert!(!window.find("image-menu").visible());
-        window.click("compact-layout-trigger", cx);
+        pick_workspace(window, CUSTOMIZE, cx);
         editor
     });
     cx.run_until_parked();
@@ -351,8 +351,8 @@ fn compact_toolbars_restore_and_presets_preserve_document(cx: &mut TestAppContex
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.try_find("canvas-toolbar-tools").is_none());
-        if window.try_find("compact-layout-trigger").is_some() {
-            window.click("compact-layout-trigger", cx);
+        if window.try_find("workspace-menu-button").is_some() {
+            pick_workspace(window, CUSTOMIZE, cx);
         }
     });
     cx.run_until_parked();
@@ -510,10 +510,10 @@ fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContex
     let original = doc(&["Photo"], None);
     let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
     cx.update(|window, cx| {
-        assert!(window.find("mode-photo").visible());
+        assert!(window.find("workspace-menu-button").visible());
         assert!(window.try_find("canvas-toolbar-dock").is_none());
         assert!(window.find("canvas-toolbar-options").visible());
-        window.click("mode-draw", cx);
+        pick_workspace(window, DRAW, cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -527,7 +527,7 @@ fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContex
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.try_find("canvas-toolbar-tools").is_none());
-        window.click("mode-photo", cx);
+        pick_workspace(window, PHOTO, cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -537,7 +537,7 @@ fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContex
             "photo keeps its tools"
         );
         assert!(window.try_find("canvas-toolbar-dock").is_none());
-        window.click("mode-draw", cx);
+        pick_workspace(window, DRAW, cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -588,7 +588,7 @@ fn rapid_mode_switches_persist_the_latest_workspace_and_settings(cx: &mut TestAp
 fn toolbars_scale_and_dock_from_the_customizer(cx: &mut TestAppContext) {
     let (_ws, editor, cx) = compact(cx, doc(&["Photo"], None), 1440., 1000.);
     let before = cx.update(|window, cx| {
-        window.click("compact-layout-trigger", cx);
+        pick_workspace(window, CUSTOMIZE, cx);
         window.find("canvas-toolbar-tools").bounds()
     });
     cx.run_until_parked();
@@ -648,7 +648,7 @@ fn brush_gallery_and_project_colours_pick_in_one_click(cx: &mut TestAppContext) 
         editor.update(cx, |e, _| {
             e.editor.doc.colors = vec![[10, 200, 30], [1, 2, 3]]
         });
-        window.click("mode-draw", cx);
+        pick_workspace(window, DRAW, cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -725,7 +725,7 @@ fn photo_mode_matches_photoshop_essentials_layout(cx: &mut TestAppContext) {
         // Foreground and background colours at the foot of the tools.
         let swatches = window.find("tool-rail-swatches").bounds();
         assert!(swatches.origin.y > window.find("tool-rail").bounds().bottom() - gpui_kit::px(1.));
-        window.click("compact-layout-trigger", cx);
+        pick_workspace(window, CUSTOMIZE, cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| window.click("toolbar-placement-over", cx));
@@ -791,7 +791,7 @@ fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut Tes
     });
     // Draw mode keeps the tabs in the header, where Procreate-style
     // overlays leave the canvas edge-to-edge.
-    cx.update(|window, cx| window.click("mode-draw", cx));
+    cx.update(|window, cx| pick_workspace(window, DRAW, cx));
     cx.run_until_parked();
     cx.update(|window, _| {
         assert!(window.try_find("document-tab-bar").is_none());
@@ -841,4 +841,16 @@ fn tools_panel_has_quick_mask_and_a_double_column_toggle(cx: &mut TestAppContext
         assert_eq!(editor.read(cx).workspace_snapshot().tool_columns, 2);
         assert_eq!(editor.read(cx).editor.doc, original);
     });
+}
+
+/// Entries of the header's workspace picker; separators take an index.
+const PHOTO: usize = 0;
+const DRAW: usize = 1;
+const CUSTOMIZE: usize = 5;
+
+/// Open the header's workspace picker and choose entry `index`.
+fn pick_workspace(window: &mut gpui_kit::Window, index: usize, cx: &mut gpui_kit::App) {
+    window.click("workspace-menu-button", cx);
+    window.render_frame(cx);
+    window.within("popup-menu").click(index, cx);
 }

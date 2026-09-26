@@ -2,6 +2,7 @@
 """Exercise shared release uploads without GitHub or signing credentials."""
 import hashlib
 import importlib.util
+import io
 from pathlib import Path
 import subprocess
 import sys
@@ -51,10 +52,15 @@ class ReleaseAssetsTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.api = FakeGitHub()
+        sleeper = patch.object(release_assets.time, 'sleep')
+        self.sleep = sleeper.start()
+        self.addCleanup(sleeper.stop)
 
     def assets(self, platform):
         if platform == 'windows':
             asset = self.root / 'target/windows/emulsion_0.0.2_x64-setup.exe'
+        elif platform.startswith('macos-'):
+            asset = self.root / f'target/macos/Emulsion-0.0.2-{platform[6:]}.dmg'
         else:
             asset = self.root / 'target/release-assets/Emulsion-linux-x86_64.tar.gz'
             appimage = self.root / 'target/appimage/Emulsion-0.0.2-x86_64.AppImage'
@@ -99,6 +105,32 @@ class ReleaseAssetsTests(unittest.TestCase):
         self.assertEqual(alias.read_bytes(), original.read_bytes())
         self.assertEqual(checksum.read_text().split(), [hashlib.sha256(alias.read_bytes()).hexdigest(), alias.name])
 
+    def test_all_platforms_share_one_draft_without_overlapping_files(self):
+        platforms = release_assets.PLATFORMS
+        for platform in platforms:
+            self.assets(platform)
+        with patch.object(release_assets.subprocess, 'run') as run:
+            for platform in platforms:
+                self.upload(platform)
+            self.assertEqual(len(self.api.creates), 1)
+            uploaded = [set(Path(name).name for name in call.args[0][7:]) for call in run.call_args_list]
+            self.assertEqual(len(uploaded), len(platforms))
+            self.assertEqual(len(set().union(*uploaded)), sum(map(len, uploaded)))
+
+    def test_macos_aliases_preserve_bytes_for_each_architecture(self):
+        for arch in ['arm64', 'x86_64']:
+            with self.subTest(arch=arch):
+                original = self.assets(f'macos-{arch}')
+                assets = release_assets.release_assets(self.root, f'macos-{arch}', '0.0.2')
+                self.assertEqual([asset.name for asset in assets], [
+                    f'Emulsion-0.0.2-{arch}.dmg', f'Emulsion-0.0.2-{arch}.dmg.sha256',
+                    f'Emulsion-macos-{arch}.dmg', f'Emulsion-macos-{arch}.dmg.sha256',
+                ])
+                alias, checksum = assets[2:]
+                self.assertEqual(alias.read_bytes(), original.read_bytes())
+                self.assertEqual(checksum.read_text().split(),
+                                 [hashlib.sha256(alias.read_bytes()).hexdigest(), alias.name])
+
     def test_draft_retry_reuses_release(self):
         self.assets('windows')
         with patch.object(release_assets.subprocess, 'run') as run:
@@ -112,6 +144,72 @@ class ReleaseAssetsTests(unittest.TestCase):
         result = release_assets.ensure_draft(self.api, REPOSITORY, TAG, SHA)
         self.assertTrue(result['draft'])
         self.assertEqual(result['target_commitish'], SHA)
+
+    def test_new_draft_listing_delay_never_posts_a_second_draft(self):
+        for conflict in (False, True):
+            with self.subTest(conflict=conflict):
+                self.api = FakeGitHub()
+                self.api.race = conflict
+                hidden_reads = 0
+
+                def delayed(path, data=None, missing_ok=False):
+                    nonlocal hidden_reads
+                    if '/releases?' in path and self.api.release is not None:
+                        hidden_reads += 1
+                        if hidden_reads <= 2:
+                            return []
+                    return self.api(path, data=data, missing_ok=missing_ok)
+
+                result = release_assets.ensure_draft(delayed, REPOSITORY, TAG, SHA)
+                self.assertEqual(result['target_commitish'], SHA)
+                self.assertEqual(len(self.api.creates), 1)
+                self.assertEqual(hidden_reads, 3)
+
+    def test_visibility_timeout_is_bounded_and_never_uploads(self):
+        self.assets('linux')
+
+        def invisible(path, data=None, missing_ok=False):
+            if '/releases?' in path:
+                return []
+            return self.api(path, data=data, missing_ok=missing_ok)
+
+        with patch.object(release_assets.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'not yet visible.*do not delete'):
+                release_assets.upload(self.root, 'linux', '0.0.2', REPOSITORY, SHA, invisible)
+            self.assertEqual(len(self.api.creates), 1)
+            self.assertEqual(self.sleep.call_count, 5)
+            run.assert_not_called()
+
+    def test_validation_error_keeps_github_details_when_no_draft_exists(self):
+        def invalid(path, data=None, missing_ok=False):
+            if data is not None:
+                raise HTTPError(path, 422, 'Validation failed', {},
+                                io.BytesIO(b'{"message":"Invalid tag name"}'))
+            return self.api(path, missing_ok=missing_ok)
+
+        with self.assertRaisesRegex(ValueError, 'HTTP 422.*Invalid tag name'):
+            release_assets.ensure_draft(invalid, REPOSITORY, TAG, SHA)
+        self.assertEqual(self.sleep.call_count, 5)
+
+    def test_delayed_conflicting_draft_still_blocks_upload(self):
+        self.assets('linux')
+        hidden_reads = 0
+
+        def conflicting(path, data=None, missing_ok=False):
+            nonlocal hidden_reads
+            if data is not None:
+                self.api.release = {**data, 'target_commitish': OTHER_SHA}
+                raise HTTPError(path, 422, 'Conflict', {}, None)
+            if '/releases?' in path and self.api.release is not None:
+                hidden_reads += 1
+                if hidden_reads == 1:
+                    return []
+            return self.api(path, missing_ok=missing_ok)
+
+        with patch.object(release_assets.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'different commit'):
+                release_assets.upload(self.root, 'linux', '0.0.2', REPOSITORY, SHA, conflicting)
+            run.assert_not_called()
 
     def test_published_or_different_commit_release_never_uploads(self):
         self.assets('windows')

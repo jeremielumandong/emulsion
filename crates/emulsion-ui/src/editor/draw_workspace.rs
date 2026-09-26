@@ -1,13 +1,35 @@
-//! Painter controls: the Photo/Draw switch, the one-click brush shelf and
+//! Painter controls: the workspace picker, the one-click brush shelf and
 //! its gallery, Draw mode's large paint dock, and the project palette of
 //! colours already painted with. Presentation only; picking never edits
 //! the document.
+use super::compact::{Bar, CompactLayout};
 use super::*;
 use gpui_kit::component::{
     Sizable,
     button::{Button, ButtonVariants},
+    menu::{DropdownMenu, PopupMenuItem},
     tooltip::Tooltip,
 };
+
+/// The built-in workspaces, in the order the picker lists them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuiltinWorkspace {
+    Photo,
+    Draw,
+    Minimal,
+}
+
+impl BuiltinWorkspace {
+    pub(crate) const ALL: [Self; 3] = [Self::Photo, Self::Draw, Self::Minimal];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Photo => "Photo",
+            Self::Draw => "Draw",
+            Self::Minimal => "Minimal",
+        }
+    }
+}
 use std::collections::{HashMap, HashSet};
 
 /// Brushes the shelf shows when nothing is pinned.
@@ -44,36 +66,120 @@ impl EditorView {
         }
     }
 
-    /// Photo | Draw, always one click away in the header.
-    pub(super) fn mode_switch(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .id("mode-switch")
-            .test_support()
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .p(px(2.))
-            .border_1()
-            .border_color(p.line)
-            .children([("photo", "Photo", false), ("draw", "Draw", true)].map(
-                |(id, label, draw)| {
-                    let on = self.draw_mode == draw;
-                    Button::new(SharedString::from(format!("mode-{id}")))
-                        .label(label)
-                        .small()
-                        .when(on, |b| b.bg(p.ink).text_color(p.paper))
-                        .when(!on, |b| b.ghost())
-                        .tooltip(format!(
-                            "{label} mode: its own toolbars, tools and panels (Ctrl+Alt+Shift+D switches)"
-                        ))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if this.draw_mode != draw {
-                                this.toggle_draw_mode(cx);
-                            }
-                            window.focus(&this.canvas_focus, cx);
-                        }))
-                },
-            ))
+    /// The built-in workspace on screen: Minimal whenever the options and
+    /// view bars are both hidden, otherwise the mode's own.
+    pub(super) fn builtin_workspace(&self) -> BuiltinWorkspace {
+        let minimal = !self.compact.bars[Bar::Options as usize].open
+            && !self.compact.bars[Bar::View as usize].open;
+        if minimal {
+            BuiltinWorkspace::Minimal
+        } else if self.draw_mode {
+            BuiltinWorkspace::Draw
+        } else {
+            BuiltinWorkspace::Photo
+        }
+    }
+
+    /// Switch to a built-in workspace with that mode's factory toolbars.
+    pub(super) fn apply_builtin_workspace(
+        &mut self,
+        workspace: BuiltinWorkspace,
+        cx: &mut Context<Self>,
+    ) {
+        if workspace != BuiltinWorkspace::Minimal
+            && self.draw_mode != (workspace == BuiltinWorkspace::Draw)
+        {
+            self.toggle_draw_mode(cx);
+        }
+        self.compact = CompactLayout::for_mode(self.draw_mode, cx);
+        self.sidebar_layout.collapsed = workspace == BuiltinWorkspace::Minimal;
+        if workspace == BuiltinWorkspace::Minimal {
+            for bar in [Bar::Options, Bar::View, Bar::Color, Bar::Brushes] {
+                self.compact.bars[bar as usize].open = false;
+            }
+        }
+        cx.notify();
+    }
+
+    /// The header picker's choice: Photo and Draw switch mode and bring back
+    /// the toolbars that mode was left with, as the old Photo | Draw switch
+    /// did. Choosing the current mode from Minimal restores its toolbars.
+    pub(super) fn switch_workspace(&mut self, workspace: BuiltinWorkspace, cx: &mut Context<Self>) {
+        let draw = workspace == BuiltinWorkspace::Draw;
+        if workspace != BuiltinWorkspace::Minimal && self.draw_mode != draw {
+            self.toggle_draw_mode(cx);
+        } else if workspace != self.builtin_workspace() {
+            self.apply_builtin_workspace(workspace, cx);
+        }
+    }
+
+    /// One workspace picker at the header's right, named for the workspace
+    /// on screen. Built-ins, reset and customize keep fixed places at the
+    /// top; saved presets follow.
+    pub(super) fn workspace_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let editor = cx.entity().downgrade();
+        Button::new("workspace-menu-button")
+            .label(self.builtin_workspace().label())
+            .dropdown_caret(true)
+            .xsmall()
+            .outline()
+            .tooltip("Workspace: Photo, Draw, Minimal or one you saved (Ctrl+Alt+Shift+D switches Photo and Draw)")
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, cx| {
+                let Some(view) = editor.upgrade() else {
+                    return menu;
+                };
+                let current = view.read(cx).builtin_workspace();
+                for workspace in BuiltinWorkspace::ALL {
+                    let editor = editor.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(workspace.label())
+                            .checked(current == workspace)
+                            .on_click(move |_, window, cx| {
+                                editor
+                                    .update(cx, |this, cx| {
+                                        this.switch_workspace(workspace, cx);
+                                        window.focus(&this.canvas_focus, cx);
+                                    })
+                                    .ok();
+                            }),
+                    );
+                }
+                let reset = editor.clone();
+                let customize = editor.clone();
+                menu = menu
+                    .separator()
+                    .item(PopupMenuItem::new("Reset Workspace").on_click(move |_, _, cx| {
+                        reset.update(cx, |this, cx| this.reset_workspace(cx)).ok();
+                    }))
+                    .item(PopupMenuItem::new("Customize Workspace…").on_click(
+                        move |_, window, cx| {
+                            customize
+                                .update(cx, |this, cx| {
+                                    if this.workspace_customizer.is_none() {
+                                        this.toggle_workspace_customizer(window, cx);
+                                    }
+                                })
+                                .ok();
+                        },
+                    ));
+                let saved = crate::app_state::settings(cx).workspace_presets.clone();
+                if !saved.is_empty() {
+                    menu = menu.separator().label("Saved");
+                    for preset in saved {
+                        let editor = editor.clone();
+                        menu = menu.item(PopupMenuItem::new(preset.name.clone()).on_click(
+                            move |_, _, cx| {
+                                editor
+                                    .update(cx, |this, cx| {
+                                        this.apply_workspace_layout(&preset.layout, cx)
+                                    })
+                                    .ok();
+                            },
+                        ));
+                    }
+                }
+                menu
+            })
             .into_any_element()
     }
 

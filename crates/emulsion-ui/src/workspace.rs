@@ -10,7 +10,7 @@ use emulsion_io::recent::{self, Recent};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Selectable, Sizable};
+use gpui_kit::component::{IconName, Selectable, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::HashMap;
@@ -32,6 +32,9 @@ pub enum Screen {
 
 pub struct Workspace {
     pub screen: Screen,
+    /// Where Back leaves Settings, Batch or About: the Home or Editor
+    /// screen they were opened from.
+    pub(crate) back_to: Screen,
     /// The active document; always one of `tabs` when open.
     pub editor: Option<Entity<EditorView>>,
     /// Every open document, in tab order.
@@ -181,6 +184,7 @@ impl Workspace {
         .detach();
         Self {
             screen: Screen::Home,
+            back_to: Screen::Home,
             editor: None,
             tabs: Vec::new(),
             recents: Vec::new(),
@@ -243,6 +247,9 @@ impl Workspace {
                 editor.set_visible(screen == Screen::Editor, window, cx);
             });
         }
+        if matches!(self.screen, Screen::Home | Screen::Editor) {
+            self.back_to = self.screen;
+        }
         self.screen = screen;
         if screen != Screen::Editor {
             // The hidden editor no longer participates in action dispatch.
@@ -255,6 +262,27 @@ impl Workspace {
         self.cancel_style_dialog(window, cx);
         self.set_screen(Screen::Home, window, cx);
         cx.notify();
+    }
+
+    /// The screen Back returns to: the open document if Settings, Batch or
+    /// About was reached from it, otherwise Home.
+    pub(crate) fn back_target(&self) -> Screen {
+        if self.back_to == Screen::Editor && self.editor.is_some() {
+            Screen::Editor
+        } else {
+            Screen::Home
+        }
+    }
+
+    pub(crate) fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.back_target() {
+            Screen::Editor => {
+                if let Some(active) = self.active_tab() {
+                    self.activate_tab(active, window, cx);
+                }
+            }
+            _ => self.show_home(window, cx),
+        }
     }
 
     /// Does any open document have unsaved changes?
@@ -435,7 +463,8 @@ impl Workspace {
         Some(row.into_any_element())
     }
 
-    /// The same command categories as the editor, scoped to the current page.
+    /// The same command categories as the editor on every page. Menus never
+    /// disappear; commands that do not apply here are disabled instead.
     fn page_menus(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let screen = self.screen;
@@ -462,24 +491,22 @@ impl Workspace {
                     menu.action_context(focus.clone())
                         .menu("New…", Box::new(NewDocument))
                         .menu("Open…", Box::new(Open))
-                        .when(screen != Screen::Batch, |menu| {
-                            menu.separator().menu("Batch…", Box::new(ShowBatch))
-                        })
+                        .separator()
+                        .menu_with_disabled("Batch…", Box::new(ShowBatch), screen == Screen::Batch)
                         .separator()
                         .menu("Quit", Box::new(Quit))
                 }
             }))
-            .when(screen != Screen::Settings, |bar| {
+            .child(button("workspace-edit-menu-button", "Edit").dropdown_menu({
                 let focus = focus.clone();
-                bar.child(button("workspace-edit-menu-button", "Edit").dropdown_menu(
-                    move |menu, _, _| {
-                        menu.action_context(focus.clone()).menu(
-                            "Keyboard Shortcuts and Preferences…",
-                            Box::new(ShowSettings),
-                        )
-                    },
-                ))
-            })
+                move |menu, _, _| {
+                    menu.action_context(focus.clone()).menu_with_disabled(
+                        "Keyboard Shortcuts and Preferences…",
+                        Box::new(ShowSettings),
+                        screen == Screen::Settings,
+                    )
+                }
+            }))
             .child(button("workspace-view-menu-button", "View").dropdown_menu({
                 let focus = focus.clone();
                 move |menu, _, _| {
@@ -504,91 +531,151 @@ impl Workspace {
                     menu
                 }
             }))
-            .when(screen != Screen::Home || has_editor, |bar| {
-                let focus = focus.clone();
-                bar.child(
-                    button("workspace-window-menu-button", "Window").dropdown_menu(
-                        move |menu, _, _| {
-                            menu.action_context(focus.clone())
-                                .when(screen != Screen::Home, |menu| {
-                                    menu.menu("Home", Box::new(ShowHome))
-                                })
-                                .when(has_editor, |menu| {
-                                    menu.menu("Return to document", Box::new(ShowEditor))
-                                })
-                        },
-                    ),
-                )
-            })
-            .when(screen != Screen::About, |bar| {
-                bar.child(button("workspace-help-menu-button", "Help").dropdown_menu(
+            .child(
+                button("workspace-window-menu-button", "Window").dropdown_menu({
+                    let focus = focus.clone();
                     move |menu, _, _| {
                         menu.action_context(focus.clone())
-                            .menu("About Emulsion", Box::new(ShowAbout))
-                    },
-                ))
-            })
+                            .menu_with_disabled("Home", Box::new(ShowHome), screen == Screen::Home)
+                            .menu_with_disabled(
+                                "Return to document",
+                                Box::new(ShowEditor),
+                                !has_editor,
+                            )
+                            .separator()
+                            .menu_with_disabled(
+                                "Settings…",
+                                Box::new(ShowSettings),
+                                screen == Screen::Settings,
+                            )
+                    }
+                }),
+            )
+            .child(
+                button("workspace-help-menu-button", "Help").dropdown_menu(move |menu, _, _| {
+                    menu.action_context(focus.clone()).menu_with_disabled(
+                        "About Emulsion",
+                        Box::new(ShowAbout),
+                        screen == Screen::About,
+                    )
+                }),
+            )
             .into_any_element()
     }
 
-    fn compact_theme_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Theme and Settings, pinned to the right of every compact header so
+    /// they sit in the same place on Home, the editor (Photo or Draw) and
+    /// every other page. One theme button keeps the cluster small enough to
+    /// fit any window; its menu holds Light, Dark and, on Linux, Omarchy.
+    fn compact_app_controls(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
+        let on_settings = self.screen == Screen::Settings;
+        let following = theme::following_omarchy(cx);
+        #[cfg(target_os = "linux")]
+        let omarchy = theme::omarchy_theme_name();
+        #[cfg(not(target_os = "linux"))]
+        let omarchy: Option<String> = None;
+        let tip = if following {
+            match omarchy {
+                Some(name) => format!("Theme: following Omarchy ({name})"),
+                None => "Theme: following Omarchy".to_string(),
+            }
+        } else if p.dark {
+            "Theme: dark".to_string()
+        } else {
+            "Theme: light".to_string()
+        };
         div()
-            .id("compact-theme-controls")
+            .id("compact-app-controls")
             .test_support()
             .flex()
+            .flex_none()
             .items_center()
             .gap_1()
-            .map(|controls| {
-                #[cfg(target_os = "linux")]
-                let controls = {
-                    let on = theme::following_omarchy(cx);
-                    let label = match (theme::omarchy_theme_name(), on) {
-                        (Some(name), true) => format!("◆ {name}"),
-                        _ => "◆ Omarchy".to_string(),
-                    };
-                    controls.child(
-                        Button::new("compact-theme-omarchy")
-                            .label(label)
-                            .tooltip("Follow your Omarchy theme live; choose light or dark to stop following")
-                            .xsmall()
-                            .ghost()
-                            .rounded_none()
-                            .selected(on)
-                            .on_click(|_, _, cx| theme::follow_omarchy(cx)),
-                    )
-                };
-                controls
-            })
             .child(
-                Button::new("compact-theme-light")
-                    .label("☀")
-                    .tooltip("Use light theme")
+                Button::new("compact-theme")
+                    .icon(if p.dark {
+                        IconName::Moon
+                    } else {
+                        IconName::Sun
+                    })
+                    .tooltip(tip)
                     .xsmall()
                     .ghost()
                     .rounded_none()
-                    .selected(!p.dark && !theme::following_omarchy(cx))
-                    .on_click(|_, _, cx| theme::set_dark(false, cx)),
+                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, cx| {
+                        let dark = theme::palette(cx).dark;
+                        let following = theme::following_omarchy(cx);
+                        let menu = menu
+                            .item(
+                                PopupMenuItem::new("Light")
+                                    .checked(!dark && !following)
+                                    .on_click(|_, _, cx| {
+                                        theme::set_dark(false, cx);
+                                        cx.refresh_windows();
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("Dark")
+                                    .checked(dark && !following)
+                                    .on_click(|_, _, cx| {
+                                        theme::set_dark(true, cx);
+                                        cx.refresh_windows();
+                                    }),
+                            );
+                        #[cfg(target_os = "linux")]
+                        let menu = {
+                            let label = match theme::omarchy_theme_name() {
+                                Some(name) => format!("Follow Omarchy ({name})"),
+                                None => "Follow Omarchy".to_string(),
+                            };
+                            menu.item(PopupMenuItem::new(label).checked(following).on_click(
+                                |_, _, cx| {
+                                    theme::follow_omarchy(cx);
+                                    cx.refresh_windows();
+                                },
+                            ))
+                        };
+                        menu
+                    }),
             )
             .child(
-                Button::new("compact-theme-dark")
-                    .label("☾")
-                    .tooltip("Use dark theme")
+                Button::new("compact-settings")
+                    .icon(IconName::Settings)
+                    .tooltip(if on_settings {
+                        "Close Settings"
+                    } else {
+                        "Settings and keyboard shortcuts (Ctrl-K)"
+                    })
                     .xsmall()
                     .ghost()
                     .rounded_none()
-                    .selected(p.dark && !theme::following_omarchy(cx))
-                    .on_click(|_, _, cx| theme::set_dark(true, cx)),
+                    .selected(on_settings)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if on_settings {
+                            this.go_back(window, cx);
+                        } else {
+                            this.cancel_style_dialog(window, cx);
+                            this.set_screen(Screen::Settings, window, cx);
+                        }
+                    })),
             )
             .into_any_element()
     }
 
+    /// Settings, Batch and About: Back first, where it is expected, then
+    /// the shared menus and the page's name.
     fn compact_page_header(
         &self,
         navigation: AnyElement,
-        theme_controls: AnyElement,
+        app_controls: AnyElement,
         label: &'static str,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
+        let back_tip = match self.back_target() {
+            Screen::Editor => "Back to your document",
+            _ => "Back to Home",
+        };
         div()
             .id("compact-page-header")
             .test_support()
@@ -599,9 +686,29 @@ impl Workspace {
             .h(rems(2.25))
             .px_2()
             .gap_2()
-            .child(navigation)
+            .child(
+                Button::new("compact-page-back")
+                    .icon(IconName::ArrowLeft)
+                    .label("Back")
+                    .tooltip(back_tip)
+                    .xsmall()
+                    .ghost()
+                    .rounded_none()
+                    .flex_none()
+                    .on_click(cx.listener(|this, _, window, cx| this.go_back(window, cx))),
+            )
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .flex_shrink_1()
+                    .overflow_hidden()
+                    .child(navigation),
+            )
+            .child(
+                div()
+                    .flex_none()
                     .text_size(rems(0.75))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(label),
@@ -614,7 +721,7 @@ impl Workspace {
                     .h_full()
                     .window_control_area(WindowControlArea::Drag),
             )
-            .child(theme_controls)
+            .child(app_controls)
             .into_any_element()
     }
 
@@ -627,6 +734,7 @@ impl Workspace {
             .flex()
             .items_center()
             .max_w(rems(30.))
+            .min_w_0()
             .overflow_x_scroll()
             .gap_1();
         for (i, editor) in self.tabs.iter().enumerate() {
@@ -1577,6 +1685,18 @@ impl Workspace {
     }
 }
 
+/// TitleBar's row sizes itself to its content, so a wide header would push
+/// the right-hand controls past the window edge. Taken out of flow, the header
+/// gets exactly the row's width and its own shrinking rules apply.
+fn fit_title_bar(header: AnyElement) -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .child(header)
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Dialog state belongs to Root, while this view owns its overlay layer.
@@ -1619,7 +1739,7 @@ impl Render for Workspace {
         let compact_page = compact && !compact_editor;
         let top = if compact_editor {
             let tabs = self.compact_tabs(cx);
-            let theme_controls = self.compact_theme_controls(cx);
+            let theme_controls = self.compact_app_controls(cx);
             let editor = self.editor.as_ref().unwrap().clone();
             let header = editor.update(cx, |editor, cx| {
                 editor.compact_header(tabs, theme_controls, &p, window, cx)
@@ -1631,11 +1751,11 @@ impl Render for Workspace {
                 .bg(p.paper)
                 .border_color(p.line)
                 .on_close_window(|_, window, cx| window.dispatch_action(Box::new(Quit), cx))
-                .child(header)
+                .child(fit_title_bar(header))
                 .into_any_element()
         } else if compact_page {
             let navigation = self.page_menus(cx);
-            let theme_controls = self.compact_theme_controls(cx);
+            let theme_controls = self.compact_app_controls(cx);
             let header = if self.screen == Screen::Home {
                 self.home_header(navigation, theme_controls, window, cx)
             } else {
@@ -1646,7 +1766,7 @@ impl Render for Workspace {
                     Screen::Editor => "Editor",
                     Screen::Home => "Home",
                 };
-                self.compact_page_header(navigation, theme_controls, label)
+                self.compact_page_header(navigation, theme_controls, label, cx)
             };
             gpui_kit::component::TitleBar::new()
                 .draggable(false)
@@ -1655,7 +1775,7 @@ impl Render for Workspace {
                 .bg(p.paper)
                 .border_color(p.line)
                 .on_close_window(|_, window, cx| window.dispatch_action(Box::new(Quit), cx))
-                .child(header)
+                .child(fit_title_bar(header))
                 .into_any_element()
         } else {
             self.top_bar(cx).into_any_element()
@@ -2300,30 +2420,69 @@ mod compact_tests {
         });
         cx.update(|window, cx| window.press("escape", cx));
         cx.run_until_parked();
+        // One theme button; its menu lists Light, Dark and, on Linux, Omarchy.
+        let pick_theme = |cx: &mut VisualTestContext, index: usize| {
+            cx.update(|window, cx| window.click("compact-theme", cx));
+            cx.run_until_parked();
+            cx.update(|window, cx| window.within("popup-menu").click(index, cx));
+            cx.run_until_parked();
+        };
         #[cfg(target_os = "linux")]
         {
-            cx.update(|window, cx| window.click("compact-theme-omarchy", cx));
-            cx.run_until_parked();
+            pick_theme(cx, 2);
             cx.update(|_, cx| assert!(theme::following_omarchy(cx)));
         }
-        cx.update(|window, cx| window.click("compact-theme-light", cx));
-        cx.run_until_parked();
+        pick_theme(cx, 0);
         cx.update(|_, cx| {
             assert!(!theme::palette(cx).dark);
             assert!(!theme::following_omarchy(cx));
         });
-        cx.update(|window, cx| window.click("compact-theme-dark", cx));
-        cx.run_until_parked();
+        pick_theme(cx, 1);
         cx.update(|_, cx| assert!(theme::palette(cx).dark));
+        cx.update(|window, _| assert!(window.find("compact-settings").visible()));
         cx.update(|window, cx| window.click("workspace-window-menu-button", cx));
         cx.run_until_parked();
-        cx.update(|window, cx| window.within("popup-menu").click(0usize, cx));
+        cx.update(|window, cx| window.within("popup-menu").click(1usize, cx));
         cx.run_until_parked();
         cx.update(|_, cx| {
             let workspace = workspace.read(cx);
             assert_eq!(workspace.screen, Screen::Editor);
             assert_eq!(workspace.editor.as_ref(), Some(&first));
         });
+
+        // Settings is one click away from the editor, and Back returns to
+        // the same document.
+        cx.update(|window, cx| window.click("compact-settings", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(workspace.read(cx).screen, Screen::Settings);
+            assert!(window.find("compact-page-back").visible());
+            assert!(window.find("compact-settings").visible());
+            assert!(window.find("workspace-edit-menu-button").visible());
+        });
+        cx.update(|window, cx| window.click("compact-page-back", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.screen, Screen::Editor);
+            assert_eq!(workspace.editor.as_ref(), Some(&first));
+        });
+
+        // Draw mode docks the document tabs in the header; on a small
+        // window the theme and Settings controls must still be on screen.
+        cx.update(|_, cx| first.update(cx, |editor, cx| editor.toggle_draw_mode(cx)));
+        cx.simulate_resize(size(px(900.), px(600.)));
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            for id in ["workspace-menu-button", "compact-theme", "compact-settings"] {
+                let control = window.find(id);
+                assert!(control.visible(), "{id}");
+                assert!(f32::from(control.bounds().right()) <= 900., "{id}");
+            }
+        });
+        cx.update(|_, cx| first.update(cx, |editor, cx| editor.toggle_draw_mode(cx)));
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        cx.run_until_parked();
 
         cx.update(|window, cx| window.click("file-menu-button", cx));
         cx.run_until_parked();
@@ -2356,7 +2515,7 @@ mod compact_tests {
             assert!(workspace.tabs.is_empty());
             assert!(workspace.editor.is_none());
             assert_eq!(workspace.screen, Screen::Home);
-            assert!(window.try_find("workspace-window-menu-button").is_none());
+            assert!(window.find("workspace-window-menu-button").visible());
         });
 
         cx.update(|window, cx| window.click("workspace-edit-menu-button", cx));
@@ -2365,9 +2524,16 @@ mod compact_tests {
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(workspace.read(cx).screen, Screen::Settings);
-            assert!(window.try_find("workspace-edit-menu-button").is_none());
+            assert!(window.find("workspace-edit-menu-button").visible());
             assert!(window.try_find("compact-app-menu").is_none());
         });
+        // With no document open, Back and the gear both lead Home.
+        cx.update(|window, cx| window.click("compact-settings", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(workspace.read(cx).screen, Screen::Home));
+        cx.update(|window, cx| window.click("compact-settings", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(workspace.read(cx).screen, Screen::Settings));
 
         cx.update(|window, cx| window.click("workspace-help-menu-button", cx));
         cx.run_until_parked();
@@ -2375,7 +2541,7 @@ mod compact_tests {
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(workspace.read(cx).screen, Screen::About);
-            assert!(window.try_find("workspace-help-menu-button").is_none());
+            assert!(window.find("workspace-help-menu-button").visible());
             assert!(window.try_find("compact-app-menu").is_none());
         });
 
@@ -2385,7 +2551,7 @@ mod compact_tests {
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(workspace.read(cx).screen, Screen::Home);
-            assert!(window.try_find("workspace-window-menu-button").is_none());
+            assert!(window.find("workspace-window-menu-button").visible());
             assert!(window.try_find("compact-app-menu").is_none());
         });
     }
