@@ -89,7 +89,7 @@ pub struct VectorItem {
     pub kind: VectorKind,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Op {
     Source {
         mode: u32,
@@ -428,6 +428,96 @@ impl Canvas {
             })
             .sum();
         let mut atlas = Atlas::new(gpu.clone(), unique.len() as u32 + filled + headroom);
+        let canvas = Self::assemble(compiler, doc, device, &mut atlas)?;
+        Ok((canvas, atlas))
+    }
+
+    /// Rebuild the program and tile tables for a changed document, reusing the
+    /// existing atlas.
+    ///
+    /// The atlas keys tiles by `Arc` identity, so every tile the edit left
+    /// alone is re-acquired from its existing slot and never re-uploaded. New
+    /// tiles are acquired before the old slots are released, so a tile present
+    /// in both documents never drops to zero references in between and never
+    /// makes a round trip to the GPU.
+    ///
+    /// Returns an error if the atlas cannot fit the new document, in which case
+    /// the caller should fall back to [`Self::compile`] and a fresh atlas; the
+    /// atlas may hold slots from the abandoned attempt.
+    pub fn recompile(
+        &mut self,
+        doc: &Document,
+        gpu: &Arc<crate::gpu::Gpu>,
+        atlas: &mut Atlas,
+        paint_node: Option<NodeId>,
+        vello: bool,
+    ) -> anyhow::Result<()> {
+        let tree = doc.composite_tree();
+        let mut compiler = Compiler {
+            vectors: if vello {
+                vector_nodes(doc)
+            } else {
+                HashMap::new()
+            },
+            names: doc.nodes.iter().map(|n| (n.id, n.name.clone())).collect(),
+            width: doc.width,
+            height: doc.height,
+            space: doc.blend_space,
+            sources: Vec::new(),
+            ops: Vec::new(),
+            runs: Vec::new(),
+            open_run: None,
+            unsupported: Vec::new(),
+            alpha_slots: 0,
+            paint: None,
+            paint_node,
+            _doc: doc,
+        };
+        compiler.list(&tree.nodes, 0);
+        let next = Self::assemble(compiler, doc, &gpu.device, atlas)?;
+        // Only now: anything the new document still uses has already been
+        // re-acquired, so releasing cannot evict a live tile.
+        for source in &self.sources {
+            for slot in source.slots.iter().flatten() {
+                atlas.release(*slot);
+            }
+        }
+        // Tell the composite cache only what actually changed. A stroke
+        // commits on every frame, so blanket-invalidating here would recomposite
+        // the whole view each time and undo the point of the cache.
+        let mut dirty = Vec::new();
+        let structural = next.ops != self.ops
+            || next.sources.len() != self.sources.len()
+            || next.space != self.space;
+        if structural {
+            dirty.push(IRect::new(0, 0, doc.width as i32, doc.height as i32));
+        } else {
+            let t = TILE as i32;
+            for (before, after) in self.sources.iter().zip(&next.sources) {
+                if before.tiles_x != after.tiles_x || before.tiles_y != after.tiles_y {
+                    dirty.push(IRect::new(0, 0, doc.width as i32, doc.height as i32));
+                    break;
+                }
+                for (i, (b, a)) in before.slots.iter().zip(&after.slots).enumerate() {
+                    if b != a {
+                        let (x, y) = (i as u32 % after.tiles_x, i as u32 / after.tiles_x);
+                        dirty.push(IRect::new(x as i32 * t, y as i32 * t, t, t));
+                    }
+                }
+            }
+        }
+        *self = next;
+        self.dirty.extend(dirty);
+        Ok(())
+    }
+
+    /// Build the sources, tile tables and program against `atlas`.
+    fn assemble(
+        compiler: Compiler<'_>,
+        doc: &Document,
+        device: &wgpu::Device,
+        atlas: &mut Atlas,
+    ) -> anyhow::Result<Self> {
         let tiles_x = doc.width.div_ceil(TILE);
         let tiles_y = doc.height.div_ceil(TILE);
         let per = (tiles_x * tiles_y) as usize;
@@ -435,8 +525,8 @@ impl Canvas {
         let mut table = Vec::new();
         for (name, raster) in compiler.sources {
             // Missing tiles read as the fill; one shared tile materialises them.
-            let fill_tile: Option<Arc<[[u16; 4]]>> = (raster.fill() != [0; 4])
-                .then(|| vec![raster.fill(); TILE as usize * TILE as usize].into());
+            let fill_tile: Option<Arc<[[u16; 4]]>> =
+                (raster.fill() != [0; 4]).then(|| atlas.fill_tile(raster.fill()));
             let mut slots = Vec::with_capacity(per);
             for ty in 0..tiles_y {
                 for tx in 0..tiles_x {
@@ -481,7 +571,7 @@ impl Canvas {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             },
         );
-        let canvas = Self {
+        Ok(Self {
             width: doc.width,
             height: doc.height,
             space: doc.blend_space,
@@ -493,8 +583,7 @@ impl Canvas {
             table,
             tables,
             dirty: Vec::new(),
-        };
-        Ok((canvas, atlas))
+        })
     }
 
     /// The longest run of leading ops the composite cache can hold: it

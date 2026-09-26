@@ -112,6 +112,38 @@ impl Engine {
         })
     }
 
+    /// Adopt a changed document, reusing the atlas.
+    ///
+    /// The engine has no incremental structural update: a node added, removed,
+    /// reordered, or given a different blend, opacity, clip or mask needs a new
+    /// program. Rebuilding the whole engine would also rebuild the atlas and
+    /// re-upload every tile, which for a 4K document is over a gigabyte per
+    /// edit. This rebuilds the program against the existing atlas instead, so
+    /// tiles the edit left alone are re-acquired by `Arc` identity and never
+    /// travel to the GPU again.
+    ///
+    /// On failure the engine is left as it was and the caller should rebuild
+    /// from scratch; the usual cause is the atlas having no room for the new
+    /// document, since it was sized for the old one plus headroom.
+    pub fn reload(
+        &mut self,
+        doc: &Document,
+        paint_node: Option<NodeId>,
+        vello: bool,
+    ) -> anyhow::Result<()> {
+        self.canvas
+            .recompile(doc, &self.gpu, &mut self.atlas, paint_node, vello)?;
+        self.cached_ops = if self.cache.is_some() {
+            self.canvas.cacheable_prefix() as u32
+        } else {
+            0
+        };
+        // `recompile` records only the tiles whose identity changed, and
+        // `render` drains that into the composite cache, so an edit costs the
+        // cache the tiles it touched rather than the whole view.
+        Ok(())
+    }
+
     /// Split borrows for recording GPU brush work.
     pub fn brush_parts(
         &mut self,

@@ -361,6 +361,74 @@ mod tests {
         }
     }
 
+    /// `Engine::reload` rebuilds the program against the atlas already on the
+    /// GPU. Tiles the edit left alone must be re-acquired by `Arc` identity, so
+    /// the atlas must not grow, the composite cache must not be invalidated,
+    /// and the result must still match the CPU.
+    ///
+    /// Layers that are baked -- masked, or placed off the document grid -- are
+    /// re-flattened on every reload into a fresh `Raster`, so their tiles do
+    /// get new slots and are reported dirty. That is why the no-invalidation
+    /// half of this test uses a document without them.
+    #[test]
+    fn reload_reuses_the_atlas_and_keeps_parity() {
+        let Some(gpu) = gpu() else { return };
+
+        // No baked layers: a reload must be a complete no-op for the cache.
+        let mut plain = Document::new(700, 520);
+        crate::bench::add_paint_layer(&mut plain);
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &plain,
+            None,
+            VectorSpace::Srgb,
+            false,
+            true,
+            (64, 64),
+        )
+        .unwrap();
+        let (tiles, pages) = (engine.atlas.used(), engine.atlas.pages());
+        for _ in 0..3 {
+            engine.reload(&plain, None, false).unwrap();
+            assert_eq!(
+                (engine.atlas.used(), engine.atlas.pages()),
+                (tiles, pages),
+                "reload allocated atlas slots for tiles it already had"
+            );
+            assert!(
+                engine.canvas.dirty.is_empty(),
+                "reload of an unchanged document invalidated {} cache rect(s)",
+                engine.canvas.dirty.len()
+            );
+        }
+
+        // With masks and placements, reload must still composite correctly.
+        let doc = crate::testdocs::fidelity(BlendSpace::Linear);
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            None,
+            VectorSpace::Srgb,
+            false,
+            true,
+            (64, 64),
+        )
+        .unwrap();
+        let before = engine.atlas.used();
+        engine.reload(&doc, None, false).unwrap();
+        assert_eq!(
+            engine.atlas.used(),
+            before,
+            "reload leaked atlas slots across a rebuild"
+        );
+        let (cpu, size) = cpu_reference(&doc, 0);
+        let gpu_px = gpu_render(&mut engine, 0).unwrap();
+        let d = compare("reload", size.0 as usize, &gpu_px, &cpu, None);
+        if gpu.tile_format == emulsion_engine::gpu::TileFormat::Unorm16 {
+            assert!(d.max_code <= 1, "after reload: {d:?}");
+        }
+    }
+
     #[test]
     fn gpu_dabs_match_cpu_stroke() {
         let Some(gpu) = gpu() else { return };

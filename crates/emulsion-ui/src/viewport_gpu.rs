@@ -154,10 +154,27 @@ mod hosted {
             ((f32::from(bounds.size.height) * scale).round() as u32).max(1),
         );
 
-        // Any document change recompiles: the engine can replace tiles of an
-        // existing raster, but not a changed node graph.
-        let stale = matches!(status, Status::Active(c) if c.revision != revision);
-        if matches!(status, Status::Untried) || stale {
+        // A changed document needs a new program. Rebuild it against the atlas
+        // already on the GPU, so unchanged tiles are re-acquired by `Arc`
+        // identity rather than re-uploaded; only fall back to a full rebuild if
+        // that fails, which usually means the atlas has no room for the new
+        // document.
+        if let Status::Active(canvas) = status
+            && canvas.revision != revision
+        {
+            match canvas.engine.reload(doc, None, true) {
+                Ok(()) => {
+                    canvas.revision = revision;
+                    tracing::debug!("gpu canvas reloaded at rev {revision}");
+                }
+                Err(err) => {
+                    tracing::info!("gpu canvas reload failed, rebuilding: {err:#}");
+                    *status = Status::Untried;
+                }
+            }
+        }
+
+        if matches!(status, Status::Untried) {
             match Canvas::build(doc, size, revision) {
                 Ok(canvas) => {
                     tracing::info!(

@@ -39,6 +39,10 @@ pub struct Atlas {
     slot_tile: Vec<Option<Arc<[[u16; 4]]>>>,
     /// Slots whose mips 1.. are stale.
     dirty: BTreeSet<Slot>,
+    /// One shared tile per fill colour, materialising a raster's missing tiles.
+    /// Keyed by colour so a recompile gets the same `Arc`, and therefore the
+    /// same slot, instead of allocating a fresh one and dirtying the cache.
+    fills: HashMap<[u16; 4], Arc<[[u16; 4]]>>,
     page_views: HashMap<(u32, u32), wgpu::TextureView>,
     mip_pipeline: wgpu::RenderPipeline,
     mip_layout: wgpu::BindGroupLayout,
@@ -181,6 +185,7 @@ impl Atlas {
             slot_tile: vec![None; total as usize],
             dirty: BTreeSet::new(),
             page_views: HashMap::new(),
+            fills: HashMap::new(),
             mip_pipeline,
             mip_layout,
             mip_groups: HashMap::new(),
@@ -196,6 +201,19 @@ impl Atlas {
 
     pub fn capacity(&self) -> u32 {
         self.pages * PER_PAGE
+    }
+
+    /// The shared tile for a raster's fill colour, stable across recompiles.
+    ///
+    /// A raster's missing tiles all read as its fill, so they can share one
+    /// tile. Handing back the same `Arc` for a colour keeps that tile's slot
+    /// stable, which is what lets [`crate::Canvas::recompile`] see an unchanged
+    /// document as unchanged.
+    pub fn fill_tile(&mut self, colour: [u16; 4]) -> Arc<[[u16; 4]]> {
+        self.fills
+            .entry(colour)
+            .or_insert_with(|| vec![colour; TILE as usize * TILE as usize].into())
+            .clone()
     }
 
     pub fn used(&self) -> u32 {
