@@ -228,6 +228,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
+        let back_label = match self.back_target() {
+            crate::workspace::Screen::Editor => "Back to your document",
+            _ => "Back to Home",
+        };
         self.ensure_settings_inputs(window, cx);
         self.ensure_image_inputs(window, cx);
         let s = app_state::settings(cx).clone();
@@ -566,11 +570,7 @@ impl Workspace {
                     )
                     .child(rows)
             })
-            .child(div().px(px(40.)).py(px(24.)).child(button("done", "Back to the editor", false, &p).on_click(cx.listener(|this, _, window, cx| {
-                let screen = if this.editor.is_some() { crate::workspace::Screen::Editor } else { crate::workspace::Screen::Home };
-                this.set_screen(screen, window, cx);
-                cx.notify();
-            }))))
+            .child(div().px(px(40.)).py(px(24.)).child(button("done", back_label, false, &p).on_click(cx.listener(|this, _, window, cx| this.go_back(window, cx)))))
     }
 
     /// Write the keymap template if there is no file yet, then hand it to

@@ -524,6 +524,9 @@ impl Workspace {
                     .test_support()
                     .flex()
                     .items_center()
+                    .min_w_0()
+                    .flex_shrink_1()
+                    .overflow_hidden()
                     .gap_1()
                     .children(filters),
             )

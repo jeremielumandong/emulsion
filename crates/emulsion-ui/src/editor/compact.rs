@@ -221,11 +221,6 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let wide = window.viewport_size().width >= px(WIDE_CHROME);
-        let layout = control("compact-layout-trigger", "Workspace")
-            .tooltip("Customize tools, menus and workspace presets")
-            .on_click(
-                cx.listener(|this, _, window, cx| this.toggle_workspace_customizer(window, cx)),
-            );
         // Photo mode docks the tabs above the canvas; the header keeps the
         // menus alone, like Photoshop's menu bar.
         let tabs = if self.compact.overlay {
@@ -258,97 +253,109 @@ impl EditorView {
                 div()
                     .flex()
                     .items_center()
+                    .min_w_0()
+                    .flex_shrink_1()
+                    .overflow_hidden()
                     .child(self.effect_menus(p, wide, cx)),
             )
+            // Document tabs, size and branch give way first when the window
+            // is narrow, so the actions and app controls on the right stay
+            // on screen in Photo and Draw alike.
             .child(
                 div()
-                    .id("compact-tab-leading-drag")
+                    .id("compact-header-middle")
                     .test_support()
-                    .w(rems(1.5))
-                    .h_full()
-                    .flex_none()
-                    .window_control_area(WindowControlArea::Drag),
-            )
-            .when(self.compact.overlay, |d| d.child(tabs))
-            .child(
-                div()
-                    .id("compact-window-drag")
-                    .test_support()
+                    .flex()
                     .flex_1()
-                    .min_w(rems(1.5))
+                    .items_center()
+                    .min_w_0()
                     .h_full()
-                    .window_control_area(WindowControlArea::Drag),
+                    .gap_1()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("compact-tab-leading-drag")
+                            .test_support()
+                            .w(rems(1.5))
+                            .h_full()
+                            .flex_none()
+                            .window_control_area(WindowControlArea::Drag),
+                    )
+                    .when(self.compact.overlay, |d| d.child(tabs))
+                    .child(
+                        div()
+                            .id("compact-window-drag")
+                            .test_support()
+                            .flex_1()
+                            .min_w(rems(1.5))
+                            .h_full()
+                            .window_control_area(WindowControlArea::Drag),
+                    )
+                    .when(wide, |d| {
+                        d.child(
+                            control("doc-size", dimensions)
+                                .tooltip("Image and canvas size")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_size_panel(window, cx)
+                                })),
+                        )
+                        .child(
+                            control("branch-badge", head)
+                                .tooltip("Branches and saved versions")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if this.history.open {
+                                        this.close_history(window, cx);
+                                    } else {
+                                        this.open_history(cx);
+                                    }
+                                })),
+                        )
+                    }),
             )
             .child(
-                control("doc-size", dimensions)
-                    .tooltip("Image and canvas size")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.toggle_size_panel(window, cx)),
-                    ),
+                div()
+                    .id("compact-header-actions")
+                    .test_support()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1()
+                    .child(self.ask_ai_button(p, cx))
+                    .child(self.workspace_menu(cx))
+                    .child(control("save", "Save").outline().on_click(cx.listener(
+                        |_, _, window, cx| {
+                            window.dispatch_action(Box::new(crate::actions::Save), cx)
+                        },
+                    )))
+                    .child(
+                        control("export", "Export")
+                            .outline()
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_export_panel(cx))),
+                    )
+                    .child(theme_controls),
             )
-            .child(
-                control("branch-badge", head)
-                    .tooltip("Branches and saved versions")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.history.open {
-                            this.close_history(window, cx);
-                        } else {
-                            this.open_history(cx);
-                        }
-                    })),
-            )
-            .child(self.ask_ai_button(p, cx))
-            .child(self.mode_switch(p, cx))
-            .child(div().flex().items_center().child(layout))
-            .child(
-                control("save", "Save")
-                    .outline()
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(Box::new(crate::actions::Save), cx)
-                    })),
-            )
-            .child(
-                control("export", "Export")
-                    .outline()
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_export_panel(cx))),
-            )
-            .child(theme_controls)
             .into_any_element()
     }
 
     pub(super) fn workspace_presets(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let minimal = !self.compact.bars[Bar::Options as usize].open
-            && !self.compact.bars[Bar::View as usize].open;
+        let current = self.builtin_workspace();
         div()
             .flex()
             .flex_wrap()
             .items_center()
             .gap_1()
             .children(
-                [("photo", "Photo"), ("draw", "Draw"), ("minimal", "Minimal")]
-                    .into_iter()
-                    .map(|(id, name)| {
-                        let selected = match id {
-                            "minimal" => minimal,
-                            "draw" => self.draw_mode && !minimal,
-                            _ => !self.draw_mode && !minimal,
-                        };
-                        control(SharedString::from(format!("layout-preset-{id}")), name)
-                            .when(selected, |b| b.bg(p.ink).text_color(p.paper))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if id != "minimal" && this.draw_mode != (id == "draw") {
-                                    this.toggle_draw_mode(cx);
-                                }
-                                this.compact = CompactLayout::for_mode(this.draw_mode, cx);
-                                this.sidebar_layout.collapsed = id == "minimal";
-                                if id == "minimal" {
-                                    for bar in [Bar::Options, Bar::View, Bar::Color, Bar::Brushes] {
-                                        this.compact.bars[bar as usize].open = false;
-                                    }
-                                }
-                                cx.notify();
-                            }))
-                    }),
+                super::draw_workspace::BuiltinWorkspace::ALL.map(|workspace| {
+                    let id = workspace.label().to_lowercase();
+                    control(
+                        SharedString::from(format!("layout-preset-{id}")),
+                        workspace.label(),
+                    )
+                    .when(current == workspace, |b| b.bg(p.ink).text_color(p.paper))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.apply_builtin_workspace(workspace, cx)
+                    }))
+                }),
             )
             .into_any_element()
     }
