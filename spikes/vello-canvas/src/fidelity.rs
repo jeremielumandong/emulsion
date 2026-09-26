@@ -898,6 +898,28 @@ mod tests {
         );
     }
 
+    /// How long a document-sized text rasterisation takes: the cost paid on
+    /// every frame of a text drag today.
+    #[test]
+    fn text_rasterize_cost() {
+        let spec = emulsion_core::text::TextSpec {
+            text: "Hello world".into(),
+            size: 240.0,
+            x: 400.0,
+            y: 800.0,
+            ..Default::default()
+        };
+        let mut ms = Vec::new();
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let r = emulsion_core::text::rasterize(&spec, 3840, 2160);
+            ms.push(t.elapsed().as_secs_f64() * 1e3);
+            std::hint::black_box(&r);
+        }
+        ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!("text::rasterize at 3840x2160: median {:.1} ms", ms[2]);
+    }
+
     #[test]
     fn gpu_dabs_match_cpu_stroke() {
         let Some(gpu) = gpu() else { return };

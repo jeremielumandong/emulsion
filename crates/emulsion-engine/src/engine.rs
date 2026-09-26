@@ -138,6 +138,7 @@ impl Engine {
         // Fast path: if the only difference is pixels in direct sources, swap
         // those rasters. Rebuilding the program costs ~66 ms on a 4K document
         // where this costs ~1 ms, and a stroke commits every frame.
+        let t0 = Instant::now();
         let after = Canvas::signature(doc);
         if let Some(changed) = Canvas::pixels_only_change(&self.signature, &after)
             && changed
@@ -164,6 +165,7 @@ impl Engine {
                 )?;
             }
             self.signature = after;
+            tracing::debug!(ms = t0.elapsed().as_secs_f64() * 1e3, "reload: pixels only");
             return Ok(());
         }
 
@@ -182,9 +184,19 @@ impl Engine {
         // live only there, so without this they never reach the screen.
         // Re-encoding is skipped for documents with no vector content, which
         // is every purely raster document.
-        if vectors_before != self.canvas.vector_signature() {
-            self.vectors = VectorLayer::new(self.gpu.clone(), &self.canvas, self.vectors.space)?;
+        let t_recompile = t0.elapsed().as_secs_f64() * 1e3;
+        let t1 = Instant::now();
+        let resynced = vectors_before != self.canvas.vector_signature();
+        if resynced {
+            self.vectors.resync(&self.canvas);
         }
+        tracing::debug!(
+            recompile_ms = t_recompile,
+            resync_ms = t1.elapsed().as_secs_f64() * 1e3,
+            resynced,
+            objects = self.vectors.objects.len(),
+            "reload: rebuilt"
+        );
         self.cached_ops = if self.cache.is_some() {
             self.canvas.cacheable_prefix() as u32
         } else {
@@ -194,6 +206,12 @@ impl Engine {
         // `render` drains that into the composite cache, so an edit costs the
         // cache the tiles it touched rather than the whole view.
         Ok(())
+    }
+
+    /// How many leading ops the composite cache covers. Ops after this run
+    /// per pixel, every frame.
+    pub fn cached_ops(&self) -> u32 {
+        self.cached_ops
     }
 
     /// Split borrows for recording GPU brush work.

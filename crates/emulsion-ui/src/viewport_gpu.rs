@@ -217,13 +217,35 @@ mod hosted {
             zoom: view.device_zoom(scale),
         };
         let target = canvas.target.acquire();
-        if let Err(err) = canvas
+        let frame_start = std::time::Instant::now();
+        match canvas
             .engine
             .render(&target, backend::FORMAT, Output::Encoded)
         {
-            tracing::warn!("gpu canvas render failed, using the CPU path: {err:#}");
-            *status = Status::Refused;
-            return false;
+            Ok(times) => {
+                let ms = frame_start.elapsed().as_secs_f64() * 1e3;
+                if ms > 8.0 {
+                    tracing::debug!(
+                        total_ms = ms,
+                        cpu_ms = times.cpu_ms,
+                        vector_encode_ms = times.vector_encode_ms,
+                        vector_render_ms = times.vector_render_ms,
+                        composite_ms = times.composite_ms,
+                        mips_ms = times.mips_ms,
+                        cache_fills = times.cache_fills,
+                        visible_vectors = times.visible_vectors,
+                        cached_ops = canvas.engine.cached_ops(),
+                        total_ops = canvas.engine.canvas.ops.len(),
+                        runs = canvas.engine.canvas.runs.len(),
+                        "slow engine frame"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!("gpu canvas render failed, using the CPU path: {err:#}");
+                *status = Status::Refused;
+                return false;
+            }
         }
         backend::after_render(&canvas.gpu);
         canvas.target.paint(window, bounds);

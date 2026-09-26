@@ -368,6 +368,61 @@ impl VectorLayer {
         Ok(layer)
     }
 
+    /// Adopt a changed canvas, keeping the Vello renderer, fonts and target.
+    ///
+    /// `Renderer::new` compiles Vello's pipelines and dominates construction,
+    /// so an edit must never go through [`Self::new`]. Objects whose geometry
+    /// and style are unchanged keep their encoded fragment, so moving one text
+    /// box re-encodes one object rather than the whole document.
+    pub fn resync(&mut self, canvas: &Canvas) {
+        fn same(a: &VectorKind, b: &VectorKind) -> bool {
+            match (a, b) {
+                (
+                    VectorKind::Path {
+                        path: pa,
+                        style: sa,
+                    },
+                    VectorKind::Path {
+                        path: pb,
+                        style: sb,
+                    },
+                ) => Arc::ptr_eq(pa, pb) && sa == sb,
+                (VectorKind::Text { spec: sa }, VectorKind::Text { spec: sb }) => {
+                    Arc::ptr_eq(sa, sb)
+                }
+                _ => false,
+            }
+        }
+        let mut old: HashMap<NodeId, Object> = std::mem::take(&mut self.objects)
+            .into_iter()
+            .map(|o| (o.node, o))
+            .collect();
+        self.by_node.clear();
+        self.runs.clear();
+        for run in &canvas.runs {
+            let mut entries = Vec::new();
+            for VectorItem { node, kind } in run {
+                let index = self.objects.len();
+                let reused = old.remove(node).filter(|o| same(&o.kind, kind));
+                let fresh = reused.is_none();
+                self.objects.push(reused.unwrap_or_else(|| Object {
+                    node: *node,
+                    kind: kind.clone(),
+                    fragment: Scene::new(),
+                    bounds: [0.0; 4],
+                }));
+                self.by_node.insert(*node, index);
+                if fresh {
+                    self.encode(index);
+                }
+                entries.push(entry(index, &self.objects[index]));
+            }
+            self.runs.push(Run {
+                tree: RTree::bulk_load(entries),
+            });
+        }
+    }
+
     pub fn run_count(&self) -> usize {
         self.runs.len()
     }
