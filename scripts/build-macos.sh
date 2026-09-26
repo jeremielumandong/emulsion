@@ -38,7 +38,8 @@ for arg in "$@"; do
 done
 
 [[ "$(uname -s)" == Darwin ]] || die "this script must run on macOS"
-case "$ARCH" in arm64|x86_64) ;; *) die "unsupported architecture: $ARCH" ;; esac
+# ONNX Runtime, used by the local AI tools, publishes no Intel macOS build.
+case "$ARCH" in arm64) ;; *) die "unsupported architecture: $ARCH (Apple silicon only)" ;; esac
 command -v iconutil >/dev/null || die "iconutil is required"
 command -v hdiutil >/dev/null || die "hdiutil is required"
 command -v codesign >/dev/null || die "codesign is required"

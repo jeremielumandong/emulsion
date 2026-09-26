@@ -292,7 +292,7 @@ Requires Rust and the standard macOS `iconutil` and `sips` tools for the icon.
 The script creates a versioned `.app` and `.dmg` in `target/macos/`. The app is
 signed ad hoc for local use. Release builds are signed with Developer ID and
 notarized by the **macOS signed release package** workflow for Apple silicon
-and Intel; see [docs/releases.md](docs/releases.md#signed-macos-disk-images).
+(Intel Macs are not supported); see [docs/releases.md](docs/releases.md#signed-macos-disk-images).
 
 ## Appearance
 

@@ -18,11 +18,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Apple silicon only: ONNX Runtime publishes no Intel macOS build.
         include:
           - arch: arm64
             runner: macos-15
-          - arch: x86_64
-            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     environment: macos-release
@@ -138,8 +137,8 @@ jobs:
           retention-days: 14
           compression-level: 0
 
-  # Both architectures build in parallel; one job attaches them in turn so the
-  # shared draft is never created twice.
+  # A separate job attaches the image so signing credentials never share a
+  # runner with the release token.
   upload:
     needs: package
     runs-on: ubuntu-24.04
@@ -161,4 +160,3 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/upload-release-assets.py macos-arm64
-          python3 scripts/upload-release-assets.py macos-x86_64
