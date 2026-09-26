@@ -104,7 +104,8 @@ def ensure_draft(api, repository, tag, sha):
     return release
 
 
-MACOS_ARCHES = {'macos-arm64': 'arm64', 'macos-x86_64': 'x86_64'}
+# Apple silicon only: ONNX Runtime publishes no Intel macOS build.
+MACOS_ARCHES = {'macos-arm64': 'arm64'}
 PLATFORMS = ['linux', 'windows', *MACOS_ARCHES]
 
 

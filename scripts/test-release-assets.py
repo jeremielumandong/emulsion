@@ -118,7 +118,7 @@ class ReleaseAssetsTests(unittest.TestCase):
             self.assertEqual(len(set().union(*uploaded)), sum(map(len, uploaded)))
 
     def test_macos_aliases_preserve_bytes_for_each_architecture(self):
-        for arch in ['arm64', 'x86_64']:
+        for arch in ['arm64']:
             with self.subTest(arch=arch):
                 original = self.assets(f'macos-{arch}')
                 assets = release_assets.release_assets(self.root, f'macos-{arch}', '0.0.2')

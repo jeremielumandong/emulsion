@@ -55,7 +55,7 @@ downloads; they are not an independent publisher signature.
    `v<workspace version>`. The others add their assets to that draft. Linux attaches
    its installer archive, checksum, and standalone AppImage; Windows attaches
    its signed installer and checksums, including a stable download filename;
-   macOS attaches notarized Apple silicon and Intel disk images the same way.
+   macOS attaches a notarized Apple silicon disk image the same way.
 5. Wait for all three workflows to succeed, then review and publish the shared
    draft as the latest release. Publishing before all complete would leave a
    platform's latest-download URL without its asset.
@@ -162,22 +162,23 @@ GitHub OIDC assertion lifetime before signing starts.
 ## Signed macOS disk images
 
 After merging to `main` and passing CI, run **macOS signed release package**. It
-builds on two hosted runners in parallel, `macos-15` (Apple silicon, `arm64`) and
-`macos-15-intel` (`x86_64`). Each compiles the release executable before any
+builds on the hosted `macos-15` runner (Apple silicon, `arm64`). There is no
+Intel build: ONNX Runtime, which the local AI tools use, publishes no Intel
+macOS binaries. The job compiles the release executable before any
 credentials are loaded, then `scripts/build-macos.sh --no-build --sign` signs the
 app with the Developer ID certificate, hardened runtime and a secure timestamp,
 signs the disk image, notarizes it with `notarytool`, staples the ticket and
 checks it with Gatekeeper (`spctl`). The build refuses bundles that link non-system
-libraries. A final job attaches both images to the shared draft, one at a time:
+libraries. A final job attaches the image to the shared draft:
 
-- `Emulsion-<version>-arm64.dmg` and `Emulsion-<version>-x86_64.dmg`, with `.sha256` files
-- `Emulsion-macos-arm64.dmg` and `Emulsion-macos-x86_64.dmg`, with `.sha256` files
+- `Emulsion-<version>-arm64.dmg`, with a `.sha256` file
+- `Emulsion-macos-arm64.dmg`, with a `.sha256` file
 
 As on Windows, the stable filenames are byte-for-byte copies for
 `releases/latest/download/` links. The notarization ticket is stapled inside the
 image, so renaming does not affect it. Images are also kept as workflow artifacts
-for 14 days. If one architecture fails, rerun the failed jobs; the successful
-architecture's artifact is reused.
+for 14 days. If the upload fails, rerun the failed job; the signed image's
+artifact is reused.
 
 ### One-time setup
 
