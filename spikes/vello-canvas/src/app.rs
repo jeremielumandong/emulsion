@@ -258,6 +258,11 @@ impl App {
     }
 
     fn frame(&mut self, event_loop: &ActiveEventLoop) -> anyhow::Result<()> {
+        // winit can deliver another redraw after `exit()`; a finished script
+        // must not run again and overwrite its report.
+        if self.report.is_some() {
+            return Ok(());
+        }
         let now = Instant::now();
         if let Some(last) = self.last_frame.replace(now) {
             let ms = now.duration_since(last).as_secs_f64() * 1e3;
@@ -368,6 +373,17 @@ impl App {
                         "vsync off"
                     }
                 );
+                report.notes.push(format!(
+                    "GPU textures {:.0} MiB (atlas {} tiles in {} pages, {}); allocator {}",
+                    engine.texture_bytes() as f64 / 1048576.0,
+                    engine.atlas.used(),
+                    engine.atlas.pages(),
+                    engine.gpu.tile_format.label(),
+                    engine
+                        .gpu
+                        .allocated_bytes()
+                        .map_or("n/a".into(), |b| format!("{:.0} MiB", b as f64 / 1048576.0))
+                ));
                 self.report = Some(report);
                 event_loop.exit();
             }

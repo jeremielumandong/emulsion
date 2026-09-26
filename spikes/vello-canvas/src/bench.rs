@@ -705,6 +705,12 @@ pub fn baseline(
             let start = Instant::now();
             let mut fed = 0;
             while fed < points.len() {
+                // Idle until the next input event, as an event loop would,
+                // so only frames with work are recorded.
+                let wait = points[fed].2 - start.elapsed().as_secs_f64() * 1e3;
+                if wait > 0.0 {
+                    std::thread::sleep(std::time::Duration::from_secs_f64(wait / 1e3));
+                }
                 let t = Instant::now();
                 let now = start.elapsed().as_secs_f64() * 1e3;
                 let mut events = Vec::new();

@@ -247,6 +247,15 @@ fn bench(args: &Args) -> Result<()> {
     json["file"] = file.clone().into();
     json["commit"] = commit().into();
     json["size"] = format!("{}x{}", args.size.0, args.size.1).into();
+    json["options"] = serde_json::json!({
+        "baseline": args.baseline,
+        "headless": args.headless,
+        "cache": args.cache,
+        "vello": args.vello,
+        "vsync": args.vsync,
+        "tiles": args.tiles.map(|t| t.label()),
+        "vectors": format!("{:?}", args.space),
+    });
     write_json(&args.json, json)
 }
 
