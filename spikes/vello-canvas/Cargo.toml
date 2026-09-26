@@ -1,0 +1,36 @@
+[package]
+name = "vello-canvas-spike"
+description = "Spike: owned winit + wgpu render loop with a Vello vector layer, measured against the GPUI canvas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Stream spans to a running Tracy profiler. Off by default: enabling it builds
+# the Tracy C++ client; without it `tracing-tracy` compiles to no-ops.
+tracy = ["tracing-tracy/enable"]
+
+[dependencies]
+anyhow = { workspace = true }
+bytemuck = { workspace = true }
+cosmic-text = { workspace = true }
+glam = { workspace = true }
+image = { workspace = true }
+serde_json = { workspace = true }
+pollster = { workspace = true }
+rayon = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+wgpu = { workspace = true }
+emulsion-core = { workspace = true }
+emulsion-io = { workspace = true }
+emulsion-raster = { workspace = true }
+rstar = "0.12"
+tracing-tracy = { version = "0.11", default-features = false }
+vello = "0.10"
+winit = "0.30"
+
+[lints]
+workspace = true

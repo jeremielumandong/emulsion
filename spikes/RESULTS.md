@@ -22,6 +22,7 @@ provider here; the GPU paths get measured on other hardware.
 | 10 | Film-simulation base look fidelity | pending | | |
 | 11 | Import analysis latency | pending | | |
 | 12 | Two-stack before/after cost | pending | | |
+| 13 | Owned winit + wgpu canvas with a Vello vector layer | partial | Built and verified for fidelity on Mesa lavapipe: raster composite matches the CPU compositor within 1 display code at mip levels 0–2; opaque Vello vectors differ only at anti-aliased edges. Hardware timings not yet recorded. See [vello-canvas/RESULTS.md](vello-canvas/RESULTS.md). | Pending hardware run against the GPUI build. |
 
 ## Findings
 
@@ -74,3 +75,5 @@ cargo test -p emulsion-ui assistant_turn_through_the_ui -- --ignored --nocapture
 - 2026-09-18 — `cargo tree -i wgpu@29` shows `gpui-pre-linux → gpui-pre-wgpu → wgpu 29`. GPUI's
   Linux renderer is wgpu, so the viewport fallback plan becomes "share GPUI's wgpu device"
   rather than importing an external Vulkan image.
+- 2026-09-26 — `spikes/vello-canvas`: owned wgpu compositor + Vello vector layer, brush tests A/B,
+  fidelity and benchmark harness. Vello 0.10 is on wgpu 29, so one wgpu stays linked.
