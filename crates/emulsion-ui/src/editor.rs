@@ -385,6 +385,8 @@ pub struct EditorView {
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
+    /// Experimental GPU canvas; `Refused` (or off) means the tile path.
+    pub(crate) gpu_canvas: Rc<RefCell<crate::viewport_gpu::Status>>,
     pub(crate) seen_rev: u64,
     /// A composite tree is being built off the UI thread for this revision.
     tree_building: Option<u64>,
@@ -525,6 +527,7 @@ impl EditorView {
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
+            gpu_canvas: Default::default(),
             seen_rev: rev,
             tree_building: None,
             tree_request: 0,
@@ -2330,6 +2333,11 @@ impl EditorView {
         });
         let cache = self.cache.clone();
         let cache2 = self.cache.clone();
+        let gpu_canvas = self.gpu_canvas.clone();
+        let gpu_canvas2 = self.gpu_canvas.clone();
+        let gpu_doc = self.editor.doc.clone();
+        let gpu_rev = self.editor.revision;
+        let gpu_view = self.view;
         let bounds_cell = self.canvas_bounds.clone();
         let fit_pending = self.fit_pending;
         let weak = cx.entity().downgrade();
@@ -2539,6 +2547,13 @@ impl EditorView {
                             });
                             return None;
                         }
+                        // The GPU canvas draws the whole document itself, so
+                        // don't composite tiles it is about to make redundant.
+                        // A refusal is sticky, so this yields for one frame at
+                        // most before the tile path resumes.
+                        if gpu_canvas.borrow().defers_to_gpu(&gpu_view) {
+                            return None;
+                        }
                         let plan = viewport::prepaint(
                             &scene,
                             &mut cache.borrow_mut(),
@@ -2590,6 +2605,21 @@ impl EditorView {
                     move |bounds, plan, window, cx| {
                         if let Some(plan) = plan {
                             viewport::paint(plan, &scene2, &cache2, window, cx);
+                        } else if crate::viewport_gpu::paint(
+                            &mut gpu_canvas2.borrow_mut(),
+                            &gpu_doc,
+                            gpu_rev,
+                            &gpu_view,
+                            bounds,
+                            window,
+                        ) {
+                            // Painted by the engine.
+                        } else if crate::viewport_gpu::enabled() {
+                            // It refused this frame; come back on the tile path.
+                            let again = w2.clone();
+                            cx.defer(move |cx| {
+                                again.update(cx, |_, cx| cx.notify()).ok();
+                            });
                         }
                         if let Some(mask) = &mask_view {
                             mask_view::paint(

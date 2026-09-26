@@ -2088,6 +2088,7 @@ dependencies = [
  "emulsion-ai",
  "emulsion-assistant",
  "emulsion-core",
+ "emulsion-engine",
  "emulsion-filters",
  "emulsion-gpu",
  "emulsion-io",
@@ -2098,6 +2099,7 @@ dependencies = [
  "glam",
  "gpui-kit",
  "gpui-pre",
+ "gpui-pre-wgpu",
  "image",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -2110,6 +2112,7 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "unicode-segmentation",
+ "wgpu",
  "windows-sys 0.61.2",
 ]
 

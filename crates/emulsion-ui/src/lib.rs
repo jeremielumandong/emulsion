@@ -17,6 +17,7 @@ mod settings_writer;
 pub mod tablet;
 pub mod theme;
 pub mod viewport;
+pub mod viewport_gpu;
 pub mod widgets;
 pub mod workspace;
 
