@@ -390,8 +390,11 @@ mod tests {
         }
         cpu.finish();
         let cpu = cpu.render(&base).0;
+        // Each dab rounds to 16 bits on the GPU but accumulates in f32 on the
+        // CPU; drivers differ (lavapipe 5, Apple M1 15). 32/65535 is still
+        // under one 8-bit code.
         let limit = match gpu.tile_format {
-            crate::gpu::TileFormat::Unorm16 => 16,
+            crate::gpu::TileFormat::Unorm16 => 32,
             crate::gpu::TileFormat::Float16 => 400,
         };
         let mut max = 0;

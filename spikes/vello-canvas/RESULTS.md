@@ -1,15 +1,27 @@
 # Results: owned wgpu + Vello canvas vs GPUI canvas
 
-*2026-09-26. Status: built; fidelity measured; **hardware timings not yet recorded**.*
+*2026-09-26. Status: measured on Apple M1 (Metal) and Mesa lavapipe; Intel Iris
+Plus run in progress; GPUI build not yet measured directly.*
 
-**No decision yet.** The only GPU available for these runs was Mesa lavapipe, a
-software Vulkan driver, on the same 4 vCPUs as the CPU baseline. Its timings
-measure a shader emulator and cannot show whether an owned pipeline beats
-GPUI. The findings that don't depend on hardware are fidelity, bytes moved,
-memory, CPU cost per frame and the structure of each path. The
-[hardware run](#hardware-run-to-do) section lists the commands for a real GPU.
+On the M1, against the CPU work the GPUI canvas does for the same scripted
+input:
 
-## Machine for these runs
+- **GPU brush stamping (test B) clears the brief's ≥2× bar on input-to-pixel
+  latency:** 7.1 / 19.4 ms p50 / p99 against 17.4 / 39.0 ms.
+- **Stamping on the CPU and uploading dirty tiles (test A) gains only
+  1.2–1.3×.**
+- **Navigation doesn't clear 2×.** A warm tile cache makes panning cheap on
+  both paths; the spike's p99 is 1.7× better at 100% pan.
+- **Raster fidelity matches** on Metal as on lavapipe.
+
+The GPUI column leaves out GPUI's own layout, atlas upload and present, so it
+understates GPUI's frame times. Where the spike is faster, the ratios are lower
+bounds.
+
+## Machines
+
+The M1 and Iris Plus sections list their own hardware. The lavapipe smoke run
+and fidelity baseline ran here:
 
 | | |
 |---|---|
@@ -141,6 +153,55 @@ baked masks and placements being mipped after baking, and stay within 1 code.
 lavapipe. The layer-style, adjustment-layer and advanced-blending paths are not
 implemented and are not in the test files.
 
+## Apple M1 (Metal)
+
+Jeremie's MacBook Pro: Apple M1, Metal backend, `Rgba16Unorm` tiles. Windowed
+runs at 1600×1000, vsync off, commit `024a410`. Raw data:
+[`results/bench-Jeremies-MacBook-Pro.local.jsonl`](results/bench-Jeremies-MacBook-Pro.local.jsonl),
+[`results/fidelity-Jeremies-MacBook-Pro.local.jsonl`](results/fidelity-Jeremies-MacBook-Pro.local.jsonl).
+All three GPU tests pass with `EMULSION_REQUIRE_GPU_TESTS=1`.
+
+Frame time is serialised: CPU record, GPU, present, then a wait for the GPU.
+The GPUI column is the same script through the GPUI canvas's CPU raster work.
+
+| Workload | Spike p50 / p99 | GPUI-path CPU work p50 / p99 (mean) | Spike advantage |
+|---|---|---|---|
+| Navigate layers-4k, all 600 frames | 3.61 / 11.50 ms | 0.00 / 17.12 ms (0.67) | p99 1.5× |
+| — pan 100% | 2.55 / 12.30 ms | 0.00 / 20.62 ms (1.25) | p99 1.7× |
+| — pan 50% | 2.65 / 10.39 ms | 0.00 / 6.57 ms (0.75) | none |
+| — zoom sweep fit↔400% | 3.99 / 8.65 ms | 0.00 / 0.00 ms (0.05) | none |
+| Navigate layers-4k, `--no-cache` | 19.00 / 20.50 ms | – | – |
+| **Brush A input-to-pixel** (CPU stamp, dirty tiles) | 14.90 / 29.21 ms | 17.38 / 39.00 ms | 1.17× / 1.34× |
+| **Brush B input-to-pixel** (GPU dabs) | **7.14 / 19.36 ms** | 17.38 / 39.00 ms | **2.4× / 2.0×** |
+| Navigate vectors-500 (Vello every frame) | 7.34 / 10.62 ms | not run | – |
+| Edit one vector object per frame | 6.81 / 10.10 ms | 12.23 / 16.07 ms | 1.8× / 1.6× |
+
+The brush comparison uses the same 1.5 s S-curve at 1 kHz, a 300 px soft brush,
+a 25-node 4K document, and the view at 100%. Latency runs from each input
+event's scheduled time to GPU completion of the frame that shows it. Details:
+
+- **Brush A:** `Stroke::render` took 1.2 ms of CPU per frame (p50) and
+  uploaded 2.2 tiles per frame on average (1.1 MiB, up to 3 MiB).
+- **Brush B:** no uploads during the stroke. The stroke end was read back in
+  4.2 ms (13 MiB, 26 tiles). The result matches the CPU `Stroke` within 15/65535,
+  at most 1 display code.
+- **Baseline brush timing:** the GPUI baseline's brush run predates `9f8800d`
+  and spun between input events. Its latency is valid; its frame-time stats are
+  not, so they are left out.
+
+CPU record and submit cost 0.2–0.5 ms per frame; 1.4 ms with Vello drawing
+500 objects (1.1 ms of it in Vello). The Metal adapter gives no allocator
+report. Texture sizes are the same as on lavapipe: 1115 MiB atlas, 192 MiB tile
+cache, and 6 MiB per Vello run target.
+
+Fidelity on Metal matches lavapipe: raster at most 1 code at levels 0–2, direct
+and cached, in both blend spaces. Opaque vectors (vectors-500, sRGB mode) are
+0.002% off-edge; the translucent sheet is 1.32%.
+
+## Intel Iris Plus (Vulkan)
+
+In progress.
+
 ## Timings on lavapipe (smoke run only)
 
 1600×1000 view. Frame time covers CPU record plus the GPU, serialised. The GPUI
@@ -189,10 +250,9 @@ What carries over to real hardware:
   Vello render call together take about 1 ms of CPU. The GPUI path re-rasterizes the edited path into its document-size
   cache and recomposites 4 tiles (28.5 ms here).
 
-## Hardware run: to do
+## Reproducing on other hardware
 
-Measure on the Iris Plus G7 machine (and any discrete GPU), same files, same
-window size, vsync off:
+Same files, same window size, vsync off:
 
 ```sh
 cargo run --release -p vello-canvas-spike -- gen --out spikes/out
@@ -208,35 +268,51 @@ done
 $S fidelity spikes/out/*.ora --json spikes/vello-canvas/results/fidelity-$(hostname).jsonl
 ```
 
-For the GPUI build, open the same files in `emulsion-app` (release) and record
-frame time during the same gestures. The vendored GPUI has Tracy spans behind
-`--cfg ztracing` (`vendor/gpui/gpui-pre-ztracing`), and `editor_navigation`
-covers the CPU side of panning. Neither was run for this report. Fill in:
+Since `9f8800d`, each JSON line records its options (`baseline`, `cache`,
+…). The GPUI build itself hasn't been measured. The vendored GPUI has Tracy
+spans behind `--cfg ztracing` (`vendor/gpui/gpui-pre-ztracing`). One Tracy
+capture of a brush stroke in `emulsion-app` would replace the lower bound above
+with a direct number.
 
-| Measure | Spike | GPUI build | Ratio |
-|---|---|---|---|
-| Pan 100%, layers-4k, p50 / p99 frame | | | |
-| Zoom sweep, layers-4k, p50 / p99 frame | | | |
-| Brush A input-to-pixel p50 / p99 | | | |
-| Brush B input-to-pixel p50 / p99 | | | |
-| vectors-500 navigate p50 / p99 frame | | | |
-| Vector edit p50 / p99 frame | | | |
-| GPU memory (allocator report) | | | |
-| Upload bytes per brush frame | | | |
+## Reading against the decision criteria
 
-## Reading so far (not the decision)
+**Fidelity:**
+- **Raster:** met on both drivers. At most 1 display code at every zoom
+  level, every blend mode, groups, clipping and masks.
+- **Vector:** met for opaque content. Translucent overlaps inside a Vello run
+  shift by up to about 10 codes (sRGB-space blending).
 
-- **Fidelity:** the raster criterion is met; results are indistinguishable at 8
-  bits, zoomed out included. Vello meets it only for opaque vector content.
-  Translucent overlaps shift by up to about 10 codes.
-- **Speed:** the case for ≥2× lies in cache misses, zoom to new levels,
-  and painting. There, the owned path does GPU work instead of CPU compositing and
-  per-frame uploads. Warm-cache panning is a textured blit on both paths.
-  Only hardware p99 numbers can show whether that clears the 2× bar.
-- **Worth porting to GPUI either way:**
-  - GPU-filled composite tiles: `emulsion-gpu` already composites tiles on
-    the GPU, but reads them back.
-  - Dirty-tile invalidation across mip levels.
-  - Per-tile mip chains that match CPU rounding.
-  - Brush B's resident dab stamping, which removes the per-frame uploads of
-    test A.
+**Brush latency: ≥2× only with GPU-resident stamping (B).**
+- **Test A** keeps Emulsion's CPU brush engine and gains 1.2–1.3×.
+- **Test B covers only round, dry brushes at stroke opacity 1.** Wet, textured,
+  dual and dynamic brushes would have to move to the GPU to get the same win.
+- **B's win needs the GPU layer shown without a readback.** That's what an
+  owned render loop provides. The GPUI canvas presents CPU images, and GPUI's
+  macOS renderer is native Metal rather than wgpu. Getting B inside GPUI
+  means embedding external textures, the out-of-scope question.
+
+**Pan/zoom: not ≥2×.**
+- With a warm cache, both paths show cached tiles, and GPUI's zoom sweep does no
+  raster work at all.
+- The spike only wins on cache misses: p99 1.7× when panning at 100%.
+- Without a cache, the spike was 5× slower (19 ms vs 3.6 ms), so the GPU path
+  needs the same tile cache GPUI already has.
+
+**Vector edits:** 1.6–1.8× before GPUI's present is counted. Vello re-renders
+500 objects every frame in about 7 ms on the M1. Editing one object costs
+about 1 ms of CPU.
+
+**Costs:**
+- The GPU-resident document roughly doubles memory, since the CPU copy stays;
+  on unified-memory machines that's system RAM.
+- The spike implements neither layer styles nor adjustment layers.
+
+By the brief's criteria this points to the shared engine crate, built around
+GPU-resident painting, a GPU tile cache and Vello for vectors, and not to
+faster pan/zoom. The deciding cost is moving the brush engine to the GPU. Before
+committing, do the Iris Plus run (in progress) and one direct GPUI-build
+latency capture. If the answer is "stay on GPUI", what's worth porting back:
+- GPU-filled composite tiles (`emulsion-gpu` composites on the GPU but reads
+  tiles back);
+- dirty-tile invalidation across mip levels;
+- per-tile mip chains that match CPU rounding.
