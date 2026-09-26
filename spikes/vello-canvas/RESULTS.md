@@ -1,42 +1,49 @@
 # Results: owned wgpu + Vello canvas vs GPUI canvas
 
-*2026-09-26. Status: measured on Intel Iris Plus G7 (Vulkan), Apple M1 (Metal)
-and Mesa lavapipe, in a standalone window and embedded in GPUI on both laptops.
-The GPUI build itself not yet measured directly.*
+*2026-09-26. Status: measured on Intel Iris Plus G7 (Vulkan), Apple M1 (Metal),
+AMD Radeon RX 7700 XT (Windows; Vulkan and D3D12) and Mesa lavapipe, in a
+standalone window and embedded in GPUI on all three machines. The GPUI build
+itself not yet measured directly.*
 
 The GPUI column below is the CPU work the GPUI canvas does for the same scripted
 input. It leaves out GPUI's own layout, atlas upload and present, so where the
 spike is faster the ratios are lower bounds.
 
-| Spike advantage (p50 / p99) | Intel Iris Plus G7 | Apple M1 |
-|---|---|---|
-| Brush input-to-pixel, CPU stamping (test A) | **2.6× / 2.7×** | 1.2× / 1.3× |
-| Brush input-to-pixel, GPU dabs (test B) | **8.3× / 5.3×** | **2.1×** / 1.4× |
-| Pan at 100%, p99 frame | **4.0×** | 1.2× |
-| Edit one vector object per frame | **6.5× / 6.0×** | 1.7× / 1.2× |
-| Warm-cache pan/zoom p50 | no gain (both show cached tiles) | no gain |
+| Spike advantage (p50 / p99) | Intel Iris Plus G7 | Apple M1 | RX 7700 XT |
+|---|---|---|---|
+| Brush input-to-pixel, CPU stamping (test A) | **2.6× / 2.7×** | 1.2× / 1.3× | **43× / 1.7×** |
+| Brush input-to-pixel, GPU dabs (test B) | **8.3× / 5.3×** | **2.1×** / 1.4× | **63× / 10×** |
+| Pan at 100%, p99 frame | **4.0×** | 1.2× | **3.0×** |
+| Edit one vector object per frame | **6.5× / 6.0×** | 1.7× / 1.2× | **10× / 4.3×** |
+| Warm-cache pan/zoom p50 | no gain (both show cached tiles) | no gain | no gain |
 
 **On the Iris Plus, which Emulsion targets, the brief's ≥2× bar is cleared in a
 standalone window on brush latency with both brush tests, on pan p99 and on
 vector edits.** On the M1 only GPU dabs clear it, at p50; its much faster CPU
 shrinks the GPUI path's cost. Raster fidelity matches the CPU compositor within
-one 8-bit code on all three drivers.
+one 8-bit code on all four drivers. On the desktop RX 7700 XT the spike's
+frames take well under a millisecond, so its ratios are large, but they are
+set by the GPUI path's CPU work (21 ms per brush frame) rather than by anything
+the display could show at 165 Hz.
 
 Embedded in a GPUI window, the canvas is paced to the 60 Hz display, and the
 GPUI column is still unpaced CPU work, so these ratios are lower bounds:
 
-| Inside GPUI, advantage at least (p50 / p99) | Intel Iris Plus G7 | Apple M1 |
-|---|---|---|
-| Brush input-to-pixel, CPU stamping (test A) | 1.2× / 1.0× | none shown |
-| Brush input-to-pixel, GPU dabs (test B) | **2.5×** / 1.3× | none shown |
-| Pan at 100%, p99 frame | 1.4× | 1.1× |
-| Edit one vector object per frame | **2.2× / 2.8×** | none shown |
+| Inside GPUI, advantage at least (p50 / p99) | Intel Iris Plus G7 | Apple M1 | RX 7700 XT (165 Hz) |
+|---|---|---|---|
+| Brush input-to-pixel, CPU stamping (test A) | 1.2× / 1.0× | none shown | **3.6× / 3.5×** |
+| Brush input-to-pixel, GPU dabs (test B) | **2.5×** / 1.3× | none shown | **3.7× / 4.3×** |
+| Pan at 100%, p99 frame | 1.4× | 1.1× | **2.9×** |
+| Edit one vector object per frame | **2.2× / 2.8×** | none shown | 1.95× / **2.8×** |
 
 **Inside GPUI on the Iris, GPU dabs and vector edits keep a gain of 2× or more
 at p50. Worst-case brush latency does not**, because of stalls inside GPUI that
 the standalone window doesn't have; they are being traced. On the M1 the GPUI
 path's work mostly fits in one 60 Hz frame, so the display pacing hides any
-difference. See [Embedding in GPUI](#embedding-in-gpui).
+difference. **On Windows (RX 7700 XT, 165 Hz) every row keeps about 2× or more
+inside GPUI, at p50 and p99, and the embedding costs nothing measurable:** it matches a
+vsync'd standalone window on the same D3D12 backend. See
+[Embedding in GPUI](#embedding-in-gpui).
 
 ## Machines
 
@@ -147,7 +154,8 @@ memory, so a GPU-resident document roughly doubles its memory footprint.
 Out of scope in the brief; done afterwards as a follow-up. See
 [Embedding in GPUI](#embedding-in-gpui). On Linux the engine shares GPUI's
 wgpu 29.0.4 device. On macOS GPUI renders with Metal directly, so the canvas
-crosses over through an IOSurface.
+crosses over through an IOSurface. On Windows GPUI renders with Direct3D 11, so
+it crosses over through an NT-shared D3D12 texture.
 
 ## Fidelity against the CPU compositor
 
@@ -282,6 +290,46 @@ target/release/vello-canvas-spike fidelity spikes/out/vectors-500.ora \
 Any production engine has the same constraint: work per draw has to be bounded
 by tiles × ops, not by the view.
 
+## AMD Radeon RX 7700 XT (Windows)
+
+Jeremie's desktop: AMD Ryzen 7 8700G (with a Radeon 780M, unused here), 62 GiB,
+AMD Radeon RX 7700 XT driving a 2560-wide display at 165 Hz, Windows 11 Home
+(build 26200), Rust 1.98.1, `Rgba16Unorm` tiles. wgpu picked Vulkan (AMD
+proprietary driver 26.8.1, LLPC) for standalone runs. Windowed runs at 1600×1000,
+vsync off, commit `40a7217`. Raw data:
+[`results/bench-PCDESKPC.jsonl`](results/bench-PCDESKPC.jsonl),
+[`results/fidelity-PCDESKPC.jsonl`](results/fidelity-PCDESKPC.jsonl). All three
+GPU tests pass on D3D12.
+
+| Workload | Spike p50 / p99 | GPUI-path CPU work p50 / p99 (mean) | Spike advantage |
+|---|---|---|---|
+| Navigate layers-4k, all 600 frames | 0.31 / 0.79 ms | 0.00 / 19.57 ms | p99 25× |
+| — pan 100% | 0.32 / 7.02 ms | 0.00 / 20.90 ms (1.50) | p99 3.0× |
+| — pan 50% | 0.31 / 0.47 ms | 0.00 / 10.99 ms | p99 23× |
+| — zoom sweep fit↔400% | 0.31 / 0.45 ms | 0.00 / 0.00 ms | none |
+| Navigate layers-4k, `--no-cache` | 1.12 / 1.72 ms | – | – |
+| **Brush A input-to-pixel** (CPU stamp, dirty tiles) | **0.78** / 31.35 ms | 33.61 / 52.86 ms | **43× / 1.7×** |
+| **Brush B input-to-pixel** (GPU dabs) | **0.53 / 5.20** ms | 33.61 / 52.86 ms | **63× / 10×** |
+| Navigate vectors-500 (Vello every frame) | 0.95 / 1.36 ms | not run | – |
+| Edit one vector object per frame | 1.14 / 4.34 ms | 11.80 / 18.47 ms | **10× / 4.3×** |
+
+- **The spike is GPU-bound far below a frame.** Unpaced, it renders at
+  1–3 kHz, so the brush script's 1 kHz input reaches the screen in under a
+  millisecond at p50. Brush A's p99 comes from frames that upload dirty tiles
+  (up to 3 MiB).
+- **The GPUI path's CPU work is the same order as on the M1 and Iris:** 21 ms
+  per brush frame, 12 ms per vector edit. On this machine that is 3–4
+  refreshes at 165 Hz, so unlike the M1, the gain survives display pacing (see
+  [Embedding in GPUI](#embedding-in-gpui)).
+- **Without the tile cache**, pan is 3.6× slower at p50 but still
+  1.1 ms: the GPU has headroom the laptops don't.
+
+Fidelity on AMD Vulkan matches the other drivers. Raster is at most 1 code at
+levels 0–2, direct and cached, in both blend spaces. vectors-500 in sRGB mode is
+0.003% off-edge. The translucent sheets are 1.34–1.35% (sRGB-encoded) and 1.0%
+(linear 8-bit). The fidelity run wrote all 30 cases and then crashed at process
+exit (`0xC0000409`) during Vulkan teardown. That doesn't affect the results.
+
 ## Timings on lavapipe (smoke run only)
 
 1600×1000 view. Frame time covers CPU record plus the GPU, serialised. The GPUI
@@ -343,6 +391,11 @@ no readback, no `paint_image`. The README describes the patches.
   paints them with its existing `Window::paint_surface`, patched to accept
   single-plane BGRA. The two command queues aren't ordered, so each canvas
   frame waits for its own GPU work before GPUI samples it.
+- **Windows:** GPUI renders with Direct3D 11. The engine keeps its own wgpu
+  D3D12 device on GPUI's adapter and renders into a ring of NT-shared D3D12
+  textures. GPUI's `draw_surfaces`, patched from a no-op, opens each handle once
+  and draws it with its image shaders. As on macOS, each canvas frame waits for
+  its own GPU work.
 
 Verified:
 
@@ -357,6 +410,15 @@ Verified:
   GPU tests pass. `emulsion-app` still draws an open document. Painting with
   both brushes, panning, zoom, Fit and 100% work in the embedded view
   ([screenshot](results/gpui-embedded-m1.png)).
+- **RX 7700 XT (Windows 11):** release build, fmt, clippy and the GPU tests
+  on D3D12 pass. `emulsion-app` still draws an open document. All four
+  scenarios complete inside GPUI, including brush B's readback, and the
+  embedded view composites beside the chrome
+  ([screenshot](results/gpui-embedded-windows.png)). GPUI and the engine both
+  run on the 7700 XT, not the 780M. On a Windows checkout,
+  `check-gpui-vendor.py` and `test-license-staging.py` fail on licence
+  hashes, because `core.autocrlf` rewrites the vendored licence files. That
+  is unrelated to this patch; CI checks them on Linux.
 
 ### Results
 
@@ -426,6 +488,35 @@ How to read these tables:
   fairly; the pan rows less so. Standalone reports now record the rendered
   size.
 
+| RX 7700 XT (165 Hz), p50 / p99 | Standalone, vsync off (Vulkan) | Standalone, vsync (D3D12) | Inside GPUI (D3D12) | GPUI-path CPU work |
+|---|---|---|---|---|
+| Pan 100% | 0.32 / 7.02 ms | 5.99 / 9.32 ms | 6.04 / 7.24 ms | 0.00 / 20.90 ms |
+| Brush A | 0.78 / 31.35 ms | 9.06 / 14.44 ms | **9.23 / 15.19 ms** | 33.61 / 52.86 ms |
+| Brush B | 0.53 / 5.20 ms | 9.06 / 18.03 ms | **9.06 / 12.31 ms** | 33.61 / 52.86 ms |
+| Edit one vector object | 1.14 / 4.34 ms | 6.01 / 7.00 ms | **6.04 / 6.63 ms** | 11.80 / 18.47 ms |
+
+Windows commit `40a7217`. Raw data:
+[`bench-PCDESKPC-gpui.jsonl`](results/bench-PCDESKPC-gpui.jsonl),
+[`bench-PCDESKPC-vsync-dx12.jsonl`](results/bench-PCDESKPC-vsync-dx12.jsonl),
+and a vsync'd Vulkan run,
+[`bench-PCDESKPC-vsync.jsonl`](results/bench-PCDESKPC-vsync.jsonl). It has the
+same medians as D3D12; brush p99s vary run to run (brush A 37.8 ms there).
+
+- **Embedding costs nothing measurable on Windows.** Against a vsync'd
+  standalone window on the same D3D12 backend, frames and latency match within
+  1 ms at p50 and p99. The engine's CPU record and submit is 0.15–0.63 ms p50
+  inside GPUI and 0.29–1.03 ms standalone.
+- **No stalls like the M1's and Iris's.** Brush A inside GPUI has four frames
+  over 1.5× the median in 245, and brush p99 latency is 12–15 ms, about two
+  refreshes. Brush A runs at full rate.
+- **Pacing.** GPUI on Windows presents with `Present(0)` from a
+  DwmFlush-paced loop, so embedded frames sit at the 165 Hz interval (6.0 ms),
+  and brush latency at p50 is one and a half refreshes.
+- **The gain survives the pacing.** The GPUI path's CPU work, 21 ms per brush
+  frame and 12 ms per vector edit, spans several 6 ms refreshes. So inside GPUI
+  every row keeps about 2× or more at both p50 and p99: brush A 3.6× / 3.5×,
+  brush B 3.7× / 4.3×, vector edits 1.95× / 2.8×, pan p99 2.9×.
+
 **Next:** find the stalls and brush A's half rate before building on this.
 Rerun the brush tests inside GPUI on both laptops with the slow-frame
 breakdown. On the Iris, also run the standalone window with `--vsync`, the
@@ -486,9 +577,10 @@ GPU dabs.**
   Wet, textured, dual and dynamic brushes would have to move to the GPU to get
   its larger gain.
 - **B needs the GPU layer shown without a readback.** The GPUI canvas
-  presents CPU images. Embedding does this on both platforms (see
+  presents CPU images. Embedding does this on all three platforms (see
   [Embedding in GPUI](#embedding-in-gpui)): on the Iris, B keeps at least
-  2.5× at p50 inside GPUI, but not yet at p99.
+  2.5× at p50 inside GPUI, but not yet at p99; on the Windows desktop at
+  165 Hz, at least 3.7× / 4.3×.
 
 **Pan/zoom:**
 - **Warm cache:** no gain at p50. Both paths show cached tiles, and GPUI's zoom
@@ -517,6 +609,8 @@ before committing to it:
   2× at p50 embedded in GPUI, so GPUI could keep the chrome, with no UI toolkit
   change. That holds only if the brush p99 stalls and brush A's half rate
   inside GPUI can be fixed (see [Embedding in GPUI](#embedding-in-gpui)).
+  GPUI's Windows renderer shows neither, which points at the Linux and macOS
+  frame scheduling rather than at the embedding itself.
 - **One direct GPUI-build capture** of a brush stroke and a pan, via Tracy
   (`--cfg ztracing`). The GPUI numbers here are lower bounds, so this can only
   widen the gaps, but it replaces an estimate with a measurement.
