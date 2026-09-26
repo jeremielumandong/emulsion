@@ -169,9 +169,62 @@ pub struct Report {
     /// Named per-frame breakdowns; names carry their unit.
     pub stages: Vec<(String, Series)>,
     pub notes: Vec<String>,
+    /// One record per measured frame; the report lists the slow ones.
+    pub trace: Vec<FrameRecord>,
 }
 
+/// What one measured frame did, for attributing stalls.
+#[derive(Clone, Copy, Default)]
+pub struct FrameRecord {
+    pub frame: usize,
+    pub ms: f64,
+    pub cpu_ms: f64,
+    pub cache_fills: usize,
+    pub mip_tiles: usize,
+    pub uploaded_bytes: u64,
+    /// Embedded runs: time waiting for the host's previous frame, and in the
+    /// canvas paint (script input, engine record, and on macOS its GPU work).
+    /// The rest of the frame is the host's own layout, draw and pacing.
+    pub split: Option<(f64, f64)>,
+}
+
+impl FrameRecord {
+    fn json(&self) -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "frame": self.frame,
+            "ms": self.ms,
+            "cpu_ms": self.cpu_ms,
+            "cache_fills": self.cache_fills,
+            "mip_tiles": self.mip_tiles,
+            "uploaded_bytes": self.uploaded_bytes,
+        });
+        if let Some((wait, paint)) = self.split {
+            v["wait_ms"] = wait.into();
+            v["paint_ms"] = paint.into();
+            v["host_ms"] = (self.ms - wait - paint).into();
+        }
+        v
+    }
+}
+
+/// Slow frames are over 1.5× the median frame; at most this many are kept.
+const SLOW_FRAMES: usize = 30;
+
 impl Report {
+    /// Frames over 1.5× the median, in order.
+    pub fn slow_frames(&self) -> Vec<FrameRecord> {
+        let median = self.frames.quantile(0.5);
+        if !median.is_finite() || median <= 0.0 {
+            return Vec::new();
+        }
+        self.trace
+            .iter()
+            .filter(|r| r.ms > 1.5 * median)
+            .take(SLOW_FRAMES)
+            .copied()
+            .collect()
+    }
+
     fn stage(&mut self, name: &str, value: f64) {
         match self.stages.iter_mut().find(|(n, _)| n == name) {
             Some((_, s)) => s.push(value),
@@ -240,6 +293,27 @@ impl Report {
         for n in &self.notes {
             println!("\n- {n}");
         }
+        let slow = self.slow_frames();
+        if !slow.is_empty() {
+            println!("\nSlow frames (over 1.5× the median):");
+            for r in slow {
+                let split = r.split.map_or(String::new(), |(wait, paint)| {
+                    format!(
+                        ", wait {wait:.1} + paint {paint:.1} + host {:.1} ms",
+                        r.ms - wait - paint
+                    )
+                });
+                println!(
+                    "- frame {}: {:.1} ms (cpu {:.2} ms, {} fills, {} mips, {:.1} MiB up{split})",
+                    r.frame,
+                    r.ms,
+                    r.cpu_ms,
+                    r.cache_fills,
+                    r.mip_tiles,
+                    r.uploaded_bytes as f64 / 1048576.0
+                );
+            }
+        }
     }
 
     pub fn json(&self) -> serde_json::Value {
@@ -248,6 +322,7 @@ impl Report {
                 "n": s.len(),
                 "p50": s.quantile(0.5),
                 "p99": s.quantile(0.99),
+                "max": s.quantile(1.0),
                 "mean": s.mean(),
             })
         };
@@ -262,6 +337,7 @@ impl Report {
             "latency": s(&self.latency),
             "upload_bytes": s(&self.upload_bytes),
             "notes": self.notes,
+            "slow_frames": self.slow_frames().iter().map(FrameRecord::json).collect::<Vec<_>>(),
         })
     }
 }
@@ -457,6 +533,15 @@ impl Script {
         times: &FrameTimes,
     ) -> anyhow::Result<()> {
         self.report.frames.push(frame_ms);
+        self.report.trace.push(FrameRecord {
+            frame: self.frame,
+            ms: frame_ms,
+            cpu_ms: times.cpu_ms,
+            cache_fills: times.cache_fills,
+            mip_tiles: times.mip_tiles,
+            uploaded_bytes: times.uploaded_bytes,
+            split: None,
+        });
         self.report.upload_bytes.push(times.uploaded_bytes as f64);
         self.report.cpu.push(times.cpu_ms);
         self.report

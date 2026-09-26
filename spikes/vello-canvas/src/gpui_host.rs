@@ -49,6 +49,8 @@ enum Painting {
 /// The frame whose GPU completion the next paint waits for.
 struct Pending {
     start: Instant,
+    /// Time in this frame's canvas paint, after the wait.
+    paint_ms: f64,
     times: FrameTimes,
     scripted: bool,
     events: Vec<Instant>,
@@ -382,6 +384,7 @@ impl State {
         self.scale = scale;
         let size = device_size(bounds, scale);
 
+        let waited = Instant::now();
         {
             let _span = tracing::info_span!("gpu_wait").entered();
             backend::wait_for_previous_frame(self.engine.as_ref().map(|e| &*e.gpu));
@@ -389,6 +392,7 @@ impl State {
         // A frame runs from here to the same point of the next paint: its own
         // work, GPUI's layout, draw and present of it, and the GPU finishing.
         let done = Instant::now();
+        let wait_ms = done.duration_since(waited).as_secs_f64() * 1e3;
         let start = done;
         if let Some(p) = self.pending.take() {
             let ms = start.duration_since(p.start).as_secs_f64() * 1e3;
@@ -408,6 +412,9 @@ impl State {
                 && let Some(script) = &mut self.script
             {
                 script.after_frame(engine, ms, done, &p.times)?;
+                if let Some(record) = script.report.trace.last_mut() {
+                    record.split = Some((wait_ms, p.paint_ms));
+                }
                 if script.done() {
                     let mut report = std::mem::take(&mut script.report);
                     report.mode = format!(
@@ -508,6 +515,7 @@ impl State {
         self.last_times = times;
         self.pending = Some(Pending {
             start,
+            paint_ms: start.elapsed().as_secs_f64() * 1e3,
             times,
             scripted,
             events: std::mem::take(&mut self.events),
