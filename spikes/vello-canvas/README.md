@@ -163,7 +163,7 @@ to GPU completion of the frame that shows it. Scanout is not included.
 
 ### Linux embedding in GPUI
 
-`--gpui` (Linux and macOS) runs the same engine inside a GPUI window, alongside
+`--gpui` (Linux, macOS and Windows) runs the same engine inside a GPUI window, alongside
 ordinary GPUI chrome: a toolbar with live stats and a layer sidebar. GPUI's
 renderer composites the canvas without a CPU copy. This needs three small
 patches to the vendored GPUI, recorded in each crate's `EMULSION_CHANGES.md`:
@@ -202,8 +202,6 @@ GPUI presents with Mailbox on Wayland and Fifo (vsync) on X11, and the reports
 record which. Either way GPUI draws when the display asks for a frame, so
 embedded frames are paced to the refresh rate (measured on Hyprland). Limits:
 - Device loss isn't handled; `shared_gpu().generation` is there for it.
-- Windows uses GPUI's native DirectX renderer; there the flag reports that
-  embedding is Linux- and macOS-only.
 
 ### macOS embedding in GPUI
 
@@ -230,7 +228,40 @@ GPUI paints from the display link, so frame p50 cannot drop below the refresh
 interval; compare latency and p99 with `--vsync` standalone runs. Intel Macs
 with two GPUs are out of scope.
 
-Two things the host does for unattended runs, on both platforms:
+### Windows embedding in GPUI
+
+On Windows GPUI renders with Direct3D 11, which wgpu has no backend for, so,
+as on macOS, the engine keeps its own device and the two share textures. One
+patch to the vendored `gpui-pre-windows` (see its `EMULSION_CHANGES.md`):
+
+- **Shared-texture surfaces.** `draw_surfaces` was a no-op on Windows. It now
+  draws a `PaintSurface` whose `ExternalTexture` is a
+  `gpui_windows::SharedTexture { handle, id }`, an NT handle to a
+  `B8G8R8A8_UNORM` texture. The renderer opens each handle once with
+  `OpenSharedResource1`, caches the view by `id`, and draws it as one
+  whole-texture sprite with the existing polychrome sprite shaders.
+- **Adapter.** `gpui_windows::adapter_luid()` reports the DXGI adapter GPUI
+  chose; a shared texture cannot cross adapters. This matters on machines with
+  an integrated and a discrete GPU.
+- **Frame completion.** A D3D11 event query is ended after each present;
+  `gpui_windows::wait_for_submitted_frames()` blocks until the last one has
+  signalled.
+
+The engine opens a wgpu D3D12 device on the adapter with GPUI's LUID. It
+renders into a ring of three committed D3D12 textures created with
+`D3D12_HEAP_FLAG_SHARED` and `ALLOW_SIMULTANEOUS_ACCESS`, each with an NT handle
+from `CreateSharedHandle`, wrapped with `texture_from_raw` and
+`create_texture_from_hal`. GPUI paints the current one with
+`Window::paint_external_texture`. The D3D12 and D3D11 queues are not ordered,
+so, as on macOS, each canvas frame waits for its own GPU work before GPUI
+samples it, and each paint first waits for GPUI's last present.
+
+GPUI presents without vsync (`Present(0)`) but draws on a DwmFlush-paced
+thread, so embedded frames are paced to the refresh rate as on the other
+platforms. WARP (software) rendering has no matching D3D12 adapter; there the
+flag reports an error.
+
+Two things the host does for unattended runs, on all three platforms:
 - It turns off GPUI's inactive-window throttle
   (`inactive_frame_interval: None`) and activates the app. Launched from a
   terminal, the window is not focused, and GPUI caps unfocused windows at
@@ -267,7 +298,7 @@ $S fidelity spikes/out/fidelity-linear.ora spikes/out/fidelity-srgb.ora \
 # Tracy: build with the feature and connect the Tracy profiler.
 cargo run --release -p vello-canvas-spike --features tracy -- view spikes/out/layers-4k.ora
 
-# Inside GPUI (Linux): the same scripts, or an interactive window.
+# Inside GPUI (Linux, macOS, Windows): the same scripts, or an interactive window.
 $S bench brush-a spikes/out/layers-4k.ora --gpui --json spikes/out/results.jsonl
 $S view spikes/out/layers-4k.ora --gpui
 ```

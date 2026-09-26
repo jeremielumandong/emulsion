@@ -59,6 +59,14 @@ impl Gpu {
             compatible_surface: surface,
         }))
         .context("no wgpu adapter")?;
+        Self::from_adapter(adapter, requested)
+    }
+
+    /// Open a device on `adapter`, with the tile format chosen as in [`Gpu::new`].
+    pub fn from_adapter(
+        adapter: wgpu::Adapter,
+        requested: Option<TileFormat>,
+    ) -> Result<Arc<Self>> {
         let unorm_features = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba16Unorm);
         // Rendering and blending into Rgba16Unorm are adapter-specific
         // format features on top of the 16-bit-norm feature.

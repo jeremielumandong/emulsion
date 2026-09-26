@@ -26,14 +26,18 @@ are retained. No GPUI API version upgrade accompanies this import.
 - [macOS/Metal](gpui-pre-apple/EMULSION_CHANGES.md): single-plane BGRA
   surfaces and a wait for committed frames, for the canvas embedding spike.
 - [Windows](gpui-pre-windows/EMULSION_CHANGES.md): explicit WARP fallback and
-  economical software frame pacing adapted from AgentOps' Apache-2.0 GPUI fork.
+  economical software frame pacing adapted from AgentOps' Apache-2.0 GPUI fork;
+  NT-shared external textures and a frame-completion wait for the canvas
+  embedding spike.
 - `gpui-pre-reqwest/.gitignore`: allow its published `Cargo.lock` to be tracked
   with the rest of the archive; no reqwest code changes.
 
 Native macOS Metal rendering only gains BGRA surfaces and a frame-completion
 wait; existing drawing is unchanged. The application does not add GPU image
 compositing or painting; those remain Emulsion's existing CPU implementations.
-Only `spikes/vello-canvas` draws external textures and BGRA surfaces so far.
+Windows Direct3D 11 rendering gains shared-texture surfaces (previously
+skipped) and a frame-completion wait. Only `spikes/vello-canvas` draws external
+textures and BGRA surfaces so far.
 
 ## Updating or editing
 

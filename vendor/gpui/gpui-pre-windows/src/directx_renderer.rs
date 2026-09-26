@@ -1,4 +1,5 @@
-// Modified by Emulsion: consistent software-device reporting for rendering policy.
+// Modified by Emulsion: consistent software-device reporting for rendering policy;
+// shared-texture surfaces and a frame fence for the canvas embedding spike.
 use std::{
     slice,
     sync::{Arc, OnceLock},
@@ -46,6 +47,9 @@ pub(crate) struct DirectXRenderer {
     pipelines: DirectXRenderPipelines,
     direct_composition: Option<DirectComposition>,
     font_info: &'static FontInfo,
+    // Modified by Emulsion: application textures shared from another device.
+    surfaces: crate::external_texture::SurfaceTextures,
+    frame_fence: crate::external_texture::FrameFence,
 
     width: u32,
     height: u32,
@@ -93,6 +97,8 @@ struct DirectXRenderPipelines {
     mono_sprites: PipelineState<MonochromeSprite>,
     subpixel_sprites: PipelineState<SubpixelSprite>,
     poly_sprites: PipelineState<PolychromeSprite>,
+    // Modified by Emulsion: shared-texture surfaces, drawn as whole-texture sprites.
+    surface_sprites: PipelineState<PolychromeSprite>,
 }
 
 struct DirectXGlobalElements {
@@ -192,6 +198,8 @@ impl DirectXRenderer {
             pipelines,
             direct_composition,
             font_info: Self::get_font_info(),
+            surfaces: Default::default(),
+            frame_fence: Default::default(),
             width: 1,
             height: 1,
             skip_draws: false,
@@ -284,6 +292,8 @@ impl DirectXRenderer {
             }
 
             self.direct_composition.take();
+            self.surfaces.clear();
+            self.frame_fence.reset();
             self.devices.take();
         }
 
@@ -339,7 +349,12 @@ impl DirectXRenderer {
             return Ok(());
         }
         self.render(scene, background_appearance)?;
-        self.present()
+        self.present()?;
+        if let Some(devices) = &self.devices {
+            self.frame_fence
+                .submitted(&devices.device, &devices.device_context);
+        }
+        Ok(())
     }
 
     /// Clear the render target for `background_appearance` and encode every
@@ -385,7 +400,7 @@ impl DirectXRenderer {
                 PrimitiveBatch::PolychromeSprites { texture_id, range } => {
                     self.draw_polychrome_sprites(texture_id, range.start, range.len())
                 }
-                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(&scene.surfaces[range]),
+                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(range),
             }
             .with_context(|| {
                 format!(
@@ -529,6 +544,15 @@ impl DirectXRenderer {
 
     fn upload_scene_buffers(&mut self, scene: &Scene) -> Result<()> {
         let devices = self.devices.as_ref().context("devices missing")?;
+
+        let sprites = self.surfaces.prepare(&devices.device, &scene.surfaces);
+        if !sprites.is_empty() {
+            self.pipelines.surface_sprites.update_buffer(
+                &devices.device,
+                &devices.device_context,
+                &sprites,
+            )?;
+        }
 
         if !scene.shadows.is_empty() {
             self.pipelines.shadow_pipeline.update_buffer(
@@ -808,9 +832,26 @@ impl DirectXRenderer {
         )
     }
 
-    fn draw_surfaces(&mut self, surfaces: &[PaintSurface]) -> Result<()> {
-        if surfaces.is_empty() {
-            return Ok(());
+    fn draw_surfaces(&mut self, range: std::ops::Range<usize>) -> Result<()> {
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let batch_params = self
+            .globals
+            .batch_params_buffer
+            .as_ref()
+            .context("batch params buffer missing")?;
+        for index in range {
+            // Handles that could not be opened were logged and are skipped.
+            let Some(view) = self.surfaces.view(index) else {
+                continue;
+            };
+            self.pipelines.surface_sprites.draw_range_with_texture(
+                &devices.device_context,
+                slice::from_ref(&Some(view.clone())),
+                batch_params,
+                slice::from_ref(&self.globals.sampler),
+                index as u32,
+                1,
+            )?;
         }
         Ok(())
     }
@@ -995,6 +1036,13 @@ impl DirectXRenderPipelines {
             16,
             create_blend_state(device)?,
         )?;
+        let surface_sprites = PipelineState::new(
+            device,
+            "surface_sprite_pipeline",
+            ShaderModule::PolychromeSprite,
+            4,
+            create_blend_state(device)?,
+        )?;
 
         Ok(Self {
             shadow_pipeline,
@@ -1005,6 +1053,7 @@ impl DirectXRenderPipelines {
             mono_sprites,
             subpixel_sprites,
             poly_sprites,
+            surface_sprites,
         })
     }
 }

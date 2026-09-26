@@ -7,6 +7,9 @@
 //! - macOS: GPUI renders with Metal directly, so the engine keeps its own wgpu
 //!   (Metal) device and renders into IOSurface-backed textures that GPUI
 //!   paints as BGRA surfaces. On Apple silicon both are the same GPU.
+//! - Windows: GPUI renders with Direct3D 11, so the engine keeps its own wgpu
+//!   (D3D12) device on GPUI's adapter and renders into NT-shared textures
+//!   that GPUI opens and draws as external textures.
 //!
 //! Scripted runs use the same scripts as the standalone window. A frame's
 //! time is the interval between successive canvas paints: GPUI's layout,
@@ -343,6 +346,205 @@ mod backend {
         };
         Ok(Slot {
             buffer,
+            view: texture.create_view(&Default::default()),
+            _texture: texture,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod backend {
+    use crate::gpu::{Gpu, TileFormat};
+    use anyhow::{Context as _, anyhow};
+    use gpui_kit::*;
+    use gpui_windows::SharedTexture;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE};
+    use windows::Win32::Graphics::Direct3D12::{
+        D3D12_HEAP_FLAG_SHARED, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS,
+        D3D12_RESOURCE_STATE_COMMON, D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12Resource,
+    };
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+    use windows::core::PCWSTR;
+
+    /// GPUI's swap chain is non-sRGB `B8G8R8A8_UNORM`, so the shader-encoded
+    /// values pass straight through.
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
+    /// Textures in flight: the one GPUI may still be sampling, and more.
+    const RING: usize = 3;
+    pub const NOTES: &[&str] = &[
+        "Windows: the canvas renders on its own wgpu D3D12 device, on GPUI's adapter, into NT-shared BGRA textures that GPUI's D3D11 renderer opens and draws; the two devices' queues are not ordered, so each canvas frame waits for its own GPU work (device.poll) before GPUI samples it, and for GPUI's last present (an event query) before rendering",
+    ];
+
+    pub fn presentation() -> &'static str {
+        if std::env::var_os("GPUI_DISABLE_DIRECT_COMPOSITION").is_some() {
+            "Windows, D3D11 flip swap chain (DwmFlush-paced)"
+        } else {
+            "Windows, D3D11 + DirectComposition (DwmFlush-paced)"
+        }
+    }
+
+    /// The engine's own D3D12 device on the adapter GPUI chose: a shared
+    /// texture cannot cross adapters.
+    pub fn device(tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {
+        let luid = gpui_windows::adapter_luid().context("GPUI has not chosen an adapter")?;
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        desc.backends = wgpu::Backends::DX12;
+        let instance = wgpu::Instance::new(desc);
+        let adapter = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12))
+            .into_iter()
+            .find(|adapter| {
+                let Some(hal) = (unsafe { adapter.as_hal::<wgpu::hal::api::Dx12>() }) else {
+                    return false;
+                };
+                unsafe { hal.raw_adapter().GetDesc1() }
+                    .is_ok_and(|d| (d.AdapterLuid.LowPart, d.AdapterLuid.HighPart) == luid)
+            })
+            .ok_or_else(|| anyhow!("no D3D12 adapter matches GPUI's (software rendering?)"))?;
+        Gpu::from_adapter(adapter, tiles)
+    }
+
+    /// Wait for GPUI's last present, then for the engine's own work.
+    pub fn wait_for_previous_frame(gpu: Option<&Gpu>) {
+        gpui_windows::wait_for_submitted_frames();
+        if let Some(gpu) = gpu {
+            gpu.wait();
+        }
+    }
+
+    /// The two queues are not ordered: finish the canvas before GPUI can
+    /// sample it.
+    pub fn after_render(gpu: &Gpu) {
+        gpu.wait();
+    }
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+    struct Slot {
+        shared: SharedTexture,
+        view: wgpu::TextureView,
+        _texture: wgpu::Texture,
+    }
+
+    impl Drop for Slot {
+        fn drop(&mut self) {
+            // GPUI holds its own reference to the resource once opened.
+            let _ = unsafe { CloseHandle(HANDLE(self.shared.handle as *mut _)) };
+        }
+    }
+
+    pub struct Target {
+        slots: Vec<Slot>,
+        current: usize,
+        pub size: (u32, u32),
+    }
+
+    impl Target {
+        pub fn new(gpu: &Gpu, size: (u32, u32)) -> anyhow::Result<Self> {
+            let slots = (0..RING)
+                .map(|_| slot(gpu, size))
+                .collect::<anyhow::Result<_>>()?;
+            Ok(Self {
+                slots,
+                current: 0,
+                size,
+            })
+        }
+
+        /// Move to the next texture in the ring and return it.
+        pub fn next(&mut self) -> wgpu::TextureView {
+            self.current = (self.current + 1) % self.slots.len();
+            self.slots[self.current].view.clone()
+        }
+
+        pub fn paint(&self, window: &mut Window, bounds: Bounds<Pixels>) {
+            let shared = self.slots[self.current].shared;
+            window.paint_external_texture(bounds, ExternalTexture(Arc::new(shared)));
+        }
+    }
+
+    /// One shareable D3D12 texture, its NT handle, and wgpu's view of it.
+    fn slot(gpu: &Gpu, (width, height): (u32, u32)) -> anyhow::Result<Slot> {
+        let hal = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() }
+            .context("the engine's device is not on the D3D12 backend")?;
+        let raw = hal.raw_device();
+        let heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_DEFAULT,
+            ..Default::default()
+        };
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Alignment: 0,
+            Width: width as u64,
+            Height: height,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+            // Simultaneous access lets D3D11 read it without a state handoff.
+            Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+                | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS,
+        };
+        let mut resource: Option<ID3D12Resource> = None;
+        unsafe {
+            raw.CreateCommittedResource(
+                &heap,
+                D3D12_HEAP_FLAG_SHARED,
+                &desc,
+                D3D12_RESOURCE_STATE_COMMON,
+                None,
+                &mut resource,
+            )
+        }
+        .context("CreateCommittedResource (shared) failed")?;
+        let resource = resource.context("no shared resource")?;
+        let handle =
+            unsafe { raw.CreateSharedHandle(&resource, None, GENERIC_ALL.0, PCWSTR::null()) }
+                .context("CreateSharedHandle failed")?;
+        drop(hal);
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let hal_texture = unsafe {
+            wgpu::hal::dx12::Device::texture_from_raw(
+                resource,
+                FORMAT,
+                wgpu::TextureDimension::D2,
+                size,
+                1,
+                1,
+            )
+        };
+        let texture = unsafe {
+            gpu.device.create_texture_from_hal::<wgpu::hal::api::Dx12>(
+                hal_texture,
+                &wgpu::TextureDescriptor {
+                    label: Some("embedded canvas (shared)"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+            )
+        };
+        Ok(Slot {
+            shared: SharedTexture {
+                handle: handle.0 as usize,
+                id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            },
             view: texture.create_view(&Default::default()),
             _texture: texture,
         })

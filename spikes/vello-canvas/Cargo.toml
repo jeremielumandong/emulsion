@@ -49,5 +49,19 @@ core-video = "0.5.2"
 objc2-io-surface = "0.3"
 objc2-metal = { version = "0.3", features = ["objc2-io-surface"] }
 
+# Windows embedding spike: the engine on its own wgpu (D3D12) device, on GPUI's
+# adapter, renders into NT-shared textures that GPUI's D3D11 renderer opens and
+# draws (see the vendored `gpui-pre-windows` patch).
+[target.'cfg(target_os = "windows")'.dependencies]
+gpui-kit = { workspace = true }
+gpui-pre-windows = "=0.3.5"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+] }
+
 [lints]
 workspace = true

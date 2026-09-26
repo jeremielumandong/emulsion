@@ -95,6 +95,7 @@ application asset handling is unchanged.
 handle, and carries it on `PaintSurface` on platforms other than macOS (where
 the field remains the CoreVideo buffer). `src/window.rs` adds
 `Window::paint_external_texture`. Renderers that cannot use the handle skip it;
-only the wgpu renderer draws it (see `gpui-pre-wgpu`). Emulsion's application does
+the wgpu renderer draws `wgpu::TextureView`s (see `gpui-pre-wgpu`) and the
+Windows Direct3D 11 renderer draws NT-shared textures (see `gpui-pre-windows`). Emulsion's application does
 not use this yet: it exists for `spikes/vello-canvas`, which renders a canvas on
 GPUI's own device and lets GPUI composite it without a CPU copy.

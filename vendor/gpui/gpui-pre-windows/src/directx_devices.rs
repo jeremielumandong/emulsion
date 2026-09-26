@@ -1,4 +1,5 @@
-// Modified by Emulsion: prefer hardware, then explicitly fall back to WARP.
+// Modified by Emulsion: prefer hardware, then explicitly fall back to WARP;
+// publish the adapter for shared textures (canvas embedding spike).
 use anyhow::{Context, Result};
 use gpui_util::ResultExt;
 use itertools::Itertools;
@@ -50,6 +51,7 @@ impl DirectXDevices {
             get_dxgi_factory(debug_layer_available).context("Creating DXGI factory")?;
         let (adapter, device, device_context, feature_level) =
             get_adapter(&dxgi_factory, debug_layer_available).context("Getting DXGI adapter")?;
+        crate::external_texture::set_adapter(&adapter);
         match feature_level {
             D3D_FEATURE_LEVEL_11_1 => {
                 log::info!("Created device with Direct3D 11.1 feature level.")

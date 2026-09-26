@@ -11,7 +11,7 @@ mod compositor;
 mod engine;
 mod fidelity;
 mod gpu;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod gpui_host;
 mod testdocs;
 mod vector;
@@ -44,7 +44,7 @@ options:
   --vectors srgb|linear
   --no-vello         composite vector nodes from their CPU caches
   --no-cache         recomposite every layer every frame (no GPU tile cache)
-  --gpui             (Linux, macOS) run inside a GPUI window, composited by GPUI's renderer
+  --gpui             (Linux, macOS, Windows) run inside a GPUI window, composited by GPUI's renderer
   --json FILE        append the report as a JSON line
 ";
 
@@ -301,7 +301,7 @@ fn bench(args: &Args) -> Result<()> {
     meta.finish(report)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn gpui_embedded(
     args: &Args,
     doc: emulsion_core::Document,
@@ -326,12 +326,12 @@ fn gpui_embedded(
     )
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod gpui_host {
     pub type Finish = Box<dyn FnOnce(Option<crate::bench::Report>) -> anyhow::Result<()>>;
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn gpui_embedded(
     _: &Args,
     _: emulsion_core::Document,
@@ -340,7 +340,7 @@ fn gpui_embedded(
     _: &str,
     _: gpui_host::Finish,
 ) -> Result<()> {
-    bail!("--gpui embedding is Linux- and macOS-only in this spike")
+    bail!("--gpui embedding is Linux-, macOS- and Windows-only in this spike")
 }
 
 fn main() -> Result<()> {
