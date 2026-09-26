@@ -32,5 +32,11 @@ tracing-tracy = { version = "0.11", default-features = false }
 vello = "0.10"
 winit = "0.30"
 
+# Linux embedding spike: the engine on GPUI's own wgpu device, composited by
+# GPUI's renderer (see the vendored `gpui-pre-wgpu` / `gpui-pre` patches).
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui-kit = { workspace = true }
+gpui-pre-wgpu = "=0.3.5"
+
 [lints]
 workspace = true

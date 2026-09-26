@@ -304,6 +304,53 @@ What carries over to real hardware:
   Vello render call together take about 1 ms of CPU. The GPUI path re-rasterizes the edited path into its document-size
   cache and recomposites 4 tiles (28.5 ms here).
 
+## Linux embedding in GPUI
+
+*Stage 1 of the embedding spike. Built and verified on lavapipe under Xvfb;
+Iris Plus numbers pending.*
+
+The engine now runs inside a GPUI window, on GPUI's own wgpu device, with
+GPUI chrome around it. GPUI's renderer composites the canvas as an external
+texture, with no readback and no `paint_image` (see the README). Verified so
+far:
+
+- **The canvas shows in the GPUI window.** It sits alongside a GPUI toolbar
+  with live stats and a layer sidebar, with Vello paths and text on the
+  composited canvas: [screenshot](results/gpui-embedded-lavapipe.png).
+- **Input works inside GPUI.** Mouse painting with brush A and brush B,
+  right-drag panning, wheel zoom and toolbar buttons all work (driven with
+  `xdotool`).
+- **Every scripted scenario completes inside GPUI:** navigate, brush-a,
+  brush-b, vector-edit, and `--no-cache`. Brush B's read-back matches the CPU
+  `Stroke` within 5/65535, as in the standalone runs.
+- **No regressions in GPUI itself.** The CI renderer smoke test
+  (`renderer_smoke --require-software`) passes with the patched GPUI;
+  `check-gpui-vendor.py`, the licence-staging test and workspace clippy
+  pass too.
+
+Lavapipe on Xvfb presents with Fifo and is software-only, so its timings say
+nothing about the question. The question is whether the Iris Plus gains hold
+inside GPUI. On the Iris machine (Wayland/Hyprland, so GPUI presents with
+Mailbox):
+
+```sh
+S=target/release/vello-canvas-spike; J=spikes/vello-canvas/results/bench-$(hostname)-gpui.jsonl
+for s in navigate brush-a brush-b; do $S bench $s spikes/out/layers-4k.ora --gpui --json $J; done
+$S bench vector-edit spikes/out/vectors-500.ora --gpui --json $J
+```
+
+| Iris Plus G7, p50 / p99 | Standalone window | Inside GPUI | GPUI-path CPU work |
+|---|---|---|---|
+| Pan 100% frame | 1.96 / 11.87 ms | | 0.00 / 47.71 ms |
+| Brush A input-to-pixel | 25.68 / 48.82 ms | | 65.88 / 133.32 ms |
+| Brush B input-to-pixel | 7.89 / 24.99 ms | | 65.88 / 133.32 ms |
+| Edit one vector object | 5.71 / 8.16 ms | | 37.36 / 48.88 ms |
+
+If the "Inside GPUI" column stays near the standalone one, the architecture
+holds: GPUI keeps the interface and the owned engine draws the canvas. Stage 2
+is the same embedding in `emulsion-ui`'s canvas behind an opt-in flag, with
+the document synced to the engine by tile identity.
+
 ## Reproducing on other hardware
 
 Same files, same window size, vsync off:

@@ -8990,6 +8990,8 @@ dependencies = [
  "emulsion-io",
  "emulsion-raster",
  "glam",
+ "gpui-kit",
+ "gpui-pre-wgpu",
  "image",
  "pollster 0.4.0",
  "rayon",

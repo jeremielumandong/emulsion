@@ -1,3 +1,4 @@
+// Modified by Emulsion: ExternalTexture surfaces for application canvases (Linux canvas spike).
 // todo("windows"): remove
 #![cfg_attr(windows, allow(dead_code))]
 
@@ -771,6 +772,22 @@ pub struct PaintSurface {
     pub content_mask: ContentMask<ScaledPixels>,
     #[cfg(target_os = "macos")]
     pub image_buffer: core_video::pixel_buffer::CVPixelBuffer,
+    // Modified by Emulsion: application-owned GPU texture (Linux canvas spike).
+    #[cfg(not(target_os = "macos"))]
+    pub texture: ExternalTexture,
+}
+
+/// An application-owned GPU texture for the platform renderer to composite,
+/// such as a canvas rendered on the renderer's own device. The renderer
+/// downcasts the handle to its native view type (`wgpu::TextureView` for the
+/// wgpu renderer) and skips anything else. Added by Emulsion.
+#[derive(Clone)]
+pub struct ExternalTexture(pub std::sync::Arc<dyn std::any::Any + Send + Sync>);
+
+impl Debug for ExternalTexture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ExternalTexture")
+    }
 }
 
 impl From<PaintSurface> for Primitive {

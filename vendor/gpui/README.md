@@ -19,14 +19,18 @@ are retained. No GPUI API version upgrade accompanies this import.
   keepalive presentation on software devices; preserve virtual-list height
   estimates across layout and resizing; opt-in cross-frame Taffy layout reuse.
 - [Linux/wgpu](gpui-pre-wgpu/EMULSION_CHANGES.md): hardware-first ordering,
-  forced software diagnostics, and software-capable device-loss recovery.
+  forced software diagnostics, and software-capable device-loss recovery; a
+  shared device and external-texture drawing for the canvas embedding spike.
+- [Core external textures](gpui-pre/EMULSION_CHANGES.md#external-textures-linux-canvas-spike):
+  `Window::paint_external_texture` for application-owned GPU textures.
 - [Windows](gpui-pre-windows/EMULSION_CHANGES.md): explicit WARP fallback and
   economical software frame pacing adapted from AgentOps' Apache-2.0 GPUI fork.
 - `gpui-pre-reqwest/.gitignore`: allow its published `Cargo.lock` to be tracked
   with the rest of the archive; no reqwest code changes.
 
-Native macOS Metal rendering is unchanged. These changes do not add GPU image
-compositing or painting; those remain Emulsion's existing CPU implementations.
+Native macOS Metal rendering is unchanged. The application does not add GPU
+image compositing or painting; those remain Emulsion's existing CPU
+implementations. Only `spikes/vello-canvas` draws external textures so far.
 
 ## Updating or editing
 

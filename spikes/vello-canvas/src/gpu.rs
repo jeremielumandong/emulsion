@@ -120,6 +120,35 @@ impl Gpu {
         }))
     }
 
+    /// Adopt GPUI's device (Linux embedding). The tile format follows the
+    /// features GPUI requested for it; GPUI keeps its own error handler.
+    #[cfg(target_os = "linux")]
+    pub fn from_shared(shared: &gpui_wgpu::SharedGpu, requested: Option<TileFormat>) -> Arc<Self> {
+        let unorm_ok = shared.device.features().contains(
+            wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+                | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+        ) && shared
+            .adapter
+            .get_texture_format_features(wgpu::TextureFormat::Rgba16Unorm)
+            .flags
+            .contains(wgpu::TextureFormatFeatureFlags::BLENDABLE);
+        let tile_format = match requested {
+            Some(TileFormat::Unorm16) if !unorm_ok => {
+                tracing::warn!("GPUI's device cannot render Rgba16Unorm; using Rgba16Float");
+                TileFormat::Float16
+            }
+            Some(format) => format,
+            None if unorm_ok => TileFormat::Unorm16,
+            None => TileFormat::Float16,
+        };
+        Arc::new(Self {
+            adapter: shared.adapter.clone(),
+            device: (*shared.device).clone(),
+            queue: (*shared.queue).clone(),
+            tile_format,
+        })
+    }
+
     pub fn describe(&self) -> String {
         let info = self.adapter.get_info();
         format!(

@@ -1365,3 +1365,14 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
 
     return ycbcr_to_RGB * y_cb_cr;
 }
+
+// Modified by Emulsion: an application-owned RGBA texture (Linux canvas spike),
+// bound as `t_y` in the surface layout.
+@fragment
+fn fs_external(input: SurfaceVarying) -> @location(0) vec4<f32> {
+    if (any(input.clip_distances < vec4<f32>(0.0))) {
+        return vec4<f32>(0.0);
+    }
+    let color = textureSampleLevel(t_y, s_surface, input.texture_position, 0.0);
+    return blend_color(color, 1.0);
+}

@@ -161,6 +161,47 @@ to GPU completion of the frame that shows it. Scanout is not included.
   end the painted tiles are copied to a buffer and mapped asynchronously; the
   canvas adopts the result as its CPU raster without re-uploading.
 
+### Linux embedding in GPUI
+
+`--gpui` (Linux only) runs the same engine inside a GPUI window, alongside
+ordinary GPUI chrome: a toolbar with live stats and a layer sidebar. GPUI's
+renderer composites the canvas without a CPU copy. This needs three small
+patches to the vendored GPUI, recorded in each crate's `EMULSION_CHANGES.md`:
+
+- **Shared device** (`gpui-pre-wgpu`, `wgpu_context.rs`). GPUI requests WebGPU
+  default limits and the 16-bit-norm texture features when the adapter has them.
+  It publishes its device, queue and adapter through `gpui_wgpu::shared_gpu()`.
+  The engine adopts that device (`Gpu::from_shared`), so every texture it makes
+  is usable by GPUI.
+- **External textures** (`gpui-pre`, `scene.rs` / `window.rs`).
+  `Window::paint_external_texture(bounds, ExternalTexture)` puts an
+  application-owned texture handle in the scene, like `paint_image` but with no
+  CPU pixels.
+- **Drawing them** (`gpui-pre-wgpu`, `wgpu_renderer.rs` / `shaders.wgsl`). The
+  wgpu renderer downcasts the handle to a `wgpu::TextureView`. It draws it with
+  GPUI's existing surface layout and a new `fs_external` fragment entry,
+  honouring content masks.
+
+`gpui_host.rs` gives the canvas its own entity, so each frame re-renders only
+that view (`request_animation_frame`). The chrome refreshes at 4 Hz.
+
+Each canvas paint does four things:
+1. Waits for the GPU to finish the previous GPUI frame.
+2. Advances the script or the brush stroke.
+3. Renders the engine into an `Rgba8Unorm` texture sized to the canvas in device
+   pixels.
+4. Paints that texture into the scene.
+
+A frame is timed from one post-wait point to the next. That covers the
+engine's work plus GPUI's layout, draw and present. Latency ends at GPU
+completion of the GPUI frame that showed the input.
+
+GPUI presents with Mailbox on Wayland and Fifo (vsync) on X11, and the reports
+record which. Limits:
+- Device loss isn't handled; `shared_gpu().generation` is there for it.
+- macOS and Windows use GPUI's native Metal and DirectX renderers. There, the
+  flag reports that embedding is Linux-only.
+
 ## Running
 
 ```sh
@@ -188,11 +229,16 @@ $S fidelity spikes/out/fidelity-linear.ora spikes/out/fidelity-srgb.ora \
 
 # Tracy: build with the feature and connect the Tracy profiler.
 cargo run --release -p vello-canvas-spike --features tracy -- view spikes/out/layers-4k.ora
+
+# Inside GPUI (Linux): the same scripts, or an interactive window.
+$S bench brush-a spikes/out/layers-4k.ora --gpui --json spikes/out/results.jsonl
+$S view spikes/out/layers-4k.ora --gpui
 ```
 
 Other options: `--size WxH` (default 1600x1000), `--vsync`,
 `--tiles unorm16|float16`, `--vectors srgb|linear`, `--no-vello`,
-`--no-cache`, `--frames N`.
+`--no-cache`, `--gpui`, `--frames N`. In `--gpui` runs, `--size` sets the
+canvas area in logical pixels, and the window adds the chrome around it.
 
 `navigate` runs 240 frames of fast panning at 100%, 120 at 50%, and 240 of a
 zoom sweep between fit and 400%. `vector-edit` moves one object per frame for

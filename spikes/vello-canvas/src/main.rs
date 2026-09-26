@@ -11,6 +11,8 @@ mod compositor;
 mod engine;
 mod fidelity;
 mod gpu;
+#[cfg(target_os = "linux")]
+mod gpui_host;
 mod testdocs;
 mod vector;
 
@@ -42,6 +44,7 @@ options:
   --vectors srgb|linear
   --no-vello         composite vector nodes from their CPU caches
   --no-cache         recomposite every layer every frame (no GPU tile cache)
+  --gpui             (Linux) run inside a GPUI window on GPUI's own wgpu device
   --json FILE        append the report as a JSON line
 ";
 
@@ -56,6 +59,7 @@ struct Args {
     space: VectorSpace,
     vello: bool,
     cache: bool,
+    gpui: bool,
     json: Option<PathBuf>,
     out: Option<PathBuf>,
     levels: Vec<u32>,
@@ -73,6 +77,7 @@ fn parse() -> Result<Args> {
         space: VectorSpace::Srgb,
         vello: true,
         cache: true,
+        gpui: false,
         json: None,
         out: None,
         levels: vec![0, 1, 2],
@@ -98,6 +103,7 @@ fn parse() -> Result<Args> {
             }
             "--no-vello" => a.vello = false,
             "--no-cache" => a.cache = false,
+            "--gpui" => a.gpui = true,
             "--json" => a.json = Some(value()?.into()),
             "--out" => a.out = Some(value()?.into()),
             "--levels" => {
@@ -179,6 +185,8 @@ fn bench(args: &Args) -> Result<()> {
         .then(|| bench::add_paint_layer(&mut doc));
     let mut report = if args.baseline {
         bench::baseline(kind, &mut doc, paint, args.size)?
+    } else if args.gpui {
+        gpui_embedded(args, doc, paint, Some(kind), file)?.context("benchmark did not finish")?
     } else if args.headless {
         let gpu = Gpu::new(gpu::instance(), None, args.tiles)?;
         let mut engine = Engine::new(
@@ -253,10 +261,45 @@ fn bench(args: &Args) -> Result<()> {
         "cache": args.cache,
         "vello": args.vello,
         "vsync": args.vsync,
+        "gpui": args.gpui,
         "tiles": args.tiles.map(|t| t.label()),
         "vectors": format!("{:?}", args.space),
     });
     write_json(&args.json, json)
+}
+
+#[cfg(target_os = "linux")]
+fn gpui_embedded(
+    args: &Args,
+    doc: emulsion_core::Document,
+    paint: Option<emulsion_core::NodeId>,
+    script: Option<bench::Kind>,
+    file: &str,
+) -> Result<Option<bench::Report>> {
+    gpui_host::run(
+        gpui_host::Options {
+            size: args.size,
+            tiles: args.tiles,
+            space: args.space,
+            vello: args.vello,
+            cache: args.cache,
+            script: script.map(|k| (k, args.frames)),
+            title: format!("vello-canvas spike (GPUI): {file}"),
+        },
+        doc,
+        paint,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn gpui_embedded(
+    _: &Args,
+    _: emulsion_core::Document,
+    _: Option<emulsion_core::NodeId>,
+    _: Option<bench::Kind>,
+    _: &str,
+) -> Result<Option<bench::Report>> {
+    bail!("--gpui embedding is Linux-only in this spike")
 }
 
 fn main() -> Result<()> {
@@ -272,6 +315,10 @@ fn main() -> Result<()> {
             let file = args.positional.get(1).context("view FILE")?;
             let mut doc = open(file)?;
             let paint = bench::add_paint_layer(&mut doc);
+            if args.gpui {
+                gpui_embedded(&args, doc, Some(paint), None, file)?;
+                return Ok(());
+            }
             app::run(
                 app::Options {
                     size: args.size,

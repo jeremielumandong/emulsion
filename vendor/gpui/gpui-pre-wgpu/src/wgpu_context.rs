@@ -1,4 +1,5 @@
-// Modified by Emulsion: explicit software selection and hardware-first fallback.
+// Modified by Emulsion: explicit software selection and hardware-first fallback;
+// shared-device publication and optional canvas features/limits (Linux canvas spike).
 #[cfg(not(target_family = "wasm"))]
 use anyhow::Context as _;
 #[cfg(not(target_family = "wasm"))]
@@ -130,11 +131,14 @@ impl WgpuContext {
         );
 
         let backend = WgpuBackend::Native(adapter.get_info().backend);
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+        publish_shared_gpu(&adapter, &device, &queue);
         Ok(Self {
             instance,
             adapter,
-            device: Arc::new(device),
-            queue: Arc::new(queue),
+            device,
+            queue,
             backend,
             dual_source_blending,
             color_texture_format,
@@ -242,6 +246,14 @@ impl WgpuContext {
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
 
         let mut required_features = wgpu::Features::empty();
+        // Emulsion: let an application canvas on this device keep 16-bit
+        // document tiles when the adapter can render into them.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            required_features |= adapter.features()
+                & (wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+        }
         if dual_source_blending {
             required_features |= wgpu::Features::DUAL_SOURCE_BLENDING;
         } else {
@@ -262,10 +274,16 @@ impl WgpuContext {
                 .using_resolution(adapter.limits())
                 .using_alignment(adapter.limits())
         };
+        // Emulsion: WebGPU default limits when the adapter has them, so an
+        // application canvas can run compute renderers (Vello) on this device.
         #[cfg(not(target_family = "wasm"))]
-        let required_limits = wgpu::Limits::downlevel_defaults()
-            .using_resolution(adapter.limits())
-            .using_alignment(adapter.limits());
+        let required_limits = if wgpu::Limits::default().check_limits(&adapter.limits()) {
+            wgpu::Limits::default()
+        } else {
+            wgpu::Limits::downlevel_defaults()
+        }
+        .using_resolution(adapter.limits())
+        .using_alignment(adapter.limits());
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -612,4 +630,38 @@ mod tests {
             parse_pci_id(&format!("{:#X}", 0x1234)).unwrap(),
         );
     }
+}
+
+/// GPUI's current device, shared with application code that draws into
+/// textures GPUI composites (Emulsion's canvas spike). `generation` changes when
+/// device-loss recovery replaces the device; resources from an older
+/// generation must be recreated.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone)]
+pub struct SharedGpu {
+    pub adapter: wgpu::Adapter,
+    pub device: Arc<wgpu::Device>,
+    pub queue: Arc<wgpu::Queue>,
+    pub generation: u64,
+}
+
+#[cfg(not(target_family = "wasm"))]
+static SHARED_GPU: std::sync::Mutex<Option<SharedGpu>> = std::sync::Mutex::new(None);
+
+#[cfg(not(target_family = "wasm"))]
+fn publish_shared_gpu(adapter: &wgpu::Adapter, device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>) {
+    let mut shared = SHARED_GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let generation = shared.as_ref().map_or(1, |s| s.generation + 1);
+    *shared = Some(SharedGpu {
+        adapter: adapter.clone(),
+        device: Arc::clone(device),
+        queue: Arc::clone(queue),
+        generation,
+    });
+}
+
+/// The device GPUI renders with, once a window has created it.
+#[cfg(not(target_family = "wasm"))]
+pub fn shared_gpu() -> Option<SharedGpu> {
+    SHARED_GPU.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }

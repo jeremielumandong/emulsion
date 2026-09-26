@@ -88,3 +88,13 @@ benchmark support. Application benchmarks can install the normal bundled icons
 before opening windows, rather than timing failed asset lookups. The editor
 navigation benchmark uses this with the real GPUI Kit asset bundle. Production
 application asset handling is unchanged.
+
+## External textures (Linux canvas spike)
+
+`src/scene.rs` adds `ExternalTexture`, an opaque application-owned GPU texture
+handle, and carries it on `PaintSurface` on platforms other than macOS (where
+the field remains the CoreVideo buffer). `src/window.rs` adds
+`Window::paint_external_texture`. Renderers that cannot use the handle skip it;
+only the wgpu renderer draws it (see `gpui-pre-wgpu`). Emulsion's application does
+not use this yet: it exists for `spikes/vello-canvas`, which renders a canvas on
+GPUI's own device and lets GPUI composite it without a CPU copy.
