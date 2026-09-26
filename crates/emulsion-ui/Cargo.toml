@@ -39,7 +39,7 @@ emulsion-io = { workspace = true }
 emulsion-raster = { workspace = true }
 emulsion-filters = { workspace = true }
 emulsion-gpu = { workspace = true }
-emulsion-engine = { workspace = true }
+emulsion-engine = { workspace = true, features = ["gpui"] }
 rayon = { workspace = true }
 smallvec = { workspace = true }
 image = { workspace = true }

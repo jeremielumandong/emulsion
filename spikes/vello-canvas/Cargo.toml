@@ -25,7 +25,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 wgpu = { workspace = true }
 emulsion-core = { workspace = true }
-emulsion-engine = { workspace = true }
+emulsion-engine = { workspace = true, features = ["gpui"] }
 emulsion-io = { workspace = true }
 emulsion-raster = { workspace = true }
 rstar = "0.12"

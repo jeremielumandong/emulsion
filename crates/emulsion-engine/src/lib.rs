@@ -18,6 +18,8 @@ pub mod canvas;
 pub mod compositor;
 pub mod engine;
 pub mod gpu;
+#[cfg(feature = "gpui")]
+pub mod host;
 pub mod vector;
 
 pub use canvas::Canvas;

@@ -1944,15 +1944,23 @@ version = "0.0.3"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "core-foundation 0.10.1",
+ "core-video",
  "cosmic-text",
  "emulsion-core",
  "emulsion-raster",
+ "gpui-kit",
+ "gpui-pre-apple",
  "gpui-pre-wgpu",
+ "gpui-pre-windows",
+ "objc2-io-surface",
+ "objc2-metal 0.3.2",
  "pollster 0.4.0",
  "rstar",
  "tracing",
  "vello",
  "wgpu",
+ "windows 0.62.2",
 ]
 
 [[package]]
