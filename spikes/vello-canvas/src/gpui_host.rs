@@ -17,12 +17,12 @@
 //! from an input event to GPU completion of the GPUI frame that showed it.
 
 use crate::bench::{Kind, Report, Script, Series};
-use crate::brush::{CpuStroke, GpuStroke, Readback, test_brush};
-use crate::compositor::Camera;
-use crate::engine::{Engine, FrameTimes, Output};
-use crate::gpu::TileFormat;
-use crate::vector::VectorSpace;
 use emulsion_core::{Document, NodeId};
+use emulsion_engine::brush::{CpuStroke, GpuStroke, Readback, test_brush};
+use emulsion_engine::compositor::Camera;
+use emulsion_engine::engine::{Engine, FrameTimes, Output};
+use emulsion_engine::gpu::TileFormat;
+use emulsion_engine::vector::VectorSpace;
 use gpui_kit::*;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -94,8 +94,8 @@ fn device_size(bounds: Bounds<Pixels>, scale: f32) -> (u32, u32) {
 /// the render target and how it is painted.
 #[cfg(target_os = "linux")]
 mod backend {
-    use crate::gpu::{Gpu, TileFormat};
     use anyhow::Context as _;
+    use emulsion_engine::gpu::{Gpu, TileFormat};
     use gpui_kit::*;
     use std::sync::Arc;
 
@@ -170,7 +170,6 @@ mod backend {
 
 #[cfg(target_os = "macos")]
 mod backend {
-    use crate::gpu::{Gpu, TileFormat};
     use anyhow::{Context as _, anyhow, ensure};
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::boolean::CFBoolean;
@@ -180,6 +179,7 @@ mod backend {
         CVPixelBuffer, CVPixelBufferRef, kCVPixelBufferIOSurfacePropertiesKey,
         kCVPixelBufferMetalCompatibilityKey, kCVPixelFormatType_32BGRA,
     };
+    use emulsion_engine::gpu::{Gpu, TileFormat};
     use gpui_kit::*;
     use objc2_io_surface::IOSurfaceRef;
     use objc2_metal::{
@@ -354,8 +354,8 @@ mod backend {
 
 #[cfg(target_os = "windows")]
 mod backend {
-    use crate::gpu::{Gpu, TileFormat};
     use anyhow::{Context as _, anyhow};
+    use emulsion_engine::gpu::{Gpu, TileFormat};
     use gpui_kit::*;
     use gpui_windows::SharedTexture;
     use std::sync::Arc;

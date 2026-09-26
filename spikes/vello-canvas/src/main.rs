@@ -2,26 +2,18 @@
 //! GPUI painting for Emulsion's workloads? See README.md and RESULTS.md.
 
 mod app;
-mod atlas;
 mod bench;
-mod brush;
-mod cache;
-mod canvas;
-mod compositor;
-mod engine;
 mod fidelity;
-mod gpu;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod gpui_host;
 mod testdocs;
-mod vector;
 
 use anyhow::{Context, Result, bail};
-use engine::{Engine, Offscreen, Output};
-use gpu::{Gpu, TileFormat};
+use emulsion_engine::engine::{Engine, Offscreen, Output};
+use emulsion_engine::gpu::{Gpu, TileFormat};
+use emulsion_engine::vector::VectorSpace;
 use std::path::PathBuf;
 use std::time::Instant;
-use vector::VectorSpace;
 
 const USAGE: &str = "\
 vello-canvas-spike <command>
@@ -242,7 +234,7 @@ fn bench(args: &Args) -> Result<()> {
     let report = if args.baseline {
         bench::baseline(kind, &mut doc, paint, args.size)?
     } else if args.headless {
-        let gpu = Gpu::new(gpu::instance(), None, args.tiles)?;
+        let gpu = Gpu::new(emulsion_engine::gpu::instance(), None, args.tiles)?;
         let mut engine = Engine::new(
             gpu.clone(),
             &doc,
@@ -377,7 +369,7 @@ fn main() -> Result<()> {
         }
         Some("bench") => bench(&args),
         Some("fidelity") => {
-            let gpu = Gpu::new(gpu::instance(), None, args.tiles)?;
+            let gpu = Gpu::new(emulsion_engine::gpu::instance(), None, args.tiles)?;
             println!(
                 "\nGPU: {}; tiles {}; commit {}\n\n{}",
                 gpu.describe(),
@@ -407,7 +399,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("info") => {
-            let gpu = Gpu::new(gpu::instance(), None, args.tiles)?;
+            let gpu = Gpu::new(emulsion_engine::gpu::instance(), None, args.tiles)?;
             println!("{}", gpu.describe());
             println!("tile format: {}", gpu.tile_format.label());
             let l = gpu.adapter.limits();

@@ -12,6 +12,7 @@ license = "MIT"
 [workspace.dependencies]
 # internal
 emulsion-core = { path = "crates/emulsion-core" }
+emulsion-engine = { path = "crates/emulsion-engine" }
 emulsion-raster = { path = "crates/emulsion-raster" }
 emulsion-brushes = { path = "crates/emulsion-brushes" }
 emulsion-gpu = { path = "crates/emulsion-gpu" }

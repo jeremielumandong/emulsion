@@ -132,7 +132,10 @@ impl Engine {
     }
 
     /// Submit pending work without drawing a frame.
-    #[cfg(test)]
+    ///
+    /// Brush dabs are recorded into a frame encoder that [`Self::render`]
+    /// normally submits. A host that paints without presenting, and the
+    /// fidelity checks, need that work on the queue anyway.
     pub fn flush(&mut self) {
         if let Some(encoder) = self.pending.take() {
             self.gpu.queue.submit([encoder.finish()]);

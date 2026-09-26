@@ -1,11 +1,11 @@
 //! Pixel diff of the spike's GPU composite against Emulsion's CPU reference
 //! compositor (what the GPUI canvas presents), at 100% and zoomed-out levels.
 
-use crate::compositor::Camera;
-use crate::engine::{Engine, Offscreen, Output};
-use crate::gpu::Gpu;
-use crate::vector::VectorSpace;
 use emulsion_core::Document;
+use emulsion_engine::compositor::Camera;
+use emulsion_engine::engine::{Engine, Offscreen, Output};
+use emulsion_engine::gpu::Gpu;
+use emulsion_engine::vector::VectorSpace;
 use emulsion_raster::composite::{level_size, render_tile_cpu, tiles_at};
 use emulsion_raster::{TILE, TileCoord, color};
 use rayon::prelude::*;
@@ -309,13 +309,13 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brush::{GpuStroke, test_brush};
+    use emulsion_engine::brush::{GpuStroke, test_brush};
     use emulsion_raster::blend::BlendSpace;
 
     /// A GPU, or `None` to skip. `EMULSION_REQUIRE_GPU_TESTS=1` makes a
     /// missing adapter a failure, as in `emulsion-gpu`.
     fn gpu() -> Option<Arc<Gpu>> {
-        match Gpu::new(crate::gpu::instance(), None, None) {
+        match Gpu::new(emulsion_engine::gpu::instance(), None, None) {
             Ok(gpu) => Some(gpu),
             Err(error) => {
                 assert!(
@@ -350,7 +350,7 @@ mod tests {
                     let (cpu, size) = cpu_reference(&doc, level);
                     let gpu_px = gpu_render(&mut engine, level).unwrap();
                     let d = compare("test", size.0 as usize, &gpu_px, &cpu, None);
-                    if gpu.tile_format == crate::gpu::TileFormat::Unorm16 {
+                    if gpu.tile_format == emulsion_engine::gpu::TileFormat::Unorm16 {
                         assert!(d.max_code <= 1, "{space:?} level {level}: {d:?}");
                         if level == 0 {
                             assert!(d.max_linear < 1e-4, "{space:?}: {d:?}");
@@ -408,7 +408,7 @@ mod tests {
         let mut cpu = emulsion_raster::paint::Stroke::new(
             base.clone(),
             brush,
-            emulsion_raster::paint::Ink::Color(crate::brush::INK),
+            emulsion_raster::paint::Ink::Color(emulsion_engine::brush::INK),
             None,
         );
         for &(x, y, t) in &points {
@@ -420,8 +420,8 @@ mod tests {
         // CPU; drivers differ (lavapipe 5, Apple M1 15). 32/65535 is still
         // under one 8-bit code.
         let limit = match gpu.tile_format {
-            crate::gpu::TileFormat::Unorm16 => 32,
-            crate::gpu::TileFormat::Float16 => 400,
+            emulsion_engine::gpu::TileFormat::Unorm16 => 32,
+            emulsion_engine::gpu::TileFormat::Float16 => 400,
         };
         let mut max = 0;
         for y in 0..520 {

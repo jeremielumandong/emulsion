@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// `emulsion-gpu`'s parity-tested blend kernels, reused verbatim.
-const UPSTREAM: &str = include_str!("../../../crates/emulsion-gpu/src/composite.wgsl");
+const UPSTREAM: &str = include_str!("../../emulsion-gpu/src/composite.wgsl");
 
 fn shader_source() -> String {
     let start = UPSTREAM

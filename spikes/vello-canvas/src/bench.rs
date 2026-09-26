@@ -1,10 +1,10 @@
 //! Scripted, repeatable workloads. The same camera paths and input schedules
 //! drive the GPU engine and a CPU baseline of the GPUI canvas's raster work.
 
-use crate::brush::{CpuStroke, GpuStroke, Readback, test_brush, tiles_in};
-use crate::compositor::Camera;
-use crate::engine::{Engine, FrameTimes};
 use emulsion_core::{Document, NodeId, NodeKind};
+use emulsion_engine::brush::{CpuStroke, GpuStroke, Readback, test_brush, tiles_in};
+use emulsion_engine::compositor::Camera;
+use emulsion_engine::engine::{Engine, FrameTimes};
 use emulsion_raster::composite::{render_tile, tile_to_bgra8, tiles_at};
 use emulsion_raster::paint::{Ink, Stroke};
 use emulsion_raster::{IRect, Raster, TILE, TileCoord};
@@ -440,12 +440,12 @@ impl Script {
                         -3.0
                     };
                     engine.vectors.edit(node, |kind| match kind {
-                        crate::canvas::VectorKind::Path { path, .. } => {
+                        emulsion_engine::canvas::VectorKind::Path { path, .. } => {
                             let mut p = (**path).clone();
                             p.translate(d, -d);
                             *path = Arc::new(p);
                         }
-                        crate::canvas::VectorKind::Text { spec } => {
+                        emulsion_engine::canvas::VectorKind::Text { spec } => {
                             let mut s = (**spec).clone();
                             s.x += d as f32;
                             *spec = Arc::new(s);
@@ -576,7 +576,7 @@ impl Script {
             self.report.notes.push(format!(
                 "stroke end → CPU raster: {ms:.1} ms async readback of {:.1} MiB ({} tiles, {dabs} dabs)",
                 bytes as f64 / 1048576.0,
-                bytes / crate::atlas::TILE_BYTES,
+                bytes / emulsion_engine::atlas::TILE_BYTES,
             ));
             let reference = cpu_reference_stroke(
                 &engine.canvas.sources[source].raster,
@@ -605,7 +605,7 @@ fn cpu_reference_stroke(
     let mut stroke = Stroke::new(
         base.clone(),
         test_brush(size),
-        Ink::Color(crate::brush::INK),
+        Ink::Color(emulsion_engine::brush::INK),
         None,
     );
     for &(x, y, t) in points {
@@ -783,7 +783,7 @@ pub fn baseline(
             let mut stroke = Stroke::new(
                 base.clone(),
                 test_brush(BRUSH_SIZE),
-                Ink::Color(crate::brush::INK),
+                Ink::Color(emulsion_engine::brush::INK),
                 None,
             );
             let mut current = base;

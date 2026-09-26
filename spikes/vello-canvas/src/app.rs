@@ -3,12 +3,12 @@
 //! interactive viewer with painting, pan/zoom and a HUD.
 
 use crate::bench::{Report, Script, Series};
-use crate::brush::{CpuStroke, GpuStroke, Readback, test_brush};
-use crate::compositor::Camera;
-use crate::engine::{Engine, FrameTimes, Output};
-use crate::gpu::{Gpu, TileFormat};
-use crate::vector::VectorSpace;
 use emulsion_core::{Document, NodeId};
+use emulsion_engine::brush::{CpuStroke, GpuStroke, Readback, test_brush};
+use emulsion_engine::compositor::Camera;
+use emulsion_engine::engine::{Engine, FrameTimes, Output};
+use emulsion_engine::gpu::{Gpu, TileFormat};
+use emulsion_engine::vector::VectorSpace;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
@@ -122,7 +122,7 @@ impl App {
                     .with_inner_size(PhysicalSize::new(self.options.size.0, self.options.size.1)),
             )?,
         );
-        let instance = crate::gpu::instance();
+        let instance = emulsion_engine::gpu::instance();
         let surface = instance.create_surface(window.clone())?;
         let gpu = Gpu::new(instance, Some(&surface), self.options.tiles)?;
         let size = window.inner_size();
@@ -310,7 +310,7 @@ impl App {
                     -2.0
                 };
                 engine.vectors.edit(node, |k| {
-                    if let crate::canvas::VectorKind::Path { path, .. } = k {
+                    if let emulsion_engine::canvas::VectorKind::Path { path, .. } = k {
                         let mut p = (**path).clone();
                         p.translate(d, 0.0);
                         *path = Arc::new(p);
