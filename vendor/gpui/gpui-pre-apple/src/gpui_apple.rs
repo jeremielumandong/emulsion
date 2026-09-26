@@ -1,3 +1,4 @@
+// Modified by Emulsion: export `wait_for_submitted_frames` (macOS canvas spike).
 #![cfg(target_os = "macos")]
 //! Shared Apple platform support for GPUI.
 //!
@@ -6,3 +7,5 @@
 
 mod metal_atlas;
 pub mod metal_renderer;
+
+pub use metal_renderer::wait_for_submitted_frames;

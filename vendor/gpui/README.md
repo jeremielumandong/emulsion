@@ -23,14 +23,17 @@ are retained. No GPUI API version upgrade accompanies this import.
   shared device and external-texture drawing for the canvas embedding spike.
 - [Core external textures](gpui-pre/EMULSION_CHANGES.md#external-textures-linux-canvas-spike):
   `Window::paint_external_texture` for application-owned GPU textures.
+- [macOS/Metal](gpui-pre-apple/EMULSION_CHANGES.md): single-plane BGRA
+  surfaces and a wait for committed frames, for the canvas embedding spike.
 - [Windows](gpui-pre-windows/EMULSION_CHANGES.md): explicit WARP fallback and
   economical software frame pacing adapted from AgentOps' Apache-2.0 GPUI fork.
 - `gpui-pre-reqwest/.gitignore`: allow its published `Cargo.lock` to be tracked
   with the rest of the archive; no reqwest code changes.
 
-Native macOS Metal rendering is unchanged. The application does not add GPU
-image compositing or painting; those remain Emulsion's existing CPU
-implementations. Only `spikes/vello-canvas` draws external textures so far.
+Native macOS Metal rendering only gains BGRA surfaces and a frame-completion
+wait; existing drawing is unchanged. The application does not add GPU image
+compositing or painting; those remain Emulsion's existing CPU implementations.
+Only `spikes/vello-canvas` draws external textures and BGRA surfaces so far.
 
 ## Updating or editing
 

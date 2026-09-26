@@ -1,7 +1,12 @@
-//! Linux embedding spike: the engine runs on GPUI's own wgpu device and
-//! renders the canvas into a texture that GPUI's renderer composites as an
-//! external surface, inside a window of ordinary GPUI chrome. No readback, no
-//! `paint_image`.
+//! Embedding spike: the engine renders the canvas into a GPU texture that
+//! GPUI's own renderer composites beside ordinary GPUI chrome. No readback,
+//! no `paint_image`.
+//!
+//! - Linux: the engine runs on GPUI's wgpu device and paints an external
+//!   texture.
+//! - macOS: GPUI renders with Metal directly, so the engine keeps its own wgpu
+//!   (Metal) device and renders into IOSurface-backed textures that GPUI
+//!   paints as BGRA surfaces. On Apple silicon both are the same GPU.
 //!
 //! Scripted runs use the same scripts as the standalone window. A frame's
 //! time is the interval between successive canvas paints: GPUI's layout,
@@ -12,15 +17,13 @@ use crate::bench::{Kind, Report, Script, Series};
 use crate::brush::{CpuStroke, GpuStroke, Readback, test_brush};
 use crate::compositor::Camera;
 use crate::engine::{Engine, FrameTimes, Output};
-use crate::gpu::{Gpu, TileFormat};
+use crate::gpu::TileFormat;
 use crate::vector::VectorSpace;
-use anyhow::Context as _;
 use emulsion_core::{Document, NodeId};
 use gpui_kit::*;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct Options {
@@ -36,17 +39,11 @@ pub struct Options {
 
 const SIDEBAR: f32 = 260.0;
 const TOOLBAR: f32 = 36.0;
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 enum Painting {
     Idle,
     Cpu(Box<CpuStroke>),
     Gpu(Box<GpuStroke>),
-}
-
-struct Target {
-    view: wgpu::TextureView,
-    size: (u32, u32),
 }
 
 /// The frame whose GPU completion the next paint waits for.
@@ -63,7 +60,7 @@ struct State {
     paint_node: Option<NodeId>,
     engine: Option<Engine>,
     script: Option<Script>,
-    target: Option<Target>,
+    target: Option<backend::Target>,
     pending: Option<Pending>,
     frames: VecDeque<f64>,
     last_times: FrameTimes,
@@ -88,14 +85,269 @@ fn device_size(bounds: Bounds<Pixels>, scale: f32) -> (u32, u32) {
     )
 }
 
-/// The present mode GPUI's Linux backends configure.
-fn presentation() -> &'static str {
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        "Wayland, Mailbox"
-    } else {
-        "X11, Fifo (vsync)"
+/// Where the platforms differ: the device, waiting for GPUI's previous frame,
+/// the render target and how it is painted.
+#[cfg(target_os = "linux")]
+mod backend {
+    use crate::gpu::{Gpu, TileFormat};
+    use anyhow::Context as _;
+    use gpui_kit::*;
+    use std::sync::Arc;
+
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+    /// Extra lines for the report.
+    pub const NOTES: &[&str] = &[];
+
+    /// The present mode GPUI's Linux backends configure.
+    pub fn presentation() -> &'static str {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            "Wayland, Mailbox"
+        } else {
+            "X11, Fifo (vsync)"
+        }
+    }
+
+    /// GPUI has created its device by the first paint; the engine adopts it.
+    pub fn device(tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {
+        let shared = gpui_wgpu::shared_gpu().context("GPUI has not published its wgpu device")?;
+        Ok(Gpu::from_shared(&shared, tiles))
+    }
+
+    /// The previous GPUI frame, including its present, is complete once
+    /// everything submitted to the shared device so far has run.
+    pub fn wait_for_previous_frame(gpu: Option<&Gpu>) {
+        if let Some(gpu) = gpu {
+            gpu.wait();
+        }
+    }
+
+    /// One texture; the shared queue orders the engine's frame before GPUI's.
+    pub fn after_render(_: &Gpu) {}
+
+    pub struct Target {
+        view: wgpu::TextureView,
+        pub size: (u32, u32),
+    }
+
+    impl Target {
+        pub fn new(gpu: &Gpu, size: (u32, u32)) -> anyhow::Result<Self> {
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("embedded canvas"),
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            Ok(Self {
+                view: texture.create_view(&Default::default()),
+                size,
+            })
+        }
+
+        /// The texture this frame renders into.
+        pub fn next(&mut self) -> wgpu::TextureView {
+            self.view.clone()
+        }
+
+        pub fn paint(&self, window: &mut Window, bounds: Bounds<Pixels>) {
+            window.paint_external_texture(bounds, ExternalTexture(Arc::new(self.view.clone())));
+        }
     }
 }
+
+#[cfg(target_os = "macos")]
+mod backend {
+    use crate::gpu::{Gpu, TileFormat};
+    use anyhow::{Context as _, anyhow, ensure};
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+    use core_video::pixel_buffer::{
+        CVPixelBuffer, CVPixelBufferRef, kCVPixelBufferIOSurfacePropertiesKey,
+        kCVPixelBufferMetalCompatibilityKey, kCVPixelFormatType_32BGRA,
+    };
+    use gpui_kit::*;
+    use objc2_io_surface::IOSurfaceRef;
+    use objc2_metal::{
+        MTLDevice as _, MTLPixelFormat, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
+        MTLTextureUsage,
+    };
+    use std::ffi::c_void;
+    use std::sync::Arc;
+
+    /// GPUI's layer is non-sRGB `BGRA8Unorm`, so the shader-encoded values
+    /// pass straight through.
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
+    /// Surfaces in flight: the one GPUI may still be sampling, and more.
+    const RING: usize = 3;
+    pub const NOTES: &[&str] = &[
+        "macOS: the canvas renders on its own wgpu Metal device into IOSurface-backed BGRA textures that GPUI paints as surfaces; the wgpu and GPUI queues are not ordered, so each canvas frame waits for its own GPU work (device.poll) before GPUI samples it",
+    ];
+
+    #[link(name = "CoreVideo", kind = "framework")]
+    unsafe extern "C" {
+        /// A *Get* function: the pixel buffer keeps ownership. core-video's
+        /// `get_io_surface` wraps it under the create rule and over-releases.
+        fn CVPixelBufferGetIOSurface(buffer: CVPixelBufferRef) -> *mut c_void;
+    }
+
+    pub fn presentation() -> &'static str {
+        "macOS, CAMetalLayer (display-linked)"
+    }
+
+    /// The engine's own device on the Metal backend.
+    pub fn device(tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        desc.backends = wgpu::Backends::METAL;
+        Gpu::new(wgpu::Instance::new(desc), None, tiles)
+    }
+
+    /// Wait for GPUI's committed frames, then for the engine's own work.
+    pub fn wait_for_previous_frame(gpu: Option<&Gpu>) {
+        gpui_apple::wait_for_submitted_frames();
+        if let Some(gpu) = gpu {
+            gpu.wait();
+        }
+    }
+
+    /// The two queues are not ordered: finish the canvas before GPUI can
+    /// sample it.
+    pub fn after_render(gpu: &Gpu) {
+        gpu.wait();
+    }
+
+    struct Slot {
+        buffer: CVPixelBuffer,
+        view: wgpu::TextureView,
+        _texture: wgpu::Texture,
+    }
+
+    pub struct Target {
+        slots: Vec<Slot>,
+        current: usize,
+        pub size: (u32, u32),
+    }
+
+    impl Target {
+        pub fn new(gpu: &Gpu, size: (u32, u32)) -> anyhow::Result<Self> {
+            let slots = (0..RING)
+                .map(|_| slot(gpu, size))
+                .collect::<anyhow::Result<_>>()?;
+            Ok(Self {
+                slots,
+                current: 0,
+                size,
+            })
+        }
+
+        /// Move to the next surface in the ring and return its texture.
+        pub fn next(&mut self) -> wgpu::TextureView {
+            self.current = (self.current + 1) % self.slots.len();
+            self.slots[self.current].view.clone()
+        }
+
+        pub fn paint(&self, window: &mut Window, bounds: Bounds<Pixels>) {
+            window.paint_surface(bounds, self.slots[self.current].buffer.clone());
+        }
+    }
+
+    /// One IOSurface-backed pixel buffer and the wgpu texture over it.
+    fn slot(gpu: &Gpu, (width, height): (u32, u32)) -> anyhow::Result<Slot> {
+        let key = |k| unsafe { CFString::wrap_under_get_rule(k) };
+        let io_surface_properties: CFDictionary<CFString, CFType> =
+            CFDictionary::from_CFType_pairs(&[]);
+        let options: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[
+            (
+                key(unsafe { kCVPixelBufferIOSurfacePropertiesKey }),
+                io_surface_properties.as_CFType(),
+            ),
+            (
+                key(unsafe { kCVPixelBufferMetalCompatibilityKey }),
+                CFBoolean::true_value().as_CFType(),
+            ),
+        ]);
+        let buffer = CVPixelBuffer::new(
+            kCVPixelFormatType_32BGRA,
+            width as usize,
+            height as usize,
+            Some(&options),
+        )
+        .map_err(|status| anyhow!("CVPixelBufferCreate failed ({status})"))?;
+        // Owned by the pixel buffer: not released here.
+        let surface = unsafe { CVPixelBufferGetIOSurface(buffer.as_concrete_TypeRef()) };
+        ensure!(!surface.is_null(), "pixel buffer has no IOSurface");
+
+        let hal = unsafe { gpu.device.as_hal::<wgpu::hal::api::Metal>() }
+            .context("the engine's device is not on the Metal backend")?;
+        let desc = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                MTLPixelFormat::BGRA8Unorm,
+                width as usize,
+                height as usize,
+                false,
+            )
+        };
+        desc.setTextureType(MTLTextureType::Type2D);
+        desc.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        desc.setStorageMode(MTLStorageMode::Shared);
+        let surface = unsafe { &*(surface as *const IOSurfaceRef) };
+        let raw = hal
+            .raw_device()
+            .newTextureWithDescriptor_iosurface_plane(&desc, surface, 0)
+            .context("newTextureWithDescriptor:iosurface:plane: failed")?;
+        drop(hal);
+        let hal_texture = unsafe {
+            wgpu::hal::metal::Device::texture_from_raw(
+                raw,
+                FORMAT,
+                MTLTextureType::Type2D,
+                1,
+                1,
+                wgpu::hal::CopyExtent {
+                    width,
+                    height,
+                    depth: 1,
+                },
+            )
+        };
+        let texture = unsafe {
+            gpu.device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+                hal_texture,
+                &wgpu::TextureDescriptor {
+                    label: Some("embedded canvas (IOSurface)"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+            )
+        };
+        Ok(Slot {
+            buffer,
+            view: texture.create_view(&Default::default()),
+            _texture: texture,
+        })
+    }
+}
+
+use backend::presentation;
 
 impl State {
     /// Canvas-local device position → document position.
@@ -123,18 +375,16 @@ impl State {
         self.events.push(Instant::now());
     }
 
-    /// Finish the previous frame, advance, and render this one. Returns the
-    /// texture GPUI should composite.
-    fn frame(&mut self, bounds: Bounds<Pixels>, scale: f32) -> anyhow::Result<wgpu::TextureView> {
+    /// Finish the previous frame, advance, and render this one into the
+    /// target GPUI should composite.
+    fn frame(&mut self, bounds: Bounds<Pixels>, scale: f32) -> anyhow::Result<()> {
         self.bounds = Some(bounds);
         self.scale = scale;
         let size = device_size(bounds, scale);
 
-        // The previous GPUI frame, including its present, is complete once
-        // everything submitted so far has run.
-        if let Some(engine) = &self.engine {
+        {
             let _span = tracing::info_span!("gpu_wait").entered();
-            engine.gpu.wait();
+            backend::wait_for_previous_frame(self.engine.as_ref().map(|e| &*e.gpu));
         }
         // A frame runs from here to the same point of the next paint: its own
         // work, GPUI's layout, draw and present of it, and the GPU finishing.
@@ -165,6 +415,9 @@ impl State {
                         engine.gpu.describe(),
                         presentation()
                     );
+                    report
+                        .notes
+                        .extend(backend::NOTES.iter().map(|n| n.to_string()));
                     report.notes.push(format!(
                         "canvas {}x{} device px at scale {scale}; GPU textures {:.0} MiB (atlas {} tiles in {} pages, {})",
                         size.0,
@@ -203,16 +456,15 @@ impl State {
             }
         }
 
-        // First paint: GPUI has created its device; build the engine on it.
+        // First paint: build the engine (on GPUI's device where it has one).
         let warmup = self.engine.is_none();
         if warmup {
-            let shared =
-                gpui_wgpu::shared_gpu().context("GPUI has not published its wgpu device")?;
-            let gpu = Gpu::from_shared(&shared, self.options.tiles);
+            let gpu = backend::device(self.options.tiles)?;
             tracing::info!(
                 gpu = gpu.describe(),
                 tiles = gpu.tile_format.label(),
-                "canvas on GPUI's device"
+                presentation = presentation(),
+                "embedded canvas device"
             );
             let mut engine = Engine::new(
                 gpu,
@@ -231,25 +483,7 @@ impl State {
         let engine = self.engine.as_mut().expect("engine");
         engine.screen = size;
         if self.target.as_ref().is_none_or(|t| t.size != size) {
-            let texture = engine.gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("embedded canvas"),
-                size: wgpu::Extent3d {
-                    width: size.0,
-                    height: size.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            self.target = Some(Target {
-                view: texture.create_view(&Default::default()),
-                size,
-            });
+            self.target = Some(backend::Target::new(&engine.gpu, size)?);
         }
 
         // Scripts start after the warm-up frame, as in the standalone runs.
@@ -268,8 +502,9 @@ impl State {
                 Painting::Idle => {}
             }
         }
-        let view = self.target.as_ref().expect("target").view.clone();
-        let times = engine.render(&view, FORMAT, Output::Encoded)?;
+        let view = self.target.as_mut().expect("target").next();
+        let times = engine.render(&view, backend::FORMAT, Output::Encoded)?;
+        backend::after_render(&engine.gpu);
         self.last_times = times;
         self.pending = Some(Pending {
             start,
@@ -278,7 +513,7 @@ impl State {
             events: std::mem::take(&mut self.events),
         });
         self.frame += 1;
-        Ok(view)
+        Ok(())
     }
 
     fn stats(&self) -> String {
@@ -424,8 +659,11 @@ impl Render for CanvasView {
                     move |bounds, (), window, cx| {
                         let result = state.borrow_mut().frame(bounds, window.scale_factor());
                         match result {
-                            Ok(view) => window
-                                .paint_external_texture(bounds, ExternalTexture(Arc::new(view))),
+                            Ok(()) => {
+                                if let Some(target) = &state.borrow().target {
+                                    target.paint(window, bounds);
+                                }
+                            }
                             Err(e) => state.borrow_mut().error = Some(e),
                         }
                         let s = state.borrow();
@@ -564,13 +802,30 @@ impl Render for Host {
     }
 }
 
+/// Receives the scripted report, if any, when the app quits.
+pub type Finish = Box<dyn FnOnce(Option<Report>) -> anyhow::Result<()>>;
+
+/// Hand the outcome to `finish`, once.
+fn complete(state: &Shared, finish: &RefCell<Option<Finish>>) -> Option<anyhow::Result<()>> {
+    let finish = finish.borrow_mut().take()?;
+    let mut s = state.borrow_mut();
+    Some(match s.error.take() {
+        Some(e) => Err(e),
+        None => finish(s.report.take()),
+    })
+}
+
 /// Open the GPUI window and run until the script finishes (or the window
-/// closes). Returns the scripted report, if any.
+/// closes), then pass the scripted report, if any, to `finish`.
+///
+/// `finish` runs from GPUI's quit hook: on macOS quitting terminates the
+/// process, so `run` may never return there. A failure then exits with 1.
 pub fn run(
     options: Options,
     doc: Document,
     paint_node: Option<NodeId>,
-) -> anyhow::Result<Option<Report>> {
+    finish: Finish,
+) -> anyhow::Result<()> {
     let (w, h) = options.size;
     let title = options.title.clone();
     // Top of the stack first, as a layers panel shows it.
@@ -605,7 +860,23 @@ pub fn run(
         frame: 0,
     }));
     let app_state = state.clone();
+    let finish = Rc::new(RefCell::new(Some(finish)));
+    let outcome: Rc<RefCell<Option<anyhow::Result<()>>>> = Rc::default();
+    let (quit_state, quit_finish, quit_outcome) = (state.clone(), finish.clone(), outcome.clone());
     gpui_kit::application().run(move |cx| {
+        cx.on_app_quit(move |_| {
+            if let Some(result) = complete(&quit_state, &quit_finish) {
+                if cfg!(target_os = "macos")
+                    && let Err(e) = &result
+                {
+                    eprintln!("Error: {e:?}");
+                    std::process::exit(1);
+                }
+                *quit_outcome.borrow_mut() = Some(result);
+            }
+            async {}
+        })
+        .detach();
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -619,6 +890,9 @@ pub fn run(
         );
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // GPUI caps unfocused windows at ~30 fps (on macOS, every third
+            // vsync). Scripted runs are unattended, so never throttle.
+            inactive_frame_interval: None,
             titlebar: Some(TitlebarOptions {
                 title: Some(title.into()),
                 ..Default::default()
@@ -636,14 +910,17 @@ pub fn run(
                 layers,
             })
         });
-        if let Err(e) = opened {
-            app_state.borrow_mut().error = Some(e);
-            cx.quit();
+        match opened {
+            // Come to the front, as a user clicking into the canvas would.
+            Ok(_) => cx.activate(true),
+            Err(e) => {
+                app_state.borrow_mut().error = Some(e);
+                cx.quit();
+            }
         }
     });
-    let mut s = state.borrow_mut();
-    if let Some(e) = s.error.take() {
-        return Err(e);
-    }
-    Ok(s.report.take())
+    let result = outcome.borrow_mut().take();
+    result
+        .or_else(|| complete(&state, &finish))
+        .unwrap_or(Ok(()))
 }

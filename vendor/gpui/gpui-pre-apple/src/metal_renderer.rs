@@ -1,3 +1,5 @@
+// Modified by Emulsion: draw single-plane BGRA surfaces and count committed and
+// completed frames (macOS canvas spike).
 use crate::metal_atlas::MetalAtlas;
 use anyhow::{Context as _, Result};
 use block::ConcreteBlock;
@@ -16,7 +18,7 @@ use image::RgbaImage;
 use core_foundation::base::TCFType;
 use core_video::{
     metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
-    pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+    pixel_buffer::{kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange},
 };
 use foreign_types::{ForeignType, ForeignTypeRef};
 use metal::{
@@ -29,6 +31,35 @@ use std::{cell::Cell, ffi::c_void, mem, mem::MaybeUninit, ops::Range, ptr, slice
 
 // Exported to metal
 pub(crate) type PointF = gpui::Point<f32>;
+
+/// Emulsion: frames committed to the GPU and frames it has finished, across
+/// all windows, so an application sharing the GPU can wait for GPUI's frames
+/// (the vello-canvas spike). Headless renders are not counted.
+static FRAMES: std::sync::Mutex<FrameCounts> = std::sync::Mutex::new(FrameCounts {
+    submitted: 0,
+    completed: 0,
+});
+static FRAMES_COMPLETED: std::sync::Condvar = std::sync::Condvar::new();
+
+struct FrameCounts {
+    submitted: u64,
+    completed: u64,
+}
+
+fn frame_counts() -> std::sync::MutexGuard<'static, FrameCounts> {
+    FRAMES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Block until every frame committed so far has finished on the GPU.
+pub fn wait_for_submitted_frames() {
+    let mut counts = frame_counts();
+    let target = counts.submitted;
+    while counts.completed < target {
+        counts = FRAMES_COMPLETED
+            .wait(counts)
+            .unwrap_or_else(|e| e.into_inner());
+    }
+}
 
 #[cfg(not(feature = "runtime_shaders"))]
 const SHADERS_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders.metallib"));
@@ -126,6 +157,7 @@ pub struct MetalRenderer {
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
     surfaces_pipeline_state: metal::RenderPipelineState,
+    surfaces_bgra_pipeline_state: metal::RenderPipelineState,
     unit_vertices: metal::Buffer,
     #[allow(clippy::arc_with_non_send_sync)]
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
@@ -323,6 +355,14 @@ impl MetalRenderer {
             "surface_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
+        let surfaces_bgra_pipeline_state = build_pipeline_state(
+            &device,
+            &library,
+            "surfaces_bgra",
+            "surface_vertex",
+            "surface_bgra_fragment",
+            MTLPixelFormat::BGRA8Unorm,
+        );
 
         let command_queue = device.new_command_queue();
         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
@@ -345,6 +385,7 @@ impl MetalRenderer {
             monochrome_sprites_pipeline_state,
             polychrome_sprites_pipeline_state,
             surfaces_pipeline_state,
+            surfaces_bgra_pipeline_state,
             unit_vertices,
             instance_buffer_pool,
             sprite_atlas,
@@ -477,6 +518,9 @@ impl MetalRenderer {
             }
         };
 
+        // Count the frame before committing it, so its completion handler
+        // can never run ahead of the count.
+        frame_counts().submitted += 1;
         if self.presents_with_transaction {
             command_buffer.commit();
             command_buffer.wait_until_scheduled();
@@ -524,6 +568,8 @@ impl MetalRenderer {
             if let Some(instance_buffer) = instance_buffer.take() {
                 instance_buffer_pool.lock().release(instance_buffer);
             }
+            frame_counts().completed += 1;
+            FRAMES_COMPLETED.notify_all();
         });
         let block = block.copy();
         command_buffer.add_completed_handler(&block);
@@ -1134,7 +1180,6 @@ impl MetalRenderer {
             return;
         }
 
-        command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
         command_encoder.set_vertex_buffer(
             SurfaceInputIndex::Vertices as u64,
             Some(&self.unit_vertices),
@@ -1157,10 +1202,49 @@ impl MetalRenderer {
                 DevicePixels::from(surface.image_buffer.get_height() as i32),
             );
 
-            assert_eq!(
-                surface.image_buffer.get_pixel_format(),
-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-            );
+            // Video (YCbCr) and canvas (BGRA) surfaces can share a frame, so
+            // the pipeline is chosen per surface.
+            let format = surface.image_buffer.get_pixel_format();
+            if format == kCVPixelFormatType_32BGRA {
+                let texture = self
+                    .core_video_texture_cache
+                    .create_texture_from_image(
+                        surface.image_buffer.as_concrete_TypeRef(),
+                        None,
+                        MTLPixelFormat::BGRA8Unorm,
+                        surface.image_buffer.get_width(),
+                        surface.image_buffer.get_height(),
+                        0,
+                    )
+                    .unwrap();
+                command_encoder.set_render_pipeline_state(&self.surfaces_bgra_pipeline_state);
+                command_encoder.set_vertex_bytes(
+                    SurfaceInputIndex::TextureSize as u64,
+                    mem::size_of_val(&texture_size) as u64,
+                    &texture_size as *const Size<DevicePixels> as *const _,
+                );
+                command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
+                    let texture = CVMetalTextureGetTexture(texture.as_concrete_TypeRef());
+                    Some(metal::TextureRef::from_ptr(texture as *mut _))
+                });
+                command_encoder.draw_primitives_instanced_base_instance(
+                    metal::MTLPrimitiveType::Triangle,
+                    0,
+                    6,
+                    1,
+                    (first_surface + index) as u64,
+                );
+                continue;
+            }
+            if format != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
+                static WARNED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    log::error!("skipping surface with unsupported pixel format {format:#x}");
+                }
+                continue;
+            }
+            command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
 
             let y_texture = self
                 .core_video_texture_cache

@@ -21,6 +21,6 @@ These changes remain under Apache-2.0. Original source notices are retained.
 
 Linux still needs a functioning display server and Vulkan/OpenGL implementation.
 For CPU-only Vulkan rendering, install Mesa Lavapipe. This does not implement a
-graphics-driver-free raster UI backend. The native macOS Metal renderer is unchanged.
+graphics-driver-free raster UI backend. The native macOS Metal renderer is not part of this crate; see `../gpui-pre-apple/EMULSION_CHANGES.md`.
 
 Archive and upstream revision information are in `../UPSTREAM.json`.

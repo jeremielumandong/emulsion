@@ -163,7 +163,7 @@ to GPU completion of the frame that shows it. Scanout is not included.
 
 ### Linux embedding in GPUI
 
-`--gpui` (Linux only) runs the same engine inside a GPUI window, alongside
+`--gpui` (Linux and macOS) runs the same engine inside a GPUI window, alongside
 ordinary GPUI chrome: a toolbar with live stats and a layer sidebar. GPUI's
 renderer composites the canvas without a CPU copy. This needs three small
 patches to the vendored GPUI, recorded in each crate's `EMULSION_CHANGES.md`:
@@ -199,8 +199,42 @@ completion of the GPUI frame that showed the input.
 GPUI presents with Mailbox on Wayland and Fifo (vsync) on X11, and the reports
 record which. Limits:
 - Device loss isn't handled; `shared_gpu().generation` is there for it.
-- macOS and Windows use GPUI's native Metal and DirectX renderers. There, the
-  flag reports that embedding is Linux-only.
+- Windows uses GPUI's native DirectX renderer; there the flag reports that
+  embedding is Linux- and macOS-only.
+
+### macOS embedding in GPUI
+
+On macOS GPUI renders with Metal directly, not wgpu, so there is no device to
+share. `--gpui` works the same way from the outside, with one patch to the
+vendored `gpui-pre-apple` (see its `EMULSION_CHANGES.md`):
+
+- **BGRA surfaces.** `draw_surfaces` draws single-plane
+  `kCVPixelFormatType_32BGRA` pixel buffers with a pass-through
+  `surface_bgra_fragment`, alongside the existing video (YCbCr) path.
+- **Frame completion.** The renderer counts committed and completed frames;
+  `gpui_apple::wait_for_submitted_frames()` blocks until they match.
+
+The engine keeps its own wgpu Metal device. It renders into a ring of three
+IOSurface-backed `Bgra8Unorm` textures, each made with
+`newTextureWithDescriptor:iosurface:plane:` and wrapped with
+`create_texture_from_hal`. GPUI paints the matching `CVPixelBuffer` with
+`Window::paint_surface`. Both devices are the one GPU on Apple silicon. The two
+command queues are not ordered, so each canvas frame waits for its own GPU work
+before GPUI can sample it; the report notes this. Each paint first waits for
+GPUI's committed frames, then for the engine's device.
+
+GPUI paints from the display link, so frame p50 cannot drop below the refresh
+interval; compare latency and p99 with `--vsync` standalone runs. Intel Macs
+with two GPUs are out of scope.
+
+Two things the host does for unattended runs, on both platforms:
+- It turns off GPUI's inactive-window throttle
+  (`inactive_frame_interval: None`) and activates the app. Launched from a
+  terminal, the window is not focused, and GPUI caps unfocused windows at
+  ~30 fps, which on macOS lands on every third vsync (~50 ms frames).
+- It finishes the report (print and JSON) from GPUI's `on_app_quit` hook.
+  On macOS quitting sends `terminate:`, which ends the process before
+  `Application::run` returns.
 
 ## Running
 

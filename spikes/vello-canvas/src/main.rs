@@ -11,7 +11,7 @@ mod compositor;
 mod engine;
 mod fidelity;
 mod gpu;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod gpui_host;
 mod testdocs;
 mod vector;
@@ -44,7 +44,7 @@ options:
   --vectors srgb|linear
   --no-vello         composite vector nodes from their CPU caches
   --no-cache         recomposite every layer every frame (no GPU tile cache)
-  --gpui             (Linux) run inside a GPUI window on GPUI's own wgpu device
+  --gpui             (Linux, macOS) run inside a GPUI window, composited by GPUI's renderer
   --json FILE        append the report as a JSON line
 ";
 
@@ -175,6 +175,49 @@ fn commit() -> String {
         .unwrap_or_default()
 }
 
+/// What a finished report is labelled and written with.
+struct ReportMeta {
+    file: String,
+    size: (u32, u32),
+    json: Option<PathBuf>,
+    options: serde_json::Value,
+}
+
+impl ReportMeta {
+    fn new(args: &Args, file: &str) -> Self {
+        Self {
+            file: file.to_string(),
+            size: args.size,
+            json: args.json.clone(),
+            options: serde_json::json!({
+                "baseline": args.baseline,
+                "headless": args.headless,
+                "cache": args.cache,
+                "vello": args.vello,
+                "vsync": args.vsync,
+                "gpui": args.gpui,
+                "tiles": args.tiles.map(|t| t.label()),
+                "vectors": format!("{:?}", args.space),
+            }),
+        }
+    }
+
+    /// Print the report and append it to the JSON file.
+    fn finish(self, mut report: bench::Report) -> Result<()> {
+        let (file, (w, h)) = (self.file, self.size);
+        report
+            .notes
+            .push(format!("file {file}, {w}x{h} view, commit {}", commit()));
+        report.print();
+        let mut json = report.json();
+        json["file"] = file.into();
+        json["commit"] = commit().into();
+        json["size"] = format!("{w}x{h}").into();
+        json["options"] = self.options;
+        write_json(&self.json, json)
+    }
+}
+
 fn bench(args: &Args) -> Result<()> {
     let [_, scenario, file] = &args.positional[..] else {
         bail!("bench SCENARIO FILE\n\n{USAGE}");
@@ -183,10 +226,21 @@ fn bench(args: &Args) -> Result<()> {
     let mut doc = open(file)?;
     let paint = matches!(kind, bench::Kind::BrushA | bench::Kind::BrushB)
         .then(|| bench::add_paint_layer(&mut doc));
-    let mut report = if args.baseline {
+    let meta = ReportMeta::new(args, file);
+    if args.gpui && !args.baseline {
+        // GPUI may end the process when it quits (macOS terminates the
+        // application), so the report is finished from its quit hook.
+        return gpui_embedded(
+            args,
+            doc,
+            paint,
+            Some(kind),
+            file,
+            Box::new(move |report| meta.finish(report.context("benchmark did not finish")?)),
+        );
+    }
+    let report = if args.baseline {
         bench::baseline(kind, &mut doc, paint, args.size)?
-    } else if args.gpui {
-        gpui_embedded(args, doc, paint, Some(kind), file)?.context("benchmark did not finish")?
     } else if args.headless {
         let gpu = Gpu::new(gpu::instance(), None, args.tiles)?;
         let mut engine = Engine::new(
@@ -244,38 +298,18 @@ fn bench(args: &Args) -> Result<()> {
         };
         app::run(options, doc, paint)?.context("benchmark did not finish")?
     };
-    report.notes.push(format!(
-        "file {file}, {}x{} view, commit {}",
-        args.size.0,
-        args.size.1,
-        commit()
-    ));
-    report.print();
-    let mut json = report.json();
-    json["file"] = file.clone().into();
-    json["commit"] = commit().into();
-    json["size"] = format!("{}x{}", args.size.0, args.size.1).into();
-    json["options"] = serde_json::json!({
-        "baseline": args.baseline,
-        "headless": args.headless,
-        "cache": args.cache,
-        "vello": args.vello,
-        "vsync": args.vsync,
-        "gpui": args.gpui,
-        "tiles": args.tiles.map(|t| t.label()),
-        "vectors": format!("{:?}", args.space),
-    });
-    write_json(&args.json, json)
+    meta.finish(report)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn gpui_embedded(
     args: &Args,
     doc: emulsion_core::Document,
     paint: Option<emulsion_core::NodeId>,
     script: Option<bench::Kind>,
     file: &str,
-) -> Result<Option<bench::Report>> {
+    finish: gpui_host::Finish,
+) -> Result<()> {
     gpui_host::run(
         gpui_host::Options {
             size: args.size,
@@ -288,18 +322,25 @@ fn gpui_embedded(
         },
         doc,
         paint,
+        finish,
     )
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+mod gpui_host {
+    pub type Finish = Box<dyn FnOnce(Option<crate::bench::Report>) -> anyhow::Result<()>>;
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn gpui_embedded(
     _: &Args,
     _: emulsion_core::Document,
     _: Option<emulsion_core::NodeId>,
     _: Option<bench::Kind>,
     _: &str,
-) -> Result<Option<bench::Report>> {
-    bail!("--gpui embedding is Linux-only in this spike")
+    _: gpui_host::Finish,
+) -> Result<()> {
+    bail!("--gpui embedding is Linux- and macOS-only in this spike")
 }
 
 fn main() -> Result<()> {
@@ -316,8 +357,7 @@ fn main() -> Result<()> {
             let mut doc = open(file)?;
             let paint = bench::add_paint_layer(&mut doc);
             if args.gpui {
-                gpui_embedded(&args, doc, Some(paint), None, file)?;
-                return Ok(());
+                return gpui_embedded(&args, doc, Some(paint), None, file, Box::new(|_| Ok(())));
             }
             app::run(
                 app::Options {

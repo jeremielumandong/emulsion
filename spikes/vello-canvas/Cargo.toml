@@ -38,5 +38,16 @@ winit = "0.30"
 gpui-kit = { workspace = true }
 gpui-pre-wgpu = "=0.3.5"
 
+# macOS embedding spike: the engine on its own wgpu (Metal) device renders into
+# IOSurface-backed textures that GPUI's Metal renderer paints as BGRA surfaces
+# (see the vendored `gpui-pre-apple` patch).
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-kit = { workspace = true }
+gpui-pre-apple = "=0.3.5"
+core-foundation = "0.10"
+core-video = "0.5.2"
+objc2-io-surface = "0.3"
+objc2-metal = { version = "0.3", features = ["objc2-io-surface"] }
+
 [lints]
 workspace = true
