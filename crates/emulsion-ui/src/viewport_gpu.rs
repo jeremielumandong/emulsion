@@ -27,14 +27,24 @@ const HOSTED: bool = cfg!(any(
     target_os = "windows"
 ));
 
-/// Whether the experimental GPU canvas was requested.
+/// Whether the GPU canvas should draw.
 ///
-/// Follows the `EMULSION_GPU*` convention: an environment variable read once,
-/// with no settings-UI equivalent.
+/// On wherever there is a hosting backend; `EMULSION_GPU_CANVAS=0` falls back
+/// to the CPU tile path. Follows the `EMULSION_GPU*` convention: an
+/// environment variable read once, with no settings-UI equivalent.
+///
+/// The path refuses on its own for anything it cannot draw faithfully, so a
+/// document it does not support still renders -- see [`Status`].
 pub fn enabled() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| HOSTED && std::env::var("EMULSION_GPU_CANVAS").is_ok_and(|v| v == "1"))
+    *ON.get_or_init(|| {
+        HOSTED
+            && match std::env::var("EMULSION_GPU_CANVAS") {
+                Ok(v) => v != "0",
+                Err(_) => true,
+            }
+    })
 }
 
 /// What the canvas decided, remembered across frames.
