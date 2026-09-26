@@ -317,6 +317,11 @@ fn layer_view(texture: &wgpu::Texture, layer: u32) -> wgpu::TextureView {
 }
 
 impl VectorLayer {
+    /// Whether this layer draws nothing, so a caller can skip re-encoding.
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty() && self.runs.is_empty()
+    }
+
     pub fn new(gpu: Arc<Gpu>, canvas: &Canvas, space: VectorSpace) -> anyhow::Result<Self> {
         let renderer = Renderer::new(
             &gpu.device,

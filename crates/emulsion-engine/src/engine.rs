@@ -52,6 +52,9 @@ pub struct Engine {
     pub cache: Option<CompositeCache>,
     cached_ops: u32,
     pending: Option<wgpu::CommandEncoder>,
+    /// The document structure this program was compiled from, so a reload can
+    /// tell a pixel edit from a change that needs a new program.
+    signature: Vec<crate::canvas::NodeSig>,
 }
 
 impl Engine {
@@ -109,6 +112,7 @@ impl Engine {
             screen,
             hud: Vec::new(),
             pending: None,
+            signature: Canvas::signature(doc),
         })
     }
 
@@ -131,8 +135,56 @@ impl Engine {
         paint_node: Option<NodeId>,
         vello: bool,
     ) -> anyhow::Result<()> {
+        // Fast path: if the only difference is pixels in direct sources, swap
+        // those rasters. Rebuilding the program costs ~66 ms on a 4K document
+        // where this costs ~1 ms, and a stroke commits every frame.
+        let after = Canvas::signature(doc);
+        if let Some(changed) = Canvas::pixels_only_change(&self.signature, &after)
+            && changed
+                .iter()
+                .all(|id| self.canvas.sources.iter().any(|s| s.node == Some(*id)))
+        {
+            for id in changed {
+                let Some(index) = self.canvas.sources.iter().position(|s| s.node == Some(id))
+                else {
+                    continue;
+                };
+                let Some(raster) = doc.node(id).and_then(|n| match &n.kind {
+                    emulsion_core::NodeKind::Raster { raster, .. } => Some(raster.clone()),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                self.canvas.replace_raster(
+                    &self.gpu.queue,
+                    &mut self.atlas,
+                    index,
+                    raster,
+                    None,
+                )?;
+            }
+            self.signature = after;
+            return Ok(());
+        }
+
+        let vectors_before = self.canvas.vector_signature();
         self.canvas
             .recompile(doc, &self.gpu, &mut self.atlas, paint_node, vello)?;
+        self.signature = after;
+        // The compositor holds the serialised op program. Without this the
+        // shader keeps running the previous document's ops, so a structural
+        // change -- a layer added, removed or reordered -- recompiles and
+        // invalidates correctly and still draws the old picture.
+        self.compositor.set_program(&self.canvas);
+        // The vector layer holds one encoded Vello fragment per path and text
+        // box, plus the R-tree used to cull them, all built from the previous
+        // canvas. Paths and text added or changed by the pen and type tools
+        // live only there, so without this they never reach the screen.
+        // Re-encoding is skipped for documents with no vector content, which
+        // is every purely raster document.
+        if vectors_before != self.canvas.vector_signature() {
+            self.vectors = VectorLayer::new(self.gpu.clone(), &self.canvas, self.vectors.space)?;
+        }
         self.cached_ops = if self.cache.is_some() {
             self.canvas.cacheable_prefix() as u32
         } else {

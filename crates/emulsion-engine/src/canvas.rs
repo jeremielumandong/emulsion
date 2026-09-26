@@ -55,9 +55,34 @@ pub fn mode(mode: BlendMode) -> u32 {
     }
 }
 
+/// What a baked raster was flattened from.
+///
+/// Baking runs `flatten` over a whole document-sized layer, which for a 4K
+/// document is tens of milliseconds. A reload re-walks the tree, so without
+/// this every masked or placed layer is re-baked on every edit. Identical
+/// inputs give identical pixels, so the previous `Arc` is reused -- which also
+/// keeps its atlas slots, and therefore keeps the composite cache valid.
+#[derive(Clone, PartialEq)]
+pub(crate) struct BakeKey {
+    node: u64,
+    /// Distinguishes a group's mask shape from the group's own content.
+    mask_shape: bool,
+    /// `Arc` address of the source raster, or 0.
+    raster: usize,
+    /// `Arc` address of the mask, or 0.
+    mask: usize,
+    placement: Option<emulsion_raster::composite::Placement>,
+    fill: Option<[u32; 4]>,
+}
+
 /// A document-aligned raster whose tiles live in the atlas.
 pub struct Source {
     pub name: String,
+    /// The document node whose raster this is, when the node compiles to a
+    /// direct source. `None` for baked sources, whose pixels are a function of
+    /// a mask or placement rather than the raster alone, and so cannot be
+    /// swapped by [`Canvas::replace_raster`].
+    pub node: Option<NodeId>,
     pub raster: Arc<Raster>,
     pub tiles_x: u32,
     pub tiles_y: u32,
@@ -141,6 +166,9 @@ pub struct Canvas {
     /// Document rectangles whose pixels changed since the composite cache
     /// last looked.
     pub dirty: Vec<IRect>,
+    /// Baked rasters and the inputs they came from, so a reload can reuse
+    /// those whose inputs did not change.
+    pub(crate) baked: Vec<(BakeKey, Arc<Raster>)>,
 }
 
 /// Which document nodes Vello can draw, and how.
@@ -185,7 +213,7 @@ struct Compiler<'a> {
     width: u32,
     height: u32,
     space: BlendSpace,
-    sources: Vec<(String, Arc<Raster>)>,
+    sources: Vec<(String, Arc<Raster>, Option<NodeId>)>,
     ops: Vec<Op>,
     runs: Vec<Vec<VectorItem>>,
     /// Index into `ops` of the open run's op, if the last op is a mergeable run.
@@ -194,6 +222,10 @@ struct Compiler<'a> {
     alpha_slots: u32,
     paint: Option<(NodeId, usize)>,
     paint_node: Option<NodeId>,
+    /// Bakes from the previous compile, reused when their inputs match.
+    baked_prev: Vec<(BakeKey, Arc<Raster>)>,
+    /// Bakes this compile produced, kept for the next one.
+    baked_new: Vec<(BakeKey, Arc<Raster>)>,
     _doc: &'a Document,
 }
 
@@ -211,11 +243,54 @@ impl Compiler<'_> {
     }
 
     fn source(&mut self, name: String, raster: Arc<Raster>) -> usize {
-        self.sources.push((name, raster));
+        self.sources.push((name, raster, None));
+        self.sources.len() - 1
+    }
+
+    /// A source that is exactly one node's raster, so a later edit can swap
+    /// its pixels instead of recompiling.
+    fn direct_source(&mut self, name: String, raster: Arc<Raster>, node: NodeId) -> usize {
+        self.sources.push((name, raster, Some(node)));
         self.sources.len() - 1
     }
 
     /// Render one node's content alone (placement, mask) to a doc-aligned raster.
+    /// What this bake depends on: identical inputs give identical pixels.
+    fn bake_key(node: &CompositeNode, mask_shape: bool) -> BakeKey {
+        let (raster, placement, fill) = match &node.content {
+            NodeContent::Pixels { raster, placement } => (
+                Arc::as_ptr(raster) as *const u8 as usize,
+                Some(*placement),
+                None,
+            ),
+            NodeContent::Fill(c) => (0, None, Some(c.map(f32::to_bits))),
+            _ => (0, None, None),
+        };
+        BakeKey {
+            node: node.id,
+            mask_shape,
+            raster,
+            mask: node
+                .mask
+                .as_ref()
+                .map_or(0, |m| Arc::as_ptr(m) as *const u8 as usize),
+            placement,
+            fill,
+        }
+    }
+
+    fn bake_cached(&mut self, node: &CompositeNode, mask_shape: bool) -> Arc<Raster> {
+        let key = Self::bake_key(node, mask_shape);
+        let hit = self
+            .baked_prev
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, r)| r.clone());
+        let raster = hit.unwrap_or_else(|| self.bake(node));
+        self.baked_new.push((key, raster.clone()));
+        raster
+    }
+
     fn bake(&self, node: &CompositeNode) -> Arc<Raster> {
         let mut alone = node.clone();
         alone.visible = true;
@@ -306,13 +381,13 @@ impl Compiler<'_> {
                         && raster.width() == self.width
                         && raster.height() == self.height
                     {
-                        let s = self.source(name, raster.clone());
+                        let s = self.direct_source(name, raster.clone(), node.id);
                         if self.paint_node == Some(node.id) {
                             self.paint = Some((node.id, s));
                         }
                         s
                     } else {
-                        let baked = self.bake(node);
+                        let baked = self.bake_cached(node, false);
                         self.source(format!("{name} (baked)"), baked)
                     };
                     self.ops.push(Op::Source {
@@ -325,7 +400,7 @@ impl Compiler<'_> {
                 }
                 NodeContent::Fill(color) => {
                     let color = if node.mask.is_some() {
-                        let baked = self.bake(node);
+                        let baked = self.bake_cached(node, false);
                         let source = self.source(format!("{name} (baked)"), baked);
                         self.ops.push(Op::Source {
                             mode: blend,
@@ -352,7 +427,7 @@ impl Compiler<'_> {
                     let mask = node.mask.as_ref().map(|_| {
                         let mut shape = node.clone();
                         shape.content = NodeContent::Fill([1.0; 4]);
-                        let baked = self.bake(&shape);
+                        let baked = self.bake_cached(&shape, true);
                         self.source(format!("{name} mask (baked)"), baked)
                     });
                     self.ops.push(Op::Push { isolated });
@@ -377,6 +452,24 @@ impl Compiler<'_> {
             self.open_run = None;
         }
     }
+}
+
+/// Everything about a composite node that decides how it compiles, with
+/// its pixel content identified separately.
+///
+/// Two documents with equal signatures compile to the same program, so a
+/// difference confined to `content` means only pixels moved and the engine
+/// can swap those rasters instead of rebuilding.
+#[derive(Clone, PartialEq)]
+pub struct NodeSig {
+    pub node: NodeId,
+    /// `Arc` address of the pixel content, or 0.
+    pub content: usize,
+    shape: u64,
+    mask: usize,
+    placement: Option<emulsion_raster::composite::Placement>,
+    opacity: u32,
+    clip_to: Option<usize>,
 }
 
 impl Canvas {
@@ -410,19 +503,21 @@ impl Canvas {
             alpha_slots: 0,
             paint: None,
             paint_node,
+            baked_prev: Vec::new(),
+            baked_new: Vec::new(),
             _doc: doc,
         };
         compiler.list(&tree.nodes, 0);
         let unique: std::collections::HashSet<usize> = compiler
             .sources
             .iter()
-            .flat_map(|(_, r)| r.base_tiles().map(|(_, t)| t.as_ptr() as usize))
+            .flat_map(|(_, r, _)| r.base_tiles().map(|(_, t)| t.as_ptr() as usize))
             .collect();
         let filled: u32 = compiler
             .sources
             .iter()
-            .filter(|(_, r)| r.fill() != [0; 4])
-            .map(|(_, r)| {
+            .filter(|(_, r, _)| r.fill() != [0; 4])
+            .map(|(_, r, _)| {
                 let (x, y) = r.tiles_at(0);
                 (x * y) as u32
             })
@@ -471,6 +566,8 @@ impl Canvas {
             alpha_slots: 0,
             paint: None,
             paint_node,
+            baked_prev: std::mem::take(&mut self.baked),
+            baked_new: Vec::new(),
             _doc: doc,
         };
         compiler.list(&tree.nodes, 0);
@@ -523,7 +620,7 @@ impl Canvas {
         let per = (tiles_x * tiles_y) as usize;
         let mut sources = Vec::new();
         let mut table = Vec::new();
-        for (name, raster) in compiler.sources {
+        for (name, raster, node) in compiler.sources {
             // Missing tiles read as the fill; one shared tile materialises them.
             let fill_tile: Option<Arc<[[u16; 4]]>> =
                 (raster.fill() != [0; 4]).then(|| atlas.fill_tile(raster.fill()));
@@ -553,6 +650,7 @@ impl Canvas {
             table.extend(slots.iter().map(|s| s.unwrap_or(NONE)));
             sources.push(Source {
                 name,
+                node,
                 raster,
                 tiles_x,
                 tiles_y,
@@ -583,12 +681,105 @@ impl Canvas {
             table,
             tables,
             dirty: Vec::new(),
+            baked: compiler.baked_new,
         })
     }
 
     /// The longest run of leading ops the composite cache can hold: it
     /// contains no Vello run, ends outside any group, and no later op clips
     /// to an alpha slot it sets.
+    /// Signature of a document's composite tree, in compile order.
+    pub fn signature(doc: &Document) -> Vec<NodeSig> {
+        fn walk(nodes: &[CompositeNode], out: &mut Vec<NodeSig>) {
+            for node in nodes {
+                let (content, placement) = match &node.content {
+                    NodeContent::Pixels { raster, placement } => {
+                        (Arc::as_ptr(raster) as *const u8 as usize, Some(*placement))
+                    }
+                    _ => (0, None),
+                };
+                // Everything that changes the emitted ops, folded together.
+                let shape = {
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    use std::hash::{Hash, Hasher};
+                    std::mem::discriminant(&node.content).hash(&mut h);
+                    node.visible.hash(&mut h);
+                    format!("{:?}", node.blend).hash(&mut h);
+                    format!("{:?}", node.blending).hash(&mut h);
+                    if let NodeContent::Fill(c) = &node.content {
+                        c.map(f32::to_bits).hash(&mut h);
+                    }
+                    h.finish()
+                };
+                out.push(NodeSig {
+                    node: node.id,
+                    content,
+                    shape,
+                    mask: node
+                        .mask
+                        .as_ref()
+                        .map_or(0, |m| Arc::as_ptr(m) as *const u8 as usize),
+                    placement,
+                    opacity: node.opacity.to_bits(),
+                    clip_to: node.clip_to,
+                });
+                if let NodeContent::Group(children) = &node.content {
+                    walk(children, out);
+                }
+            }
+        }
+        let tree = doc.composite_tree();
+        let mut out = Vec::new();
+        walk(&tree.nodes, &mut out);
+        out
+    }
+
+    /// Nodes whose pixels changed, when that is the *only* difference between
+    /// two signatures. `None` means the program itself must be rebuilt.
+    pub fn pixels_only_change(before: &[NodeSig], after: &[NodeSig]) -> Option<Vec<NodeId>> {
+        if before.len() != after.len() {
+            return None;
+        }
+        let mut changed = Vec::new();
+        for (a, b) in before.iter().zip(after) {
+            let same_frame = NodeSig {
+                content: b.content,
+                ..a.clone()
+            } == *b;
+            if !same_frame {
+                return None;
+            }
+            if a.content != b.content {
+                changed.push(b.node);
+            }
+        }
+        Some(changed)
+    }
+
+    /// Identity of the vector content, for deciding whether the Vello layer
+    /// has to be re-encoded.
+    ///
+    /// Geometry and text are compared by `Arc` address, which an edit always
+    /// changes because the document stores them behind `Arc`; style is stored
+    /// by value and compared directly. Re-encoding every object costs about
+    /// 20 ms on a 4K document, so a raster-only edit must not pay it.
+    pub fn vector_signature(&self) -> Vec<(NodeId, usize, Option<PathStyle>)> {
+        self.runs
+            .iter()
+            .flatten()
+            .map(|item| match &item.kind {
+                VectorKind::Path { path, style } => (
+                    item.node,
+                    Arc::as_ptr(path) as *const u8 as usize,
+                    Some(*style),
+                ),
+                VectorKind::Text { spec } => {
+                    (item.node, Arc::as_ptr(spec) as *const u8 as usize, None)
+                }
+            })
+            .collect()
+    }
+
     pub fn cacheable_prefix(&self) -> usize {
         let first_vector = self
             .ops

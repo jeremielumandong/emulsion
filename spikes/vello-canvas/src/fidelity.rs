@@ -429,6 +429,475 @@ mod tests {
         }
     }
 
+    /// What the app does when you paint: the stroke is rasterised on the CPU,
+    /// committed with ReplacePixels, and the canvas reloads the new document.
+    /// The composite must actually change.
+    #[test]
+    fn reload_shows_pixels_committed_to_the_document() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = Document::new(700, 520);
+        let paint = crate::bench::add_paint_layer(&mut doc);
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            Some(paint),
+            VectorSpace::Srgb,
+            false,
+            true,
+            (64, 64),
+        )
+        .unwrap();
+        // Fill the composite cache first, so a stale cache would hide the edit.
+        let before = gpu_render(&mut engine, 0).unwrap();
+
+        // Paint a stroke across the middle, exactly as the editor does.
+        let base = match &doc.node(paint).unwrap().kind {
+            emulsion_core::NodeKind::Raster { raster, .. } => raster.clone(),
+            other => panic!("paint layer is not a raster: {other:?}"),
+        };
+        let brush = test_brush(120.0);
+        let mut stroke = emulsion_raster::paint::Stroke::new(
+            base,
+            brush,
+            emulsion_raster::paint::Ink::Color(emulsion_engine::brush::INK),
+            None,
+        );
+        for i in 0..200 {
+            let t = i as f32 / 200.0;
+            stroke.point_at(40.0 + 620.0 * t, 260.0, None, Some(i as f64));
+        }
+        stroke.finish();
+        let current = match &doc.node(paint).unwrap().kind {
+            emulsion_core::NodeKind::Raster { raster, .. } => raster.clone(),
+            _ => unreachable!(),
+        };
+        let painted = stroke.render(&current).0;
+        emulsion_core::Command::ReplacePixels {
+            id: paint,
+            raster: Arc::new(painted),
+            dirty: emulsion_raster::IRect::new(0, 0, 700, 520),
+            label: "Paint".into(),
+        }
+        .apply(&mut doc)
+        .expect("commit stroke");
+
+        engine.reload(&doc, Some(paint), false).unwrap();
+        let after = gpu_render(&mut engine, 0).unwrap();
+        let changed = before
+            .iter()
+            .zip(&after)
+            .filter(|(a, b)| (*a - *b).abs() > 1e-4)
+            .count();
+        assert!(
+            changed > 0,
+            "reload after ReplacePixels showed no change: the committed stroke is invisible"
+        );
+    }
+
+    /// The same commit-and-reload cycle on the real 4K test document, which
+    /// unlike a bare paint layer has masked and placed layers that compile to
+    /// baked sources.
+    #[test]
+    fn reload_shows_pixels_on_the_layered_document() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = crate::testdocs::layers_4k();
+        // Paint into the topmost plain raster layer, as selecting it would.
+        let target = doc
+            .nodes
+            .iter()
+            .rev()
+            .find(|n| matches!(n.kind, emulsion_core::NodeKind::Raster { .. }))
+            .map(|n| n.id)
+            .expect("a raster layer");
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            Some(target),
+            VectorSpace::Srgb,
+            true,
+            true,
+            (256, 256),
+        )
+        .unwrap();
+        let before = gpu_render(&mut engine, 0).unwrap();
+
+        let current = match &doc.node(target).unwrap().kind {
+            emulsion_core::NodeKind::Raster { raster, .. } => raster.clone(),
+            _ => unreachable!(),
+        };
+        let brush = test_brush(300.0);
+        let mut stroke = emulsion_raster::paint::Stroke::new(
+            current.clone(),
+            brush,
+            emulsion_raster::paint::Ink::Color(emulsion_engine::brush::INK),
+            None,
+        );
+        for i in 0..300 {
+            let t = i as f32 / 300.0;
+            stroke.point_at(200.0 + 3400.0 * t, 1080.0, None, Some(i as f64));
+        }
+        stroke.finish();
+        let painted = stroke.render(&current).0;
+        emulsion_core::Command::ReplacePixels {
+            id: target,
+            raster: Arc::new(painted),
+            dirty: emulsion_raster::IRect::new(0, 0, 3840, 2160),
+            label: "Paint".into(),
+        }
+        .apply(&mut doc)
+        .expect("commit stroke");
+
+        engine.reload(&doc, Some(target), true).unwrap();
+        let after = gpu_render(&mut engine, 0).unwrap();
+        let changed = before
+            .iter()
+            .zip(&after)
+            .filter(|(a, b)| (*a - *b).abs() > 1e-4)
+            .count();
+        assert!(
+            changed > 0,
+            "reload on the layered document showed no change: committed stroke invisible"
+        );
+    }
+
+    /// Painting on a non-pixel layer makes the editor add a raster layer, so
+    /// the reload is a *structural* change, not just new pixels. The
+    /// compositor holds the serialised op program, so a reload that forgets to
+    /// re-upload it invalidates the cache correctly and still draws the old
+    /// document -- which is exactly what "the brush does nothing" looks like.
+    #[test]
+    fn reload_shows_a_layer_added_after_compile() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = Document::new(400, 300);
+        // A background so the composite is not empty to begin with.
+        crate::bench::add_paint_layer(&mut doc);
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            None,
+            VectorSpace::Srgb,
+            true,
+            true,
+            (128, 128),
+        )
+        .unwrap();
+        let before = gpu_render(&mut engine, 0).unwrap();
+        let ops_before = engine.canvas.ops.len();
+
+        // Add an opaque layer covering the document, as painting on a fill
+        // layer would.
+        let raster = emulsion_raster::Raster::solid(400, 300, [0.6, 0.12, 0.12, 1.0]);
+        emulsion_core::Command::AddNode {
+            node: Box::new(emulsion_core::Node::raster(
+                0,
+                "Added",
+                Arc::new(raster),
+                Default::default(),
+            )),
+            slot: emulsion_core::command::Slot::TOP,
+        }
+        .apply(&mut doc)
+        .expect("add layer");
+
+        engine.reload(&doc, None, true).unwrap();
+        assert!(
+            engine.canvas.ops.len() > ops_before,
+            "the new layer did not reach the program"
+        );
+        let after = gpu_render(&mut engine, 0).unwrap();
+        let changed = before
+            .iter()
+            .zip(&after)
+            .filter(|(a, b)| (*a - *b).abs() > 1e-4)
+            .count();
+        assert!(
+            changed > 0,
+            "a layer added after compile is invisible: the compositor is still \
+             running the old op program"
+        );
+    }
+
+    /// What the pen and type tools do: add a vector node after the engine was
+    /// built. The vector layer holds one encoded Vello fragment per object and
+    /// the R-tree that culls them, so a reload that does not rebuild it draws
+    /// the old set of paths and text -- new ones simply never appear.
+    #[test]
+    fn reload_shows_a_vector_node_added_after_compile() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = crate::testdocs::vectors(4, 1);
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            None,
+            VectorSpace::Srgb,
+            true,
+            true,
+            (256, 256),
+        )
+        .unwrap();
+        let before = gpu_render(&mut engine, 0).unwrap();
+        let objects_before = engine.vectors.objects.len();
+
+        // A big opaque path across the middle, as drawing with the pen would.
+        let corner = |x: f64, y: f64| emulsion_raster::vector::Anchor {
+            p: (x, y),
+            h_in: (x, y),
+            h_out: (x, y),
+            smooth: false,
+        };
+        let path = emulsion_raster::vector::Path {
+            subpaths: vec![emulsion_raster::vector::SubPath {
+                anchors: vec![
+                    corner(100.0, 1000.0),
+                    corner(3700.0, 1000.0),
+                    corner(3700.0, 1400.0),
+                    corner(100.0, 1400.0),
+                ],
+                closed: true,
+            }],
+        };
+        emulsion_core::Command::AddNode {
+            node: Box::new(emulsion_core::Node::path(
+                0,
+                "Pen path",
+                Arc::new(path),
+                emulsion_raster::vector::PathStyle::default(),
+                3840,
+                2160,
+            )),
+            slot: emulsion_core::command::Slot::TOP,
+        }
+        .apply(&mut doc)
+        .expect("add path");
+
+        engine.reload(&doc, None, true).unwrap();
+        assert!(
+            engine.vectors.objects.len() > objects_before,
+            "the new path did not reach the vector layer"
+        );
+        let after = gpu_render(&mut engine, 0).unwrap();
+        let changed = before
+            .iter()
+            .zip(&after)
+            .filter(|(a, b)| (*a - *b).abs() > 1e-4)
+            .count();
+        assert!(
+            changed > 0,
+            "a vector node added after compile is invisible: the vector layer \
+             is still the one built at compile time"
+        );
+    }
+
+    /// Where reload time goes on a realistic document. Not an assertion about
+    /// speed; run with --nocapture to see the split.
+    #[test]
+    fn reload_cost_breakdown() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = crate::testdocs::layers_4k();
+        // Add vector content, as the pen and type tools do.
+        for i in 0..3 {
+            let corner = |x: f64, y: f64| emulsion_raster::vector::Anchor {
+                p: (x, y),
+                h_in: (x, y),
+                h_out: (x, y),
+                smooth: false,
+            };
+            let x = 200.0 + 400.0 * i as f64;
+            let path = emulsion_raster::vector::Path {
+                subpaths: vec![emulsion_raster::vector::SubPath {
+                    anchors: vec![
+                        corner(x, 600.0),
+                        corner(x + 300.0, 600.0),
+                        corner(x + 300.0, 900.0),
+                        corner(x, 900.0),
+                    ],
+                    closed: true,
+                }],
+            };
+            emulsion_core::Command::AddNode {
+                node: Box::new(emulsion_core::Node::path(
+                    0,
+                    format!("Rect {i}"),
+                    Arc::new(path),
+                    emulsion_raster::vector::PathStyle::default(),
+                    3840,
+                    2160,
+                )),
+                slot: emulsion_core::command::Slot::TOP,
+            }
+            .apply(&mut doc)
+            .expect("add path");
+        }
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            None,
+            VectorSpace::Srgb,
+            true,
+            true,
+            (1600, 1000),
+        )
+        .unwrap();
+
+        let mut whole = Vec::new();
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            engine.reload(&doc, None, true).unwrap();
+            whole.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        // The case that matters: a stroke committed with ReplacePixels, as the
+        // editor does on every frame of a drag.
+        // A layer that compiles to a direct source, which is what an ordinary
+        // pixel layer does and what the editor paints into.
+        let target = engine
+            .canvas
+            .sources
+            .iter()
+            .find_map(|s| s.node)
+            .expect("a direct pixel source");
+        let brush = test_brush(300.0);
+        let mut edited = Vec::new();
+        let (mut changed_tiles, mut total_tiles) = (0usize, 0usize);
+        for pass in 0..5 {
+            let current = match &doc.node(target).unwrap().kind {
+                emulsion_core::NodeKind::Raster { raster, .. } => raster.clone(),
+                _ => unreachable!(),
+            };
+            let mut stroke = emulsion_raster::paint::Stroke::new(
+                current.clone(),
+                brush,
+                emulsion_raster::paint::Ink::Color(emulsion_engine::brush::INK),
+                None,
+            );
+            let y = 400.0 + 120.0 * pass as f32;
+            for i in 0..60 {
+                let t = i as f32 / 60.0;
+                stroke.point_at(300.0 + 1200.0 * t, y, None, Some(i as f64));
+            }
+            stroke.finish();
+            let painted = stroke.render(&current).0;
+            emulsion_core::Command::ReplacePixels {
+                id: target,
+                raster: Arc::new(painted),
+                dirty: emulsion_raster::IRect::new(0, 0, 3840, 2160),
+                label: "Paint".into(),
+            }
+            .apply(&mut doc)
+            .expect("commit");
+            // How many of this layer's tiles actually changed identity?
+            let after_ptrs: std::collections::HashSet<usize> = match &doc.node(target).unwrap().kind
+            {
+                emulsion_core::NodeKind::Raster { raster, .. } => raster
+                    .base_tiles()
+                    .map(|(_, t)| t.as_ptr() as usize)
+                    .collect(),
+                _ => unreachable!(),
+            };
+            let before_ptrs: std::collections::HashSet<usize> = current
+                .base_tiles()
+                .map(|(_, t)| t.as_ptr() as usize)
+                .collect();
+            changed_tiles = after_ptrs.difference(&before_ptrs).count();
+            total_tiles = after_ptrs.len();
+            let t = std::time::Instant::now();
+            engine.reload(&doc, None, true).unwrap();
+            edited.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        // Isolate the vector re-encode.
+        let mut vec_only = Vec::new();
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let v = emulsion_engine::vector::VectorLayer::new(
+                gpu.clone(),
+                &engine.canvas,
+                engine.vectors.space,
+            )
+            .unwrap();
+            vec_only.push(t.elapsed().as_secs_f64() * 1000.0);
+            drop(v);
+        }
+        // Split the edited-reload cost.
+        let mut tree_ms = Vec::new();
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let tree = doc.composite_tree();
+            tree_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            std::hint::black_box(&tree);
+        }
+        let mut fresh_ms = Vec::new();
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            let c = emulsion_engine::Canvas::compile(&doc, &gpu, None, 64, true).unwrap();
+            fresh_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            drop(c);
+        }
+
+        // The incremental path the spike used: replace one source's raster and
+        // upload only the tiles whose identity changed.
+        let mut inc_ms = Vec::new();
+        if let Some(src) = engine
+            .canvas
+            .sources
+            .iter()
+            .position(|s| s.raster.base_tiles().count() == total_tiles)
+        {
+            for pass in 0..5 {
+                let current = match &doc.node(target).unwrap().kind {
+                    emulsion_core::NodeKind::Raster { raster, .. } => raster.clone(),
+                    _ => unreachable!(),
+                };
+                let mut stroke = emulsion_raster::paint::Stroke::new(
+                    current.clone(),
+                    brush,
+                    emulsion_raster::paint::Ink::Color(emulsion_engine::brush::INK),
+                    None,
+                );
+                let y = 1200.0 + 80.0 * pass as f32;
+                for i in 0..60 {
+                    let t = i as f32 / 60.0;
+                    stroke.point_at(300.0 + 1200.0 * t, y, None, Some(i as f64));
+                }
+                stroke.finish();
+                let painted = Arc::new(stroke.render(&current).0);
+                let t = std::time::Instant::now();
+                let (canvas, atlas) = (&mut engine.canvas, &mut engine.atlas);
+                canvas
+                    .replace_raster(&gpu.queue, atlas, src, painted, None)
+                    .unwrap();
+                inc_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+
+        let med = |mut v: Vec<f64>| {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v[v.len() / 2]
+        };
+        println!(
+            "reload unchanged {:.2} ms; after a stroke commit {:.2} ms; \
+             vector re-encode alone {:.1} ms; \
+             composite_tree {:.1} ms; fresh compile {:.1} ms; \
+             incremental replace_raster {:.2} ms; \
+             {} of {} layer tiles changed identity; \
+             {} sources, {} ops, {} vector objects",
+            med(whole),
+            med(edited),
+            med(vec_only),
+            med(tree_ms),
+            med(fresh_ms),
+            if inc_ms.is_empty() {
+                f64::NAN
+            } else {
+                med(inc_ms)
+            },
+            changed_tiles,
+            total_tiles,
+            engine.canvas.sources.len(),
+            engine.canvas.ops.len(),
+            engine.vectors.objects.len(),
+        );
+    }
+
     #[test]
     fn gpu_dabs_match_cpu_stroke() {
         let Some(gpu) = gpu() else { return };
