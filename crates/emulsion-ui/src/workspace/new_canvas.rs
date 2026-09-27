@@ -365,17 +365,19 @@ impl Render for NewCanvas {
                             .gap_4()
                             .child(
                                 div()
-                                    .w(px(130.))
+                                    .id("new-canvas-types").test_support()
+                                    .w(px(200.))
                                     .flex_none()
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .child(div().text_color(p.muted).child("Document type"))
+                                    .child(div().font_family(theme::MONO_FONT).text_size(px(9.5)).text_color(p.muted).child("DOCUMENT TYPE"))
                                     .children(CanvasKind::ALL.map(|kind| {
                                         Button::new(("new-canvas-kind", kind as usize))
                                             .label(kind.label())
                                             .small()
                                             .ghost()
+                                            .h(px(34.))
                                             .selected(self.spec.kind == kind)
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.pick_kind(kind, window, cx)
@@ -434,15 +436,18 @@ impl Render for NewCanvas {
                                                             && s.unit == preset.unit
                                                             && s.resolution == preset.resolution
                                                     });
+                                                    let scale = (86. / preset.width.max(1.)).min(60. / preset.height.max(1.));
                                                     Button::new(("new-canvas-preset", index))
-                                                        .label(format!(
-                                                            "{}\n{} × {} {}",
-                                                            preset.name,
-                                                            preset.width,
-                                                            preset.height,
-                                                            preset.unit.label()
-                                                        ))
-                                                        .h(px(76.))
+                                                        .accessibility_label(format!("{} · {} × {} {}", preset.name, preset.width, preset.height, preset.unit.label()))
+                                                        .child(div().flex().flex_col().w_full().gap(px(2.))
+                                                            .child(div().h(px(72.)).flex().items_center().justify_center()
+                                                                .child(div().w(px((preset.width * scale) as f32))
+                                                                    .h(px((preset.height * scale) as f32))
+                                                                    .bg(p.paper).border_1().border_color(p.muted)))
+                                                            .child(div().text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_ellipsis().child(preset.name))
+                                                            .child(div().font_family(theme::MONO_FONT).text_size(px(10.)).text_color(p.muted)
+                                                                .child(format!("{} × {} {}", preset.width, preset.height, preset.unit.label()))))
+                                                        .h(px(124.))
                                                         .w(px(132.))
                                                         .small()
                                                         .outline()

@@ -1792,7 +1792,12 @@ impl Render for Workspace {
                 ),
             );
         let compact = crate::app_state::settings(cx).compact_chrome;
-        let compact_editor = compact && self.screen == Screen::Editor && self.editor.is_some();
+        let project_editor = self
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.read(cx).editor.kind().is_some());
+        let compact_editor =
+            (compact || project_editor) && self.screen == Screen::Editor && self.editor.is_some();
         let compact_page = compact && !compact_editor;
         let top = if compact_editor {
             let tabs = self.compact_tabs(cx);

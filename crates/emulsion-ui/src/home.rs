@@ -22,6 +22,7 @@ use std::sync::{Arc, OnceLock};
 pub(crate) struct GalleryThumbnail {
     requested_width: u32,
     image: Option<Arc<RenderImage>>,
+    file_bytes: Option<u64>,
 }
 
 fn thumbnail_width(viewport_width: f32, scale_factor: f32) -> u32 {
@@ -152,6 +153,7 @@ mod tests {
                         GalleryThumbnail {
                             requested_width: 2048,
                             image: None,
+                            file_bytes: None,
                         },
                     );
                 }
@@ -401,6 +403,44 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn home_file_actions_and_compact_navigation_keep_local_work_reachable(cx: &mut TestAppContext) {
+        let (workspace, cx) = browser(cx);
+        let path = Path::new("photos/Portrait.png");
+        cx.update(|window, cx| window.click("home-list", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("home-list-heading").visible());
+            window.click(path_id("home-file-actions", path), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(1usize, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(
+                workspace.read(cx).home_state.selected.as_deref(),
+                Some(path)
+            );
+            assert!(window.find("home-inspector").visible());
+            window.click("home-details-close", cx);
+        });
+        cx.run_until_parked();
+        cx.simulate_resize(size(px(480.), px(760.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find("home-inspector").is_none());
+            assert_eq!(
+                window.find("home-navigation-compact").bounds().size.width,
+                px(56.)
+            );
+            window.click("home-navigation-open", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("home-filter-today", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(workspace.read(cx).visible_recents(cx).len(), 1));
+    }
+
+    #[gpui_kit::test]
     fn photo_entry_opens_file_picker_without_creating_a_canvas(cx: &mut TestAppContext) {
         let (workspace, cx) = browser(cx);
         cx.update(|window, cx| window.click((ElementId::from("home-start"), "Photo"), cx));
@@ -499,16 +539,17 @@ impl Workspace {
             let path = r.path.clone();
             cx.spawn(async move |this, cx| {
                 let p = path.clone();
-                let result = cx
+                let (result, file_bytes) = cx
                     .background_spawn(async move {
-                        emulsion_io::thumb::thumbnail_cover(&p, width, width * 3 / 4).map(
-                            |(w, h, mut rgba)| {
+                        let file_bytes = std::fs::metadata(&p).ok().map(|m| m.len());
+                        let result = emulsion_io::thumb::thumbnail_cover(&p, width, width * 5 / 8)
+                            .map(|(w, h, mut rgba)| {
                                 for px in rgba.as_chunks_mut::<4>().0 {
                                     px.swap(0, 2);
                                 }
                                 (w, h, rgba)
-                            },
-                        )
+                            });
+                        (result, file_bytes)
                     })
                     .await;
                 this.update(cx, |this, cx| {
@@ -526,6 +567,7 @@ impl Workspace {
                         GalleryThumbnail {
                             requested_width: width,
                             image,
+                            file_bytes,
                         },
                     );
                     cx.notify();
@@ -703,7 +745,8 @@ impl Workspace {
         let width = f32::from(window.viewport_size().width) / f32::from(window.rem_size());
         let inspector = self.home_state.details;
         let docked_inspector = inspector && width >= 64.;
-        let sidebar_width = 13.75;
+        let narrow = width < 40.;
+        let sidebar_width = if narrow { 3.5 } else { 13.75 };
         let center_width =
             (width - sidebar_width - if docked_inspector { 15.625 } else { 0. }).clamp(12., 77.5);
         let columns = ((center_width - 4.) / 13.25).floor().clamp(1., 6.) as u16;
@@ -716,7 +759,7 @@ impl Workspace {
                     entry,
                     self.home_state.selected.as_deref(),
                     &p,
-                    center_width >= 39.,
+                    center_width >= 52.,
                     cx,
                 )
             })
@@ -744,6 +787,7 @@ impl Workspace {
                 .border_1()
                 .border_color(p.line)
                 .overflow_hidden()
+                .child(self.home_list_heading(center_width >= 52., &p))
                 .children(cells)
                 .into_any_element()
         } else {
@@ -779,7 +823,7 @@ impl Workspace {
                     .pb(px(32.))
                     .gap(px(22.))
                     .child(self.home_welcome(&p, cx))
-                    .child(self.home_starts(&p, cx))
+                    .child(self.home_starts(if narrow { 2 } else { 5 }, &p, cx))
                     .children(self.recovered_rows(&p, cx))
                     .children(self.home_project_cards(center_width, &p, cx))
                     .child(self.home_file_controls(visible.len(), &p, cx))
@@ -807,7 +851,11 @@ impl Workspace {
             .min_w_0()
             .min_h_0()
             .bg(p.paper)
-            .child(self.home_dashboard_sidebar(&p, cx))
+            .child(if narrow {
+                self.home_navigation_menu(&p, cx)
+            } else {
+                self.home_dashboard_sidebar(&p, cx)
+            })
             .child(div().flex().flex_1().min_w_0().child(center))
             .when(inspector, |row| {
                 row.child(
@@ -1059,70 +1107,129 @@ impl Workspace {
         cx: &Context<Self>,
     ) -> AnyElement {
         let path = recent.path.clone();
-        let checked_path = path.clone();
-        let forget = path.clone();
         let active = selected == Some(path.as_path());
         let name = self.home_project_name(&path);
         let kind = self.home_workspace_label(&path);
         let unfinished = self.unfinished(&path, cx);
         let star = crate::app_state::settings(cx).starred_files.contains(&path);
-        let mut content = div().flex().min_w_0();
+        let folder = self
+            .home_state
+            .projects
+            .catalog
+            .projects
+            .iter()
+            .find(|entry| entry.path == path)
+            .and_then(|entry| entry.folder)
+            .and_then(|id| {
+                self.home_state
+                    .projects
+                    .catalog
+                    .folders
+                    .iter()
+                    .find(|folder| folder.id == id)
+            });
+        let folder_name = folder.map_or("Unfiled", |folder| folder.name.as_str());
+        let dot = folder.map_or(p.muted, |folder| layout::folder_color(folder.id));
+        let project = || {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .min_w_0()
+                .child(div().size(px(6.)).flex_none().rounded_full().bg(dot))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .child(folder_name.to_string()),
+                )
+        };
+        let dimensions = self
+            .thumbs
+            .get(&path)
+            .and_then(|t| t.file_bytes)
+            .map(|bytes| {
+                if bytes >= 1_048_576 {
+                    format!("{:.1} MB", bytes as f64 / 1_048_576.)
+                } else {
+                    format!("{:.0} KB", bytes as f64 / 1024.)
+                }
+            })
+            .unwrap_or_else(|| "—".into());
+        let title = format!("{}{}", if unfinished { "• " } else { "" }, name);
+        let mut content = div().flex().min_w_0().w_full();
         if self.home_state.rows {
             content = content
                 .items_center()
-                .gap_2()
-                .w_full()
+                .gap(px(12.))
                 .child(
                     div()
-                        .flex_none()
-                        .w(rems(2.125))
-                        .h(rems(1.375))
-                        .overflow_hidden()
-                        .child(self.recent_thumbnail(&path, p)),
-                )
-                .child(
-                    div()
+                        .flex()
                         .flex_1()
                         .min_w_0()
-                        .text_ellipsis()
-                        .text_size(rems(0.719))
-                        .child(format!(
-                            "{}{}{}",
-                            if unfinished { "• " } else { "" },
-                            name,
-                            if star { " ★" } else { "" }
-                        )),
+                        .items_center()
+                        .gap(px(10.))
+                        .child(
+                            div()
+                                .w(px(34.))
+                                .h(px(24.))
+                                .flex_none()
+                                .rounded(px(3.))
+                                .overflow_hidden()
+                                .child(self.recent_thumbnail(&path, p)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .text_size(px(12.5))
+                                .child(title),
+                        )
+                        .when(star, |row| row.child(layout::icon("pin", 10.))),
                 )
+                .when(wide, |row| {
+                    row.child(
+                        div()
+                            .w(px(130.))
+                            .flex_none()
+                            .text_size(px(11.5))
+                            .text_color(p.muted)
+                            .child(project()),
+                    )
+                })
                 .child(
                     div()
-                        .w_8()
-                        .text_size(rems(0.625))
+                        .w(px(100.))
+                        .flex_none()
+                        .text_size(px(11.5))
                         .text_color(p.muted)
                         .child(kind),
                 )
                 .when(wide, |row| {
                     row.child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .text_size(rems(0.625))
+                            .w(px(90.))
+                            .flex_none()
+                            .font_family(theme::MONO_FONT)
+                            .text_size(px(10.5))
                             .text_color(p.muted)
-                            .child(recent.summary.replace("nodes", "layers")),
+                            .text_ellipsis()
+                            .child(dimensions),
                     )
                 })
                 .child(
                     div()
-                        .w(rems(4.75))
-                        .text_size(rems(0.625))
+                        .w(px(100.))
+                        .flex_none()
+                        .font_family(theme::MONO_FONT)
+                        .text_size(px(10.5))
                         .text_color(p.muted)
-                        .text_right()
                         .child(recent::ago(recent.opened)),
                 );
         } else {
             content = content
                 .flex_col()
-                .w_full()
                 .child(
                     div()
                         .relative()
@@ -1133,48 +1240,70 @@ impl Workspace {
                         .child(
                             div()
                                 .absolute()
-                                .left_2()
-                                .top_2()
-                                .px_1()
-                                .bg(p.chrome.opacity(0.85))
-                                .text_size(rems(0.625))
-                                .text_color(p.chrome_fg)
+                                .left(px(10.))
+                                .top(px(10.))
+                                .h(px(20.))
+                                .px(px(7.))
+                                .flex()
+                                .items_center()
+                                .rounded(px(5.))
+                                .bg(rgba(0x0a0a0caa))
+                                .text_color(gpui_kit::white())
+                                .font_family(theme::MONO_FONT)
+                                .text_size(px(9.5))
                                 .child(kind),
-                        ),
+                        )
+                        .when(star, |thumb| {
+                            thumb.child(
+                                div()
+                                    .absolute()
+                                    .right(px(10.))
+                                    .top(px(10.))
+                                    .size(px(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(5.))
+                                    .bg(rgba(0x0a0a0caa))
+                                    .text_color(gpui_kit::white())
+                                    .child(layout::icon("pin", 10.)),
+                            )
+                        }),
                 )
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap_1()
-                        .px_3()
-                        .pt_2()
-                        .pb_3()
+                        .gap(px(2.))
+                        .px(px(12.))
+                        .py(px(10.))
+                        .pr(px(42.))
                         .child(
                             div()
-                                .text_size(rems(0.844))
+                                .text_size(px(12.5))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_ellipsis()
-                                .child(format!(
-                                    "{}{}{}",
-                                    if unfinished { "• " } else { "" },
-                                    name,
-                                    if star { " ★" } else { "" }
-                                )),
+                                .child(title),
                         )
                         .child(
                             div()
-                                .text_size(rems(0.625))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .font_family(theme::MONO_FONT)
+                                .text_size(px(10.))
                                 .text_color(p.muted)
-                                .text_ellipsis()
-                                .child(format!(
-                                    "{} · {}",
-                                    recent::ago(recent.opened),
-                                    recent.summary.replace("nodes", "layers")
-                                )),
+                                .child(project())
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .text_ellipsis()
+                                        .child(format!("· {}", recent::ago(recent.opened))),
+                                ),
                         ),
                 );
         }
+        let checked_path = path.clone();
         let check = Checkbox::new(path_id("home-check", &path))
             .small()
             .checked(self.home_state.checked.contains(&path))
@@ -1188,17 +1317,59 @@ impl Workspace {
                 }
                 cx.notify();
             }));
-        let forget_button = control(path_id("home-forget", &path), "×", p)
+        let owner = cx.weak_entity();
+        let menu_path = path.clone();
+        let actions = Button::new(path_id("home-file-actions", &path))
+            .label("•••")
+            .accessibility_label(format!("Actions for {name}"))
+            .xsmall()
             .ghost()
-            .accessibility_label(format!("Forget {name}"))
-            .tooltip("Forget this entry; keep the file")
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.home_state.checked.remove(&forget);
-                if this.home_state.selected.as_ref() == Some(&forget) {
-                    this.home_state.selected = None;
-                }
-                this.remove_recent(&forget, cx);
-            }));
+            .size(px(24.))
+            .dropdown_menu(move |menu, _, _| {
+                let open = owner.clone();
+                let open_path = menu_path.clone();
+                let details = owner.clone();
+                let details_path = menu_path.clone();
+                let pinned_path = menu_path.clone();
+                let forget = owner.clone();
+                let forget_path = menu_path.clone();
+                menu.item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
+                    open.update(cx, |this, cx| this.open_path(open_path.clone(), window, cx))
+                        .ok();
+                }))
+                .item(
+                    PopupMenuItem::new("File details").on_click(move |_, _, cx| {
+                        details
+                            .update(cx, |this, cx| {
+                                this.home_state.selected = Some(details_path.clone());
+                                this.home_state.details = true;
+                                cx.notify();
+                            })
+                            .ok();
+                    }),
+                )
+                .item(
+                    PopupMenuItem::new(if star { "Unpin" } else { "Pin" }).on_click(
+                        move |_, _, cx| {
+                            crate::app_state::update_settings(cx, |settings| {
+                                if settings.starred_files.contains(&pinned_path) {
+                                    settings.starred_files.retain(|path| path != &pinned_path);
+                                } else {
+                                    settings.starred_files.push(pinned_path.clone());
+                                }
+                            });
+                            cx.refresh_windows();
+                        },
+                    ),
+                )
+                .item(
+                    PopupMenuItem::new("Forget entry · keep file").on_click(move |_, _, cx| {
+                        forget
+                            .update(cx, |this, cx| this.remove_recent(&forget_path, cx))
+                            .ok();
+                    }),
+                )
+            });
         let select = Button::new(path_id("home-recent", &path))
             .ghost()
             .rounded_none()
@@ -1207,10 +1378,7 @@ impl Workspace {
             .min_w_0()
             .w_full()
             .text_color(p.ink)
-            .bg(if active { p.panel } else { p.paper })
-            // A delayed tooltip on the whole card can survive the double-click
-            // that replaces Home with the editor. Keep the instruction in the
-            // accessible name instead of painting stale Home UI over the image.
+            .bg(if active { p.soft_bg } else { p.panel })
             .accessibility_label(format!("Select {name}; double-click to open"))
             .child(content)
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
@@ -1224,35 +1392,34 @@ impl Workspace {
             div()
                 .flex()
                 .items_center()
-                .gap_2()
-                .h(px(52.))
-                .px_2()
+                .gap(px(12.))
+                .h(px(44.))
+                .px(px(14.))
                 .min_w_0()
-                .border_1()
+                .border_b_1()
                 .border_color(if active { p.accent } else { p.line })
-                .bg(if active { p.soft_bg } else { p.panel })
+                .bg(p.panel)
                 .child(check)
                 .child(div().flex_1().min_w_0().child(select))
-                .child(forget_button)
+                .child(actions)
                 .into_any_element()
         } else {
             div()
                 .relative()
                 .min_w_0()
-                .rounded(px(8.))
+                .rounded(px(crate::app_state::settings(cx).corners.radius() + 2.))
                 .overflow_hidden()
                 .bg(p.panel)
                 .border_1()
                 .border_color(if active { p.accent } else { p.line })
                 .child(select)
-                .child(div().absolute().left_2().top(rems(2.)).child(check))
+                .child(div().absolute().left(px(10.)).top(px(36.)).child(check))
                 .child(
                     div()
                         .absolute()
-                        .right_1()
-                        .top_1()
-                        .bg(p.chrome.opacity(0.85))
-                        .child(forget_button),
+                        .right(px(10.))
+                        .bottom(px(14.))
+                        .child(actions),
                 )
                 .into_any_element()
         }
@@ -1454,12 +1621,12 @@ impl Workspace {
         )
     }
 
-    fn home_starts(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+    fn home_starts(&self, columns: u16, p: &Palette, cx: &Context<Self>) -> AnyElement {
         div()
             .id("home-starts")
             .test_support()
             .grid()
-            .grid_cols(5)
+            .grid_cols(columns)
             .gap(px(8.))
             .children(
                 [
@@ -1470,9 +1637,14 @@ impl Workspace {
                     Destination::Library,
                 ]
                 .map(|destination| {
-                    div()
-                        .id((ElementId::from("home-start"), destination.label()))
-                        .test_support()
+                    Button::new((ElementId::from("home-start"), destination.label()))
+                        .accessibility_label(format!(
+                            "{}: {}",
+                            destination.label(),
+                            destination.subtitle()
+                        ))
+                        .outline()
+                        .items_start()
                         .flex()
                         .flex_col()
                         .min_w_0()
@@ -1480,34 +1652,53 @@ impl Workspace {
                         .justify_between()
                         .gap(px(14.))
                         .p(px(14.))
-                        .rounded(px(8.))
+                        .rounded(px(crate::app_state::settings(cx).corners.radius() + 2.))
                         .border_1()
                         .border_color(p.line)
                         .bg(p.panel)
                         .cursor_pointer()
-                        .hover(|d| d.bg(p.soft_bg))
                         .child(
                             div()
-                                .size(px(30.))
-                                .rounded(px(8.))
-                                .bg(p.accent.opacity(0.18))
                                 .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(layout::icon(layout::destination_icon(destination), 15.)),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(destination.label()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(10.5))
-                                .text_color(p.muted)
-                                .text_ellipsis()
-                                .child(destination.subtitle()),
+                                .flex_col()
+                                .items_start()
+                                .justify_between()
+                                .w_full()
+                                .h(px(104.))
+                                .child(
+                                    div()
+                                        .size(px(30.))
+                                        .rounded(px(8.))
+                                        .bg(p.accent.opacity(0.18))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(layout::icon(
+                                            layout::destination_icon(destination),
+                                            15.,
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .w_full()
+                                        .min_w_0()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.5))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(destination.label()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(p.muted)
+                                                .text_ellipsis()
+                                                .child(destination.subtitle()),
+                                        ),
+                                ),
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.start_destination(destination, window, cx)

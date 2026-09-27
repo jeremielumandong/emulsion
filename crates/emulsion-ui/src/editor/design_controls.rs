@@ -32,7 +32,7 @@ impl EditorView {
             Button::new(id)
                 .accessibility_label(label)
                 .when(id == "design-resize", |button| {
-                    button.child(rail::tool_icon("sparkles").size(px(11.)))
+                    button.child(rail::tool_icon("sparkles").text_color(p.ink).size(px(11.)))
                 })
                 .child(div().text_size(px(11.)).child(label))
                 .xsmall()
@@ -89,7 +89,7 @@ impl EditorView {
                                 .tooltip("Undo")
                                 .accessibility_label("Undo")
                                 .disabled(!self.editor.can_undo())
-                                .child(rail::tool_icon("undo-2").size(px(11.)))
+                                .child(rail::tool_icon("undo-2").text_color(p.ink).size(px(11.)))
                                 .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
                         )
                         .child(
@@ -100,7 +100,7 @@ impl EditorView {
                                 .tooltip("Redo")
                                 .accessibility_label("Redo")
                                 .disabled(!self.editor.can_redo())
-                                .child(rail::tool_icon("redo-2").size(px(11.)))
+                                .child(rail::tool_icon("redo-2").text_color(p.ink).size(px(11.)))
                                 .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
                         )
                         .child(
@@ -110,13 +110,16 @@ impl EditorView {
                                 .xsmall()
                                 .outline()
                                 .size(px(24.))
-                                .child(rail::tool_icon("sliders-horizontal").size(px(11.)))
+                                .child(
+                                    rail::tool_icon("sliders-horizontal")
+                                        .text_color(p.ink)
+                                        .size(px(11.)),
+                                )
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.design_ui.inspector = !this.design_ui.inspector;
                                     cx.notify();
                                 })),
                         )
-                        .child(self.project_export_button(cx))
                         .child(button("design-position", "Position").on_click(cx.listener(
                             |this, _, _, cx| this.show_design_section(Section::Position, cx),
                         )))

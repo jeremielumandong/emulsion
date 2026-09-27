@@ -246,7 +246,7 @@ remaining native frame-pacing, opaque-edge parity, or other-platform validation.
 
 ### 3. Canva-style Design
 
-- [ ] Native Design rail/drawer, contextual toolbar and page strip from handoff.
+- [x] Native Design rail/drawer, contextual toolbar and page strip from handoff.
 - [x] Real text presets, editable shapes/elements, local uploads/photos, frames.
 - [x] Editable bundled templates and local template save/import/search.
 - [ ] Object ordering/grouping/locking/snapping/align/distribute and crop controls.
@@ -415,3 +415,9 @@ layered 4K documents, including GPU brush commit/undo/redo. See
 [the measured results](../spikes/vello-canvas/RESULTS.md#september-27-matched-active-window-follow-up).
 macOS, updated Windows behavior, opaque-vector edge fidelity and the remaining
 Design/Diagram capabilities are still open.
+
+## Template fidelity follow-up
+
+See [the native fidelity audit](template-fidelity.md) for the surface dimensions,
+responsive behavior, retained workflows and native adaptations. Advanced Design,
+Diagram and migration gates above remain separate from the layout work.

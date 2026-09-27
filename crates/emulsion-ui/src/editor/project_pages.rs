@@ -132,6 +132,8 @@ impl EditorView {
         self.pages_ui.seen_page = 0;
         self.after_change(cx);
         if self.is_design() || self.is_diagram() {
+            self.rulers = false;
+            self.sidebar_tab = SidebarTab::Properties;
             self.set_tool(Tool::Move, cx);
         }
     }
@@ -379,10 +381,15 @@ impl EditorView {
             .min_w_0()
             .overflow_x_scroll()
             .gap_2()
-            .p_2();
+            .px_2()
+            .py(px(if design { 8. } else { 2. }));
         for (index, meta) in pages.into_iter().enumerate() {
             let id = meta.id;
-            let image = self.page_thumbnail(id, cx);
+            let image = if design {
+                self.page_thumbnail(id, cx)
+            } else {
+                None
+            };
             let owner = cx.weak_entity();
             row = row.child(
                 div()
@@ -391,34 +398,53 @@ impl EditorView {
                     .gap_1()
                     .w(px(if design { 64. } else { 78. }))
                     .when(design, |tile| tile.relative().h(px(64.)))
+                    .when(!design, |tile| tile.flex_row().items_center().w(px(138.)))
                     .flex_none()
-                    .child(
-                        div()
-                            .id(("project-page", id))
-                            .test_support()
-                            .h(px(if design { 64. } else { 52. }))
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(p.stage)
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(if id == active { p.accent } else { p.line })
-                            .cursor_pointer()
-                            .children(
-                                image.map(|image| {
+                    .when(!design, |tile| {
+                        tile.child(
+                            Button::new(("project-page", id))
+                                .label(meta.name.clone())
+                                .accessibility_label(format!("Page {}: {}", index + 1, meta.name))
+                                .tooltip(meta.name.clone())
+                                .xsmall()
+                                .ghost()
+                                .h(px(26.))
+                                .w(px(106.))
+                                .bg(if id == active { p.soft_bg } else { p.panel })
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.select_page(id, cx)),
+                                ),
+                        )
+                    })
+                    .when(design, |tile| {
+                        tile.child(
+                            div()
+                                .id(("project-page", id))
+                                .test_support()
+                                .h(px(if design { 64. } else { 52. }))
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(p.stage)
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(if id == active { p.accent } else { p.line })
+                                .cursor_pointer()
+                                .children(image.map(|image| {
                                     img(image).size_full().object_fit(ObjectFit::Contain)
-                                }),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| this.select_page(id, cx))),
-                    )
+                                }))
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.select_page(id, cx)),
+                                ),
+                        )
+                    })
                     .child(
                         Button::new(("project-page-menu", id))
                             .label(if design {
                                 format!("{} ···", index + 1)
                             } else {
-                                format!("{}. {}", index + 1, meta.name)
+                                "···".into()
                             })
                             .tooltip(meta.name.clone())
                             .when(design, |button| {
@@ -431,6 +457,11 @@ impl EditorView {
                             })
                             .xsmall()
                             .ghost()
+                            .when(!design, |button| {
+                                button
+                                    .h(px(26.))
+                                    .bg(if id == active { p.soft_bg } else { p.panel })
+                            })
                             .dropdown_menu(move |menu, _, _| {
                                 let select = owner.clone();
                                 let duplicate = owner.clone();
@@ -577,14 +608,13 @@ impl EditorView {
                 .test_support()
                 .flex()
                 .items_center()
-                .h(px(88.))
+                .h(px(32.))
                 .flex_none()
                 .gap_2()
                 .bg(p.panel)
                 .border_t_1()
                 .border_color(p.line)
                 .child(row)
-                .child(self.project_export_button(cx))
                 .child(
                     Button::new("project-page-add")
                         .label("+")

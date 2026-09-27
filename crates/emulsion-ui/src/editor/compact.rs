@@ -287,7 +287,7 @@ impl EditorView {
                             .h_full()
                             .window_control_area(WindowControlArea::Drag),
                     )
-                    .when(wide, |d| {
+                    .when(wide && !self.is_design() && !self.is_diagram(), |d| {
                         d.child(
                             control("doc-size", dimensions)
                                 .tooltip("Image and canvas size")
@@ -317,17 +317,24 @@ impl EditorView {
                     .items_center()
                     .gap_1()
                     .child(self.ask_ai_button(p, cx))
-                    .child(self.workspace_menu(cx))
+                    .when(self.editor.kind().is_none(), |actions| {
+                        actions.child(self.workspace_menu(cx))
+                    })
                     .child(control("save", "Save").outline().on_click(cx.listener(
                         |_, _, window, cx| {
                             window.dispatch_action(Box::new(crate::actions::Save), cx)
                         },
                     )))
-                    .child(
-                        control("export", "Export")
-                            .outline()
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_export_panel(cx))),
-                    )
+                    .when(self.editor.kind().is_none(), |actions| {
+                        actions.child(
+                            control("export", "Export").outline().on_click(
+                                cx.listener(|this, _, _, cx| this.toggle_export_panel(cx)),
+                            ),
+                        )
+                    })
+                    .when(self.editor.kind().is_some(), |actions| {
+                        actions.child(self.project_export_button(cx))
+                    })
                     .child(theme_controls),
             )
             .into_any_element()

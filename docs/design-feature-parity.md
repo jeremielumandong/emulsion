@@ -87,3 +87,8 @@ and delete. The page strip includes thumbnails, page menus, Add, page count and
 zoom/fit controls. The native document model, clipboard and history are shared
 with the other editing workspaces. These changes do not add collaboration or
 complete the responsive-layout and component milestones.
+
+The [template fidelity audit](template-fidelity.md) records the completed layout
+follow-up, including native icon delivery, project-editor chrome, narrow overlays,
+file cards/list actions and proportional creation presets. Feature milestones
+above remain open independently of that layout work.

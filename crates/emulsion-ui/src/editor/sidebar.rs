@@ -440,6 +440,10 @@ impl EditorView {
             SidebarTab::BrushSettings => self.brush_settings_panel(p, cx),
             SidebarTab::BrushPresets => div().children(self.presets_view(p, cx)).into_any_element(),
             SidebarTab::Properties if self.draw_mode && matches!(self.tool, Tool::Brush | Tool::Clone | Tool::Heal | Tool::Mask) => self.brush_settings_panel(p,cx),
+            SidebarTab::Properties if self.is_diagram() => div()
+                .id("sidebar-properties-content").test_support()
+                .child(self.diagram_selection_panel(p, cx))
+                .child(self.inspector(p, window, cx)).into_any_element(),
             SidebarTab::Properties => div()
                 .id("sidebar-properties-content")
                 .children(self.shape_properties(window, cx))

@@ -64,7 +64,8 @@ impl EditorView {
         if self.ask.is_some() {
             return self.ask_bar(p, cx);
         }
-        if crate::app_state::settings(cx).ai_hint_dismissed {
+        if self.is_design() || self.is_diagram() || crate::app_state::settings(cx).ai_hint_dismissed
+        {
             return None;
         }
         let dismiss =

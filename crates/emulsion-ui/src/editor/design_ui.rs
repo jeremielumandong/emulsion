@@ -424,7 +424,7 @@ impl EditorView {
                             .flex_col()
                             .items_center()
                             .gap(px(4.))
-                            .child(rail::tool_icon(s.icon()).size(px(15.)))
+                            .child(rail::tool_icon(s.icon()).text_color(p.ink).size(px(15.)))
                             .child(div().text_size(px(9.5)).child(s.label())),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -467,7 +467,11 @@ impl EditorView {
                             .xsmall()
                             .accessibility_label("Collapse library")
                             .tooltip("Collapse library")
-                            .child(rail::tool_icon("chevrons-left").size(px(13.)))
+                            .child(
+                                rail::tool_icon("chevrons-left")
+                                    .text_color(p.ink)
+                                    .size(px(13.)),
+                            )
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.design_ui.open = false;
                                 cx.notify();
@@ -478,7 +482,7 @@ impl EditorView {
                 div().px(px(10.)).pt(px(8.)).child(
                     Styled::h(Input::new(&search).small(), px(26.))
                         .text_size(px(11.))
-                        .prefix(rail::tool_icon("search").size(px(11.))),
+                        .prefix(rail::tool_icon("search").text_color(p.ink).size(px(11.))),
                 ),
             );
         let mut content = div()
@@ -870,7 +874,13 @@ impl EditorView {
                 .flex()
                 .min_h_0()
                 .child(rail)
-                .when(open, |row| row.child(drawer))
+                .when(open, |row| {
+                    row.child(if overlay {
+                        deferred(drawer).with_priority(1).into_any_element()
+                    } else {
+                        drawer.into_any_element()
+                    })
+                })
                 .into_any_element(),
         )
     }

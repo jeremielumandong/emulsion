@@ -58,7 +58,7 @@ fn run_application(files: Vec<PathBuf>, edit: bool) {
     let viewer =
         !edit && !files.is_empty() && files.iter().all(|p| emulsion_ui::image_viewer::supports(p));
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
             theme::install(cx);
@@ -67,7 +67,7 @@ fn run_application(files: Vec<PathBuf>, edit: bool) {
             } else {
                 app_state::install(cx);
             }
-            // Also squares gpui-kit's corners: the design has none but avatars and dots.
+            // Apply the saved palette and corner style before the first frame.
             theme::apply_saved(cx);
             #[cfg(target_os = "linux")]
             theme::watch_omarchy(cx);
@@ -146,4 +146,34 @@ fn run_application(files: Vec<PathBuf>, edit: bool) {
             })
             .detach();
         });
+}
+
+#[cfg(test)]
+mod asset_tests {
+    use gpui_kit::AssetSource;
+
+    #[test]
+    fn packaged_navigation_icons_are_available_offline() {
+        let assets = gpui_kit::assets::AllAssets;
+        for icon in [
+            "clock",
+            "pin",
+            "image",
+            "workflow",
+            "layout-grid",
+            "list",
+            "library",
+            "brush",
+            "layout-template",
+            "folder-plus",
+            "panel-left",
+        ] {
+            let path = format!("icons/{icon}.svg");
+            let bytes = assets.load(&path).unwrap().unwrap();
+            assert!(
+                std::str::from_utf8(&bytes).unwrap().contains("<svg"),
+                "{path}"
+            );
+        }
+    }
 }

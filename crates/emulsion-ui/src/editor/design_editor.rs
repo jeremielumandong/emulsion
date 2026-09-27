@@ -39,7 +39,21 @@ impl EditorView {
         let tabs = self.document_tabs.take();
         let toolbar = self.design_canvas_toolbar(p, window, cx);
         let canvas = self.canvas_region();
-        let inspector = self.design_ui.inspector;
+        let inspector = self.is_diagram() || self.design_ui.inspector;
+        let tabs = tabs.map(|tabs| {
+            div()
+                .id("document-tab-bar")
+                .test_support()
+                .h(px(38.))
+                .flex_none()
+                .flex()
+                .items_end()
+                .min_w_0()
+                .bg(p.paper)
+                .border_b_1()
+                .border_color(p.line)
+                .child(tabs)
+        });
         div()
             .id("design-editor")
             .test_support()
@@ -53,21 +67,6 @@ impl EditorView {
                 this.drag_shift = event.modifiers.shift;
                 this.notify_canvas(cx);
             }))
-            .when_some(tabs, |root, tabs| {
-                root.child(
-                    div()
-                        .id("document-tab-bar")
-                        .test_support()
-                        .h(px(38.))
-                        .flex_none()
-                        .flex()
-                        .items_end()
-                        .bg(p.paper)
-                        .border_b_1()
-                        .border_color(p.line)
-                        .child(tabs),
-                )
-            })
             .children(self.size_panel_view(p, cx))
             .children(self.export_panel_view(p, cx))
             .children(self.ask_area(p, cx))
@@ -80,6 +79,7 @@ impl EditorView {
                     .min_w_0()
                     .min_h_0()
                     .children(self.design_drawer(p, window, cx))
+                    .children(self.diagram_drawer(p, window, cx))
                     .child(
                         div()
                             .id("editor-canvas-column")
@@ -90,7 +90,9 @@ impl EditorView {
                             .min_w_0()
                             .min_h_0()
                             .overflow_hidden()
+                            .children(tabs)
                             .children(toolbar)
+                            .children(self.diagram_canvas_toolbar(p, window, cx))
                             .when(
                                 !matches!(
                                     self.tool,
@@ -235,7 +237,11 @@ impl EditorView {
                     .ghost()
                     .size(px(24.))
                     .disabled(locked)
-                    .child(rail::tool_icon("align-left").size(px(11.)))
+                    .child(
+                        rail::tool_icon("align-left")
+                            .text_color(p.ink)
+                            .size(px(11.)),
+                    )
                     .dropdown_menu(move |mut menu, _, _| {
                         for (label, align) in [
                             ("Left", Align::Left),
@@ -282,7 +288,7 @@ impl EditorView {
                     .xsmall()
                     .ghost()
                     .size(px(24.))
-                    .child(rail::tool_icon("sparkles").size(px(11.)))
+                    .child(rail::tool_icon("sparkles").text_color(p.ink).size(px(11.)))
                     .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
             )
             .into_any_element(),

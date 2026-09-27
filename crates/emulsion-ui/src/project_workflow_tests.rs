@@ -855,3 +855,93 @@ fn design_selection_toolbar_edits_native_text_and_preserves_undo(cx: &mut TestAp
         })
     });
 }
+
+#[gpui_kit::test]
+fn project_chrome_keeps_canvas_actions_inside_narrow_and_wide_windows(cx: &mut TestAppContext) {
+    use gpui_kit::{px, size};
+    let (ws, cx) = open(cx, Document::new(600, 400));
+    for kind in [ProjectKind::Design, ProjectKind::Diagram] {
+        let view = cx.update(|window, cx| {
+            ws.update(cx, |ws, cx| {
+                ws.install_project(
+                    ProjectEditor::new_project(kind, Document::new(600, 400)).unwrap(),
+                    "Fidelity".into(),
+                    window,
+                    cx,
+                )
+            });
+            ws.read(cx).editor.clone().unwrap()
+        });
+        for dark in [false, true] {
+            for width in [480., 800., 1440.] {
+                cx.simulate_resize(size(px(width), px(900.)));
+                cx.update(|_, cx| crate::theme::set_dark(dark, cx));
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    let is_design = kind == ProjectKind::Design;
+                    let column = window.find("editor-canvas-column").bounds();
+                    let bar = window
+                        .find(if is_design {
+                            "design-canvas-toolbar"
+                        } else {
+                            "diagram-canvas-toolbar"
+                        })
+                        .bounds();
+                    assert_eq!(bar.size.height, px(38.));
+                    assert_eq!(
+                        window.find("editor-status-strip").bounds().size.height,
+                        px(24.)
+                    );
+                    assert_eq!(
+                        window.find("project-page-strip").bounds().size.height,
+                        px(if is_design { 88. } else { 32. })
+                    );
+                    assert!(
+                        column.size.width >= px(280.),
+                        "{kind:?} at {width}: {column:?}"
+                    );
+                    assert!(column.right() <= px(width));
+                    assert!(window.try_find("ask-ai-hint").is_none());
+                    assert!(!view.read(cx).rulers);
+                    for id in if is_design {
+                        ["design-position", "design-animate", "design-resize"]
+                    } else {
+                        [
+                            "diagram-canvas-connect",
+                            "diagram-canvas-layout",
+                            "diagram-canvas-fit",
+                        ]
+                    } {
+                        let b = window.find(id).bounds();
+                        assert!(
+                            b.left() >= bar.left() && b.right() <= bar.right(),
+                            "{id} at {width}: {b:?} outside {bar:?}"
+                        );
+                    }
+                });
+            }
+        }
+        if kind == ProjectKind::Diagram {
+            cx.simulate_resize(size(px(1440.), px(1000.)));
+            cx.run_until_parked();
+            cx.update(|window, cx| window.click(("diagram-shape", 1usize), cx));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert_eq!(
+                    view.read(cx)
+                        .editor
+                        .doc
+                        .diagram
+                        .as_ref()
+                        .unwrap()
+                        .shapes
+                        .len(),
+                    1
+                );
+                window.click("project-undo", cx);
+            });
+            cx.run_until_parked();
+            cx.update(|_, cx| assert!(view.read(cx).editor.doc.nodes.is_empty()));
+        }
+    }
+}

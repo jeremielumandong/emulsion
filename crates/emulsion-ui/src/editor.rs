@@ -2900,9 +2900,10 @@ impl EditorView {
             // Inputs must be siblings of the Canvas key context: its editing
             // shortcuts otherwise compete with the inline font-size field.
             .children(self.design_selection_toolbar(p, window, cx))
-            .when(!self.is_design() || self.design_full_tools(), |area| {
-                area.child(self.contextual_taskbar(cx))
-            })
+            .when(
+                (!self.is_design() && !self.is_diagram()) || self.design_full_tools(),
+                |area| area.child(self.contextual_taskbar(cx)),
+            )
     }
 
     /// GPUI has no native zoom cursor. Keep a platform-independent magnifier
@@ -3037,7 +3038,8 @@ impl EditorView {
     }
 
     fn status_strip(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let compact = crate::app_state::settings(cx).compact_chrome;
+        let compact =
+            crate::app_state::settings(cx).compact_chrome || self.is_design() || self.is_diagram();
         let controls = if compact {
             Vec::new()
         } else {
@@ -4174,7 +4176,7 @@ impl Render for EditorView {
         self.sync_rotation_fields(window, cx);
         self.sync_style_color_pickers(window, cx);
         self.ensure_gen_prompt(window, cx);
-        if self.is_design() {
+        if self.is_design() || self.is_diagram() {
             return self.design_editor(&p, window, cx);
         }
         if crate::app_state::settings(cx).compact_chrome {

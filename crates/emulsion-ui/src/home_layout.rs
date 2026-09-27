@@ -21,7 +21,7 @@ pub(super) fn destination_icon(destination: Destination) -> &'static str {
         Destination::Library => "library",
     }
 }
-fn folder_color(id: u64) -> Hsla {
+pub(super) fn folder_color(id: u64) -> Hsla {
     rgb([0xd93a1e, 0x7a5cf5, 0x2c9ca3, 0xc59a48, 0x5086c1][id as usize % 5]).into()
 }
 fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
@@ -35,6 +35,68 @@ fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
 }
 
 impl Workspace {
+    pub(super) fn home_navigation_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+        let owner = cx.weak_entity();
+        div()
+            .id("home-navigation-compact")
+            .test_support()
+            .w(px(56.))
+            .flex_none()
+            .bg(p.panel)
+            .border_r_1()
+            .border_color(p.line)
+            .p(px(8.))
+            .child(
+                Popover::new("home-navigation-popover")
+                    .trigger(
+                        Button::new("home-navigation-open")
+                            .accessibility_label("Projects and filters")
+                            .tooltip("Projects and filters")
+                            .ghost()
+                            .size(px(36.))
+                            .child(icon("panel-left", 16.)),
+                    )
+                    .content(move |_, window, cx| {
+                        owner
+                            .update(cx, |this, cx| {
+                                div()
+                                    .h((window.viewport_size().height - px(80.)).max(px(120.)))
+                                    .child(this.home_dashboard_sidebar(&theme::palette(cx), cx))
+                                    .into_any_element()
+                            })
+                            .unwrap_or_else(|_| div().into_any_element())
+                    }),
+            )
+            .into_any_element()
+    }
+    pub(super) fn home_list_heading(&self, wide: bool, p: &Palette) -> AnyElement {
+        let mut row = div()
+            .id("home-list-heading")
+            .test_support()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .h(px(32.))
+            .px(px(14.))
+            .border_b_1()
+            .border_color(p.line)
+            .bg(p.panel)
+            .font_family(theme::MONO_FONT)
+            .text_size(px(9.5))
+            .text_color(p.muted)
+            .child(div().w(px(16.)).flex_none())
+            .child(div().flex_1().min_w_0().child("NAME"));
+        if wide {
+            row = row.child(div().w(px(130.)).flex_none().child("PROJECT"));
+        }
+        row = row.child(div().w(px(100.)).flex_none().child("WORKSPACE"));
+        if wide {
+            row = row.child(div().w(px(90.)).flex_none().child("SIZE"));
+        }
+        row.child(div().w(px(100.)).flex_none().child("OPENED"))
+            .child(div().w(px(24.)).flex_none())
+            .into_any_element()
+    }
     pub(super) fn home_workspace_label(&self, path: &Path) -> String {
         self.home_project_kind(path)
             .map(|kind| kind.label().to_string())
@@ -121,15 +183,19 @@ impl Workspace {
                     .gap(px(6.))
                     .child(
                         button("home-import-files", "Open…")
-                            .child(icon("folder-open", 12.))
+                            .icon(icon("folder-open", 12.))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(crate::actions::Open), cx)
                             }),
                     )
                     .child(
-                        button("home-start-prompt", "Start with a prompt")
+                        Button::new("home-start-prompt")
+                            .accessibility_label("Start with a prompt")
+                            .small()
+                            .h(px(30.))
                             .primary()
-                            .child(icon("sparkles", 12.))
+                            .icon(icon("sparkles", 12.))
+                            .child(div().text_size(px(12.)).child("Start with a prompt"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let project = ProjectEditor::new_project(
                                     ProjectKind::Design,
@@ -496,6 +562,14 @@ impl Workspace {
                                 .text_size(px(10.5))
                                 .text_color(p.muted)
                                 .child(format!("{} projects", state.catalog.folders.len())),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            button("home-projects-new", "+ New project")
+                                .ghost()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.home_project_name_dialog(None, None, window, cx)
+                                })),
                         ),
                 )
                 .child(grid)

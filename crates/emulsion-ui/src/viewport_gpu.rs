@@ -501,7 +501,25 @@ mod hosted {
             status.refuse("Graphics device is recovering.".into(), revision, true);
             return false;
         }
-        canvas.target.paint(window, bounds);
+        // The shared engine includes its benchmark stage outside the document.
+        // Keep that area owned by GPUI so dark/light/external themes match the
+        // CPU canvas. The hosted GPU path only accepts unrotated views.
+        let origin = view.doc_to_screen((0., 0.), &bounds);
+        let document = gpui_kit::Bounds::new(
+            gpui_kit::point(gpui_kit::px(origin.0 as f32), gpui_kit::px(origin.1 as f32)),
+            gpui_kit::size(
+                gpui_kit::px((doc.width as f64 * view.zoom) as f32),
+                gpui_kit::px((doc.height as f64 * view.zoom) as f32),
+            ),
+        );
+        window.with_content_mask(
+            Some(gpui_kit::ContentMask {
+                bounds: document.intersect(&bounds),
+            }),
+            |window| {
+                canvas.target.paint(window, bounds);
+            },
+        );
         true
     }
 }

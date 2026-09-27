@@ -34,6 +34,119 @@ impl Default for DiagramUi {
     }
 }
 impl EditorView {
+    pub(super) fn diagram_canvas_toolbar(
+        &self,
+        p: &Palette,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.is_diagram() {
+            return None;
+        }
+        let narrow = window.viewport_size().width < px(1100.);
+        let owner = cx.weak_entity();
+        let mut bar = div()
+            .id("diagram-canvas-toolbar")
+            .test_support()
+            .h(px(38.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(12.))
+            .min_w_0()
+            .bg(p.panel)
+            .border_b_1()
+            .border_color(p.line);
+        if !narrow {
+            let name = self
+                .editor
+                .page_list()
+                .iter()
+                .find(|page| page.id == self.editor.active_page())
+                .map(|page| page.name.clone())
+                .unwrap_or_else(|| self.name.clone());
+            bar = bar.child(
+                div()
+                    .max_w(px(160.))
+                    .text_ellipsis()
+                    .text_size(px(12.))
+                    .child(name),
+            );
+        }
+        for (index, (label, icon, tool)) in [
+            ("Select", "move", Tool::Move),
+            ("Text", "type", Tool::Type),
+            ("Pan", "hand", Tool::Hand),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            bar = bar.child(
+                Button::new(("diagram-canvas-tool", index))
+                    .accessibility_label(label)
+                    .tooltip(label)
+                    .xsmall()
+                    .ghost()
+                    .size(px(26.))
+                    .selected(self.tool == tool && !self.diagram_ui.connecting)
+                    .child(rail::tool_icon(icon).text_color(p.ink).size(px(13.)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.diagram_cancel_connection();
+                        this.set_tool(tool, cx);
+                    })),
+            );
+        }
+        bar = bar
+            .child(
+                Button::new("diagram-canvas-connect")
+                    .accessibility_label("Connect shapes")
+                    .tooltip("Connect shapes")
+                    .xsmall()
+                    .ghost()
+                    .size(px(26.))
+                    .selected(self.diagram_ui.connecting)
+                    .child(rail::tool_icon("link").text_color(p.ink).size(px(13.)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let active = this.diagram_ui.connecting;
+                        this.set_tool(Tool::Move, cx);
+                        this.diagram_cancel_connection();
+                        this.diagram_ui.connecting = !active;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("diagram-canvas-layout")
+                    .label("Auto layout")
+                    .xsmall()
+                    .outline()
+                    .h(px(24.))
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for layout in Layout::ALL {
+                            let owner = owner.clone();
+                            menu = menu.item(PopupMenuItem::new(layout.label()).on_click(
+                                move |_, _, cx| {
+                                    owner
+                                        .update(cx, |this, cx| this.layout_diagram(layout, cx))
+                                        .ok();
+                                },
+                            ));
+                        }
+                        menu
+                    }),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("diagram-canvas-fit")
+                    .label(format!("{:.0}%", self.view.zoom * 100.))
+                    .tooltip("Fit diagram")
+                    .xsmall()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx))),
+            );
+        Some(bar.into_any_element())
+    }
+
     fn import_diagram_file(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -681,104 +794,20 @@ impl EditorView {
             cx,
         );
     }
-    pub(super) fn diagram_drawer(
+    pub(super) fn diagram_selection_panel(
         &mut self,
         p: &Palette,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if !self.is_diagram() {
-            return None;
-        }
-        self.load_creative_library(cx);
-        if self.diagram_ui.search.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search shapes"));
-            self.diagram_ui.subscription = Some(cx.subscribe(&input, |_, _, event, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            }));
-            self.diagram_ui.search = Some(input);
-        }
-        let search = self.diagram_ui.search.as_ref().unwrap().clone();
-        let query = search.read(cx).value().to_lowercase();
-        let header = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .child("Diagram")
-            .child(
-                Button::new("diagram-toggle-drawer")
-                    .label(if self.diagram_ui.open { "‹" } else { "›" })
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.diagram_ui.open = !this.diagram_ui.open;
-                        cx.notify();
-                    })),
-            );
-        if !self.diagram_ui.open {
-            return Some(
-                div()
-                    .w(px(68.))
-                    .flex_none()
-                    .p_2()
-                    .child(header)
-                    .into_any_element(),
-            );
-        }
+    ) -> AnyElement {
         let mut content = div()
-            .id("diagram-drawer-content")
+            .id("diagram-selection-properties")
+            .test_support()
             .flex()
             .flex_col()
-            .gap_2()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(Input::new(&search).small());
-        content=content.child(Button::new("diagram-connect").label(if self.diagram_ui.connecting{"Cancel connection"}else{"Connect shapes"}).selected(self.diagram_ui.connecting).outline().on_click(cx.listener(|this,_,_,cx|{let active=this.diagram_ui.connecting;this.set_tool(Tool::Move,cx);this.diagram_cancel_connection();this.diagram_ui.connecting= !active;this.set_status(if active{"Connection cancelled."}else{"Click a source shape, then a destination. Click near an edge midpoint for a fixed port."},false,cx);})));
-        let owner = cx.weak_entity();
-        content = content.child(
-            Button::new("diagram-layout")
-                .label("Arrange diagram ▾")
-                .outline()
-                .dropdown_menu(move |mut menu, _, _| {
-                    for layout in Layout::ALL {
-                        let owner = owner.clone();
-                        menu = menu.item(PopupMenuItem::new(layout.label()).on_click(
-                            move |_, _, cx| {
-                                owner
-                                    .update(cx, |this, cx| this.layout_diagram(layout, cx))
-                                    .ok();
-                            },
-                        ));
-                    }
-                    menu
-                }),
-        );
-        content = content.child(
-            div()
-                .flex()
-                .gap_1()
-                .child(
-                    Button::new("diagram-grid")
-                        .label("Grid")
-                        .selected(self.diagram_ui.grid)
-                        .small()
-                        .outline()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.diagram_ui.grid = !this.diagram_ui.grid;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("diagram-minimap")
-                        .label("Minimap")
-                        .small()
-                        .outline()
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_navigator(cx))),
-                ),
-        );
+            .gap(px(6.))
+            .p(px(12.))
+            .text_size(px(11.5))
+            .child(div().font_weight(FontWeight::MEDIUM).child("Selection"));
         if let Some(id) = self.diagram_object() {
             content = content.child(
                 Button::new("diagram-properties")
@@ -1032,6 +1061,185 @@ impl EditorView {
                 );
             }
         }
+        content
+            .child(self.alignment_controls(p, cx))
+            .into_any_element()
+    }
+
+    pub(super) fn diagram_drawer(
+        &mut self,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.is_diagram() {
+            return None;
+        }
+        self.load_creative_library(cx);
+        if self.diagram_ui.search.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search shapes"));
+            self.diagram_ui.subscription = Some(cx.subscribe(&input, |_, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }));
+            self.diagram_ui.search = Some(input);
+        }
+        let search = self.diagram_ui.search.as_ref().unwrap().clone();
+        let query = search.read(cx).value().to_lowercase();
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(px(38.))
+            .flex_none()
+            .px(px(12.))
+            .text_size(px(12.))
+            .border_b_1()
+            .border_color(p.line)
+            .child("Shapes")
+            .child(
+                Button::new("diagram-toggle-drawer")
+                    .label(if self.diagram_ui.open { "‹" } else { "›" })
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.diagram_ui.open = !this.diagram_ui.open;
+                        cx.notify();
+                    })),
+            );
+        if !self.diagram_ui.open {
+            return Some(
+                div()
+                    .w(px(68.))
+                    .flex_none()
+                    .p_2()
+                    .child(header)
+                    .into_any_element(),
+            );
+        }
+        let mut content = div()
+            .id("diagram-drawer-content")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(10.))
+            .py(px(8.))
+            .child(Styled::h(Input::new(&search).small(), px(26.)));
+        for (label, kinds) in [
+            ("General / Flowchart", &ShapeKind::ALL[..7]),
+            ("UML / Entity / Containers", &ShapeKind::ALL[7..]),
+        ] {
+            let kinds = kinds
+                .iter()
+                .copied()
+                .filter(|kind| kind.label().to_lowercase().contains(&query))
+                .collect::<Vec<_>>();
+            if kinds.is_empty() {
+                continue;
+            }
+            let mut grid = div().id(label).grid().grid_cols(4).gap(px(4.));
+            for kind in kinds {
+                let i = ShapeKind::ALL.iter().position(|k| *k == kind).unwrap();
+                let ink = p.ink;
+                let glyph = canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        let x = f32::from(bounds.left()) + 5.;
+                        let y = f32::from(bounds.top()) + 8.;
+                        let path = kind.path([
+                            x as f64,
+                            y as f64,
+                            (f32::from(bounds.size.width) - 10.) as f64,
+                            (f32::from(bounds.size.height) - 16.) as f64,
+                        ]);
+                        let mut drawing = PathBuilder::stroke(px(1.));
+                        for (points, closed) in path.flatten(0.3) {
+                            if let Some(first) = points.first() {
+                                drawing.move_to(point(px(first.0 as f32), px(first.1 as f32)));
+                            }
+                            for p in points.iter().skip(1) {
+                                drawing.line_to(point(px(p.0 as f32), px(p.1 as f32)));
+                            }
+                            if closed {
+                                drawing.close();
+                            }
+                        }
+                        if let Ok(path) = drawing.build() {
+                            window.paint_path(path, ink);
+                        }
+                    },
+                )
+                .size_full();
+                grid = grid.child(
+                    Button::new(("diagram-shape", i))
+                        .accessibility_label(kind.label())
+                        .tooltip(kind.label())
+                        .outline()
+                        .p_0()
+                        .w_full()
+                        .h(px(50.))
+                        .child(glyph)
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.insert_diagram_shape(kind, cx)),
+                        ),
+                );
+            }
+            content = content
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label),
+                )
+                .child(grid);
+        }
+        content=content.child(Button::new("diagram-connect").label(if self.diagram_ui.connecting{"Cancel connection"}else{"Connect shapes"}).selected(self.diagram_ui.connecting).outline().on_click(cx.listener(|this,_,_,cx|{let active=this.diagram_ui.connecting;this.set_tool(Tool::Move,cx);this.diagram_cancel_connection();this.diagram_ui.connecting= !active;this.set_status(if active{"Connection cancelled."}else{"Click a source shape, then a destination. Click near an edge midpoint for a fixed port."},false,cx);})));
+        let owner = cx.weak_entity();
+        content = content.child(
+            Button::new("diagram-layout")
+                .label("Arrange diagram ▾")
+                .outline()
+                .dropdown_menu(move |mut menu, _, _| {
+                    for layout in Layout::ALL {
+                        let owner = owner.clone();
+                        menu = menu.item(PopupMenuItem::new(layout.label()).on_click(
+                            move |_, _, cx| {
+                                owner
+                                    .update(cx, |this, cx| this.layout_diagram(layout, cx))
+                                    .ok();
+                            },
+                        ));
+                    }
+                    menu
+                }),
+        );
+        content = content.child(
+            div()
+                .flex()
+                .gap_1()
+                .child(
+                    Button::new("diagram-grid")
+                        .label("Grid")
+                        .selected(self.diagram_ui.grid)
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.diagram_ui.grid = !this.diagram_ui.grid;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("diagram-minimap")
+                        .label("Minimap")
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_navigator(cx))),
+                ),
+        );
         content = content
             .child(
                 Button::new("diagram-import-file")
@@ -1120,23 +1328,7 @@ impl EditorView {
         content = content
             .child(self.creative_pack_controls(cx))
             .child(self.stencil_pack_list(&query, p, cx));
-        for (i, kind) in ShapeKind::ALL
-            .into_iter()
-            .enumerate()
-            .filter(|(_, kind)| kind.label().to_lowercase().contains(&query))
-        {
-            content = content.child(
-                Button::new(("diagram-shape", i))
-                    .label(kind.label())
-                    .w_full()
-                    .h(px(42.))
-                    .outline()
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.insert_diagram_shape(kind, cx)),
-                    ),
-            );
-        }
-        content=content.child(self.alignment_controls(p,cx)).child(div().text_size(px(11.)).text_color(p.muted).child("Shift-click to select several shapes. Double-click text to edit it. Connectors follow moved shapes."));
+        content=content.child(div().text_size(px(11.)).text_color(p.muted).child("Shift-click to select several shapes. Double-click text to edit it. Connectors follow moved shapes."));
         let narrow = window.viewport_size().width < px(1100.);
         let drawer = div()
             .id("diagram-drawer")
@@ -1145,8 +1337,6 @@ impl EditorView {
             .flex_none()
             .flex()
             .flex_col()
-            .gap_3()
-            .p_3()
             .bg(p.panel)
             .border_r_1()
             .border_color(p.line)
@@ -1160,7 +1350,7 @@ impl EditorView {
                 .relative()
                 .w(px(68.))
                 .flex_none()
-                .child(drawer)
+                .child(deferred(drawer).with_priority(1))
                 .into_any_element()
         } else {
             drawer.into_any_element()
