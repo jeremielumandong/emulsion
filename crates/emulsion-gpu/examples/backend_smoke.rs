@@ -47,7 +47,7 @@ fn main() -> Result<()> {
             node(
                 1,
                 NodeContent::Pixels {
-                    raster: source.clone(),
+                    raster: source.clone().into(),
                     placement: Placement::default(),
                 },
             ),

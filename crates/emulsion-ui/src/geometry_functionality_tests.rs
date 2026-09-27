@@ -170,8 +170,8 @@ fn rectangle_and_ellipse_shapes_render_editable_paths_and_undo(cx: &mut TestAppC
             };
             assert_eq!(path.anchor_count(), 4);
             assert!(path.subpaths[0].closed);
-            assert_eq!(cache.get(90, 80)[3], 65535);
-            assert_eq!(cache.get(41, 41)[3] > 32767, corner_inside);
+            assert_eq!(cache.pixels().get(90, 80)[3], 65535);
+            assert_eq!(cache.pixels().get(41, 41)[3] > 32767, corner_inside);
             assert_eq!(
                 path.subpaths[0]
                     .anchors

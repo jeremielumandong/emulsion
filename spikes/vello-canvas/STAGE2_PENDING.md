@@ -76,7 +76,30 @@ is not hypothetical.
 
 ### Performance
 
-**5. Text and path drags re-rasterise a document-sized raster.**
+**5. Building the composite tree rasterises vector layers.** *(done)*
+
+The eager half is fixed: `VectorRaster` in `emulsion-core` renders a text or
+path layer's pixels on first use, so a transform only records what they
+should be. Measured on a 3840×2160 document with one text layer, transforming
+went from **12.1 ms to 0.00 ms**.
+
+`NodeContent::Pixels` now holds a `LazyRaster` rather than an `Arc<Raster>`,
+so building a composite tree records how to make a vector layer's pixels
+instead of making them. It carries the size and an identity, so a caller can
+measure and key on content it is not going to draw. The CPU compositor
+renders them where it samples them, in `composite`; the GPU canvas, drawing
+the vector with Vello, never asks.
+
+Measured end to end on a 3840x2160 document with one text layer: transform
+**12.1 ms -> 0.00 ms**, composite tree after a transform **10.94 ms ->
+0.00 ms**.
+
+What the lazy cache already buys: transforms whose result is never displayed
+cost nothing -- MCP and batch operations, undo and redo chains, documents
+loaded but not shown, and every intermediate step of a multi-command edit.
+Loading an ORA no longer rasterises its vector layers up front either.
+
+**5b. The original diagnosis, for reference.**
 `emulsion-core/src/transform.rs:189` calls `text::rasterize(&updated, w, h)`
 on every transform, where `w, h` are the document's dimensions; paths do the
 same a few lines above. Measured 12.1 ms for modest text at 3840×2160, rising

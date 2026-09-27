@@ -606,11 +606,13 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 },
                 HKind::Text { spec } => {
                     let spec = spec.sanitized();
-                    let cache = Arc::new(emulsion_core::text::rasterize(&spec, h.width, h.height));
-                    NodeKind::Text {
-                        spec: Arc::new(spec),
-                        cache,
-                    }
+                    let spec = Arc::new(spec);
+                    let cache = emulsion_core::vector_cache::VectorRaster::text(
+                        spec.clone(),
+                        h.width,
+                        h.height,
+                    );
+                    NodeKind::Text { spec, cache }
                 }
                 HKind::Path { path, style } => {
                     let path = paths.read(path, zip)?;
@@ -618,7 +620,12 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                         return Err(IoError::Manifest("a path has too many anchors".into()));
                     }
                     let style = style.sanitized();
-                    let cache = Arc::new(path.rasterize(&style, h.width, h.height));
+                    let cache = emulsion_core::vector_cache::VectorRaster::path(
+                        path.clone(),
+                        style,
+                        h.width,
+                        h.height,
+                    );
                     NodeKind::Path { path, style, cache }
                 }
             };

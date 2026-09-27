@@ -16,6 +16,7 @@ pub mod styles;
 pub mod text;
 pub mod text_effects;
 pub mod transform;
+pub mod vector_cache;
 
 pub use command::{Command, CommandError, Dirty};
 pub use document::{Document, DocumentError, PanelRow};

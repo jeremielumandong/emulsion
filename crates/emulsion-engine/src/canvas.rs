@@ -258,11 +258,7 @@ impl Compiler<'_> {
     /// What this bake depends on: identical inputs give identical pixels.
     fn bake_key(node: &CompositeNode, mask_shape: bool) -> BakeKey {
         let (raster, placement, fill) = match &node.content {
-            NodeContent::Pixels { raster, placement } => (
-                Arc::as_ptr(raster) as *const u8 as usize,
-                Some(*placement),
-                None,
-            ),
+            NodeContent::Pixels { raster, placement } => (raster.id(), Some(*placement), None),
             NodeContent::Fill(c) => (0, None, Some(c.map(f32::to_bits))),
             _ => (0, None, None),
         };
@@ -376,12 +372,16 @@ impl Compiler<'_> {
                     continue;
                 }
                 NodeContent::Pixels { raster, placement } => {
+                    let (rw, rh) = raster.size();
                     let source = if placement.is_identity()
                         && node.mask.is_none()
-                        && raster.width() == self.width
-                        && raster.height() == self.height
+                        && rw == self.width
+                        && rh == self.height
                     {
-                        let s = self.direct_source(name, raster.clone(), node.id);
+                        // A raster layer: the compositor samples these pixels,
+                        // so this is where they are rendered if they were
+                        // deferred. A Vello-drawn node never reaches here.
+                        let s = self.direct_source(name, raster.get().clone(), node.id);
                         if self.paint_node == Some(node.id) {
                             self.paint = Some((node.id, s));
                         }
@@ -693,9 +693,7 @@ impl Canvas {
         fn walk(nodes: &[CompositeNode], out: &mut Vec<NodeSig>) {
             for node in nodes {
                 let (content, placement) = match &node.content {
-                    NodeContent::Pixels { raster, placement } => {
-                        (Arc::as_ptr(raster) as *const u8 as usize, Some(*placement))
-                    }
+                    NodeContent::Pixels { raster, placement } => (raster.id(), Some(*placement)),
                     _ => (0, None),
                 };
                 // Everything that changes the emitted ops, folded together.

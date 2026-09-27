@@ -618,7 +618,7 @@ mod tests {
         assert_eq!(style.width, 4.0, "stroke width scales with the viewBox");
         let b = path.bounds(style);
         assert!(b.x <= 20 && b.right() >= 80, "{b:?}");
-        assert!(cache.get(50, 40)[0] > 60000, "red fill rendered");
+        assert!(cache.pixels().get(50, 40)[0] > 60000, "red fill rendered");
         let NodeKind::Path { style, path, .. } = &d.nodes[1].kind else {
             panic!()
         };

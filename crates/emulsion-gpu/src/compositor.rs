@@ -542,7 +542,7 @@ mod tests {
                 .filter(|b| mode(*b).is_some())
             {
                 let mut foreground = node(NodeContent::Pixels {
-                    raster: raster.clone(),
+                    raster: raster.clone().into(),
                     placement: Placement::at(2.0, 1.0),
                 });
                 foreground.opacity = 0.71;
@@ -570,7 +570,7 @@ mod tests {
             ((x * 13 + y * 7) % 256) as u8
         }));
         let mut placed = node(NodeContent::Pixels {
-            raster: Arc::new(Raster::solid(37, 29, [0.32, 0.12, 0.48, 0.6])),
+            raster: Arc::new(Raster::solid(37, 29, [0.32, 0.12, 0.48, 0.6])).into(),
             placement: Placement {
                 x: 252.4,
                 y: 249.2,
@@ -669,7 +669,7 @@ mod tests {
         for (index, op) in ops.into_iter().enumerate() {
             for masked in [false, true] {
                 let base = node(NodeContent::Pixels {
-                    raster: raster.clone(),
+                    raster: raster.clone().into(),
                     placement: Placement::default(),
                 });
                 let mut adjust = node(NodeContent::Adjust(op.clone()));
@@ -780,7 +780,7 @@ mod tests {
                 let mut nodes: Vec<_> = (0..layer_count)
                     .map(|i| {
                         let mut layer = node(NodeContent::Pixels {
-                            raster: raster.clone(),
+                            raster: raster.clone().into(),
                             placement: Placement::at(f64::from(i) * 1.25, f64::from(i) * 0.75),
                         });
                         layer.opacity = if i == 0 { 1.0 } else { 0.53 };

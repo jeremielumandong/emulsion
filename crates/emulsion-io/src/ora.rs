@@ -226,7 +226,7 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
             mask: None,
             clip_to: None,
             content: NodeContent::Pixels {
-                raster: raster.clone(),
+                raster: raster.clone().into(),
                 placement: *placement,
             },
         }],
@@ -369,7 +369,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                 let data = format!("data/node-{}.png", n.id);
                 jobs.push(Job::Png {
                     path: data.clone(),
-                    raster: cache,
+                    raster: cache.pixels(),
                 });
                 ora_layers.insert(n.id, (data.clone(), 0, 0));
                 MKind::Path {
@@ -382,7 +382,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                 let data = format!("data/node-{}.png", n.id);
                 jobs.push(Job::Png {
                     path: data.clone(),
-                    raster: cache,
+                    raster: cache.pixels(),
                 });
                 ora_layers.insert(n.id, (data.clone(), 0, 0));
                 MKind::Text {
@@ -1113,16 +1113,22 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                     return Err(IoError::Manifest("a path has too many anchors".into()));
                 }
                 let style = style.sanitized();
-                let cache = Arc::new(path.rasterize(&style, m.width, m.height));
+                let cache = emulsion_core::vector_cache::VectorRaster::path(
+                    path.clone(),
+                    style,
+                    m.width,
+                    m.height,
+                );
                 NodeKind::Path { path, style, cache }
             }
             MKind::Text { spec, .. } => {
-                let spec = spec.sanitized();
-                let cache = Arc::new(emulsion_core::text::rasterize(&spec, m.width, m.height));
-                NodeKind::Text {
-                    spec: Arc::new(spec),
-                    cache,
-                }
+                let spec = Arc::new(spec.sanitized());
+                let cache = emulsion_core::vector_cache::VectorRaster::text(
+                    spec.clone(),
+                    m.width,
+                    m.height,
+                );
+                NodeKind::Text { spec, cache }
             }
         };
         let mask = match &n.mask {

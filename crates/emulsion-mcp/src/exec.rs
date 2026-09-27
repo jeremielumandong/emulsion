@@ -5117,7 +5117,7 @@ mod tests {
         assert!(spec.bold && spec.size == 30.0 && spec.color == [255, 0, 0, 255]);
         let inked = (0..64)
             .flat_map(|y| (0..200).map(move |x| (x, y)))
-            .filter(|&(x, y)| cache.get(x, y)[3] > 0)
+            .filter(|&(x, y)| cache.pixels().get(x, y)[3] > 0)
             .count();
         assert!(inked > 50, "{inked}");
         let d = describe(&e).to_string();
@@ -5350,7 +5350,7 @@ mod tests {
         let NodeKind::Path { cache, .. } = &e.doc.node(id).unwrap().kind else {
             panic!()
         };
-        assert!(cache.get(60, 40)[1] > 60000, "filled green inside");
+        assert!(cache.pixels().get(60, 40)[1] > 60000, "filled green inside");
         let r = execute(
             &mut e,
             "set_path",
@@ -5360,7 +5360,7 @@ mod tests {
         let NodeKind::Path { cache, .. } = &e.doc.node(id).unwrap().kind else {
             panic!()
         };
-        assert_eq!(cache.get(60, 40), [0; 4], "no fill now");
+        assert_eq!(cache.pixels().get(60, 40), [0; 4], "no fill now");
         let r = execute(&mut e, "path_to_selection", &json!({ "node": id }));
         assert!(
             !r.is_error && describe(&e)["selection"]["width"].as_i64().unwrap() > 40,

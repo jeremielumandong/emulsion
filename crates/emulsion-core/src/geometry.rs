@@ -278,8 +278,9 @@ pub(crate) fn translate_node(
                 }) {
                     return Err(DocumentError::BadValue(id, "translation").into());
                 }
-                *cache = Arc::new(updated.rasterize(style, w, h));
-                *path = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::path(updated.clone(), *style, w, h);
+                *path = updated;
             }
             NodeKind::Text { spec, cache } => {
                 let mut updated = (**spec).clone();
@@ -288,8 +289,9 @@ pub(crate) fn translate_node(
                 if !updated.x.is_finite() || !updated.y.is_finite() {
                     return Err(DocumentError::BadValue(id, "translation").into());
                 }
-                *cache = Arc::new(crate::text::rasterize(&updated, w, h));
-                *spec = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::text(updated.clone(), w, h);
+                *spec = updated;
             }
             NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
         }
@@ -377,8 +379,9 @@ pub(crate) fn rotate_node(
             NodeKind::Path { path, style, cache } => {
                 let mut updated = (**path).clone();
                 updated.transform(transform);
-                *cache = Arc::new(updated.rasterize(style, w, h));
-                *path = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::path(updated.clone(), *style, w, h);
+                *path = updated;
             }
             NodeKind::Text { spec, cache } => {
                 let mut updated = (**spec).clone();
@@ -387,8 +390,9 @@ pub(crate) fn rotate_node(
                 updated.y = anchor.y as f32;
                 updated.rotation = (updated.rotation as f64 + degrees) as f32;
                 let updated = updated.sanitized();
-                *cache = Arc::new(crate::text::rasterize(&updated, w, h));
-                *spec = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::text(updated.clone(), w, h);
+                *spec = updated;
             }
             NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
         }
@@ -491,8 +495,9 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                     *length = (*length as f64 * scale) as f32;
                 }
                 style.dash_offset = (style.dash_offset as f64 * scale) as f32;
-                *cache = Arc::new(p.rasterize(style, w, h));
-                *path = Arc::new(p);
+                let p = Arc::new(p);
+                *cache = crate::vector_cache::VectorRaster::path(p.clone(), *style, w, h);
+                *path = p;
                 if let Some(m) = &n.mask {
                     n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
                 }
@@ -507,8 +512,9 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 s.width = s.width.map(|w| (w as f64 * scale) as f32);
                 s.letter_spacing = (s.letter_spacing as f64 * scale) as f32;
                 let s = s.sanitized();
-                *cache = Arc::new(crate::text::rasterize(&s, w, h));
-                *spec = Arc::new(s);
+                let s = Arc::new(s);
+                *cache = crate::vector_cache::VectorRaster::text(s.clone(), w, h);
+                *spec = s;
                 if let Some(m) = &n.mask {
                     n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
                 }
