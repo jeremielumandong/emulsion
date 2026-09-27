@@ -767,3 +767,91 @@ fn design_frame_fit_controls_preserve_embedded_pixels_and_undo(cx: &mut TestAppC
         cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original));
     }
 }
+
+#[gpui_kit::test]
+fn design_selection_toolbar_edits_native_text_and_preserves_undo(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(600, 400));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1400.), gpui_kit::px(900.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap(),
+                "Type".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-section", 2usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-text", 0usize), cx));
+    cx.run_until_parked();
+    let original = cx.update(|window, cx| {
+        assert!(window.find("design-selection-toolbar").visible());
+        assert!(window.try_find("node-panel").is_none());
+        let before = view.read(cx).editor.doc.clone();
+        window.click("design-text-bold", cx);
+        before
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_ne!(view.read(cx).editor.doc, original);
+        window.click("design-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.doc, original);
+        window.click("design-text-size", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, _| assert_eq!(window.find("design-text-size").focused(), Some(true)));
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("42");
+    cx.run_until_parked();
+    cx.update(|window, _| assert_eq!(window.find("design-text-size-input").value(), Some("42")));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let e = view.read(cx);
+        let NodeKind::Text { spec, .. } = &e.editor.doc.node(e.selected.unwrap()).unwrap().kind
+        else {
+            panic!()
+        };
+        assert_eq!(spec.style_at(0).size, 42.);
+        window.click("design-text-align", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.within("popup-menu").click(1usize, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let e = view.read(cx);
+        let NodeKind::Text { spec, .. } = &e.editor.doc.node(e.selected.unwrap()).unwrap().kind
+        else {
+            panic!()
+        };
+        assert_eq!(spec.align, emulsion_core::text::Align::Center);
+        window.click("design-text-properties", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("sidebar-properties-content").visible());
+        window.click("design-inspector-toggle", cx);
+    });
+    cx.run_until_parked();
+    let before_zoom = cx.update(|window, cx| {
+        let z = view.read(cx).view.zoom;
+        window.click("design-zoom-in", cx);
+        z
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            assert!(e.view.zoom > before_zoom);
+            e.undo(cx);
+            e.undo(cx);
+            assert_eq!(e.editor.doc, original);
+        })
+    });
+}

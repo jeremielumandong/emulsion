@@ -70,3 +70,20 @@ new editable template pages. Font combinations insert grouped native text.
 Layout and interaction tests cover both chrome modes at narrow and wide widths,
 plus page creation, alignment, frame fitting, save/reopen and Undo/Redo.
 This pass does not close semantic responsive frames, breakpoints or components.
+
+The Home follow-up replaces the photographic hero and permanent inspector with
+project navigation, five workspace launch cards, local project previews and a
+spaced recent-files grid/list. Project and workspace filters, name/opened sorting,
+search, pinned files, Trash and file details use local records. Extra file actions,
+folder imports, saved presets and project management remain available from More
+file actions. Photo opens a file picker; switching back to an existing Photo tab
+reuses it. New still supports intentionally creating a blank document.
+
+Design now has a focused editor in both chrome settings. The properties/layers
+dock opens explicitly, and specialized tool options appear when those tools are
+chosen. The selection toolbar provides native text font, size, bold, italic,
+alignment and character/paragraph controls; shapes retain properties, duplicate
+and delete. The page strip includes thumbnails, page menus, Add, page count and
+zoom/fit controls. The native document model, clipboard and history are shared
+with the other editing workspaces. These changes do not add collaboration or
+complete the responsive-layout and component milestones.

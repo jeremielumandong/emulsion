@@ -19,6 +19,32 @@ fn number(value: f32) -> String {
 }
 
 impl EditorView {
+    pub(super) fn design_text_size_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.text_fields_sync(window, cx);
+        let input = self.type_tool.properties.as_ref().unwrap().inputs["size"].clone();
+        let focus = input.read(cx).focus_handle(cx);
+        div()
+            .id("design-text-size")
+            .test_support()
+            .track_focus(&focus)
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                window.focus(&focus, cx);
+                cx.stop_propagation();
+            })
+            .w(px(46.))
+            .child(
+                Styled::h(
+                    Input::new(&input).id("design-text-size-input").small(),
+                    px(24.),
+                )
+                .text_size(px(11.)),
+            )
+            .into_any_element()
+    }
     fn text_fields_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = self.text_target().map(|(id, _)| id);
         let spec = self

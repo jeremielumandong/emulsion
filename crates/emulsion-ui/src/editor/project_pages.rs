@@ -77,7 +77,7 @@ impl EditorView {
         }).detach();
     }
 
-    fn project_export_button(&self, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn project_export_button(&self, cx: &Context<Self>) -> AnyElement {
         let owner = cx.weak_entity();
         let include_bleed = self.pages_ui.include_bleed;
         Button::new("project-export-pages")
@@ -370,6 +370,8 @@ impl EditorView {
         let pages = self.editor.page_list().to_vec();
         let active = self.editor.active_page();
         let count = pages.len();
+        let design = self.is_design();
+        let page_number = pages.iter().position(|p| p.id == active).unwrap_or(0) + 1;
         let mut row = div()
             .id("project-pages-scroll")
             .flex()
@@ -387,13 +389,14 @@ impl EditorView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .w(px(78.))
+                    .w(px(if design { 64. } else { 78. }))
+                    .when(design, |tile| tile.relative().h(px(64.)))
                     .flex_none()
                     .child(
                         div()
                             .id(("project-page", id))
                             .test_support()
-                            .h(px(52.))
+                            .h(px(if design { 64. } else { 52. }))
                             .w_full()
                             .flex()
                             .items_center()
@@ -412,7 +415,20 @@ impl EditorView {
                     )
                     .child(
                         Button::new(("project-page-menu", id))
-                            .label(format!("{}. {}", index + 1, meta.name))
+                            .label(if design {
+                                format!("{} ···", index + 1)
+                            } else {
+                                format!("{}. {}", index + 1, meta.name)
+                            })
+                            .tooltip(meta.name.clone())
+                            .when(design, |button| {
+                                button
+                                    .absolute()
+                                    .bottom_0()
+                                    .left_0()
+                                    .h(px(18.))
+                                    .bg(p.panel.opacity(0.9))
+                            })
                             .xsmall()
                             .ghost()
                             .dropdown_menu(move |menu, _, _| {
@@ -477,6 +493,82 @@ impl EditorView {
                                 )
                             }),
                     ),
+            );
+        }
+        if design {
+            row = row.items_center().child(
+                Button::new("project-page-add")
+                    .accessibility_label("Add page")
+                    .label("+")
+                    .outline()
+                    .size(px(64.))
+                    .flex_none()
+                    .on_click(cx.listener(|this, _, _, cx| this.add_project_page(false, cx))),
+            );
+            return Some(
+                div()
+                    .id("project-page-strip")
+                    .test_support()
+                    .flex()
+                    .items_center()
+                    .h(px(88.))
+                    .flex_none()
+                    .gap(px(8.))
+                    .px(px(12.))
+                    .bg(p.panel)
+                    .border_t_1()
+                    .border_color(p.line)
+                    .child(row)
+                    .child(
+                        div()
+                            .font_family(MONO_FONT)
+                            .text_size(px(10.5))
+                            .text_color(p.muted)
+                            .child(format!("Page {page_number} / {count}")),
+                    )
+                    .child(
+                        div()
+                            .id("design-page-zoom")
+                            .test_support()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.))
+                            .p(px(2.))
+                            .rounded(px(5.))
+                            .bg(p.soft_bg)
+                            .border_1()
+                            .border_color(p.line)
+                            .child(
+                                Button::new("design-zoom-out")
+                                    .accessibility_label("Zoom out")
+                                    .label("−")
+                                    .xsmall()
+                                    .ghost()
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.zoom_step(false, cx)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("design-zoom-fit")
+                                    .accessibility_label("Fit page")
+                                    .tooltip("Fit page")
+                                    .label(format!("{:.0}%", self.view.zoom * 100.))
+                                    .xsmall()
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx))),
+                            )
+                            .child(
+                                Button::new("design-zoom-in")
+                                    .accessibility_label("Zoom in")
+                                    .label("+")
+                                    .xsmall()
+                                    .ghost()
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.zoom_step(true, cx)),
+                                    ),
+                            ),
+                    )
+                    .into_any_element(),
             );
         }
         Some(

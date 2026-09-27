@@ -116,8 +116,8 @@ fn home_library_navigation_and_narrow_export_settings_stay_reachable(cx: &mut Te
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert_eq!(window.find("home-library").bounds().size.width, px(56.));
-        window.click((ElementId::from("home-destination"), "Library"), cx);
+        assert_eq!(window.find("home-library").bounds().size.width, px(220.));
+        window.click((ElementId::from("home-start"), "Library"), cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {

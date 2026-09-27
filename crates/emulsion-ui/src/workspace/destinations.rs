@@ -116,7 +116,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(kind) = destination.canvas() {
+        if destination == Destination::Photo {
+            self.prompt_open_named("Open photo", window, cx);
+        } else if let Some(kind) = destination.canvas() {
             self.open_new_canvas_kind(kind, window, cx);
         } else {
             self.visit_destination(destination, window, cx);
@@ -142,6 +144,8 @@ impl Workspace {
                     .rposition(|tab| Destination::for_editor(tab.read(cx)) == destination)
                 {
                     self.activate_tab(index, window, cx);
+                } else if destination == Destination::Photo {
+                    self.prompt_open_named("Open photo", window, cx);
                 } else if let Some(kind) = destination.canvas() {
                     self.open_new_canvas_kind(kind, window, cx);
                 }

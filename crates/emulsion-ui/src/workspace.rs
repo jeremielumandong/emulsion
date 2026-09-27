@@ -1140,13 +1140,22 @@ impl Workspace {
     }
 
     fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_open_named("Open", window, cx);
+    }
+
+    fn prompt_open_named(
+        &mut self,
+        title: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.cancel_style_dialog(window, cx);
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             // Several files open as several tabs.
             multiple: true,
-            prompt: Some("Open".into()),
+            prompt: Some(title.into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
@@ -2444,16 +2453,14 @@ mod compact_tests {
             assert!(window.find("workspace-file-menu-button").visible());
             assert!(window.try_find("compact-app-menu").is_none());
             assert!(window.find("home-brand").visible());
-            assert!(window.find("home-header-filters").visible());
+            assert!(window.find("home-filter-today").visible());
             assert!(window.find("home-window-drag").bounds().size.width >= px(48.));
         });
-        for button in ["home-import-files", "open"] {
-            cx.update(|window, cx| window.click(button, cx));
-            cx.run_until_parked();
-            assert!(cx.did_prompt_for_paths());
-            cx.simulate_path_prompt_response(|_| None);
-            cx.run_until_parked();
-        }
+        cx.update(|window, cx| window.click("home-import-files", cx));
+        cx.run_until_parked();
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| None);
+        cx.run_until_parked();
         cx.update(|window, cx| window.press("ctrl-o", cx));
         cx.run_until_parked();
         assert!(cx.did_prompt_for_paths());

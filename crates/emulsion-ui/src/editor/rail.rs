@@ -258,6 +258,14 @@ const LIQUIFY_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
 /// kit at build time, or one of the drawings above.
 fn icon_bytes(id: &str) -> &'static [u8] {
     match id {
+        "sliders-horizontal" => include_bytes!(
+            "../../../../vendor/gpui/gpui-kit-assets/assets/icons/sliders-horizontal.svg"
+        ),
+        "align-left" => {
+            include_bytes!(
+                "../../../../vendor/gpui/gpui-kit-assets/assets/icons/text-align-start.svg"
+            )
+        }
         "search" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/search.svg")
         }

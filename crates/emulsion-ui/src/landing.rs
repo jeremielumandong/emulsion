@@ -1,34 +1,15 @@
-//! The landing image: the Home screen hero, the launch splash, and a
-//! ready-made document to try the editor on.
+//! Launch artwork and an optional example document, decoded only when needed.
 
 use gpui_kit::RenderImage;
 use std::sync::Arc;
 
 /// Bundled wide PNG, composed for the compact Home hero.
 pub const LANDING_PNG: &[u8] = include_bytes!("../../../assets/landing/landing.png");
-const LANDING_MEDIUM_PNG: &[u8] = include_bytes!("../../../assets/landing/landing-medium.png");
-const LANDING_TALL_PNG: &[u8] = include_bytes!("../../../assets/landing/landing-tall.png");
 const SPLASH_PNG: &[u8] = include_bytes!("../../../assets/landing/splash.png");
 pub const LANDING_NAME: &str = "landing";
 
 pub(crate) struct LandingImages {
-    wide: Arc<RenderImage>,
-    medium: Arc<RenderImage>,
-    tall: Arc<RenderImage>,
     pub(crate) splash: Arc<RenderImage>,
-}
-
-impl LandingImages {
-    /// Pick the closest composition and its eye-centered focal position.
-    pub(crate) fn for_aspect(&self, aspect: f32) -> (Arc<RenderImage>, (f32, f32)) {
-        if aspect < 2.05 {
-            (self.tall.clone(), (0.78, 0.22))
-        } else if aspect < 3.2 {
-            (self.medium.clone(), (0.73, 0.23))
-        } else {
-            (self.wide.clone(), (0.80, 0.21))
-        }
-    }
 }
 
 fn decode_image(bytes: &[u8]) -> Option<RenderImage> {
@@ -43,12 +24,9 @@ fn decode_image(bytes: &[u8]) -> Option<RenderImage> {
     Some(crate::viewport::bgra_image(w, h, px))
 }
 
-/// Decode the responsive Home hero compositions to GPUI images (BGRA).
+/// Decode the splash to GPUI BGRA; Home no longer needs three hero bitmaps.
 pub(crate) fn decode() -> Option<LandingImages> {
     Some(LandingImages {
-        wide: Arc::new(decode_image(LANDING_PNG)?),
-        medium: Arc::new(decode_image(LANDING_MEDIUM_PNG)?),
-        tall: Arc::new(decode_image(LANDING_TALL_PNG)?),
         splash: Arc::new(decode_image(SPLASH_PNG)?),
     })
 }
@@ -58,9 +36,6 @@ mod tests {
     #[test]
     fn landing_decodes_and_imports() {
         let images = super::decode().expect("bundled images decode");
-        assert_eq!(images.for_aspect(14.0).0.size(0).width.0, 2508);
-        assert_eq!(images.for_aspect(2.5).0.size(0).width.0, 1916);
-        assert_eq!(images.for_aspect(1.5).0.size(0).width.0, 1672);
         assert_eq!(images.splash.size(0).width.0, 1672);
         assert_eq!(images.splash.size(0).height.0, 941);
         let doc = emulsion_io::import::import_bytes("landing", super::LANDING_PNG).unwrap();

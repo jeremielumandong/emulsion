@@ -357,8 +357,11 @@ collapse, color/layer heights and dock width can be resized with pointer or
 keyboard, and saved workspaces restore the selected panels and collapsed states.
 Narrow windows reopen the dock as an overlay without reducing the canvas width.
 
-Home and Library share destination navigation: a 220px sidebar on wide windows
-and labeled icon buttons on smaller windows. Home content is capped at 1240px.
+Home uses the handoff's 220px project navigation and a content area capped at
+1240px. Its dashboard contains workspace launch cards, local project previews,
+and recent-file grid/list views. Library retains its own destination navigation.
+Home details are optional and overlay at narrow widths; More file actions keeps
+folder import, presets and project management reachable.
 Library starts with a viewport-driven image grid, switches to its existing
 preview/develop workflow on image selection, and has a Grid view return action.
 Develop/export settings remain reachable through an overlay on narrow windows.

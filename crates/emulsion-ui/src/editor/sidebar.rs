@@ -207,6 +207,9 @@ impl EditorView {
 
     /// Resolve temporary previews before hiding their Apply/Cancel controls.
     pub(crate) fn select_sidebar(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        if self.is_design() {
+            self.design_ui.inspector = true;
+        }
         if tab != self.sidebar_tab {
             self.finish_shape_color_edit(cx);
         }

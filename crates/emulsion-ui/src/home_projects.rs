@@ -210,6 +210,20 @@ impl Workspace {
             .map(|p| p.name.clone())
             .unwrap_or_else(|| file_name(path))
     }
+    pub(crate) fn home_project_kind(&self, path: &Path) -> Option<CanvasKind> {
+        self.home_state
+            .projects
+            .catalog
+            .projects
+            .iter()
+            .find(|p| p.path == path)
+            .and_then(|p| p.kind)
+            .or_else(|| {
+                image::ImageFormat::from_path(path)
+                    .ok()
+                    .map(|_| CanvasKind::Photo)
+            })
+    }
     pub(crate) fn home_project_matches(&self, path: &Path) -> bool {
         let state = &self.home_state.projects;
         let project = state.catalog.projects.iter().find(|p| p.path == path);
@@ -219,9 +233,9 @@ impl Workspace {
                 .is_none_or(|id| project.is_some_and(|p| p.folder == Some(id)))
             && state
                 .kind
-                .is_none_or(|kind| project.is_some_and(|p| p.kind == Some(kind)))
+                .is_none_or(|kind| self.home_project_kind(path) == Some(kind))
     }
-    fn home_project_name_dialog(
+    pub(crate) fn home_project_name_dialog(
         &mut self,
         project: Option<u64>,
         folder: Option<u64>,
@@ -358,6 +372,7 @@ impl Workspace {
                             owner
                                 .update(cx, |this, cx| {
                                     this.home_state.projects.folder = id;
+                                    this.home_state.unfiled = false;
                                     this.home_state.projects.trash = trash;
                                     this.home_state.folder = None;
                                     this.home_state.selected = None;
@@ -397,7 +412,7 @@ impl Workspace {
                 }),
             )
             .child(
-                control("home-new-folder", "New folder…", p).on_click(cx.listener(
+                control("home-new-folder-menu", "New folder…", p).on_click(cx.listener(
                     |this, _, window, cx| this.home_project_name_dialog(None, None, window, cx),
                 )),
             )

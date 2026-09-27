@@ -28,6 +28,7 @@ mod creative_pack_ui;
 mod creative_ui;
 pub(crate) mod crop;
 mod design_controls;
+mod design_editor;
 mod design_motion_ui;
 mod design_ui;
 mod diagram_data_ui;
@@ -2889,13 +2890,19 @@ impl EditorView {
                 }
             });
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
             .min_w_0()
             .min_h_0()
             .child(canvas)
-            .child(self.contextual_taskbar(cx))
+            // Inputs must be siblings of the Canvas key context: its editing
+            // shortcuts otherwise compete with the inline font-size field.
+            .children(self.design_selection_toolbar(p, window, cx))
+            .when(!self.is_design() || self.design_full_tools(), |area| {
+                area.child(self.contextual_taskbar(cx))
+            })
     }
 
     /// GPUI has no native zoom cursor. Keep a platform-independent magnifier
@@ -4167,6 +4174,9 @@ impl Render for EditorView {
         self.sync_rotation_fields(window, cx);
         self.sync_style_color_pickers(window, cx);
         self.ensure_gen_prompt(window, cx);
+        if self.is_design() {
+            return self.design_editor(&p, window, cx);
+        }
         if crate::app_state::settings(cx).compact_chrome {
             return self.compact_editor(&p, window, cx);
         }

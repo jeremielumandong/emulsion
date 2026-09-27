@@ -74,6 +74,7 @@ impl Section {
 }
 pub(super) struct DesignUi {
     section: Section,
+    pub(super) inspector: bool,
     open: bool,
     search: Option<Entity<InputState>>,
     subscription: Option<Subscription>,
@@ -85,6 +86,7 @@ impl Default for DesignUi {
     fn default() -> Self {
         Self {
             section: Section::Templates,
+            inspector: false,
             open: true,
             search: None,
             subscription: None,
@@ -100,6 +102,9 @@ impl EditorView {
         self.design_ui.section = section;
         self.design_ui.open = true;
         cx.notify();
+    }
+    pub(super) fn design_full_tools(&self) -> bool {
+        self.design_ui.section == Section::Tools && self.design_ui.open
     }
     pub(super) fn is_design(&self) -> bool {
         self.editor.kind() == Some(ProjectKind::Design)

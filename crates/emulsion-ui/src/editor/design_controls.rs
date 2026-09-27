@@ -103,6 +103,20 @@ impl EditorView {
                                 .child(rail::tool_icon("redo-2").size(px(11.)))
                                 .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
                         )
+                        .child(
+                            Button::new("design-inspector-toggle")
+                                .accessibility_label("Layers and properties")
+                                .tooltip("Layers and properties")
+                                .xsmall()
+                                .outline()
+                                .size(px(24.))
+                                .child(rail::tool_icon("sliders-horizontal").size(px(11.)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.design_ui.inspector = !this.design_ui.inspector;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(self.project_export_button(cx))
                         .child(button("design-position", "Position").on_click(cx.listener(
                             |this, _, _, cx| this.show_design_section(Section::Position, cx),
                         )))
