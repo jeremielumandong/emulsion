@@ -1,8 +1,10 @@
 # Cloud integration implementation specification
 
-Status: implementation in progress, 2026-09-27. Based on the
+Status: experimental implementation, 2026-09-27. Based on the
 [feasibility plan](cloud-sync-plan.md). Live provider acceptance requires
-developer registrations, which are not available yet.
+developer registrations and interactive account consent. Google Desktop
+registration can be imported locally; provider sign-in and transfers have not
+yet been verified against real accounts.
 
 ## Release contract
 
@@ -99,3 +101,51 @@ not an archival-original guarantee.
 Provider production verification, privacy/disclosure review, encrypted-at-rest
 handling appropriate to the deployed environment, and real-account tests on
 Linux/macOS/Windows are release gates, not results implied by mocked tests.
+
+## Implementation evidence and remaining scope
+
+Implemented: `emulsion-cloud` with native OAuth/PKCE, OS credential storage,
+session fallback, configurable public registrations for official builds and
+forks, provider/account/registration isolation, durable immutable revisions,
+chunked provider uploads, paginated discovery, hash-verified downloads,
+offline queueing, conflict-head identification, and Photos Picker imports.
+GPUI exposes setup/connect/disconnect, sync-current-file, retry/pause, version
+download/open, and photo import. Save completion captures a portable snapshot
+on its existing background worker. RAW originals from both live state and
+history are included and remapped on the receiving device.
+
+Local automated evidence: cloud storage/authentication-boundary tests, a fake
+provider test for ambiguous commit recovery, native/history/RAW portability
+round trips, unsafe bundle rejection, and headless UI tests for unconfigured
+connections and the Photos setup route. These are not live protocol tests for
+all four vendors; production sign-in, upload/download behavior, and scope
+compatibility still require a real-account matrix.
+
+Deliberate first-release limits: chunk sessions restart after process death,
+remote enumeration uses bounded full listings rather than persisted delta
+cursors, conflicts offer separate version downloads instead of binary merge,
+and imports use ordinary local artwork files rather than an encrypted media
+vault. There is no automatic cross-device replacement of an existing local
+file. These constraints and the data-policy release gate are also surfaced in
+the [setup guide](cloud-setup.md). The wider library/metadata sync milestones
+from the feasibility plan remain future work.
+
+## Verification — 2026-09-27
+
+- Cloud crate: **10 tests passed**, including account/registration isolation,
+  restart recovery, divergent revision heads, and ambiguous upload recovery.
+- Native portability: **4 tests passed**, including RAW sources referenced only
+  by history and rejection of traversal before extraction.
+- Headless cloud UI: **2 tests passed**, covering disabled unconfigured
+  connections and routing Photos imports to account setup.
+- `cargo check -p emulsion-ui --locked --offline` passed.
+- `cargo clippy -p emulsion-cloud -p emulsion-io -p emulsion-ui --all-targets
+  --locked --offline -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo build -p emulsion-app --locked --offline` passed.
+- Dependency attribution regenerated in `THIRD_PARTY_CRATES.md`.
+
+A Google Desktop registration was configured in the local application data
+folder with owner-only permissions. Personal registration values were checked
+against changed repository files and were absent. No real account sign-in or
+cloud file transfer was performed during this implementation.

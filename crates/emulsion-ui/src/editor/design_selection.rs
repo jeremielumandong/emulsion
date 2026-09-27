@@ -29,7 +29,9 @@ fn hits(doc: &Document, id: NodeId, point: (f64, f64), tolerance: f64) -> bool {
             .into_iter()
             .any(|child| hits(doc, child, point, tolerance)),
         NodeKind::Adjust(_) => false,
-        NodeKind::Fill { rgba } => rgba[3] > 0,
+        // The page background stays editable from Layers, but a blank canvas
+        // click should deselect objects rather than try to drag an infinite fill.
+        NodeKind::Fill { rgba } => node.mask_enabled && node.mask.is_some() && rgba[3] > 0,
         NodeKind::Text { spec, .. } => {
             let p = spec
                 .transform()

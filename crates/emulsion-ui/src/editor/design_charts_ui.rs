@@ -88,8 +88,8 @@ impl EditorView {
             (f64::from(bounds.x), f64::from(bounds.y))
         } else {
             chart.size = (
-                f64::from(self.editor.doc.width).min(600.).max(160.),
-                f64::from(self.editor.doc.height).min(400.).max(160.),
+                f64::from(self.editor.doc.width).clamp(160., 600.),
+                f64::from(self.editor.doc.height).clamp(160., 400.),
             );
             (
                 (f64::from(self.editor.doc.width) - chart.size.0) / 2.,

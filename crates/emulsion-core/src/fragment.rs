@@ -168,6 +168,8 @@ impl Fragment {
                 }
                 design.constraints.extend(additions.constraints);
                 design.frames.extend(additions.frames);
+                design.charts.extend(additions.charts);
+                design.media.extend(additions.media);
                 design.motion.extend(additions.motion);
                 editor
                     .execute(Command::SetDesign {

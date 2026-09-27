@@ -168,8 +168,11 @@ impl PlatformPlayer {
         start
     }
     fn send(&self, command: String) {
-        if let Some(sender) = &self.sender {
-            let _ = sender.try_send(command);
+        if let Some(sender) = &self.sender
+            && sender.try_send(command).is_err()
+        {
+            self.shared.lock().unwrap().error =
+                Some("The system video player is not responding.".into());
         }
     }
     fn point(&self, x: f32, y: f32) -> (f32, f32) {
@@ -225,6 +228,14 @@ impl PlatformPlayer {
             "home" => "Home",
             "end" => "End",
             "delete" => "Delete",
+            "," => "comma",
+            "." => "period",
+            "<" => "less",
+            ">" => "greater",
+            "+" => "plus",
+            "-" => "minus",
+            "=" => "equal",
+            "_" => "underscore",
             other => other,
         };
         if key.len() > 40
@@ -247,6 +258,8 @@ impl Drop for PlatformPlayer {
         self.sender.take();
         // Each helper has its own process group. Also stop the WebKit subprocesses
         // so switching slides or closing the presentation cannot leave audio playing.
+        // SAFETY: spawn assigned this live child its own process group. A negative
+        // process ID signals only that group; no pointer or borrowed data is used.
         unsafe {
             libc::kill(-(self.child.id() as i32), libc::SIGTERM);
         }

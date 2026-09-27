@@ -149,9 +149,23 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
             out.push_str("/>");
         }
         NodeKind::Text { spec, .. } => {
-            let paths = emulsion_core::text::vector_paths(spec).ok_or_else(|| {
+            // Paragraph frames clip ink in text-local coordinates. Outlining an
+            // unbounded-height copy then clipping its transformed outlines keeps
+            // ordinary bounded text (including table cells) fully vector.
+            let frame = spec.width.zip(spec.height);
+            let mut outlined = (**spec).clone();
+            if frame.is_some() {
+                outlined.height = None;
+            }
+            let paths = emulsion_core::text::vector_paths(&outlined).ok_or_else(|| {
                 error("Advanced text effects or color glyphs require a rendered appearance.")
             })?;
+            if let Some((width, height)) = frame {
+                write!(out,
+                    "<defs><clipPath id=\"text-frame-{id}\" clipPathUnits=\"userSpaceOnUse\"><rect width=\"{width}\" height=\"{height}\" transform=\"{}\"/></clipPath></defs><g clip-path=\"url(#text-frame-{id})\">",
+                    matrix(spec.transform()),
+                ).unwrap();
+            }
             for (path, color) in paths {
                 write!(
                     out,
@@ -161,6 +175,9 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
                     color[3] as f32 / 255.
                 )
                 .unwrap();
+            }
+            if frame.is_some() {
+                out.push_str("</g>");
             }
         }
         NodeKind::Raster { raster, placement } => out.push_str(&image(
@@ -388,6 +405,70 @@ mod tests {
             ext
         ))
     }
+    #[test]
+    fn bounded_rotated_text_exports_vector_glyphs_inside_the_local_frame() {
+        let mut doc = Document::new(220, 200);
+        let spec = emulsion_core::text::TextSpec {
+            text: "MMMMMMMM\nSecond line".into(),
+            x: 90.,
+            y: 60.,
+            width: Some(65.),
+            height: Some(16.),
+            size: 28.,
+            rotation: 31.,
+            scale_x: 1.3,
+            scale_y: 0.85,
+            ..Default::default()
+        };
+        emulsion_core::Command::AddNode {
+            node: Box::new(emulsion_core::Node::text(
+                0,
+                "Bounded label",
+                spec.clone(),
+                220,
+                200,
+            )),
+            slot: emulsion_core::command::Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let before = doc.clone();
+        let (source, flattened) = svg(&doc).unwrap();
+        assert!(!flattened);
+        assert_eq!(doc, before);
+        let source = String::from_utf8(source).unwrap();
+        assert!(!source.contains("<image"));
+        assert!(source.contains("text-frame-"));
+        let tree = resvg::usvg::Tree::from_str(&source, &Default::default()).unwrap();
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(220, 200).unwrap();
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::identity(),
+            &mut pixmap.as_mut(),
+        );
+        let inverse = spec.transform().inverse();
+        let mut ink = 0;
+        for (index, pixel) in pixmap.pixels().iter().enumerate() {
+            if pixel.alpha() == 0 {
+                continue;
+            }
+            ink += 1;
+            let local = inverse.transform_point2(glam::dvec2(
+                (index % 220) as f64 + 0.5,
+                (index / 220) as f64 + 0.5,
+            ));
+            assert!(
+                (-1.5..=66.5).contains(&local.x),
+                "Ink outside width: {local:?}"
+            );
+            assert!(
+                (-1.5..=17.5).contains(&local.y),
+                "Ink outside height: {local:?}"
+            );
+        }
+        assert!(ink > 20, "The clipped frame must retain visible glyphs");
+    }
+
     #[test]
     fn all_supplied_starters_export_without_flattening_text_or_placeholder_frames() {
         for template in Template::catalog() {

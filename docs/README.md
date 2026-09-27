@@ -10,6 +10,8 @@ behavior.
 
 ## Using Emulsion
 
+- [Cloud accounts and setup](cloud-setup.md): experimental project sync,
+  selected-photo imports, and local OAuth registrations for open-source builds.
 - [Files, folders and environment](files-and-environment.md): the command line,
   where settings, shortcuts, autosaves and downloads live, how to capture logs,
   and every environment variable and installer flag.
@@ -25,6 +27,10 @@ behavior.
   package formats import and what is lost in conversion.
 - [Moving artwork](artwork-movement.md) and [Aligning artwork](artwork-alignment.md):
   the Move tool, nudging, and the Align controls.
+- [Design starters and layout](design-starters-and-layout.md): editable templates,
+  responsive frames, reusable formatting and bulk creation.
+- [Design charts and tables](design-charts.md): local data authoring and editable artwork.
+- [Design video](design-video.md): YouTube objects, presentation playback and system runtime requirements.
 - [Experimental Nikon HE/HE★ support](nikon-he.md): the pinned decoder, its
   limits, and the opt-in test.
 - [Camera Raw 3 reference: gap assessment](camera-raw-3-gap.md): Emulsion's RAW
@@ -90,6 +96,7 @@ Each page records the state on its date and is not updated afterwards.
 | [Canvas navigation release measurements](canvas-navigation-release-results.md) | 2026-09-23 | Pan and zoom notification benchmarks |
 | [Live layout setting comparison](live-layout-toggle-results.md) | 2026-09-23 | Manual sample of a running editor with layout reuse off and on |
 | [Cloud project sync and photo sources](cloud-sync-plan.md) | 2026-09-27 | Feasibility and phased plan for Google Drive, Google Photos, Dropbox, and OneDrive |
+| [Cloud integration specification](cloud-sync-spec.md) | 2026-09-27 | Implementation contract, acceptance criteria, and release gates |
 
 The `.json` files beside the measurement pages hold the raw benchmark output
 those pages summarise.

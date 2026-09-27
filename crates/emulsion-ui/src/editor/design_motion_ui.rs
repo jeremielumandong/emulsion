@@ -61,11 +61,16 @@ impl EditorView {
         let run = self.motion.run;
         if presenting {
             self.fit_pending = true;
+            self.status = None;
         }
         self.motion.task = Some(cx.spawn(async move |this, cx| {
-            let start = Instant::now();
+            let start = cx.background_executor().now();
             loop {
-                let elapsed = start.elapsed().as_millis() as u64;
+                let elapsed = cx
+                    .background_executor()
+                    .now()
+                    .duration_since(start)
+                    .as_millis() as u64;
                 let done = presenting && elapsed >= u64::from(duration);
                 let time = if done {
                     duration - 1
@@ -129,7 +134,7 @@ impl EditorView {
         }));
         cx.notify();
     }
-    fn presentation_step(&mut self, delta: isize, cx: &mut Context<Self>) {
+    pub(super) fn presentation_step(&mut self, delta: isize, cx: &mut Context<Self>) {
         let pages = self.editor.page_list();
         let index = pages
             .iter()
@@ -142,6 +147,20 @@ impl EditorView {
         self.select_page(id, cx);
         self.start_motion(true, cx);
         self.motion.fullscreen_window = fullscreen;
+    }
+    pub(super) fn resume_presentation_advance(&mut self, cx: &mut Context<Self>) {
+        if self.motion.presenting
+            && self.motion.auto_advance
+            && !self.motion.playing
+            && !self.design_video_playing()
+            && self
+                .editor
+                .page_list()
+                .last()
+                .is_some_and(|page| page.id != self.editor.active_page())
+        {
+            self.presentation_step(1, cx);
+        }
     }
     pub(super) fn presentation_view(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let index = self
@@ -215,7 +234,10 @@ impl EditorView {
                                 .label("Stop video")
                                 .small()
                                 .outline()
-                                .on_click(cx.listener(|this, _, _, cx| this.stop_design_video(cx))),
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.stop_design_video(cx);
+                                    this.resume_presentation_advance(cx);
+                                })),
                         )
                     })
                     .child(
@@ -229,6 +251,7 @@ impl EditorView {
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.motion.auto_advance = !this.motion.auto_advance;
+                                this.resume_presentation_advance(cx);
                                 cx.notify();
                             })),
                     )
@@ -495,7 +518,10 @@ impl EditorView {
                 Button::new("design-present")
                     .label("Present pages")
                     .outline()
-                    .on_click(cx.listener(|this, _, _, cx| this.start_motion(true, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.start_motion(true, cx);
+                        window.focus(&this.canvas_focus, cx);
+                    })),
             )
             .child(
                 Button::new("design-export-motion")

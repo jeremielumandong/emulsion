@@ -2,7 +2,7 @@
 #[path = "design_brand.rs"]
 pub mod brand;
 #[path = "design_media.rs"]
-mod media;
+pub mod media;
 #[path = "design_templates.rs"]
 mod templates;
 use crate::{Command, Document, Node, NodeKind, command::Slot, text::TextSpec};

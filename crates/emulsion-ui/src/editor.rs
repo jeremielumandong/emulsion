@@ -67,7 +67,10 @@ mod presets;
 mod quick_mask;
 #[cfg(test)]
 pub(crate) use presets::shared_library;
+mod design_bulk_ui;
+mod design_charts_ui;
 mod design_layout_ui;
+mod design_video_ui;
 mod photo_shortcuts;
 pub(crate) mod rail;
 mod raw_panel;
@@ -372,6 +375,7 @@ pub struct EditorView {
     design_ui: design_ui::DesignUi,
     creative: creative_ui::CreativeUi,
     motion: design_motion_ui::MotionUi,
+    video: design_video_ui::VideoUi,
     diagram_ui: diagram_ui::DiagramUi,
     pub(crate) visible: bool,
     pub(crate) ants_task: Option<Task<()>>,
@@ -538,6 +542,7 @@ impl EditorView {
             design_ui: Default::default(),
             creative: Default::default(),
             motion: Default::default(),
+            video: Default::default(),
             diagram_ui: Default::default(),
             visible: true,
             ants_task: start_services.then(|| Self::start_ants(cx)),
@@ -2605,6 +2610,19 @@ impl EditorView {
                 }
             }))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if this.motion.presenting {
+                    let step = match e.keystroke.key.as_str() {
+                        "space" if e.keystroke.modifiers.shift => Some(-1),
+                        "space" | "pagedown" => Some(1),
+                        "pageup" => Some(-1),
+                        _ => None,
+                    };
+                    if let Some(step) = step {
+                        this.presentation_step(step, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
                 if this.raw_split_active() {
                     let next = match e.keystroke.key.as_str() {
                         "left" => Some(this.compare - 0.02),
@@ -2908,6 +2926,7 @@ impl EditorView {
             // Inputs must be siblings of the Canvas key context: its editing
             // shortcuts otherwise compete with the inline font-size field.
             .children(self.design_selection_toolbar(p, window, cx))
+            .children(self.design_video_overlays(p, window, cx))
             .when(
                 (!self.is_design() && !self.is_diagram()) || self.design_full_tools(),
                 |area| area.child(self.contextual_taskbar(cx)),

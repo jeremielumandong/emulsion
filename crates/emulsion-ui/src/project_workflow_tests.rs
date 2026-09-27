@@ -7,6 +7,101 @@ use emulsion_core::{
 use gpui_kit::test::TestWindowExt;
 
 #[gpui_kit::test]
+fn design_copy_style_and_bulk_create_are_editable_and_undoable(cx: &mut TestAppContext) {
+    let mut doc = Document::new(600, 400);
+    let mut add_text = |text: &str, size, y| {
+        Command::AddNode {
+            node: Box::new(Node::text(
+                0,
+                text,
+                emulsion_core::text::TextSpec {
+                    text: text.into(),
+                    size,
+                    y,
+                    ..Default::default()
+                },
+                600,
+                400,
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap()
+    };
+    let source = add_text("Heading", 48., 30.);
+    let target = add_text("Hello {{name}}", 20., 130.);
+    let (ws, cx) = open(cx, doc.clone());
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, doc.clone()).unwrap(),
+                "Bulk".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![source], Some(source));
+            cx.notify();
+        });
+        window.click("design-position", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-copy-style", cx));
+    cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![target], Some(target));
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-paste-style", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        view.update(cx, |e, cx| {
+            let NodeKind::Text { spec, .. } = &e.editor.doc.node(target).unwrap().kind else {
+                panic!()
+            };
+            assert_eq!(spec.size, 48.);
+            assert_eq!(spec.text, "Hello {{name}}");
+            assert_eq!(spec.y, 130.);
+            e.undo(cx);
+            assert_eq!(e.editor.doc, doc);
+            e.redo(cx);
+        });
+        window.click(("design-section", 0usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-bulk-create", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("ok", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            assert_eq!(e.editor.page_list().len(), 2);
+            let NodeKind::Text { spec, .. } = &e.editor.doc.node(target).unwrap().kind else {
+                panic!()
+            };
+            assert_eq!(spec.text, "Hello Example");
+            assert_eq!(spec.size, 48.);
+            e.undo(cx);
+            assert_eq!(e.editor.page_list().len(), 1);
+            let NodeKind::Text { spec, .. } = &e.editor.doc.node(target).unwrap().kind else {
+                panic!()
+            };
+            assert_eq!(spec.text, "Hello {{name}}");
+            e.redo(cx);
+            assert_eq!(e.editor.page_list().len(), 2);
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn design_template_categories_search_and_create_editable_invitations(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, Document::new(600, 400));
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
@@ -73,7 +168,13 @@ fn design_template_categories_search_and_create_editable_invitations(cx: &mut Te
 fn design_canvas_selects_objects_and_leaves_text_editing(cx: &mut TestAppContext) {
     use crate::editor::Tool;
     use gpui_kit::{MouseButton, MouseDownEvent};
-    let mut doc = Document::new(600, 400);
+    let mut doc = CanvasSpec {
+        width: 600.,
+        height: 400.,
+        ..Default::default()
+    }
+    .create()
+    .unwrap();
     let shape = Command::AddNode {
         node: Box::new(Node::path(
             0,
@@ -94,6 +195,7 @@ fn design_canvas_selects_objects_and_leaves_text_editing(cx: &mut TestAppContext
     .apply(&mut doc)
     .unwrap()
     .unwrap();
+    let baseline_count = doc.nodes.len();
     let (ws, cx) = open(cx, doc.clone());
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(900.)));
     let view = cx.update(|window, cx| {
@@ -162,7 +264,7 @@ fn design_canvas_selects_objects_and_leaves_text_editing(cx: &mut TestAppContext
         assert_eq!(e.tool, Tool::Move);
         assert_eq!(e.selected, Some(shape));
         assert!(e.type_tool.field.is_none());
-        assert_eq!(e.editor.doc.nodes.len(), 2);
+        assert_eq!(e.editor.doc.nodes.len(), baseline_count + 1);
         let NodeKind::Text { spec, .. } = &e.editor.doc.node(text).unwrap().kind else {
             panic!()
         };
@@ -183,7 +285,7 @@ fn design_canvas_selects_objects_and_leaves_text_editing(cx: &mut TestAppContext
         let e = view.read(cx);
         assert_eq!(e.tool, Tool::Move);
         assert!(e.type_tool.field.is_none());
-        assert_eq!(e.editor.doc.nodes.len(), 3);
+        assert_eq!(e.editor.doc.nodes.len(), baseline_count + 2);
     });
     cx.update(|window, cx| {
         view.update(cx, |e, cx| e.set_tool(Tool::Type, cx));
@@ -280,6 +382,8 @@ fn design_layout_controls_create_a_persistent_frame_and_undo_as_one_edit(cx: &mu
     cx.run_until_parked();
     cx.update(|window, cx| window.click("design-layout-fill", cx));
     cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-layout-hug-height", cx));
+    cx.run_until_parked();
     cx.update(|window, cx| window.click("ok", cx));
     cx.run_until_parked();
     cx.update(|_, cx| {
@@ -287,6 +391,7 @@ fn design_layout_controls_create_a_persistent_frame_and_undo_as_one_edit(cx: &mu
             assert_eq!(e.editor.doc.design.frames.len(), 1);
             let frame = e.editor.doc.design.frames.values().next().unwrap();
             assert!(frame.children.values().all(|child| child.fill_width));
+            assert!(frame.hug_height);
             e.undo(cx);
             assert_eq!(e.editor.doc, original);
             e.redo(cx);

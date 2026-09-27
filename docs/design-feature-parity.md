@@ -12,6 +12,28 @@ and GitHub-URL exchange remain included.
 
 ## Capabilities and acceptance targets
 
+The product target includes Canva-style day-to-day authoring as well as advanced
+layout. The reference inventory is Canva's [editing and designing help](https://www.canva.com/help/editing-designing/)
+and [feature catalog](https://www.canva.com/features/), reviewed on 2026-09-27.
+Those references define user workflows; Emulsion keeps its supplied UI template
+and implements its own local document behavior. Cloud collaboration remains a
+separate phase. A feature is complete only when its controls, canvas interaction,
+Undo, persistence and applicable export work together.
+
+| Everyday workflow | Current status and next acceptance |
+| --- | --- |
+| Select, multi-select, group, arrange, duplicate, lock, flip and delete | Shared native commands; Design has Select, Position and object actions. Continue auditing pointer, keyboard and narrow-window reachability. |
+| Text authoring and typography | Editable rich text, font controls, spacing, paragraph settings and existing warp/path tools. Audit direct controls for text effects, lists and mixed formatting; keep styled text crisp. |
+| Reuse formatting | Copy/Paste style transfers text/shape formatting, opacity, blending and effects without replacing the target's content or geometry. One Undo restores a multi-object application. |
+| Bulk creation | Local CSV substitutes authored `{{column}}` text fields and generates editable pages as one undoable batch. Image/data bindings, saved field mappings and multi-page record sets remain open. |
+| Charts and tables | Native bar, line and pie charts and tables with editable CSV data, titles, sizes and palettes; changes are undoable and saved in projects. Artwork can be detached for free editing. Spreadsheet-style cell controls and additional chart types remain open. See [charts and tables](design-charts.md). |
+| Photo and media editing in Design | Existing uploads, frame fitting and shared Photo tools. Audit crop, replacement, adjustments, background removal and effects from the Design selection controls. |
+| Brand and assets | Local brand kits and package exchange exist. Need stronger font portability, reusable styles, asset organization and consumer updates. |
+| Pages and presentation | Add/remove/reorder pages, resize, a direct Present button, manual slide navigation, fullscreen, optional automatic advance and basic motion exist. Speaker notes, presenter display and PowerPoint interchange remain open. |
+| Video, audio and animation | Editable YouTube link/poster objects and system web-player integration are implemented; Linux system-WebKit playback, audio, pause/resume and resize have been verified; Windows/macOS runtime verification is pending. The current Flatpak runtime lacks WebKitGTK, so that package supports video authoring but not playback. Basic object entry/exit and GIF export exist. Local video/audio tracks, trimming, transitions and property animation remain open. See [Design video](design-video.md). |
+| Export and print | Existing local image/vector/PDF/native output. Audit selected pages/objects, transparency, bleed, crop marks, sizing and diagnostics per format. |
+| AI-assisted design | Existing local assistant/provider integration remains available. Generation, extraction and editing actions require explicit capability checks; buttons alone do not establish parity. |
+
 “Partial” means a foundation exists; it does not claim equivalent behavior or
 quality. Evidence paths below refer to Emulsion source.
 
@@ -20,7 +42,7 @@ quality. Evidence paths below refer to Emulsion source.
 | Editable vector authoring | Shared path, shape, text, transform, clipboard, layer and alignment tools | Audit their reachability in Design. Cover point/handle/segment editing, path continuation/join/split, object and node multiselection, precise transforms, compound operations and reversible stroke expansion. |
 | Object appearance | Editable fills/strokes, blend modes, vector effects and shape properties | Verify multiple-stop paint on fill and stroke, alpha, gradient geometry/types, reusable appearance, selecting matching objects and export fidelity. Keep original type/shape data editable whenever the operation allows it. |
 | Precision and reshaping | Rulers/guides, snapping, transforms and path operations | Add any missing object guides, ruler origins/units, spacing feedback, vector mesh/perspective/skew and bitmap tracing. Validate geometry at rotated/scaled views and one-step Undo. |
-| Responsive frames | Persistent nested row/column/grid layouts, wrapping, padding/gaps, alignment, fixed/fill width, absolute children and text reflow | Add hug/height-fill sizing, min/max, automatic clipping, aspect locks and broader constraints. Measure large scenes. Diagram auto-layout is a separate capability. |
+| Responsive frames | Persistent nested row/column/grid layouts, wrapping, padding/gaps, alignment, shared row fill width, content-sized height, absolute children and text reflow | Add hug-width/height-fill sizing, min/max, automatic clipping, aspect locks and broader constraints. Measure large scenes. Diagram auto-layout is a separate capability. |
 | Breakpoints | Page resize with anchors and optional text reflow | Add authored width-based overrides, inheritance and non-destructive preview widths. Desktop → phone → desktop must recover base values. |
 | Components | Editable templates and ordinary groups | Add document-local definitions, linked instances, families/variants, property overrides, propagation, reset and detach. Detect dependency cycles. Save, recovery, clipboard, duplicate/delete and Undo must preserve identity and links. |
 | Design variables | Local brand colors/fonts in `creative_ui.rs` | Add named color/number variables and property bindings. Editing a variable updates consumers; unlink/delete retain resolved appearance; imported fragments remap IDs. |

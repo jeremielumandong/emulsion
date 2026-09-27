@@ -12,8 +12,8 @@
 pub mod abr;
 pub mod brush_library;
 pub mod brushset;
-pub mod creative_library;
 pub mod cloud;
+pub mod creative_library;
 pub mod design_bulk;
 pub mod design_charts;
 pub mod design_media;

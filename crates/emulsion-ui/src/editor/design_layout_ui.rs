@@ -87,6 +87,7 @@ impl EditorView {
                 && settings.children.values().all(|child| child.fill_width)
         });
         let wrap = cx.new(|_| settings.wrap);
+        let hug = cx.new(|_| settings.hug_height);
         let alignment = cx.new(|_| settings.align);
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
@@ -94,6 +95,7 @@ impl EditorView {
             let fields=fields.clone();let inputs=fields.clone();let owner=owner.clone();let ids=ids.clone();let settings=settings.clone();
             let fill_state=fill.clone();let wrap_state=wrap.clone();let align_state=alignment.clone();
             let fill_apply=fill.clone();let wrap_apply=wrap.clone();let align_apply=alignment.clone();
+            let hug_state=hug.clone();let hug_apply=hug.clone();
             dialog.title("Responsive layout").width(px(440.))
                 .child(div().flex().flex_col().gap_2()
                     .child(div().grid().grid_cols(2).gap_2().children([
@@ -103,6 +105,8 @@ impl EditorView {
                         .on_click(move|_,window,cx|{fill_state.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
                     .child(Button::new("design-layout-wrap").label(if *wrap.read(cx) { "✓ Wrap rows" } else { "Keep row on one line" }).small().outline()
                         .on_click(move|_,window,cx|{wrap_state.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
+                    .child(Button::new("design-layout-hug-height").label(if *hug.read(cx) { "Height: fit content" } else { "Height: fixed" }).small().outline()
+                        .on_click(move|_,window,cx|{hug_state.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
                     .child(Button::new("design-layout-align").label(format!("Alignment: {}",match *alignment.read(cx) {Align::Start=>"Start",Align::Center=>"Center",Align::End=>"End"})).small().outline()
                         .on_click(move|_,window,cx|{align_state.update(cx,|v,cx|{*v=match *v{Align::Start=>Align::Center,Align::Center=>Align::End,Align::End=>Align::Start};cx.notify();});window.refresh();}))
                     .child(div().text_size(px(11.)).child("Children follow layer order. Text wraps without resizing its font. Changes are one Undo step.")))
@@ -110,6 +114,7 @@ impl EditorView {
                 .on_ok(move|_,_,cx|{
                     let values=inputs.each_ref().map(|i|i.read(cx).value().parse::<f64>().unwrap_or(f64::NAN));
                     let fill=*fill_apply.read(cx);let wrap=*wrap_apply.read(cx);let align=*align_apply.read(cx);
+                    let hug_height=*hug_apply.read(cx);
                     owner.update(cx,|this,cx|{
                         if this.edit_ticket()!=ticket {this.set_status("The page changed. Open layout again.",true,cx);return false;}
                         if values.iter().any(|v|!v.is_finite()) || values[7].fract()!=0. || !(1. ..=64.).contains(&values[7]) {
@@ -118,7 +123,7 @@ impl EditorView {
                         this.editor.begin("Responsive layout");
                         let result=(||{
                             let group=match group {Some(id)=>id,None=>this.editor.execute(Command::Group{ids:ids.clone(),name:"Responsive frame".into()}).map_err(|e|e.to_string())?.ok_or("No group created")?};
-                            let mut frame=Frame{flow,gap:values[2],padding:[values[3],values[4],values[5],values[6]],columns:values[7] as u32,wrap,align,..settings.clone()};
+                            let mut frame=Frame{flow,gap:values[2],padding:[values[3],values[4],values[5],values[6]],columns:values[7] as u32,wrap,align,hug_height,..settings.clone()};
                             for id in this.editor.doc.children(Some(group)) {if id!=frame.boundary {frame.children.entry(id).or_default().fill_width=fill;}}
                             layout::enable(&mut this.editor,group,frame,(values[0],values[1]))?;
                             Ok::<_,String>(group)

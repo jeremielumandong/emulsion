@@ -250,7 +250,8 @@ pub struct CompositeTree {
 /// compositor needs them only for the layers it actually reaches. Building a
 /// composite tree therefore records how to make them rather than making them.
 ///
-/// Cloning shares the result, so passing a tree around renders nothing twice.
+/// Cloning shares the published result. Racing cold requests may render a
+/// source more than once, but always return the same published pixels.
 #[derive(Clone)]
 pub struct LazyRaster {
     ready: Arc<std::sync::OnceLock<Arc<Raster>>>,
@@ -314,11 +315,19 @@ impl LazyRaster {
 
     /// The pixels, rendering them if this is the first ask.
     pub fn get(&self) -> &Arc<Raster> {
-        self.ready.get_or_init(|| {
-            self.make
-                .as_ref()
-                .expect("a LazyRaster has pixels or knows how to make them")()
-        })
+        if let Some(raster) = self.ready.get() {
+            return raster;
+        }
+        // A producer may enter Rayon and steal another render of this same
+        // source. Never hold OnceLock's initialization lock across that work:
+        // a recursively stolen caller would wait on its own initializer.
+        // Racing cold callers may compute twice; publication is shared and
+        // its initializer does no rendering or blocking work.
+        let raster = self
+            .make
+            .as_ref()
+            .expect("a LazyRaster has pixels or knows how to make them")();
+        self.ready.get_or_init(|| raster)
     }
 
     /// Whether the pixels exist, so a caller can avoid forcing them.
@@ -1415,18 +1424,30 @@ impl PixelSampler {
         }
         let t = TILE as i32;
         let coord = TileCoord::new(x / t, y / t);
-        let mut tiles = self.tiles.lock();
-        let tile = match tiles.iter().position(|(c, _)| *c == coord) {
-            Some(i) => tiles.remove(i),
-            None => {
-                if tiles.len() == Self::CAPACITY {
-                    tiles.remove(0);
-                }
-                (coord, render_tile(&self.tree, 0, coord))
+        let index = ((y % t) * t + x % t) as usize;
+        {
+            let mut tiles = self.tiles.lock();
+            if let Some(i) = tiles.iter().position(|(c, _)| *c == coord) {
+                let tile = tiles.remove(i);
+                let pixel = tile.1[index];
+                tiles.push(tile);
+                return pixel;
             }
-        };
-        let pixel = tile.1[((y % t) * t + x % t) as usize];
-        tiles.push(tile);
+        }
+        // Rendering can enter Rayon and reenter this sampler in a stolen job.
+        // Hold the cache mutex only for lookup/publication, never for rendering.
+        let rendered = render_tile(&self.tree, 0, coord);
+        let pixel = rendered[index];
+        let mut tiles = self.tiles.lock();
+        if let Some(i) = tiles.iter().position(|(c, _)| *c == coord) {
+            let tile = tiles.remove(i);
+            tiles.push(tile);
+        } else {
+            if tiles.len() == Self::CAPACITY {
+                tiles.remove(0);
+            }
+            tiles.push((coord, rendered));
+        }
         pixel
     }
 }
@@ -1580,6 +1601,77 @@ pub fn tile_to_bgra8(
 mod tests {
     use super::*;
     use crate::adjust::Adjustment;
+
+    #[test]
+    fn reentrant_cold_sources_and_sampler_finish_on_one_rayon_worker() {
+        // A deadline on a detached worker turns the previous self-deadlock into
+        // a bounded failure; it cannot freeze the test harness during cleanup.
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                for operation in 0..4 {
+                    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                    let count = calls.clone();
+                    let source = LazyRaster::deferred(
+                        (4, 4),
+                        Arc::new(move || {
+                            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            // Deterministically steal the other outer join branch
+                            // while the first caller is still creating its pixels.
+                            rayon::yield_now();
+                            Arc::new(Raster::solid(4, 4, [1.; 4]))
+                        }),
+                    );
+                    let scene = Arc::new(CompositeTree {
+                        width: 4,
+                        height: 4,
+                        space: BlendSpace::Linear,
+                        nodes: vec![CompositeNode {
+                            content: NodeContent::Pixels {
+                                raster: source.clone(),
+                                placement: Placement::default(),
+                            },
+                            ..layer(1, Raster::transparent(1, 1))
+                        }],
+                    });
+                    let sampler = PixelSampler::new(scene.clone());
+                    let render = || match operation {
+                        0 => {
+                            assert_eq!(flatten(&scene, 0).get(0, 0), [65535; 4]);
+                        }
+                        1 => {
+                            assert_eq!(region(&scene, IRect::new(0, 0, 1, 1))[0], [1.; 4]);
+                        }
+                        2 => {
+                            assert_eq!(render_tile(&scene, 0, TileCoord::new(0, 0))[0], [1.; 4]);
+                        }
+                        _ => {
+                            assert_eq!(sampler.get(0, 0), [1.; 4]);
+                        }
+                    };
+                    rayon::join(render, render);
+                    assert!(source.is_ready());
+                    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+                    let published = Arc::as_ptr(source.get());
+                    render();
+                    assert_eq!(Arc::as_ptr(source.get()), published);
+                    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+                    if operation == 3 {
+                        assert_eq!(sampler.tiles.lock().len(), 1);
+                    }
+                }
+            });
+            send.send(()).unwrap();
+        });
+        receive
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("CPU rendering must not wait on its own deferred initialization");
+        worker.join().unwrap();
+    }
 
     #[test]
     fn batch_render_resolves_deferred_pixels_before_parallel_tiles() {

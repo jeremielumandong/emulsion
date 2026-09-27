@@ -17,6 +17,7 @@ struct ActiveVideo {
     _server: emulsion_io::design_media::PlayerServer,
     id: NodeId,
     image: Option<Arc<RenderImage>>,
+    window: AnyWindowHandle,
 }
 impl EditorView {
     pub(super) fn design_video_playing(&self) -> bool {
@@ -24,8 +25,18 @@ impl EditorView {
     }
     pub(super) fn stop_design_video(&mut self, cx: &mut Context<Self>) {
         self.video.task = None;
-        if self.video.active.take().is_some() {
+        if let Some(active) = self.video.active.take() {
+            if let Some(image) = active.image.clone() {
+                let handle = active.window;
+                cx.defer(move |cx| {
+                    cx.update_window(handle, |_, window, _| {
+                        let _ = window.drop_image(image);
+                    })
+                    .ok();
+                });
+            }
             self.notify_canvas(cx);
+            cx.notify();
         }
     }
     pub(super) fn design_video_controls(&self, cx: &Context<Self>) -> AnyElement {
@@ -127,6 +138,14 @@ impl EditorView {
             size(px((q.0 - p.0).abs() as f32), px((q.1 - p.1).abs() as f32)),
         ))
     }
+    fn video_fits_canvas(&self, bounds: Bounds<Pixels>) -> bool {
+        self.canvas_bounds().is_some_and(|canvas| {
+            bounds.origin.x >= canvas.origin.x
+                && bounds.origin.y >= canvas.origin.y
+                && bounds.origin.x + bounds.size.width <= canvas.origin.x + canvas.size.width
+                && bounds.origin.y + bounds.size.height <= canvas.origin.y + canvas.size.height
+        })
+    }
     fn play_design_video(&mut self, id: NodeId, window: &mut Window, cx: &mut Context<Self>) {
         self.stop_design_video(cx);
         let Some(video) = self.editor.doc.design.media.get(&id) else {
@@ -143,6 +162,14 @@ impl EditorView {
             );
             return;
         }
+        if !self.video_fits_canvas(bounds) {
+            self.set_status(
+                "Fit the whole video inside the presentation canvas to play it.",
+                true,
+                cx,
+            );
+            return;
+        }
         let result = (|| {
             let server = emulsion_io::design_media::PlayerServer::start(video)?;
             let player = crate::web_player::Player::new(server.url(), bounds, window, cx)?;
@@ -151,6 +178,7 @@ impl EditorView {
                 _server: server,
                 id,
                 image: None,
+                window: window.window_handle(),
             })
         })();
         match result {
@@ -186,6 +214,7 @@ impl EditorView {
                 }));
                 window.focus(&focus, cx);
                 self.notify_canvas(cx);
+                cx.notify();
             }
             Err(error) => self.set_status(format!("Video player unavailable: {error}"), true, cx),
         }
@@ -227,9 +256,20 @@ impl EditorView {
             self.stop_design_video(cx);
         }
         if self.video.active.as_ref().is_some_and(|active| {
+            videos
+                .iter()
+                .any(|(id, bounds)| *id == active.id && !self.video_fits_canvas(*bounds))
+        }) {
+            self.stop_design_video(cx);
+            self.set_status(
+                "Fit the whole video inside the presentation canvas to play it.",
+                true,
+                cx,
+            );
+        }
+        if self.video.active.as_ref().is_some_and(|active| {
             videos.iter().any(|(id, bounds)| {
-                *id == active.id
-                    && (bounds.size.width < px(200.) || bounds.size.height < px(200.))
+                *id == active.id && (bounds.size.width < px(200.) || bounds.size.height < px(200.))
             })
         }) {
             self.stop_design_video(cx);
@@ -253,16 +293,14 @@ impl EditorView {
                 .overflow_hidden();
             if let Some(active) = self.video.active.as_mut().filter(|active| active.id == id) {
                 active.player.update_bounds(bounds);
-                if let Some(image) = active.player.latest_frame() {
-                    if active
+                if let Some(image) = active.player.latest_frame()
+                    && active
                         .image
                         .as_ref()
                         .is_none_or(|old| !Arc::ptr_eq(old, &image))
-                    {
-                        if let Some(old) = active.image.replace(image) {
-                            let _ = window.drop_image(old);
-                        }
-                    }
+                    && let Some(old) = active.image.replace(image)
+                {
+                    let _ = window.drop_image(old);
                 }
                 player = player
                     .bg(rgb(0x111111))
@@ -328,9 +366,9 @@ impl EditorView {
                         } else if let Some(active) = &this.video.active {
                             let m = event.keystroke.modifiers;
                             let modifiers = u32::from(m.shift)
-                                | u32::from(m.control) * 4
-                                | u32::from(m.alt) * 8
-                                | u32::from(m.platform) * 64;
+                                | (u32::from(m.control) * 4)
+                                | (u32::from(m.alt) * 8)
+                                | (u32::from(m.platform) * 64);
                             active.player.key(&event.keystroke.key, true, modifiers);
                         }
                         cx.stop_propagation();

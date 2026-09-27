@@ -28,6 +28,8 @@ mod project_workflow_tests;
 
 #[path = "design_chart_tests.rs"]
 mod design_chart_tests;
+#[path = "design_video_tests.rs"]
+mod design_video_tests;
 
 #[path = "performance_settings_tests.rs"]
 mod performance_settings_tests;
@@ -213,7 +215,10 @@ fn doc(names: &[&str], pixels: Option<Raster>) -> Document {
 }
 
 /// A workspace with `d` open, no Jev key, and no coding CLI.
-fn open(cx: &mut TestAppContext, d: Document) -> (Entity<Workspace>, &mut VisualTestContext) {
+pub(crate) fn open(
+    cx: &mut TestAppContext,
+    d: Document,
+) -> (Entity<Workspace>, &mut VisualTestContext) {
     open_with(cx, d, CliStatus::Missing)
 }
 

@@ -13,6 +13,73 @@
 #include <unistd.h>
 #include <math.h>
 
+/* A normal GTK toplevel lifecycle with an offscreen GDK drawing surface.
+ * WebKit suspends media for GtkOffscreenWindow specifically. No compositor
+ * window is created here. */
+typedef struct { GtkWindow parent; } EmulsionCaptureWindow;
+typedef struct { GtkWindowClass parent; } EmulsionCaptureWindowClass;
+G_DEFINE_TYPE(EmulsionCaptureWindow, emulsion_capture_window, GTK_TYPE_WINDOW)
+static void capture_realize(GtkWidget *widget) {
+    GtkAllocation a; gtk_widget_get_allocation(widget, &a);
+    GdkWindowAttr attrs = {0};
+    attrs.window_type=GDK_WINDOW_OFFSCREEN;
+    attrs.wclass=GDK_INPUT_OUTPUT;
+    attrs.x=a.x; attrs.y=a.y; attrs.width=MAX(a.width,1); attrs.height=MAX(a.height,1);
+    attrs.visual=gtk_widget_get_visual(widget);
+    attrs.event_mask=gtk_widget_get_events(widget)|GDK_EXPOSURE_MASK|GDK_STRUCTURE_MASK;
+    GdkWindow *surface=gdk_window_new(gtk_widget_get_parent_window(widget),&attrs,GDK_WA_X|GDK_WA_Y|GDK_WA_VISUAL);
+    gtk_widget_set_window(widget,surface);
+    gdk_window_set_user_data(surface,widget);
+    gtk_widget_set_realized(widget,TRUE);
+}
+static void capture_map(GtkWidget *widget) {
+    gtk_widget_set_mapped(widget,TRUE);
+    GtkWidget *child=gtk_bin_get_child(GTK_BIN(widget));
+    if(child && gtk_widget_get_visible(child)) gtk_widget_map(child);
+    gdk_window_show(gtk_widget_get_window(widget));
+}
+static void capture_unmap(GtkWidget *widget) {
+    gtk_widget_set_mapped(widget,FALSE);
+    gdk_window_hide(gtk_widget_get_window(widget));
+}
+static void capture_allocate(GtkWidget *widget,GtkAllocation *allocation) {
+    gtk_widget_set_allocation(widget,allocation);
+    if(gtk_widget_get_realized(widget)) gdk_window_move_resize(gtk_widget_get_window(widget),allocation->x,allocation->y,MAX(1,allocation->width),MAX(1,allocation->height));
+    GtkWidget *child=gtk_bin_get_child(GTK_BIN(widget));
+    if(child && gtk_widget_get_visible(child)) {
+        GtkAllocation child_allocation={0,0,MAX(1,allocation->width),MAX(1,allocation->height)};
+        gtk_widget_size_allocate(child,&child_allocation);
+    }
+}
+static void capture_resize(GtkContainer *container) {
+    GtkWidget *widget=GTK_WIDGET(container);
+    GtkWidget *child=gtk_bin_get_child(GTK_BIN(widget));
+    GtkRequisition preferred={640,360};
+    if(child) gtk_widget_get_preferred_size(child,NULL,&preferred);
+    GtkAllocation allocation={0,0,MAX(1,preferred.width),MAX(1,preferred.height)};
+    gtk_widget_size_allocate(widget,&allocation);
+}
+static void capture_show(GtkWidget *widget) {
+    GTK_WIDGET_CLASS(g_type_class_peek(GTK_TYPE_WIDGET))->show(widget);
+    capture_resize(GTK_CONTAINER(widget));
+    gtk_widget_map(widget);
+}
+static void capture_hide(GtkWidget *widget) {
+    GTK_WIDGET_CLASS(g_type_class_peek(GTK_TYPE_WIDGET))->hide(widget);
+    gtk_widget_unmap(widget);
+}
+static void emulsion_capture_window_class_init(EmulsionCaptureWindowClass *klass) {
+    GtkWidgetClass *widget=GTK_WIDGET_CLASS(klass);
+    widget->realize=capture_realize; widget->map=capture_map;
+    widget->show=capture_show; widget->hide=capture_hide;
+    GTK_CONTAINER_CLASS(klass)->check_resize=capture_resize;
+    widget->unmap=capture_unmap; widget->size_allocate=capture_allocate;
+}
+static void emulsion_capture_window_init(EmulsionCaptureWindow *window) {
+    gtk_window_set_decorated(GTK_WINDOW(window),FALSE);
+    gtk_window_set_accept_focus(GTK_WINDOW(window),FALSE);
+}
+
 static WebKitWebView *view;
 static GtkWidget *window;
 static const char *initial_uri;
@@ -56,6 +123,10 @@ static void snapshot_done(GObject *source, GAsyncResult *result, gpointer unused
      * Normalize the snapshot to our negotiated pixel size, matching input coords. */
     int sw = cairo_image_surface_get_width(surface), sh = cairo_image_surface_get_height(surface);
     if (sw != width || sh != height) {
+        /* Work in physical source pixels even if Cairo also carries a HiDPI
+         * device transform. Applying both transforms would halve the image. */
+        cairo_surface_set_device_scale(surface, 1.0, 1.0);
+        cairo_surface_set_device_offset(surface, 0.0, 0.0);
         cairo_surface_t *scaled = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
         cairo_t *cr = cairo_create(scaled);
         cairo_scale(cr, (double)width / sw, (double)height / sh);
@@ -147,7 +218,7 @@ static gboolean input(GIOChannel *channel, GIOCondition condition, gpointer unus
     if (sscanf(line, "R %d %d", &w, &h) == 2 && w > 0 && h > 0 && w <= 1920 && h <= 1920 && w*h <= 1920*1080) {
         width=w; height=h;
         gtk_widget_set_size_request(GTK_WIDGET(view), w, h);
-        gtk_window_resize(GTK_WINDOW(window), w, h);
+        capture_resize(GTK_CONTAINER(window));
     } else if (sscanf(line, "M %f %f", &x, &y) == 2 && isfinite(x) && isfinite(y)) {
         GdkEvent *event=gdk_event_new(GDK_MOTION_NOTIFY);
         event->motion.time=GDK_CURRENT_TIME; event->motion.x=x; event->motion.y=y; event->motion.state=buttons;
@@ -206,7 +277,7 @@ int main(int argc, char **argv) {
     webkit_settings_set_enable_fullscreen(settings, FALSE);
     webkit_settings_set_enable_developer_extras(settings, FALSE);
     webkit_settings_set_javascript_can_open_windows_automatically(settings, FALSE);
-    window=gtk_offscreen_window_new();
+    window=g_object_new(emulsion_capture_window_get_type(),NULL);
     gtk_widget_set_size_request(GTK_WIDGET(view),width,height);
     gtk_container_add(GTK_CONTAINER(window),GTK_WIDGET(view));
     g_signal_connect(view,"decide-policy",G_CALLBACK(policy),NULL);

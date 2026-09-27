@@ -85,6 +85,7 @@ impl Section {
     }
 }
 pub(super) struct DesignUi {
+    pub(super) copied_appearance: Option<emulsion_core::design_appearance::Appearance>,
     section: Section,
     pub(super) inspector: bool,
     open: bool,
@@ -102,6 +103,7 @@ pub(super) struct DesignUi {
 impl Default for DesignUi {
     fn default() -> Self {
         Self {
+            copied_appearance: None,
             section: Section::Templates,
             inspector: false,
             open: true,
@@ -565,6 +567,10 @@ impl EditorView {
         match section {
             Section::Templates => {
                 self.load_design_previews(&query, cx);
+                content = content.child(Button::new("design-bulk-create").label("Bulk create from CSV…")
+                    .tooltip("Use {{column}} fields in your text to create a design for each data row")
+                    .small().outline().w_full()
+                    .on_click(cx.listener(|this,_,window,cx|this.design_bulk_dialog(None,window,cx))));
                 content = content.child(
                     Button::new("design-explore-templates")
                         .label("Explore templates")
@@ -828,6 +834,8 @@ impl EditorView {
                     ));
             }
             Section::Elements => {
+                content = content.child(self.design_video_controls(cx));
+                content = content.child(self.design_chart_controls(cx));
                 content = content.child(
                     div()
                         .flex()

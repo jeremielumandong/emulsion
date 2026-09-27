@@ -142,7 +142,7 @@ impl EditorView {
         let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)
             - f64::from(f32::from(canvas.origin.y));
         let text = matches!(node.kind, NodeKind::Text { .. });
-        let width = if text { 324. } else { 250. };
+        let width = if text { 350. } else { 276. };
         let x = (((left + right) / 2.) as f32 - width / 2.)
             .clamp(8., (f32::from(canvas.size.width) - width - 8.).max(8.));
         let y = (top as f32 - 38.).clamp(8., (f32::from(canvas.size.height) - 38.).max(8.));
@@ -280,6 +280,52 @@ impl EditorView {
                         .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
                 );
         }
+        let editor = cx.entity();
+        let can_paste = self.design_ui.copied_appearance.is_some() && !locked;
+        bar = bar.child(
+            Button::new("design-selection-more")
+                .accessibility_label("Object actions")
+                .tooltip("Object actions")
+                .xsmall()
+                .ghost()
+                .size(px(24.))
+                .child(rail::tool_icon("ellipsis").text_color(p.ink).size(px(12.)))
+                .dropdown_menu(move |menu, _, _| {
+                    use super::layer_menu::item;
+                    menu.item(item(&editor, "Copy style", true, |e, _, cx| {
+                        e.copy_design_appearance(cx)
+                    }))
+                    .item(item(&editor, "Paste style", can_paste, |e, _, cx| {
+                        e.paste_design_appearance(cx)
+                    }))
+                    .item(item(&editor, "Flip horizontally", !locked, |e, _, cx| {
+                        e.flip_transform_selection(true, cx)
+                    }))
+                    .item(item(&editor, "Flip vertically", !locked, |e, _, cx| {
+                        e.flip_transform_selection(false, cx)
+                    }))
+                    .item(item(
+                        &editor,
+                        if locked { "Unlock" } else { "Lock" },
+                        true,
+                        move |e, _, cx| {
+                            e.execute(
+                                Command::SetLocked {
+                                    id,
+                                    locked: !locked,
+                                },
+                                cx,
+                            );
+                        },
+                    ))
+                    .item(item(&editor, "Duplicate", !locked, |e, _, cx| {
+                        e.duplicate_selected(cx)
+                    }))
+                    .item(item(&editor, "Delete", !locked, |e, _, cx| {
+                        e.delete_selected(cx)
+                    }))
+                }),
+        );
         Some(
             bar.child(
                 Button::new("design-selection-magic")

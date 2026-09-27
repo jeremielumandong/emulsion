@@ -82,6 +82,8 @@ impl Default for Motion {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Design {
+    pub media: BTreeMap<NodeId, crate::design::media::YouTube>,
+    pub charts: BTreeMap<NodeId, crate::design_charts::Chart>,
     pub frames: BTreeMap<NodeId, crate::design_layout::Frame>,
     pub constraints: BTreeMap<NodeId, Constraint>,
     pub duration_ms: u32,
@@ -91,6 +93,8 @@ pub struct Design {
 impl Default for Design {
     fn default() -> Self {
         Self {
+            media: BTreeMap::new(),
+            charts: BTreeMap::new(),
             frames: BTreeMap::new(),
             constraints: BTreeMap::new(),
             duration_ms: 3000,
@@ -104,6 +108,16 @@ impl Design {
         self == &Self::default()
     }
     pub fn validate(&self, doc: &Document) -> Result<(), String> {
+        crate::design::media::validate(&self.media, doc)?;
+        if self.charts.len() > 256 {
+            return Err("A page supports up to 256 charts and tables.".into());
+        }
+        for (id, chart) in &self.charts {
+            if !doc.node(*id).is_some_and(|n| n.is_group()) {
+                return Err("Chart data needs its own group.".into());
+            }
+            chart.validate()?;
+        }
         crate::design_layout::validate(&self.frames, doc)?;
         if !(100..=60_000).contains(&self.duration_ms) || !(1..=60).contains(&self.fps) {
             return Err("Choose a duration from 0.1–60 seconds and 1–60 fps.".into());
@@ -134,6 +148,9 @@ impl Design {
         Ok(())
     }
     pub fn retain_nodes(&mut self, ids: &HashSet<NodeId>) {
+        self.media
+            .retain(|id, video| ids.contains(id) && ids.contains(&video.boundary));
+        self.charts.retain(|id, _| ids.contains(id));
         self.frames
             .retain(|id, frame| ids.contains(id) && ids.contains(&frame.boundary));
         for frame in self.frames.values_mut() {
@@ -150,6 +167,20 @@ impl Design {
     pub fn remap(&self, map: &HashMap<NodeId, NodeId>) -> Self {
         let id = |id| map.get(&id).copied().unwrap_or(id);
         Self {
+            media: self
+                .media
+                .iter()
+                .map(|(key, value)| {
+                    let mut value = value.clone();
+                    value.boundary = id(value.boundary);
+                    (id(*key), value)
+                })
+                .collect(),
+            charts: self
+                .charts
+                .iter()
+                .map(|(key, value)| (id(*key), value.clone()))
+                .collect(),
             frames: self
                 .frames
                 .iter()

@@ -62,6 +62,9 @@ Select objects or a group, open **Position**, and choose **Row**, **Column**, or
 **Grid** under Responsive layout. Set frame width/height, individual padding,
 gap, columns, row wrapping, and alignment. Children can retain their width or
 fill the available width. Text reflows without changing its font size.
+Flexible children in a row share the space left after fixed children and gaps.
+Choose **Height: fit content** to resize a frame around its content and padding;
+nested frames update their parents in the same edit.
 
 The resulting group has an editable rectangular boundary. Reflow runs as part of
 the originating command when text, objects, or the boundary changes. Nested frames
@@ -75,10 +78,31 @@ move protected content fail atomically. Rotating or reshaping the layout boundar
 requires removing automatic layout first. Layout cells snap to document pixels to
 avoid cumulative drift; authored text remains text.
 
-This is the first responsive-layout workflow. Hug sizing, height fill, min/max
+This is the first responsive-layout workflow. Hug width, height fill, min/max
 constraints, automatic clipping, aspect locks, authored breakpoints, variables,
 components/variants, interactive prototypes, and responsive HTML export remain
 separate milestones. Large-scene layout performance still needs measurement.
+
+## Reuse formatting and generate designs
+
+Use **Copy style** and **Paste style** in Position or the selected object's
+**Object actions** menu. Text formatting, shape fill/stroke, opacity, blending and
+layer effects transfer while the target keeps its content, geometry, masks and
+identity. Text-to-text copying applies the source's first character formatting
+throughout the target; it does not copy the source string or its character ranges.
+Pasting onto several selected objects is one Undo step, and a protected target
+rejects the whole operation. Object actions also exposes flip, lock, duplicate
+and delete.
+
+To generate local design variations, write text such as `Hello {{name}}`, then
+choose **Bulk create from CSV…** in Design. Paste data or import a CSV with a
+`name` column. Each data row creates an editable page, preserving native text,
+rich formatting, source media and responsive layout. The source page stays intact;
+one Undo removes the generated batch. CSV is data only, supports quoted commas
+and newlines, and never executes formulas or fetches URLs. Input is limited to
+2 MB, 64 columns and the remaining project capacity (100 total pages). Missing or
+duplicate columns, invalid rows and protected fields reject the batch. This first
+workflow binds text; image bindings and multi-page record sets remain pending.
 
 ## Photo/Paint shortcuts
 
@@ -98,3 +122,5 @@ flyout switching/docking in both compact and roomy chrome. Canvas selection
 coverage includes text insertion, Shift selection, editing and switching objects,
 blank clicks, and the visible Select control. Windows and macOS runtime checks
 remain with the separate platform machines.
+Deferred CPU raster sources initialize before parallel tile composition, avoiding
+recursive initialization waits while preserving lazy vector scene construction.

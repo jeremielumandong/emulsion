@@ -787,6 +787,7 @@ fn remap_collisions(base: &Document, ours: &Document, theirs: &Document) -> Docu
         .diagram
         .as_ref()
         .map(|d| std::sync::Arc::new(d.remap(&map)));
+    t.design = t.design.remap(&map);
     t.next_id = next;
     t
 }
@@ -930,6 +931,20 @@ pub fn merge(
 
     let mut design_conflict = false;
     let side = choices.get(&ConflictKey::Design);
+    out.design.media = merge_metadata(
+        &base.design.media,
+        &ours.design.media,
+        &theirs.design.media,
+        side,
+        &mut design_conflict,
+    );
+    out.design.charts = merge_metadata(
+        &base.design.charts,
+        &ours.design.charts,
+        &theirs.design.charts,
+        side,
+        &mut design_conflict,
+    );
     out.design.frames = merge_metadata(
         &base.design.frames,
         &ours.design.frames,

@@ -20,4 +20,3 @@ url = "2.5"
 uuid = { version = "1", features = ["v4", "serde"] }
 keyring = "4.2"
 tempfile = "3.27"
-

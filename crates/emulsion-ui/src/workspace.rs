@@ -55,8 +55,10 @@ pub struct Workspace {
     pub editor: Option<Entity<EditorView>>,
     /// Every open document, in tab order.
     pub tabs: Vec<Entity<EditorView>>,
+    document_tabs: Entity<DocumentTabs>,
     pub recents: Vec<Recent>,
     pub(crate) home_state: crate::home::HomeState,
+    pub(crate) cloud: crate::cloud_screen::CloudUi,
     pub(crate) thumbs: HashMap<PathBuf, crate::home::GalleryThumbnail>,
     pub(crate) thumbs_loading: HashMap<PathBuf, u64>,
     pub(crate) thumb_generation: u64,
@@ -198,18 +200,23 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 this.recents = recents;
                 this.recovered = recovered;
+                this.cloud_load(cx);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+        let owner = cx.weak_entity();
+        let document_tabs = cx.new(|_| DocumentTabs { workspace: owner });
         Self {
             screen: Screen::Home,
             back_to: Screen::Home,
             editor: None,
             tabs: Vec::new(),
+            document_tabs,
             recents: Vec::new(),
             home_state: Default::default(),
+            cloud: Default::default(),
             recovered: Vec::new(),
             thumbs: HashMap::new(),
             thumbs_loading: HashMap::new(),
@@ -1335,13 +1342,21 @@ impl Workspace {
             let (p, d) = (path.clone(), doc.clone());
             let result = cx
                 .background_spawn(async move {
-                    if let Some(project) = project {
+                    let saved = if let Some(project) = project {
                         emulsion_io::project::write(&project, &p)
                     } else if sidecar {
                         emulsion_io::raw_settings::save_sidecar(&d, &p)
                     } else {
                         emulsion_io::save_full(&d, &graph, &p)
-                    }
+                    };
+                    saved.map(|()| {
+                        let source = if sidecar {
+                            &d.raw.as_ref().unwrap().source
+                        } else {
+                            &p
+                        };
+                        emulsion_io::cloud::enqueue_saved(source).map_err(|error| error.to_string())
+                    })
                 })
                 .await;
             let queued = ed.update(cx, |e, _| {
@@ -1349,7 +1364,7 @@ impl Workspace {
                 e.history.save_queued.take()
             });
             this.update(cx, |this, cx| match result {
-                Ok(()) => {
+                Ok(cloud_result) => {
                     let recent_path = if sidecar {
                         &doc.raw.as_ref().unwrap().source
                     } else {
@@ -1377,8 +1392,18 @@ impl Workspace {
                         {
                             e.discard_recovery();
                         }
-                        e.set_status(format!("Saved {}", path.display()), false, cx);
+                        let message = match &cloud_result {
+                            Ok(true) => {
+                                format!("Saved locally · cloud upload queued: {}", path.display())
+                            }
+                            Ok(false) => format!("Saved {}", path.display()),
+                            Err(error) => format!("Saved locally; cloud snapshot failed: {error}"),
+                        };
+                        e.set_status(message, cloud_result.is_err(), cx);
                     });
+                    if cloud_result == Ok(true) {
+                        this.cloud_sync(false, cx);
+                    }
                 }
                 Err(err) => ed.update(cx, |e, cx| {
                     e.set_status(format!("Save failed: {err}"), true, cx)
@@ -1813,8 +1838,10 @@ impl Render for Workspace {
             (compact || project_editor) && self.screen == Screen::Editor && self.editor.is_some();
         let compact_page = compact && !compact_editor;
         let top = if compact_editor {
-            let owner = cx.weak_entity();
-            let tabs = cx.new(|_| DocumentTabs { workspace: owner });
+            // Keep the element path stable between mouse-down and mouse-up.
+            // Replacing this entity during a focus redraw swallows tab clicks.
+            let tabs = self.document_tabs.clone();
+            tabs.update(cx, |_, cx| cx.notify());
             let theme_controls = self.compact_app_controls(window, cx);
             let editor = self.editor.as_ref().unwrap().clone();
             let header = editor.update(cx, |editor, cx| {

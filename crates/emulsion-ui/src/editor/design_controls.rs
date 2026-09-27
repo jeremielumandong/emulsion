@@ -11,6 +11,41 @@ use gpui_kit::component::{
 };
 
 impl EditorView {
+    pub(super) fn copy_design_appearance(&mut self, cx: &mut Context<Self>) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        if self.selected_layer_roots().len() != 1 {
+            self.set_status("Select one object to copy its style.", true, cx);
+            return;
+        }
+        if let Some(node) = self.selected.and_then(|id| self.editor.doc.node(id)) {
+            self.design_ui.copied_appearance =
+                Some(emulsion_core::design_appearance::Appearance::capture(node));
+            self.set_status(
+                "Style copied. Select objects and choose Paste style.",
+                false,
+                cx,
+            );
+        }
+    }
+
+    pub(super) fn paste_design_appearance(&mut self, cx: &mut Context<Self>) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let Some(appearance) = &self.design_ui.copied_appearance else {
+            return;
+        };
+        let commands = self
+            .selected_layer_roots()
+            .iter()
+            .filter_map(|id| self.editor.doc.node(*id))
+            .flat_map(|node| appearance.commands(node))
+            .collect();
+        self.execute_layer_commands("Paste style", commands, cx);
+    }
+
     pub(super) fn design_canvas_toolbar(
         &self,
         p: &Palette,
@@ -146,6 +181,14 @@ impl EditorView {
                             |this, _, _, cx| this.show_design_section(Section::Motion, cx),
                         )))
                         .child(
+                            button("design-present-now", "Present").on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.start_motion(true, cx);
+                                    window.focus(&this.canvas_focus, cx);
+                                },
+                            )),
+                        )
+                        .child(
                             button(
                                 "design-resize",
                                 if compact { "Resize" } else { "Magic resize" },
@@ -195,6 +238,31 @@ impl EditorView {
                 ),
             )
             .child(self.alignment_controls(p, cx))
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        Button::new("design-copy-style")
+                            .label("Copy style")
+                            .small()
+                            .outline()
+                            .disabled(self.selected_layer_roots().len() != 1)
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.copy_design_appearance(cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("design-paste-style")
+                            .label("Paste style")
+                            .small()
+                            .outline()
+                            .disabled(disabled || self.design_ui.copied_appearance.is_none())
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.paste_design_appearance(cx)),
+                            ),
+                    ),
+            )
             .child(self.design_layout_controls(p, cx))
             .child(div().text_color(p.muted).child("Layer order"))
             .child(

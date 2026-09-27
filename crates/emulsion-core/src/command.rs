@@ -926,6 +926,8 @@ impl Command {
                     .remap(&map);
                 doc.design.constraints.extend(settings.constraints);
                 doc.design.frames.extend(settings.frames);
+                doc.design.charts.extend(settings.charts);
+                doc.design.media.extend(settings.media);
                 doc.design.motion.extend(settings.motion);
                 if let Some(diagram) = &doc.diagram {
                     let additions = diagram.fragment(&ids.iter().copied().collect()).remap(&map);
