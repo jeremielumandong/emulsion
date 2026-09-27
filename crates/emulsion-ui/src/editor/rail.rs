@@ -587,7 +587,7 @@ impl EditorView {
         for (g, group) in groups.iter().enumerate() {
             let shown = self.rail_shown(g);
             let it = group[shown];
-            let on = self.rail_item_active(&it) || (self.tool == it.tool && group.len() == 1);
+            let on = self.rail_item_active(&it);
             let has_more = group.len() > 1;
             let tool_label = match it.select {
                 Some(SelectShape::Rect) => "Rectangle selection (Rectangular marquee)",

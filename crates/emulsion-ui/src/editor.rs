@@ -64,7 +64,7 @@ mod presets;
 mod quick_mask;
 #[cfg(test)]
 pub(crate) use presets::shared_library;
-mod rail;
+pub(crate) mod rail;
 mod raw_panel;
 mod raw_settings_ui;
 mod recipes;

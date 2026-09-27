@@ -264,6 +264,15 @@ pub enum Op {
     Push {
         isolated: bool,
     },
+    /// Save an isolated styled appearance, then evaluate the same children
+    /// against the real backdrop (non-Normal effects need both results).
+    StyleBackdrop,
+    /// Recover the styled source and apply the layer's blend/opacity once.
+    StylePop {
+        mode: u32,
+        opacity: f32,
+        clip: u32,
+    },
     Pop {
         isolated: bool,
         mode: u32,
@@ -569,8 +578,61 @@ impl Compiler<'_> {
                         mask,
                     });
                 }
-                NodeContent::StyledGroup { .. } => {
-                    self.note(format!("{name}: layer styles skipped"));
+                NodeContent::StyledGroup {
+                    children,
+                    clip_source,
+                    effect_mask,
+                } => {
+                    // Painting changes both source pixels and the cached
+                    // effects, so a styled layer cannot use direct GPU paint.
+                    let paint_node = self.paint_node.take();
+                    if effect_mask.is_some() {
+                        self.note(format!("{name}: effect mask requires CPU compositing"));
+                    }
+                    // A clipped layer must see the original unfilled shape,
+                    // never the enlarged silhouette of a shadow or glow.
+                    if alpha != NONE {
+                        self.ops.push(Op::Push { isolated: true });
+                        self.open_run = None;
+                        self.list(std::slice::from_ref(clip_source), depth + 1);
+                        self.ops.push(Op::Pop {
+                            isolated: true,
+                            mode: 0,
+                            opacity: 0.0,
+                            clip: NONE,
+                            alpha,
+                            mask: None,
+                        });
+                    }
+                    self.ops.push(Op::Push { isolated: true });
+                    self.open_run = None;
+                    let start = self.ops.len();
+                    self.list(children, depth + 1);
+                    if children
+                        .iter()
+                        .any(|child| child.blend != BlendMode::Normal)
+                    {
+                        // Reuse the same sources and Vello targets for both
+                        // evaluations; text stays at the viewport resolution.
+                        let end = self.ops.len();
+                        self.ops.push(Op::StyleBackdrop);
+                        self.ops.extend_from_within(start..end);
+                        self.ops.push(Op::StylePop {
+                            mode: blend,
+                            opacity,
+                            clip,
+                        });
+                    } else {
+                        self.ops.push(Op::Pop {
+                            isolated: true,
+                            mode: blend,
+                            opacity,
+                            clip,
+                            alpha: NONE,
+                            mask: None,
+                        });
+                    }
+                    self.paint_node = paint_node;
                 }
                 NodeContent::Adjust(_) => {
                     self.note(format!("{name}: adjustment layer skipped"));
@@ -861,8 +923,20 @@ impl Canvas {
                     opacity: node.opacity.to_bits(),
                     clip_to: node.clip_to,
                 });
-                if let NodeContent::Group(children) = &node.content {
-                    walk(children, out);
+                match &node.content {
+                    NodeContent::Group(children) => walk(children, out),
+                    NodeContent::StyledGroup {
+                        children,
+                        clip_source,
+                        effect_mask,
+                    } => {
+                        walk(children, out);
+                        walk(std::slice::from_ref(clip_source), out);
+                        if let Some(mask) = effect_mask {
+                            walk(std::slice::from_ref(mask), out);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -887,7 +961,7 @@ impl Canvas {
             if !same_frame {
                 return None;
             }
-            if a.content != b.content {
+            if a.content != b.content && !changed.contains(&b.node) {
                 changed.push(b.node);
             }
         }
@@ -908,11 +982,12 @@ impl Canvas {
             matches!(
                 doc.node(*id).map(|n| &n.kind),
                 Some(NodeKind::Raster { .. })
-            ) && (self.sources.iter().any(|s| s.node == Some(*id))
-                || self
-                    .baked
-                    .iter()
-                    .any(|b| b.key.node == *id && !b.key.mask_shape))
+            ) && doc.node(*id).is_some_and(|n| n.styles.is_empty())
+                && (self.sources.iter().any(|s| s.node == Some(*id))
+                    || self
+                        .baked
+                        .iter()
+                        .any(|b| b.key.node == *id && !b.key.mask_shape))
         }) {
             return Ok(false);
         }
@@ -1001,15 +1076,16 @@ impl Canvas {
             Op::Source { clip, .. }
             | Op::Fill { clip, .. }
             | Op::Vector { clip, .. }
-            | Op::Pop { clip, .. } => clip,
-            Op::Push { .. } => NONE,
+            | Op::Pop { clip, .. }
+            | Op::StylePop { clip, .. } => clip,
+            Op::Push { .. } | Op::StyleBackdrop => NONE,
         };
         let alpha_of = |op: &Op| match *op {
             Op::Source { alpha, .. }
             | Op::Fill { alpha, .. }
             | Op::Vector { alpha, .. }
             | Op::Pop { alpha, .. } => alpha,
-            Op::Push { .. } => NONE,
+            Op::Push { .. } | Op::StyleBackdrop | Op::StylePop { .. } => NONE,
         };
         let mut depth = 0i32;
         let mut best = 0;
@@ -1027,7 +1103,7 @@ impl Canvas {
             if let Some(op) = self.ops.get(end) {
                 match op {
                     Op::Push { .. } => depth += 1,
-                    Op::Pop { .. } => depth -= 1,
+                    Op::Pop { .. } | Op::StylePop { .. } => depth -= 1,
                     _ => {}
                 }
             }
@@ -1087,6 +1163,14 @@ impl Canvas {
                     w[5] = run as u32;
                 }
                 Op::Push { isolated } => w[0] = if isolated { 1 } else { 2 },
+                Op::StyleBackdrop => w[0] = 7,
+                Op::StylePop {
+                    mode,
+                    opacity,
+                    clip,
+                } => {
+                    w[..5].copy_from_slice(&[8, mode, NONE, clip, opacity.to_bits()]);
+                }
                 Op::Pop {
                     isolated,
                     mode,

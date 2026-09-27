@@ -1,7 +1,7 @@
 //! User-selected tools share the standard rail's activation semantics.
 use super::*;
 use gpui_kit::component::{
-    Disableable, Sizable,
+    Disableable, Selectable, Sizable,
     button::{Button, ButtonVariants},
 };
 
@@ -241,6 +241,7 @@ impl EditorView {
                 Button::new(SharedString::from(format!("custom-tool-{}", item.name)))
                     .small()
                     .ghost()
+                    .selected(active)
                     .w(rems(1.75))
                     .h(rems(1.75))
                     .accessibility_label(item.name)

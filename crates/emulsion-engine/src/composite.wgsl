@@ -69,6 +69,7 @@ fn sample_vector(run: u32, screen: vec2<i32>) -> vec4<f32> {
 fn composite_range(px: vec2<i32>, screen: vec2<i32>, level: u32, first: u32, last: u32, start: vec4<f32>) -> vec4<f32> {
     var acc = start;
     var stack: array<vec4<f32>, 8>;
+    var styled: array<vec4<f32>, 8>;
     var alpha: array<f32, 16>;
     for (var s = 0u; s < 16u; s++) { alpha[s] = 1.0; }
     var depth = 0u;
@@ -81,11 +82,27 @@ fn composite_range(px: vec2<i32>, screen: vec2<i32>, level: u32, first: u32, las
             if op == 1u { acc = vec4(0.0); }
             continue;
         }
+        if op == 7u {
+            styled[depth - 1u] = acc;
+            acc = stack[depth - 1u];
+            continue;
+        }
         let mode = program[o + 1u];
         let slot = program[o + 2u];
         let clip = program[o + 3u];
         var coverage = bitcast<f32>(program[o + 4u]);
         if clip != NONE { coverage *= alpha[clip]; }
+        if op == 8u {
+            depth--;
+            let a = styled[depth].a;
+            // Match StyledGroup in the CPU compositor, including effects
+            // such as Multiply shadows over a partially transparent backdrop.
+            let rgb = clamp(acc.rgb - stack[depth].rgb * (1.0 - a), vec3(0.0), vec3(a));
+            let src = vec4(rgb, a);
+            acc = stack[depth];
+            if coverage > 0.0 { acc = blend(mode, acc, src * coverage); }
+            continue;
+        }
         if op == 3u || op == 4u {
             depth--;
             var mask = 1.0;

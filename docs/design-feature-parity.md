@@ -51,3 +51,12 @@ Each milestone must include a complete user workflow, existing regression tests,
 round-trip/recovery tests for new data, and performance measurements on realistic
 projects. A core-only implementation or a panel of placeholders does not close a
 row. Update this plan as implementation and acceptance checks establish progress.
+
+The shared-tool quality pass fixes exclusive selection across Photo/Draw rails
+and their grouped tools, and keeps eligible styled text in Vello when adding a
+shadow. Effects retain their existing raster representation; advanced blending
+still requires the compatibility canvas. The new application artwork is used by
+Home and Linux/Windows packaging, with the full-resolution source used to build
+the macOS icon. These fixes do not complete the responsive-frame, component or
+advanced motion milestones above. Windows and macOS runtime checks remain with
+the separate platform machines.

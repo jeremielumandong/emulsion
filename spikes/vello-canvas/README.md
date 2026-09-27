@@ -111,10 +111,18 @@ copied before GPU painting.
 `canvas.rs` turns `Document::composite_tree()` into the op model of
 `emulsion-gpu`'s tile compositor: layer, fill, isolated and pass-through groups,
 clipping, group masks. Masks and non-identity placements of pixel layers are
-baked once on the CPU into document-aligned rasters. Adjustment layers, layer
-styles, advanced blending options and Dissolve are not implemented. The spike
-lists any it meets as unsupported rather than approximating them. The test files
-use none of them.
+baked once on the CPU into document-aligned rasters. Layer styles composite
+their cached effects around the original content, keeping eligible text and
+paths in Vello at the viewport resolution. Non-Normal effects also evaluate
+against the real backdrop, matching the CPU's styled-layer semantics. Clipping
+uses the original layer shape, excluding shadows and glows. Styled paint layers
+use the CPU brush so edits regenerate their effects.
+
+Adjustment layers, advanced blending options (including effect masks) and
+Dissolve still require the CPU canvas. The engine reports these explicitly.
+Effect images themselves remain document-resolution rasters; the foreground
+text is scalable. `style_tests` checks compositing against the CPU, edit/reload,
+and unchanged text edges with a shadow at 100%, 150% and 250% zoom.
 
 The screen pass maps each screen pixel to a document pixel. It runs the program
 with nearest sampling at the camera's mip level, then applies the checkerboard,

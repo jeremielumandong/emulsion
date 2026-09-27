@@ -282,7 +282,7 @@ pub struct VectorLayer {
     renderer: Renderer,
     pub fonts: Fonts,
     pub objects: Vec<Object>,
-    by_node: HashMap<NodeId, usize>,
+    by_node: HashMap<NodeId, Vec<usize>>,
     runs: Vec<Run>,
     pub space: VectorSpace,
     target: Option<Target>,
@@ -360,7 +360,7 @@ impl VectorLayer {
                     fragment: Scene::new(),
                     bounds: [0.0; 4],
                 });
-                layer.by_node.insert(*node, index);
+                layer.by_node.entry(*node).or_default().push(index);
                 layer.encode(index);
                 entries.push(entry(index, &layer.objects[index]));
             }
@@ -414,7 +414,7 @@ impl VectorLayer {
                     fragment: Scene::new(),
                     bounds: [0.0; 4],
                 }));
-                self.by_node.insert(*node, index);
+                self.by_node.entry(*node).or_default().push(index);
                 if fresh {
                     let started = Instant::now();
                     self.encode(index);
@@ -507,22 +507,25 @@ impl VectorLayer {
         }
     }
 
-    /// Change one object and re-encode it alone.
+    /// Change one node, including any separate clipping-shape instances.
     pub fn edit(&mut self, node: NodeId, change: impl FnOnce(&mut VectorKind)) -> bool {
-        let Some(&index) = self.by_node.get(&node) else {
+        let Some(indices) = self.by_node.get(&node).cloned() else {
             return false;
         };
-        let before = entry(index, &self.objects[index]);
-        change(&mut self.objects[index].kind);
-        let t = Instant::now();
-        self.encode(index);
-        self.stats.encoded += 1;
-        self.stats.encode_ms += t.elapsed().as_secs_f64() * 1e3;
-        let after = entry(index, &self.objects[index]);
-        for run in &mut self.runs {
-            if run.tree.remove(&before).is_some() {
-                run.tree.insert(after);
-                break;
+        let mut kind = self.objects[indices[0]].kind.clone();
+        change(&mut kind);
+        for index in indices {
+            let before = entry(index, &self.objects[index]);
+            self.objects[index].kind = kind.clone();
+            let t = Instant::now();
+            self.encode(index);
+            self.stats.encoded += 1;
+            self.stats.encode_ms += t.elapsed().as_secs_f64() * 1e3;
+            let after = entry(index, &self.objects[index]);
+            for run in &mut self.runs {
+                if run.tree.remove(&before).is_some() {
+                    run.tree.insert(after);
+                }
             }
         }
         true

@@ -40,8 +40,11 @@ new brush/recovery code (the recorded Windows results predate this patch):
 - Copy a whole text layer, paste in the same and a different tab, enlarge it,
   and verify it remains editable. Whole mixed-layer copies retain native fragments within the app. Pixel
   selections and external copies use the portable PNG representation.
-- Add an adjustment or layer style to an already active GPU document. Verify the
-  CPU-canvas badge, correct pixels, and recovery after undo. Translucent vectors
+- Add a shadow to text in an active GPU document. Check crisp glyph edges at
+  100%, 150% and 250%, effect opacity/blends, clipping, edits and undo. Ordinary
+  layer styles should retain the GPU canvas. Effect images remain rasterized.
+- Add an adjustment or advanced blending option (such as Blend If) to an active
+  GPU document. Verify the CPU-canvas badge, correct pixels, and recovery after undo. Translucent vectors
   should show compatibility rendering and match the CPU canvas's colors.
 - Suspend/resume and, where safely available, exercise real device replacement.
   The automatic test destroys an owned engine device and recreates it; it does

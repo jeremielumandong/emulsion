@@ -22,6 +22,9 @@ pub mod gpu;
 pub mod host;
 pub mod vector;
 
+#[cfg(test)]
+mod style_tests;
+
 pub use canvas::Canvas;
 pub use compositor::Camera;
 pub use engine::{Engine, FrameTimes, Offscreen, Output};

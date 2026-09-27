@@ -3,6 +3,74 @@ use super::*;
 use gpui_kit::test::TestWindowExt;
 
 #[gpui_kit::test]
+fn tool_highlights_are_exclusive_in_photo_and_draw_layouts(cx: &mut TestAppContext) {
+    let mut original = doc(&["Photo"], None);
+    // Mask activation otherwise creates one, which is an intentional edit.
+    original.nodes[0].mask = Some(Arc::new(emulsion_raster::Mask::white(256, 192)));
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(1600.)));
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    for compact in [false, true] {
+        for draw in [false, true] {
+            cx.update(|window, cx| {
+                cx.global_mut::<AppSettings>().0.compact_chrome = compact;
+                editor.update(cx, |e, cx| {
+                    e.draw_mode = draw;
+                    e.rail = Default::default();
+                    cx.notify();
+                });
+                window.refresh();
+            });
+            cx.run_until_parked();
+            // These tools share Brush internally but must select independently.
+            for chosen in ["Brush", "Smudge", "Eraser", "Move", "Hand", "Brush"] {
+                cx.update(|window, cx| window.click(chosen, cx));
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    for name in ["Brush", "Smudge", "Eraser", "Move", "Hand", "Mask", "Zoom"] {
+                        assert_eq!(
+                            window.find(name).selected(),
+                            Some(name == chosen),
+                            "{name}, active={chosen}, compact={compact}, draw={draw}"
+                        );
+                    }
+                    assert_eq!(editor.read(cx).editor.doc, original);
+                    assert_eq!(editor.read(cx).editor.history.len(), 0);
+                });
+            }
+            let groups = if draw {
+                crate::editor::rail::DRAW_GROUPS
+            } else {
+                crate::editor::rail::GROUPS
+            };
+            for (g, group) in groups.iter().enumerate() {
+                for (i, chosen) in group.iter().enumerate() {
+                    cx.update(|_, cx| editor.update(cx, |e, cx| e.activate_rail_item(g, i, cx)));
+                    cx.run_until_parked();
+                    cx.update(|window, _| {
+                        assert_eq!(
+                            window.within("tool-rail").find(chosen.name).selected(),
+                            Some(true)
+                        );
+                        for item in groups.iter().flat_map(|group| group.iter()) {
+                            if let Some(button) = window.try_find(item.name) {
+                                assert_eq!(
+                                    button.selected(),
+                                    Some(item.name == chosen.name),
+                                    "{}, active={}, compact={compact}, draw={draw}",
+                                    item.name,
+                                    chosen.name
+                                );
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn custom_toolbox_drag_add_reorder_and_activation_preserve_document(cx: &mut TestAppContext) {
     let original = doc(&["Photo"], None);
     let (ws, cx) = open(cx, original.clone());
