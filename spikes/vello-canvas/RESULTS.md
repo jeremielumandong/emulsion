@@ -680,7 +680,31 @@ opening the document, and stroke-end readback are outside the input samples.
 Earlier exploratory runs with an undersized standalone parent were discarded.
 
 Raw data: [native editor results](results/editor-linux-rx7700xt-migration.json).
-Use the matched CPU/GPU canvas dimensions in that report when comparing results.
+The window manager gave the GPU cases a 795×1173 device-pixel canvas and the CPU
+cases 769×1173 (synthetic) / 763×1173 (original layered fixture); these are
+**observational comparisons, not exact equal-viewport experiments**.
+
+Original layered fixture, milliseconds (p50 / p95):
+
+| Workload | CPU input → canvas submission | GPU input → canvas submission | CPU input → next frame callback | GPU input → next frame callback |
+|---|---:|---:|---:|---:|
+| Pan | 2.38 / 3.48 | 3.08 / 3.36 | 6.06 / 6.19 | 38.55 / 42.54 |
+| Brush | 33.13 / 214.81 | 3.45 / 3.86 | 36.33 / 218.00 | 38.71 / 39.36 |
+| Text move | 58.45 / 62.97 | 5.53 / 5.87 | 61.90 / 69.45 | 41.12 / 41.59 |
+
+The GPU brush actually ran; one stroke-end commit/readback took 3.22 ms. Its
+textures occupied about 1145 MiB on the dense layered fixture, versus 206 MiB on
+the synthetic shared-tile fixture. Those numbers exclude CPU data, driver/Vello
+internal buffers and GPUI's own textures. The historical 1301 MiB baseline used
+a different viewport, so it is not an exact before/after memory comparison.
+
+The corrected synthetic brush submission was 3.91 / 22.02 ms CPU and 3.49 / 3.97
+ms GPU. **The earlier 14.8 → 2.4 ms exploratory claim is superseded.** GPU frame
+callbacks remained around 38–41 ms in these runs despite short canvas submission;
+CPU pacing varied by workload. This establishes lower submission cost and brush
+tail latency on the dense fixture, not a general end-to-end latency win. Isolating
+the GPUI/compositor scheduling delay and rerunning at fixed viewport dimensions
+remains performance follow-up work.
 
 ### Fidelity and remaining work
 

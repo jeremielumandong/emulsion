@@ -13,6 +13,7 @@ these Windows results predate that follow-up.*
 **Current follow-up:** tasks 1, 2, 4–8, 10 and 12 have implementation and Linux
 regression coverage. Task 11 now has a native EditorView benchmark. Task 3
 remains open for macOS validation. Task 9 retains opaque-vector edge differences;
+task 13 tracks the frame-pacing issue exposed by native measurement;
 the new brush/recovery code also needs a
 Windows follow-up. See [platform validation](PLATFORM_VALIDATION.md).
 
@@ -238,6 +239,17 @@ and a destination-sized lazy raster cache, including across tabs. Same-document
 paste preserves the exact position; cross-document paste centers it. A pixel
 selection or a mixed/multiple-layer copy still copies pixels. External apps
 receive the PNG. Native clipboard data does not persist across app restarts.
+
+**13. Native editor frame pacing.** *(open, found by task 11)*
+
+The corrected native benchmark shows substantially lower GPU submission cost on
+the original layered fixture (brush p50 33.13 → 3.45 ms, p95 214.81 → 3.86 ms).
+However GPU input-to-next-frame-callback remains roughly 38–41 ms, so median
+end-to-end brush latency has not been shown to improve. Investigate the
+GPUI/compositor scheduling delay and repeat with identical viewport dimensions;
+the window manager gave these runs slightly different canvas widths. The raw
+reports and limits are in `RESULTS.md`. Do not substitute the earlier undersized
+harness numbers or spike-host latency for these shipping-editor results.
 
 ## For the Windows session
 
