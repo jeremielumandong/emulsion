@@ -1,10 +1,10 @@
 //! Data-backed chart and table controls in the Design element library.
+use super::design_chart_data::ChartDataEditor;
 use super::*;
 use emulsion_core::design_charts::{self, Chart, Kind};
 use gpui_kit::component::{
     Sizable, WindowExt,
     button::{Button, ButtonVariants},
-    input::{Textarea, TextareaState},
 };
 
 impl EditorView {
@@ -58,7 +58,7 @@ impl EditorView {
             })
             .into_any_element()
     }
-    fn design_chart_dialog(
+    pub(super) fn design_chart_dialog(
         &mut self,
         kind: Kind,
         editing: bool,
@@ -114,11 +114,7 @@ impl EditorView {
                 .join(", "),
         ]
         .map(|v| cx.new(|cx| InputState::new(window, cx).default_value(v)));
-        let data = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .rows(9)
-                .default_value(emulsion_io::design_charts::to_csv(&chart.rows))
-        });
+        let data = cx.new(|cx| ChartDataEditor::new(&chart, window, cx));
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
         window.open_dialog(cx, move |dialog, _, _| {
@@ -127,8 +123,8 @@ impl EditorView {
             let owner = owner.clone();
             let chart = chart.clone();
             dialog
-                .title(format!("{} data", chart.kind.label()))
-                .width(px(640.))
+                .title("Chart and table data")
+                .width(px(720.))
                 .child(
                     div().flex().flex_col().gap_2()
                         .child(
@@ -139,8 +135,7 @@ impl EditorView {
                                     }),
                             ),
                         )
-                        .child("CSV: first row is the header. Charts use category labels in column one and numbers in the remaining columns. Pie uses one value column. Tables accept text.")
-                        .child(div().id("design-chart-data").test_support().child(Textarea::new(&data)))
+                        .child(data.clone())
                         .child("Editing data redraws the chart at the chosen size. Detach from data to keep manual artwork edits."),
                 )
                 .footer(crate::widgets::form_dialog_footer("Apply data"))
@@ -152,7 +147,8 @@ impl EditorView {
                         inputs[2].read(cx).value().trim().parse().unwrap_or(f64::NAN),
                     );
                     let colors = inputs[3].read(cx).value().to_string();
-                    let csv = data.read(cx).value().to_string();
+                    chart.kind = data.read(cx).kind;
+                    let rows = data.read(cx).rows(cx);
                     owner.update(cx, |this, cx| {
                         if this.edit_ticket() != ticket {
                             this.set_status("The page changed. Open chart data again.", true, cx);
@@ -169,7 +165,7 @@ impl EditorView {
                                 let rgba = if color.len() == 6 { (value << 8) | 255 } else { value };
                                 Ok(rgba.to_be_bytes())
                             }).collect::<Result<_, String>>()?;
-                            chart.rows = emulsion_io::design_charts::rows(&csv).map_err(|e| e.to_string())?;
+                            chart.rows = rows?;
                             design_charts::apply(&mut this.editor, existing, chart, origin)
                         })();
                         match result {
@@ -180,6 +176,10 @@ impl EditorView {
                                 true
                             }
                             Err(error) => {
+                                data.update(cx, |data, cx| {
+                                    data.error = Some(error.clone());
+                                    cx.notify();
+                                });
                                 this.set_status(error, true, cx);
                                 false
                             }

@@ -10,11 +10,15 @@ use emulsion_cloud::{
     store,
 };
 use gpui_kit::{
-    component::{Disableable, Sizable, button::Button},
+    component::{
+        Disableable, Icon, Sizable,
+        button::Button,
+        menu::{DropdownMenu, PopupMenuItem},
+    },
     *,
 };
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -33,6 +37,99 @@ pub(crate) struct CloudUi {
     remote: Vec<(Account, RemoteRevision)>,
     page: usize,
     ready: Option<PathBuf>,
+    syncing_file: Option<(PathBuf, Provider)>,
+    sync_error: Option<(PathBuf, Provider)>,
+    syncing_accounts: Vec<Provider>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileSyncStatus {
+    Local,
+    Syncing,
+    Synced,
+    Queued,
+    Paused,
+    Error,
+    Disconnected,
+    Snapshot,
+    Unsaved,
+}
+impl FileSyncStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Local => "Local only",
+            Self::Syncing => "Syncing…",
+            Self::Synced => "Synced",
+            Self::Queued => "Queued",
+            Self::Paused => "Paused",
+            Self::Error => "Retry needed",
+            Self::Disconnected => "Reconnect to sync",
+            Self::Snapshot => "Snapshot needed",
+            Self::Unsaved => "Unsaved edits",
+        }
+    }
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Local => "hard-drive",
+            Self::Syncing => "cloud-sync",
+            Self::Synced => "cloud-check",
+            Self::Queued | Self::Snapshot => "cloud-upload",
+            Self::Paused => "circle-pause",
+            Self::Error => "cloud-alert",
+            Self::Disconnected => "cloud-off",
+            Self::Unsaved => "pencil",
+        }
+    }
+}
+impl CloudUi {
+    fn file_status(&self, path: &Path, unsaved: bool) -> (Option<Provider>, FileSyncStatus) {
+        if let Some((active, provider)) = &self.syncing_file
+            && active == path
+        {
+            return (Some(*provider), FileSyncStatus::Syncing);
+        }
+        let binding = self
+            .index
+            .as_ref()
+            .and_then(|i| i.bindings.iter().find(|b| b.path == path));
+        if unsaved {
+            return (binding.map(|b| b.provider), FileSyncStatus::Unsaved);
+        }
+        if let Some((failed, provider)) = &self.sync_error
+            && failed == path
+        {
+            return (Some(*provider), FileSyncStatus::Error);
+        }
+        let Some(binding) = binding else {
+            return (None, FileSyncStatus::Local);
+        };
+        let index = self.index.as_ref().unwrap();
+        let jobs: Vec<_> = index
+            .jobs
+            .iter()
+            .filter(|j| j.revision.project == binding.project)
+            .collect();
+        let state = if !index
+            .accounts
+            .iter()
+            .any(|a| a.provider == binding.provider && a.id == binding.account_id)
+        {
+            FileSyncStatus::Disconnected
+        } else if binding.paused {
+            FileSyncStatus::Paused
+        } else if !jobs.is_empty() && self.syncing_accounts.contains(&binding.provider) {
+            FileSyncStatus::Syncing
+        } else if jobs.iter().any(|j| j.error.is_some()) {
+            FileSyncStatus::Error
+        } else if !jobs.is_empty() {
+            FileSyncStatus::Queued
+        } else if binding.saved_hash.is_some() {
+            FileSyncStatus::Synced
+        } else {
+            FileSyncStatus::Snapshot
+        };
+        (Some(binding.provider), state)
+    }
 }
 
 #[derive(Default)]
@@ -43,6 +140,262 @@ struct Outcome {
     photos: Vec<PathBuf>,
 }
 impl Workspace {
+    pub(crate) fn cloud_home_notice(&self) -> Option<AnyElement> {
+        (!self.cloud.note.is_empty()).then(|| {
+            div()
+                .id("home-cloud-status")
+                .test_support()
+                .text_sm()
+                .child(self.cloud.note.clone())
+                .into_any_element()
+        })
+    }
+
+    /// Uses the cached index: rendering cards never reads files or contacts a provider.
+    pub(crate) fn cloud_file_control(&self, path: &Path, cx: &Context<Self>) -> AnyElement {
+        let index = self.cloud.index.as_ref();
+        let binding = index.and_then(|i| i.bindings.iter().find(|b| b.path == path));
+        let accounts = index.map(|i| i.accounts.as_slice()).unwrap_or_default();
+        let destinations: Vec<_> = accounts
+            .iter()
+            .filter(|a| a.provider != Provider::GooglePhotos)
+            .filter(|a| binding.is_none_or(|b| b.provider == a.provider && b.account_id == a.id))
+            .map(|a| a.provider)
+            .collect();
+        let unsaved = self.editor.as_ref().is_some_and(|e| {
+            let e = e.read(cx);
+            e.editor.path.as_deref().or(e.source.as_deref()) == Some(path)
+                && (e.editor.is_modified() || e.history.save_busy)
+        });
+        let (provider, status) = self.cloud.file_status(path, unsaved);
+        let status_label = provider.map_or_else(
+            || status.label().to_string(),
+            |p| format!("{} · {}", p.label(), status.label()),
+        );
+        let palette = theme::palette(cx);
+        let color = match status {
+            FileSyncStatus::Synced => if palette.dark {
+                rgb(0x66d9a0)
+            } else {
+                rgb(0x157344)
+            }
+            .into(),
+            FileSyncStatus::Error | FileSyncStatus::Disconnected => if palette.dark {
+                rgb(0xffb86b)
+            } else {
+                rgb(0x9b4e00)
+            }
+            .into(),
+            FileSyncStatus::Syncing => palette.accent,
+            _ => palette.muted,
+        };
+        let status_row = div()
+            .id((
+                ElementId::from("home-file-sync-status"),
+                path.to_string_lossy().into_owned(),
+            ))
+            .test_support()
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .text_xs()
+            .text_color(color)
+            .child(
+                Icon::empty()
+                    .path(format!("icons/{}.svg", status.icon()))
+                    .size(px(14.)),
+            )
+            .child(status_label);
+        let label = if destinations.is_empty() {
+            if binding.is_some() {
+                "Reconnect cloud…".to_string()
+            } else {
+                "Connect cloud…".to_string()
+            }
+        } else if binding.is_some_and(|b| b.paused) {
+            "Resume sync".into()
+        } else if binding.is_some() {
+            "Sync now".into()
+        } else if destinations.len() == 1 {
+            format!("Sync to {}", destinations[0].label())
+        } else {
+            "Sync to cloud…".into()
+        };
+        let button = Button::new((
+            ElementId::from("home-file-sync"),
+            path.to_string_lossy().into_owned(),
+        ))
+        .label(label)
+        .icon(Icon::empty().path("icons/cloud-upload.svg"))
+        .small()
+        .outline()
+        .tooltip(
+            "Upload this saved file and its required originals; future saves sync automatically",
+        )
+        .disabled(self.cloud.busy || !self.cloud.loaded);
+        let path = path.to_path_buf();
+        let button =
+            if destinations.len() == 1 {
+                let provider = destinations[0];
+                button
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.cloud_sync_file(path.clone(), provider, cx)
+                    }))
+                    .into_any_element()
+            } else if destinations.is_empty() {
+                button
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.set_screen(Screen::Settings, window, cx)
+                    }))
+                    .into_any_element()
+            } else {
+                let owner = cx.weak_entity();
+                button
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for provider in &destinations {
+                            let provider = *provider;
+                            let owner = owner.clone();
+                            let path = path.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(format!("Sync to {}", provider.label()))
+                                    .on_click(move |_, _, cx| {
+                                        owner
+                                            .update(cx, |this, cx| {
+                                                this.cloud_sync_file(path.clone(), provider, cx)
+                                            })
+                                            .ok();
+                                    }),
+                            );
+                        }
+                        menu
+                    })
+                    .into_any_element()
+            };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .min_w_0()
+            .child(button)
+            .child(status_row)
+            .into_any_element()
+    }
+
+    fn cloud_sync_file(&mut self, path: PathBuf, provider: Provider, cx: &mut Context<Self>) {
+        if self.cloud.busy {
+            return;
+        }
+        if let Some(editor) = &self.editor {
+            let e = editor.read(cx);
+            let open = e.editor.path.as_ref().or(e.source.as_ref());
+            let same_file = open.is_some_and(|open| {
+                open == &path
+                    || open
+                        .canonicalize()
+                        .ok()
+                        .zip(path.canonicalize().ok())
+                        .is_some_and(|(a, b)| a == b)
+            });
+            if same_file && (e.history.save_busy || e.editor.is_modified()) {
+                self.cloud.note = "Save the open file's current edits before syncing it.".into();
+                cx.notify();
+                return;
+            }
+        }
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        self.cloud.note = format!("Syncing {name} to {}…", provider.label());
+        self.cloud.syncing_file = Some((path.clone(), provider));
+        if self
+            .cloud
+            .sync_error
+            .as_ref()
+            .is_some_and(|(failed, _)| failed == &path)
+        {
+            self.cloud.sync_error = None;
+        }
+        let mut rows: Vec<_> = self
+            .cloud
+            .remote
+            .iter()
+            .filter(|(a, _)| a.provider != provider)
+            .cloned()
+            .collect();
+        self.cloud_task(
+            move |store| {
+                store.bind(&path, provider)?;
+                emulsion_io::cloud::enqueue(&store, &path)?;
+                let canonical = path.canonicalize()?;
+                let account = store.update(|index| {
+                    let binding = index
+                        .bindings
+                        .iter()
+                        .find(|b| b.path == canonical)
+                        .ok_or_else(|| anyhow::anyhow!("File sync settings changed; retry"))?;
+                    for job in &mut index.jobs {
+                        if job.revision.project == binding.project {
+                            job.retry_at = 0;
+                        }
+                    }
+                    index
+                        .accounts
+                        .iter()
+                        .find(|a| a.provider == provider && a.id == binding.account_id)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Reconnect this file's cloud account"))
+                })?;
+                let transfer = providers::connected(&store, &account)
+                    .and_then(|files| providers::synchronize(&store, &account, &files));
+                let remote = match transfer {
+                    Ok(remote) => remote,
+                    Err(error) => {
+                        // Account lookup/listing can fail before the uploader records a job
+                        // error. Keep the selected file's status accurate across restarts.
+                        let index = store.read()?;
+                        if let Some(binding) = index.bindings.iter().find(|b| b.path == canonical) {
+                            for job in index.jobs.iter().filter(|j| {
+                                j.revision.project == binding.project && j.error.is_none()
+                            }) {
+                                store.failed(job, error.to_string())?;
+                            }
+                        }
+                        return Err(error);
+                    }
+                };
+                rows.extend(remote.into_iter().map(|r| (account.clone(), r)));
+                let index = store.read()?;
+                let binding = index
+                    .bindings
+                    .iter()
+                    .find(|b| b.path == canonical)
+                    .ok_or_else(|| anyhow::anyhow!("File sync settings changed; retry"))?;
+                let pending = index
+                    .jobs
+                    .iter()
+                    .any(|j| j.revision.project == binding.project);
+                let note = if binding.paused {
+                    format!("Sync paused for {name}; its saved copy is kept in the queue.")
+                } else if pending {
+                    format!("{name} is queued for {}.", provider.label())
+                } else {
+                    format!(
+                        "Synced {name} to {}. Future saves sync automatically.",
+                        provider.label()
+                    )
+                };
+                Ok(Outcome {
+                    note,
+                    remote: Some(rows),
+                    ..Default::default()
+                })
+            },
+            cx,
+        );
+    }
+
     fn cloud_task(
         &mut self,
         work: impl FnOnce(Store) -> anyhow::Result<Outcome> + Send + 'static,
@@ -62,6 +415,8 @@ impl Workspace {
                 .await;
             this.update(cx, |this, cx| {
                 this.cloud.busy = false;
+                let syncing = this.cloud.syncing_file.take();
+                this.cloud.syncing_accounts.clear();
                 this.cloud.cancelled = None;
                 this.cloud.loaded = true;
                 if let Ok(index) = index {
@@ -69,6 +424,20 @@ impl Workspace {
                 }
                 if let Ok(config) = config {
                     this.cloud.config = config;
+                }
+                if result.is_err()
+                    && let Some((path, provider)) = syncing
+                {
+                    let has_queued_error = this.cloud.index.as_ref().is_some_and(|i| {
+                        i.bindings.iter().find(|b| b.path == path).is_some_and(|b| {
+                            i.jobs
+                                .iter()
+                                .any(|j| j.revision.project == b.project && j.error.is_some())
+                        })
+                    });
+                    if !has_queued_error {
+                        this.cloud.sync_error = Some((path, provider));
+                    }
                 }
                 match result {
                     Ok(outcome) => {
@@ -137,6 +506,16 @@ impl Workspace {
             return;
         }
         self.cloud.note = "Checking cloud revisions…".into();
+        self.cloud.syncing_accounts = self
+            .cloud
+            .index
+            .as_ref()
+            .unwrap()
+            .accounts
+            .iter()
+            .filter(|a| a.provider != Provider::GooglePhotos)
+            .map(|a| a.provider)
+            .collect();
         self.cloud_task(
             move |store| {
                 if retry {
@@ -254,18 +633,7 @@ impl Workspace {
             cx.notify();
             return;
         };
-        self.cloud_task(
-            move |store| {
-                store.bind(&path, provider)?;
-                emulsion_io::cloud::enqueue(&store, &path)?;
-                Ok(Outcome {
-                    note: "Cloud sync enabled. Saved versions are queued; Sync now uploads them."
-                        .into(),
-                    ..Default::default()
-                })
-            },
-            cx,
-        );
+        self.cloud_sync_file(path, provider, cx);
     }
     fn cloud_pause(&mut self, path: PathBuf, paused: bool, cx: &mut Context<Self>) {
         self.cloud_task(
@@ -632,6 +1000,125 @@ mod tests {
     use super::*;
     use core::prelude::v1::test;
     use gpui_kit::test::TestWindowExt;
+
+    fn drive_account() -> Account {
+        Account {
+            provider: Provider::GoogleDrive,
+            id: "test-account".into(),
+            registration: "test-client".into(),
+            label: "Test Drive".into(),
+            root: "test-folder".into(),
+            persistent_credentials: false,
+        }
+    }
+
+    #[test]
+    fn card_status_tracks_durable_queue_and_never_marks_failed_uploads_synced() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::new(temp.path().join("cloud"));
+        let path = temp.path().join("photo.png");
+        std::fs::write(&path, b"test snapshot").unwrap();
+        let path = path.canonicalize().unwrap();
+        let account = drive_account();
+        store.connect(account.clone()).unwrap();
+        let mut ui = CloudUi::default();
+        assert_eq!(ui.file_status(&path, false), (None, FileSyncStatus::Local));
+        store.bind(&path, account.provider).unwrap();
+        store.enqueue(&path, &path).unwrap();
+        ui.index = Some(store.read().unwrap());
+        assert_eq!(
+            ui.file_status(&path, false),
+            (Some(Provider::GoogleDrive), FileSyncStatus::Queued)
+        );
+        let job = store.pending(&account).unwrap().remove(0);
+        store.failed(&job, "offline".into()).unwrap();
+        ui.index = Some(Store::new(&store.root).read().unwrap());
+        assert_eq!(ui.file_status(&path, false).1, FileSyncStatus::Error);
+        store.set_paused(&path, true).unwrap();
+        ui.index = Some(store.read().unwrap());
+        assert_eq!(ui.file_status(&path, false).1, FileSyncStatus::Paused);
+        store.set_paused(&path, false).unwrap();
+        store.complete(&job).unwrap();
+        ui.index = Some(store.read().unwrap());
+        assert_eq!(ui.file_status(&path, false).1, FileSyncStatus::Synced);
+        assert_eq!(ui.file_status(&path, true).1, FileSyncStatus::Unsaved);
+        ui.sync_error = Some((path.clone(), Provider::GoogleDrive));
+        assert_eq!(ui.file_status(&path, false).1, FileSyncStatus::Error);
+        ui.syncing_file = Some((path.clone(), Provider::GoogleDrive));
+        assert_eq!(ui.file_status(&path, false).1, FileSyncStatus::Syncing);
+        ui.syncing_file = None;
+        ui.sync_error = None;
+        store
+            .connect(Account {
+                id: "different-account".into(),
+                ..account
+            })
+            .unwrap();
+        ui.index = Some(store.read().unwrap());
+        assert_eq!(ui.file_status(&path, false).1, FileSyncStatus::Disconnected);
+    }
+
+    #[gpui_kit::test]
+    fn card_sync_is_visible_in_grid_and_list_and_keeps_unsaved_work_local(cx: &mut TestAppContext) {
+        let (workspace, cx) = crate::tests::open(cx, emulsion_core::Document::new(32, 32));
+        cx.run_until_parked();
+        cx.simulate_resize(size(px(1440.), px(1000.)));
+        let path = PathBuf::from("/tmp/emulsion-card-sync-unsaved.png");
+        cx.update(|window, cx| {
+            workspace.update(cx, |this, cx| {
+                this.cloud = CloudUi {
+                    loaded: true,
+                    index: Some(Index {
+                        accounts: vec![drive_account()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                this.editor.as_ref().unwrap().update(cx, |editor, _| {
+                    editor.editor.path = Some(path.clone());
+                    editor.history.save_busy = true;
+                });
+                this.recents = vec![emulsion_io::recent::Recent {
+                    path: path.clone(),
+                    opened: emulsion_io::recent::now(),
+                    summary: String::new(),
+                }];
+                this.recovered.clear();
+                this.set_screen(Screen::Home, window, cx);
+            })
+        });
+        cx.run_until_parked();
+        for rows in [false, true] {
+            if rows {
+                cx.update(|window, cx| window.click("home-list", cx));
+                cx.run_until_parked();
+            }
+            cx.update(|window, cx| {
+                let id = (
+                    ElementId::from("home-file-sync"),
+                    path.to_string_lossy().into_owned(),
+                );
+                assert!(window.find(id.clone()).visible());
+                assert!(
+                    window
+                        .find((
+                            ElementId::from("home-file-sync-status"),
+                            path.to_string_lossy().into_owned()
+                        ))
+                        .visible()
+                );
+                window.click(id, cx);
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let this = workspace.read(cx);
+                assert_eq!(this.screen, Screen::Home);
+                assert!(!this.cloud.busy);
+                assert!(this.cloud.note.contains("Save the open file"));
+                assert!(window.find("home-cloud-status").visible());
+            });
+        }
+    }
 
     #[gpui_kit::test]
     fn cloud_settings_explain_missing_registrations_and_keep_connect_inactive(

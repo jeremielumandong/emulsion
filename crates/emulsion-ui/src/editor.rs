@@ -68,6 +68,7 @@ mod quick_mask;
 #[cfg(test)]
 pub(crate) use presets::shared_library;
 mod design_bulk_ui;
+mod design_chart_data;
 mod design_charts_ui;
 mod design_layout_ui;
 mod design_video_ui;

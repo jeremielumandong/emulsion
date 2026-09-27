@@ -142,7 +142,8 @@ impl EditorView {
         let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)
             - f64::from(f32::from(canvas.origin.y));
         let text = matches!(node.kind, NodeKind::Text { .. });
-        let width = if text { 350. } else { 276. };
+        let chart = self.editor.doc.design.charts.contains_key(&id);
+        let width = if text || chart { 350. } else { 276. };
         let x = (((left + right) / 2.) as f32 - width / 2.)
             .clamp(8., (f32::from(canvas.size.width) - width - 8.).max(8.));
         let y = (top as f32 - 38.).clamp(8., (f32::from(canvas.size.height) - 38.).max(8.));
@@ -264,6 +265,20 @@ impl EditorView {
             );
         } else {
             bar = bar
+                .when(chart, |bar| {
+                    bar.child(
+                        small_button("design-chart-edit-selection", "Edit data")
+                            .disabled(locked)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.design_chart_dialog(
+                                    emulsion_core::design_charts::Kind::Bar,
+                                    true,
+                                    window,
+                                    cx,
+                                )
+                            })),
+                    )
+                })
                 .child(
                     small_button("design-object-properties", "Properties").on_click(cx.listener(
                         |this, _, _, cx| this.select_sidebar(SidebarTab::Properties, cx),

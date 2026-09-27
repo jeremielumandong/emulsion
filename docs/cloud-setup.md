@@ -133,11 +133,22 @@ service-account credential file.
 
 1. Open **Home → Cloud & Photos**, or the cloud section at the top of Settings.
 2. Connect the desired provider and finish sign-in in your system browser.
-3. Open and save a file, then choose **Sync current file** for its destination.
+3. On Home or inside a project, use **Sync to Google Drive** directly beneath
+   a saved photo/file card (also available in list view). If multiple storage
+   providers are connected, **Sync to cloud…** offers a destination menu.
+   This enables automatic sync and starts uploading immediately. Settings'
+   **Sync current file** uses the same action for the open document.
    Native projects include their referenced RAW originals, including references
    retained by native history. A missing/mismatched original prevents queueing
    a misleadingly incomplete portable revision.
-4. **Sync now / retry** uploads pending revisions and lists remote versions.
+4. Each file shows a cloud-status icon and its provider, such as **Google Drive
+   · Synced**. A green cloud check means its saved snapshot has uploaded.
+   Syncing, queued, paused, retry-needed, disconnected, and unsaved-edit states
+   have distinct icons and labels. **Local only** means sync has not been
+   enabled for that file. **Sync now** on a card retries its saved copy;
+   paused files offer **Resume sync**. Status describes Emulsion's saved
+   snapshots; files changed externally are checked when next queued.
+   **Sync now / retry** in Settings uploads pending revisions and lists remote versions.
    Subsequent successful saves automatically queue snapshots; the running app
    also checks periodically. Pause stops uploads but retains queued work.
 5. On another installation using the same app registration and provider

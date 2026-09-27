@@ -827,6 +827,7 @@ impl Workspace {
                     .children(self.recovered_rows(&p, cx))
                     .children(self.home_project_cards(center_width, &p, cx))
                     .child(self.home_file_controls(visible.len(), &p, cx))
+                    .children(self.cloud_home_notice())
                     .when(self.home_state.management, |column| {
                         column
                             .child(self.home_projects_controls(&p, cx))
@@ -1370,6 +1371,7 @@ impl Workspace {
                     }),
                 )
             });
+        let sync = self.cloud_file_control(&path, cx);
         let select = Button::new(path_id("home-recent", &path))
             .ghost()
             .rounded_none()
@@ -1393,7 +1395,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(12.))
-                .h(px(44.))
+                .min_h(px(52.))
                 .px(px(14.))
                 .min_w_0()
                 .border_b_1()
@@ -1401,6 +1403,7 @@ impl Workspace {
                 .bg(p.panel)
                 .child(check)
                 .child(div().flex_1().min_w_0().child(select))
+                .child(sync)
                 .child(actions)
                 .into_any_element()
         } else {
@@ -1412,15 +1415,17 @@ impl Workspace {
                 .bg(p.panel)
                 .border_1()
                 .border_color(if active { p.accent } else { p.line })
-                .child(select)
-                .child(div().absolute().left(px(10.)).top(px(36.)).child(check))
                 .child(
-                    div()
-                        .absolute()
-                        .right(px(10.))
-                        .bottom(px(14.))
-                        .child(actions),
+                    div().relative().child(select).child(
+                        div()
+                            .absolute()
+                            .right(px(10.))
+                            .bottom(px(14.))
+                            .child(actions),
+                    ),
                 )
+                .child(div().absolute().left(px(10.)).top(px(36.)).child(check))
+                .child(div().px(px(12.)).pb(px(10.)).child(sync))
                 .into_any_element()
         }
     }
