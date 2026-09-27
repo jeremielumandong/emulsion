@@ -242,6 +242,78 @@ pub struct CompositeTree {
     pub nodes: Vec<CompositeNode>,
 }
 
+/// Pixels a composite node draws from, which may not exist yet.
+///
+/// A vector layer's pixels are rendered from its path or text, and on a large
+/// document that costs tens of milliseconds. A renderer that draws the vector
+/// directly -- the GPU canvas, through Vello -- never needs them, and the CPU
+/// compositor needs them only for the layers it actually reaches. Building a
+/// composite tree therefore records how to make them rather than making them.
+///
+/// Cloning shares the result, so passing a tree around renders nothing twice.
+#[derive(Clone)]
+pub struct LazyRaster {
+    ready: Arc<std::sync::OnceLock<Arc<Raster>>>,
+    make: Option<Arc<dyn Fn() -> Arc<Raster> + Send + Sync>>,
+    /// Known without rendering, so a caller can size and identify the content
+    /// it is not going to draw.
+    size: (u32, u32),
+}
+
+impl LazyRaster {
+    /// Pixels that already exist.
+    pub fn ready(raster: Arc<Raster>) -> Self {
+        let size = (raster.width(), raster.height());
+        let ready = Arc::new(std::sync::OnceLock::new());
+        let _ = ready.set(raster);
+        Self {
+            ready,
+            make: None,
+            size,
+        }
+    }
+
+    /// Pixels to render on first use, at a size the caller already knows.
+    pub fn deferred(size: (u32, u32), make: Arc<dyn Fn() -> Arc<Raster> + Send + Sync>) -> Self {
+        Self {
+            ready: Arc::new(std::sync::OnceLock::new()),
+            make: Some(make),
+            size,
+        }
+    }
+
+    /// The pixel dimensions, without rendering anything.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// A stable identity for these pixels, for callers that key on the content
+    /// without needing it. New content gets a new identity.
+    pub fn id(&self) -> usize {
+        Arc::as_ptr(&self.ready) as *const u8 as usize
+    }
+
+    /// The pixels, rendering them if this is the first ask.
+    pub fn get(&self) -> &Arc<Raster> {
+        self.ready.get_or_init(|| {
+            self.make
+                .as_ref()
+                .expect("a LazyRaster has pixels or knows how to make them")()
+        })
+    }
+
+    /// Whether the pixels exist, so a caller can avoid forcing them.
+    pub fn is_ready(&self) -> bool {
+        self.ready.get().is_some()
+    }
+}
+
+impl From<Arc<Raster>> for LazyRaster {
+    fn from(raster: Arc<Raster>) -> Self {
+        Self::ready(raster)
+    }
+}
+
 #[derive(Clone)]
 pub struct CompositeNode {
     /// Stable id; seeds Dissolve noise.
@@ -261,7 +333,7 @@ pub struct CompositeNode {
 #[derive(Clone)]
 pub enum NodeContent {
     Pixels {
-        raster: Arc<Raster>,
+        raster: LazyRaster,
         placement: Placement,
     },
     /// Solid premultiplied linear colour over the whole document.
@@ -540,6 +612,9 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
 
         match &node.content {
             NodeContent::Pixels { raster, placement } => {
+                // The CPU compositor draws these pixels, so this is where a
+                // vector layer's raster is finally rendered.
+                let raster = raster.get();
                 let mut src = Scratch::zeroed();
                 let sampled = sample_raster(&mut src, raster, placement, ctx);
                 let knockout_shape = if node.blending.knockout != Knockout::None
@@ -1493,7 +1568,7 @@ mod tests {
             mask: None,
             clip_to: None,
             content: NodeContent::Pixels {
-                raster: Arc::new(raster),
+                raster: Arc::new(raster).into(),
                 placement: Placement::default(),
             },
         }

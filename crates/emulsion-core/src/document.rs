@@ -498,7 +498,7 @@ impl Document {
                     let n = doc.node(*id).expect("child exists");
                     let content = match &n.kind {
                         NodeKind::Raster { raster, placement } => NodeContent::Pixels {
-                            raster: raster.clone(),
+                            raster: raster.clone().into(),
                             placement: *placement,
                         },
                         NodeKind::Group { .. } => NodeContent::Group(build(doc, Some(n.id))),
@@ -507,8 +507,15 @@ impl Document {
                             NodeContent::Fill(color::srgba8_to_premul(*rgba))
                         }
                         NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
+                            // Defer: a renderer that draws the vector itself
+                            // never needs these, and rendering them costs
+                            // tens of milliseconds on a large document.
+                            let cache = cache.clone();
                             NodeContent::Pixels {
-                                raster: cache.pixels().clone(),
+                                raster: emulsion_raster::composite::LazyRaster::deferred(
+                                    cache.size(),
+                                    Arc::new(move || cache.pixels().clone()),
+                                ),
                                 placement: emulsion_raster::Placement::default(),
                             }
                         }
@@ -519,7 +526,7 @@ impl Document {
                             offset,
                             ..
                         } => NodeContent::Pixels {
-                            raster: cache.clone(),
+                            raster: cache.clone().into(),
                             placement: crate::smart::cache_placement(
                                 placement,
                                 (source.width(), source.height()),
@@ -561,14 +568,23 @@ impl Document {
                             mask_node.blend = emulsion_raster::BlendMode::Normal;
                             mask_node.blending = Default::default();
                             mask_node.content = match &node.content {
-                                NodeContent::Pixels { raster, placement } => NodeContent::Pixels {
-                                    raster: Arc::new(emulsion_raster::Raster::solid(
-                                        raster.width(),
-                                        raster.height(),
-                                        [1.0; 4],
-                                    )),
-                                    placement: *placement,
-                                },
+                                NodeContent::Pixels { raster, placement } => {
+                                    let (raster, placement) = (raster.clone(), *placement);
+                                    NodeContent::Pixels {
+                                        raster: emulsion_raster::composite::LazyRaster::deferred(
+                                            raster.size(),
+                                            Arc::new(move || {
+                                                let r = raster.get();
+                                                Arc::new(emulsion_raster::Raster::solid(
+                                                    r.width(),
+                                                    r.height(),
+                                                    [1.0; 4],
+                                                ))
+                                            }),
+                                        ),
+                                        placement,
+                                    }
+                                }
                                 _ => NodeContent::Fill([1.0; 4]),
                             };
                             Some(Box::new(mask_node))

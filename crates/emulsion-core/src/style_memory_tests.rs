@@ -17,7 +17,7 @@ fn overlay(node: &CompositeNode) -> Arc<Raster> {
     let NodeContent::Pixels { raster, .. } = &children.last().unwrap().content else {
         panic!("overlay pixels");
     };
-    raster.clone()
+    raster.get().clone()
 }
 
 #[test]

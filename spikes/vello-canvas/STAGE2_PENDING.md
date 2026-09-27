@@ -69,22 +69,23 @@ is not hypothetical.
 
 ### Performance
 
-**5. Building the composite tree rasterises vector layers.** *(partly done)*
+**5. Building the composite tree rasterises vector layers.** *(done)*
 
 The eager half is fixed: `VectorRaster` in `emulsion-core` renders a text or
 path layer's pixels on first use, so a transform only records what they
 should be. Measured on a 3840×2160 document with one text layer, transforming
 went from **12.1 ms to 0.00 ms**.
 
-The cost moved rather than vanished. `Document::composite_tree` materialises
-`NodeContent::Pixels` for every node, so the first consumer forces the render:
-**10.94 ms** after a transform, once per frame during a drag. A drag is
-therefore no faster yet.
+`NodeContent::Pixels` now holds a `LazyRaster` rather than an `Arc<Raster>`,
+so building a composite tree records how to make a vector layer's pixels
+instead of making them. It carries the size and an identity, so a caller can
+measure and key on content it is not going to draw. The CPU compositor
+renders them where it samples them, in `composite`; the GPU canvas, drawing
+the vector with Vello, never asks.
 
-Finishing it means `CompositeNode` carrying the vector lazily, so a renderer
-that draws it directly -- the GPU canvas, via Vello -- never forces the
-pixels, and the CPU compositor forces them only for the layers it actually
-draws. That is a change in `emulsion-raster`'s composite model.
+Measured end to end on a 3840x2160 document with one text layer: transform
+**12.1 ms -> 0.00 ms**, composite tree after a transform **10.94 ms ->
+0.00 ms**.
 
 What the lazy cache already buys: transforms whose result is never displayed
 cost nothing -- MCP and batch operations, undo and redo chains, documents

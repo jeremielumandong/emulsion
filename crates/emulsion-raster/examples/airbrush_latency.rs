@@ -43,7 +43,7 @@ fn main() {
                 node(
                     2,
                     NodeContent::Pixels {
-                        raster: Arc::new(current.clone()),
+                        raster: Arc::new(current.clone()).into(),
                         placement: Placement::default(),
                     },
                 ),

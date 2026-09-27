@@ -1254,7 +1254,7 @@ pub fn effect_node(id: u64, raster: Arc<Raster>, r: IRect, n: &Node) -> Composit
         mask: None,
         clip_to: None,
         content: NodeContent::Pixels {
-            raster,
+            raster: raster.into(),
             placement: Placement::at(r.x as f64, r.y as f64),
         },
     }

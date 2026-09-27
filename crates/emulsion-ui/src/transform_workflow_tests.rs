@@ -12,7 +12,7 @@ fn moving_styled_image_reuses_effect_pixels_across_canvas_edge_and_undo(cx: &mut
         let NodeContent::Pixels { raster, placement } = &children.last().unwrap().content else {
             panic!("overlay");
         };
-        (raster.clone(), *placement)
+        (raster.get().clone(), *placement)
     }
     let source = Arc::new(Raster::from_fn(256, 192, [0; 4], |x, y| {
         [x as u16 * 128, y as u16 * 128, 10000, 65535]
