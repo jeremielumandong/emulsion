@@ -39,7 +39,11 @@ pub fn enabled() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
+        // Never under test: the unit tests drive GPUI headless, with no
+        // surface to present and no frame loop to drive the engine, so a
+        // canvas that renders on the GPU there just hangs them.
         HOSTED
+            && !cfg!(test)
             && match std::env::var("EMULSION_GPU_CANVAS") {
                 Ok(v) => v != "0",
                 Err(_) => true,

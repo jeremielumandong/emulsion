@@ -2560,19 +2560,22 @@ impl EditorView {
                             });
                             return None;
                         }
-                        // The GPU canvas draws the whole document itself, so
-                        // don't composite tiles it is about to make redundant.
-                        // A refusal is sticky, so this yields for one frame at
-                        // most before the tile path resumes.
-                        if gpu_canvas.borrow().defers_to_gpu(&gpu_view) {
-                            return None;
-                        }
+                        // When the GPU canvas draws the document, the tile
+                        // path stands down: no tiles are requested and the plan
+                        // carries only the chrome -- stage, plate, grid, wipe,
+                        // rulers -- which the engine does not draw. A refusal
+                        // is sticky, so this yields for one frame at most.
+                        let images = !gpu_canvas.borrow().defers_to_gpu(&gpu_view);
                         let plan = viewport::prepaint(
                             &scene,
                             &mut cache.borrow_mut(),
                             b,
                             window.scale_factor(),
+                            images,
                         );
+                        if !images {
+                            return Some(plan);
+                        }
                         if cache.borrow_mut().start_settle_wakeup() {
                             // Share one worker across moving frames. It waits
                             // for the latest view change without generating
@@ -2617,22 +2620,30 @@ impl EditorView {
                     },
                     move |bounds, plan, window, cx| {
                         if let Some(plan) = plan {
-                            viewport::paint(plan, &scene2, &cache2, window, cx);
-                        } else if crate::viewport_gpu::paint(
-                            &mut gpu_canvas2.borrow_mut(),
-                            &gpu_doc,
-                            gpu_rev,
-                            &gpu_view,
-                            bounds,
-                            window,
-                        ) {
-                            // Painted by the engine.
-                        } else if crate::viewport_gpu::enabled() {
-                            // It refused this frame; come back on the tile path.
-                            let again = w2.clone();
-                            cx.defer(move |cx| {
-                                again.update(cx, |_, cx| cx.notify()).ok();
-                            });
+                            if !plan.has_images() && crate::viewport_gpu::enabled() {
+                                // The engine draws the document, between the
+                                // chrome that sits under it and the chrome
+                                // that sits over it.
+                                viewport::paint_under(&plan, &scene2, window);
+                                let drawn = crate::viewport_gpu::paint(
+                                    &mut gpu_canvas2.borrow_mut(),
+                                    &gpu_doc,
+                                    gpu_rev,
+                                    &gpu_view,
+                                    bounds,
+                                    window,
+                                );
+                                viewport::paint_over(&plan, &scene2, window, cx);
+                                if !drawn {
+                                    // It refused; come back on the tile path.
+                                    let again = w2.clone();
+                                    cx.defer(move |cx| {
+                                        again.update(cx, |_, cx| cx.notify()).ok();
+                                    });
+                                }
+                            } else {
+                                viewport::paint(plan, &scene2, &cache2, window, cx);
+                            }
                         }
                         if let Some(mask) = &mask_view {
                             mask_view::paint(
