@@ -27,6 +27,7 @@ mod contextual_tools;
 mod creative_pack_ui;
 mod creative_ui;
 pub(crate) mod crop;
+mod design_controls;
 mod design_motion_ui;
 mod design_ui;
 mod diagram_data_ui;
@@ -4240,13 +4241,19 @@ impl Render for EditorView {
                             .children(size_panel)
                             .children(export_panel)
                             .children(ask)
+                            .children(self.design_canvas_toolbar(&p, window, cx))
                             .child(canvas)
-                            .children(dock),
+                            .children(dock)
+                            .when(self.is_design(), |column| {
+                                column.children(self.project_page_strip(&p, cx))
+                            }),
                     )
                     .child(panel)
                     .children(picker),
             )
-            .children(self.project_page_strip(&p, cx))
+            .when(!self.is_design(), |column| {
+                column.children(self.project_page_strip(&p, cx))
+            })
             .child(strip)
             .into_any_element()
     }

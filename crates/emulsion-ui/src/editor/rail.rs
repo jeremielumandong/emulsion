@@ -258,6 +258,29 @@ const LIQUIFY_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
 /// kit at build time, or one of the drawings above.
 fn icon_bytes(id: &str) -> &'static [u8] {
     match id {
+        "search" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/search.svg")
+        }
+        "layout-template" => include_bytes!(
+            "../../../../vendor/gpui/gpui-kit-assets/assets/icons/layout-template.svg"
+        ),
+        "shapes" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/shapes.svg")
+        }
+        "upload" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/upload.svg")
+        }
+        "palette" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/palette.svg")
+        }
+        "image" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/image.svg"),
+        "sparkles" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/sparkles.svg")
+        }
+        "play" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/play.svg"),
+        "chevrons-left" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/chevrons-left.svg")
+        }
         "rotate-cw" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/rotate-cw.svg")
         }

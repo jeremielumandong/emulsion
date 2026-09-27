@@ -110,7 +110,15 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
         NodeKind::Group { .. } => doc
             .children(Some(id))
             .into_iter()
-            .filter_map(|child| node_bounds(doc, child))
+            .filter_map(|child| {
+                let bounds = node_bounds(doc, child)?;
+                // Cropped media must not enlarge the frame's transform or
+                // alignment bounds. Its source still moves with the group.
+                match doc.node(child)?.clip_to {
+                    Some(base) => Some(bounds.intersect(&node_bounds(doc, base)?)),
+                    None => Some(bounds),
+                }
+            })
             .fold(IRect::default(), |a, b| a.union(&b)),
         NodeKind::Fill { .. } => IRect::new(0, 0, doc.width as i32, doc.height as i32),
         NodeKind::Adjust(_) => mask

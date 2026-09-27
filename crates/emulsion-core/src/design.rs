@@ -1,8 +1,11 @@
 //! Editable design building blocks. Templates contain native paths and text.
 #[path = "design_brand.rs"]
 pub mod brand;
+#[path = "design_media.rs"]
+mod media;
 use crate::{Command, Document, Node, NodeKind, command::Slot, text::TextSpec};
 use emulsion_raster::vector::{Anchor, Path, PathStyle, SubPath};
+pub use media::{ImageFit, fit_frame_image};
 use std::sync::Arc;
 
 /// A frame is a native group with a vector clipping base and optional image.
@@ -26,6 +29,58 @@ pub fn frame(doc: &Document, element: Element) -> crate::fragment::Fragment {
     }
 }
 
+/// Original bundled font combinations, inserted as two editable text layers.
+pub fn typography_pair(doc: &Document, variant: usize) -> Option<crate::fragment::Fragment> {
+    if variant >= 4 {
+        return None;
+    }
+    let (heading_font, body_font) = match variant {
+        0 => ("Geist", "Geist Mono"),
+        2 => ("Geist Mono", "Geist"),
+        _ => ("Geist", "Geist"),
+    };
+    let mut nodes = Vec::new();
+    for (id, font, text, ratio, y) in [
+        (1, heading_font, "Your headline", 0.075, 0.3),
+        (
+            2,
+            body_font,
+            "A little context makes a great story.",
+            0.027,
+            0.55,
+        ),
+    ] {
+        let mut node = Node::text(
+            id,
+            if id == 1 { "Heading" } else { "Body" },
+            TextSpec {
+                text: text.into(),
+                font: font.into(),
+                size: (doc.width.min(doc.height) as f32 * ratio).max(6.),
+                x: doc.width as f32 * 0.12,
+                y: doc.height as f32 * y,
+                width: Some(doc.width as f32 * 0.76),
+                bold: id == 1 && variant != 3,
+                italic: id == 1 && variant == 3,
+                color: [28, 30, 36, 255],
+                ..Default::default()
+            },
+            doc.width,
+            doc.height,
+        );
+        node.parent = Some(3);
+        nodes.push(node);
+    }
+    nodes.push(Node::group(3, "Font combination"));
+    Some(crate::fragment::Fragment {
+        nodes,
+        roots: vec![3],
+        design: Default::default(),
+        diagram: None,
+        raw_originals: Vec::new(),
+    })
+}
+
 pub fn frame_parts(
     doc: &Document,
     selected: crate::NodeId,
@@ -36,16 +91,30 @@ pub fn frame_parts(
     } else {
         doc.children(selected.parent)
     };
-    let boundary = if let Some(base) = selected.clip_to {
-        base
-    } else if matches!(selected.kind, NodeKind::Path { .. }) {
-        selected.id
-    } else {
-        *members.iter().find(|id| {
-            doc.node(**id)
-                .is_some_and(|n| matches!(n.kind, NodeKind::Path { .. }))
-        })?
+    let boundary = match &selected.kind {
+        NodeKind::Path { .. } => selected.id,
+        NodeKind::Raster { .. } => selected.clip_to?,
+        NodeKind::Group { .. } => {
+            let mut shapes = members.iter().filter(|id| {
+                doc.node(**id)
+                    .is_some_and(|n| matches!(n.kind, NodeKind::Path { .. }))
+            });
+            let boundary = *shapes.next()?;
+            // A general illustration group is not an unambiguous media frame.
+            if shapes.next().is_some() {
+                return None;
+            }
+            boundary
+        }
+        _ => return None,
     };
+    let base = doc.node(boundary)?;
+    if !matches!(base.kind, NodeKind::Path { .. }) {
+        return None;
+    }
+    if matches!(selected.kind, NodeKind::Raster { .. }) {
+        return (selected.parent == base.parent).then_some((boundary, Some(selected.id)));
+    }
     let image = members
         .iter()
         .find(|id| {
@@ -67,20 +136,14 @@ pub fn place_in_frame(
     }
     let (boundary, image) =
         frame_parts(&editor.doc, selected).ok_or("Select a frame or vector shape first.")?;
-    let bounds =
-        crate::geometry::node_bounds(&editor.doc, boundary).ok_or("The frame has no bounds.")?;
-    if bounds.is_empty() {
-        return Err("The frame is empty.".into());
-    }
-    let scale =
-        (bounds.w as f64 / raster.width() as f64).max(bounds.h as f64 / raster.height() as f64);
-    let placement = emulsion_raster::Placement {
-        x: bounds.x as f64 + (bounds.w as f64 - raster.width() as f64 * scale) / 2.,
-        y: bounds.y as f64 + (bounds.h as f64 - raster.height() as f64 * scale) / 2.,
-        scale_x: scale,
-        scale_y: scale,
-        ..Default::default()
-    };
+    let placement = media::placement(
+        &editor.doc,
+        boundary,
+        &raster,
+        ImageFit::Cover,
+        [0.5; 2],
+        Default::default(),
+    )?;
     editor.begin("Replace frame image");
     let result = (|| {
         if let Some(id) = image {

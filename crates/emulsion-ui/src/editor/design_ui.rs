@@ -13,7 +13,7 @@ use gpui_kit::component::{
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum Section {
+pub(super) enum Section {
     #[default]
     Templates,
     Elements,
@@ -25,9 +25,10 @@ enum Section {
     Photos,
     Magic,
     Motion,
+    Position,
 }
 impl Section {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Templates,
         Self::Elements,
         Self::Text,
@@ -38,10 +39,11 @@ impl Section {
         Self::Photos,
         Self::Magic,
         Self::Motion,
+        Self::Position,
     ];
     fn label(self) -> &'static str {
         match self {
-            Self::Templates => "Templates",
+            Self::Templates => "Design",
             Self::Elements => "Elements",
             Self::Text => "Text",
             Self::Uploads => "Uploads",
@@ -51,20 +53,22 @@ impl Section {
             Self::Photos => "Photos",
             Self::Magic => "Magic",
             Self::Motion => "Motion",
+            Self::Position => "Position",
         }
     }
     fn icon(self) -> &'static str {
         match self {
-            Self::Templates => "▦",
-            Self::Elements => "◇",
-            Self::Text => "T",
-            Self::Uploads => "↑",
-            Self::Tools => "✎",
-            Self::Frames => "▧",
-            Self::Brand => "◉",
-            Self::Photos => "▣",
-            Self::Magic => "✧",
-            Self::Motion => "▷",
+            Self::Templates => "layout-template",
+            Self::Elements => "shapes",
+            Self::Text => "type",
+            Self::Uploads => "upload",
+            Self::Tools => "pen-tool",
+            Self::Frames => "square",
+            Self::Brand => "palette",
+            Self::Photos => "image",
+            Self::Magic => "sparkles",
+            Self::Motion => "play",
+            Self::Position => "move",
         }
     }
 }
@@ -73,6 +77,9 @@ pub(super) struct DesignUi {
     open: bool,
     search: Option<Entity<InputState>>,
     subscription: Option<Subscription>,
+    template_size: Option<(u32, u32)>,
+    preview_size: Option<(u32, u32)>,
+    previews: HashMap<usize, Arc<RenderImage>>,
 }
 impl Default for DesignUi {
     fn default() -> Self {
@@ -81,11 +88,19 @@ impl Default for DesignUi {
             open: true,
             search: None,
             subscription: None,
+            template_size: None,
+            preview_size: None,
+            previews: HashMap::new(),
         }
     }
 }
 
 impl EditorView {
+    pub(super) fn show_design_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.design_ui.section = section;
+        self.design_ui.open = true;
+        cx.notify();
+    }
     pub(super) fn is_design(&self) -> bool {
         self.editor.kind() == Some(ProjectKind::Design)
     }
@@ -133,8 +148,12 @@ impl EditorView {
         if !self.prepare_page_action(cx) {
             return;
         }
+        let size = self
+            .design_ui
+            .template_size
+            .unwrap_or((self.editor.doc.width, self.editor.doc.height));
         let result = template
-            .create(self.editor.doc.width, self.editor.doc.height)
+            .create(size.0, size.1)
             .and_then(|doc| self.editor.add_page(doc, template.label().into(), 0.));
         match result {
             Ok(_) => {
@@ -143,6 +162,65 @@ impl EditorView {
             }
             Err(error) => self.set_status(error, true, cx),
         }
+    }
+
+    fn insert_font_combination(&mut self, variant: usize, cx: &mut Context<Self>) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let Some(fragment) = emulsion_core::design::typography_pair(&self.editor.doc, variant)
+        else {
+            return;
+        };
+        match fragment.paste(&mut self.editor, Slot::TOP, (0., 0.)) {
+            Ok(ids) => {
+                let primary = ids.first().copied();
+                self.set_layer_selection(ids, primary);
+                self.after_change(cx);
+                self.set_tool(Tool::Move, cx);
+            }
+            Err(error) => self.set_status(error, true, cx),
+        }
+    }
+
+    fn load_design_previews(&mut self, cx: &mut Context<Self>) {
+        let size = self
+            .design_ui
+            .template_size
+            .unwrap_or((self.editor.doc.width, self.editor.doc.height));
+        if self.design_ui.preview_size == Some(size) {
+            return;
+        }
+        self.design_ui.preview_size = Some(size);
+        self.design_ui.previews.clear();
+        cx.spawn(async move |this, cx| {
+            let previews = cx
+                .background_spawn(async move {
+                    let scale = 384. / f64::from(size.0.max(size.1));
+                    let preview_size = (
+                        (f64::from(size.0) * scale).round().max(1.) as u32,
+                        (f64::from(size.1) * scale).round().max(1.) as u32,
+                    );
+                    Template::ALL
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, template)| {
+                            let doc = template.create(preview_size.0, preview_size.1).ok()?;
+                            let (w, h, bytes) = super::history::doc_thumb(&doc, 216);
+                            Some((i, Arc::new(viewport::bgra_image(w, h, bytes))))
+                        })
+                        .collect::<HashMap<_, _>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.design_ui.preview_size == Some(size) {
+                    this.design_ui.previews = previews;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn choose_design_asset(&mut self, cx: &mut Context<Self>) {
@@ -316,21 +394,34 @@ impl EditorView {
             .flex_none()
             .flex()
             .flex_col()
-            .gap_1()
+            .items_center()
+            .gap(px(2.))
             .py_2()
             .min_h_0()
             .overflow_y_scroll()
             .bg(p.panel)
             .border_r_1()
             .border_color(p.line)
-            .children(Section::ALL.into_iter().enumerate().map(|(i, s)| {
+            .children([0, 1, 2, 3, 7, 6, 8].into_iter().map(|i| {
+                let s = Section::ALL[i];
                 Button::new(("design-section", i))
-                    .label(format!("{}\n{}", s.icon(), s.label()))
-                    .w_full()
-                    .h(px(64.))
+                    .accessibility_label(s.label())
+                    .w(px(56.))
+                    .h(px(48.))
                     .xsmall()
                     .ghost()
                     .selected(section == s && open)
+                    .text_color(if section == s && open { p.ink } else { p.muted })
+                    .when(section == s && open, |button| button.bg(p.soft_bg))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(4.))
+                            .child(rail::tool_icon(s.icon()).size(px(15.)))
+                            .child(div().text_size(px(9.5)).child(s.label())),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.design_ui.open = !(this.design_ui.section == s && this.design_ui.open);
                         this.design_ui.section = s;
@@ -344,25 +435,149 @@ impl EditorView {
             .flex_none()
             .flex()
             .flex_col()
-            .gap_3()
-            .p_3()
             .bg(p.panel)
             .border_r_1()
             .border_color(p.line)
-            .child(div().text_size(px(15.)).child(section.label()))
-            .child(Input::new(&search).small());
+            .child(
+                div()
+                    .id("design-drawer-heading")
+                    .test_support()
+                    .flex()
+                    .items_center()
+                    .h(px(38.))
+                    .flex_none()
+                    .px(px(12.))
+                    .border_b_1()
+                    .border_color(p.line)
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(section.label()),
+                    )
+                    .child(
+                        Button::new("design-drawer-close")
+                            .ghost()
+                            .xsmall()
+                            .accessibility_label("Collapse library")
+                            .tooltip("Collapse library")
+                            .child(rail::tool_icon("chevrons-left").size(px(13.)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.design_ui.open = false;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div().px(px(10.)).pt(px(8.)).child(
+                    Styled::h(Input::new(&search).small(), px(26.))
+                        .text_size(px(11.))
+                        .prefix(rail::tool_icon("search").size(px(11.))),
+                ),
+            );
         let mut content = div()
             .id("design-drawer-content")
             .flex()
             .flex_col()
-            .gap_2()
+            .gap(px(6.))
+            .p(px(10.))
             .flex_1()
             .min_h_0()
             .overflow_y_scroll();
         match section {
             Section::Templates => {
-                content = content.child(self.creative_pack_controls(cx));
+                self.load_design_previews(cx);
+                content = content.child(
+                    div().flex().flex_wrap().gap(px(4.)).children(
+                        [
+                            ("Instagram", (1080, 1080)),
+                            ("Story", (1080, 1920)),
+                            ("Poster", (1587, 2245)),
+                            ("Presentation", (1920, 1080)),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (label, size))| {
+                            Button::new(("design-format", i))
+                                .accessibility_label(label)
+                                .child(div().text_size(px(10.5)).child(label))
+                                .xsmall()
+                                .outline()
+                                .h(px(22.))
+                                .rounded_full()
+                                .selected(self.design_ui.template_size == Some(size))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.design_ui.template_size = Some(size);
+                                    cx.notify();
+                                }))
+                        }),
+                    ),
+                );
+                let mut grid = div()
+                    .id("design-template-grid")
+                    .test_support()
+                    .grid()
+                    .grid_cols(2)
+                    .gap(px(6.));
+                for (i, t) in Template::ALL
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.label().to_lowercase().contains(&query))
+                {
+                    let preview = self.design_ui.previews.get(&i).cloned();
+                    grid = grid.child(
+                        Button::new(("design-template", i))
+                            .accessibility_label(t.label())
+                            .tooltip(t.label())
+                            .outline()
+                            .w_full()
+                            .h(px(108.))
+                            .p_0()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .w_full()
+                                    .min_w_0()
+                                    .gap(px(5.))
+                                    .child(
+                                        div()
+                                            .h(px(78.))
+                                            .w_full()
+                                            .overflow_hidden()
+                                            .bg(p.soft_bg)
+                                            .when_some(preview, |tile, preview| {
+                                                tile.child(
+                                                    img(preview)
+                                                        .size_full()
+                                                        .object_fit(ObjectFit::Contain),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .px(px(6.))
+                                            .text_size(px(9.5))
+                                            .font_family(MONO_FONT)
+                                            .overflow_hidden()
+                                            .child(t.label()),
+                                    ),
+                            )
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.add_design_template(t, cx)),
+                            ),
+                    );
+                }
                 content = content
+                    .child(grid)
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child("Each template adds an editable page."),
+                    )
+                    .child(self.creative_pack_controls(cx))
                     .child(
                         Button::new("design-save-template")
                             .label("Save page as template…")
@@ -385,49 +600,96 @@ impl EditorView {
                         p,
                         cx,
                     ));
-                content = content.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(p.muted)
-                        .child("Each template adds an editable page."),
-                );
-                for (i, t) in Template::ALL
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(_, t)| t.label().to_lowercase().contains(&query))
-                {
-                    content = content.child(
-                        Button::new(("design-template", i))
-                            .label(t.label())
-                            .h(px(68.))
-                            .w_full()
-                            .outline()
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.add_design_template(t, cx)),
-                            ),
-                    );
-                }
             }
             Section::Elements => {
+                content = content.child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(
+                            Button::new("design-open-frames")
+                                .label("Frames")
+                                .xsmall()
+                                .outline()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show_design_section(Section::Frames, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("design-open-tools")
+                                .label("All tools")
+                                .xsmall()
+                                .outline()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show_design_section(Section::Tools, cx)
+                                })),
+                        ),
+                );
+                let mut grid = div()
+                    .id("design-element-grid")
+                    .test_support()
+                    .grid()
+                    .grid_cols(2)
+                    .gap(px(6.));
                 for (i, e) in Element::ALL
                     .into_iter()
                     .enumerate()
                     .filter(|(_, e)| e.label().to_lowercase().contains(&query))
                 {
-                    content =
-                        content.child(
+                    let drawing = format!(
+                        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><path d='{}' fill='{}' stroke='currentColor' stroke-width='2'/></svg>",
+                        e.path(8., 8., 48., 48.).to_svg(),
+                        if e == Element::Line {
+                            "none"
+                        } else {
+                            "currentColor"
+                        }
+                    );
+                    grid =
+                        grid.child(
                             Button::new(("design-element", i))
-                                .label(e.label())
+                                .accessibility_label(e.label())
                                 .w_full()
+                                .h(px(88.))
                                 .outline()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(
+                                            svg()
+                                                .data(drawing.as_bytes())
+                                                .size(px(48.))
+                                                .text_color(p.ink),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(9.5))
+                                                .font_family(MONO_FONT)
+                                                .child(e.label()),
+                                        ),
+                                )
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.insert_design_element(e, cx)
                                 })),
                         );
                 }
+                content = content.child(grid);
                 content = content.child(self.alignment_controls(p, cx));
             }
             Section::Text => {
+                content = content.child(
+                    Button::new("design-add-text")
+                        .label("+ Add a text box")
+                        .h(px(32.))
+                        .w_full()
+                        .primary()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.insert_design_text(TextPreset::Body, cx)
+                        })),
+                );
                 for (i, t) in TextPreset::ALL
                     .into_iter()
                     .enumerate()
@@ -435,16 +697,94 @@ impl EditorView {
                 {
                     content = content.child(
                         Button::new(("design-text", i))
-                            .label(t.label())
-                            .h(px(if i == 0 { 64. } else { 44. }))
+                            .accessibility_label(t.label())
+                            .px(px(12.))
+                            .bg(p.soft_bg)
+                            .h(px(match i {
+                                0 => 44.,
+                                1 => 38.,
+                                _ => 32.,
+                            }))
                             .w_full()
                             .outline()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .font_weight(match i {
+                                        0 => FontWeight::SEMIBOLD,
+                                        1 => FontWeight::MEDIUM,
+                                        _ => FontWeight::NORMAL,
+                                    })
+                                    .text_size(px(match i {
+                                        0 => 22.,
+                                        1 => 15.,
+                                        _ => 12.,
+                                    }))
+                                    .child(t.label()),
+                            )
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.insert_design_text(t, cx)),
                             ),
                     );
                 }
-                content=content.child(div().text_size(px(11.)).text_color(p.muted).child("Click text with the Type tool to edit. Character and paragraph controls remain in Properties."));
+                let combinations = [
+                    ("Geist", "Geist Mono"),
+                    ("Bold", "Geist"),
+                    ("Geist Mono", "Geist"),
+                    ("Italic", "Geist"),
+                ];
+                let cards = combinations
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (title, body))| {
+                        Button::new(("design-type-pair", i))
+                            .outline()
+                            .h(px(80.))
+                            .w_full()
+                            .bg(p.soft_bg)
+                            .accessibility_label(format!("Add {title} and {body} font combination"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(if i == 3 {
+                                                FontWeight::NORMAL
+                                            } else {
+                                                FontWeight::SEMIBOLD
+                                            })
+                                            .when(i == 3, |heading| heading.italic())
+                                            .font_family(if i == 2 {
+                                                MONO_FONT
+                                            } else {
+                                                theme::UI_FONT
+                                            })
+                                            .child(title),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(9.5))
+                                            .text_color(p.muted)
+                                            .font_family(if i == 0 {
+                                                MONO_FONT
+                                            } else {
+                                                theme::UI_FONT
+                                            })
+                                            .child(body),
+                                    ),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.insert_font_combination(i, cx)
+                            }))
+                    });
+                content = content
+                    .child(div().pt_2().text_size(px(10.5)).text_color(p.muted).child("Font combinations"))
+                    .child(div().grid().grid_cols(2).gap(px(6.)).children(cards))
+                    .child(div().text_size(px(11.)).text_color(p.muted).child("Click text with the Type tool to edit. Character and paragraph controls remain in Properties."));
             }
             Section::Uploads | Section::Photos => {
                 content = content.child(
@@ -467,6 +807,9 @@ impl EditorView {
             }
             Section::Motion => {
                 content = content.child(self.design_motion_controls(p, cx));
+            }
+            Section::Position => {
+                content = content.child(self.design_position_controls(p, cx));
             }
             Section::Magic => {
                 content=content.child(Button::new("design-open-assistant").label("Ask the assistant…").outline().on_click(cx.listener(|this,_,window,cx|this.open_ask(window,cx)))).child(div().text_size(px(11.)).text_color(p.muted).child("Use your configured provider and the existing preview and approval workflow."));
@@ -504,6 +847,7 @@ impl EditorView {
                         } else {this.set_status("Select a frame containing an image first.",false,cx);}
                     })))
                     .child(div().text_size(px(11.)).text_color(p.muted).child("Frames keep their original image pixels. Move the group to move the frame; move or transform its image to adjust the crop."));
+                content = content.child(self.design_frame_controls(p, cx));
             }
         }
         drawer = drawer.child(content).when(overlay, |d| {

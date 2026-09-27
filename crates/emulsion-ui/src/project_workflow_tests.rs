@@ -365,7 +365,7 @@ fn design_motion_preview_and_presentation_leave_saved_objects_unchanged(cx: &mut
     });
     cx.run_until_parked();
     let original = cx.update(|_, cx| view.read(cx).editor.doc.clone());
-    cx.update(|window, cx| window.click(("design-section", 9usize), cx));
+    cx.update(|window, cx| window.click("design-animate", cx));
     cx.run_until_parked();
     cx.update(|window, cx| window.click("design-motion-play", cx));
     cx.run_until_parked();
@@ -442,16 +442,14 @@ fn resize_form_submits_and_cancel_keeps_the_project(cx: &mut TestAppContext) {
         ws.read(cx).editor.clone().unwrap()
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.click(("design-section", 9usize), cx));
-    cx.run_until_parked();
-    cx.update(|window, cx| window.click("design-resize-copy", cx));
+    cx.update(|window, cx| window.click("design-resize", cx));
     cx.run_until_parked();
     cx.update(|window, cx| window.click("ok", cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert_eq!(view.read(cx).editor.page_list().len(), 2);
         assert!(window.try_find("ok").is_none());
-        window.click("design-resize-copy", cx);
+        window.click("design-resize", cx);
     });
     cx.run_until_parked();
     cx.simulate_keystrokes("escape");
@@ -533,4 +531,239 @@ fn creative_pack_export_form_open_install_and_stencil_placement(cx: &mut TestApp
         e.undo(cx);
         assert_eq!(e.editor.doc, stencil);
     }));
+}
+
+#[gpui_kit::test]
+fn design_handoff_layout_and_native_actions(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(600, 400));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap(),
+                "Design".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    for compact in [false, true] {
+        for width in [800., 1000., 1600.] {
+            cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(1000.)));
+            cx.update(|window, cx| {
+                cx.global_mut::<AppSettings>().0.compact_chrome = compact;
+                window.refresh();
+            });
+            cx.run_until_parked();
+            cx.update(|window, _| {
+                assert_eq!(
+                    window.find("design-rail").bounds().size.width,
+                    gpui_kit::px(68.)
+                );
+                assert_eq!(
+                    window.find("design-drawer").bounds().size.width,
+                    gpui_kit::px(250.)
+                );
+                assert_eq!(
+                    window.find("design-drawer-heading").bounds().size.height,
+                    gpui_kit::px(38.)
+                );
+                let bar = window.find("design-canvas-toolbar").bounds();
+                assert_eq!(bar.size.height, gpui_kit::px(38.));
+                let pages = window.find("project-page-strip").bounds();
+                assert_eq!(pages.size.height, gpui_kit::px(88.));
+                assert_eq!(pages.origin.x, bar.origin.x);
+                assert_eq!(pages.size.width, bar.size.width);
+                for id in [0usize, 1, 2, 3, 7, 6, 8] {
+                    let bounds = window.find(("design-section", id)).bounds();
+                    assert_eq!(
+                        bounds.size,
+                        gpui_kit::size(gpui_kit::px(56.), gpui_kit::px(48.))
+                    );
+                }
+                for id in ["design-position", "design-animate", "design-resize"] {
+                    let bounds = window.find(id).bounds();
+                    assert!(bar.contains(&bounds.origin), "{id} starts outside header");
+                    assert!(
+                        bar.contains(&bounds.bottom_right()),
+                        "{id} ends outside header"
+                    );
+                }
+            });
+        }
+    }
+    cx.update(|window, cx| window.click(("design-format", 1usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-template", 0usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let e = view.read(cx);
+        assert_eq!((e.editor.doc.width, e.editor.doc.height), (1080, 1920));
+        assert_eq!(e.editor.page_list().len(), 2);
+        assert!(
+            e.editor
+                .doc
+                .nodes
+                .iter()
+                .all(|n| !matches!(n.kind, NodeKind::Raster { .. }))
+        );
+        window.click("design-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.page_list().len(), 1);
+        assert_eq!(view.read(cx).editor.doc.width, 600);
+        window.click(("design-section", 2usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-type-pair", 0usize), cx));
+    cx.run_until_parked();
+    let original = cx.update(|window, cx| {
+        let e = view.read(cx);
+        assert_eq!(e.editor.doc.nodes.len(), 3);
+        assert_eq!(
+            e.editor
+                .doc
+                .nodes
+                .iter()
+                .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+                .count(),
+            2
+        );
+        assert!(e.editor.doc.node(e.selected.unwrap()).unwrap().is_group());
+        let original = e.editor.doc.clone();
+        window.click("design-position", cx);
+        original
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-align", 0usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let e = view.read(cx);
+        assert_eq!(
+            emulsion_core::geometry::node_bounds(&e.editor.doc, e.selected.unwrap())
+                .unwrap()
+                .x,
+            0
+        );
+        window.click("design-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.doc, original);
+        window.click("design-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(view.read(cx).editor.doc.nodes.is_empty());
+        window.click("design-redo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.doc, original);
+        window.click("design-drawer-close", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("design-drawer").is_none());
+        window.click(("design-section", 1usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-open-tools", cx));
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(window.find("tool-rail").visible()));
+}
+
+#[gpui_kit::test]
+fn design_frame_fit_controls_preserve_embedded_pixels_and_undo(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(600, 400));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(1400.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap(),
+                "Frame".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-section", 1usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-open-frames", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-frame", 0usize), cx));
+    cx.run_until_parked();
+    let pixels = Arc::new(emulsion_raster::Raster::solid(
+        400,
+        100,
+        [0.2, 0.3, 0.4, 1.],
+    ));
+    let (image, original) = cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            let group = e.selected.unwrap();
+            let image = emulsion_core::design::place_in_frame(&mut e.editor, group, pixels.clone())
+                .unwrap();
+            e.after_change(cx);
+            (image, e.editor.doc.clone())
+        })
+    });
+    cx.run_until_parked();
+    for (control, index) in [
+        ("design-frame-fit", 1usize),
+        ("design-frame-fit", 2),
+        ("design-frame-focus", 5),
+    ] {
+        cx.update(|window, cx| window.click((control, index), cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let e = view.read(cx);
+            let NodeKind::Raster { raster, placement } = &e.editor.doc.node(image).unwrap().kind
+            else {
+                panic!()
+            };
+            assert!(Arc::ptr_eq(raster, &pixels));
+            assert_eq!(
+                e.editor.doc.node(image).unwrap().clip_to,
+                original.node(image).unwrap().clip_to
+            );
+            if control == "design-frame-fit" && index == 1 {
+                assert_eq!(placement.scale_x, 0.3);
+            }
+            if control == "design-frame-fit" && index == 2 {
+                assert_ne!(placement.scale_x, placement.scale_y);
+            }
+            assert_ne!(e.editor.doc, original);
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("fitted-frame.emu");
+            emulsion_io::project::write(&e.editor.snapshot().unwrap(), &path).unwrap();
+            let mut loaded = emulsion_io::project::read(&path).unwrap();
+            let NodeKind::Raster {
+                raster: restored,
+                placement: restored_placement,
+            } = &mut loaded.pages[0].doc.node_mut(image).unwrap().kind
+            else {
+                panic!()
+            };
+            assert_eq!(restored_placement, placement);
+            assert_eq!(
+                (restored.width(), restored.height()),
+                (raster.width(), raster.height())
+            );
+            for y in 0..raster.height() {
+                for x in 0..raster.width() {
+                    assert_eq!(restored.get(x, y), raster.get(x, y));
+                }
+            }
+            // Document equality intentionally compares raster Arc identity.
+            // Having compared every pixel, normalize only that allocation.
+            *restored = raster.clone();
+            assert_eq!(loaded.pages[0].doc, e.editor.doc);
+            window.click("design-undo", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original));
+    }
 }

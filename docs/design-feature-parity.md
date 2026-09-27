@@ -24,7 +24,7 @@ quality. Evidence paths below refer to Emulsion source.
 | Breakpoints | Page resize with anchors and optional text reflow | Add authored width-based overrides, inheritance and non-destructive preview widths. Desktop → phone → desktop must recover base values. |
 | Components | Editable templates and ordinary groups | Add document-local definitions, linked instances, families/variants, property overrides, propagation, reset and detach. Detect dependency cycles. Save, recovery, clipboard, duplicate/delete and Undo must preserve identity and links. |
 | Design variables | Local brand colors/fonts in `creative_ui.rs` | Add named color/number variables and property bindings. Editing a variable updates consumers; unlink/delete retain resolved appearance; imported fragments remap IDs. |
-| Image fills | Embedded frame media, replacement and crop editing | Add explicit cover/contain/stretch and focal-point controls. Keep destination hierarchy stable during asynchronous placement. Source-file removal after save must not break images. |
+| Image fills | Embedded frame media, replacement, crop editing, Cover/Contain/Stretch and a nine-point crop-focus control | Manual fitting preserves source pixels, rotation, flips, clipping and Undo. Fitted placements persist in native projects. Automatic refitting during responsive frame layout remains part of semantic frames. |
 | Interactive presentation | Page presentation and motion preview in `design_motion_ui.rs` | Add object interactions for pointer triggers, navigation/back, overlays and instance variant changes, with supported transitions and a preview-only history. Returning to editing must preserve the authored document. |
 | Frame export | Native projects and PNG/JPEG/SVG/PDF export | Add subtree export and standalone responsive HTML with embedded assets and supported interactions. Compare native, image, SVG and browser output across widths. Export is local, not deployment. |
 | Motion | Fade/slide/zoom entry/exit, timing and GIF export | Add editable property keyframes, easing, retiming, reveal channels, more original presets and animated SVG/Lottie interchange. Unsupported export content must produce explicit diagnostics. |
@@ -60,3 +60,13 @@ Home and Linux/Windows packaging, with the full-resolution source used to build
 the macOS icon. These fixes do not complete the responsive-frame, component or
 advanced motion milestones above. Windows and macOS runtime checks remain with
 the separate platform machines.
+
+The Design drawer now follows the handoff's seven-item rail, 250 px library,
+38 px heading and canvas action bar, two-column preview tiles, format chips,
+and text/font-combination cards. Position, Animate and Magic resize use native
+editing commands; Frames and the complete tool set remain reachable through
+Elements. Instagram, Story, Poster and Presentation chips choose the size of
+new editable template pages. Font combinations insert grouped native text.
+Layout and interaction tests cover both chrome modes at narrow and wide widths,
+plus page creation, alignment, frame fitting, save/reopen and Undo/Redo.
+This pass does not close semantic responsive frames, breakpoints or components.

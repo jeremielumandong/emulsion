@@ -1117,10 +1117,24 @@ impl EditorView {
                     .min_h_0()
                     .children(self.design_drawer(p, window, cx))
                     .children(self.diagram_drawer(p, window, cx))
-                    .child(stage)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .children(self.design_canvas_toolbar(p, window, cx))
+                            .child(stage)
+                            .when(self.is_design(), |column| {
+                                column.children(self.project_page_strip(p, cx))
+                            }),
+                    )
                     .child(panel),
             )
-            .children(self.project_page_strip(p, cx))
+            .when(!self.is_design(), |column| {
+                column.children(self.project_page_strip(p, cx))
+            })
             .children(if self.sidebar_tab == SidebarTab::Assistant {
                 None
             } else {

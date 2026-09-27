@@ -207,7 +207,7 @@ impl EditorView {
             cx,
         );
     }
-    fn resize_variant_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn resize_variant_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
             return;
         }
