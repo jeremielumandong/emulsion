@@ -17,6 +17,20 @@ use std::{
 };
 
 static HELPER: OnceLock<&'static [u8]> = OnceLock::new();
+#[cfg(test)]
+thread_local! {
+    static TEST_HELPER: std::cell::Cell<Option<&'static [u8]>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(crate) fn test_helper(bytes: &'static [u8]) -> impl Drop {
+    struct Restore(Option<&'static [u8]>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_HELPER.set(self.0);
+        }
+    }
+    Restore(TEST_HELPER.replace(Some(bytes)))
+}
 /// The application embeds only this small adapter executable, not WebKit itself.
 pub fn register_linux_helper(bytes: &'static [u8]) {
     let _ = HELPER.set(bytes);
@@ -62,7 +76,10 @@ impl PlatformPlayer {
         _window: &mut Window,
         _cx: &mut App,
     ) -> anyhow::Result<Self> {
-        let bytes = HELPER.get().filter(|bytes| !bytes.is_empty()).context("This build has no Linux video adapter. Rebuild with WebKitGTK 4.1 development headers installed.")?;
+        let bytes = HELPER.get().copied();
+        #[cfg(test)]
+        let bytes = TEST_HELPER.get().or(bytes);
+        let bytes = bytes.filter(|bytes| !bytes.is_empty()).context("This build has no Linux video adapter. Rebuild with WebKitGTK 4.1 development headers installed.")?;
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos();

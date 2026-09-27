@@ -49,6 +49,39 @@ applicable publishing/verification process before distributing broadly.
 [OAuth setup](https://developers.google.com/identity/protocols/oauth2/native-app),
 [Photos authorization](https://developers.google.com/photos/overview/authorization).
 
+## Troubleshooting Google connections
+
+The browser callback acknowledges receipt of Google's response. The connection
+is complete only when Emulsion shows your account instead of **Not connected**.
+Errors appear above the provider rows and identify token exchange, account
+lookup, or storage setup. Declining consent ends the attempt immediately;
+start a new connection to try again.
+
+- **Google API is disabled / storage setup:** enable **Google Drive API** in
+  the Google Cloud project that owns the imported Desktop registration. For
+  photo selection, enable **Google Photos Picker API** in that same project.
+  Allow time for activation, then retry.
+- **Required permission was not granted:** reconnect and select the requested
+  access on Google's consent screen.
+- **App registration rejected:** download the current **Desktop app** client
+  JSON, import it again, and reconnect.
+- **Sign-in code rejected:** begin a new connection from Emulsion instead of
+  refreshing an old browser callback page.
+
+See [Google Drive error guidance](https://developers.google.com/workspace/drive/api/guides/handle-errors)
+and [Google Desktop OAuth guidance](https://developers.google.com/identity/protocols/oauth2/native-app).
+
+Developers can check network reachability without reading or sending any
+registration, account credentials, or tokens:
+
+```sh
+cargo run -p emulsion-cloud --example check_google_connection
+```
+
+The unauthenticated token and account requests deliberately expect HTTP 400
+and 401. Passing this check verifies connectivity only; it does not verify
+account consent or API enablement.
+
 ## Dropbox
 
 Create a Scoped access application in the

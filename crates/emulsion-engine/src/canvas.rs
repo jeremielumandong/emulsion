@@ -343,7 +343,9 @@ pub fn text_supported(spec: &emulsion_core::text::TextSpec) -> bool {
         && spec.text_path.is_none()
         && !spec.vertical
         && spec.runs.iter().all(|run| run.style.color[3] == 255)
-        && spec.height.is_none()
+        // A finite paragraph frame clips glyphs in Vello. Height-only text
+        // still uses the fallback because it has no finite horizontal clip.
+        && (spec.height.is_none() || spec.width.is_some())
         && spec.anti_alias == emulsion_core::text::AntiAliasMode::Smooth
 }
 

@@ -13,6 +13,8 @@ use native::PlatformPlayer;
 
 #[cfg(target_os = "linux")]
 pub use linux::register_linux_helper;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use linux::test_helper;
 
 pub struct Player(PlatformPlayer);
 

@@ -39,6 +39,31 @@ fn assert_pixels_equal(a: &Raster, b: &Raster) {
 }
 
 #[test]
+fn chart_labels_and_table_cells_remain_native_vector_text() {
+    use emulsion_core::design_charts::{self, Chart, Kind};
+    for kind in Kind::ALL {
+        let mut editor = emulsion_core::Editor::new(Document::new(800, 600), None);
+        design_charts::apply(&mut editor, None, Chart::example(kind), (30.5, 40.25)).unwrap();
+        let vectors = vector_nodes(&editor.doc);
+        let mut labels = 0;
+        for node in &editor.doc.nodes {
+            if let NodeKind::Text { spec, cache } = &node.kind {
+                labels += 1;
+                assert!(spec.width.is_some() && spec.height.is_some());
+                assert!(
+                    matches!(vectors.get(&node.id), Some(VectorKind::Text { .. })),
+                    "{} / {} must not become a document-resolution bitmap",
+                    kind.label(),
+                    node.name
+                );
+                assert!(!cache.is_rendered());
+            }
+        }
+        assert!(labels > 1);
+    }
+}
+
+#[test]
 fn changed_bakes_match_full_render_through_edit_erase_and_undo() {
     let base = Arc::new(Raster::solid(900, 700, [0.2, 0.1, 0.05, 0.5]));
     let edited = Arc::new(base.with_changes(vec![(

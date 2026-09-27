@@ -206,12 +206,14 @@ impl Workspace {
                 self.cloud.note = format!("Finish {} sign-in in your browser…", provider.label());
                 self.cloud_task(move |store| {
                     let (mut account, tokens) = pending.finish()?;
-                    providers::Files::initialize(&mut account, &tokens.access_token)?;
+                    providers::Files::initialize(&mut account, &tokens.access_token)
+                        .map_err(|e| anyhow::anyhow!("{} storage setup: {e}", provider.label()))?;
                     // Replacement never transfers bindings or work to a different account.
                     if let Some(old) = store.read()?.accounts.into_iter().find(|a| a.provider == provider && a.id != account.id) { auth::forget(&old)?; }
                     account.persistent_credentials = auth::save(&account, &tokens);
                     let note = if account.persistent_credentials { format!("Connected {}. Choose a saved file to sync.", account.label) } else { format!("Connected {} for this session. The OS credential store is unavailable; reconnect after restarting.", account.label) };
-                    store.connect(account)?;
+                    store.connect(account)
+                        .map_err(|e| anyhow::anyhow!("Saving connection on this device: {e}"))?;
                     Ok(Outcome { note, remote:Some(vec![]), ..Default::default() })
                 }, cx);
             }
@@ -383,6 +385,9 @@ impl Workspace {
             .child(div().flex().flex_wrap().gap(px(8.))
                 .child(Button::new("cloud-registration").label("Import app registration…").small().outline().disabled(busy).on_click(cx.listener(|this, _, _, cx| this.cloud_import_config(cx))))
                 .child(Button::new("cloud-refresh").label("Sync now / retry").small().outline().disabled(busy || accounts.is_empty()).on_click(cx.listener(|this, _, _, cx| this.cloud_sync(true, cx)))));
+        if !self.cloud.note.is_empty() {
+            panel = panel.child(div().text_sm().child(self.cloud.note.clone()));
+        }
         for (provider_index, provider) in Provider::ALL.into_iter().enumerate() {
             let account = accounts.iter().find(|a| a.provider == provider).cloned();
             let configured = self.cloud.config.clients.contains_key(&provider);
@@ -463,9 +468,6 @@ impl Workspace {
                 }
             }
             panel = panel.child(row);
-        }
-        if !self.cloud.note.is_empty() {
-            panel = panel.child(div().text_sm().child(self.cloud.note.clone()));
         }
         if let Some(cancelled) = self.cloud.cancelled.clone() {
             panel = panel.child(

@@ -352,12 +352,16 @@ impl PendingLogin {
                         .and_then(|line| line.strip_prefix("GET "))
                         .and_then(|rest| rest.split_whitespace().next())
                         .unwrap_or("");
-                    let code = callback_code(target, &self.state);
-                    let ok = code.is_ok();
-                    let message = if ok {
-                        "Sign-in received. You can return to Emulsion."
-                    } else {
-                        "This sign-in response was rejected. Return to Emulsion and try again."
+                    let callback = callback_code(target, &self.state);
+                    let ok = callback.is_ok();
+                    let message = match &callback {
+                        Ok(Some(_)) => {
+                            "Sign-in response received. Return to Emulsion to check whether the connection completed."
+                        }
+                        Ok(None) => "Sign-in was declined. Return to Emulsion to reconnect.",
+                        Err(_) => {
+                            "This sign-in response was rejected. Return to Emulsion and try again."
+                        }
                     };
                     let _ = write!(
                         stream,
@@ -366,9 +370,12 @@ impl PendingLogin {
                         message.len(),
                         message
                     );
-                    let Ok(code) = code else {
+                    let Ok(code) = callback else {
                         continue;
                     };
+                    let code = code.context(
+                        "Sign-in was declined. Reconnect and allow the requested access",
+                    )?;
                     let registration = self.client.client_id.clone();
                     let mut fields = vec![
                         ("grant_type", "authorization_code".into()),
@@ -380,37 +387,44 @@ impl PendingLogin {
                     if !self.client.client_secret.is_empty() {
                         fields.push(("client_secret", self.client.client_secret));
                     }
-                    let tokens = exchange(self.provider, &fields)?;
+                    let tokens = exchange(self.provider, &fields).map_err(|e| {
+                        anyhow::anyhow!("{} token exchange: {e}", self.provider.label())
+                    })?;
                     let c = Client::default();
-                    let (account_id, label) = match self.provider {
-                        Provider::GoogleDrive | Provider::GooglePhotos => {
-                            let v = c.json(
-                                "GET",
-                                "https://openidconnect.googleapis.com/v1/userinfo",
-                                Some(&tokens.access_token),
-                                None,
-                            )?;
-                            (http::field(&v, "sub")?, http::field(&v, "email")?)
-                        }
-                        Provider::Dropbox => {
-                            let v = c.json(
-                                "POST",
-                                "https://api.dropboxapi.com/2/users/get_current_account",
-                                Some(&tokens.access_token),
-                                Some(&Value::Null),
-                            )?;
-                            (http::field(&v, "account_id")?, http::field(&v, "email")?)
-                        }
-                        Provider::OneDrive => {
-                            let v = c.json(
-                                "GET",
-                                "https://graph.microsoft.com/v1.0/me",
-                                Some(&tokens.access_token),
-                                None,
-                            )?;
-                            (http::field(&v, "id")?, http::field(&v, "displayName")?)
-                        }
+                    let lookup_identity = || -> Result<(String, String)> {
+                        Ok(match self.provider {
+                            Provider::GoogleDrive | Provider::GooglePhotos => {
+                                let v = c.json(
+                                    "GET",
+                                    "https://openidconnect.googleapis.com/v1/userinfo",
+                                    Some(&tokens.access_token),
+                                    None,
+                                )?;
+                                (http::field(&v, "sub")?, http::field(&v, "email")?)
+                            }
+                            Provider::Dropbox => {
+                                let v = c.json(
+                                    "POST",
+                                    "https://api.dropboxapi.com/2/users/get_current_account",
+                                    Some(&tokens.access_token),
+                                    Some(&Value::Null),
+                                )?;
+                                (http::field(&v, "account_id")?, http::field(&v, "email")?)
+                            }
+                            Provider::OneDrive => {
+                                let v = c.json(
+                                    "GET",
+                                    "https://graph.microsoft.com/v1.0/me",
+                                    Some(&tokens.access_token),
+                                    None,
+                                )?;
+                                (http::field(&v, "id")?, http::field(&v, "displayName")?)
+                            }
+                        })
                     };
+                    let (account_id, label) = lookup_identity().map_err(|e| {
+                        anyhow::anyhow!("{} account lookup: {e}", self.provider.label())
+                    })?;
                     return Ok((
                         Account {
                             provider: self.provider,
@@ -437,7 +451,7 @@ fn identity(account_id: &str, registration: &str) -> String {
     let digest = Sha256::digest(format!("{account_id}\0{registration}").as_bytes());
     URL_SAFE_NO_PAD.encode(digest)
 }
-fn callback_code(target: &str, state: &str) -> Result<String> {
+fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
     ensure!(target.starts_with("/callback?"), "Wrong callback path");
     let url = url::Url::parse(&format!("http://127.0.0.1{target}"))?;
     let pairs: Vec<_> = url.query_pairs().collect();
@@ -446,18 +460,22 @@ fn callback_code(target: &str, state: &str) -> Result<String> {
             && pairs.iter().any(|(k, v)| k == "state" && v == state),
         "Sign-in state mismatch"
     );
-    ensure!(!pairs.iter().any(|(k, _)| k == "error"), "Sign-in declined");
+    if pairs.iter().any(|(k, _)| k == "error") {
+        return Ok(None);
+    }
     ensure!(
         pairs.iter().filter(|(k, _)| k == "code").count() == 1,
         "Invalid sign-in code"
     );
-    Ok(pairs
-        .iter()
-        .find(|(k, _)| k == "code")
-        .filter(|(_, v)| !v.is_empty())
-        .context("Missing sign-in code")?
-        .1
-        .to_string())
+    Ok(Some(
+        pairs
+            .iter()
+            .find(|(k, _)| k == "code")
+            .filter(|(_, v)| !v.is_empty())
+            .context("Missing sign-in code")?
+            .1
+            .to_string(),
+    ))
 }
 pub fn example_config() -> Value {
     json!({"clients": {"dropbox": {"client_id": "YOUR_DROPBOX_APP_KEY"}, "onedrive": {"client_id": "YOUR_MICROSOFT_APPLICATION_ID"}}})
@@ -479,14 +497,18 @@ mod tests {
     fn callback_requires_matching_unique_state_and_code() {
         assert_eq!(
             callback_code("/callback?code=a%2Bb&state=secret", "secret").unwrap(),
-            "a+b"
+            Some("a+b".into())
+        );
+        assert_eq!(
+            callback_code("/callback?error=access_denied&state=secret", "secret").unwrap(),
+            None
         );
         for s in [
             "/callback?code=a&state=wrong",
             "/callback?code=a&state=secret&state=secret",
             "/callback?code=a&code=b&state=secret",
             "/other?code=a&state=secret",
-            "/callback?error=denied&state=secret",
+            "/callback?error=access_denied&state=wrong",
         ] {
             assert!(callback_code(s, "secret").is_err());
         }

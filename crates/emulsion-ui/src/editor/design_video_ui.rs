@@ -26,15 +26,21 @@ impl EditorView {
     pub(super) fn stop_design_video(&mut self, cx: &mut Context<Self>) {
         self.video.task = None;
         if let Some(active) = self.video.active.take() {
-            if let Some(image) = active.image.clone() {
-                let handle = active.window;
-                cx.defer(move |cx| {
-                    cx.update_window(handle, |_, window, _| {
+            let image = active.image.clone();
+            let handle = active.window;
+            let player_focus = self.video.focus.clone();
+            let canvas_focus = self.canvas_focus.clone();
+            cx.defer(move |cx| {
+                cx.update_window(handle, |_, window, cx| {
+                    if let Some(image) = image {
                         let _ = window.drop_image(image);
-                    })
-                    .ok();
-                });
-            }
+                    }
+                    if player_focus.is_some_and(|focus| focus.is_focused(window)) {
+                        window.focus(&canvas_focus, cx);
+                    }
+                })
+                .ok();
+            });
             self.notify_canvas(cx);
             cx.notify();
         }
@@ -196,16 +202,7 @@ impl EditorView {
                             .timer(std::time::Duration::from_millis(33))
                             .await;
                         let more = this
-                            .update(cx, |this, cx| {
-                                if !this.motion.presenting
-                                    || !this.visible
-                                    || !this.design_video_playing()
-                                {
-                                    return false;
-                                }
-                                this.notify_canvas(cx);
-                                true
-                            })
+                            .update(cx, |this, cx| this.poll_design_video(cx))
                             .unwrap_or(false);
                         if !more {
                             break;
@@ -220,6 +217,47 @@ impl EditorView {
         }
     }
 
+    // Lifecycle changes notify CanvasView. Run them from the polling task,
+    // never while CanvasView is borrowed to render the player overlay.
+    fn poll_design_video(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.motion.presenting || !self.visible {
+            self.stop_design_video(cx);
+            return false;
+        }
+        let Some(active) = self.video.active.as_ref() else {
+            return false;
+        };
+        if let Some(error) = active.player.error() {
+            self.stop_design_video(cx);
+            self.set_status(format!("Video player unavailable: {error}"), true, cx);
+            return false;
+        }
+        let Some(bounds) = self.video_screen_bounds(active.id) else {
+            self.stop_design_video(cx);
+            return false;
+        };
+        if !self.video_fits_canvas(bounds) {
+            self.stop_design_video(cx);
+            self.set_status(
+                "Fit the whole video inside the presentation canvas to play it.",
+                true,
+                cx,
+            );
+            return false;
+        }
+        if bounds.size.width < px(200.) || bounds.size.height < px(200.) {
+            self.stop_design_video(cx);
+            self.set_status(
+                "Enlarge the video or presentation window to play it (minimum 200 × 200 px).",
+                true,
+                cx,
+            );
+            return false;
+        }
+        self.notify_canvas(cx);
+        true
+    }
+
     pub(super) fn design_video_overlays(
         &mut self,
         p: &Palette,
@@ -230,15 +268,6 @@ impl EditorView {
             return None;
         }
         let canvas = self.canvas_bounds()?;
-        if let Some(error) = self
-            .video
-            .active
-            .as_ref()
-            .and_then(|active| active.player.error())
-        {
-            self.stop_design_video(cx);
-            self.set_status(format!("Video player unavailable: {error}"), true, cx);
-        }
         let videos: Vec<_> = self
             .editor
             .doc
@@ -247,38 +276,6 @@ impl EditorView {
             .keys()
             .filter_map(|id| self.video_screen_bounds(*id).map(|b| (*id, b)))
             .collect();
-        if self
-            .video
-            .active
-            .as_ref()
-            .is_some_and(|active| !videos.iter().any(|(id, _)| *id == active.id))
-        {
-            self.stop_design_video(cx);
-        }
-        if self.video.active.as_ref().is_some_and(|active| {
-            videos
-                .iter()
-                .any(|(id, bounds)| *id == active.id && !self.video_fits_canvas(*bounds))
-        }) {
-            self.stop_design_video(cx);
-            self.set_status(
-                "Fit the whole video inside the presentation canvas to play it.",
-                true,
-                cx,
-            );
-        }
-        if self.video.active.as_ref().is_some_and(|active| {
-            videos.iter().any(|(id, bounds)| {
-                *id == active.id && (bounds.size.width < px(200.) || bounds.size.height < px(200.))
-            })
-        }) {
-            self.stop_design_video(cx);
-            self.set_status(
-                "Enlarge the video or presentation window to play it (minimum 200 × 200 px).",
-                true,
-                cx,
-            );
-        }
         let mut overlay = div().absolute().size_full();
         for (id, bounds) in videos {
             let origin = bounds.origin;

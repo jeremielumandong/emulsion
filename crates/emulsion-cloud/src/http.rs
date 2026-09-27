@@ -24,6 +24,11 @@ impl Response {
             .map_err(|_| anyhow::anyhow!("Provider returned invalid JSON"))
     }
     pub fn success(&self) -> Result<()> {
+        if !(200..300).contains(&self.status)
+            && let Some(message) = provider_error(&self.body)
+        {
+            bail!("{message} (HTTP {})", self.status);
+        }
         status(self.status)
     }
     pub fn header(&self, key: &str) -> Result<String> {
@@ -34,6 +39,59 @@ impl Response {
             .ok_or_else(|| anyhow::anyhow!("Provider response is missing a required header"))?
             .to_owned())
     }
+}
+// Never display provider messages, descriptions, URLs or arbitrary error codes:
+// they can contain credentials or account details. Translate only known codes.
+fn provider_error(body: &[u8]) -> Option<&'static str> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let error = value.get("error")?;
+    let mut reasons = vec![];
+    if let Some(code) = error.as_str() {
+        reasons.push(code);
+    }
+    for list in ["errors", "details"] {
+        if let Some(items) = error.get(list).and_then(Value::as_array) {
+            reasons.extend(items.iter().filter_map(|item| item["reason"].as_str()));
+        }
+    }
+    for reason in reasons {
+        let message = match reason {
+            "accessNotConfigured" | "SERVICE_DISABLED" => {
+                "The Google API is disabled for this app registration. Enable the required API in the same Google Cloud project as the Desktop client, wait a few minutes, then reconnect"
+            }
+            "insufficientPermissions" | "ACCESS_TOKEN_SCOPE_INSUFFICIENT" => {
+                "Required permission was not granted. Reconnect and allow the requested access on the consent screen"
+            }
+            "storageQuotaExceeded" => "Cloud storage is full",
+            "invalid_client" | "deleted_client" => {
+                "The provider rejected this app registration. Import the current Desktop client JSON and reconnect"
+            }
+            "invalid_grant" => {
+                "The sign-in code or refresh token expired or was rejected. Start a fresh connection in Emulsion"
+            }
+            "invalid_scope" => "The app requested a permission this provider does not support",
+            "access_denied" => {
+                "Sign-in access was declined. Reconnect and allow access; test registrations must include your account as a test user"
+            }
+            _ => continue,
+        };
+        return Some(message);
+    }
+    None
+}
+
+fn transport_error(error: ureq::Error) -> anyhow::Error {
+    anyhow::anyhow!(match error {
+        ureq::Error::HostNotFound =>
+            "Cannot resolve the provider hostname; check your internet connection and DNS",
+        ureq::Error::Timeout(_) =>
+            "The provider connection timed out; check your network and retry",
+        ureq::Error::Tls(_) | ureq::Error::Rustls(_) =>
+            "Cannot establish a secure connection to the provider; check your system clock and network certificate settings",
+        ureq::Error::InvalidProxyUrl | ureq::Error::ConnectProxyFailed(_) =>
+            "Cannot connect through the configured proxy; check your proxy settings",
+        _ => "Cloud connection interrupted; check your internet connection and retry",
+    })
 }
 pub fn status(code: u16) -> Result<()> {
     if (200..300).contains(&code) {
@@ -93,10 +151,7 @@ impl Client {
         let request = request
             .body(body)
             .map_err(|_| anyhow::anyhow!("Invalid cloud request"))?;
-        let response = self
-            .agent
-            .run(request)
-            .map_err(|_| anyhow::anyhow!("Cloud connection interrupted; local work is safe"))?;
+        let response = self.agent.run(request).map_err(transport_error)?;
         if matches!(response.status().as_u16(), 429 | 503) {
             let seconds = response
                 .headers()
@@ -249,6 +304,52 @@ pub fn field(value: &Value, name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provider_errors_explain_setup_without_exposing_response_details() {
+        for reason in ["accessNotConfigured", "SERVICE_DISABLED"] {
+            let response = Response {
+                status: 403,
+                headers: Default::default(),
+                body: serde_json::to_vec(&serde_json::json!({"error": {
+                    "message": "private response",
+                    "details": [{"reason": reason, "metadata": {"url": "private URL"}}]
+                }}))
+                .unwrap(),
+            };
+            let message = response.json().unwrap_err().to_string();
+            assert!(message.contains("Google API is disabled"));
+            assert!(!message.contains("private"));
+        }
+        let response = Response {
+            status: 400,
+            headers: Default::default(),
+            body: br#"{"error":"invalid_grant","error_description":"private token"}"#.to_vec(),
+        };
+        let message = response.json().unwrap_err().to_string();
+        assert!(message.contains("fresh connection"));
+        assert!(!message.contains("private token"));
+        let unknown = Response {
+            body: br#"{"error":"private code"}"#.to_vec(),
+            ..response
+        };
+        assert_eq!(
+            unknown.json().unwrap_err().to_string(),
+            "Cloud request failed (HTTP 400)"
+        );
+        let success = Response {
+            status: 200,
+            ..unknown
+        };
+        assert!(success.json().is_ok());
+    }
+
+    #[test]
+    fn transport_errors_never_echo_credentials_or_urls() {
+        let error = transport_error(ureq::Error::ConnectProxyFailed("private password".into()));
+        assert!(error.to_string().contains("proxy settings"));
+        assert!(!error.to_string().contains("private password"));
+    }
+
     #[test]
     fn bearer_download_hosts_are_restricted() {
         for bad in [

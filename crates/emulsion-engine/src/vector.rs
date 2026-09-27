@@ -480,6 +480,17 @@ impl VectorLayer {
                 let shaped = self.fonts.shape(spec);
                 let t = spec.transform().to_cols_array();
                 let transform = Affine::new(t);
+                let frame = spec
+                    .width
+                    .zip(spec.height)
+                    .map(|(width, height)| Rect::new(0., 0., f64::from(width), f64::from(height)));
+                if let Some(frame) = frame {
+                    // Keep glyphs at display resolution while clipping in text
+                    // coordinates, including rotated/scaled chart labels.
+                    object
+                        .fragment
+                        .push_clip_layer(Fill::NonZero, transform, &frame);
+                }
                 for run in &shaped.runs {
                     object
                         .fragment
@@ -495,13 +506,15 @@ impl VectorLayer {
                         .brush(space.color(run.color))
                         .draw(Fill::NonZero, run.glyphs.iter().copied());
                 }
+                if frame.is_some() {
+                    object.fragment.pop_layer();
+                }
                 let b = shaped.bounds;
-                let rect = transform.transform_rect_bbox(Rect::new(
-                    b[0] as f64,
-                    b[1] as f64,
-                    b[2] as f64,
-                    b[3] as f64,
-                ));
+                // A frame is a conservative bound even when clipped glyph ink
+                // overhangs its font's advance bounds (italic and raised text).
+                let rect = transform.transform_rect_bbox(frame.unwrap_or_else(|| {
+                    Rect::new(b[0] as f64, b[1] as f64, b[2] as f64, b[3] as f64)
+                }));
                 object.bounds = [rect.x0 - 2.0, rect.y0 - 2.0, rect.x1 + 2.0, rect.y1 + 2.0];
             }
         }
@@ -803,7 +816,217 @@ mod font_tests {
         assert!(!crate::canvas::text_supported(&translucent));
         let mut clipped = spec;
         clipped.height = Some(40.);
+        assert!(crate::canvas::text_supported(&clipped));
+        clipped.width = None;
         assert!(!crate::canvas::text_supported(&clipped));
+    }
+
+    #[test]
+    #[ignore = "requires an offscreen wgpu adapter"]
+    fn bounded_chart_text_stays_clipped_and_matches_zoomed_glyph_outlines() {
+        use crate::{Engine, Offscreen, Output};
+        use emulsion_core::{Command, Document, Node, NodeKind, command::Slot};
+        let gpu = Gpu::new(wgpu::Instance::default(), None, None).unwrap();
+        let spec = TextSpec {
+            text: "Chart label\nOutside the cell".into(),
+            font: "Geist".into(),
+            size: 24.,
+            x: 45.25,
+            y: 35.5,
+            width: Some(110.),
+            height: Some(17.),
+            rotation: 19.,
+            scale_x: 1.15,
+            scale_y: 0.9,
+            ..Default::default()
+        };
+        for zoom in [1., 1.5, 3.] {
+            let mut doc = Document::new(240, 160);
+            Command::AddNode {
+                node: Box::new(Node::text(0, "Chart label", spec.clone(), 240, 160)),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let size = ((240. * zoom) as u32, (160. * zoom) as u32);
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &doc,
+                None,
+                VectorSpace::Srgb,
+                true,
+                false,
+                size,
+            )
+            .unwrap();
+            assert_eq!(engine.canvas.vector_count(), 1);
+            assert!(engine.canvas.rasterized.is_empty());
+            let NodeKind::Text { cache, .. } = &doc.nodes[0].kind else {
+                panic!()
+            };
+            assert!(
+                !cache.is_rendered(),
+                "paragraph glyphs must bypass source-resolution rasterization"
+            );
+            engine.camera = crate::Camera {
+                center: [120., 80.],
+                zoom,
+            };
+            let output = Offscreen::new(&gpu, size, wgpu::TextureFormat::Rgba32Float);
+            engine
+                .render(&output.view, output.format, Output::Raw)
+                .unwrap();
+            let actual = output.read(&gpu).unwrap();
+
+            // Independent unhinted glyph outlines rendered at output resolution,
+            // then clipped in the text's original rotated/scaled local frame.
+            let mut scaled = spec.clone();
+            scaled.height = None;
+            scaled.x *= zoom as f32;
+            scaled.y *= zoom as f32;
+            scaled.scale_x *= zoom as f32;
+            scaled.scale_y *= zoom as f32;
+            let mut reference = Document::new(size.0, size.1);
+            for (path, color) in emulsion_core::text::vector_paths(&scaled).unwrap() {
+                Command::AddNode {
+                    node: Box::new(Node::path(
+                        0,
+                        "Glyph",
+                        Arc::new(path),
+                        PathStyle {
+                            fill: Some(color),
+                            stroke: None,
+                            ..Default::default()
+                        },
+                        size.0,
+                        size.1,
+                    )),
+                    slot: Slot::TOP,
+                }
+                .apply(&mut reference)
+                .unwrap();
+            }
+            let expected = emulsion_raster::composite::flatten(&reference.composite_tree(), 0);
+            // Optional native-render evidence for visual review. Compare the
+            // actual GPU glyphs against the former document-resolution source
+            // enlarged with bilinear sampling; no template HTML is rendered.
+            if zoom == 3.
+                && let Some(directory) = std::env::var_os("EMULSION_CHART_RENDER_DIR")
+            {
+                let directory = std::path::PathBuf::from(directory);
+                std::fs::create_dir_all(&directory).unwrap();
+                let old = emulsion_core::text::rasterize(&spec, 240, 160);
+                let header = format!("P6\n{} {}\n255\n", size.0, size.1);
+                let mut native = header.as_bytes().to_vec();
+                let mut enlarged = header.into_bytes();
+                for (i, bytes) in actual.as_chunks::<16>().0.iter().enumerate() {
+                    let (x, y) = (i as u32 % size.0, i as u32 / size.0);
+                    let alpha = f32::from_le_bytes(bytes[12..16].try_into().unwrap());
+                    let gray = ((1. - alpha.clamp(0., 1.)) * 255.).round() as u8;
+                    native.extend_from_slice(&[gray; 3]);
+                    let (sx, sy) = (
+                        (f64::from(x) + 0.5) / zoom - 0.5,
+                        (f64::from(y) + 0.5) / zoom - 0.5,
+                    );
+                    let (ix, iy) = (sx.floor() as i32, sy.floor() as i32);
+                    let at = |x: i32, y: i32| {
+                        if x < 0 || y < 0 || x >= 240 || y >= 160 {
+                            0.
+                        } else {
+                            f64::from(old.get(x as u32, y as u32)[3]) / 65535.
+                        }
+                    };
+                    let (fx, fy) = (sx - sx.floor(), sy - sy.floor());
+                    let alpha = (at(ix, iy) * (1. - fx) + at(ix + 1, iy) * fx) * (1. - fy)
+                        + (at(ix, iy + 1) * (1. - fx) + at(ix + 1, iy + 1) * fx) * fy;
+                    let gray = ((1. - alpha.clamp(0., 1.)) * 255.).round() as u8;
+                    enlarged.extend_from_slice(&[gray; 3]);
+                }
+                std::fs::write(directory.join("native-clipped-glyphs-300pct.ppm"), native).unwrap();
+                std::fs::write(
+                    directory.join("previous-enlarged-text-300pct.ppm"),
+                    enlarged,
+                )
+                .unwrap();
+            }
+            let inverse = Affine::new(spec.transform().to_cols_array()).inverse();
+            let mut intersection = 0;
+            let mut union = 0;
+            let mut coverage = 0;
+            for (i, bytes) in actual.as_chunks::<16>().0.iter().enumerate() {
+                let (x, y) = (i as u32 % size.0, i as u32 / size.0);
+                let alpha = f32::from_le_bytes(bytes[12..16].try_into().unwrap());
+                let local = inverse
+                    * vello::kurbo::Point::new(
+                        (f64::from(x) + 0.5) / zoom,
+                        (f64::from(y) + 0.5) / zoom,
+                    );
+                if local.x < -2. || local.x > 112. || local.y < -2. || local.y > 19. {
+                    assert!(
+                        alpha < 0.01,
+                        "glyph ink escaped its frame at zoom {zoom}: {local:?}"
+                    );
+                }
+                let inside = (0. ..110.).contains(&local.x) && (0. ..17.).contains(&local.y);
+                let a = alpha > 0.5;
+                let b = inside && expected.get(x, y)[3] > 32767;
+                coverage += usize::from(a);
+                intersection += usize::from(a && b);
+                union += usize::from(a || b);
+            }
+            assert!(coverage > 40, "the cropped chart label must remain visible");
+            let iou = intersection as f64 / union.max(1) as f64;
+            eprintln!("bounded chart label zoom={zoom}: outlined coverage IoU={iou:.4}");
+            assert!(
+                iou > 0.88,
+                "zoom={zoom}: native clipped glyph coverage IoU={iou}"
+            );
+            assert!(!cache.is_rendered());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an offscreen wgpu adapter"]
+    fn all_chart_kinds_use_vector_labels_without_raster_sources() {
+        use crate::{Engine, Offscreen, Output};
+        use emulsion_core::{
+            Document, NodeKind,
+            design_charts::{self, Chart, Kind},
+        };
+        let gpu = Gpu::new(wgpu::Instance::default(), None, None).unwrap();
+        for kind in Kind::ALL {
+            let mut editor = emulsion_core::Editor::new(Document::new(640, 440), None);
+            design_charts::apply(&mut editor, None, Chart::example(kind), (20., 20.)).unwrap();
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &editor.doc,
+                None,
+                VectorSpace::Srgb,
+                true,
+                false,
+                (960, 660),
+            )
+            .unwrap();
+            assert!(
+                engine.canvas.sources.is_empty(),
+                "{} unnecessarily created bitmap sources",
+                kind.label()
+            );
+            assert!(engine.canvas.rasterized.is_empty());
+            engine.camera = crate::Camera {
+                center: [320., 220.],
+                zoom: 1.5,
+            };
+            let output = Offscreen::new(&gpu, (960, 660), wgpu::TextureFormat::Rgba32Float);
+            engine
+                .render(&output.view, output.format, Output::Raw)
+                .unwrap();
+            for node in &editor.doc.nodes {
+                if let NodeKind::Text { cache, .. } = &node.kind {
+                    assert!(!cache.is_rendered());
+                }
+            }
+        }
     }
 
     #[test]
