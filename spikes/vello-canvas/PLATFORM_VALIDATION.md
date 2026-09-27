@@ -10,8 +10,12 @@ bash scripts/validate-vello-migration.sh /absolute/path/document.ora
 ```
 
 The script requires GPU tests to execute (adapter failures cannot silently skip),
-runs core/UI/fidelity tests, then opens the actual `EditorView` in a temporary
-data store. It prints the report directory. The release benchmark exercises real
+runs core/UI/fidelity tests including rich-text glyph coverage, then opens the
+actual `EditorView` in a temporary data store. The disposable window opens
+fullscreen with a fixed 1000×700 logical-pixel editor; it closes when done.
+Keep it active during measurement. The comparison step rejects differing
+adapters, document/canvas dimensions, scaling, inactive samples and unexpected
+renderer/brush fallback; it writes `comparison.txt` beside the raw reports. It prints the report directory. The release benchmark exercises real
 pan/brush handlers and text commands, including canvas submission through GPUI.
 It records whether the GPU brush actually ran. JSON times end at submission or
 the next platform frame callback; neither measures physical display latency.
@@ -34,8 +38,8 @@ new brush/recovery code (the recorded Windows results predate this patch):
   pressure dynamics, selections, masks and transparency locks, which retain CPU
   brush handling. Close during a stroke: the unsaved-change prompt must appear.
 - Copy a whole text layer, paste in the same and a different tab, enlarge it,
-  and verify it remains editable. Selection/mixed-layer and external copies use
-  the portable PNG representation.
+  and verify it remains editable. Whole mixed-layer copies retain native fragments within the app. Pixel
+  selections and external copies use the portable PNG representation.
 - Add an adjustment or layer style to an already active GPU document. Verify the
   CPU-canvas badge, correct pixels, and recovery after undo. Translucent vectors
   should show compatibility rendering and match the CPU canvas's colors.

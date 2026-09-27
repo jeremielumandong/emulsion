@@ -333,7 +333,7 @@ pub fn text_supported(spec: &emulsion_core::text::TextSpec) -> bool {
         && spec.warp.is_identity()
         && spec.text_path.is_none()
         && !spec.vertical
-        && spec.runs.is_empty()
+        && spec.runs.iter().all(|run| run.style.color[3] == 255)
         && spec.height.is_none()
         && spec.anti_alias == emulsion_core::text::AntiAliasMode::Smooth
 }

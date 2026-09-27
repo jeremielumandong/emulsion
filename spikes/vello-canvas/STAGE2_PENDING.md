@@ -13,7 +13,8 @@ these Windows results predate that follow-up.*
 **Current follow-up:** tasks 1, 2, 4–8, 10 and 12 have implementation and Linux
 regression coverage. Task 11 now has a native EditorView benchmark. Task 3
 remains open for macOS validation. Task 9 retains opaque-vector edge differences;
-task 13 tracks the frame-pacing issue exposed by native measurement;
+task 13 has passed matched active-window Linux measurements, with wider
+display/platform validation still open;
 the new brush/recovery code also needs a
 Windows follow-up. See [platform validation](PLATFORM_VALIDATION.md).
 
@@ -262,7 +263,20 @@ Linux offscreen tests compare regular/bold/italic/bold-italic glyph coverage aga
 CPU output (IoU 0.899 / 0.948 / 0.920 / 0.953). These are glyph geometry regression
 checks, not pixel-identical AA or native frame-pacing measurements.
 
-**13. Native editor frame pacing.** *(open, found by task 11)*
+September 27 text follow-up: ordinary opaque rich-text runs now use Vello glyphs
+instead of a document-resolution raster fallback. CPU rendering, editing geometry,
+export and Vello share the same paragraph shaping. Per-character color, font size,
+weight, italic and baseline offsets reach the GPU. Text transforms retain fractional
+origins; CPU fallback resamples fractional placement instead of snapping it away.
+Rotated mixed-style text at 100%, 150% and 200% zoom passes per-color outline
+coverage checks against scalable export (IoU 0.958–0.987 on Linux/RADV). These
+checks also assert that GPU setup does not materialize the text raster cache.
+Clipboard tests now use fractional, rotated, multiline rich text. Translucent
+paints, bounded-height text, vertical/path/warped text and non-smooth AA modes
+retain the existing explicit compatibility path; this does not close their
+screen-resolution rendering work or the opaque-vector edge gate.
+
+**13. Native editor frame pacing.** *(matched Linux validation complete; wider platform/display validation remains)*
 
 The corrected native benchmark shows substantially lower GPU submission cost on
 the original layered fixture (brush p50 33.13 → 3.45 ms, p95 214.81 → 3.86 ms).
@@ -272,6 +286,16 @@ GPUI/compositor scheduling delay and repeat with identical viewport dimensions;
 the window manager gave these runs slightly different canvas widths. The raw
 reports and limits are in `RESULTS.md`. Do not substitute the earlier undersized
 harness numbers or spike-host latency for these shipping-editor results.
+
+September 27 matched follow-up: the fullscreen harness now fixes the editor at
+1000×700 logical pixels, and both backends produced an 815×670 device-pixel canvas
+at 1.25 scale. On Linux/RADV/RX 7700 XT at 165 Hz, all runs had zero inactive
+samples and GPU next-frame callbacks were about 6.06 ms. The dense layered
+fixture measured brush submission p50 27.22 ms CPU / 3.10 ms GPU, and callback
+p50 30.31 / 6.06 ms. The prior 38–41 ms GPU delay did not recur. The new comparison
+script rejects unmatched/inactive/fallback runs. See the matched follow-up in
+`RESULTS.md`; these results neither identify a universal compositor fix nor close
+other-platform or opaque-edge validation.
 
 ## For the Windows session
 

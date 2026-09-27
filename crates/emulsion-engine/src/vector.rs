@@ -14,7 +14,7 @@
 use crate::canvas::{Canvas, VectorItem, VectorKind};
 use crate::gpu::Gpu;
 use emulsion_core::NodeId;
-use emulsion_core::text::{Align, TextSpec};
+use emulsion_core::text::TextSpec;
 use emulsion_raster::color;
 use emulsion_raster::vector::{Path, PathStyle, StrokeCap, StrokeJoin};
 use rstar::primitives::{GeomWithData, Rectangle};
@@ -61,6 +61,7 @@ pub struct GlyphRun {
     pub glyphs: Vec<Glyph>,
     pub coords: Vec<vello::NormalizedCoord>,
     pub fake_italic: bool,
+    pub color: [u8; 4],
 }
 
 pub struct Fonts {
@@ -114,49 +115,10 @@ impl Fonts {
         Some((font, coords))
     }
 
-    /// Shape a single-style text spec the way `emulsion-core` does.
+    /// Use the same paragraph layout and character styles as the CPU renderer.
     pub fn shape(&mut self, spec: &TextSpec) -> Shaped {
-        use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping, Style, Weight, Wrap};
-        let metrics = Metrics::new(spec.size, spec.size * spec.line_height);
-        let mut buffer = Buffer::new(&mut self.system, metrics);
-        {
-            let mut b = buffer.borrow_with(&mut self.system);
-            b.set_size(spec.width, None);
-            b.set_wrap(if spec.width.is_some() {
-                Wrap::WordOrGlyph
-            } else {
-                Wrap::None
-            });
-            let font = spec.font.trim();
-            let mut attrs = Attrs::new()
-                .family(if font.is_empty() {
-                    Family::SansSerif
-                } else {
-                    Family::Name(font)
-                })
-                .metrics(metrics);
-            if spec.bold {
-                attrs = attrs.weight(Weight::BOLD);
-            }
-            if spec.italic {
-                attrs = attrs.style(Style::Italic);
-            }
-            if spec.letter_spacing != 0.0 {
-                attrs = attrs.letter_spacing(spec.letter_spacing);
-            }
-            b.set_rich_text(
-                [(spec.text.as_str(), attrs.clone())],
-                &attrs,
-                Shaping::Advanced,
-                Some(match spec.align {
-                    Align::Left => cosmic_text::Align::Left,
-                    Align::Center => cosmic_text::Align::Center,
-                    Align::Right => cosmic_text::Align::Right,
-                    Align::Justify => cosmic_text::Align::Justified,
-                }),
-            );
-            b.shape_until_scroll(true);
-        }
+        let (buffer, styles) = emulsion_core::text::shaped_buffer(spec, &mut self.system);
+        let fallback = spec.base_style();
         let mut runs: Vec<GlyphRun> = Vec::new();
         let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
         let mut placed = Vec::new();
@@ -164,6 +126,13 @@ impl Fonts {
             bounds[1] = bounds[1].min(run.line_top);
             bounds[3] = bounds[3].max(run.line_top + run.line_height);
             for g in run.glyphs {
+                let style = g
+                    .metadata
+                    .checked_sub(1)
+                    .and_then(|i| styles.get(i))
+                    .unwrap_or_else(|| styles.first().unwrap_or(&fallback));
+                bounds[1] = bounds[1].min(run.line_top - style.baseline);
+                bounds[3] = bounds[3].max(run.line_top + run.line_height - style.baseline);
                 bounds[0] = bounds[0].min(g.x);
                 bounds[2] = bounds[2].max(g.x + g.w);
                 placed.push((
@@ -172,15 +141,16 @@ impl Fonts {
                     g.font_weight,
                     g.cache_key_flags
                         .contains(cosmic_text::CacheKeyFlags::FAKE_ITALIC),
+                    style.color,
                     Glyph {
                         id: g.glyph_id as u32,
                         x: g.x + g.font_size * g.x_offset,
-                        y: run.line_y + g.y - g.font_size * g.y_offset,
+                        y: run.line_y + g.y - g.font_size * g.y_offset - style.baseline,
                     },
                 ));
             }
         }
-        for (id, size, weight, fake_italic, glyph) in placed {
+        for (id, size, weight, fake_italic, color, glyph) in placed {
             let Some((font, coords)) = self.font(id, weight) else {
                 continue;
             };
@@ -189,7 +159,8 @@ impl Fonts {
                     if r.font.data.id() == font.data.id()
                         && r.size == size
                         && r.coords == coords
-                        && r.fake_italic == fake_italic =>
+                        && r.fake_italic == fake_italic
+                        && r.color == color =>
                 {
                     r.glyphs.push(glyph)
                 }
@@ -199,6 +170,7 @@ impl Fonts {
                     glyphs: vec![glyph],
                     coords,
                     fake_italic,
+                    color,
                 }),
             }
         }
@@ -508,7 +480,6 @@ impl VectorLayer {
                 let shaped = self.fonts.shape(spec);
                 let t = spec.transform().to_cols_array();
                 let transform = Affine::new(t);
-                let color = space.color(spec.color);
                 for run in &shaped.runs {
                     object
                         .fragment
@@ -521,7 +492,7 @@ impl VectorLayer {
                             }),
                         )
                         .transform(transform)
-                        .brush(color)
+                        .brush(space.color(run.color))
                         .draw(Fill::NonZero, run.glyphs.iter().copied());
                 }
                 let b = shaped.bounds;
@@ -764,6 +735,176 @@ impl Hud {
 #[cfg(test)]
 mod font_tests {
     use super::*;
+
+    fn rich_spec() -> TextSpec {
+        let mut spec = TextSpec {
+            text: "Sharp color\nRaised café".into(),
+            font: "Geist".into(),
+            size: 42.,
+            x: 55.25,
+            y: 45.5,
+            color: [255, 30, 30, 255],
+            width: Some(390.),
+            rotation: 7.,
+            scale_x: 1.1,
+            ..Default::default()
+        };
+        spec.apply_style(6..11, |style| {
+            style.color = [30, 255, 30, 255];
+            style.bold = true;
+            style.italic = true;
+            style.size = 48.;
+        });
+        spec.apply_style(12..18, |style| {
+            style.color = [30, 30, 255, 255];
+            style.baseline = 13.5;
+            style.letter_spacing = 1.5;
+        });
+        spec
+    }
+
+    #[test]
+    fn rich_text_keeps_colors_font_instances_and_baseline_geometry() {
+        let spec = rich_spec();
+        assert!(crate::canvas::text_supported(&spec));
+        let mut fonts = Fonts::new();
+        let shaped = fonts.shape(&spec);
+        let colors: Vec<_> = shaped.runs.iter().map(|run| run.color).collect();
+        assert!(colors.contains(&[255, 30, 30, 255]));
+        assert!(colors.contains(&[30, 255, 30, 255]));
+        assert!(colors.contains(&[30, 30, 255, 255]));
+        assert!(shaped.runs.iter().any(|r| r.size == 48. && r.fake_italic));
+
+        let mut unraised = spec.clone();
+        unraised.apply_style(12..18, |style| style.baseline = 0.);
+        let normal = fonts.shape(&unraised);
+        let blue = |shaped: &Shaped| {
+            shaped
+                .runs
+                .iter()
+                .filter(|r| r.color == [30, 30, 255, 255])
+                .flat_map(|r| r.glyphs.iter().map(|g| (g.id, g.x, g.y)))
+                .collect::<Vec<_>>()
+        };
+        let raised_glyphs = blue(&shaped);
+        let normal_glyphs = blue(&normal);
+        assert!(!raised_glyphs.is_empty());
+        assert_eq!(raised_glyphs.len(), normal_glyphs.len());
+        for (a, b) in raised_glyphs.iter().zip(&normal_glyphs) {
+            assert_eq!((a.0, a.1), (b.0, b.1));
+            assert!((b.2 - a.2 - 13.5).abs() < 0.001);
+        }
+
+        let mut translucent = spec.clone();
+        translucent.apply_style(6..11, |style| style.color[3] = 128);
+        assert!(!crate::canvas::text_supported(&translucent));
+        let mut clipped = spec;
+        clipped.height = Some(40.);
+        assert!(!crate::canvas::text_supported(&clipped));
+    }
+
+    #[test]
+    #[ignore = "requires an offscreen wgpu adapter"]
+    fn rich_text_gpu_matches_scalable_export_at_fractional_zoom_and_rotation() {
+        use crate::{Engine, Offscreen, Output};
+        use emulsion_core::{Command, Document, Node, NodeKind, command::Slot};
+        let gpu = Gpu::new(wgpu::Instance::default(), None, None).unwrap();
+        for zoom in [1., 1.5, 2.] {
+            let mut doc = Document::new(640, 320);
+            Command::AddNode {
+                node: Box::new(Node::text(0, "Rich text", rich_spec(), 640, 320)),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let size = ((640. * zoom) as u32, (320. * zoom) as u32);
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &doc,
+                None,
+                VectorSpace::Srgb,
+                true,
+                false,
+                size,
+            )
+            .unwrap();
+            assert_eq!(engine.canvas.vector_count(), 1);
+            assert!(engine.canvas.rasterized.is_empty());
+            let NodeKind::Text { cache, .. } = &doc.nodes[0].kind else {
+                panic!()
+            };
+            assert!(
+                !cache.is_rendered(),
+                "rich text must not acquire a raster preview as its render source"
+            );
+            engine.camera = crate::Camera {
+                center: [320., 160.],
+                zoom,
+            };
+            let output = Offscreen::new(&gpu, size, wgpu::TextureFormat::Rgba32Float);
+            engine
+                .render(&output.view, output.format, Output::Raw)
+                .unwrap();
+            let actual = output.read(&gpu).unwrap();
+            let mut reference = rich_spec();
+            reference.x *= zoom as f32;
+            reference.y *= zoom as f32;
+            reference.scale_x *= zoom as f32;
+            reference.scale_y *= zoom as f32;
+            // Rasterize the scalable export outlines at the target resolution.
+            // The ordinary CPU text path enlarges hinted source pixels, which
+            // intentionally is not the quality target for zoomed GPU text.
+            let mut export = Document::new(size.0, size.1);
+            for (path, color) in emulsion_core::text::vector_paths(&reference).unwrap() {
+                Command::AddNode {
+                    node: Box::new(Node::path(
+                        0,
+                        "Glyph",
+                        Arc::new(path),
+                        PathStyle {
+                            fill: Some(color),
+                            stroke: None,
+                            ..Default::default()
+                        },
+                        size.0,
+                        size.1,
+                    )),
+                    slot: Slot::TOP,
+                }
+                .apply(&mut export)
+                .unwrap();
+            }
+            let expected = emulsion_raster::composite::flatten(&export.composite_tree(), 0);
+            // Compare each color independently so losing a style cannot be hidden
+            // by a similar total glyph silhouette. Ignore AA intensity differences.
+            let mut intersection = [0_usize; 3];
+            let mut union = [0_usize; 3];
+            for (i, bytes) in actual.as_chunks::<16>().0.iter().enumerate() {
+                let pixel: [f32; 4] = std::array::from_fn(|c| {
+                    f32::from_le_bytes(bytes[c * 4..c * 4 + 4].try_into().unwrap())
+                });
+                let reference = expected.get(i as u32 % size.0, i as u32 / size.0);
+                for c in 0..3 {
+                    let a = pixel[3] > 0.5
+                        && pixel[c] > pixel[(c + 1) % 3] * 2.
+                        && pixel[c] > pixel[(c + 2) % 3] * 2.;
+                    let b = reference[3] > 32767
+                        && u32::from(reference[c]) > u32::from(reference[(c + 1) % 3]) * 2
+                        && u32::from(reference[c]) > u32::from(reference[(c + 2) % 3]) * 2;
+                    intersection[c] += usize::from(a && b);
+                    union[c] += usize::from(a || b);
+                }
+            }
+            for c in 0..3 {
+                let iou = intersection[c] as f64 / union[c].max(1) as f64;
+                eprintln!("rich text zoom={zoom} channel={c}: IoU={iou:.4}");
+                assert!(
+                    iou > 0.90,
+                    "zoom={zoom}, color={c}, outline coverage IoU={iou}"
+                );
+            }
+        }
+    }
     #[test]
     fn bundled_variable_weights_and_synthetic_italic_reach_vello() {
         let mut fonts = Fonts::new();

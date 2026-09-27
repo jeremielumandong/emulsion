@@ -706,6 +706,42 @@ tail latency on the dense fixture, not a general end-to-end latency win. Isolati
 the GPUI/compositor scheduling delay and rerunning at fixed viewport dimensions
 remains performance follow-up work.
 
+### September 27: matched active-window follow-up
+
+The native harness now opens a disposable fullscreen window and fixes its editor
+at 1000×700 logical pixels. Both backends measured the same **815×670 device-pixel
+canvas**, at 1.25 display scale, on the RX 7700 XT / RADV / Mesa 26.2.2, with a
+165 Hz display. Compilation completed before measurement. All four runs had zero
+inactive-window samples. The comparison script rejects mismatched geometry,
+adapters, scaling, missing samples and unexpected renderer/brush fallback.
+
+Raw reports, fixture hash and source state:
+[matched September 27 measurements](results/editor-linux-rx7700xt-matched-20260927.json).
+The source state includes the rich-text and fractional-position fixes. Each case
+has 8 warm-ups and 40 measured samples. This is a current CPU/GPU comparison;
+the differently sized earlier observations are not a before/after baseline.
+
+Original layered 4K fixture, milliseconds (p50 / p95):
+
+| Workload | CPU submission | GPU submission | CPU next frame callback | GPU next frame callback |
+|---|---:|---:|---:|---:|
+| Pan | 2.30 / 2.63 | 3.25 / 3.59 | 6.06 / 6.26 | 6.07 / 6.15 |
+| Brush | 27.22 / 33.15 | 3.10 / 3.43 | 30.31 / 36.34 | 6.06 / 6.16 |
+| Text move | 33.26 / 36.62 | 3.65 / 4.27 | 35.65 / 39.16 | 6.06 / 6.40 |
+
+The GPU brush ran and its committed pixels passed undo/redo checks. Commit/readback
+was 3.21 ms; engine textures used 1,198,958,941 bytes. On the synthetic shared-tile
+fixture, brush submission was 3.54 / 5.09 ms CPU versus 2.90 / 3.45 ms GPU; both
+had about 6.06 ms median next-frame callbacks. Synthetic commit/readback took
+14.28 ms. This supports lower submission/callback latency for the dense fixture,
+not a speedup for every workload (pan submission was slightly slower on GPU).
+
+The former 38–41 ms GPU callback delay did not recur under these controlled active
+conditions. This establishes a matched Linux baseline, without identifying a
+universal compositor fix or establishing physical display latency. Occlusion,
+other display configurations, macOS and the updated Windows path still need
+separate measurements. Opaque-vector edge/overlap fidelity remains open.
+
 ### Fidelity and remaining work
 
 [Full fixture comparisons](results/fidelity-linux-rx7700xt-migration.md) preserve

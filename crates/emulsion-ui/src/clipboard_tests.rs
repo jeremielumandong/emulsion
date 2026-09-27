@@ -711,8 +711,9 @@ fn clipboard_and_internal_lift_retain_16_bit_precision(cx: &mut TestAppContext) 
 
 fn text_clipboard_document() -> (Document, NodeId, emulsion_core::text::TextSpec) {
     let mut d = Document::new(600, 400);
-    let spec = emulsion_core::text::TextSpec {
-        text: "Crisp text".into(),
+    let mut spec = emulsion_core::text::TextSpec {
+        text: "Crisp text\nMixed café".into(),
+        font: "Geist".into(),
         size: 38.0,
         x: 90.25,
         y: 110.5,
@@ -722,6 +723,12 @@ fn text_clipboard_document() -> (Document, NodeId, emulsion_core::text::TextSpec
         color: [30, 60, 120, 255],
         ..Default::default()
     };
+    spec.apply_style(6..10, |style| {
+        style.italic = true;
+        style.color = [180, 35, 80, 255];
+        style.baseline = 4.5;
+        style.size = 44.;
+    });
     let id = Command::AddNode {
         node: Box::new(Node::text(0, "Heading", spec.clone(), d.width, d.height)),
         slot: Slot::TOP,
@@ -815,6 +822,9 @@ fn clipboard_text_cross_tab_uses_destination_cache_and_centers(cx: &mut TestAppC
             assert_eq!(actual.text, spec.text);
             assert_eq!(actual.size, spec.size);
             assert_eq!(actual.font, spec.font);
+            assert_eq!(actual.runs, spec.runs);
+            assert_eq!(actual.rotation, spec.rotation);
+            assert_eq!(actual.scale_x, spec.scale_x);
             assert_eq!(e.editor.history.len(), 1);
         })
     });

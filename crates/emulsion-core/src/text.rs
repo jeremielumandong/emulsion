@@ -367,7 +367,7 @@ impl TextSpec {
 
     /// Convert local layout coordinates into document coordinates.
     pub fn transform(&self) -> glam::DAffine2 {
-        glam::DAffine2::from_translation(glam::dvec2(self.x.round() as f64, self.y.round() as f64))
+        glam::DAffine2::from_translation(glam::dvec2(self.x as f64, self.y as f64))
             * glam::DAffine2::from_angle((self.rotation as f64).to_radians())
             * glam::DAffine2::from_scale(glam::dvec2(self.scale_x as f64, self.scale_y as f64))
     }
@@ -582,8 +582,12 @@ fn style_spans(spec: &TextSpec) -> Vec<(std::ops::Range<usize>, TextStyle)> {
     spans
 }
 
-/// Identical shaping is used for raster ink and editing geometry.
-fn shaped_buffer(
+/// Shared shaping for raster ink, editing geometry, exports and GPU glyphs.
+/// Glyph metadata is a one-based index into the returned character styles.
+/// The input must have normalized, valid UTF-8 character ranges, as produced by
+/// `TextSpec::sanitized` and the text editing commands. Coordinates are local;
+/// consumers apply each style's baseline offset and the spec's transform.
+pub fn shaped_buffer(
     spec: &TextSpec,
     system: &mut cosmic_text::FontSystem,
 ) -> (cosmic_text::Buffer, Vec<TextStyle>) {
@@ -1143,7 +1147,11 @@ pub fn rasterize(spec: &TextSpec, w: u32, h: u32) -> Raster {
     }
     let (ox, oy) = (spec.x.round() as i32, spec.y.round() as i32);
     let (wi, hi) = (w as i32, h as i32);
-    let rotated = spec.rotation != 0.0 || spec.scale_x != 1.0 || spec.scale_y != 1.0;
+    let transformed = spec.rotation != 0.0
+        || spec.scale_x != 1.0
+        || spec.scale_y != 1.0
+        || spec.x.fract() != 0.0
+        || spec.y.fract() != 0.0;
     let origin = glam::dvec2(ox as f64, oy as f64);
     let rotation = spec.transform() * glam::DAffine2::from_translation(-origin);
     let transformed_margin = 2.0 * (spec.scale_x.abs() + spec.scale_y.abs()) as f64 + 2.0;
@@ -1215,7 +1223,7 @@ pub fn rasterize(spec: &TextSpec, w: u32, h: u32) -> Raster {
                     if weight <= 0.0 {
                         continue;
                     }
-                    if rotated {
+                    if transformed {
                         // Keep glyph samples that can contribute AFTER rotation.
                         // Clipping the unrotated cache first loses letters outside
                         // the canvas that should rotate back into view.
@@ -1254,7 +1262,7 @@ pub fn rasterize(spec: &TextSpec, w: u32, h: u32) -> Raster {
         pixels.keys().map(|k| k.1).max().unwrap_or(0),
     );
     let b = IRect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-    if rotated {
+    if transformed {
         let corners = [
             glam::dvec2(x0 as f64, y0 as f64),
             glam::dvec2((x1 + 1) as f64, y0 as f64),
@@ -1339,6 +1347,42 @@ mod tests {
             IRect::new(0, 0, 0, 0)
         } else {
             IRect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+        }
+    }
+
+    #[test]
+    fn fractional_text_placement_reaches_geometry_raster_and_vector_export() {
+        let spec = TextSpec {
+            text: "Fractional".into(),
+            font: "Geist".into(),
+            size: 32.,
+            x: 20.125,
+            y: 30.25,
+            ..Default::default()
+        };
+        assert_eq!(spec.transform().translation, glam::dvec2(20.125, 30.25));
+        let shifted = TextSpec {
+            x: 20.375,
+            ..spec.clone()
+        };
+        let a = rasterize(&spec, 256, 100);
+        let b = rasterize(&shifted, 256, 100);
+        assert!(
+            (0..100).any(|y| (0..256).any(|x| a.get(x, y) != b.get(x, y))),
+            "fractional moves must not snap to the same raster position"
+        );
+        let a = vector_paths(&spec).unwrap();
+        let b = vector_paths(&shifted).unwrap();
+        assert!(!a.is_empty());
+        assert_eq!(a.len(), b.len());
+        for ((a, ca), (b, cb)) in a.iter().zip(&b) {
+            assert_eq!(ca, cb);
+            for (a, b) in a.subpaths.iter().zip(&b.subpaths) {
+                for (a, b) in a.anchors.iter().zip(&b.anchors) {
+                    assert!((b.p.0 - a.p.0 - 0.25).abs() < 0.0001);
+                    assert!((b.p.1 - a.p.1).abs() < 0.0001);
+                }
+            }
         }
     }
 

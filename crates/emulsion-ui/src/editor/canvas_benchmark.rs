@@ -278,7 +278,10 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
                         title: Some("Emulsion canvas benchmark".into()),
                         ..Default::default()
                     }),
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    // Own only this disposable window. Fullscreen avoids a tiling
+                    // compositor shrinking it below the fixed 1000×700 editor,
+                    // and gives CPU/GPU runs identical available surface bounds.
+                    window_bounds: Some(WindowBounds::Fullscreen(bounds)),
                     window_min_size: Some(size(px(1000.), px(700.))),
                     ..Default::default()
                 },

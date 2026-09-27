@@ -179,11 +179,7 @@ pub fn transform_nodes(
                 *path = updated;
             }
             NodeKind::Text { spec, cache } => {
-                // Rendering may snap glyph origins, but editable coordinates
-                // must retain their fractional position through transforms.
-                let mut source = spec.transform();
-                source.translation = glam::dvec2(spec.x as f64, spec.y as f64);
-                let combined = m * source;
+                let combined = m * spec.transform();
                 let (sx, sy, rotation) = decompose(combined, node.id)?;
                 let mut updated = (**spec).clone();
                 updated.x = combined.translation.x as f32;

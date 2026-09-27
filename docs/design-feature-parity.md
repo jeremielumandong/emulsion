@@ -1,24 +1,16 @@
-# Design feature parity reference
+# Emulsion Design functionality plan
 
-User-selected reference: [Omadesign](https://github.com/michaelmonetized/omadesign),
-local checkout `/home/arkane/Projects/omadesign`, revision
-`0469c5b4df4a7525d172cf0dce95d38f0c055805` (reviewed September 27, 2026).
-The comparison uses its README and documentation: `docs/MANUAL.md`,
-`docs/layout.md`, `docs/format-support.md`, and `docs/plugins.md`. Release labels
-in those documents differ; the revision above defines this comparison.
-
-This is a capability target, not a source of implementation, templates, assets,
-copy, or styling. Emulsion keeps the supplied UI handoff, native document model,
-Vello renderer, existing functionality and its own implementations. Design parity
-is not complete. A visible button, a core API, or a similar Photo tool alone does
-not count as an end-to-end Design workflow.
+This plan defines the remaining local Design capabilities. Emulsion uses its
+own implementation, native document model, Vello renderer and supplied UI
+handoff. Existing editing functionality must be preserved. A visible control or
+a core API alone does not count as a complete Design workflow.
 
 Collaboration, accounts, public publishing, remote shared libraries and cloud
 review remain deferred by the user's local-editing-only requirement. Local
 prototype presentation and export are included. Existing template/stencil file
 and GitHub-URL exchange remain included.
 
-## Comparison and acceptance targets
+## Capabilities and acceptance targets
 
 “Partial” means a foundation exists; it does not claim equivalent behavior or
 quality. Evidence paths below refer to Emulsion source.
@@ -36,15 +28,15 @@ quality. Evidence paths below refer to Emulsion source.
 | Interactive presentation | Page presentation and motion preview in `design_motion_ui.rs` | Add object interactions for pointer triggers, navigation/back, overlays and instance variant changes, with supported transitions and a preview-only history. Returning to editing must preserve the authored document. |
 | Frame export | Native projects and PNG/JPEG/SVG/PDF export | Add subtree export and standalone responsive HTML with embedded assets and supported interactions. Compare native, image, SVG and browser output across widths. Export is local, not deployment. |
 | Motion | Fade/slide/zoom entry/exit, timing and GIF export | Add editable property keyframes, easing, retiming, reveal channels, more original presets and animated SVG/Lottie interchange. Unsupported export content must produce explicit diagnostics. |
-| Templates and assets | Six original editable starters, local assets, `.emutemplate` packs and GitHub installation | Expand the original catalog across document types/proportions, with search/filter/preview and scalable layouts. Never import the reference's artwork, templates or text as our built-ins. |
+| Templates and assets | Six original editable starters, local assets, `.emutemplate` packs and GitHub installation | Expand the original catalog across document types/proportions, with search/filter/preview and scalable layouts. Create original artwork, templates and text for built-ins. |
 | Palettes and brand typography | Brand colors/font selection and kit import/export | Add named palette collections with transparency, selection extraction and fill/stroke targeting; project asset folders; locally embedded TTF/OTF families and named typography roles. Verify a portable project on a machine without those fonts installed. |
 | Format interoperability | Existing layered/vector/page imports and exports | Maintain a feature-level fixture matrix for groups, clipping, masks, fonts, effects and editability. Evaluate missing proprietary-format bridges separately; no unsupported interchange claims. |
-| Extensions and automation | Existing assistant/MCP editing and data-only template/stencil packages | Compare extensible authoring workflows separately. Data-only GitHub imports must never become implicit executable plugin installation. Any scripting/plugin runtime needs its own design and permission model. |
+| Extensions and automation | Existing assistant/MCP editing and data-only template/stencil packages | Plan extensible authoring workflows separately. Data-only GitHub imports must never become implicit executable plugin installation. Any scripting/plugin runtime needs its own design and permission model. |
 
 ## Implementation order
 
-1. Finish and validate the shared shell and standalone image viewer already in
-   progress. Preserve all established editing and file workflows.
+1. Shared shell and standalone image viewer: implemented and regression-tested.
+   Preserve these workflows throughout the remaining work.
 2. Audit Design's context tools and precision/appearance operations; expose
    existing working tools and fill gaps with original implementations.
 3. Build and validate semantic responsive frames and breakpoints in the core;
@@ -58,5 +50,4 @@ quality. Evidence paths below refer to Emulsion source.
 Each milestone must include a complete user workflow, existing regression tests,
 round-trip/recovery tests for new data, and performance measurements on realistic
 projects. A core-only implementation or a panel of placeholders does not close a
-row. Re-run the comparison when the reference revision changes; additions do not
-silently expand the accepted target.
+row. Update this plan as implementation and acceptance checks establish progress.

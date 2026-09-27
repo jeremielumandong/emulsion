@@ -75,7 +75,7 @@ not yet been used for a live download/install acceptance test.
 
 Remaining release gates include the complete handoff control/layout audit,
 accessibility and narrow-window review, advanced vendor shape/library compatibility,
-context-specific AI proposals, an active-window matched Vello/CPU benchmark, and
+context-specific AI proposals, broader display/performance measurements, and
 platform checks requiring macOS/Windows hardware. Collaboration remains deferred.
 The migration is not marked complete while those gates remain open.
 
@@ -293,9 +293,12 @@ items are tracked in `../spikes/vello-canvas/STAGE2_PENDING.md`: platform valida
 opaque-vector edge/overlap fidelity, and native frame pacing. Do not mark these
 complete as a side effect of the redesign.
 
-The corrected native benchmark shows lower brush/text submission time, but GPU
-next-frame callbacks around 38–41 ms and unmatched viewport dimensions prevent a
-claim of an overall latency win. Repeat matched-window tests after shell changes.
+Matched active-window Linux measurements now show lower GPU brush/text submission
+and next-frame callback latency on the dense layered fixture. The older 38–41 ms
+GPU callback delay did not recur with fixed viewport dimensions; these runs do
+not establish a universal compositor fix or physical input-to-photon latency.
+Wider display configurations and other platforms remain unvalidated. See the
+September 27 matched follow-up in `spikes/vello-canvas/RESULTS.md`.
 
 Text verification must include native copy/paste within/across documents, zoom
 changes, non-integer placement, HiDPI, rotation, multiline/rich text, save/reopen,
@@ -384,9 +387,28 @@ handoff to Photo also skips the splash. Normal Home launch uses the supplied
 Emulsion artwork with a version label from the app's build metadata.
 
 
-## Design reference requested September 27
+## Design functionality plan
 
-Use the local Omadesign checkout as a feature reference, without copying its
-implementation or visual design. The pinned comparison, gaps and delivery order
-are in [Design feature parity](design-feature-parity.md). The original handoff
-remains the UI source. Local editing remains the scope; collaboration is deferred.
+The remaining capabilities and delivery order are in
+[Design functionality](design-feature-parity.md). The supplied handoff remains
+the UI source. Local editing remains the scope; collaboration is deferred.
+
+
+## September 27 follow-up: rich text and matched canvas measurements
+
+Opaque character-style runs now remain Vello glyphs, sharing paragraph shaping
+with CPU rendering and vector export. Text keeps fractional positions through
+rendering, transforms and exports. Clipboard regressions cover rotated multiline
+rich text with different colors, sizes, italic and raised baselines. GPU outline
+coverage passes at 100%, 150% and 200% zoom without creating text raster caches.
+Advanced text effects, bounded-height text and translucent paint retain explicit
+compatibility rendering.
+
+Validation: 1,284 workspace tests passed (13 ignored), all four explicit GPU font
+tests passed, and workspace all-target Clippy including the native benchmark
+feature passed with warnings denied. The benchmark comparison policy has three
+passing tests. Matched active-window Linux runs passed for synthetic and dense
+layered 4K documents, including GPU brush commit/undo/redo. See
+[the measured results](../spikes/vello-canvas/RESULTS.md#september-27-matched-active-window-follow-up).
+macOS, updated Windows behavior, opaque-vector edge fidelity and the remaining
+Design/Diagram capabilities are still open.
