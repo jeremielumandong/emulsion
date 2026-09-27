@@ -100,7 +100,8 @@ pub(crate) fn composite_mask(node: &Node) -> Option<Arc<Mask>> {
         NodeKind::Raster { raster, .. } => (raster.width(), raster.height(), (0, 0)),
         NodeKind::Smart { cache, offset, .. } => (cache.width(), cache.height(), *offset),
         NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } => {
-            (cache.width(), cache.height(), (0, 0))
+            let (w, h) = cache.size();
+            (w, h, (0, 0))
         }
         _ => (mask.width(), mask.height(), (0, 0)),
     };

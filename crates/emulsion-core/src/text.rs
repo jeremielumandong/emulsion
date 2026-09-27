@@ -1619,7 +1619,7 @@ mod tests {
             panic!()
         };
         assert_eq!(spec.rotation, 35.0);
-        let old_cache = cache.clone();
+        let old_cache = cache.id();
         let roundtrip: TextSpec =
             serde_json::from_str(&serde_json::to_string(spec).unwrap()).unwrap();
         assert_eq!(roundtrip.rotation, 35.0);
@@ -1636,8 +1636,8 @@ mod tests {
         };
         assert_eq!(spec.text, "Changed");
         assert_eq!(spec.rotation, 35.0);
-        assert!(!std::sync::Arc::ptr_eq(cache, &old_cache));
-        assert!(!ink(cache).is_empty());
+        assert_ne!(cache.id(), old_cache);
+        assert!(!ink(cache.pixels()).is_empty());
     }
 
     #[test]
@@ -1689,7 +1689,7 @@ mod tests {
         let crate::NodeKind::Text { cache, .. } = &doc.nodes[0].kind else {
             panic!()
         };
-        assert!(ink(cache).is_empty());
+        assert!(ink(cache.pixels()).is_empty());
         let before = crate::geometry::node_bounds(&doc, 1).unwrap();
         assert!(before.x >= 500 && before.y >= 500);
         crate::Command::RotateNode {

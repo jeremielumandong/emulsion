@@ -405,7 +405,7 @@ mod tests {
         let NodeKind::Path { cache, .. } = &editor.doc.node(id).unwrap().kind else {
             panic!("not a path")
         };
-        cache.get(x, y)[3]
+        cache.pixels().get(x, y)[3]
     }
 
     #[test]

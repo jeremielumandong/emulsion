@@ -848,7 +848,12 @@ pub fn baseline(
                     let mut p = (**path).clone();
                     p.translate(d, -d);
                     dirty = dirty.union(&p.bounds(style));
-                    *cache = Arc::new(p.rasterize(style, w, h));
+                    *cache = emulsion_core::vector_cache::VectorRaster::path(
+                        Arc::new(p.clone()),
+                        *style,
+                        w,
+                        h,
+                    );
                     *path = Arc::new(p);
                 }
                 let tree = doc.composite_tree();

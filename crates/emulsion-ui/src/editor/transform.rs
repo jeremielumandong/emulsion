@@ -528,8 +528,10 @@ impl EditorView {
                 let (w, h, placement) = text_transform_frame(spec);
                 Some(quad(placement.to_doc(w, h), w as f64, h as f64))
             }
-            NodeKind::Path { cache, .. } => {
-                let b = cache.tile_bounds();
+            NodeKind::Path { path, style, .. } => {
+                // The path's own extent: tighter than the rasterised tile
+                // bounds, which are 256-aligned, and it needs no pixels.
+                let b = path.bounds(style);
                 (!b.is_empty()).then(|| {
                     let (x, y, w, h) = (b.x as f64, b.y as f64, b.w as f64, b.h as f64);
                     [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]

@@ -493,11 +493,25 @@ impl Command {
             | Command::SetLocked { .. }
             | Command::Rename { .. } => Dirty::Nothing,
             Command::SetPath { id, path, style } => match before.node(*id).map(|n| &n.kind) {
-                Some(NodeKind::Path { cache, .. }) => Dirty::Rect(
-                    cache
-                        .tile_bounds()
-                        .union(&path.bounds(style))
-                        .intersect(&IRect::new(0, 0, before.width as i32, before.height as i32)),
+                Some(NodeKind::Path {
+                    path: old,
+                    style: old_style,
+                    cache,
+                }) => Dirty::Rect(
+                    // Don't force the old pixels just to size a dirty rect:
+                    // the path's own bounds cover where it was.
+                    if cache.is_rendered() {
+                        cache.pixels().tile_bounds()
+                    } else {
+                        old.bounds(old_style)
+                    }
+                    .union(&path.bounds(style))
+                    .intersect(&IRect::new(
+                        0,
+                        0,
+                        before.width as i32,
+                        before.height as i32,
+                    )),
                 ),
                 _ => Dirty::All,
             },
@@ -1262,12 +1276,12 @@ impl Command {
                         )
                     }
                     NodeKind::Text { spec, cache } => (
-                        cache.clone(),
+                        cache.pixels().clone(),
                         Placement::default(),
                         Some(SmartEditable::Text { spec: spec.clone() }),
                     ),
                     NodeKind::Path { path, style, cache } => (
-                        cache.clone(),
+                        cache.pixels().clone(),
                         Placement::default(),
                         Some(SmartEditable::Path {
                             path: path.clone(),
@@ -1309,7 +1323,7 @@ impl Command {
                 }
                 if let NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } = &n.kind {
                     n.kind = NodeKind::Raster {
-                        raster: cache.clone(),
+                        raster: cache.pixels().clone(),
                         placement: Placement::default(),
                     };
                     return Ok(None);
@@ -1475,7 +1489,7 @@ impl Command {
                         cache,
                     } => {
                         let style = style.sanitized();
-                        *cache = Arc::new(path.rasterize(&style, w, h));
+                        *cache = crate::vector_cache::VectorRaster::path(path.clone(), style, w, h);
                         *p = path.clone();
                         *s = style;
                         Ok(None)
@@ -1488,9 +1502,9 @@ impl Command {
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 match &mut n.kind {
                     NodeKind::Text { spec: s, cache } => {
-                        let spec = (**spec).clone().sanitized();
-                        *cache = Arc::new(crate::text::rasterize(&spec, w, h));
-                        *s = Arc::new(spec);
+                        let spec = Arc::new((**spec).clone().sanitized());
+                        *cache = crate::vector_cache::VectorRaster::text(spec.clone(), w, h);
+                        *s = spec;
                         Ok(None)
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "text".into())),

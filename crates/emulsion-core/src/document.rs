@@ -508,7 +508,7 @@ impl Document {
                         }
                         NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
                             NodeContent::Pixels {
-                                raster: cache.clone(),
+                                raster: cache.pixels().clone(),
                                 placement: emulsion_raster::Placement::default(),
                             }
                         }
@@ -709,7 +709,9 @@ impl Document {
         for n in &self.nodes {
             match &n.kind {
                 NodeKind::Raster { raster: r, .. } => raster(r),
-                NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => raster(cache),
+                NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
+                    raster(cache.pixels())
+                }
                 NodeKind::Smart { source, cache, .. } => {
                     raster(source);
                     raster(cache);

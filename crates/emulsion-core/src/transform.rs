@@ -174,8 +174,9 @@ pub fn transform_nodes(
                     *length = (*length as f64 * scale) as f32;
                 }
                 style.dash_offset = (style.dash_offset as f64 * scale) as f32;
-                *cache = Arc::new(updated.rasterize(style, w, h));
-                *path = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::path(updated.clone(), *style, w, h);
+                *path = updated;
             }
             NodeKind::Text { spec, cache } => {
                 let combined = m * spec.transform();
@@ -186,8 +187,9 @@ pub fn transform_nodes(
                 updated.scale_x = sx as f32;
                 updated.scale_y = sy as f32;
                 updated.rotation = rotation as f32;
-                *cache = Arc::new(crate::text::rasterize(&updated, w, h));
-                *spec = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::text(updated.clone(), w, h);
+                *spec = updated;
             }
             _ => {}
         }

@@ -920,6 +920,63 @@ mod tests {
         println!("text::rasterize at 3840x2160: median {:.1} ms", ms[2]);
     }
 
+    /// What a text drag costs now: the transform itself, and the transform
+    /// plus building the composite tree, which is what the canvas consumes.
+    #[test]
+    fn text_drag_cost() {
+        let mut doc = Document::new(3840, 2160);
+        let spec = emulsion_core::text::TextSpec {
+            text: "Hello world".into(),
+            size: 240.0,
+            x: 400.0,
+            y: 800.0,
+            ..Default::default()
+        };
+        let id = emulsion_core::Command::AddNode {
+            node: Box::new(emulsion_core::Node::text(0, "Text", spec, 3840, 2160)),
+            slot: emulsion_core::command::Slot::TOP,
+        }
+        .apply(&mut doc)
+        .expect("add text")
+        .expect("id");
+
+        let mut xf = Vec::new();
+        for i in 0..10 {
+            let t = std::time::Instant::now();
+            emulsion_core::Command::TranslateNode {
+                id,
+                dx: 3.0,
+                dy: 1.0 + i as f64,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            xf.push(t.elapsed().as_secs_f64() * 1e3);
+        }
+        let mut tree = Vec::new();
+        for i in 0..10 {
+            emulsion_core::Command::TranslateNode {
+                id,
+                dx: 3.0,
+                dy: 1.0 + i as f64,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let t = std::time::Instant::now();
+            let ct = doc.composite_tree();
+            tree.push(t.elapsed().as_secs_f64() * 1e3);
+            std::hint::black_box(&ct);
+        }
+        let med = |mut v: Vec<f64>| {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v[v.len() / 2]
+        };
+        println!(
+            "text drag: transform {:.2} ms; composite_tree after a transform {:.2} ms",
+            med(xf),
+            med(tree),
+        );
+    }
+
     #[test]
     fn gpu_dabs_match_cpu_stroke() {
         let Some(gpu) = gpu() else { return };
