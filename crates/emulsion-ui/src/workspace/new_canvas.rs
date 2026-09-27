@@ -11,13 +11,19 @@ struct NewCanvas {
     fields: [Entity<InputState>; 6],
     search: Entity<InputState>,
     category: String,
+    folder: Option<u64>,
     notice: Option<String>,
     submitted: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl NewCanvas {
-    fn new(workspace: WeakEntity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        workspace: WeakEntity<Workspace>,
+        folder: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let spec = CanvasSpec::default();
         let fields = [
             spec.name.clone(),
@@ -48,7 +54,11 @@ impl NewCanvas {
                 }),
             );
         }
+        if let Some(owner) = workspace.upgrade() {
+            subscriptions.push(cx.observe(&owner, |_, _, cx| cx.notify()));
+        }
         Self {
+            folder,
             workspace,
             spec,
             fields,
@@ -58,6 +68,71 @@ impl NewCanvas {
             submitted: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    fn project_destination(&self, cx: &mut Context<Self>) -> AnyElement {
+        let folders = self
+            .workspace
+            .upgrade()
+            .map(|w| w.read(cx).home_state.projects.catalog.folders.clone())
+            .unwrap_or_default();
+        let selected = self.folder;
+        let label = folders
+            .iter()
+            .find(|f| Some(f.id) == selected)
+            .map(|f| f.name.clone())
+            .unwrap_or_else(|| "Unfiled".into());
+        let owner = cx.weak_entity();
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child("Save to project")
+            .child(
+                Button::new("new-canvas-project")
+                    .label(label)
+                    .dropdown_caret(true)
+                    .small()
+                    .outline()
+                    .dropdown_menu(move |mut menu, _, _| {
+                        let owner_none = owner.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new("Unfiled")
+                                .checked(selected.is_none())
+                                .on_click(move |_, _, cx| {
+                                    owner_none
+                                        .update(cx, |this, cx| {
+                                            this.folder = None;
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                }),
+                        );
+                        for folder in &folders {
+                            let owner = owner.clone();
+                            let id = folder.id;
+                            menu = menu.item(
+                                PopupMenuItem::new(folder.name.clone())
+                                    .checked(selected == Some(id))
+                                    .on_click(move |_, _, cx| {
+                                        owner
+                                            .update(cx, |this, cx| {
+                                                this.folder = Some(id);
+                                                cx.notify();
+                                            })
+                                            .ok();
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .child("Filed in Home after saving. Manage projects on Home."),
+            )
+            .into_any_element()
     }
 
     fn draft(&self, cx: &App) -> Result<CanvasSpec, String> {
@@ -161,6 +236,7 @@ impl NewCanvas {
             settings.recent_canvases.truncate(8);
         });
         self.submitted = true;
+        let folder = self.folder;
         workspace.update(cx, |workspace, cx| {
             workspace.add_tab_then(window, cx, move |workspace, window, cx| {
                 if let Some(project) = project {
@@ -170,6 +246,7 @@ impl NewCanvas {
                 }
                 if let Some(editor) = &workspace.editor {
                     editor.update(cx, |editor, cx| {
+                        editor.home_folder_on_save = Some(folder);
                         if editor.draw_mode != (spec.kind == CanvasKind::Paint) {
                             editor.toggle_draw_mode(cx);
                         }
@@ -442,6 +519,7 @@ impl Render for NewCanvas {
                                             ),
                                     )
                                     .child(field("Name", &self.fields[0]))
+                                    .child(self.project_destination(cx))
                                     .child(
                                         div()
                                             .flex()
@@ -609,9 +687,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.cancel_style_dialog(window, cx);
+        self.ensure_home_projects(cx);
         let workspace = cx.weak_entity();
+        let folder = self.home_state.projects.folder;
         let view = cx.new(|cx| {
-            let mut view = NewCanvas::new(workspace, window, cx);
+            let mut view = NewCanvas::new(workspace, folder, window, cx);
             if kind != CanvasKind::Photo {
                 view.pick_kind(kind, window, cx);
             }

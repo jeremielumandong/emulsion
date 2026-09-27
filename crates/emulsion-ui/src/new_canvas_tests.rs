@@ -121,3 +121,68 @@ fn new_design_dialog_creates_all_pages_and_bleed(cx: &mut TestAppContext) {
         assert_eq!(ws.read(cx).tabs.len(), 2);
     });
 }
+
+#[gpui_kit::test]
+fn new_document_keeps_home_project_on_first_save_and_later_saves(cx: &mut TestAppContext) {
+    use emulsion_io::creative_library as library;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("campaign.ora");
+    let original = doc(&["Existing"], None);
+    let (ws, cx) = open(cx, original.clone());
+    let (catalog, folder) = library::update(&library::root(), |catalog| {
+        catalog.add_project_folder("Shared UI test project".into())
+    })
+    .unwrap();
+    cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.home_state.projects.catalog = catalog;
+            ws.home_state.projects.folder = Some(folder);
+            ws.new_document(window, cx);
+        })
+    });
+    cx.run_until_parked();
+    type_field(cx, "Width", "64");
+    type_field(cx, "Height", "48");
+    cx.update(|window, cx| {
+        assert!(window.find("new-canvas-project").visible());
+        window.click("new-canvas-create", cx);
+    });
+    cx.run_until_parked();
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| {
+        assert_eq!(editor.read(cx).home_folder_on_save, Some(Some(folder)));
+        assert_eq!(ws.read(cx).tabs[0].read(cx).editor.doc, original);
+        ws.update(cx, |ws, cx| ws.write(editor.clone(), path.clone(), cx));
+    });
+    cx.run_until_parked();
+    assert!(path.is_file());
+    let catalog = library::load(&library::root()).unwrap();
+    assert_eq!(
+        catalog
+            .projects
+            .iter()
+            .find(|p| p.path == path)
+            .unwrap()
+            .folder,
+        Some(folder)
+    );
+    cx.update(|_, cx| {
+        assert_eq!(editor.read(cx).home_folder_on_save, None);
+        ws.update(cx, |ws, cx| ws.write(editor.clone(), path.clone(), cx));
+    });
+    cx.run_until_parked();
+    let catalog = library::load(&library::root()).unwrap();
+    assert_eq!(
+        catalog.projects.iter().filter(|p| p.path == path).count(),
+        1
+    );
+    assert_eq!(
+        catalog
+            .projects
+            .iter()
+            .find(|p| p.path == path)
+            .unwrap()
+            .folder,
+        Some(folder)
+    );
+}

@@ -172,10 +172,10 @@ branch history, custom toolbars, masks/channels, and advanced brush controls.
 
 - [x] Handoff palette and persistent accent/corner controls, light/dark/external themes; bundled fonts.
 - [x] Photo/Paint New document dialog with presets, units, dimensions, resolution, name, backgrounds, saved presets and recent sizes.
-- [ ] Finish handoff geometry across existing custom controls; preset search and project destination.
+- [x] Shared handoff geometry, preset search and project destination.
 - [x] Home navigation/start cards, workspace routing, responsive menu overflow.
-- [ ] Photo/Paint dock restructuring; preserve saved custom layouts and shortcuts.
-- [ ] Library workspace uses actual files and existing batch/develop operations.
+- [x] Photo/Paint dock restructuring; preserve saved custom layouts and shortcuts.
+- [x] Library workspace uses actual files and existing batch/develop operations.
 
 Gate: create/open/save/reopen a photo and painting; all current UI regression tests
 pass; old settings load; no visible control is a silent no-op.
@@ -341,3 +341,52 @@ ignored), including destination routing and graph-aware clipboard/undo. The full
 core/I/O suites and all-target Clippy for core, I/O, UI and engine passed. Motion,
 resize constraints and their persistence are being implemented after this
 checkpoint and require their own tests before the related gates are checked.
+
+
+## September 27 checkpoint: shared UI completion
+
+The shared shell now uses the handoff's 48px attached tool rail, 38px document
+strip and 300px default dock in Photo and Paint. Saved toolbar positions, scales,
+floating layouts and the roomy chrome setting remain supported. The dock has
+Properties/Adjust/History/Assistant, Swatches/Color and Layers/Channels/Paths
+groups. Less common panels remain in More and the Window menu. Sections can
+collapse, color/layer heights and dock width can be resized with pointer or
+keyboard, and saved workspaces restore the selected panels and collapsed states.
+Narrow windows reopen the dock as an overlay without reducing the canvas width.
+
+Home and Library share destination navigation: a 220px sidebar on wide windows
+and labeled icon buttons on smaller windows. Home content is capped at 1240px.
+Library starts with a viewport-driven image grid, switches to its existing
+preview/develop workflow on image selection, and has a Grid view return action.
+Develop/export settings remain reachable through an overlay on narrow windows.
+Folder imports, collections, ratings, tags, recipes, selection and batch export
+continue to use the existing local file operations and bounded thumbnail loader.
+
+New Document's Save to project picker defaults to the current Home project.
+The first successful save records that folder in the persistent Home catalog;
+subsequent saves preserve membership. Canceling creation preserves open documents.
+This selects a Home organization folder; the normal Save dialog still chooses the
+physical file path. Old workspace JSON supplies defaults for the new dock fields.
+
+This completes the shared-shell slice. Advanced Design and Diagram tools,
+contextual AI proposals, importer compatibility expansion, and the remaining
+Vello performance/platform release gates remain separate milestones below/above;
+this checkpoint does not mark the full migration complete.
+
+
+Validation after the shared shell, standalone image viewer and new splash:
+`cargo test --workspace --locked -- --test-threads=1` passed 1,282 tests
+(12 ignored), including 500 UI tests (one ignored). Workspace all-target Clippy
+with warnings denied, formatting, GPUI vendor validation, license staging,
+renderer policy and Linux desktop-entry validation passed. The viewer skips
+editor startup services and the splash until Edit in Photo is requested; the
+handoff to Photo also skips the splash. Normal Home launch uses the supplied
+Emulsion artwork with a version label from the app's build metadata.
+
+
+## Design reference requested September 27
+
+Use the local Omadesign checkout as a feature reference, without copying its
+implementation or visual design. The pinned comparison, gaps and delivery order
+are in [Design feature parity](design-feature-parity.md). The original handoff
+remains the UI source. Local editing remains the scope; collaboration is deferred.

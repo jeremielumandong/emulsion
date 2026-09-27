@@ -261,6 +261,10 @@ pub(crate) const LAYERS_MAX_H: f32 = 900.0;
 enum Drag {
     Compare,
     Toolbar(compact::ToolbarDrag),
+    ColorSplit {
+        start_y: Pixels,
+        start_h: f32,
+    },
     SidebarResize {
         start_x: Pixels,
         start_w: f32,
@@ -392,8 +396,9 @@ pub struct EditorView {
     workspace_customizer: Option<Entity<gpui_kit::component::input::InputState>>,
     workspace_customizer_focus: FocusHandle,
     sidebar_layout: sidebar::SidebarState,
-    /// Draw mode: painter's rail and a Layers-only sidebar.
+    /// Paint mode: painter's tools within the shared editor shell.
     pub(crate) draw_mode: bool,
+    pub(crate) home_folder_on_save: Option<Option<u64>>,
     /// Export chooser state and the last format picked.
     pub(crate) export_prefs: export_ui::ExportPrefs,
     pub(crate) fit_pending: bool,
@@ -538,6 +543,7 @@ impl EditorView {
             sidebar_view,
             name,
             source,
+            home_folder_on_save: None,
             view: View::default(),
             warp: None,
             anim: Default::default(),
@@ -1587,6 +1593,11 @@ impl EditorView {
                 let drag = *drag;
                 self.move_toolbar(drag, pos, cx);
             }
+            Drag::ColorSplit { start_y, start_h } => {
+                self.sidebar_layout.colors_height =
+                    (*start_h + f32::from(pos.y - *start_y)).clamp(48., 240.);
+                cx.notify();
+            }
             Drag::SidebarResize { start_x, start_w } => {
                 self.sidebar_layout.width = Some((*start_w - f32::from(pos.x - *start_x)).max(0.));
                 cx.notify();
@@ -1728,6 +1739,7 @@ impl EditorView {
             }
             Some(Drag::Compare)
             | Some(Drag::Pan { .. })
+            | Some(Drag::ColorSplit { .. })
             | Some(Drag::SidebarResize { .. })
             | Some(Drag::RotateView { .. })
             | Some(Drag::Navigator)
@@ -4180,7 +4192,11 @@ impl Render for EditorView {
         let ask = self.ask_area(&p, cx);
         let size_panel = self.size_panel_view(&p, cx);
         let export_panel = self.export_panel_view(&p, cx);
-        let dock = self.assistant_dock(&p, cx);
+        let dock = if self.sidebar_tab == SidebarTab::Assistant {
+            None
+        } else {
+            self.assistant_dock(&p, cx)
+        };
         let panel = self.sidebar_region(window, cx);
         div()
             .flex()

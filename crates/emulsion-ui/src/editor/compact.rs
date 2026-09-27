@@ -105,13 +105,9 @@ impl CompactLayout {
         ];
         // Photo matches Photoshop's Essentials: Tools left with the colour
         // swatches at their foot, the options bar across the top.
-        let open = [true, !draw, true, false, draw, draw];
-        // Painting favours bigger targets: tools and colours at L size.
-        let scale = if draw {
-            [1.25, 1., 1., 1.25, 1., 1.]
-        } else {
-            [1.; 6]
-        };
+        let open = [true, true, true, false, draw, false];
+        // The shared 48px rail starts at 1×; saved per-toolbar scales still override it.
+        let scale = [1.; 6];
         Self {
             bars: std::array::from_fn(|i| Toolbar {
                 focus: cx.focus_handle(),
@@ -125,7 +121,7 @@ impl CompactLayout {
             drop_edge: None,
             tool_ids: Vec::new(),
             hidden_menu_ids: Vec::new(),
-            overlay: draw,
+            overlay: false,
             tool_columns: 1,
         }
     }
@@ -604,6 +600,8 @@ impl EditorView {
                 cx.stop_propagation(); cx.notify();
             }))
             .when(vertical, |d| d.flex_col())
+            .when(attached && bar == Bar::Tools && vertical && self.compact.tool_columns == 1, |d| d.w(rems(3.)))
+            .when(attached && bar == Bar::Options && !vertical, |d| d.min_h(rems(2.125)))
             .bg(p.panel).border_color(p.line)
             .when(!attached, |d| d.border_1().shadow_md())
             .when(attached, |d| match edge {
@@ -1028,7 +1026,7 @@ impl EditorView {
                                                 .flex_none()
                                                 .items_end()
                                                 .min_w_0()
-                                                .h(rems(1.875))
+                                                .h(rems(2.375))
                                                 .px_1()
                                                 .bg(p.paper)
                                                 .border_b_1()
@@ -1123,7 +1121,11 @@ impl EditorView {
                     .child(panel),
             )
             .children(self.project_page_strip(p, cx))
-            .children(self.assistant_dock(p, cx))
+            .children(if self.sidebar_tab == SidebarTab::Assistant {
+                None
+            } else {
+                self.assistant_dock(p, cx)
+            })
             .children(self.picker(p, window, cx))
             .into_any_element()
     }

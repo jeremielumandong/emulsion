@@ -5,17 +5,17 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 #[derive(Default)]
-pub(super) struct PreviewNavigation {
+pub(crate) struct PreviewNavigation {
     path: Option<PathBuf>,
-    view: View,
-    bounds: Option<Bounds<Pixels>>,
-    dimensions: (u32, u32),
-    manual: bool,
-    drag: Option<Point<Pixels>>,
+    pub(crate) view: View,
+    pub(crate) bounds: Option<Bounds<Pixels>>,
+    pub(crate) dimensions: (u32, u32),
+    pub(crate) manual: bool,
+    pub(crate) drag: Option<Point<Pixels>>,
 }
 
 impl PreviewNavigation {
-    fn sync(&mut self, path: &Path, dimensions: (u32, u32)) {
+    pub(crate) fn sync(&mut self, path: &Path, dimensions: (u32, u32)) {
         if self.path.as_deref() != Some(path) || self.dimensions != dimensions {
             self.path = Some(path.into());
             self.dimensions = dimensions;
@@ -24,14 +24,14 @@ impl PreviewNavigation {
         }
     }
 
-    fn layout(&mut self, bounds: Bounds<Pixels>) {
+    pub(crate) fn layout(&mut self, bounds: Bounds<Pixels>) {
         self.bounds = Some(bounds);
         if !self.manual {
             self.fit();
         }
     }
 
-    fn fit(&mut self) {
+    pub(crate) fn fit(&mut self) {
         self.manual = false;
         self.drag = None;
         if let Some(bounds) = self.bounds {
@@ -39,7 +39,7 @@ impl PreviewNavigation {
         }
     }
 
-    fn zoom(&mut self, factor: f64, anchor: Point<Pixels>) {
+    pub(crate) fn zoom(&mut self, factor: f64, anchor: Point<Pixels>) {
         if let Some(bounds) = self.bounds {
             self.view.zoom_at(
                 factor,
@@ -50,7 +50,7 @@ impl PreviewNavigation {
         }
     }
 
-    fn step(&mut self, zoom_in: bool) {
+    pub(crate) fn step(&mut self, zoom_in: bool) {
         if let Some(bounds) = self.bounds {
             let center = bounds.center();
             self.view.step(
@@ -62,7 +62,7 @@ impl PreviewNavigation {
         }
     }
 
-    fn pan(&mut self, dx: f64, dy: f64) {
+    pub(crate) fn pan(&mut self, dx: f64, dy: f64) {
         self.view.pan(dx, dy);
         self.manual = true;
     }
@@ -266,6 +266,7 @@ mod tests {
                 let mut ws = Workspace::new(window, cx);
                 ws.splash = false;
                 ws.screen = Screen::Batch;
+                ws.batch.current = Some(0);
                 ws.batch.preview = Some((
                     "preview.png".into(),
                     None,

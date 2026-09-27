@@ -299,12 +299,13 @@ mod tests {
                 let main = window.find("home-main").bounds();
                 let scroll = window.find("home-scroll").bounds();
                 let presets = window.find("home-presets").bounds();
-                assert_eq!(library.right(), main.left());
+                assert!(library.right() <= main.left());
+                assert!(main.size.width <= px(1240.));
                 assert!(scroll.bottom() <= presets.top());
                 assert!(presets.bottom() <= px(height));
                 assert!(scroll.size.height > px(200.));
                 if width >= 1280. {
-                    assert_eq!(main.right(), window.find("home-inspector").bounds().left());
+                    assert!(main.right() <= window.find("home-inspector").bounds().left());
                 } else {
                     assert!(window.try_find("home-inspector").is_none());
                 }
@@ -588,8 +589,9 @@ impl Workspace {
         let p = theme::palette(cx);
         let width = f32::from(window.viewport_size().width) / f32::from(window.rem_size());
         let inspector = width >= 64.;
-        let sidebar_width = if width < 48. { 9. } else { 11.875 };
-        let center_width = (width - sidebar_width - if inspector { 15.625 } else { 0. }).max(12.);
+        let sidebar_width = if width < 56. { 3.5 } else { 13.75 };
+        let center_width =
+            (width - sidebar_width - if inspector { 15.625 } else { 0. }).clamp(12., 77.5);
         let columns = (center_width / 11.125).floor().clamp(1., 6.) as u16;
         let visible = self.visible_recents(cx);
         let selected = self.selected_recent(cx);
@@ -686,7 +688,11 @@ impl Workspace {
             div()
                 .text_size(rems(0.625))
                 .text_color(p.muted)
-                .child(format!("{} of {}", visible.len(), self.recents.len())),
+                .child(format!(
+                    "{} of {}",
+                    visible.len(),
+                    self.home_project_entries().len()
+                )),
         );
         let gallery = if cells.is_empty() {
             div()
@@ -726,6 +732,7 @@ impl Workspace {
         };
         let center = div()
             .id("home-main")
+            .max_w(rems(77.5))
             .test_support()
             .flex()
             .flex_col()
@@ -758,19 +765,87 @@ impl Workspace {
             .min_h_0()
             .bg(p.paper)
             .child(self.home_library(sidebar_width, &p, cx))
-            .child(center)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .justify_center()
+                    .child(center),
+            )
             .when(inspector, |row| {
                 row.child(self.home_inspector(selected, &p, cx))
             })
             .into_any_element()
     }
 
-    fn home_library(&self, width: f32, p: &Palette, cx: &Context<Self>) -> AnyElement {
+    fn home_library(&self, width: f32, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let mut folders: BTreeMap<PathBuf, usize> = BTreeMap::new();
         for recent in &self.recents {
             if let Some(folder) = recent.path.parent() {
                 *folders.entry(folder.to_path_buf()).or_default() += 1;
             }
+        }
+        if width < 8. {
+            let owner = cx.weak_entity();
+            let folder_menu = Button::new("home-folders-menu")
+                .label("…")
+                .accessibility_label("Project folders and file import")
+                .tooltip("Folders and import")
+                .small()
+                .ghost()
+                .dropdown_menu(move |mut menu, _, _| {
+                    let all = owner.clone();
+                    menu = menu.item(PopupMenuItem::new("All work").on_click(move |_, _, cx| {
+                        all.update(cx, |this, cx| {
+                            this.home_state.folder = None;
+                            cx.notify();
+                        })
+                        .ok();
+                    }));
+                    for folder in folders.keys() {
+                        let owner = owner.clone();
+                        let path = folder.clone();
+                        menu =
+                            menu.item(PopupMenuItem::new(folder.display().to_string()).on_click(
+                                move |_, _, cx| {
+                                    owner
+                                        .update(cx, |this, cx| {
+                                            this.home_state.folder = Some(path.clone());
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                },
+                            ));
+                    }
+                    menu =
+                        menu.item(PopupMenuItem::new("Open files…").on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(crate::actions::Open), cx)
+                        }));
+                    let owner = owner.clone();
+                    menu.item(PopupMenuItem::new("Import folder…").on_click(
+                        move |_, window, cx| {
+                            owner
+                                .update(cx, |this, cx| {
+                                    this.visit_destination(Destination::Library, window, cx);
+                                    this.pick_batch_folder(cx);
+                                })
+                                .ok();
+                        },
+                    ))
+                });
+            return div()
+                .id("home-library")
+                .test_support()
+                .w(rems(width))
+                .flex_none()
+                .flex()
+                .flex_col()
+                .border_r_1()
+                .border_color(p.line)
+                .child(self.destination_navigation("home-destination", true, cx))
+                .child(folder_menu)
+                .into_any_element();
         }
         let mut library = div()
             .id("home-library-list")
@@ -781,19 +856,7 @@ impl Workspace {
             .overflow_y_scroll()
             .p_2()
             .gap_1()
-            .children(Destination::ALL.map(|destination| {
-                control(
-                    (ElementId::from("home-destination"), destination.label()),
-                    destination.label(),
-                    p,
-                )
-                .w_full()
-                .justify_start()
-                .selected(destination == Destination::Home)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.visit_destination(destination, window, cx)
-                }))
-            }))
+            .child(self.destination_navigation("home-destination", width < 8., cx))
             .child(
                 div()
                     .px_2()

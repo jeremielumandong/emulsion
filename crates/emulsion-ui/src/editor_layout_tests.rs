@@ -518,10 +518,9 @@ fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContex
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(editor.read(cx).draw_mode);
-        assert!(window.find("canvas-toolbar-dock").visible());
+        assert!(window.try_find("canvas-toolbar-dock").is_none());
         assert!(window.find("canvas-toolbar-brushes").visible());
-        assert!(window.find("dock-paint").visible());
-        assert!(window.try_find("canvas-toolbar-options").is_none());
+        assert!(window.find("canvas-toolbar-options").visible());
         window.click("toolbar-close-tools", cx);
     });
     cx.run_until_parked();
@@ -545,7 +544,7 @@ fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContex
             window.try_find("canvas-toolbar-tools").is_none(),
             "draw restores the toolbox it was left with"
         );
-        assert!(window.find("canvas-toolbar-dock").visible());
+        assert!(window.try_find("canvas-toolbar-dock").is_none());
         let settings = &cx.global::<AppSettings>().0;
         assert!(settings.photo_workspace.is_some());
         assert_eq!(editor.read(cx).editor.doc, original);
@@ -577,7 +576,7 @@ fn rapid_mode_switches_persist_the_latest_workspace_and_settings(cx: &mut TestAp
     cx.run_until_parked();
     assert_eq!(emulsion_io::settings::Settings::load(), expected);
     cx.update(|window, cx| {
-        assert!(window.find("canvas-toolbar-dock").visible());
+        assert!(window.try_find("canvas-toolbar-dock").is_none());
         assert!(editor.read(cx).draw_mode);
         assert_eq!(editor.read(cx).editor.doc, original);
         assert_eq!(editor.read(cx).editor.history.len(), 0);
@@ -789,15 +788,15 @@ fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut Tes
         assert_eq!(editor.read(cx).dock_tab, crate::editor::DockTab::Layers);
         assert_eq!(editor.read(cx).editor.doc, original);
     });
-    // Draw mode keeps the tabs in the header, where Procreate-style
-    // overlays leave the canvas edge-to-edge.
+    // Paint shares the attached document strip. Saved floating layouts still
+    // restore their header tabs (covered by the custom workspace tests).
     cx.update(|window, cx| pick_workspace(window, DRAW, cx));
     cx.run_until_parked();
     cx.update(|window, _| {
-        assert!(window.try_find("document-tab-bar").is_none());
-        let header = window.find("editor-document-bar").bounds();
+        let strip = window.find("document-tab-bar").bounds();
         let tabs = window.find("compact-document-tabs").bounds();
-        assert!(tabs.bottom() <= header.bottom() + gpui_kit::px(1.));
+        assert_eq!(strip.size.height, gpui_kit::px(38.));
+        assert!(tabs.top() >= strip.top() && tabs.bottom() <= strip.bottom());
     });
 }
 

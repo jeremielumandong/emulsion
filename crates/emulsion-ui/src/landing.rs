@@ -8,12 +8,14 @@ use std::sync::Arc;
 pub const LANDING_PNG: &[u8] = include_bytes!("../../../assets/landing/landing.png");
 const LANDING_MEDIUM_PNG: &[u8] = include_bytes!("../../../assets/landing/landing-medium.png");
 const LANDING_TALL_PNG: &[u8] = include_bytes!("../../../assets/landing/landing-tall.png");
+const SPLASH_PNG: &[u8] = include_bytes!("../../../assets/landing/splash.png");
 pub const LANDING_NAME: &str = "landing";
 
 pub(crate) struct LandingImages {
     wide: Arc<RenderImage>,
     medium: Arc<RenderImage>,
     tall: Arc<RenderImage>,
+    pub(crate) splash: Arc<RenderImage>,
 }
 
 impl LandingImages {
@@ -47,6 +49,7 @@ pub(crate) fn decode() -> Option<LandingImages> {
         wide: Arc::new(decode_image(LANDING_PNG)?),
         medium: Arc::new(decode_image(LANDING_MEDIUM_PNG)?),
         tall: Arc::new(decode_image(LANDING_TALL_PNG)?),
+        splash: Arc::new(decode_image(SPLASH_PNG)?),
     })
 }
 
@@ -58,6 +61,8 @@ mod tests {
         assert_eq!(images.for_aspect(14.0).0.size(0).width.0, 2508);
         assert_eq!(images.for_aspect(2.5).0.size(0).width.0, 1916);
         assert_eq!(images.for_aspect(1.5).0.size(0).width.0, 1672);
+        assert_eq!(images.splash.size(0).width.0, 1672);
+        assert_eq!(images.splash.size(0).height.0, 941);
         let doc = emulsion_io::import::import_bytes("landing", super::LANDING_PNG).unwrap();
         assert_eq!((doc.width, doc.height), (2508, 627));
         assert_eq!(doc.nodes.len(), 1);

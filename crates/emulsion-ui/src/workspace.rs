@@ -102,6 +102,14 @@ impl Workspace {
     }
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_splash(true, window, cx)
+    }
+
+    pub fn new_for_file(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_splash(false, window, cx)
+    }
+
+    fn new_with_splash(show_splash: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let retained_layout = crate::app_state::initialize_layout_reuse(cx);
         window.set_layout_reuse_enabled(retained_layout);
         // Imported brush tips and grains register into a shared registry;
@@ -154,18 +162,20 @@ impl Workspace {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         // Decoded up front (a few milliseconds) so the splash never shows without it.
-        let landing = crate::landing::decode();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(1400))
-                .await;
-            this.update(cx, |this, cx| {
-                this.splash = false;
-                cx.notify();
+        let landing = show_splash.then(crate::landing::decode).flatten();
+        if show_splash {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1400))
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.splash = false;
+                    cx.notify();
+                })
+                .ok();
             })
-            .ok();
-        })
-        .detach();
+            .detach();
+        }
         // Recent files and recovery copies come from disk; read them off the
         // first frame so the window appears at once.
         cx.spawn(async move |this, cx| {
@@ -207,7 +217,7 @@ impl Workspace {
             model_jobs: Default::default(),
             batch: Default::default(),
             landing,
-            splash: true,
+            splash: show_splash,
         }
     }
 
@@ -917,6 +927,20 @@ impl Workspace {
             self.open_project_path(path, false, window, cx);
             return;
         }
+        self.open_image_path(path, false, window, cx);
+    }
+
+    pub fn open_photo_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_image_path(path, true, window, cx);
+    }
+
+    fn open_image_path(
+        &mut self,
+        path: PathBuf,
+        photo: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.add_tab_then(window, cx, move |this, window, cx| {
             this.start_busy(open_busy(&path), window, cx);
             this.error = None;
@@ -941,6 +965,11 @@ impl Workspace {
                                 window,
                                 cx,
                             );
+                            if photo && let Some(ed) = &this.editor {
+                                ed.update(cx, |e, cx| {
+                                    if e.draw_mode { e.toggle_draw_mode(cx); }
+                                });
+                            }
                             if let (Some(err), Some(ed)) = (broken, &this.editor) {
                                 ed.update(cx, |e, cx| {
                                     e.set_status(
@@ -1062,28 +1091,26 @@ impl Workspace {
     }
 
     fn splash_view(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let p = theme::palette(cx);
         let viewport = window.viewport_size();
-        let aspect = f32::from(viewport.width) / f32::from(viewport.height).max(1.0);
-        let bg: AnyElement = match self
-            .landing
-            .as_ref()
-            .map(|images| images.for_aspect(aspect))
-        {
-            Some((image, (x, y))) => img(ImageSource::Render(image))
+        // Fit the entire composition, including its title, without cropping it.
+        let scale = (f32::from(viewport.width) / 1672.).min(f32::from(viewport.height) / 941.);
+        let width = 1672. * scale;
+        let height = 941. * scale;
+        let artwork = self.landing.as_ref().map(|images| {
+            img(ImageSource::Render(images.splash.clone()))
                 .size_full()
-                .object_fit(ObjectFit::Cover)
-                .object_position(x, y)
-                .into_any_element(),
-            None => div().size_full().bg(p.chrome).into_any_element(),
-        };
+                .object_fit(ObjectFit::Contain)
+        });
         div()
             .id("splash")
             .absolute()
             .top_0()
             .left_0()
             .size_full()
-            .bg(p.chrome)
+            .bg(rgb(0x080e13))
+            .flex()
+            .items_center()
+            .justify_center()
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -1092,46 +1119,23 @@ impl Workspace {
                     cx.notify();
                 }),
             )
-            .child(bg)
             .child(
                 div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .bg(linear_gradient(
-                        90.,
-                        linear_color_stop(p.chrome.opacity(0.85), 0.),
-                        linear_color_stop(p.chrome.opacity(0.0), 0.6),
-                    )),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(48.))
-                    .bottom(px(48.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.))
+                    .relative()
+                    .w(px(width))
+                    .h(px(height))
+                    .children(artwork)
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(14.))
-                            .child(div().size(px(22.)).bg(p.accent))
-                            .child(
-                                div()
-                                    .text_size(px(40.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(p.chrome_fg)
-                                    .child("Emulsion"),
-                            ),
-                    )
-                    .child(mono(
-                        format!("{} · every edit, still undoable", env!("CARGO_PKG_VERSION")),
-                        11.,
-                        p.chrome_fg.opacity(0.8),
-                    )),
+                            .id("splash-version")
+                            .absolute()
+                            .left(px(74. * scale))
+                            .top(px(480. * scale))
+                            .text_size(px((20. * scale).clamp(12., 24.)))
+                            .text_color(rgb(0xb8c8d4))
+                            // Keep release information crisp and in sync with Cargo.
+                            .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
+                    ),
             )
     }
 
@@ -1330,6 +1334,7 @@ impl Workspace {
                         &path
                     };
                     this.recents = recent::push(recent_path, summary(&doc));
+                    this.remember_saved_project(recent_path.clone(), ed.clone(), cx);
                     this.invalidate_thumbnail(
                         &std::fs::canonicalize(recent_path).unwrap_or(recent_path.clone()),
                     );

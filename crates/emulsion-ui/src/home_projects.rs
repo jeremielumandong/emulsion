@@ -28,6 +28,68 @@ pub(crate) struct HomeProjects {
     message: String,
 }
 impl Workspace {
+    pub(crate) fn remember_saved_project(
+        &mut self,
+        path: std::path::PathBuf,
+        editor: Entity<crate::editor::EditorView>,
+        cx: &mut Context<Self>,
+    ) {
+        let e = editor.read(cx);
+        let folder = e.home_folder_on_save;
+        let kind = match e.editor.kind() {
+            Some(emulsion_core::project::ProjectKind::Design) => CanvasKind::Design,
+            Some(emulsion_core::project::ProjectKind::Diagram) => CanvasKind::Diagram,
+            None if e.draw_mode => CanvasKind::Paint,
+            None => CanvasKind::Photo,
+        };
+        let entry = recent::Recent {
+            path,
+            opened: recent::now(),
+            summary: format!("{} · {} layers", kind.label(), e.editor.doc.nodes.len()),
+        };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    library::update(&library::root(), move |catalog| {
+                        let id = catalog.remember_project(&entry, Some(kind))?;
+                        if let Some(folder) = folder {
+                            let folder =
+                                folder.filter(|id| catalog.folders.iter().any(|f| f.id == *id));
+                            catalog
+                                .projects
+                                .iter_mut()
+                                .find(|p| p.id == id)
+                                .unwrap()
+                                .folder = folder;
+                        }
+                        Ok(())
+                    })
+                })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok((catalog, _)) => {
+                    if catalog.revision >= this.home_state.projects.catalog.revision {
+                        this.home_state.projects.catalog = catalog;
+                    }
+                    editor.update(cx, |e, _| {
+                        if e.home_folder_on_save == folder {
+                            e.home_folder_on_save = None;
+                        }
+                    });
+                    cx.notify();
+                }
+                Err(error) => editor.update(cx, |e, cx| {
+                    e.set_status(
+                        format!("File saved; could not update Home: {error}"),
+                        true,
+                        cx,
+                    )
+                }),
+            })
+            .ok();
+        })
+        .detach();
+    }
     pub(crate) fn ensure_home_projects(&mut self, cx: &mut Context<Self>) {
         if self.home_state.projects.loading
             || (self.home_state.projects.loaded && self.home_state.projects.recents == self.recents)

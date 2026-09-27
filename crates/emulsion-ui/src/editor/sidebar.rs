@@ -3,12 +3,32 @@ use super::*;
 use gpui_kit::component::{
     Sizable,
     button::{Button, ButtonVariants},
+    menu::{DropdownMenu, PopupMenuItem},
 };
 
-#[derive(Default)]
 pub(crate) struct SidebarState {
     pub width: Option<f32>,
     pub collapsed: bool,
+    pub overlay_open: bool,
+    pub upper_collapsed: bool,
+    pub layers_collapsed: bool,
+    pub colors_collapsed: bool,
+    pub color_tab: bool,
+    pub colors_height: f32,
+}
+impl Default for SidebarState {
+    fn default() -> Self {
+        Self {
+            width: None,
+            collapsed: false,
+            overlay_open: false,
+            upper_collapsed: false,
+            layers_collapsed: false,
+            colors_collapsed: false,
+            color_tab: false,
+            colors_height: 64.,
+        }
+    }
 }
 
 impl SidebarState {
@@ -20,7 +40,7 @@ impl SidebarState {
         }
         Some(
             self.width
-                .unwrap_or(20. * rem_size)
+                .unwrap_or(18.75 * rem_size)
                 .clamp(minimum, 35. * rem_size)
                 .min(available),
         )
@@ -44,6 +64,7 @@ mod tests {
         let state = SidebarState {
             width: Some(560.),
             collapsed: false,
+            ..Default::default()
         };
         assert_eq!(state.width_for_viewport(600., 16.), Some(320.));
         assert_eq!(state.width_for_viewport(499., 16.), None);
@@ -53,7 +74,7 @@ mod tests {
     #[test]
     fn sidebar_geometry_and_snap_follow_interface_zoom() {
         let state = SidebarState::default();
-        assert_eq!(state.width_for_viewport(1200., 20.), Some(400.));
+        assert_eq!(state.width_for_viewport(1200., 20.), Some(375.));
         assert_eq!(SidebarState::snapped_width(400., 20.), 500.);
         assert_eq!(SidebarState::snapped_width(500., 20.), 375.);
         let collapsed = SidebarState {
@@ -85,8 +106,48 @@ pub(crate) enum SidebarTab {
     BrushSettings,
     BrushPresets,
     BlendingOptions,
+    Assistant,
 }
 
+impl SidebarTab {
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::Properties => "properties",
+            Self::Adjustments => "adjustments",
+            Self::Reference => "reference",
+            Self::Navigator => "navigator",
+            Self::Info => "info",
+            Self::Recipes => "recipes",
+            Self::Timeline => "timeline",
+            Self::History => "history",
+            Self::Histogram => "histogram",
+            Self::BrushSettings => "brush-settings",
+            Self::BrushPresets => "brush-presets",
+            Self::BlendingOptions => "blending-options",
+            Self::Assistant => "assistant",
+        }
+    }
+    pub(super) fn from_key(key: &str) -> Self {
+        [
+            Self::Properties,
+            Self::Adjustments,
+            Self::Reference,
+            Self::Navigator,
+            Self::Info,
+            Self::Recipes,
+            Self::Timeline,
+            Self::History,
+            Self::Histogram,
+            Self::BrushSettings,
+            Self::BrushPresets,
+            Self::BlendingOptions,
+            Self::Assistant,
+        ]
+        .into_iter()
+        .find(|t| t.key() == key)
+        .unwrap_or(Self::Properties)
+    }
+}
 impl EditorView {
     /// Open the panel dock on Layers, Channels or Paths.
     pub(crate) fn show_dock_tab(
@@ -96,15 +157,19 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         self.sidebar_layout.collapsed = false;
+        self.sidebar_layout.overlay_open = true;
         self.dock_tab = tab;
+        self.sidebar_layout.layers_collapsed = false;
         self.menu = None;
         window.focus(&self.panel_focus, cx);
         cx.notify();
     }
 
     /// Photoshop's Tab: hide or show the panel dock.
-    pub(crate) fn toggle_panel_dock(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_layout.collapsed = !self.sidebar_layout.collapsed;
+    pub(crate) fn toggle_panel_dock(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let show = !self.sidebar_content_visible(window, cx);
+        self.sidebar_layout.collapsed = !show;
+        self.sidebar_layout.overlay_open = show;
         cx.notify();
     }
 
@@ -163,9 +228,17 @@ impl EditorView {
             self.anim.replay = None;
         }
         self.sidebar_tab = tab;
+        self.sidebar_layout.upper_collapsed = false;
+        self.sidebar_layout.overlay_open = true;
+        if tab == SidebarTab::Assistant {
+            self.assistant.dock_open = true;
+        }
         self.sidebar_layout.collapsed = false;
         if tab == SidebarTab::Info {
             self.panels.info = true;
+        }
+        if tab == SidebarTab::Navigator {
+            self.panels.navigator = true;
         }
         self.presets.open = tab == SidebarTab::BrushPresets;
         self.sidebar_menu = false;
@@ -184,9 +257,19 @@ impl EditorView {
         let visible_width = self
             .sidebar_layout
             .width_for_viewport(f32::from(window.viewport_size().width), rem_size);
-        let sidebar_width = visible_width.unwrap_or(20. * rem_size);
+        if visible_width.is_some() {
+            self.sidebar_layout.overlay_open = false;
+        }
+        let popup = visible_width.is_none()
+            && !self.sidebar_layout.collapsed
+            && self.sidebar_layout.overlay_open;
+        let sidebar_width = visible_width.unwrap_or(
+            (18.75 * rem_size)
+                .min(f32::from(window.viewport_size().width) - 40.)
+                .max(160.),
+        );
         self.layer_panel.compact = compact || f32::from(window.viewport_size().height) < 700.;
-        if compact && visible_width.is_none() {
+        if visible_width.is_none() && !popup {
             return div()
                 .id("sidebar-collapsed")
                 .flex()
@@ -206,6 +289,7 @@ impl EditorView {
                         .tooltip("Expand sidebar")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.sidebar_layout.collapsed = false;
+                            this.sidebar_layout.overlay_open = true;
                             cx.notify();
                         })),
                 )
@@ -255,86 +339,104 @@ impl EditorView {
                 .into_any_element();
         }
         let dock_bounds = self.layer_panel.dock_bounds.clone();
+        let owner = cx.weak_entity();
         let tabs = div()
+            .id("sidebar-primary-tabs")
+            .test_support()
             .flex()
             .flex_none()
-            .h(if compact { rems(1.625) } else { rems(2.125) })
-            .border_t_1()
+            .h(rems(2.))
+            .items_center()
             .border_b_1()
             .border_color(p.line)
             .children(
                 [
-                    (SidebarTab::Info, "sidebar-info-top", "Info"),
                     (SidebarTab::Properties, "sidebar-properties", "Properties"),
-                    (
-                        SidebarTab::Adjustments,
-                        "sidebar-adjustments",
-                        "Adjustments",
-                    ),
+                    (SidebarTab::Adjustments, "sidebar-adjustments", "Adjust"),
                     (SidebarTab::History, "sidebar-history-top", "History"),
-                    (SidebarTab::Reference, "sidebar-reference", "Reference"),
+                    (SidebarTab::Assistant, "sidebar-assistant", "Assistant"),
                 ]
                 .into_iter()
-                .filter(|(tab, _, _)| compact || *tab != SidebarTab::Info)
                 .map(|(tab, id, title)| {
-                    let active = self.sidebar_tab == tab;
-                    div()
-                        .id(id)
-                        .role(gpui_kit::Role::Button)
-                        .aria_label(title)
-                        .aria_selected(active)
-                        .focusable()
-                        .tab_index(0)
+                    Button::new(id)
+                        .label(title)
+                        .xsmall()
+                        .ghost()
                         .flex_1()
                         .min_w_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .h_full()
-                        .text_center()
-                        .text_size(px(11.))
-                        .text_color(if active { p.ink } else { p.muted })
-                        .border_b_2()
-                        .border_color(if active {
-                            p.accent
-                        } else {
-                            transparent_black()
+                        .when(self.sidebar_tab == tab, |b| {
+                            b.bg(p.soft_bg).text_color(p.accent)
                         })
-                        .cursor_pointer()
-                        .child(if compact {
-                            match tab {
-                                SidebarTab::Properties => "Props",
-                                SidebarTab::Adjustments => "Adjust",
-                                SidebarTab::Reference => "Ref",
-                                _ => title,
-                            }
-                        } else {
-                            title
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.select_sidebar(tab, cx);
-                        }))
-                        .test_support()
+                        .on_click(cx.listener(move |this, _, _, cx| this.select_sidebar(tab, cx)))
                 }),
             )
-            .when(compact, |d| {
-                d.child(
-                    Button::new("sidebar-collapse")
-                        .ghost()
-                        .xsmall()
-                        .label("›")
-                        .accessibility_label("Collapse sidebar")
-                        .tooltip("Collapse sidebar")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.sidebar_layout.collapsed = true;
-                            cx.notify();
-                        })),
-                )
-            });
+            .child(
+                Button::new("sidebar-more")
+                    .label("⋯")
+                    .accessibility_label("More panels")
+                    .tooltip("All panels")
+                    .xsmall()
+                    .ghost()
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for (tab, title) in [
+                            (SidebarTab::Info, "Info"),
+                            (SidebarTab::Reference, "Reference"),
+                            (SidebarTab::Navigator, "Navigator"),
+                            (SidebarTab::Histogram, "Histogram"),
+                            (SidebarTab::BrushSettings, "Brush settings"),
+                            (SidebarTab::BrushPresets, "Brush presets"),
+                            (SidebarTab::Recipes, "Recipes"),
+                            (SidebarTab::Timeline, "Timeline"),
+                            (SidebarTab::BlendingOptions, "Blending options"),
+                        ] {
+                            let owner = owner.clone();
+                            menu =
+                                menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                                    owner
+                                        .update(cx, |this, cx| this.select_sidebar(tab, cx))
+                                        .ok();
+                                }));
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                Button::new("sidebar-section-toggle")
+                    .label(if self.sidebar_layout.upper_collapsed {
+                        "⌄"
+                    } else {
+                        "⌃"
+                    })
+                    .accessibility_label("Toggle properties section")
+                    .xsmall()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.sidebar_layout.upper_collapsed = !this.sidebar_layout.upper_collapsed;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("sidebar-collapse")
+                    .label("›")
+                    .accessibility_label("Collapse sidebar")
+                    .tooltip("Collapse sidebar")
+                    .xsmall()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.sidebar_layout.collapsed = true;
+                        this.sidebar_layout.overlay_open = false;
+                        cx.notify();
+                    })),
+            );
         let content = match self.sidebar_tab {
+            SidebarTab::Assistant => div().id("sidebar-assistant-content").test_support().flex().flex_col().gap_2().p_2()
+                .child(Button::new("sidebar-assistant-prompt").label("Ask about this document…").small().outline().on_click(cx.listener(|this,_,window,cx|this.open_ask(window,cx))))
+                .children(self.assistant_dock(p,cx))
+                .into_any_element(),
             SidebarTab::BlendingOptions => self.blending_options_panel(p, cx),
             SidebarTab::BrushSettings => self.brush_settings_panel(p, cx),
             SidebarTab::BrushPresets => div().children(self.presets_view(p, cx)).into_any_element(),
+            SidebarTab::Properties if self.draw_mode && matches!(self.tool, Tool::Brush | Tool::Clone | Tool::Heal | Tool::Mask) => self.brush_settings_panel(p,cx),
             SidebarTab::Properties => div()
                 .id("sidebar-properties-content")
                 .children(self.shape_properties(window, cx))
@@ -392,27 +494,146 @@ impl EditorView {
                 .child(self.histogram_view(p, cx))
                 .into_any_element(),
         };
-        // Photoshop's Color | Swatches group heads the panel dock, unless the
-        // Colors toolbar already shows them.
         let swatches = (compact && !self.compact.bars[super::compact::Bar::Color as usize].open)
             .then(|| {
+                let color_content = if self.sidebar_layout.color_tab {
+                    div()
+                        .id("sidebar-color-content")
+                        .test_support()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .p_2()
+                        .child(self.swatches(p, cx))
+                        .child(mono(
+                            format!(
+                                "#{:02X}{:02X}{:02X}",
+                                self.tools.fg[0], self.tools.fg[1], self.tools.fg[2]
+                            ),
+                            11.,
+                            p.ink,
+                        ))
+                        .child(
+                            Button::new("sidebar-edit-color")
+                                .label("Edit foreground…")
+                                .xsmall()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.tools.picker = true;
+                                    cx.notify();
+                                })),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .id("sidebar-swatches")
+                        .test_support()
+                        .p_2()
+                        .child(self.project_colors(false, p, cx))
+                        .into_any_element()
+                };
                 div()
-                    .id("sidebar-swatches")
+                    .id("sidebar-color-group")
                     .test_support()
                     .flex()
                     .flex_col()
                     .flex_none()
-                    .gap_1()
-                    .p_2()
                     .border_t_1()
                     .border_color(p.line)
-                    .child(label("Swatches", p))
-                    .child(self.project_colors(false, p, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .h(rems(2.))
+                            .flex_none()
+                            .children(
+                                [
+                                    (false, "sidebar-swatches-tab", "Swatches"),
+                                    (true, "sidebar-color-tab", "Color"),
+                                ]
+                                .map(|(tab, id, label)| {
+                                    Button::new(id)
+                                        .label(label)
+                                        .xsmall()
+                                        .ghost()
+                                        .when(self.sidebar_layout.color_tab == tab, |b| {
+                                            b.text_color(p.accent)
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.sidebar_layout.color_tab = tab;
+                                            this.sidebar_layout.colors_collapsed = false;
+                                            cx.notify();
+                                        }))
+                                }),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                Button::new("sidebar-color-toggle")
+                                    .label(if self.sidebar_layout.colors_collapsed {
+                                        "⌄"
+                                    } else {
+                                        "⌃"
+                                    })
+                                    .accessibility_label("Toggle color section")
+                                    .xsmall()
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.sidebar_layout.colors_collapsed =
+                                            !this.sidebar_layout.colors_collapsed;
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .when(!self.sidebar_layout.colors_collapsed, |d| {
+                        d.child(
+                            div()
+                                .id("sidebar-color-scroll")
+                                .h(px(self
+                                    .sidebar_layout
+                                    .colors_height
+                                    .min(f32::from(window.viewport_size().height) * 0.18)))
+                                .overflow_y_scroll()
+                                .child(color_content),
+                        )
+                    })
+                    .child(
+                        Button::new("sidebar-color-resize")
+                            .label("─")
+                            .accessibility_label("Resize color section; use Up or Down")
+                            .xsmall()
+                            .ghost()
+                            .h(px(7.))
+                            .w_full()
+                            .cursor(CursorStyle::ResizeUpDown)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                                    this.drag = Some(Drag::ColorSplit {
+                                        start_y: e.position.y,
+                                        start_h: this.sidebar_layout.colors_height,
+                                    });
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }),
+                            )
+                            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                                let delta = match e.keystroke.key.as_str() {
+                                    "up" => -16.,
+                                    "down" => 16.,
+                                    _ => return,
+                                };
+                                this.sidebar_layout.colors_height =
+                                    (this.sidebar_layout.colors_height + delta).clamp(48., 240.);
+                                cx.stop_propagation();
+                                cx.notify();
+                            })),
+                    )
             });
         let dock_tabs = div()
             .flex()
             .flex_none()
-            .h(if compact { rems(1.625) } else { rems(2.125) })
+            .h(rems(2.))
             .border_b_1()
             .border_color(p.line)
             .children(
@@ -423,50 +644,47 @@ impl EditorView {
                 ]
                 .into_iter()
                 .map(|(tab, id, title)| {
-                    // Photoshop's panel-group tabs: a label with an accent
-                    // underline, sized to its text.
                     let active = self.dock_tab == tab;
-                    div()
-                        .id(id)
-                        .role(gpui_kit::Role::Tab)
-                        .aria_label(title)
-                        .aria_selected(active)
-                        .focusable()
-                        .tab_index(0)
-                        .flex()
-                        .items_center()
+                    Button::new(id)
+                        .label(title)
+                        .accessibility_label(title)
+                        .small()
+                        .ghost()
                         .h_full()
-                        .px_3()
-                        .text_size(px(11.))
-                        .text_color(if active { p.ink } else { p.muted })
-                        .border_b_2()
-                        .border_color(if active {
-                            p.accent
-                        } else {
-                            transparent_black()
-                        })
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(p.ink))
-                        .child(title)
+                        .when(active, |b| b.text_color(p.accent).bg(p.soft_bg))
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.show_dock_tab(tab, window, cx);
+                            this.show_dock_tab(tab, window, cx)
                         }))
-                        .test_support()
                 }),
             );
+        let dock_tabs = dock_tabs.child(div().flex_1()).child(
+            Button::new("sidebar-layers-toggle")
+                .label(if self.sidebar_layout.layers_collapsed {
+                    "⌄"
+                } else {
+                    "⌃"
+                })
+                .accessibility_label("Toggle layers section")
+                .xsmall()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar_layout.layers_collapsed = !this.sidebar_layout.layers_collapsed;
+                    cx.notify();
+                })),
+        );
         let dock_content = match self.dock_tab {
             DockTab::Layers => self.scene_graph(p, window, cx).into_any_element(),
             DockTab::Channels => self.channels_panel(p, cx),
             DockTab::Paths => self.paths_panel(p, cx),
         };
-        div()
+        let panel = div()
             .id("node-panel")
             .relative()
             .flex()
             .flex_none()
             .flex_col()
-            .w(dim::NODE_PANEL_W)
-            .when(compact, |d| d.w(px(sidebar_width)))
+            .w(px(sidebar_width))
+            .bg(p.panel)
             .min_h_0()
             .border_l_1()
             .border_color(p.line)
@@ -478,23 +696,87 @@ impl EditorView {
                     cx.stop_propagation();
                 }
             }))
-            .children(swatches)
             .child(tabs)
             .child(
                 div()
-                    .id(("sidebar-content", self.sidebar_tab as usize))
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(content)
-                    .test_support(),
+                    .flex()
+                    .items_center()
+                    .flex_none()
+                    .h(rems(1.5))
+                    .child(
+                        Button::new("sidebar-info-top")
+                            .label("Info")
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.select_sidebar(SidebarTab::Info, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("sidebar-reference")
+                            .label("Reference")
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.select_sidebar(SidebarTab::Reference, cx)
+                            })),
+                    )
+                    .when(self.draw_mode, |d| {
+                        d.child(
+                            Button::new("sidebar-brush-settings")
+                                .label("Brush")
+                                .xsmall()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.select_sidebar(SidebarTab::BrushSettings, cx)
+                                })),
+                        )
+                    }),
             )
+            .when(!self.sidebar_layout.upper_collapsed, |d| {
+                d.child(
+                    div()
+                        .id(("sidebar-content", self.sidebar_tab as usize))
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(content)
+                        .test_support(),
+                )
+            })
+            .children(swatches)
             .map(|d| {
                 let line = p.line;
                 let accent = p.accent;
                 d.child(crate::widgets::tip(
                     div()
                         .id("layers-resize")
+                        .focusable()
+                        .tab_index(0)
+                        .aria_label("Resize layers section; use Up or Down")
+                        .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                            let delta = match e.keystroke.key.as_str() {
+                                "up" => 16.,
+                                "down" => -16.,
+                                _ => return,
+                            };
+                            this.sidebar_layout.layers_collapsed = false;
+                            if this.layer_panel.compact && !this.layer_panel.controls_open {
+                                let height = this
+                                    .layer_panel
+                                    .dock_bounds
+                                    .get()
+                                    .map(|b| f32::from(b.size.height))
+                                    .unwrap_or(240.);
+                                this.layer_panel.compact_height =
+                                    Some((height + delta).clamp(LAYERS_MIN_H, LAYERS_MAX_H));
+                            } else {
+                                this.layers_h =
+                                    (this.layers_h + delta).clamp(LAYERS_MIN_H, LAYERS_MAX_H);
+                            }
+                            cx.stop_propagation();
+                            cx.notify();
+                        }))
                         .test_support()
                         .flex_none()
                         .h(px(7.))
@@ -507,6 +789,7 @@ impl EditorView {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                                this.sidebar_layout.layers_collapsed = false;
                                 this.drag = Some(Drag::LayersSplit {
                                     start_y: e.position.y,
                                     start_h: this
@@ -531,24 +814,22 @@ impl EditorView {
                     .flex()
                     .flex_col()
                     .flex_none()
-                    .h(px(
-                        if self.layer_panel.compact && !self.layer_panel.controls_open {
-                            self.layer_panel.compact_height.unwrap_or(if compact {
-                                240.
-                            } else {
-                                260.
-                            })
-                        } else {
-                            self.layers_h
-                        },
-                    ))
-                    .max_h(relative(
-                        if self.layer_panel.compact && !self.layer_panel.controls_open {
-                            0.60
-                        } else {
-                            0.80
-                        },
-                    ))
+                    .h(px(if self.sidebar_layout.layers_collapsed {
+                        2. * rem_size
+                    } else if self.layer_panel.compact && !self.layer_panel.controls_open {
+                        self.layer_panel
+                            .compact_height
+                            .unwrap_or(if compact { 240. } else { 236. })
+                    } else {
+                        self.layers_h
+                    }))
+                    .max_h(relative(if compact {
+                        0.55
+                    } else if self.layer_panel.compact && !self.layer_panel.controls_open {
+                        0.50
+                    } else {
+                        0.80
+                    }))
                     .min_h_0()
                     .child(
                         canvas(
@@ -559,14 +840,31 @@ impl EditorView {
                         .size_full(),
                     )
                     .child(dock_tabs)
-                    .child(dock_content)
+                    .when(!self.sidebar_layout.layers_collapsed, |d| {
+                        d.child(dock_content)
+                    })
                     .test_support(),
             )
-            .when(compact, |d| {
+            .map(|d| {
                 let accent = p.accent;
                 d.child(crate::widgets::tip(
                     div()
                         .id("sidebar-width-resize")
+                        .focusable()
+                        .tab_index(0)
+                        .aria_label("Resize sidebar; use Left or Right")
+                        .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
+                            let delta = match e.keystroke.key.as_str() {
+                                "left" => 16.,
+                                "right" => -16.,
+                                _ => return,
+                            };
+                            this.sidebar_layout.width = Some(
+                                (sidebar_width + delta).clamp(13.75 * rem_size, 35. * rem_size),
+                            );
+                            cx.stop_propagation();
+                            cx.notify();
+                        }))
                         .absolute()
                         .left_0()
                         .top_0()
@@ -595,8 +893,30 @@ impl EditorView {
                     "Drag to resize sidebar; double-click to snap between narrow and wide",
                 ))
             })
-            .test_support()
+            .test_support();
+        if popup {
+            deferred(
+                anchored()
+                    .position(point(
+                        window.viewport_size().width - px(sidebar_width) - px(8.),
+                        px(76.),
+                    ))
+                    .snap_to_window()
+                    .child(
+                        panel
+                            .h((window.viewport_size().height - px(108.)).max(px(120.)))
+                            .occlude()
+                            .shadow_lg()
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                this.sidebar_layout.overlay_open = false;
+                                cx.notify();
+                            })),
+                    ),
+            )
             .into_any_element()
+        } else {
+            panel.into_any_element()
+        }
     }
 
     fn paths_panel(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {

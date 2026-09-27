@@ -58,6 +58,47 @@ impl Destination {
     }
 }
 impl Workspace {
+    /// Shared Home/Library navigation; compact rails retain named keyboard targets.
+    pub(crate) fn destination_navigation(
+        &self,
+        prefix: &'static str,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let active = self.destination(cx);
+        div()
+            .id((ElementId::from(prefix), "navigation"))
+            .test_support()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap_1()
+            .p_2()
+            .children(Destination::ALL.map(|destination| {
+                let glyph = match destination {
+                    Destination::Home => "house",
+                    Destination::Photo => "image",
+                    Destination::Paint => "paintbrush",
+                    Destination::Library => "folder",
+                    Destination::Design => "layout-template",
+                    Destination::Diagram => "workflow",
+                };
+                let button = Button::new((ElementId::from(prefix), destination.label()))
+                    .icon(gpui_kit::component::Icon::empty().path(format!("icons/{glyph}.svg")))
+                    .accessibility_label(destination.label())
+                    .tooltip(destination.subtitle())
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .selected(active == Some(destination));
+                button
+                    .when(!compact, |b| b.label(destination.label()).justify_start())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.visit_destination(destination, window, cx)
+                    }))
+            }))
+            .into_any_element()
+    }
     pub(crate) fn destination(&self, cx: &App) -> Option<Destination> {
         match self.screen {
             Screen::Home => Some(Destination::Home),

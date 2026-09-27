@@ -65,8 +65,14 @@ pub struct WorkspaceLayout {
     pub sidebar_collapsed: bool,
     pub sidebar_width: f32,
     pub sidebar_tab: String,
+    pub dock_tab: String,
+    pub sidebar_upper_collapsed: bool,
+    pub sidebar_layers_collapsed: bool,
+    pub sidebar_colors_collapsed: bool,
+    pub sidebar_color_tab: bool,
+    pub sidebar_colors_height: f32,
     /// Docked toolbars float over the canvas instead of sitting beside it.
-    /// `None` uses the mode's default: beside in Photo, over in Draw.
+    /// `None` uses the shared docked arrangement in Photo and Paint.
     pub toolbars_overlay: Option<bool>,
     /// Columns in the Tools panel: 1, or 2 (Photoshop's double column).
     pub tool_columns: u8,
@@ -80,8 +86,14 @@ impl Default for WorkspaceLayout {
             hidden_menu_ids: Vec::new(),
             draw_mode: false,
             sidebar_collapsed: false,
-            sidebar_width: 320.0,
+            sidebar_width: 300.0,
             sidebar_tab: "properties".into(),
+            dock_tab: "layers".into(),
+            sidebar_upper_collapsed: false,
+            sidebar_layers_collapsed: false,
+            sidebar_colors_collapsed: false,
+            sidebar_color_tab: false,
+            sidebar_colors_height: 64.,
             toolbars_overlay: None,
             tool_columns: 1,
         }
@@ -333,7 +345,7 @@ mod tests {
         assert_eq!(layout.tool_ids, ["brush"]);
         assert!(layout.hidden_menu_ids.is_empty());
         assert!(!layout.sidebar_collapsed);
-        assert_eq!(layout.sidebar_width, 320.0);
+        assert_eq!(layout.sidebar_width, 300.0);
         assert_eq!(layout.sidebar_tab, "properties");
         assert_eq!(
             layout.toolbar_placements,
@@ -367,6 +379,7 @@ mod tests {
             sidebar_tab: "histogram".into(),
             toolbars_overlay: Some(true),
             tool_columns: 2,
+            ..WorkspaceLayout::default()
         };
         let settings = Settings {
             workspace_default: Some(layout.clone()),

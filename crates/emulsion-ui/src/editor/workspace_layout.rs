@@ -46,17 +46,19 @@ impl EditorView {
             hidden_menu_ids: self.compact.hidden_menu_ids.clone(),
             draw_mode: self.draw_mode,
             sidebar_collapsed: self.sidebar_layout.collapsed,
-            sidebar_width: self.sidebar_layout.width.unwrap_or(320.),
-            sidebar_tab: match self.sidebar_tab {
-                SidebarTab::Histogram => "histogram",
-                SidebarTab::Info => "info",
-                SidebarTab::History => "history",
-                SidebarTab::Adjustments => "adjustments",
-                SidebarTab::Navigator => "navigator",
-                SidebarTab::BrushSettings => "brush-settings",
-                _ => "properties",
+            sidebar_width: self.sidebar_layout.width.unwrap_or(300.),
+            sidebar_tab: self.sidebar_tab.key().into(),
+            dock_tab: match self.dock_tab {
+                DockTab::Layers => "layers",
+                DockTab::Channels => "channels",
+                DockTab::Paths => "paths",
             }
             .into(),
+            sidebar_upper_collapsed: self.sidebar_layout.upper_collapsed,
+            sidebar_layers_collapsed: self.sidebar_layout.layers_collapsed,
+            sidebar_colors_collapsed: self.sidebar_layout.colors_collapsed,
+            sidebar_color_tab: self.sidebar_layout.color_tab,
+            sidebar_colors_height: self.sidebar_layout.colors_height,
             toolbars_overlay: Some(self.compact.overlay),
             tool_columns: self.compact.tool_columns,
         }
@@ -116,17 +118,24 @@ impl EditorView {
             .collect();
         self.draw_mode = layout.draw_mode;
         self.rail.flyout = None;
-        let tab = match layout.sidebar_tab.as_str() {
-            "histogram" => SidebarTab::Histogram,
-            "info" => SidebarTab::Info,
-            "history" => SidebarTab::History,
-            "adjustments" => SidebarTab::Adjustments,
-            "navigator" => SidebarTab::Navigator,
-            "brush-settings" => SidebarTab::BrushSettings,
-            _ => SidebarTab::Properties,
-        };
+        let tab = SidebarTab::from_key(&layout.sidebar_tab);
         self.select_sidebar(tab, cx);
         self.sidebar_layout.collapsed = layout.sidebar_collapsed;
+        self.sidebar_layout.overlay_open = false;
+        self.sidebar_layout.upper_collapsed = layout.sidebar_upper_collapsed;
+        self.sidebar_layout.layers_collapsed = layout.sidebar_layers_collapsed;
+        self.sidebar_layout.colors_collapsed = layout.sidebar_colors_collapsed;
+        self.sidebar_layout.color_tab = layout.sidebar_color_tab;
+        self.sidebar_layout.colors_height = if layout.sidebar_colors_height.is_finite() {
+            layout.sidebar_colors_height.clamp(48., 240.)
+        } else {
+            64.
+        };
+        self.dock_tab = match layout.dock_tab.as_str() {
+            "channels" => DockTab::Channels,
+            "paths" => DockTab::Paths,
+            _ => DockTab::Layers,
+        };
         self.sidebar_layout.width = layout
             .sidebar_width
             .is_finite()

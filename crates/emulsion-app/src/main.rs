@@ -1,4 +1,5 @@
-//! Emulsion binary. `emulsion [FILE]` opens the editor; `emulsion mcp-serve`
+//! Emulsion binary. Images open in the viewer; `--edit` opens the editor.
+//! `emulsion mcp-serve`
 //! runs the stdio MCP server that a coding CLI attaches to.
 
 // Ship a Windows GUI executable without a console. Inherited pipes still work
@@ -11,6 +12,7 @@ use gpui_kit::*;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
+mod launch;
 mod memory;
 
 fn main() -> anyhow::Result<()> {
@@ -23,52 +25,48 @@ fn main() -> anyhow::Result<()> {
         tracing::warn!("Large image allocation policy could not be configured");
     }
 
-    let mut args = std::env::args().skip(1);
-    let file = match args.next() {
-        None => None,
-        Some(cmd) => match cmd.as_str() {
-            "mcp-serve" => {
-                if let Err(error) = std::thread::Builder::new()
-                    .name("image-compute".into())
-                    .spawn(emulsion_gpu::initialize)
-                {
-                    tracing::warn!(%error, "Compute initialization thread unavailable; using CPU");
-                }
-                return emulsion_mcp::serve_stdio();
+    let (files, edit) = match launch::parse(std::env::args_os().skip(1))? {
+        launch::Launch::Mcp => {
+            if let Err(error) = std::thread::Builder::new()
+                .name("image-compute".into())
+                .spawn(emulsion_gpu::initialize)
+            {
+                tracing::warn!(%error, "Compute initialization thread unavailable; using CPU");
             }
-            "--version" | "-V" => {
-                println!("emulsion {}", env!("CARGO_PKG_VERSION"));
-                return Ok(());
-            }
-            "--help" | "-h" => {
-                println!(
-                    "usage: emulsion [FILE]\n       emulsion mcp-serve\n       emulsion --version"
-                );
-                return Ok(());
-            }
-            other if other.starts_with('-') => anyhow::bail!("unknown option: {other}"),
-            path => Some(PathBuf::from(path)),
-        },
+            return emulsion_mcp::serve_stdio();
+        }
+        launch::Launch::Version => {
+            println!("emulsion {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        launch::Launch::Help => {
+            println!(
+                "usage: emulsion [FILE...]\n       emulsion --edit [FILE...]\n       emulsion mcp-serve\n       emulsion --version\n\nSupported image files open in the lightweight viewer. Use --edit to open the full editor."
+            );
+            return Ok(());
+        }
+        launch::Launch::Gui { files, edit } => (files, edit),
     };
-
-    run_editor(file);
+    run_application(files, edit);
     // The window owners have released their sessions. Allow child shutdown and
     // workspace removal to finish before background threads are terminated.
     emulsion_assistant::storage::wait_for_cleanup(std::time::Duration::from_secs(5));
     Ok(())
 }
 
-fn run_editor(file: Option<PathBuf>) {
+fn run_application(files: Vec<PathBuf>, edit: bool) {
+    let viewer =
+        !edit && !files.is_empty() && files.iter().all(|p| emulsion_ui::image_viewer::supports(p));
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
             theme::install(cx);
-            app_state::install(cx);
-            // Device discovery and shader work must not block window creation.
-            cx.background_executor()
-                .spawn(async { emulsion_gpu::initialize() })
-                .detach();
+            if viewer {
+                app_state::install_viewer(cx);
+            } else {
+                app_state::install(cx);
+            }
             // Also squares gpui-kit's corners: the design has none but avatars and dots.
             theme::apply_saved(cx);
             #[cfg(target_os = "linux")]
@@ -82,39 +80,69 @@ fn run_editor(file: Option<PathBuf>) {
             .detach();
 
             cx.spawn(async move |cx| {
-                let bounds = cx.update(|cx| Bounds::centered(None, size(px(1440.), px(900.)), cx));
-                // The title bar is ours on every platform: it moves the window,
-                // and on Linux and Windows carries minimise, maximise and close.
-                let opts = WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Emulsion".into()),
-                        ..gpui_kit::component::TitleBar::title_bar_options()
-                    }),
-                    app_owns_titlebar_drag: true,
-                    window_decorations: Some(if cfg!(target_os = "linux") {
-                        WindowDecorations::Client
-                    } else {
-                        WindowDecorations::Server
-                    }),
-                    app_id: Some("app.emulsion.Emulsion".into()),
-                    ..Default::default()
+                let groups = if viewer || files.is_empty() {
+                    vec![files]
+                } else {
+                    files.into_iter().map(|path| vec![path]).collect()
                 };
-                cx.open_window(opts, |window, cx| {
-                    if let Some(specs) = window.gpu_specs() {
-                        tracing::info!(
-                            device = %specs.device_name,
-                            software = specs.is_software_emulated,
-                            "graphics renderer initialized"
-                        );
-                    }
-                    let ws = cx.new(|cx| Workspace::new(window, cx));
-                    if let Some(path) = file {
-                        ws.update(cx, |ws, cx| ws.open_path(path, window, cx));
-                    }
-                    cx.new(|cx| Root::new(ws, window, cx))
-                })
-                .expect("failed to open window");
+                for files in groups {
+                    let bounds = cx.update(|cx| {
+                        Bounds::centered(
+                            None,
+                            if viewer {
+                                size(px(1000.), px(720.))
+                            } else {
+                                size(px(1440.), px(900.))
+                            },
+                            cx,
+                        )
+                    });
+                    // The title bar is ours on every platform: it moves the window,
+                    // and on Linux and Windows carries minimise, maximise and close.
+                    let opts = WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        titlebar: Some(TitlebarOptions {
+                            title: Some("Emulsion".into()),
+                            ..gpui_kit::component::TitleBar::title_bar_options()
+                        }),
+                        app_owns_titlebar_drag: true,
+                        window_decorations: Some(if cfg!(target_os = "linux") {
+                            WindowDecorations::Client
+                        } else {
+                            WindowDecorations::Server
+                        }),
+                        app_id: Some("app.emulsion.Emulsion".into()),
+                        ..Default::default()
+                    };
+                    cx.open_window(opts, |window, cx| {
+                        if let Some(specs) = window.gpu_specs() {
+                            tracing::info!(
+                                device = %specs.device_name,
+                                software = specs.is_software_emulated,
+                                "graphics renderer initialized"
+                            );
+                        }
+                        if viewer {
+                            let view = cx.new(|cx| {
+                                emulsion_ui::image_viewer::ImageViewer::new(files, window, cx)
+                            });
+                            cx.new(|cx| Root::new(view, window, cx))
+                        } else {
+                            let ws = cx.new(|cx| {
+                                if files.is_empty() {
+                                    Workspace::new(window, cx)
+                                } else {
+                                    Workspace::new_for_file(window, cx)
+                                }
+                            });
+                            if let Some(path) = files.into_iter().next() {
+                                ws.update(cx, |ws, cx| ws.open_path(path, window, cx));
+                            }
+                            cx.new(|cx| Root::new(ws, window, cx))
+                        }
+                    })
+                    .expect("failed to open window");
+                }
             })
             .detach();
         });

@@ -8,7 +8,8 @@ covers what is on disk and in the environment.
 ## Command line
 
 ```
-usage: emulsion [FILE]
+usage: emulsion [FILE...]
+       emulsion --edit [FILE...]
        emulsion mcp-serve
        emulsion --version
 ```
@@ -18,15 +19,36 @@ That text is what `emulsion --help` (or `-h`) prints. The forms are:
 | Invocation | Effect |
 | --- | --- |
 | `emulsion` | Open the editor on the Home screen. |
-| `emulsion FILE` | Open the editor with `FILE` loaded. |
+| `emulsion FILE...` | Open supported images in the viewer; other formats open in the editor. |
+| `emulsion --edit FILE...` | Bypass the viewer and open files in the full editor. |
 | `emulsion mcp-serve` | Run the stdio MCP server that a coding CLI attaches to; no window. |
 | `emulsion --version` / `-V` | Print `emulsion <version>` and exit. |
 | `emulsion --help` / `-h` | Print the usage text above and exit. |
 
-Any other argument starting with `-` is an error (`unknown option`). Only the
-first positional argument is read; further arguments are ignored. The desktop
-entry launches `emulsion %F`, so a multi-file selection in a file manager opens
-only the first file.
+Unknown options are errors. Use `--` before a filename beginning with `-`.
+All positional paths are preserved, including filenames containing spaces or
+non-UTF-8 bytes. The desktop entry uses `emulsion %F`: multiple supported images
+form one viewer playlist; document or mixed-format selections open editor windows.
+
+The viewer skips the splash screen and editor initialization. It provides Fit,
+actual pixels, zoom, pan, previous/next images and **Edit in Photo**. A single image
+also discovers supported sibling images in its folder. Arrow keys navigate, `0`
+or `F` fits, `1` shows actual pixels, `+`/`-` zoom, `E` opens Photo and Escape closes
+the viewer. Photo opens the original file in the same window without a splash.
+
+Built-in raster formats use this route: PNG, JPEG, WebP, TIFF, BMP, GIF, Targa,
+PNM/PAM, ICO, HDR, EXR, DDS, QOI and farbfeld. GIF and animated WebP display their
+first frame. EXIF orientation and color conversion match Photo import. Large
+images retain full-resolution tiles for close inspection; a small preview speeds
+up Fit. RAW, SVG, layered files, projects, diagrams and formats needing external
+converters keep the full editor route. File launches also skip the editor splash;
+launching Emulsion without a file retains the normal Home/startup experience.
+
+The Home launch splash uses `assets/landing/splash.png`, based on the supplied
+Emulsion artwork. Its version label is native text from `CARGO_PKG_VERSION`
+(currently 0.0.3), so releases do not need a replacement image. The composition
+fits the window without cropping the title or artwork. Click or press a key to
+dismiss it early.
 
 ## Data directory
 

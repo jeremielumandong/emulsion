@@ -217,11 +217,23 @@ fn default_layer_dock_keeps_three_rows_inside_clickable_list(cx: &mut TestAppCon
                 row.top() >= list.top() && row.bottom() <= list.bottom(),
                 "whole row must remain visible"
             );
+            assert!(
+                row.bottom() <= gpui_kit::px(720.),
+                "row outside window: {row:?}"
+            );
             row.center()
         });
         cx.simulate_click(point, Default::default());
         cx.run_until_parked();
-        cx.update(|_, cx| assert_eq!(editor.read(cx).selected, Some(id)));
+        cx.update(|window, cx| {
+            assert_eq!(
+                editor.read(cx).selected,
+                Some(id),
+                "click {point:?}; dock {:?}; row {:?}",
+                window.find("sidebar-layers-dock").bounds(),
+                window.find(("row", id)).bounds()
+            )
+        });
     }
 }
 

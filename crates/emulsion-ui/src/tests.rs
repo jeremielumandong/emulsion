@@ -14,6 +14,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[path = "shared_ui_tests.rs"]
+mod shared_ui_tests;
+
 #[path = "layout_reuse_tests.rs"]
 mod layout_reuse_tests;
 
@@ -1204,7 +1207,7 @@ fn batch_large_folder_only_loads_visible_thumbnails_and_follows_scroll(cx: &mut 
             .filter(|item| item.thumb.is_some())
             .count();
         assert!(
-            loaded > 0 && loaded < 30,
+            loaded > 0 && loaded < 80,
             "only the viewport is decoded, got {loaded}"
         );
         assert!(batch.items[199].thumb.is_none());

@@ -101,8 +101,8 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &ShowBrushSettings, _, cx| {
                 this.with_editor(cx, |e, cx| e.show_brush_settings(cx))
             }))
-            .on_action(cx.listener(|this, _: &TogglePanels, _, cx| {
-                this.with_editor(cx, |e, cx| e.toggle_panel_dock(cx))
+            .on_action(cx.listener(|this, _: &TogglePanels, window, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_panel_dock(window, cx))
             }))
             .on_action(cx.listener(|this, _: &ToggleScreenMode, window, cx| {
                 if this.editor.is_some() && !this.style_dialog_open(cx) {

@@ -81,10 +81,10 @@ pub mod dim {
     pub const TOP_BAR_H: Pixels = px(54.);
     /// The same bar in compact chrome.
     pub const TOP_BAR_H_COMPACT: Pixels = px(38.);
-    pub const TOOL_RAIL_W: Pixels = px(58.);
+    pub const TOOL_RAIL_W: Pixels = px(48.);
     pub const TOOL_BTN_W: Pixels = px(40.);
     pub const TOOL_BTN_H: Pixels = px(38.);
-    pub const NODE_PANEL_W: Pixels = px(286.);
+    pub const NODE_PANEL_W: Pixels = px(300.);
     pub const COMPARE_SLIDER_W: Pixels = px(110.);
 }
 

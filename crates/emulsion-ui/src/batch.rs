@@ -4,7 +4,7 @@
 //! picture at a time off the UI thread.
 
 mod library;
-mod preview;
+pub(crate) mod preview;
 mod recipe_previews;
 
 use crate::theme::{self, MONO_FONT};
@@ -20,6 +20,10 @@ use emulsion_recipes::Recipe;
 use emulsion_recipes::store;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::{
+    Sizable,
+    button::{Button, ButtonVariants},
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::{HashSet, VecDeque};
@@ -41,6 +45,7 @@ pub(crate) struct BatchItem {
 #[derive(Default)]
 pub(crate) struct BatchState {
     library: library::LibraryUi,
+    settings_open: bool,
     pub folder: Option<PathBuf>,
     pub items: Vec<BatchItem>,
     /// Retain failed requests too, so redraws do not retry converters forever.
@@ -1001,7 +1006,7 @@ impl Workspace {
             );
         div()
             .id("batch-settings")
-            .w(px(264.))
+            .w(rems(18.75))
             .flex_none()
             .min_h_0()
             .overflow_y_scroll()
@@ -1021,7 +1026,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
+        let compact_navigation = window.viewport_size().width < window.rem_size() * 80.;
+        let narrow = window.viewport_size().width < window.rem_size() * 64.;
         self.batch_preview(cx);
+        let overview = self.batch.current.is_none();
         let library_controls = self.library_controls(window, cx);
         let recipes = self.batch_recipes();
         let selected = self.batch.items.iter().filter(|i| i.selected).count();
@@ -1037,6 +1045,7 @@ impl Workspace {
         let mut bar = div()
             .id("batch-toolbar")
             .flex()
+            .flex_wrap()
             .flex_none()
             .items_center()
             .gap(px(12.))
@@ -1077,7 +1086,78 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| this.run_batch(cx))),
             ),
         };
-        let settings = self.batch_settings_panel(&recipes, window, cx);
+        if narrow {
+            bar = bar.child(
+                Button::new("library-settings-toggle")
+                    .label("Develop / Export")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.settings_open = !this.batch.settings_open;
+                        cx.notify();
+                    })),
+            );
+        }
+        let settings = if !narrow || self.batch.settings_open {
+            Some(self.batch_settings_panel(&recipes, window, cx))
+        } else {
+            None
+        };
+        let settings = settings.map(|settings| {
+            if narrow {
+                deferred(
+                    anchored()
+                        .position(point(
+                            (window.viewport_size().width - window.rem_size() * 18.75 - px(8.))
+                                .max(px(8.)),
+                            px(100.),
+                        ))
+                        .snap_to_window()
+                        .child(
+                            div()
+                                .id("library-settings-overlay")
+                                .test_support()
+                                .occlude()
+                                .shadow_lg()
+                                .bg(p.panel)
+                                .h((window.viewport_size().height - px(120.)).max(px(180.)))
+                                .flex()
+                                .flex_col()
+                                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                    this.batch.settings_open = false;
+                                    cx.notify();
+                                }))
+                                .child(
+                                    Button::new("library-settings-close")
+                                        .label("Close settings")
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.batch.settings_open = false;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(div().flex().flex_1().min_h_0().child(settings)),
+                        ),
+                )
+                .into_any_element()
+            } else {
+                settings
+            }
+        });
+        if !overview {
+            bar = bar.child(
+                Button::new("library-grid-view")
+                    .label("Grid view")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.current = None;
+                        cx.notify();
+                    })),
+            );
+        }
+        let navigation = self.destination_navigation("library-destination", compact_navigation, cx);
         let photo_header = div()
             .flex()
             .flex_none()
@@ -1111,7 +1191,16 @@ impl Workspace {
 
         // Only build visible rows. Thumbnails are scheduled after layout so measuring
         // a row cannot start expensive work or notify during paint.
-        let columns = if f32::from(window.viewport_size().width) < 1050. {
+        let columns = if overview {
+            let available = f32::from(window.viewport_size().width)
+                - f32::from(window.rem_size()) * (if compact_navigation { 3.5 } else { 13.75 })
+                - if narrow {
+                    0.
+                } else {
+                    f32::from(window.rem_size()) * 18.75
+                };
+            ((available - 24.) / 140.).floor().clamp(1., 12.) as usize
+        } else if f32::from(window.viewport_size().width) < 1050. {
             1
         } else {
             2
@@ -1280,9 +1369,12 @@ impl Workspace {
             .unwrap_or_default();
 
         div()
+            .id("library-workspace")
+            .test_support()
             .flex()
             .flex_col()
             .flex_1()
+            .min_w_0()
             .min_h_0()
             .child(bar.test_support())
             .children(self.batch.running.map(|(done, count)| {
@@ -1362,14 +1454,32 @@ impl Workspace {
                     .min_h_0()
                     .child(
                         div()
+                            .id("library-navigation")
+                            .test_support()
+                            .flex_none()
+                            .w(if compact_navigation {
+                                rems(3.5)
+                            } else {
+                                rems(13.75)
+                            })
+                            .border_r_1()
+                            .border_color(p.line)
+                            .child(navigation),
+                    )
+                    .child(
+                        div()
                             .flex()
                             .flex_col()
-                            .w(px(if f32::from(window.viewport_size().width) < 1050. {
-                                172.
-                            } else {
-                                304.
-                            }))
-                            .flex_none()
+                            .when(overview, |d| d.flex_1().min_w_0())
+                            .when(!overview, |d| {
+                                d.flex_none().w(px(
+                                    if f32::from(window.viewport_size().width) < 1050. {
+                                        172.
+                                    } else {
+                                        304.
+                                    },
+                                ))
+                            })
                             .min_h_0()
                             .border_r_1()
                             .border_color(p.line)
@@ -1385,8 +1495,10 @@ impl Workspace {
                                     .test_support(),
                             ),
                     )
-                    .child(
+                    .children((!overview).then(|| {
                         div()
+                            .id("library-preview")
+                            .test_support()
                             .flex()
                             .flex_col()
                             .flex_1()
@@ -1401,9 +1513,9 @@ impl Workspace {
                                     .border_t_1()
                                     .border_color(p.line)
                                     .child(mono(caption, 10., p.muted)),
-                            ),
-                    )
-                    .child(settings),
+                            )
+                    }))
+                    .children(settings),
             )
     }
 }

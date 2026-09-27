@@ -73,15 +73,16 @@ impl Render for SidebarView {
 }
 
 impl EditorView {
-    pub(super) fn sidebar_content_visible(&self, window: &Window, cx: &App) -> bool {
-        !crate::app_state::settings(cx).compact_chrome
-            || self
-                .sidebar_layout
-                .width_for_viewport(
-                    f32::from(window.viewport_size().width),
-                    f32::from(window.rem_size()),
-                )
-                .is_some()
+    pub(super) fn sidebar_content_visible(&self, window: &Window, _cx: &App) -> bool {
+        !self.sidebar_layout.collapsed
+            && (self.sidebar_layout.overlay_open
+                || self
+                    .sidebar_layout
+                    .width_for_viewport(
+                        f32::from(window.viewport_size().width),
+                        f32::from(window.rem_size()),
+                    )
+                    .is_some())
     }
 
     /// Navigation changes the canvas and the view-dependent sidebar panels.
@@ -104,17 +105,13 @@ impl EditorView {
         self.canvas_view.clone()
     }
 
-    pub(super) fn sidebar_region(&self, window: &Window, cx: &App) -> impl IntoElement + use<> {
-        let compact = crate::app_state::settings(cx).compact_chrome;
+    pub(super) fn sidebar_region(&self, window: &Window, _cx: &App) -> impl IntoElement + use<> {
         let rem_size = f32::from(window.rem_size());
-        let width = if compact {
-            self.sidebar_layout
-                .width_for_viewport(f32::from(window.viewport_size().width), rem_size)
-                .map(px)
-                .unwrap_or_else(|| px(1.875 * rem_size))
-        } else {
-            dim::NODE_PANEL_W
-        };
+        let width = self
+            .sidebar_layout
+            .width_for_viewport(f32::from(window.viewport_size().width), rem_size)
+            .map(px)
+            .unwrap_or_else(|| px(1.875 * rem_size));
         // The cache's size must be explicit; it cannot measure the panel's
         // contents. Match the expanded/collapsed sidebar geometry exactly.
         self.sidebar_view.clone().cached(

@@ -20,10 +20,32 @@ pub struct Capabilities {
 impl Global for Capabilities {}
 
 pub fn install(cx: &mut App) {
+    install_viewer(cx);
+    start_editor_services(cx);
+}
+
+/// A viewer needs appearance preferences, but no CLI probes or editor workers.
+pub fn install_viewer(cx: &mut App) {
     cx.set_global(AppSettings(Settings::load()));
+    cx.set_global(Capabilities {
+        cli: CliStatus::Missing,
+    });
+}
+
+struct EditorServices;
+impl Global for EditorServices {}
+
+pub fn start_editor_services(cx: &mut App) {
+    if cx.has_global::<EditorServices>() {
+        return;
+    }
+    cx.set_global(EditorServices);
     cx.set_global(Capabilities {
         cli: CliStatus::Checking,
     });
+    cx.background_executor()
+        .spawn(async { emulsion_gpu::initialize() })
+        .detach();
     detect_cli(cx);
     let sessions = emulsion_io::recent::data_dir().join("sessions");
     cx.background_executor()
