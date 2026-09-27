@@ -15,8 +15,16 @@ use std::path::PathBuf;
 const MAX_STEPS: usize = 100;
 const MAX_RETAINED_BYTES: usize = 2 << 30;
 
+/// Order committed edits across the pages of one project. The counter is only
+/// an in-process ordering key; persisted page/object IDs do not depend on it.
+pub(crate) fn edit_order() -> u64 {
+    static ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 #[derive(Clone)]
 pub struct Step {
+    pub(crate) order: u64,
     pub name: String,
     /// Document before the step.
     pub before: Document,
@@ -30,6 +38,12 @@ pub struct History {
 }
 
 impl History {
+    pub(crate) fn undo_order(&self) -> u64 {
+        self.undo.last().map_or(0, |step| step.order)
+    }
+    pub(crate) fn redo_order(&self) -> u64 {
+        self.redo.last().map_or(0, |step| step.order)
+    }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
@@ -50,6 +64,7 @@ impl History {
 
 /// An open document with its history and save state.
 pub struct Editor {
+    pub(crate) last_edit_order: u64,
     pub doc: Document,
     pub history: History,
     /// Bumped on every change, including undo and redo. Render caches key on it.
@@ -84,6 +99,7 @@ impl Editor {
             .commit(base)
             .map_or_else(|| doc.clone(), |c| c.doc.clone());
         Self {
+            last_edit_order: 0,
             committed,
             doc,
             history: History::default(),
@@ -149,6 +165,7 @@ impl Editor {
         if self.doc != before {
             self.bump();
             self.push(Step {
+                order: 0,
                 name,
                 before,
                 revision_before: rev,
@@ -200,6 +217,7 @@ impl Editor {
         }
         if self.doc != before {
             self.push(Step {
+                order: 0,
                 name,
                 before,
                 revision_before: rev,
@@ -228,7 +246,9 @@ impl Editor {
         }
     }
 
-    fn push(&mut self, step: Step) {
+    fn push(&mut self, mut step: Step) {
+        step.order = edit_order();
+        self.last_edit_order = step.order;
         self.history.undo.push(step);
         self.history.redo.clear();
         self.trim();
@@ -245,6 +265,7 @@ impl Editor {
         let rev = self.revision;
         self.revision = step.revision_before;
         self.history.redo.push(Step {
+            order: edit_order(),
             name: step.name,
             before: current,
             revision_before: rev,
@@ -263,6 +284,7 @@ impl Editor {
         let rev = self.revision;
         self.revision = step.revision_before;
         self.history.undo.push(Step {
+            order: edit_order(),
             name: step.name,
             before: current,
             revision_before: rev,
@@ -354,6 +376,8 @@ impl Editor {
         // The new branch keeps the undo stack it grew out of.
         self.stashed.insert(old, self.history.clone());
         self.refresh_base();
+        self.bump();
+        self.saved_revision = 0;
         Ok(())
     }
 
@@ -395,6 +419,8 @@ impl Editor {
     pub fn delete_branch(&mut self, name: &str) -> Result<(), GraphError> {
         self.graph.delete_branch(name)?;
         self.stashed.remove(name);
+        self.bump();
+        self.saved_revision = 0;
         Ok(())
     }
 
@@ -459,6 +485,7 @@ impl Editor {
         self.bump();
         self.dirty = Dirty::All;
         self.push(Step {
+            order: 0,
             name: label.into(),
             before,
             revision_before: rev,

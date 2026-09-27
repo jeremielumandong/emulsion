@@ -28,6 +28,9 @@ ag-psd = { workspace = true }
 jxl-oxide = { workspace = true }
 xcf-rs = { workspace = true }
 resvg = { workspace = true }
+svg2pdf = { version = "0.13", default-features = false, features = ["image"] }
+pdf-writer = "0.12"
+base64 = { workspace = true }
 moxcms = { workspace = true }
 kamadak-exif = { workspace = true }
 ureq = { workspace = true }

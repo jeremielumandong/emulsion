@@ -33,7 +33,8 @@ use zip::ZipArchive;
 
 // History snapshots retain native shape paints and stroke geometry as of version 5.
 // Version 6 records the complete editable rich-text model in undo snapshots.
-pub const HISTORY_VERSION: u32 = 6;
+// Version 7 retains structured diagram endpoints and ports.
+pub const HISTORY_VERSION: u32 = 7;
 pub(crate) const GRAPH: &str = "history/graph.json";
 const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
 
@@ -124,6 +125,13 @@ struct HCommit {
 
 #[derive(Serialize, Deserialize)]
 struct HDoc {
+    #[serde(
+        default,
+        skip_serializing_if = "emulsion_core::design_metadata::Design::is_default"
+    )]
+    design: emulsion_core::design_metadata::Design,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diagram: Option<Arc<emulsion_core::diagram::Diagram>>,
     width: u32,
     height: u32,
     resolution: f32,
@@ -382,6 +390,8 @@ pub(crate) fn encode(
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(HDoc {
+            diagram: d.diagram.clone(),
+            design: d.design.clone(),
             width: d.width,
             height: d.height,
             resolution: d.resolution,
@@ -552,6 +562,8 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         let mut doc = Document::new(h.width, h.height);
         doc.resolution = h.resolution;
         doc.global_light = h.global_light;
+        doc.diagram = h.diagram.clone();
+        doc.design = h.design.clone();
         doc.source_depth = if h.source_depth == 16 { 16 } else { 8 };
         doc.blend_space = h.blend_space;
         doc.guides = h.guides;

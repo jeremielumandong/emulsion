@@ -17,8 +17,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub(crate) mod destinations;
 mod new_canvas;
 mod photoshop_shortcuts;
+mod projects;
 mod raw_sync;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -118,12 +120,7 @@ impl Workspace {
             this.update(cx, |this, cx| this.cancel_style_dialog(window, cx));
             let (modified, closing) = {
                 let ws = this.read(cx);
-                (
-                    ws.editor
-                        .as_ref()
-                        .is_some_and(|e| e.read(cx).has_unsaved_changes()),
-                    ws.closing,
-                )
+                (ws.modified(cx), ws.closing)
             };
             if closing || !modified {
                 return true;
@@ -141,7 +138,7 @@ impl Workspace {
                 if answer.await == Ok(0) {
                     weak.update(cx, |this, cx| {
                         this.closing = true;
-                        if let Some(ed) = &this.editor {
+                        for ed in &this.tabs {
                             ed.update(cx, |e, _| e.discard_recovery());
                         }
                     })
@@ -568,7 +565,7 @@ impl Workspace {
     /// they sit in the same place on Home, the editor (Photo or Draw) and
     /// every other page. One theme button keeps the cluster small enough to
     /// fit any window; its menu holds Light, Dark and, on Linux, Omarchy.
-    fn compact_app_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn compact_app_controls(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let on_settings = self.screen == Screen::Settings;
         let following = theme::following_omarchy(cx);
@@ -593,6 +590,7 @@ impl Workspace {
             .flex_none()
             .items_center()
             .gap_1()
+            .child(self.workspace_switcher(window.viewport_size().width >= px(1450.), cx))
             .child(crate::appearance::control(cx))
             .child(
                 Button::new("compact-theme")
@@ -909,6 +907,16 @@ impl Workspace {
     }
 
     pub fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if emulsion_io::diagram_import::is_diagram(&path)
+            || emulsion_io::template_pack::is_pack(&path)
+        {
+            self.open_diagram_path(path, window, cx);
+            return;
+        }
+        if emulsion_io::project::is_project(&path) {
+            self.open_project_path(path, false, window, cx);
+            return;
+        }
         self.add_tab_then(window, cx, move |this, window, cx| {
             this.start_busy(open_busy(&path), window, cx);
             this.error = None;
@@ -963,6 +971,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if emulsion_io::project::is_project(&path) {
+            self.open_project_path(path, true, window, cx);
+            return;
+        }
         self.add_tab_then(window, cx, move |this, window, cx| {
             this.start_busy(
                 crate::busy_card::Busy::new("Recovering your work"),
@@ -1185,7 +1197,7 @@ impl Workspace {
             return;
         };
         ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
-        let (path, dir, name) = {
+        let (path, dir, name, multipage) = {
             let e = ed.read(cx);
             let dir = e
                 .source
@@ -1193,9 +1205,14 @@ impl Workspace {
                 .and_then(|p| p.parent().map(Path::to_path_buf))
                 .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
                 .unwrap_or_else(|| PathBuf::from("."));
-            (e.editor.path.clone(), dir, e.name.clone())
+            (
+                e.editor.path.clone(),
+                dir,
+                e.name.clone(),
+                e.editor.kind().is_some(),
+            )
         };
-        if !save_as && path.is_none() {
+        if !save_as && path.is_none() && !multipage {
             let e = ed.read(cx);
             if emulsion_io::raw_settings::sidecar_only(&e.editor.doc)
                 && e.editor.graph.commits().count() == 1
@@ -1209,11 +1226,12 @@ impl Workspace {
         match path {
             Some(p) if !save_as => self.write(ed, p, cx),
             _ => {
-                let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}.ora")));
+                let extension = if multipage { "emu" } else { "ora" };
+                let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}.{extension}")));
                 cx.spawn_in(window, async move |this, cx| {
                     if let Ok(Ok(Some(mut p))) = rx.await {
-                        if !emulsion_io::is_native(&p) {
-                            p.set_extension("ora");
+                        if multipage || !emulsion_io::is_native(&p) {
+                            p.set_extension(extension);
                         }
                         this.update(cx, |this, cx| this.write(ed, p, cx)).ok();
                     }
@@ -1234,7 +1252,15 @@ impl Workspace {
         ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         let path = target.path().to_path_buf();
         let sidecar = matches!(target, SaveTarget::Sidecar(_));
-        let Some((doc, rev, graph)) = ed.update(cx, |e, cx| {
+        let Some((doc, rev, graph, project, stamp)) = ed.update(cx, |e, cx| {
+            if e.editor.kind().is_some() && (sidecar || !emulsion_io::project::is_project(&path)) {
+                e.set_status(
+                    "Save this multi-page project as .emu to preserve every page.",
+                    true,
+                    cx,
+                );
+                return None;
+            }
             if e.raw.is_pending() {
                 e.set_status(
                     "RAW development is still running. Save when the preview finishes updating.",
@@ -1272,15 +1298,20 @@ impl Workspace {
                 e.editor.doc.clone(),
                 e.editor.revision,
                 e.editor.graph.clone(),
+                e.editor.snapshot(),
+                e.editor.stamp(),
             ))
         }) else {
             return;
         };
         cx.spawn(async move |this, cx| {
+            let multipage = project.is_some();
             let (p, d) = (path.clone(), doc.clone());
             let result = cx
                 .background_spawn(async move {
-                    if sidecar {
+                    if let Some(project) = project {
+                        emulsion_io::project::write(&project, &p)
+                    } else if sidecar {
                         emulsion_io::raw_settings::save_sidecar(&d, &p)
                     } else {
                         emulsion_io::save_full(&d, &graph, &p)
@@ -1303,14 +1334,20 @@ impl Workspace {
                         &std::fs::canonicalize(recent_path).unwrap_or(recent_path.clone()),
                     );
                     ed.update(cx, |e, cx| {
-                        if sidecar {
+                        if multipage {
+                            e.editor.mark_project_saved(path.clone(), &stamp);
+                            e.name = stem(&path);
+                            e.source = Some(path.clone());
+                        } else if sidecar {
                             e.editor.mark_sidecar_saved(rev);
                         } else {
                             e.editor.mark_saved(path.clone(), rev);
                             e.name = stem(&path);
                             e.source = Some(path.clone());
                         }
-                        if e.editor.revision == rev {
+                        if (multipage && e.editor.stamp() == stamp)
+                            || (!multipage && e.editor.revision == rev)
+                        {
                             e.discard_recovery();
                         }
                         e.set_status(format!("Saved {}", path.display()), false, cx);
@@ -1511,7 +1548,7 @@ impl Workspace {
                     })),
             )
             .child(
-                tab("tab-batch", "Batch", self.screen == Screen::Batch, true).on_click(
+                tab("tab-batch", "Library", self.screen == Screen::Batch, true).on_click(
                     cx.listener(|this, _, window, cx| {
                         this.cancel_style_dialog(window, cx);
                         this.set_screen(Screen::Batch, window, cx);
@@ -1542,6 +1579,7 @@ impl Workspace {
                 ),
             )
             .child(div().flex_1().border_l_1().border_color(p.chrome_line))
+            .child(self.workspace_switcher(false,cx))
             .child(
                 div()
                     .flex()
@@ -1744,7 +1782,7 @@ impl Render for Workspace {
         let compact_page = compact && !compact_editor;
         let top = if compact_editor {
             let tabs = self.compact_tabs(cx);
-            let theme_controls = self.compact_app_controls(cx);
+            let theme_controls = self.compact_app_controls(window, cx);
             let editor = self.editor.as_ref().unwrap().clone();
             let header = editor.update(cx, |editor, cx| {
                 editor.compact_header(tabs, theme_controls, &p, window, cx)
@@ -1760,12 +1798,12 @@ impl Render for Workspace {
                 .into_any_element()
         } else if compact_page {
             let navigation = self.page_menus(cx);
-            let theme_controls = self.compact_app_controls(cx);
+            let theme_controls = self.compact_app_controls(window, cx);
             let header = if self.screen == Screen::Home {
                 self.home_header(navigation, theme_controls, window, cx)
             } else {
                 let label = match self.screen {
-                    Screen::Batch => "Batch",
+                    Screen::Batch => "Library",
                     Screen::Settings => "Settings",
                     Screen::About => "About",
                     Screen::Editor => "Editor",
@@ -2290,7 +2328,7 @@ fn find_recovered() -> Vec<(PathBuf, u64)> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            p.extension().is_some_and(|x| x == "ora")
+            p.extension().is_some_and(|x| x == "ora" || x == "emu")
                 && !p
                     .file_name()
                     .is_some_and(|n| n.to_string_lossy().contains(&me))

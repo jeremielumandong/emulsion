@@ -92,3 +92,32 @@ fn cancelling_new_canvas_does_not_change_document_or_saved_presets(cx: &mut Test
         assert!(cx.global::<AppSettings>().0.recent_canvases.is_empty());
     });
 }
+
+#[gpui_kit::test]
+fn new_design_dialog_creates_all_pages_and_bleed(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(32, 24));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1000.)));
+    cx.update(|window, cx| ws.update(cx, |ws, cx| ws.new_document(window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("new-canvas-kind", CanvasKind::Design as usize), cx));
+    cx.run_until_parked();
+    type_field(cx, "Name", "Local campaign");
+    type_field(cx, "Width", "80");
+    type_field(cx, "Height", "60");
+    type_field(cx, "Pages", "3");
+    type_field(cx, "Bleed · mm", "3");
+    cx.update(|window, cx| window.click("new-canvas-create", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("new-canvas-form").is_none());
+        let e = ws.read(cx).editor.as_ref().unwrap().read(cx);
+        assert_eq!(
+            e.editor.kind(),
+            Some(emulsion_core::project::ProjectKind::Design)
+        );
+        assert_eq!(e.editor.page_list().len(), 3);
+        assert!(e.editor.page_list().iter().all(|page| page.bleed_mm == 3.));
+        assert!(e.has_unsaved_changes());
+        assert_eq!(ws.read(cx).tabs.len(), 2);
+    });
+}

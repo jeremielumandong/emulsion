@@ -75,6 +75,12 @@ impl VectorRaster {
         })
     }
 
+    /// Inspect allocated pixels without invoking the CPU rasterizer. Memory
+    /// accounting must not create caches that a Vello-only edit does not need.
+    pub fn rendered_pixels(&self) -> Option<&Arc<Raster>> {
+        self.ready.get()
+    }
+
     /// A stable identity for this cache, for callers that key on the pixels
     /// without needing them. A new cache -- made by any edit -- gets a new
     /// identity, which is what such callers are really asking about.

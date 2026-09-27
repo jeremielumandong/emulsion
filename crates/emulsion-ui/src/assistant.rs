@@ -2644,12 +2644,12 @@ mod mutation_queue_tests {
         let source = painting(cx, false);
         let target = painting(cx, false);
         source.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into();
             view.editor.begin("Assistant RAW edits");
             view.raw_peers = vec![target.downgrade()];
         });
         target.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None)
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into()
         });
         let relay = Relay::start().unwrap();
         let (develop, reply) = call(
@@ -2748,13 +2748,13 @@ mod mutation_queue_tests {
         let source = painting(cx, false);
         let target = painting(cx, false);
         source.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into();
             view.editor.doc.raw.as_mut().unwrap().params.wb_override = Some([2., 1., 1., 1.]);
             view.editor.doc.raw.as_mut().unwrap().params.exposure = 1.;
             view.raw_peers = vec![target.downgrade()];
         });
         target.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into();
             view.editor.doc.raw.as_mut().unwrap().metadata.model = "Different camera".into();
         });
         let relay = Relay::start().unwrap();
@@ -2787,7 +2787,7 @@ mod mutation_queue_tests {
         std::fs::remove_file(&file.0).unwrap();
         let source = painting(cx, false);
         source.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into();
             view.editor.begin("Assistant RAW comparison");
         });
         let relay = Relay::start().unwrap();
@@ -2910,7 +2910,7 @@ mod mutation_queue_tests {
                     panic!("ink layer")
                 };
                 *raster = Arc::new(emulsion_raster::Raster::solid(300, 100, [0.5, 0., 0., 0.5]));
-                view.editor = emulsion_core::Editor::new(doc.clone(), None);
+                view.editor = emulsion_core::Editor::new(doc.clone(), None).into();
                 view.editor.begin("Assistant drawing");
                 (doc, view.editor.revision)
             });

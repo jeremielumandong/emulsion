@@ -24,7 +24,13 @@ mod clipboard;
 mod compact;
 mod contextual_bar;
 mod contextual_tools;
+mod creative_pack_ui;
+mod creative_ui;
 pub(crate) mod crop;
+mod design_motion_ui;
+mod design_ui;
+mod diagram_data_ui;
+mod diagram_ui;
 mod draw_workspace;
 pub(crate) mod export_ui;
 mod filters;
@@ -48,6 +54,7 @@ mod movement;
 pub mod navigation_benchmark;
 mod panels;
 mod pen;
+mod project_pages;
 mod remove_tool;
 mod render_regions;
 mod toolbox;
@@ -351,7 +358,12 @@ impl Render for DraggedColor {
 }
 
 pub struct EditorView {
-    pub editor: Editor,
+    pub editor: emulsion_core::project::ProjectEditor,
+    pub(crate) pages_ui: project_pages::PagesUi,
+    design_ui: design_ui::DesignUi,
+    creative: creative_ui::CreativeUi,
+    motion: design_motion_ui::MotionUi,
+    diagram_ui: diagram_ui::DiagramUi,
     pub(crate) visible: bool,
     pub(crate) ants_task: Option<Task<()>>,
     pub(crate) render_epoch: u64,
@@ -500,6 +512,7 @@ impl EditorView {
             Some(g) => Editor::with_graph(doc, path, g),
             None => Editor::new(doc, path),
         };
+        let editor: emulsion_core::project::ProjectEditor = editor.into();
         let tree = Arc::new(editor.doc.composite_tree());
         let rev = editor.revision;
         let commit = editor.committed_revision;
@@ -511,6 +524,11 @@ impl EditorView {
         let sidebar_view = cx.new(|cx| render_regions::SidebarView::new(owner, cx));
         let mut view = Self {
             editor,
+            pages_ui: Default::default(),
+            design_ui: Default::default(),
+            creative: Default::default(),
+            motion: Default::default(),
+            diagram_ui: Default::default(),
             visible: true,
             ants_task: start_services.then(|| Self::start_ants(cx)),
             render_epoch: 0,
@@ -715,6 +733,8 @@ impl EditorView {
     }
 
     pub(crate) fn after_change(&mut self, cx: &mut Context<Self>) {
+        self.stop_motion(cx);
+        self.sync_page_view(cx);
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
         self.cancel_raw_develop();
         if let Some(sel) = self.selected
@@ -1424,6 +1444,9 @@ impl EditorView {
     // ── Pointer ─────────────────────────────────────────────────────────
 
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.motion.preview.is_some() || self.motion.presenting {
+            return;
+        }
         self.drag_shift = e.modifiers.shift;
         // A second button must not replace the move that owns an undo transaction.
         if matches!(self.drag, Some(Drag::Move(_))) {
@@ -1491,6 +1514,11 @@ impl EditorView {
             return;
         }
         if e.button != MouseButton::Left {
+            return;
+        }
+        if let Some(point) = self.doc_point(e.position)
+            && self.diagram_pointer_down(point, e.modifiers.shift, cx)
+        {
             return;
         }
         if self.tool == Tool::Move
@@ -2308,6 +2336,8 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let previewing = self.previewing();
+        let presenting = self.motion.presenting;
         let overlay = self.overlay(window.scale_factor());
         let zoom_cursor = self.zoom_cursor(p, window);
         let replay = self.replay_overlay(p, cx);
@@ -2319,8 +2349,9 @@ impl EditorView {
             .quick_mask
             .then(|| self.editor.doc.selection.clone())
             .flatten();
+        let quick_mask = if presenting { None } else { quick_mask };
         let quick_mask_cache = self.quick_mask_cache.clone();
-        let mask_view = self.mask_view_snapshot();
+        let mask_view = (!presenting).then(|| self.mask_view_snapshot()).flatten();
         let mask_view_cache = self.mask_view.cache.clone();
         // Fit once the canvas has been laid out.
         if self.fit_pending
@@ -2347,7 +2378,8 @@ impl EditorView {
             stage: p.stage,
             ink: p.ink,
             accent: p.accent,
-            rulers: self.rulers,
+            rulers: self.rulers && !presenting,
+            diagram_grid: self.is_diagram() && self.diagram_ui.grid && !presenting,
         };
         let scene2 = scene.clone();
         // Keep the entire grab target inside the canvas even at 0% and 100%.
@@ -2396,6 +2428,28 @@ impl EditorView {
                 "CanvasText"
             } else {
                 "Canvas"
+            })
+            .when(self.is_diagram() && self.type_tool.field.is_none(), |d| {
+                d.on_action(
+                    cx.listener(|this, _: &crate::actions::DiagramAddLeft, window, cx| {
+                        this.diagram_quick_create(emulsion_core::diagram::Port::West, window, cx)
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &crate::actions::DiagramAddRight, window, cx| {
+                        this.diagram_quick_create(emulsion_core::diagram::Port::East, window, cx)
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &crate::actions::DiagramAddUp, window, cx| {
+                        this.diagram_quick_create(emulsion_core::diagram::Port::North, window, cx)
+                    }),
+                )
+                .on_action(cx.listener(
+                    |this, _: &crate::actions::DiagramAddDown, window, cx| {
+                        this.diagram_quick_create(emulsion_core::diagram::Port::South, window, cx)
+                    },
+                ))
             })
             .when(self.raw_split_active(), |d| {
                 // Arrow keys normally dispatch layer-nudge actions before the
@@ -2544,6 +2598,11 @@ impl EditorView {
                         return;
                     }
                 }
+                if e.keystroke.key == "escape" && this.diagram_cancel_connection() {
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.text_key_down(e, window, cx) {
                     cx.stop_propagation();
                     return;
@@ -2577,7 +2636,8 @@ impl EditorView {
                         // carries only the chrome -- stage, plate, grid, wipe,
                         // rulers -- which the engine does not draw. A refusal
                         // is sticky, so this yields for one frame at most.
-                        let images = !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev);
+                        let images =
+                            previewing || !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev);
                         let plan = viewport::prepaint(
                             &scene,
                             &mut cache.borrow_mut(),
@@ -2685,7 +2745,15 @@ impl EditorView {
                                 window,
                             );
                         }
-                        tools::paint_overlay(&overlay, &view_for_overlay, bounds, accent, window);
+                        if !presenting {
+                            tools::paint_overlay(
+                                &overlay,
+                                &view_for_overlay,
+                                bounds,
+                                accent,
+                                window,
+                            );
+                        }
                         if let Some(editor) = w4.upgrade() {
                             editor
                                 .read(cx)
@@ -4079,6 +4147,9 @@ impl Render for EditorView {
         }
         let p = theme::palette(cx);
         self.sync_trees(cx);
+        if self.motion.presenting {
+            return self.presentation_view(&p, cx);
+        }
         self.sync_transform_fields(window, cx);
         self.sync_rotation_fields(window, cx);
         self.sync_style_color_pickers(window, cx);
@@ -4136,7 +4207,9 @@ impl Render for EditorView {
                     .flex_1()
                     .min_h_0()
                     .items_stretch()
-                    .child(rail)
+                    .when(!self.is_design(), |row| row.child(rail))
+                    .children(self.design_drawer(&p, window, cx))
+                    .children(self.diagram_drawer(&p, window, cx))
                     .children(self.draw_side_sliders(&p, cx))
                     .child(
                         div()
@@ -4157,6 +4230,7 @@ impl Render for EditorView {
                     .child(panel)
                     .children(picker),
             )
+            .children(self.project_page_strip(&p, cx))
             .child(strip)
             .into_any_element()
     }

@@ -331,6 +331,12 @@ pub enum Command {
         id: NodeId,
         enabled: bool,
     },
+    SetDesign {
+        design: Box<crate::design_metadata::Design>,
+    },
+    SetDiagram {
+        diagram: Option<Arc<crate::diagram::Diagram>>,
+    },
     SetGlobalLight {
         light: crate::style_options::GlobalLight,
     },
@@ -457,6 +463,8 @@ impl Command {
             Command::SetText { .. } => "Edit text".into(),
             Command::SetBlendingOptions { .. } => "Blending options".into(),
             Command::SetEffectsEnabled { .. } => "Effects visibility".into(),
+            Command::SetDesign { .. } => "Design layout and animation".into(),
+            Command::SetDiagram { .. } => "Diagram connections".into(),
             Command::SetGlobalLight { .. } => "Global light".into(),
             Command::SetLayerEffects { .. } => "Layer effects".into(),
             Command::SetStyles { styles, .. } => match styles.last() {
@@ -482,6 +490,9 @@ impl Command {
 
     /// The region this command changes on screen, given the document before.
     pub fn dirty(&self, before: &Document) -> Dirty {
+        if before.diagram.is_some() {
+            return Dirty::All;
+        }
         match self {
             Command::SetSelection { .. }
             | Command::SetGuides { .. }
@@ -613,6 +624,37 @@ impl Command {
                 }
             }
         }
+        if next.diagram.is_some() {
+            let protected = next
+                .nodes
+                .iter()
+                .any(|n| n.locked || n.locks.position || n.locks.pixels);
+            let unsynchronized = protected.then(|| next.clone());
+            crate::diagram::synchronize(doc, &mut next)
+                .map_err(crate::DocumentError::BadDiagram)?;
+            // Only inspect dependent mutations when a lock can protect one.
+            if let Some(unsynchronized) = unsynchronized {
+                let nodes = next
+                    .nodes
+                    .iter()
+                    .map(|n| (n.id, n))
+                    .collect::<std::collections::HashMap<_, _>>();
+                for node in &unsynchronized.nodes {
+                    if nodes.get(&node.id).copied() != Some(node) {
+                        let locks = unsynchronized.layer_locks(node.id);
+                        if let Some(id) = unsynchronized.locked_ancestor(node.id) {
+                            return Err(CommandError::Locked(id));
+                        }
+                        if locks.position || locks.pixels {
+                            return Err(CommandError::Locked(node.id));
+                        }
+                    }
+                }
+            }
+            fix_clips(&mut next);
+        }
+        next.design
+            .retain_nodes(&next.nodes.iter().map(|n| n.id).collect());
         next.normalize();
         next.validate()?;
         *doc = next;
@@ -644,7 +686,9 @@ impl Command {
                 Ok(())
             }
 
-            Self::SetGlobalLight { .. }
+            Self::SetDesign { .. }
+            | Self::SetDiagram { .. }
+            | Self::SetGlobalLight { .. }
             | Self::RelinkRaw { .. }
             | Self::SetBlendSpace { .. }
             | Self::SetCollapsed { .. }
@@ -870,6 +914,19 @@ impl Command {
                     },
                 );
                 doc.nodes.extend(copies);
+                let settings = doc
+                    .design
+                    .fragment(&ids.iter().copied().collect())
+                    .remap(&map);
+                doc.design.constraints.extend(settings.constraints);
+                doc.design.motion.extend(settings.motion);
+                if let Some(diagram) = &doc.diagram {
+                    let additions = diagram.fragment(&ids.iter().copied().collect()).remap(&map);
+                    let mut model = (**diagram).clone();
+                    model.shapes.extend(additions.shapes);
+                    model.edges.extend(additions.edges);
+                    doc.diagram = Some(Arc::new(model));
+                }
                 Ok(Some(map[id]))
             }
             Command::SetVisible { id, visible } => set(doc, *id, |n| n.visible = *visible),
@@ -1137,6 +1194,22 @@ impl Command {
             }
             Command::SetEffectsEnabled { id, enabled } => {
                 set(doc, *id, |n| n.effects_enabled = *enabled)
+            }
+            Command::SetDesign { design } => {
+                design
+                    .validate(doc)
+                    .map_err(crate::DocumentError::BadDesign)?;
+                doc.design = (**design).clone();
+                Ok(None)
+            }
+            Command::SetDiagram { diagram } => {
+                if let Some(model) = diagram {
+                    model
+                        .validate(doc)
+                        .map_err(crate::DocumentError::BadDiagram)?;
+                }
+                doc.diagram = diagram.clone();
+                Ok(None)
             }
             Command::SetGlobalLight { light } => {
                 doc.global_light = *light;

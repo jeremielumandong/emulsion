@@ -3,6 +3,7 @@
 //! them all — the same non-destructive pipeline the editor uses, run one
 //! picture at a time off the UI thread.
 
+mod library;
 mod preview;
 mod recipe_previews;
 
@@ -39,6 +40,7 @@ pub(crate) struct BatchItem {
 
 #[derive(Default)]
 pub(crate) struct BatchState {
+    library: library::LibraryUi,
     pub folder: Option<PathBuf>,
     pub items: Vec<BatchItem>,
     /// Retain failed requests too, so redraws do not retry converters forever.
@@ -181,8 +183,11 @@ impl BatchState {
 /// Batch accepts pictures, including camera RAW and converter-backed images,
 /// but not the page/document formats supported by the editor's general import.
 fn is_batch_input(path: &Path) -> bool {
+    if emulsion_io::diagram_import::is_diagram(path) || emulsion_io::template_pack::is_pack(path) {
+        return false;
+    }
     if path.extension().is_some_and(|ext| {
-        ["pdf", "ps", "eps", "ai"]
+        ["pdf", "ps", "eps", "ai", "emu", "drawio"]
             .iter()
             .any(|document| ext.eq_ignore_ascii_case(document))
     }) {
@@ -1017,6 +1022,7 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
         self.batch_preview(cx);
+        let library_controls = self.library_controls(window, cx);
         let recipes = self.batch_recipes();
         let selected = self.batch.items.iter().filter(|i| i.selected).count();
         let total = self.batch.items.len();
@@ -1367,6 +1373,7 @@ impl Workspace {
                             .min_h_0()
                             .border_r_1()
                             .border_color(p.line)
+                            .child(library_controls)
                             .child(photo_header)
                             .child(
                                 div()

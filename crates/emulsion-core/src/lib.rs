@@ -5,12 +5,17 @@
 
 pub mod command;
 pub mod creation;
+pub mod design;
+pub mod design_metadata;
+pub mod diagram;
 pub mod document;
+pub mod fragment;
 pub mod geometry;
 pub mod graph;
 pub mod history;
 pub mod layer_links;
 pub mod node;
+pub mod project;
 pub mod raw;
 pub mod smart;
 pub mod styles;

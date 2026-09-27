@@ -415,11 +415,23 @@ struct Fonts {
     swash: cosmic_text::SwashCache,
 }
 
+/// The same bundled faces are available to shaping, Vello and export.
+pub fn font_system() -> cosmic_text::FontSystem {
+    let mut system = cosmic_text::FontSystem::new();
+    for font in [
+        include_bytes!("../../../assets/fonts/Geist.ttf").as_slice(),
+        include_bytes!("../../../assets/fonts/GeistMono.ttf").as_slice(),
+    ] {
+        system.db_mut().load_font_data(font.to_vec());
+    }
+    system
+}
+
 fn fonts() -> &'static Mutex<Fonts> {
     static FONTS: OnceLock<Mutex<Fonts>> = OnceLock::new();
     FONTS.get_or_init(|| {
         Mutex::new(Fonts {
-            system: cosmic_text::FontSystem::new(),
+            system: font_system(),
             swash: cosmic_text::SwashCache::new(),
         })
     })
@@ -439,11 +451,89 @@ pub fn font_families() -> Vec<String> {
     names
 }
 
+/// Unhinted, document-space glyph outlines for scalable interchange. Advanced
+/// text effects return None so exporters can retain their rendered appearance.
+pub fn vector_paths(spec: &TextSpec) -> Option<Vec<(emulsion_raster::vector::Path, [u8; 4])>> {
+    use cosmic_text::{CacheKey, CacheKeyFlags, Command};
+    use std::fmt::Write;
+    if spec.vertical
+        || spec.height.is_some()
+        || !spec.warp.is_identity()
+        || spec.text_path.is_some()
+        || spec.anti_alias == AntiAliasMode::None
+    {
+        return None;
+    }
+    let mut fonts = fonts().lock().unwrap_or_else(|e| e.into_inner());
+    let Fonts { system, swash } = &mut *fonts;
+    let (buffer, styles) = shaped_buffer(spec, system);
+    let mut output = Vec::new();
+    let transform = spec.transform();
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            if run
+                .text
+                .get(glyph.start..glyph.end)
+                .is_some_and(|text| text.chars().all(char::is_whitespace))
+            {
+                continue;
+            }
+            let style = styles.get(glyph.metadata.saturating_sub(1))?;
+            let key = CacheKey::new(
+                glyph.font_id,
+                glyph.glyph_id,
+                glyph.font_size,
+                (0., 0.),
+                glyph.font_weight,
+                glyph.cache_key_flags | CacheKeyFlags::DISABLE_HINTING,
+            )
+            .0;
+            let commands = swash.get_outline_commands(system, key)?;
+            if commands.is_empty() {
+                continue;
+            }
+            let origin = (
+                glyph.x + glyph.font_size * glyph.x_offset,
+                run.line_y + glyph.y - glyph.font_size * glyph.y_offset - style.baseline,
+            );
+            let point = |x: f32, y: f32| {
+                let p = transform
+                    .transform_point2(glam::dvec2((origin.0 + x) as f64, (origin.1 - y) as f64));
+                format!("{} {}", p.x, p.y)
+            };
+            let mut path = String::new();
+            for command in commands {
+                match *command {
+                    Command::MoveTo(p) => write!(path, "M {} ", point(p.x, p.y)),
+                    Command::LineTo(p) => write!(path, "L {} ", point(p.x, p.y)),
+                    Command::QuadTo(c, p) => {
+                        write!(path, "Q {} {} ", point(c.x, c.y), point(p.x, p.y))
+                    }
+                    Command::CurveTo(a, b, p) => write!(
+                        path,
+                        "C {} {} {} ",
+                        point(a.x, a.y),
+                        point(b.x, b.y),
+                        point(p.x, p.y)
+                    ),
+                    Command::Close => write!(path, "Z "),
+                }
+                .ok()?;
+            }
+            output.push((
+                emulsion_raster::vector::Path::from_svg(&path).ok()?,
+                style.color,
+            ));
+        }
+    }
+    Some(output)
+}
+
 /// Reload installed system fonts and clear cached glyph images.
 pub fn refresh_fonts() {
     let mut f = fonts().lock().unwrap_or_else(|e| e.into_inner());
     *f = Fonts {
-        system: cosmic_text::FontSystem::new(),
+        system: font_system(),
         swash: cosmic_text::SwashCache::new(),
     };
 }

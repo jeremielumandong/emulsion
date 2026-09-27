@@ -6,6 +6,29 @@ use gpui_kit::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
+/// Native form actions dispatch to their owning dialog, including its validation
+/// and focus restoration. `on_ok` alone does not render any action buttons.
+pub fn form_dialog_footer(confirm: &'static str) -> Div {
+    use gpui_kit::component::{
+        button::{Button, ButtonVariants as _},
+        dialog::{DialogAction, DialogClose},
+    };
+    div()
+        .flex()
+        .justify_end()
+        .gap_2()
+        .child(
+            div()
+                .flex_none()
+                .child(DialogClose::new().trigger(|button| button.label("Cancel"))),
+        )
+        .child(
+            div()
+                .flex_none()
+                .child(DialogAction::new().child(Button::new("ok").label(confirm).primary())),
+        )
+}
+
 /// Monospace metadata text.
 pub fn mono(text: impl Into<SharedString>, size: f32, color: Hsla) -> Div {
     div()

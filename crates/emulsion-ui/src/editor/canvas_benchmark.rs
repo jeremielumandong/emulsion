@@ -21,7 +21,14 @@ static COMPLETED: AtomicBool = AtomicBool::new(false);
 struct BenchWindow(Entity<EditorView>);
 impl Render for BenchWindow {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().flex().flex_col().child(self.0.clone())
+        div().size_full().child(
+            div()
+                .w(px(1000.))
+                .h(px(700.))
+                .flex()
+                .flex_col()
+                .child(self.0.clone()),
+        )
     }
 }
 
@@ -40,6 +47,8 @@ pub(super) struct CanvasBenchmark {
     text_node: NodeId,
     gpu_brush: bool,
     commit_ms: Option<f64>,
+    inactive_samples: usize,
+    canvas_size: Option<[f32; 2]>,
 }
 impl Global for CanvasBenchmark {}
 
@@ -63,6 +72,8 @@ fn percentiles(values: &mut [f64]) -> serde_json::Value {
 
 fn schedule(editor: Entity<EditorView>, window: &mut Window) {
     window.on_next_frame(move |window, cx| {
+        let active = window.is_window_active();
+        let bounds = editor.read(cx).canvas_bounds();
         let state = cx.global_mut::<CanvasBenchmark>();
         if !state.ready || (state.started.is_some() && state.submitted.is_none()) {
             window.refresh();
@@ -72,6 +83,11 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
         if let Some(started) = state.started.take() {
             let submitted = state.submitted.take().unwrap();
             if state.step > WARMUP {
+                if !active { state.inactive_samples += 1; }
+                let bounds = bounds.expect("laid-out benchmark canvas");
+                let size = [f32::from(bounds.size.width), f32::from(bounds.size.height)];
+                if let Some(expected) = state.canvas_size { assert_eq!(size, expected, "canvas changed size during measurement"); }
+                else { state.canvas_size = Some(size); }
                 state.submissions.push(submitted);
                 state.boundaries.push(started.elapsed().as_secs_f64() * 1000.0);
             }
@@ -79,6 +95,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                 state.rows.push(serde_json::json!({
                     "scenario": CASES[state.case], "renderer": state.backend,
                     "gpu_brush": state.gpu_brush && state.case == 1, "samples": SAMPLES,
+                    "inactive_window_samples": state.inactive_samples,
                     "input_to_canvas_submission_ms": percentiles(&mut state.submissions),
                     "input_to_next_frame_boundary_ms": percentiles(&mut state.boundaries),
                 }));
@@ -86,6 +103,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                 state.step = 0;
                 state.submissions.clear();
                 state.boundaries.clear();
+                state.inactive_samples = 0;
                 editor.update(cx, |editor, cx| {
                     if let Some(Drag::Tool(drag)) = editor.drag.take() {
                         let start = Instant::now();
@@ -120,6 +138,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                 "debug_assertions": cfg!(debug_assertions), "gpu_texture_bytes": memory,
                 "document_px": [view.editor.doc.width, view.editor.doc.height],
                 "nodes": view.editor.doc.nodes.len(), "display_scale": window.scale_factor(),
+                "editor_logical_px": [1000, 700], "window_active_at_completion": window.is_window_active(),
                 "canvas_device_px": [f32::from(bounds.size.width) * window.scale_factor(), f32::from(bounds.size.height) * window.scale_factor()],
                 "adapter": format!("{:?}", window.gpu_specs()), "stroke_commit_ms": commit_ms,
                 "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
@@ -127,6 +146,14 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
             }));
             COMPLETED.store(true, Ordering::SeqCst);
             cx.quit();
+            return;
+        }
+        // Compositors may initially tile below the requested minimum or place
+        // the window on another workspace. Wait for a usable, active surface;
+        // starting there measures desktop throttling instead of the editor.
+        if !window.is_window_active() || window.viewport_size().width < px(1000.) || window.viewport_size().height < px(700.) {
+            window.refresh();
+            schedule(editor, window);
             return;
         }
         let (case, step, paint_node, text_node) = (state.case, state.step, state.paint_node, state.text_node);
@@ -246,6 +273,11 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
             let bounds = Bounds::centered(None, size(px(1600.), px(1000.)), cx);
             cx.open_window(
                 WindowOptions {
+                    app_id: Some("dev.emulsion.canvas-benchmark".into()),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Emulsion canvas benchmark".into()),
+                        ..Default::default()
+                    }),
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(1000.), px(700.))),
                     ..Default::default()

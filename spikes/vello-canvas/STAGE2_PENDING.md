@@ -42,6 +42,21 @@ handed.
 **On by default** where a hosting backend exists. `EMULSION_GPU_CANVAS=0`
 forces the CPU tile path.
 
+### September 27: history accounting and dense diagrams
+
+`Document::buffers_once` now counts only already-rendered vector caches. Merely
+accounting for history memory no longer rasterizes every text/path object after an
+edit. A regression test checks edits, history accounting, and undo/redo without
+materializing vector pixels, then checks accounting after an explicit CPU render.
+Diagram synchronization indexes nodes and unchanged edges, and the lock check
+avoids scanning ancestry when no position/pixel/transparency locks exist.
+
+`cargo run --release -p emulsion-core --example diagram_bench` measures a
+1,000-shape/999-edge graph on this Ryzen 7 8700G. Before these changes: build
+46.630 ms, single-node move p50 65.337 / p95 68.393 ms. After: build 17.470 ms,
+move p50 9.042 / p95 10.204 ms. These are core command measurements, not presented
+frames. The active-window CPU/GPU comparison and opaque-edge parity remain open.
+
 ### Original baseline, on the 4K 25-layer test document
 
 These figures predate the follow-up below; they are retained as historical context.
@@ -231,14 +246,21 @@ These measurements are distinct from physical input-to-photon latency. See
 [platform validation](PLATFORM_VALIDATION.md) and the follow-up in `RESULTS.md`.
 
 **12. Copy/paste rasterises text and loses crispness when enlarged.** *(done
-for one whole text layer copied within the running app)*
+for whole editable objects copied within the running app)*
 
-Copy retains the text node alongside the portable PNG clipboard image. When
-that image still matches, Paste creates editable text with the original spec
-and a destination-sized lazy raster cache, including across tabs. Same-document
-paste preserves the exact position; cross-document paste centers it. A pixel
-selection or a mixed/multiple-layer copy still copies pixels. External apps
-receive the PNG. Native clipboard data does not persist across app restarts.
+Copy retains native text/path/group fragments alongside the portable PNG. When
+that image still matches, Paste remaps IDs, hierarchy and clipping relationships,
+preserving editable specs and destination-sized vector caches. This includes
+mixed/multiple-layer selections and cross-page/cross-tab copying. Same-page paste
+retains placement; another page or tab centers objects. Pixel selections and
+external image clipboards retain their pixel semantics. External apps receive PNG;
+the native fragment does not persist across app restarts.
+
+The Design follow-up also shares bundled Geist faces across CPU and Vello shaping.
+Vello now receives variable-font weight coordinates and synthetic italic transforms.
+Linux offscreen tests compare regular/bold/italic/bold-italic glyph coverage against
+CPU output (IoU 0.899 / 0.948 / 0.920 / 0.953). These are glyph geometry regression
+checks, not pixel-identical AA or native frame-pacing measurements.
 
 **13. Native editor frame pacing.** *(open, found by task 11)*
 

@@ -28,6 +28,57 @@ References: [Canva editing](https://www.canva.com/help/editing-designing/),
 [Lucid pages](https://help.lucid.co/hc/en-us/articles/11970952773652-Welcome-to-Lucidchart),
 [Lucid CSV import](https://www.lucidchart.com/blog/introducing-process-diagrams-from-csv-import).
 
+## September 27 implementation checkpoint and package plan
+
+The next deliverable is portable local templates and stencils, with file exchange
+and GitHub installation. See [the format and user workflow](template-pack-format.md).
+
+- [x] Versioned `.emutemplate` / `.emustencil` ZIP manifest with name, author,
+  license, tags, editable native project, and preview.
+- [x] Export current Design pages or one Diagram stencil per page; omit local
+  version history, preserve native text, vectors, images, and graph metadata.
+- [x] Validate and install local files into the persistent library; preserve
+  source files; reinstall the same version without duplicate entries.
+- [x] Public GitHub repository / pinned directory installation, bounded HTTPS
+  downloads, data-only archives, atomic catalog updates, offline installed copies.
+- [x] Native export/install forms, per-page stencil placement, normal Open routing,
+  search and existing library metadata/removal controls.
+- [x] Editable Visio OPC/VDX and Lucid Standard Import readers; warnings/errors for
+  unsupported features. Lucidchart's VSDX/VDX export is an additional import route.
+- [x] File/package tests for editable round trips, metadata, multiple pages,
+  connections, reinstallation, repository layout, and invalid archives.
+- [x] Native interaction regression for export dialog, opening/installing a pack,
+  editable stencil placement, source preservation, and one-step undo.
+- [ ] Representative real-world vendor-file compatibility corpus and visual review.
+
+Other implemented work now includes persistent Home folders/trash references and
+workspace filters, local Library collections/metadata, Design resize constraints,
+brand kits, motion preview/presentation/GIF export, diagram quick-create, arrow
+styling, bend/label editing, bulk layout, text/CSV/Mermaid/SQL generation, CSV refresh,
+and conditional fills. These need the final preservation/interaction review below;
+implementation does not mean every handoff layout acceptance criterion is complete.
+
+Vello work removed history-accounting calls that unnecessarily rasterized editable
+text/path caches. A 1,000-shape/999-connector core benchmark improved single-node
+move p50 from 65.337 ms to 9.042 ms on this machine. That measures command latency,
+not frame presentation. Native clipboard retains source text/vector objects.
+
+Final validation for this checkpoint (September 27): `cargo test --workspace
+--locked -- --test-threads=1` passed **1,270 tests**, with 12 ignored by their test
+annotations, including **490 native UI tests** and **153 I/O tests**. The separate
+ignored Vello glyph-coverage test passed on the available GPU for regular, bold,
+italic, and bold-italic Geist. Workspace Clippy (`--all-targets --locked -- -D
+warnings`), formatting, GPUI vendor validation, license-staging tests, renderer
+policy tests, and whitespace checks passed. GitHub URL/selected-directory archive
+handling is covered by local fixtures; a published Emulsion-pack repository has
+not yet been used for a live download/install acceptance test.
+
+Remaining release gates include the complete handoff control/layout audit,
+accessibility and narrow-window review, advanced vendor shape/library compatibility,
+context-specific AI proposals, an active-window matched Vello/CPU benchmark, and
+platform checks requiring macOS/Windows hardware. Collaboration remains deferred.
+The migration is not marked complete while those gates remain open.
+
 ## Visual contract
 
 Use the handoff's six destinations: Home, Photo, Paint, Library, Design, Diagram.
@@ -122,7 +173,7 @@ branch history, custom toolbars, masks/channels, and advanced brush controls.
 - [x] Handoff palette and persistent accent/corner controls, light/dark/external themes; bundled fonts.
 - [x] Photo/Paint New document dialog with presets, units, dimensions, resolution, name, backgrounds, saved presets and recent sizes.
 - [ ] Finish handoff geometry across existing custom controls; preset search and project destination.
-- [ ] Home navigation/start cards, workspace routing, responsive menu overflow.
+- [x] Home navigation/start cards, workspace routing, responsive menu overflow.
 - [ ] Photo/Paint dock restructuring; preserve saved custom layouts and shortcuts.
 - [ ] Library workspace uses actual files and existing batch/develop operations.
 
@@ -137,9 +188,8 @@ licenses are embedded in About and included in the packaging manifest. Custom
 presets can be loaded, replaced by name, and removed; reaching the preset limit
 does not silently discard existing saved presets.
 
-This does **not** complete the shell redesign or add Design/Diagram pages yet.
-Those workspace choices depend on the page/project and graph milestones below;
-do not present ordinary single-page image tabs as completed Design/Diagram editors.
+This first slice did not complete the shell redesign. The page and Design
+implementation below followed it; Diagram still needs the structured graph milestone.
 
 Validation for this slice: 480 UI tests passed (one ignored), 147 core tests passed
 (one ignored), and 18 settings tests passed. Workspace/all-target Clippy with
@@ -151,24 +201,59 @@ Vello latency validation.
 
 ### 2. Page and project foundation
 
-- [ ] Versioned project package, page IDs, cross-page clipboard and project history.
-- [ ] Add/duplicate/delete/reorder/rename pages, thumbnails, active-page persistence.
-- [ ] Save/recovery/close prompts include inactive pages; embedded assets round-trip.
-- [ ] New document pages/background/bleed and custom presets.
+- [x] Versioned project package, page IDs, cross-page clipboard and project history.
+- [x] Add/duplicate/delete/reorder/rename pages, thumbnails, active-page persistence.
+- [x] Save/recovery/close prompts include inactive pages; embedded assets round-trip.
+- [x] New document pages/background/bleed and custom presets.
 
 Gate: edit two pages, duplicate/reorder/delete/undo, save/reopen/recover; edits,
 fonts, vectors, masks and branch history survive. Reject malformed packages without
 partially replacing the active document.
 
+Page/Design implementation (September 27): `.emu` packages retain a full native
+ORA and branch/version graph for each page. Page structure and page content share
+chronological undo during an editing session. Named versions remain per-page;
+this is not a whole-project branch system. A failed import installs no pages.
+Inactive-page edits participate in save, close, and recovery, and recovered copies
+remain on disk until saved or explicitly discarded. Page switching invalidates
+GPU/CPU caches and delayed document operations with page-local IDs.
+
+Design now has a native 68 px rail, searchable 250 px drawer, and 88 px page strip
+in both retained layouts. Six editable templates add pages, eight vector elements
+and five text presets add native objects, and local asset placement embeds sources.
+Frames use editable vector clipping boundaries and retain original image pixels
+for replacement and cropping. Mixed/grouped text and vector clipboard fragments
+preserve sources, hierarchy, and clipping relationships across pages/tabs.
+
+Page exports write PNG/JPEG/SVG ZIPs or a multi-page PDF atomically, with optional
+bleed and PDF trim/bleed boxes. SVG/PDF outline glyphs using the editor's shaping
+and bundled fonts; unsupported effects use an explicitly reported raster appearance.
+The native project remains editable. PDFs use RGB, not a PDF/X or CMYK workflow.
+The converter API is documented at [svg2pdf](https://docs.rs/svg2pdf/0.13.0/svg2pdf/).
+`cargo run -p emulsion-io --example project_fixture -- <new-output-directory>`
+produces an editable project and a complete export fixture for review.
+
+Validation at this checkpoint: 154 core tests passed (one ignored); 484 UI tests
+passed (one ignored) with `--test-threads=1`. Three brush-library tests in the
+parallel run conflicted on the existing shared test catalog; the isolated and
+serial checks pass. The complete I/O suite passed before export additions; all
+seven new project/package/export checks pass afterward. The generated two-page
+PDF passes qpdf validation and Poppler reports the expected trim/bleed boxes;
+the first page was rendered and inspected. Vello's bundled variable-font weight
+and synthetic italic settings now match shaping; Linux offscreen GPU coverage
+checks pass for regular/bold/italic/bold-italic. These checks do not settle the
+remaining native frame-pacing, opaque-edge parity, or other-platform validation.
+
 ### 3. Canva-style Design
 
 - [ ] Native Design rail/drawer, contextual toolbar and page strip from handoff.
-- [ ] Real text presets, editable shapes/elements, local uploads/photos, frames.
-- [ ] Editable bundled templates and local template save/import/search.
+- [x] Real text presets, editable shapes/elements, local uploads/photos, frames.
+- [x] Editable bundled templates and local template save/import/search.
 - [ ] Object ordering/grouping/locking/snapping/align/distribute and crop controls.
-- [ ] Local brand kits and anchored resize variants with overflow review.
-- [ ] Selected/all-page PNG/JPEG, vector SVG and print PDF export, bleed options.
-- [ ] Animation authoring/preview/export and presentation playback.
+- [x] Local brand kits and anchored resize variants with overflow review.
+- [ ] Apply brands across selected pages and include portable brand logos.
+- [x] Selected/all-page PNG/JPEG, vector SVG and print PDF export, bleed options.
+- [x] Basic entrance/exit timing, preview, GIF export and presentation playback.
 
 Gate: create a three-page social campaign from a template, replace a photo inside
 a frame, edit copied text, apply a brand, make another size, export and reopen
@@ -176,13 +261,15 @@ without flattening source objects or modifying the original design.
 
 ### 4. draw.io/Lucid-style Diagram
 
-- [ ] Graph model, node/port/connector commands and bounded orthogonal routing.
-- [ ] Native shape library, connector gesture, labels, properties and page tabs.
+- [x] Graph model, node/port/connector commands and bounded orthogonal routing.
+- [x] Native shape library, connector gesture, labels, properties and page tabs.
 - [ ] General/flowchart/UML/ERD stencils, notes, containers and swimlanes.
-- [ ] Manual waypoints, reconnect, arrow/dash/style controls and graph clipboard.
-- [ ] Auto-layout, minimap, large-scene culling and keyboard authoring.
-- [ ] .drawio interchange, SVG/XML/VSSX stencil import, local pack management.
-- [ ] Text/CSV/SQL/Mermaid generation and data fields/conditional formatting.
+- [x] Manual waypoints, reconnect, arrow/dash/style controls and graph clipboard.
+- [x] Auto-layout, minimap, quick-create keyboard authoring.
+- [ ] Large-scene render culling and dense-route fallback reporting.
+- [x] .drawio interchange, Visio XML/VSSX import, portable local/GitHub packs.
+- [ ] draw.io library XML and dedicated SVG stencil interchange.
+- [x] Text/CSV/SQL/Mermaid generation and local data fields/conditional formatting.
 
 Gate: build a branched flowchart, move/resize/duplicate nodes, reconnect and label
 edges, use nested containers, undo/redo, save/reopen and export/import .drawio while
@@ -217,3 +304,40 @@ transform; never resample a pasted text preview as the source of future renders.
 Track GPU submission, frame presentation, input latency, memory, and fidelity
 separately. Use representative photo, brush, multi-page design and dense-diagram
 fixtures; do not hide fallback behavior to improve benchmark numbers.
+
+## September 27 implementation checkpoint: diagram and creative catalog
+
+The Diagram graph now owns bound endpoints, named/custom ports, orthogonal or
+straight routes, manual waypoints, labels, and native shapes. Moving, deleting,
+duplicating and copying graph objects update their connections in the same undo
+operation. The drawer exposes twelve basic stencils, connection/reconnection,
+container membership, per-shape data, layout locks, four automatic layouts, a
+snap grid and the existing navigator. Bounded routing can fall back to a route
+through obstacles in dense scenes; large-scene layout and router validation are
+still release work. Basic Class/Entity shapes do not yet implement full UML/ERD
+compartments or the requested external stencil packs.
+
+Editable draw.io XML and compressed pages import together after validation;
+exports preserve the common graph primitives. Unsupported style reports remain
+visible. The interchange is not yet complete for every draw.io feature or native
+effect. Project imports retain all pages and their individual version histories.
+
+Home and the retained editor layouts now expose all six destinations. Routing
+activates a compatible open document or opens the correct New document type.
+The Library destination retains the existing batch/develop workspace. Its full
+collection/keyword management and the Home project-folder redesign remain open.
+
+A bounded, versioned local creative catalog stores asset metadata, searchable
+names/tags, attribution/license, ratings, collections, and brand records. Updates
+reload under a file lock and replace the catalog atomically. Design has local
+asset properties/relink, template save/import/search, and brand font/color
+creation, application, and import/export. Brand logos and Library collection
+controls still need UI work. Small Design windows show the drawer as an overlay.
+Magic opens the existing configured assistant workflow; it does not invent an
+AI result or send anything without a submitted request.
+
+Validation before the subsequent motion changes: 486 UI tests passed (one
+ignored), including destination routing and graph-aware clipboard/undo. The full
+core/I/O suites and all-target Clippy for core, I/O, UI and engine passed. Motion,
+resize constraints and their persistence are being implemented after this
+checkpoint and require their own tests before the related gates are checked.

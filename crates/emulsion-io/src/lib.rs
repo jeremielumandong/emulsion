@@ -12,6 +12,10 @@
 pub mod abr;
 pub mod brush_library;
 pub mod brushset;
+pub mod creative_library;
+pub mod diagram_data;
+pub mod diagram_import;
+pub mod drawio;
 pub mod exif;
 pub mod export;
 pub mod external;
@@ -22,6 +26,9 @@ pub mod jxl;
 pub mod lensfun;
 pub mod ora;
 mod path_data;
+pub mod project;
+pub mod project_animation;
+pub mod project_export;
 pub mod psd;
 pub mod raw;
 pub mod raw_probe;
@@ -29,6 +36,7 @@ pub mod raw_settings;
 pub mod recent;
 pub mod settings;
 pub mod svg;
+pub mod template_pack;
 pub mod thumb;
 pub mod xcf;
 
@@ -72,11 +80,73 @@ pub type Result<T> = std::result::Result<T, IoError>;
 /// `image` crate's wider set (Targa, PNM, icons, Radiance HDR, OpenEXR,
 /// DDS, QOI, farbfeld), JPEG XL, SVG and camera RAW.
 pub const OPEN_EXTENSIONS: &[&str] = &[
-    "ora", "psd", "psb", "xcf", "png", "jpg", "jpeg", "jpe", "jfif", "webp", "tif", "tiff", "bmp",
-    "dib", "gif", "svg", "svgz", "jxl", "tga", "icb", "vda", "vst", "pbm", "pgm", "ppm", "pam",
-    "pnm", "ico", "hdr", "rgbe", "exr", "dds", "qoi", "ff", "arw", "srf", "sr2", "cr2", "cr3",
-    "crw", "nef", "nrw", "dng", "raf", "orf", "rw2", "pef", "erf", "mrw", "3fr", "iiq", "mos",
-    "kdc", "dcr", "x3f",
+    "ora",
+    "emu",
+    "drawio",
+    "vsdx",
+    "vsdm",
+    "vstx",
+    "vssx",
+    "vdx",
+    "vsx",
+    "lucid",
+    "lucidjson",
+    "emutemplate",
+    "emustencil",
+    "psd",
+    "psb",
+    "xcf",
+    "png",
+    "jpg",
+    "jpeg",
+    "jpe",
+    "jfif",
+    "webp",
+    "tif",
+    "tiff",
+    "bmp",
+    "dib",
+    "gif",
+    "svg",
+    "svgz",
+    "jxl",
+    "tga",
+    "icb",
+    "vda",
+    "vst",
+    "pbm",
+    "pgm",
+    "ppm",
+    "pam",
+    "pnm",
+    "ico",
+    "hdr",
+    "rgbe",
+    "exr",
+    "dds",
+    "qoi",
+    "ff",
+    "arw",
+    "srf",
+    "sr2",
+    "cr2",
+    "cr3",
+    "crw",
+    "nef",
+    "nrw",
+    "dng",
+    "raf",
+    "orf",
+    "rw2",
+    "pef",
+    "erf",
+    "mrw",
+    "3fr",
+    "iiq",
+    "mos",
+    "kdc",
+    "dcr",
+    "x3f",
 ];
 
 /// Everything that opens on this machine right now: `OPEN_EXTENSIONS` plus
@@ -219,6 +289,12 @@ pub use ora::Opened;
 
 /// Open a document with its history graph when it is a native file.
 pub fn open_full(path: &Path) -> Result<Opened> {
+    if project::is_project(path) || diagram_import::is_diagram(path) || template_pack::is_pack(path)
+    {
+        return Err(IoError::Unsupported(
+            "This is a multi-page project. Open it as a project to preserve every page.".into(),
+        ));
+    }
     if is_native(path) {
         ora::read_full(path)
     } else {

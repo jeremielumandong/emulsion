@@ -424,6 +424,7 @@ pub struct Scene {
     pub ink: Hsla,
     pub accent: Hsla,
     pub rulers: bool,
+    pub diagram_grid: bool,
 }
 
 pub struct Draw {
@@ -861,6 +862,47 @@ pub fn paint_under(plan: &Plan, scene: &Scene, window: &mut Window) {
 
 /// The chrome that sits over the document: pixel grid, compare wipe, rulers.
 pub fn paint_over(plan: &Plan, scene: &Scene, window: &mut Window, cx: &mut App) {
+    if scene.diagram_grid && scene.view.rotation.rem_euclid(360.) == 0. {
+        let mut step = 20.;
+        while step * scene.view.zoom < 12. {
+            step *= 2.;
+        }
+        let bounds = plan.bounds;
+        let min = scene.view.screen_to_doc(
+            (
+                f32::from(bounds.origin.x) as f64,
+                f32::from(bounds.origin.y) as f64,
+            ),
+            &bounds,
+        );
+        let max = scene.view.screen_to_doc(
+            (
+                f32::from(bounds.origin.x + bounds.size.width) as f64,
+                f32::from(bounds.origin.y + bounds.size.height) as f64,
+            ),
+            &bounds,
+        );
+        let x0 = (min.0.max(0.) / step).ceil() as i32;
+        let x1 = (max.0.min(scene.doc_size.0 as f64) / step).floor() as i32;
+        let y0 = (min.1.max(0.) / step).ceil() as i32;
+        let y1 = (max.1.min(scene.doc_size.1 as f64) / step).floor() as i32;
+        let mut color = scene.ink;
+        color.a = 0.15;
+        // Bound work at extreme window sizes as well as extreme zoom levels.
+        if (x1 - x0).max(0) as i64 * ((y1 - y0).max(0) as i64) < 30_000 {
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    let p = scene
+                        .view
+                        .doc_to_screen((x as f64 * step, y as f64 * step), &bounds);
+                    window.paint_quad(fill(
+                        Bounds::new(point(px(p.0 as f32), px(p.1 as f32)), size(px(1.), px(1.))),
+                        color,
+                    ));
+                }
+            }
+        }
+    }
     if let Some(g) = &plan.grid {
         paint_grid(g, scene, window);
     }
@@ -1162,6 +1204,7 @@ mod tests {
             ink: Default::default(),
             accent: Default::default(),
             rulers: false,
+            diagram_grid: false,
         };
         let mut cache = TileCache::default();
         let cpu_plan = prepaint(&scene, &mut cache, bounds, 1.0, true);

@@ -45,7 +45,8 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 // Native shape paints and stroke geometry must not be silently ignored by older readers.
 // Version 6 preserves rich text runs, paragraph frames, warp and path text.
 // Older builds must reject these files instead of silently flattening those attributes.
-pub const FORMAT_VERSION: u32 = 6;
+// Version 7 retains diagram graphs, conditional rules, design constraints and motion.
+pub const FORMAT_VERSION: u32 = 7;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -55,6 +56,13 @@ const MAX_ENTRY_BYTES: u64 = 1 << 30;
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
+    #[serde(
+        default,
+        skip_serializing_if = "emulsion_core::design_metadata::Design::is_default"
+    )]
+    design: emulsion_core::design_metadata::Design,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diagram: Option<Arc<emulsion_core::diagram::Diagram>>,
     format: String,
     version: u32,
     width: u32,
@@ -520,6 +528,8 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
     entries.extend(merged?);
 
     let manifest = Manifest {
+        diagram: doc.diagram.clone(),
+        design: doc.design.clone(),
         format: "emulsion".into(),
         version: FORMAT_VERSION,
         width: doc.width,
@@ -669,6 +679,15 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
             ensure_not_raw_original(&commit.doc, path)?;
         }
     }
+    write_atomic(path, |file| write_to(doc, graph, file))
+}
+
+/// Write a page archive into a project container without temporary files.
+pub(crate) fn write_to<W: Write + Seek>(
+    doc: &Document,
+    graph: Option<&Graph>,
+    writer: W,
+) -> Result<()> {
     doc.validate()?;
     let mut paths = crate::path_data::PathPool::default();
     let enc = encode(doc, &mut paths)?;
@@ -693,8 +712,8 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
         }
         None => Vec::new(),
     };
-    write_atomic(path, |f| {
-        let mut z = ZipWriter::new(std::io::BufWriter::new(f));
+    {
+        let mut z = ZipWriter::new(std::io::BufWriter::new(writer));
         let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
         let deflated = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)
@@ -737,7 +756,7 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
         }
         z.finish()?.flush()?;
         Ok(())
-    })
+    }
 }
 
 /// Enforce original preservation at the write boundary, including baked RAWs.
@@ -798,9 +817,12 @@ pub struct Opened {
 
 /// Read a native document and its history graph, if it has one.
 pub fn read_full(path: &Path) -> Result<Opened> {
-    let doc = read(path)?;
-    let file = std::fs::File::open(path)?;
-    let mut zip = ZipArchive::new(std::io::BufReader::new(file))?;
+    read_from(std::io::BufReader::new(std::fs::File::open(path)?))
+}
+
+pub(crate) fn read_from<R: Read + Seek>(reader: R) -> Result<Opened> {
+    let mut zip = ZipArchive::new(reader)?;
+    let doc = read_document(&mut zip)?;
     let manifest = if zip.by_name(MANIFEST).is_ok() {
         Some(crate::history::fingerprint(&read_entry(
             &mut zip,
@@ -841,7 +863,7 @@ pub fn read_full(path: &Path) -> Result<Opened> {
             })
         }
         Err(e) => {
-            tracing::warn!("history graph in {} is unreadable: {e}", path.display());
+            tracing::warn!("history graph is unreadable: {e}");
             Ok(Opened {
                 doc,
                 graph: None,
@@ -855,15 +877,19 @@ pub fn read_full(path: &Path) -> Result<Opened> {
 pub fn read(path: &Path) -> Result<Document> {
     let file = std::fs::File::open(path)?;
     let mut zip = ZipArchive::new(std::io::BufReader::new(file))?;
-    if let Ok(m) = read_entry(&mut zip, "mimetype", 64)
+    read_document(&mut zip)
+}
+
+fn read_document<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
+    if let Ok(m) = read_entry(zip, "mimetype", 64)
         && m.trim_ascii() != b"image/openraster"
     {
         return Err(IoError::Unsupported("zip is not an OpenRaster file".into()));
     }
     let doc = if zip.by_name(MANIFEST).is_ok() {
-        read_manifest(&mut zip)?
+        read_manifest(zip)?
     } else {
-        read_stack(&mut zip)?
+        read_stack(zip)?
     };
     doc.validate()?;
     Ok(doc)
@@ -1005,6 +1031,8 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     let mut doc = Document::new(m.width, m.height);
     doc.resolution = m.resolution;
     doc.global_light = m.global_light;
+    doc.diagram = m.diagram.clone();
+    doc.design = m.design.clone();
     doc.source_depth = if m.source_depth == 16 { 16 } else { 8 };
     doc.blend_space = m.blend_space;
     doc.guides = m.guides.clone();

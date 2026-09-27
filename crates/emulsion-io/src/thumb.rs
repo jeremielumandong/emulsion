@@ -16,6 +16,20 @@ fn decode<R: BufRead + Seek>(reader: ImageReader<R>) -> Result<DynamicImage> {
 }
 
 fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
+    if crate::diagram_import::is_diagram(path) {
+        return composite(
+            &crate::diagram_import::read(path)?.project.pages[0].doc,
+            width,
+            height,
+        );
+    }
+    if crate::template_pack::is_pack(path) {
+        let pack = crate::template_pack::read(path)?;
+        return composite(&pack.project.pages[0].doc, width, height);
+    }
+    if crate::project::is_project(path) {
+        return composite(&crate::project::cover(path)?, width, height);
+    }
     if crate::is_native(path) {
         let mut z = zip::ZipArchive::new(std::io::BufReader::new(std::fs::File::open(path)?))?;
         let embedded = crate::ora::read_entry(&mut z, "Thumbnails/thumbnail.png", 16 << 20)

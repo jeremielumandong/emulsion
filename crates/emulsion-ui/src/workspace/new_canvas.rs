@@ -8,7 +8,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 struct NewCanvas {
     workspace: WeakEntity<Workspace>,
     spec: CanvasSpec,
-    fields: [Entity<InputState>; 4],
+    fields: [Entity<InputState>; 6],
+    search: Entity<InputState>,
     category: String,
     notice: Option<String>,
     submitted: bool,
@@ -23,9 +24,16 @@ impl NewCanvas {
             spec.width.to_string(),
             spec.height.to_string(),
             spec.resolution.to_string(),
+            spec.pages.to_string(),
+            spec.bleed_mm.to_string(),
         ]
         .map(|value| cx.new(|cx| InputState::new(window, cx).default_value(value)));
-        let mut subscriptions = Vec::new();
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search presets"));
+        let mut subscriptions = vec![cx.subscribe(&search, |_, _, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })];
         for field in &fields {
             subscriptions.push(
                 cx.subscribe_in(field, window, |this, _, event, window, cx| match event {
@@ -44,6 +52,7 @@ impl NewCanvas {
             workspace,
             spec,
             fields,
+            search,
             category: "Screen".into(),
             notice: None,
             submitted: false,
@@ -65,6 +74,18 @@ impl NewCanvas {
         spec.width = number(1, "width")?;
         spec.height = number(2, "height")?;
         spec.resolution = number(3, "resolution")?;
+        if matches!(spec.kind, CanvasKind::Design | CanvasKind::Diagram) {
+            spec.pages = self.fields[4]
+                .read(cx)
+                .value()
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| "Enter a whole number of pages.".to_string())?;
+            spec.bleed_mm = number(5, "bleed")?;
+        } else {
+            spec.pages = 1;
+            spec.bleed_mm = 0.;
+        }
         spec.validate()?;
         Ok(spec)
     }
@@ -75,6 +96,8 @@ impl NewCanvas {
             spec.width.to_string(),
             spec.height.to_string(),
             spec.resolution.to_string(),
+            spec.pages.to_string(),
+            spec.bleed_mm.to_string(),
         ];
         for (field, value) in self.fields.iter().zip(values) {
             field.update(cx, |field, cx| field.set_value(value, window, cx));
@@ -86,10 +109,18 @@ impl NewCanvas {
 
     fn pick_kind(&mut self, kind: CanvasKind, window: &mut Window, cx: &mut Context<Self>) {
         let mut spec = self.draft(cx).unwrap_or_else(|_| self.spec.clone());
-        if spec.name == "Untitled photo" || spec.name == "Untitled paint" {
+        if spec.name == "Untitled photo"
+            || spec.name == "Untitled paint"
+            || spec.name == "Untitled design"
+            || spec.name == "Untitled diagram"
+        {
             spec.name = format!("Untitled {}", kind.label().to_lowercase());
         }
         spec.kind = kind;
+        if !matches!(kind, CanvasKind::Design | CanvasKind::Diagram) {
+            spec.pages = 1;
+            spec.bleed_mm = 0.;
+        }
         spec.background = if kind == CanvasKind::Paint {
             Background::Paper
         } else {
@@ -105,10 +136,15 @@ impl NewCanvas {
         if self.submitted {
             return true;
         }
-        let result = self
-            .draft(cx)
-            .and_then(|spec| spec.create().map(|doc| (spec, doc)));
-        let (spec, doc) = match result {
+        let result = self.draft(cx).and_then(|spec| {
+            if matches!(spec.kind, CanvasKind::Design | CanvasKind::Diagram) {
+                spec.create_project()
+                    .map(|project| (spec, project.doc.clone(), Some(project)))
+            } else {
+                spec.create().map(|doc| (spec, doc, None))
+            }
+        });
+        let (spec, doc, project) = match result {
             Ok(value) => value,
             Err(error) => {
                 self.notice = Some(error);
@@ -127,7 +163,11 @@ impl NewCanvas {
         self.submitted = true;
         workspace.update(cx, |workspace, cx| {
             workspace.add_tab_then(window, cx, move |workspace, window, cx| {
-                workspace.install(doc, None, None, None, spec.name, window, cx);
+                if let Some(project) = project {
+                    workspace.install_project(project, spec.name, window, cx);
+                } else {
+                    workspace.install(doc, None, None, None, spec.name, window, cx);
+                }
                 if let Some(editor) = &workspace.editor {
                     editor.update(cx, |editor, cx| {
                         if editor.draw_mode != (spec.kind == CanvasKind::Paint) {
@@ -195,6 +235,7 @@ impl Render for NewCanvas {
                 (w as f32 * scale, h as f32 * scale)
             })
             .unwrap_or((72., 48.));
+        let query = self.search.read(cx).value().to_lowercase();
         let catalog = presets(self.spec.kind);
         let mut categories = Vec::new();
         for preset in catalog {
@@ -285,6 +326,7 @@ impl Render for NewCanvas {
                                     .flex()
                                     .flex_col()
                                     .gap_3()
+                                    .child(div().id("new-canvas-search").test_support().child(Input::new(&self.search).small()))
                                     .child(div().flex().flex_wrap().gap_1().children(
                                         categories.into_iter().enumerate().map(
                                             |(index, category)| {
@@ -306,7 +348,7 @@ impl Render for NewCanvas {
                                                 .iter()
                                                 .enumerate()
                                                 .filter(|(_, preset)| {
-                                                    preset.category == self.category
+                                                    if query.is_empty() { preset.category == self.category } else { preset.name.to_lowercase().contains(&query) || preset.category.to_lowercase().contains(&query) }
                                                 })
                                                 .map(|(index, preset)| {
                                                     let selected = draft.as_ref().is_ok_and(|s| {
@@ -346,8 +388,8 @@ impl Render for NewCanvas {
                                                 }),
                                         ),
                                     )
-                                    .when(self.category == "Saved", |panel| {
-                                        panel.children(saved.into_iter().enumerate().map(
+                                    .when(self.category == "Saved" || !query.is_empty(), |panel| {
+                                        panel.children(saved.into_iter().filter(|spec| query.is_empty() || spec.name.to_lowercase().contains(&query)).enumerate().map(
                                             |(index, spec)| {
                                                 let remove_name = spec.name.clone();
                                                 let remove_kind = spec.kind;
@@ -469,6 +511,8 @@ impl Render for NewCanvas {
                                             ),
                                     )
                                     .child(field("Resolution · ppi", &self.fields[3]))
+                                    .when(matches!(self.spec.kind, CanvasKind::Design | CanvasKind::Diagram), |panel| panel.child(div().flex().gap_2()
+                                        .child(field("Pages", &self.fields[4])).child(field("Bleed · mm", &self.fields[5]))))
                                     .child(div().flex().gap_1().children([8, 16].map(|depth| {
                                         Button::new(("new-canvas-depth", depth as usize))
                                             .label(format!("RGB · {depth}-bit"))
@@ -552,9 +596,27 @@ impl Render for NewCanvas {
 
 impl Workspace {
     pub(super) fn open_new_canvas(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let kind = self
+            .destination(cx)
+            .and_then(super::destinations::Destination::canvas)
+            .unwrap_or(CanvasKind::Photo);
+        self.open_new_canvas_kind(kind, window, cx);
+    }
+    pub(crate) fn open_new_canvas_kind(
+        &mut self,
+        kind: CanvasKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.cancel_style_dialog(window, cx);
         let workspace = cx.weak_entity();
-        let view = cx.new(|cx| NewCanvas::new(workspace, window, cx));
+        let view = cx.new(|cx| {
+            let mut view = NewCanvas::new(workspace, window, cx);
+            if kind != CanvasKind::Photo {
+                view.pick_kind(kind, window, cx);
+            }
+            view
+        });
         window.open_dialog(cx, move |dialog, window, _| {
             let submit = view.clone();
             dialog

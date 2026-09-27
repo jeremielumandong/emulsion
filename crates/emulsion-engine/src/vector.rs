@@ -59,11 +59,16 @@ pub struct GlyphRun {
     pub font: FontData,
     pub size: f32,
     pub glyphs: Vec<Glyph>,
+    pub coords: Vec<vello::NormalizedCoord>,
+    pub fake_italic: bool,
 }
 
 pub struct Fonts {
     system: cosmic_text::FontSystem,
-    data: HashMap<cosmic_text::fontdb::ID, FontData>,
+    data: HashMap<
+        (cosmic_text::fontdb::ID, cosmic_text::Weight),
+        (FontData, Vec<vello::NormalizedCoord>),
+    >,
 }
 
 pub struct Shaped {
@@ -75,24 +80,38 @@ pub struct Shaped {
 impl Fonts {
     pub fn new() -> Self {
         Self {
-            system: cosmic_text::FontSystem::new(),
+            system: emulsion_core::text::font_system(),
             data: HashMap::new(),
         }
     }
 
-    fn font(&mut self, id: cosmic_text::fontdb::ID) -> Option<FontData> {
-        if let Some(font) = self.data.get(&id) {
+    fn font(
+        &mut self,
+        id: cosmic_text::fontdb::ID,
+        weight: cosmic_text::Weight,
+    ) -> Option<(FontData, Vec<vello::NormalizedCoord>)> {
+        if let Some(font) = self.data.get(&(id, weight)) {
             return Some(font.clone());
         }
         let index = self.system.db().face(id)?.index;
-        let bytes = self
-            .system
-            .get_font(id, cosmic_text::Weight::NORMAL)?
-            .data()
-            .to_vec();
+        let source = self.system.get_font(id, weight)?;
+        let bytes = source.data().to_vec();
+        let face = source.as_swash();
+        let tag = u32::from_be_bytes(*b"wght");
+        let coords = if let Some(axis) = face.variations().find_by_tag(tag) {
+            face.variations()
+                .normalized_coords([(
+                    tag,
+                    (weight.0 as f32).clamp(axis.min_value(), axis.max_value()),
+                )])
+                .collect()
+        } else {
+            Vec::new()
+        };
         let font = FontData::new(Blob::new(Arc::new(bytes)), index);
-        self.data.insert(id, font.clone());
-        Some(font)
+        self.data
+            .insert((id, weight), (font.clone(), coords.clone()));
+        Some((font, coords))
     }
 
     /// Shape a single-style text spec the way `emulsion-core` does.
@@ -150,6 +169,9 @@ impl Fonts {
                 placed.push((
                     g.font_id,
                     g.font_size,
+                    g.font_weight,
+                    g.cache_key_flags
+                        .contains(cosmic_text::CacheKeyFlags::FAKE_ITALIC),
                     Glyph {
                         id: g.glyph_id as u32,
                         x: g.x + g.font_size * g.x_offset,
@@ -158,16 +180,25 @@ impl Fonts {
                 ));
             }
         }
-        for (id, size, glyph) in placed {
-            let Some(font) = self.font(id) else { continue };
+        for (id, size, weight, fake_italic, glyph) in placed {
+            let Some((font, coords)) = self.font(id, weight) else {
+                continue;
+            };
             match runs.last_mut() {
-                Some(r) if r.font.data.id() == font.data.id() && r.size == size => {
+                Some(r)
+                    if r.font.data.id() == font.data.id()
+                        && r.size == size
+                        && r.coords == coords
+                        && r.fake_italic == fake_italic =>
+                {
                     r.glyphs.push(glyph)
                 }
                 _ => runs.push(GlyphRun {
                     font,
                     size,
                     glyphs: vec![glyph],
+                    coords,
+                    fake_italic,
                 }),
             }
         }
@@ -483,6 +514,12 @@ impl VectorLayer {
                         .fragment
                         .draw_glyphs(&run.font)
                         .font_size(run.size)
+                        .normalized_coords(&run.coords)
+                        .glyph_transform(
+                            run.fake_italic.then(|| {
+                                Affine::new([1., 0., 14_f64.to_radians().tan(), 1., 0., 0.])
+                            }),
+                        )
                         .transform(transform)
                         .brush(color)
                         .draw(Fill::NonZero, run.glyphs.iter().copied());
@@ -694,6 +731,11 @@ impl Hud {
                 self.scene
                     .draw_glyphs(&run.font)
                     .font_size(run.size)
+                    .normalized_coords(&run.coords)
+                    .glyph_transform(
+                        run.fake_italic
+                            .then(|| Affine::new([1., 0., 14_f64.to_radians().tan(), 1., 0., 0.])),
+                    )
                     .transform(Affine::translate((8.0, 4.0 + i as f64 * line_height)))
                     .brush(Color::from_rgba8(235, 235, 235, 255))
                     .draw(Fill::NonZero, run.glyphs.iter().copied());
@@ -716,5 +758,111 @@ impl Hud {
         let _ = &self.texture;
         self.shown = [HUD_SIZE.0 as f32, height as f32];
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::*;
+    #[test]
+    fn bundled_variable_weights_and_synthetic_italic_reach_vello() {
+        let mut fonts = Fonts::new();
+        let spec = TextSpec {
+            text: "Crisp text".into(),
+            font: "Geist".into(),
+            size: 48.,
+            ..Default::default()
+        };
+        let regular = fonts.shape(&spec);
+        let bold = fonts.shape(&TextSpec {
+            bold: true,
+            ..spec.clone()
+        });
+        assert!(!regular.runs.is_empty());
+        assert!(!bold.runs.is_empty());
+        assert!(!regular.runs[0].coords.is_empty());
+        assert_ne!(
+            regular.runs[0].coords, bold.runs[0].coords,
+            "Vello must draw the same font instance that shaped the text"
+        );
+        let italic = fonts.shape(&TextSpec {
+            italic: true,
+            ..spec
+        });
+        assert!(italic.runs.iter().any(|run| run.fake_italic));
+    }
+
+    #[test]
+    #[ignore = "requires an offscreen wgpu adapter"]
+    fn vello_variable_bold_italic_matches_cpu_glyph_coverage() {
+        use crate::{Engine, Offscreen, Output};
+        use emulsion_core::{Command, Document, Node, NodeKind, command::Slot};
+        let gpu = Gpu::new(wgpu::Instance::default(), None, None).unwrap();
+        for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut doc = Document::new(512, 180);
+            Command::AddNode {
+                node: Box::new(Node::new(
+                    0,
+                    "Background",
+                    NodeKind::Fill {
+                        rgba: [0, 0, 0, 255],
+                    },
+                )),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let spec = TextSpec {
+                text: "Crisp text".into(),
+                font: "Geist".into(),
+                size: 60.,
+                x: 30.,
+                y: 40.,
+                color: [255; 4],
+                bold,
+                italic,
+                ..Default::default()
+            };
+            Command::AddNode {
+                node: Box::new(Node::text(0, "Text", spec, 512, 180)),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &doc,
+                None,
+                VectorSpace::Srgb,
+                true,
+                false,
+                (512, 180),
+            )
+            .unwrap();
+            engine.camera = crate::Camera {
+                center: [256., 90.],
+                zoom: 1.,
+            };
+            let output = Offscreen::new(&gpu, (512, 180), wgpu::TextureFormat::Rgba32Float);
+            engine
+                .render(&output.view, output.format, Output::Raw)
+                .unwrap();
+            let actual = output.read(&gpu).unwrap();
+            let expected = emulsion_raster::composite::flatten(&doc.composite_tree(), 0);
+            let mut intersection = 0;
+            let mut union = 0;
+            for (i, pixel) in actual.as_chunks::<16>().0.iter().enumerate() {
+                let a = f32::from_le_bytes(pixel[..4].try_into().unwrap()) > 0.5;
+                let b = expected.get(i as u32 % 512, i as u32 / 512)[0] > 32767;
+                intersection += usize::from(a && b);
+                union += usize::from(a || b);
+            }
+            let iou = intersection as f64 / union.max(1) as f64;
+            eprintln!("Geist bold={bold} italic={italic}: glyph coverage IoU={iou:.4}");
+            assert!(
+                iou > 0.78,
+                "font-instance or italic mismatch: bold={bold}, italic={italic}, IoU={iou}"
+            );
+        }
     }
 }

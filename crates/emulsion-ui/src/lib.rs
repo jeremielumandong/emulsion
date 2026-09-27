@@ -10,6 +10,7 @@ mod batch;
 mod busy_card;
 pub mod editor;
 mod home;
+mod home_projects;
 pub mod landing;
 mod reference;
 mod settings_models;

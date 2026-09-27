@@ -831,6 +831,9 @@ impl EditorView {
         let mut docked: Vec<(Edge, AnyElement)> = Vec::new();
         let mut overlays: Vec<AnyElement> = Vec::new();
         for bar in Bar::ALL {
+            if self.is_design() && bar == Bar::Tools {
+                continue;
+            }
             if !self.compact.bars[bar as usize].open {
                 continue;
             }
@@ -1114,9 +1117,12 @@ impl EditorView {
                     .flex()
                     .flex_1()
                     .min_h_0()
+                    .children(self.design_drawer(p, window, cx))
+                    .children(self.diagram_drawer(p, window, cx))
                     .child(stage)
                     .child(panel),
             )
+            .children(self.project_page_strip(p, cx))
             .children(self.assistant_dock(p, cx))
             .children(self.picker(p, window, cx))
             .into_any_element()

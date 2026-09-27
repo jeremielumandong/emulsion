@@ -8,14 +8,18 @@ pub enum CanvasKind {
     #[default]
     Photo,
     Paint,
+    Design,
+    Diagram,
 }
 
 impl CanvasKind {
-    pub const ALL: [Self; 2] = [Self::Photo, Self::Paint];
+    pub const ALL: [Self; 4] = [Self::Photo, Self::Paint, Self::Design, Self::Diagram];
     pub fn label(self) -> &'static str {
         match self {
             Self::Photo => "Photo",
             Self::Paint => "Paint",
+            Self::Design => "Design",
+            Self::Diagram => "Diagram",
         }
     }
 }
@@ -86,6 +90,8 @@ pub struct CanvasSpec {
     pub resolution: f64,
     pub depth: u8,
     pub background: Background,
+    pub pages: usize,
+    pub bleed_mm: f64,
 }
 
 impl Default for CanvasSpec {
@@ -99,6 +105,8 @@ impl Default for CanvasSpec {
             resolution: 72.,
             depth: 16,
             background: Background::White,
+            pages: 1,
+            bleed_mm: 0.,
         }
     }
 }
@@ -138,7 +146,52 @@ impl CanvasSpec {
         {
             return Err("Enter a document name of 1–200 characters.".into());
         }
-        self.pixel_size().map(|_| ())
+        let (w, h) = self.pixel_size()?;
+        if self.pages == 0 || self.pages > crate::project::MAX_PAGES {
+            return Err(format!("Choose 1–{} pages.", crate::project::MAX_PAGES));
+        }
+        if !matches!(self.kind, CanvasKind::Design | CanvasKind::Diagram) && self.pages != 1 {
+            return Err("Multiple pages require a Design or Diagram project.".into());
+        }
+        if u64::from(w) * u64::from(h) * self.pages as u64 > crate::project::MAX_PROJECT_PIXELS {
+            return Err("Project exceeds the total page area limit.".into());
+        }
+        if !self.bleed_mm.is_finite() || !(0. ..=100.).contains(&self.bleed_mm) {
+            return Err("Bleed must be between 0 and 100 mm.".into());
+        }
+        Ok(())
+    }
+
+    pub fn create_project(&self) -> Result<crate::project::ProjectEditor, String> {
+        use crate::project::{PageMeta, Project, ProjectEditor, ProjectKind, ProjectPage};
+        if !matches!(self.kind, CanvasKind::Design | CanvasKind::Diagram) {
+            return Err("Choose Design or Diagram for a page project.".into());
+        }
+        let doc = self.create()?;
+        let graph = crate::Editor::new(doc.clone(), None).graph;
+        ProjectEditor::open(
+            Project {
+                kind: if self.kind == CanvasKind::Diagram {
+                    ProjectKind::Diagram
+                } else {
+                    ProjectKind::Design
+                },
+                active: 1,
+                next_page_id: self.pages as u64 + 1,
+                pages: (1..=self.pages)
+                    .map(|id| ProjectPage {
+                        meta: PageMeta {
+                            id: id as u64,
+                            name: format!("Page {id}"),
+                            bleed_mm: self.bleed_mm,
+                        },
+                        doc: doc.clone(),
+                        graph: graph.clone(),
+                    })
+                    .collect(),
+            },
+            None,
+        )
     }
 
     /// Change display units without changing the physical canvas dimensions.
@@ -244,10 +297,31 @@ pub const PAINT_PRESETS: &[CanvasPreset] = &[
     preset!("Animation", "Square frame", 1080., 1080., Pixels, 72.),
 ];
 
+pub const DESIGN_PRESETS: &[CanvasPreset] = &[
+    preset!("Social", "Square post", 1080., 1080., Pixels, 72.),
+    preset!("Social", "Portrait post", 1080., 1350., Pixels, 72.),
+    preset!("Social", "Story", 1080., 1920., Pixels, 72.),
+    preset!("Presentation", "Widescreen", 1920., 1080., Pixels, 72.),
+    preset!("Presentation", "Classic", 1024., 768., Pixels, 72.),
+    preset!("Print", "A4 flyer", 210., 297., Millimeters, 300.),
+    preset!("Print", "Business card", 3.5, 2., Inches, 300.),
+    preset!("Print", "Poster", 18., 24., Inches, 300.),
+    preset!("Web", "Banner", 1600., 400., Pixels, 72.),
+    preset!("Web", "Video thumbnail", 1280., 720., Pixels, 72.),
+];
+
+pub const DIAGRAM_PRESETS: &[CanvasPreset] = &[
+    preset!("Diagram", "Flowchart", 1600., 1000., Pixels, 72.),
+    preset!("Diagram", "Mind map", 1920., 1080., Pixels, 72.),
+    preset!("Diagram", "Architecture", 2400., 1600., Pixels, 72.),
+    preset!("Print", "A4 landscape", 297., 210., Millimeters, 150.),
+];
 pub fn presets(kind: CanvasKind) -> &'static [CanvasPreset] {
     match kind {
         CanvasKind::Photo => PHOTO_PRESETS,
         CanvasKind::Paint => PAINT_PRESETS,
+        CanvasKind::Design => DESIGN_PRESETS,
+        CanvasKind::Diagram => DIAGRAM_PRESETS,
     }
 }
 

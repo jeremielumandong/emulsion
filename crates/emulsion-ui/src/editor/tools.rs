@@ -2223,6 +2223,13 @@ impl EditorView {
 
     /// Escape: cancel the active gesture and all pending tool previews.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.stop_motion(cx) {
+            return true;
+        }
+        if self.diagram_cancel_connection() {
+            cx.notify();
+            return true;
+        }
         if self.raw_cancel_interaction(cx) {
             return true;
         }

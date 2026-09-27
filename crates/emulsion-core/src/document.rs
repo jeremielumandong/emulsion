@@ -9,7 +9,7 @@ use emulsion_raster::Mask;
 use emulsion_raster::blend::BlendSpace;
 use emulsion_raster::color;
 use emulsion_raster::composite::{CompositeNode, CompositeTree, NodeContent};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -34,6 +34,10 @@ pub enum DocumentError {
     BadGuides,
     #[error("invalid RAW recipe: {0}")]
     BadRaw(&'static str),
+    #[error("invalid design settings: {0}")]
+    BadDesign(String),
+    #[error("invalid diagram: {0}")]
+    BadDiagram(String),
     #[error("more than {0} nodes")]
     TooManyNodes(usize),
 }
@@ -58,6 +62,8 @@ pub struct Document {
     pub height: u32,
     /// Pixels per inch, recorded for export.
     pub resolution: f32,
+    pub diagram: Option<Arc<crate::diagram::Diagram>>,
+    pub design: crate::design_metadata::Design,
     pub global_light: crate::style_options::GlobalLight,
     /// Bit depth of the source the document came from (8 or 16), for the
     /// title bar and export defaults. Storage is always 16-bit linear.
@@ -139,6 +145,8 @@ impl PartialEq for Document {
         self.width == o.width
             && self.height == o.height
             && self.resolution == o.resolution
+            && self.design == o.design
+            && self.diagram == o.diagram
             && self.global_light == o.global_light
             && self.blend_space == o.blend_space
             && self.nodes == o.nodes
@@ -167,6 +175,8 @@ impl Document {
             height,
             resolution: 72.0,
             global_light: Default::default(),
+            diagram: None,
+            design: Default::default(),
             source_depth: 8,
             blend_space: BlendSpace::Linear,
             nodes: Vec::new(),
@@ -383,15 +393,15 @@ impl Document {
         if self.nodes.len() > MAX_NODES {
             return Err(DocumentError::TooManyNodes(MAX_NODES));
         }
-        let mut seen = HashSet::new();
-        for n in &self.nodes {
-            if !seen.insert(n.id) {
+        let mut indices = HashMap::with_capacity(self.nodes.len());
+        for (i, n) in self.nodes.iter().enumerate() {
+            if indices.insert(n.id, i).is_some() {
                 return Err(DocumentError::DuplicateId(n.id));
             }
         }
         for n in &self.nodes {
             if let Some(p) = n.parent {
-                match self.node(p) {
+                match indices.get(&p).map(|i| &self.nodes[*i]) {
                     None => return Err(DocumentError::MissingParent(n.id, p)),
                     Some(pn) if !pn.is_group() => {
                         return Err(DocumentError::ParentNotGroup(n.id, p));
@@ -441,35 +451,42 @@ impl Document {
                 return Err(DocumentError::BadValue(n.id, "adjustment"));
             }
         }
-        for n in &self.nodes {
-            if self.depth(n.id) > MAX_DEPTH {
-                return Err(DocumentError::TooDeep(MAX_DEPTH));
-            }
-        }
-        // Contiguity: the nodes just below each group are exactly its descendants.
+        // Accumulate ancestor intervals in O(nodes × bounded depth). Avoid
+        // repeatedly scanning entire subtrees when validating large diagrams.
+        let mut descendants = vec![(0usize, usize::MAX, 0usize); self.nodes.len()];
         for (i, n) in self.nodes.iter().enumerate() {
-            if n.is_group() {
-                let size = self.subtree(n.id).len() - 1;
-                if size > i {
-                    return Err(DocumentError::NotContiguous(n.id));
+            let mut parent = n.parent;
+            let mut depth = 0;
+            while let Some(id) = parent {
+                depth += 1;
+                if depth > MAX_DEPTH {
+                    return Err(DocumentError::TooDeep(MAX_DEPTH));
                 }
-                for m in &self.nodes[i - size..i] {
-                    if !self.is_ancestor(n.id, m.id) {
-                        return Err(DocumentError::NotContiguous(n.id));
-                    }
-                }
+                let index = indices[&id];
+                let count = &mut descendants[index];
+                count.0 += 1;
+                count.1 = count.1.min(i);
+                count.2 = count.2.max(i);
+                parent = self.nodes[index].parent;
             }
         }
-        for n in &self.nodes {
+        for (i, n) in self.nodes.iter().enumerate() {
+            let (count, first, last) = descendants[i];
+            if n.is_group() && count > 0 && (count > i || first != i - count || last != i - 1) {
+                return Err(DocumentError::NotContiguous(n.id));
+            }
             if let Some(c) = n.clip_to {
-                let siblings = self.children(n.parent);
-                let me = siblings.iter().position(|s| *s == n.id);
-                let base = siblings.iter().position(|s| *s == c);
-                match (me, base) {
-                    (Some(m), Some(b)) if b < m => {}
+                match indices.get(&c).copied() {
+                    Some(base) if base < i && self.nodes[base].parent == n.parent => {}
                     _ => return Err(DocumentError::BadClip(n.id, c)),
                 }
             }
+        }
+        self.design
+            .validate(self)
+            .map_err(DocumentError::BadDesign)?;
+        if let Some(diagram) = &self.diagram {
+            diagram.validate(self).map_err(DocumentError::BadDiagram)?;
         }
         Ok(())
     }
@@ -727,7 +744,9 @@ impl Document {
             match &n.kind {
                 NodeKind::Raster { raster: r, .. } => raster(r),
                 NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
-                    raster(cache.pixels())
+                    if let Some(pixels) = cache.rendered_pixels() {
+                        raster(pixels);
+                    }
                 }
                 NodeKind::Smart { source, cache, .. } => {
                     raster(source);
@@ -950,5 +969,32 @@ mod project_color_tests {
         }
         assert_eq!(doc.colors.len(), MAX_PROJECT_COLORS);
         assert_eq!(doc.colors[0], [99, 99, 0]);
+    }
+}
+
+#[cfg(test)]
+mod hierarchy_validation_tests {
+    use super::*;
+    #[test]
+    fn cyclic_or_interleaved_groups_are_rejected_without_unbounded_walks() {
+        let mut doc = Document::new(20, 20);
+        let mut a = Node::new(1, "A", NodeKind::Group { collapsed: false });
+        a.parent = Some(2);
+        let mut b = Node::new(2, "B", NodeKind::Group { collapsed: false });
+        b.parent = Some(1);
+        doc.nodes = vec![a, b];
+        assert_eq!(doc.validate(), Err(DocumentError::TooDeep(MAX_DEPTH)));
+        let mut child = Node::new(3, "Child", NodeKind::Fill { rgba: [255; 4] });
+        child.parent = Some(1);
+        doc.nodes = vec![
+            child,
+            Node::new(2, "Sibling", NodeKind::Fill { rgba: [255; 4] }),
+            Node::new(1, "Parent", NodeKind::Group { collapsed: false }),
+        ];
+        assert_eq!(doc.validate(), Err(DocumentError::NotContiguous(1)));
+        doc.nodes.swap(0, 1);
+        doc.validate().unwrap();
+        doc.nodes[1].clip_to = Some(2);
+        assert_eq!(doc.validate(), Err(DocumentError::BadClip(3, 2)));
     }
 }

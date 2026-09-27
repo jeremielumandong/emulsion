@@ -3490,6 +3490,10 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 for (k, v) in map {
                     let key = if k == "canvas" {
                         ConflictKey::Canvas
+                    } else if k == "design" {
+                        ConflictKey::Design
+                    } else if k == "diagram" {
+                        ConflictKey::Diagram
                     } else {
                         ConflictKey::Node(
                             k.parse()
@@ -3522,6 +3526,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                         .map(|c| {
                             let key = match c.key {
                                 ConflictKey::Canvas => "canvas".to_string(),
+                                ConflictKey::Diagram => "diagram".to_string(),
+                                ConflictKey::Design => "design".to_string(),
                                 ConflictKey::Node(id) => id.to_string(),
                             };
                             json!({ "key": key, "what": c.what, "ours": c.ours, "theirs": c.theirs })

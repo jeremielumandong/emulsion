@@ -1994,6 +1994,7 @@ version = "0.0.3"
 dependencies = [
  "ag-psd",
  "anyhow",
+ "base64 0.23.1",
  "emulsion-brushes",
  "emulsion-color",
  "emulsion-core",
@@ -2005,6 +2006,7 @@ dependencies = [
  "jxl-oxide",
  "kamadak-exif",
  "moxcms 0.9.1",
+ "pdf-writer",
  "plist",
  "png 0.18.1",
  "quick-xml 0.42.0",
@@ -2014,6 +2016,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "svg2pdf",
  "thiserror 2.0.20",
  "tiff",
  "tracing",
@@ -2117,6 +2120,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "tempfile",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "unicode-segmentation",
@@ -6062,6 +6066,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-writer"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5df03c7d216de06f93f398ef06f1385a60f2c597bb96f8195c8d98e08a26b1d5"
+dependencies = [
+ "bitflags 2.13.2",
+ "itoa",
+ "memchr",
+ "ryu",
+]
+
+[[package]]
 name = "peniko"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8018,6 +8034,20 @@ dependencies = [
  "serde_core",
  "sval",
  "sval_nested",
+]
+
+[[package]]
+name = "svg2pdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e50dc062439cc1a396181059c80932a6e6bd731b130e674c597c0c8874b6df22"
+dependencies = [
+ "image",
+ "log",
+ "miniz_oxide 0.8.9",
+ "once_cell",
+ "pdf-writer",
+ "usvg 0.45.1",
 ]
 
 [[package]]

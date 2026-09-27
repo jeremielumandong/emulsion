@@ -2,7 +2,7 @@
 
 use crate::theme::{self, Palette};
 use crate::viewport::bgra_image;
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, destinations::Destination};
 use emulsion_core::{Command, Document, Node, NodeKind};
 use emulsion_io::recent;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -39,19 +39,20 @@ enum HomeFilter {
 
 #[derive(Default)]
 pub(crate) struct HomeState {
+    pub(crate) projects: crate::home_projects::HomeProjects,
     search: Option<(Entity<InputState>, Subscription)>,
     rows: bool,
-    folder: Option<PathBuf>,
+    pub(crate) folder: Option<PathBuf>,
     filter: HomeFilter,
-    selected: Option<PathBuf>,
-    checked: HashSet<PathBuf>,
+    pub(crate) selected: Option<PathBuf>,
+    pub(crate) checked: HashSet<PathBuf>,
 }
 
 fn path_id(prefix: &'static str, path: &Path) -> ElementId {
     (ElementId::from(prefix), path.to_string_lossy().into_owned()).into()
 }
 
-fn file_name(path: &Path) -> String {
+pub(crate) fn file_name(path: &Path) -> String {
     path.file_stem()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default()
@@ -63,7 +64,11 @@ fn file_kind(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn control(id: impl Into<ElementId>, label: impl Into<SharedString>, p: &Palette) -> Button {
+pub(crate) fn control(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    p: &Palette,
+) -> Button {
     Button::new(id)
         .label(label)
         .xsmall()
@@ -321,6 +326,7 @@ impl Workspace {
     /// Drop a file from the recent list without touching the file.
     pub fn remove_recent(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
         self.recents = emulsion_io::recent::remove(path);
+        self.forget_home_project(path, cx);
         self.home_state.checked.remove(path);
         if self.home_state.selected.as_deref() == Some(path) {
             self.home_state.selected = None;
@@ -336,7 +342,7 @@ impl Workspace {
     }
 
     fn load_thumbs(&mut self, width: u32, cx: &mut Context<Self>) {
-        for r in self.recents.clone() {
+        for r in self.visible_recents(cx) {
             if self
                 .thumbs
                 .get(&r.path)
@@ -423,7 +429,7 @@ impl Workspace {
         let query = query.trim();
         let stars = &crate::app_state::settings(cx).starred_files;
         let now = recent::now();
-        self.recents
+        self.home_project_entries()
             .iter()
             .filter(|entry| {
                 let folder = self
@@ -431,15 +437,19 @@ impl Workspace {
                     .folder
                     .as_ref()
                     .is_none_or(|folder| entry.path.parent() == Some(folder.as_path()));
-                let search =
-                    query.is_empty() || entry.path.to_string_lossy().to_lowercase().contains(query);
+                let search = query.is_empty()
+                    || entry.path.to_string_lossy().to_lowercase().contains(query)
+                    || self
+                        .home_project_name(&entry.path)
+                        .to_lowercase()
+                        .contains(query);
                 let filter = match self.home_state.filter {
                     HomeFilter::All => true,
                     HomeFilter::Unfinished => self.unfinished(&entry.path, cx),
                     HomeFilter::Today => now.saturating_sub(entry.opened) < 86_400,
                     HomeFilter::Starred => stars.contains(&entry.path),
                 };
-                folder && search && filter
+                folder && search && filter && self.home_project_matches(&entry.path)
             })
             .cloned()
             .collect()
@@ -462,6 +472,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.ensure_home_search(window, cx);
+        self.ensure_home_projects(cx);
         let p = theme::palette(cx);
         let input = self.home_state.search.as_ref().unwrap().0.clone();
         let filters = [
@@ -566,6 +577,7 @@ impl Workspace {
 
     pub(crate) fn home(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_home_search(window, cx);
+        self.ensure_home_projects(cx);
         self.load_thumbs(
             thumbnail_width(
                 f32::from(window.viewport_size().width),
@@ -721,6 +733,7 @@ impl Workspace {
             .min_w_0()
             .min_h_0()
             .child(actions)
+            .child(self.home_projects_controls(&p, cx))
             .child(
                 div()
                     .id("home-scroll")
@@ -731,6 +744,7 @@ impl Workspace {
                     .min_h_0()
                     .overflow_y_scroll()
                     .child(self.hero(center_width, &p, cx))
+                    .child(self.home_starts(&p, cx))
                     .children(self.recovered_rows(&p, cx))
                     .child(gallery),
             )
@@ -767,6 +781,19 @@ impl Workspace {
             .overflow_y_scroll()
             .p_2()
             .gap_1()
+            .children(Destination::ALL.map(|destination| {
+                control(
+                    (ElementId::from("home-destination"), destination.label()),
+                    destination.label(),
+                    p,
+                )
+                .w_full()
+                .justify_start()
+                .selected(destination == Destination::Home)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.visit_destination(destination, window, cx)
+                }))
+            }))
             .child(
                 div()
                     .px_2()
@@ -868,7 +895,7 @@ impl Workspace {
             return;
         }
         let paths = self
-            .recents
+            .home_project_entries()
             .iter()
             .filter(|entry| self.home_state.checked.contains(&entry.path))
             .map(|entry| entry.path.clone())
@@ -922,7 +949,7 @@ impl Workspace {
         let checked_path = path.clone();
         let forget = path.clone();
         let active = selected == Some(path.as_path());
-        let name = file_name(&path);
+        let name = self.home_project_name(&path);
         let kind = file_kind(&path);
         let unfinished = self.unfinished(&path, cx);
         let star = crate::app_state::settings(cx).starred_files.contains(&path);
@@ -1406,6 +1433,57 @@ impl Workspace {
             .into_any_element()
     }
 
+    fn home_starts(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+        div()
+            .id("home-starts")
+            .test_support()
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .p_4()
+            .children(
+                [
+                    Destination::Photo,
+                    Destination::Paint,
+                    Destination::Design,
+                    Destination::Diagram,
+                    Destination::Library,
+                ]
+                .map(|destination| {
+                    div()
+                        .id((ElementId::from("home-start"), destination.label()))
+                        .test_support()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w(px(130.))
+                        .gap_2()
+                        .p_3()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(p.line)
+                        .bg(p.panel)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(p.soft_bg))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(destination.label()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(p.muted)
+                                .child(destination.subtitle()),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.start_destination(destination, window, cx)
+                        }))
+                }),
+            )
+            .into_any_element()
+    }
     fn home_presets(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
         let mut presets = div()
             .id("home-presets")

@@ -115,6 +115,14 @@ impl EditorView {
         if !self.snap || self.snap_bypass || b.is_empty() {
             return (dx, dy);
         }
+        let (dx, dy) = if self.is_diagram() && self.diagram_ui.grid {
+            (
+                ((b.x as f64 + dx) / 20.).round() * 20. - b.x as f64,
+                ((b.y as f64 + dy) / 20.).round() * 20. - b.y as f64,
+            )
+        } else {
+            (dx, dy)
+        };
         let doc = &self.editor.doc;
         let (mut tx, mut ty) = (
             vec![0.0, doc.width as f64 / 2.0, doc.width as f64],

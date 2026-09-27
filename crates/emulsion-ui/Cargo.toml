@@ -65,5 +65,6 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 block2 = "0.6.2"
 
 [dev-dependencies]
+tempfile = "3.27"
 gpui-kit = { workspace = true, features = ["test-support"] }
 rawler = { workspace = true }

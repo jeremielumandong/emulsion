@@ -407,6 +407,16 @@ pub fn compare(a: &Document, b: &Document) -> Vec<DiffRow> {
         format!("{:?}", b.global_light),
     );
     row(
+        "design",
+        format!("{:?}", a.design),
+        format!("{:?}", b.design),
+    );
+    row(
+        "diagram",
+        format!("{:?}", a.diagram),
+        format!("{:?}", b.diagram),
+    );
+    row(
         "nodes",
         a.nodes.len().to_string(),
         b.nodes.len().to_string(),
@@ -587,6 +597,8 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConflictKey {
     Canvas,
+    Diagram,
+    Design,
     Node(NodeId),
 }
 
@@ -771,6 +783,10 @@ fn remap_collisions(base: &Document, ours: &Document, theirs: &Document) -> Docu
             *group = *fresh;
         }
     }
+    t.diagram = t
+        .diagram
+        .as_ref()
+        .map(|d| std::sync::Arc::new(d.remap(&map)));
     t.next_id = next;
     t
 }
@@ -859,6 +875,94 @@ pub fn merge(
         out.guides = theirs.guides.clone();
     }
 
+    // Merge independent diagram additions and edits by object identity.
+    fn merge_metadata<T: Clone + PartialEq>(
+        base: &std::collections::BTreeMap<NodeId, T>,
+        ours: &std::collections::BTreeMap<NodeId, T>,
+        theirs: &std::collections::BTreeMap<NodeId, T>,
+        side: Option<&Side>,
+        conflict: &mut bool,
+    ) -> std::collections::BTreeMap<NodeId, T> {
+        base.keys()
+            .chain(ours.keys())
+            .chain(theirs.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|id| {
+                let (b, o, t) = (base.get(&id), ours.get(&id), theirs.get(&id));
+                let pick = if o == b {
+                    t
+                } else if t == b || o == t {
+                    o
+                } else {
+                    *conflict = true;
+                    if side == Some(&Side::Theirs) { t } else { o }
+                };
+                pick.cloned().map(|v| (id, v))
+            })
+            .collect()
+    }
+    if base.diagram.is_some() || ours.diagram.is_some() || theirs.diagram.is_some() {
+        let empty = crate::diagram::Diagram::default();
+        let (b, o, t) = (
+            base.diagram.as_deref().unwrap_or(&empty),
+            ours.diagram.as_deref().unwrap_or(&empty),
+            theirs.diagram.as_deref().unwrap_or(&empty),
+        );
+        let mut conflict = false;
+        let side = choices.get(&ConflictKey::Diagram);
+        let shapes = merge_metadata(&b.shapes, &o.shapes, &t.shapes, side, &mut conflict);
+        let edges = merge_metadata(&b.edges, &o.edges, &t.edges, side, &mut conflict);
+        if conflict && side.is_none() {
+            conflicts.push(Conflict {
+                key: ConflictKey::Diagram,
+                what: "Diagram connections and shape data".into(),
+                ours: "Our diagram properties".into(),
+                theirs: "Their diagram properties".into(),
+            });
+        }
+        out.diagram = Some(std::sync::Arc::new(crate::diagram::Diagram {
+            shapes,
+            edges,
+        }));
+    }
+
+    let mut design_conflict = false;
+    let side = choices.get(&ConflictKey::Design);
+    out.design.constraints = merge_metadata(
+        &base.design.constraints,
+        &ours.design.constraints,
+        &theirs.design.constraints,
+        side,
+        &mut design_conflict,
+    );
+    out.design.motion = merge_metadata(
+        &base.design.motion,
+        &ours.design.motion,
+        &theirs.design.motion,
+        side,
+        &mut design_conflict,
+    );
+    let timing = |d: &Document| (d.design.duration_ms, d.design.fps);
+    if timing(ours) == timing(base) {
+        out.design.duration_ms = theirs.design.duration_ms;
+        out.design.fps = theirs.design.fps;
+    } else if timing(&theirs) != timing(base) && timing(&theirs) != timing(ours) {
+        design_conflict = true;
+        if side == Some(&Side::Theirs) {
+            out.design.duration_ms = theirs.design.duration_ms;
+            out.design.fps = theirs.design.fps;
+        }
+    }
+    if design_conflict && side.is_none() {
+        conflicts.push(Conflict {
+            key: ConflictKey::Design,
+            what: "Resize constraints and animation".into(),
+            ours: "Our design settings".into(),
+            theirs: "Their design settings".into(),
+        });
+    }
     // Nodes.
     let ids: BTreeSet<NodeId> = base
         .nodes
@@ -1004,6 +1108,11 @@ pub fn merge(
             }
         }
     }
+    crate::diagram::synchronize(&out.clone(), &mut out)
+        .map_err(crate::DocumentError::BadDiagram)?;
+    out.design
+        .retain_nodes(&out.nodes.iter().map(|n| n.id).collect());
+    out.normalize();
     out.validate()?;
     Ok(MergeOutcome::Merged(Box::new(out)))
 }
