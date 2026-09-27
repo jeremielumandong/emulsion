@@ -17,6 +17,9 @@ use std::sync::Arc;
 #[path = "layout_reuse_tests.rs"]
 mod layout_reuse_tests;
 
+#[path = "new_canvas_tests.rs"]
+mod new_canvas_tests;
+
 #[path = "performance_settings_tests.rs"]
 mod performance_settings_tests;
 

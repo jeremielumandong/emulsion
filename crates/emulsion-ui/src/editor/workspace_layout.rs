@@ -245,7 +245,7 @@ impl EditorView {
             }))
             .child(div().flex().items_center().justify_between().child(label("Customize workspace", p)).child(
                 Button::new("workspace-customizer-close").label("Done").small().on_click(cx.listener(|this, _, window, cx| this.toggle_workspace_customizer(window, cx)))))
-            .child(mono("Every panel below is its own toolbar: show it, size it, dock it to any side or float it. Drag a grip ⠿ to place it freely. Photo and Draw each remember their own setup.", 11., p.muted))
+            .child(mono("Every panel below is its own toolbar: show it, size it, dock it to any side or float it. Drag a grip ⠿ to place it freely. Photo and Paint each remember their own setup.", 11., p.muted))
             .child(self.workspace_presets(p, cx))
             .child(label("Toolbars", p))
             .child(div().flex().flex_wrap().items_center().gap_2()

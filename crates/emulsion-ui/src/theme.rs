@@ -1,6 +1,5 @@
 //! Emulsion's design tokens: built-in and Omarchy palettes, type, and layout
-//! constants. Geometry is square: 1 px hairlines and no rounded corners
-//! except avatars and status dots.
+//! constants, with the handoff's persistent accent and corner choices.
 
 use gpui_kit::*;
 
@@ -36,17 +35,17 @@ pub const ACCENT: u32 = 0xD93A1E;
 pub fn light() -> Palette {
     Palette {
         dark: false,
-        paper: c(0xEFEEEA),
-        panel: c(0xFFFFFF),
-        ink: c(0x0A0A0B),
-        muted: c(0x6E6D68),
-        line: c(0xD7D5CE),
-        stage: c(0xE4E2DC),
-        chrome: c(0x0A0A0B),
-        chrome_fg: c(0xEFEEEA),
-        chrome_line: c(0x232326),
-        nav_fg: c(0x9B9A95),
-        soft_bg: c(0xFFFFFF),
+        paper: c(0xF2F1EE),
+        panel: c(0xFAFAF9),
+        ink: c(0x161618),
+        muted: c(0x6B6A66),
+        line: c(0x141416).opacity(0.10),
+        stage: c(0xDEDCD7),
+        chrome: c(0xFAFAF9),
+        chrome_fg: c(0x161618),
+        chrome_line: c(0x141416).opacity(0.10),
+        nav_fg: c(0x6B6A66),
+        soft_bg: c(0xEEEDE9),
         accent: c(ACCENT),
         accent_fg: c(0xFFFFFF),
         checker: (0xFF, 0xE9),
@@ -56,27 +55,26 @@ pub fn light() -> Palette {
 pub fn dark() -> Palette {
     Palette {
         dark: true,
-        paper: c(0x0C0C0D),
-        panel: c(0x151517),
-        ink: c(0xEDECE8),
-        muted: c(0x8B8A85),
-        line: c(0x26262A),
-        stage: c(0x131315),
-        chrome: c(0x000000),
-        chrome_fg: c(0xEDECE8),
-        chrome_line: c(0x1E1E21),
-        nav_fg: c(0x7C7B77),
-        soft_bg: c(0x1C1C1F),
+        paper: c(0x141416),
+        panel: c(0x1B1B1E),
+        ink: c(0xECECEA),
+        muted: c(0x8D8C88),
+        line: c(0xFFFFFF).opacity(0.08),
+        stage: c(0x0E0E10),
+        chrome: c(0x1B1B1E),
+        chrome_fg: c(0xECECEA),
+        chrome_line: c(0xFFFFFF).opacity(0.08),
+        nav_fg: c(0x8D8C88),
+        soft_bg: c(0x232327),
         accent: c(ACCENT),
         accent_fg: c(0xFFFFFF),
         checker: (0x3A, 0x30),
     }
 }
 
-/// Instrument Sans for UI and headings, JetBrains Mono for metadata, values,
-/// labels and state. Both fall back to system fonts when not installed.
-pub const UI_FONT: &str = "Instrument Sans";
-pub const MONO_FONT: &str = "JetBrains Mono";
+/// Handoff typography, bundled so it is available offline on every platform.
+pub const UI_FONT: &str = "Geist";
+pub const MONO_FONT: &str = "Geist Mono";
 
 pub mod dim {
     use gpui_kit::{Pixels, px};
@@ -95,13 +93,22 @@ impl Global for ActivePalette {}
 
 /// Install the default palette before applying saved appearance preferences.
 pub fn install(cx: &mut App) {
+    if let Err(error) = cx.text_system().add_fonts(vec![
+        std::borrow::Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist.ttf")),
+        std::borrow::Cow::Borrowed(include_bytes!("../../../assets/fonts/GeistMono.ttf")),
+    ]) {
+        tracing::warn!(%error, "could not register bundled UI fonts");
+    }
     cx.set_global(ActivePalette(dark()));
 }
 
 /// Use the theme saved in settings.
 pub fn apply_saved(cx: &mut App) {
     let light = crate::app_state::settings(cx).light_mode;
-    let fallback = if light { self::light() } else { dark() };
+    let mut fallback = if light { self::light() } else { dark() };
+    let accent = crate::app_state::settings(cx).accent;
+    fallback.accent = c(accent.rgb());
+    fallback.accent_fg = c(accent.foreground());
     #[cfg(target_os = "linux")]
     let fallback = if following_omarchy(cx) {
         omarchy::read_current().unwrap_or(fallback)
@@ -112,8 +119,7 @@ pub fn apply_saved(cx: &mut App) {
     sync_kit(cx);
 }
 
-/// Match gpui-kit's widgets (inputs, menus) to the palette. The design is
-/// square, so corner radii stay zero in both modes.
+/// Match widgets to the same tokens as the application chrome.
 pub fn sync_kit(cx: &mut App) {
     use gpui_kit::component::{Theme, ThemeMode};
     let mode = if palette(cx).dark {
@@ -122,15 +128,15 @@ pub fn sync_kit(cx: &mut App) {
         ThemeMode::Light
     };
     Theme::change(mode, None, cx);
+    let p = palette(cx);
+    let radius = crate::app_state::settings(cx).corners.radius();
     let t = Theme::global_mut(cx);
-    t.radius = px(0.);
-    t.radius_lg = px(0.);
-    if following_omarchy(cx) {
-        let p = palette(cx);
-        let t = Theme::global_mut(cx);
-        map_kit_colors(&mut t.colors, p);
-        t.tokens = t.colors.into();
-    }
+    t.radius = px(radius);
+    t.radius_lg = px(radius + 4.);
+    t.font_family = UI_FONT.into();
+    t.mono_font_family = MONO_FONT.into();
+    map_kit_colors(&mut t.colors, p);
+    t.tokens = t.colors.into();
     Theme::sync_base(cx);
 }
 
@@ -140,7 +146,25 @@ pub fn set_dark(dark_on: bool, cx: &mut App) {
         s.follow_omarchy = false;
         s.light_mode = !dark_on;
     });
-    cx.set_global(ActivePalette(if dark_on { dark() } else { light() }));
+    apply_saved(cx);
+    cx.refresh_windows();
+}
+
+/// Choosing an application accent exits external palette following. Keep the
+/// current brightness, including when the external theme is light.
+pub fn set_accent(accent: emulsion_io::settings::Accent, cx: &mut App) {
+    let light = !palette(cx).dark;
+    crate::app_state::update_settings(cx, |s| {
+        s.accent = accent;
+        s.follow_omarchy = false;
+        s.light_mode = light;
+    });
+    apply_saved(cx);
+    cx.refresh_windows();
+}
+
+pub fn set_corners(corners: emulsion_io::settings::Corners, cx: &mut App) {
+    crate::app_state::update_settings(cx, |s| s.corners = corners);
     sync_kit(cx);
     cx.refresh_windows();
 }
@@ -284,6 +308,31 @@ pub fn toggle(cx: &mut App) {
 mod tests {
     use super::{ActivePalette, apply_external, c, dark, install, light, palette, sync_kit};
     use gpui_kit::TestAppContext;
+
+    #[gpui_kit::test]
+    fn appearance_choices_reach_widgets_and_survive_theme_changes(cx: &mut TestAppContext) {
+        use super::{apply_saved, set_accent, set_corners, set_dark};
+        use emulsion_io::settings::{Accent, Corners, Settings};
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::app_state::AppSettings(Settings::default()));
+            install(cx);
+            set_accent(Accent::Amber, cx);
+            set_corners(Corners::Round, cx);
+            set_dark(false, cx);
+            assert_eq!(palette(cx).accent, c(Accent::Amber.rgb()));
+            assert_eq!(palette(cx).accent_fg, c(0x1A1206));
+            assert_eq!(palette(cx).paper, light().paper);
+            let kit = gpui_kit::component::Theme::global(cx);
+            assert_eq!(kit.primary, palette(cx).accent);
+            assert_eq!(kit.primary_foreground, palette(cx).accent_fg);
+            assert_eq!(kit.radius, gpui_kit::px(12.));
+            set_dark(true, cx);
+            apply_saved(cx);
+            assert_eq!(palette(cx).accent, c(Accent::Amber.rgb()));
+            assert_eq!(palette(cx).paper, dark().paper);
+        });
+    }
 
     #[gpui_kit::test]
     fn external_updates_sync_widgets_and_ignore_failed_or_disabled_reads(cx: &mut TestAppContext) {

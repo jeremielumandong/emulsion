@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod new_canvas;
 mod photoshop_shortcuts;
 mod raw_sync;
 
@@ -592,6 +593,7 @@ impl Workspace {
             .flex_none()
             .items_center()
             .gap_1()
+            .child(crate::appearance::control(cx))
             .child(
                 Button::new("compact-theme")
                     .icon(if p.dark {
@@ -1141,9 +1143,9 @@ impl Workspace {
         .detach();
     }
 
-    /// A new 1920×1080 document on a white background.
+    /// Choose a preset or custom canvas before creating a document.
     pub fn new_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_document_with(Some([255, 255, 255, 255]), window, cx);
+        self.open_new_canvas(window, cx);
     }
 
     /// A new 1920×1080 document: `background` fills a Background layer;

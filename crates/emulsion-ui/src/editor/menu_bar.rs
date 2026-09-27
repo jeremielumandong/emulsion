@@ -203,7 +203,7 @@ impl EditorView {
                         this.toggle_draw_mode(cx)
                     }
                 }))
-                .item(item("Draw", draw, |this, _, cx| {
+                .item(item("Paint", draw, |this, _, cx| {
                     if !this.draw_mode {
                         this.toggle_draw_mode(cx)
                     }

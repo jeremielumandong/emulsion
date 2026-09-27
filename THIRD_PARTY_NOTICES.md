@@ -22,6 +22,14 @@ their own licenses; this is not an exhaustive inventory of the entire Cargo
 dependency graph. Release packages must also retain notices required by their
 other bundled dependencies and assets.
 
+## UI fonts (SIL OFL-1.1)
+
+Geist and Geist Mono are bundled unmodified in `assets/fonts/`, copyright
+2024 The Geist Project Authors (https://github.com/vercel/geist-font.git).
+Their SIL Open Font License 1.1 texts are `assets/fonts/Geist-OFL.txt` and
+`assets/fonts/GeistMono-OFL.txt`. Pinned source and checksums are recorded in
+`assets/fonts/README.md`.
+
 ## RAW decoding (LGPL-2.1)
 
 Camera RAW files are decoded by the `rawler` crate (https://github.com/dnglab/dnglab),

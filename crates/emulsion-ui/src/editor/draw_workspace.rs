@@ -25,7 +25,7 @@ impl BuiltinWorkspace {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Photo => "Photo",
-            Self::Draw => "Draw",
+            Self::Draw => "Paint",
             Self::Minimal => "Minimal",
         }
     }
@@ -123,7 +123,7 @@ impl EditorView {
             .dropdown_caret(true)
             .xsmall()
             .outline()
-            .tooltip("Workspace: Photo, Draw, Minimal or one you saved (Ctrl+Alt+Shift+D switches Photo and Draw)")
+            .tooltip("Workspace: Photo, Paint, Minimal or one you saved (Ctrl+Alt+Shift+D switches Photo and Paint)")
             .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, cx| {
                 let Some(view) = editor.upgrade() else {
                     return menu;

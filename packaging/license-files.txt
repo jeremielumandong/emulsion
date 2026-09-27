@@ -1,5 +1,8 @@
 # Required license, attribution, and provenance files in every application package.
 LICENSE
+assets/fonts/Geist-OFL.txt
+assets/fonts/GeistMono-OFL.txt
+assets/fonts/README.md
 vendor/gpui/gpui-pre/EMULSION_CHANGES.md
 vendor/gpui/gpui-pre-wgpu/EMULSION_CHANGES.md
 THIRD_PARTY_NOTICES.md

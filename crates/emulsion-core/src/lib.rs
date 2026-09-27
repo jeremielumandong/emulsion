@@ -4,6 +4,7 @@
 //! No GPU, no UI. Everything here runs headless and is tested headless.
 
 pub mod command;
+pub mod creation;
 pub mod document;
 pub mod geometry;
 pub mod graph;

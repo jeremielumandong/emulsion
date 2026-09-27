@@ -4,6 +4,7 @@
 mod about;
 pub mod actions;
 pub mod app_state;
+mod appearance;
 mod assistant;
 mod batch;
 mod busy_card;

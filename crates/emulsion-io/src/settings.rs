@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+mod appearance;
+pub use appearance::{Accent, Corners};
+
 /// How the assistant's strokes play on the canvas.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -123,6 +126,10 @@ pub struct Settings {
     pub suggestions: bool,
     /// Light theme instead of the default dark one.
     pub light_mode: bool,
+    pub accent: Accent,
+    pub corners: Corners,
+    pub canvas_presets: Vec<emulsion_core::creation::CanvasSpec>,
+    pub recent_canvases: Vec<emulsion_core::creation::CanvasSpec>,
     /// Follow the current Omarchy palette on Linux, retaining `light_mode` as fallback.
     pub follow_omarchy: bool,
     /// Apply every assistant change without asking, deletes and merges too.
@@ -203,6 +210,10 @@ impl Default for Settings {
             auto_apply: false,
             suggestions: true,
             light_mode: false,
+            accent: Accent::default(),
+            corners: Corners::default(),
+            canvas_presets: Vec::new(),
+            recent_canvases: Vec::new(),
             follow_omarchy: false,
             approve_all: false,
             compact_chrome: true,

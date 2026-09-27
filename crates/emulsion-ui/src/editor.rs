@@ -1076,13 +1076,13 @@ impl EditorView {
         if on {
             self.set_paint(PaintKind::Brush, cx);
             self.set_status(
-                "Draw mode: brushes, colours and paint controls up front. Ctrl+Alt+Shift+D or Photo returns to the photo tools.",
+                "Paint mode: brushes, colours and paint controls up front. Ctrl+Alt+Shift+D or Photo returns to the photo tools.",
                 false,
                 cx,
             );
         } else {
             self.set_status(
-                "Photo mode: every photo tool and panel. Ctrl+Alt+Shift+D returns to Draw.",
+                "Photo mode: every photo tool and panel. Ctrl+Alt+Shift+D returns to Paint.",
                 false,
                 cx,
             );
@@ -2245,9 +2245,9 @@ impl EditorView {
             .child(self.ask_ai_button(p, cx))
             .child(
                 crate::widgets::tip(
-                    chip("draw-mode", "Draw", self.draw_mode, p)
+                    chip("draw-mode", "Paint", self.draw_mode, p)
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_draw_mode(cx))),
-                    "Draw mode: a compact painting toolbar with History and Layers. Click again for the full photo toolbar.",
+                    "Paint mode: a compact painting toolbar with History and Layers. Click again for the full photo toolbar.",
                 ),
             )
             .child(
