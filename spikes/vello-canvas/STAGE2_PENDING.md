@@ -49,11 +49,14 @@ forces the CPU tile path.
 
 ### Blocking
 
-**1. Canvas chrome is missing while the engine paints.** `viewport::paint` is
-skipped entirely, so the pixel grid, the compare wipe and the stage plate and
-hairline do not draw. Either teach `viewport::paint` to draw chrome without
-its tile images, or move that chrome into the overlay pass that already runs
-after the canvas element. Most visible regression; hit first.
+**1. Canvas chrome is missing while the engine paints.** *(done)*
+
+`viewport::prepaint` takes an `images` flag. With it false it requests no
+tiles and returns a plan carrying only chrome; `viewport::paint` splits into
+`paint_under` (stage, plate hairline) and `paint_over` (pixel grid, compare
+wipe, rulers), so the engine's pixels go between them in the order the tile
+path draws them. Verified in the app: rulers, stage and plate render with the
+engine drawing the document.
 
 **2. Painting on a masked or placed layer costs ~67 ms per frame.** Those
 compile to baked sources, whose pixels are a function of the mask and
@@ -207,3 +210,12 @@ why the free-running ones mislead.
   engine frame over 8 ms with a full breakdown. `RUST_LOG=emulsion_ui=debug,emulsion_engine=debug`.
 - A stale installed build cost an hour of false debugging on Linux. Check the
   binary you are running is the one you just built.
+- **The GPU canvas is off under `cfg!(test)`.** The unit tests drive GPUI
+  headless, with no surface to present and no frame loop, and a canvas that
+  renders on the GPU there hangs them: `splash_dismisses_and_the_landing_
+  image_opens_for_editing` ran indefinitely instead of its usual 0.19 s. The
+  guard is in `viewport_gpu::enabled`. If a test ever needs the engine, it
+  needs a real surface, not that flag removed.
+- `emulsion-ui`'s `tool_usability_tests` brush-studio pair fails
+  intermittently on a clean tree, unrelated to any of this. Two failures
+  there are the expected baseline, not a regression.
