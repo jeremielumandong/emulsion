@@ -328,6 +328,7 @@ fn brush_samples_coalesce_and_pointer_up_flushes_before_undo(cx: &mut TestAppCon
             label: "Brush stroke",
             mask: false,
             mask_raster: None,
+            gpu_points: None,
         }));
         let rev = v.editor.revision;
         for x in [8., 16., 24.] {
@@ -379,6 +380,7 @@ fn brush_samples_coalesce_and_pointer_up_flushes_before_undo(cx: &mut TestAppCon
             label: "Brush stroke",
             mask: false,
             mask_raster: None,
+            gpu_points: None,
         }));
         v.tool_move(point(px(16.), px(24.)), cx);
         assert!(v.tool_cancel(cx));
@@ -415,5 +417,187 @@ fn browsing_brush_categories_preserves_active_brush_mode_and_adjustments(cx: &mu
             v.tools.brush.size, 73.,
             "reselecting must preserve adjustments"
         );
+    });
+}
+
+#[gpui_kit::test]
+fn interrupted_gpu_stroke_replays_once_and_remains_one_undo_step(cx: &mut TestAppContext) {
+    let v = view(cx);
+    v.update(cx, |v, cx| {
+        let base = Arc::new(Raster::transparent(64, 64));
+        let id = Command::AddNode {
+            node: Box::new(Node::raster(0, "paint", base.clone(), Placement::default())),
+            slot: Slot::TOP,
+        }
+        .apply(&mut v.editor.doc)
+        .unwrap()
+        .unwrap();
+        let before = v.editor.doc.clone();
+        let brush = Brush {
+            size: 12.0,
+            ..Default::default()
+        };
+        v.editor.begin("Paint");
+        v.drag = Some(Drag::Tool(ToolDrag::Stroke {
+            id,
+            stroke: Box::new(Stroke::new(
+                base.clone(),
+                brush,
+                Ink::Color([1.0, 0.0, 0.0, 1.0]),
+                None,
+            )),
+            gpu_points: Some(vec![(10.0, 20.0, Some(0.0)), (35.0, 20.0, Some(10.0))]),
+            to_local: DAffine2::IDENTITY,
+            heal: false,
+            label: "Paint",
+            mask: false,
+            mask_raster: None,
+        }));
+        v.tools.stroke_preview_pending = false;
+        // Loss after the last submitted frame must replay even without new input.
+        v.flush_live_stroke(cx);
+        let Some(Drag::Tool(ToolDrag::Stroke { gpu_points, .. })) = &v.drag else {
+            panic!()
+        };
+        assert!(gpu_points.is_none());
+        let Some(Drag::Tool(drag)) = v.drag.take() else {
+            panic!()
+        };
+        v.tool_up(drag, cx);
+        let NodeKind::Raster { raster, .. } = &v.editor.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        let mut reference =
+            Stroke::new(base.clone(), brush, Ink::Color([1.0, 0.0, 0.0, 1.0]), None);
+        reference.point_at(10.0, 20.0, None, Some(0.0));
+        reference.point_at(35.0, 20.0, None, Some(10.0));
+        reference.finish();
+        assert_eq!(
+            raster.read_rect(raster.bounds()),
+            reference.render(&base).0.read_rect(base.bounds())
+        );
+        assert_eq!(v.editor.history.len(), 1);
+        v.undo(cx);
+        assert_eq!(v.editor.doc, before);
+    });
+}
+
+#[gpui_kit::test]
+fn saving_a_gpu_stroke_materializes_pixels_and_cancel_discards_the_journal(
+    cx: &mut TestAppContext,
+) {
+    let v = view(cx);
+    v.update(cx, |v, cx| {
+        let base = Arc::new(Raster::transparent(64, 64));
+        let id = Command::AddNode {
+            node: Box::new(Node::raster(0, "paint", base.clone(), Placement::default())),
+            slot: Slot::TOP,
+        }
+        .apply(&mut v.editor.doc)
+        .unwrap()
+        .unwrap();
+        let before = v.editor.doc.clone();
+        let make_drag = || {
+            Drag::Tool(ToolDrag::Stroke {
+                id,
+                stroke: Box::new(Stroke::new(
+                    base.clone(),
+                    Brush::default(),
+                    Ink::Color([1.0, 0.0, 0.0, 1.0]),
+                    None,
+                )),
+                gpu_points: Some(vec![(25.0, 25.0, Some(0.0))]),
+                to_local: DAffine2::IDENTITY,
+                heal: false,
+                label: "Paint",
+                mask: false,
+                mask_raster: None,
+            })
+        };
+        v.editor.begin("Paint");
+        v.drag = Some(make_drag());
+        assert!(
+            v.has_unsaved_changes(),
+            "an uncommitted GPU stroke must prompt on close"
+        );
+        v.tool_cancel(cx);
+        assert_eq!(v.editor.doc, before);
+        assert!(v.editor.history.is_empty());
+        v.editor.begin("Paint");
+        v.drag = Some(make_drag());
+        v.finish_gpu_stroke(cx);
+        assert!(v.drag.is_none());
+        assert!(!v.editor.in_transaction());
+        let NodeKind::Raster { raster, .. } = &v.editor.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert!(raster.get(25, 25)[3] > 0);
+        assert_eq!(v.editor.history.len(), 1);
+    });
+}
+
+#[gpui_kit::test]
+fn gpu_quickshape_keeps_moving_strokes_and_replays_after_a_hold(cx: &mut TestAppContext) {
+    let v = view(cx);
+    v.update(cx, |v, cx| {
+        let base = Arc::new(Raster::transparent(64, 64));
+        let id = Command::AddNode {
+            node: Box::new(Node::raster(0, "paint", base.clone(), Placement::default())),
+            slot: Slot::TOP,
+        }
+        .apply(&mut v.editor.doc)
+        .unwrap()
+        .unwrap();
+        v.editor.begin("Paint");
+        v.tools.stroke_started = Some(Instant::now());
+        v.drag = Some(Drag::Tool(ToolDrag::Stroke {
+            id,
+            stroke: Box::new(Stroke::new(
+                base,
+                Brush {
+                    size: 6.0,
+                    ..Default::default()
+                },
+                Ink::Color([1.0, 0.0, 0.0, 1.0]),
+                None,
+            )),
+            gpu_points: Some(
+                (0..10)
+                    .map(|n| (10.0 + n as f32 * 3.0, 25.0, Some(n as f64 * 10.0)))
+                    .collect(),
+            ),
+            to_local: DAffine2::IDENTITY,
+            heal: false,
+            label: "Paint",
+            mask: false,
+            mask_raster: None,
+        }));
+        assert!(v.quick_shape_tick(cx));
+        assert!(matches!(
+            v.drag,
+            Some(Drag::Tool(ToolDrag::Stroke {
+                gpu_points: Some(_),
+                ..
+            }))
+        ));
+        v.tools.stroke_started = Some(Instant::now() - std::time::Duration::from_millis(650));
+        assert!(!v.quick_shape_tick(cx));
+        let Some(Drag::Tool(ToolDrag::Stroke {
+            gpu_points, stroke, ..
+        })) = &v.drag
+        else {
+            panic!()
+        };
+        assert!(gpu_points.is_none());
+        assert!(stroke.is_finished());
+        let Some(Drag::Tool(drag)) = v.drag.take() else {
+            panic!()
+        };
+        v.tool_up(drag, cx);
+        let NodeKind::Raster { raster, .. } = &v.editor.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert!(raster.get(25, 25)[3] > 0);
+        assert_eq!(v.editor.history.len(), 1);
     });
 }

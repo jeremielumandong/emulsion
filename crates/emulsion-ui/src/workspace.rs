@@ -1182,6 +1182,7 @@ impl Workspace {
         let Some(ed) = self.editor.clone() else {
             return;
         };
+        ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         let (path, dir, name) = {
             let e = ed.read(cx);
             let dir = e
@@ -1228,6 +1229,7 @@ impl Workspace {
     }
 
     fn write_target(&mut self, ed: Entity<EditorView>, target: SaveTarget, cx: &mut Context<Self>) {
+        ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         let path = target.path().to_path_buf();
         let sidecar = matches!(target, SaveTarget::Sidecar(_));
         let Some((doc, rev, graph)) = ed.update(cx, |e, cx| {
@@ -1332,6 +1334,7 @@ impl Workspace {
         let Some(ed) = self.editor.clone() else {
             return;
         };
+        ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         if ed.read(cx).raw.is_pending() {
             ed.update(cx, |e, cx| {
                 e.set_status(

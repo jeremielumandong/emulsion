@@ -366,7 +366,7 @@ impl TileCache {
         self.entries.len() + usize::from(self.screen.is_some()) + self.to_drop.len()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "canvas-bench"))]
     pub(crate) fn pending_request_count(&self) -> usize {
         self.pending.len() + self.queue.len()
     }
@@ -434,6 +434,7 @@ pub struct Draw {
 
 pub struct Plan {
     draws: Vec<Draw>,
+    images: bool,
 
     doc_rect: Option<Bounds<Pixels>>,
     grid: Option<GridSpec>,
@@ -662,6 +663,7 @@ pub fn prepaint(
     });
     Plan {
         draws,
+        images,
         doc_rect,
         grid,
         wipe_x,
@@ -830,8 +832,10 @@ impl Plan {
     /// Whether this plan composes the document's pixels. A plan built with
     /// `images = false` carries only chrome, for a renderer that draws the
     /// document itself.
-    pub fn has_images(&self) -> bool {
-        !self.draws.is_empty()
+    pub fn composes_images(&self) -> bool {
+        // Missing or offscreen CPU tiles do not turn a CPU plan into a GPU
+        // plan: retrying the GPU then would schedule endless fallback frames.
+        self.images
     }
 }
 
@@ -1160,7 +1164,17 @@ mod tests {
             rulers: false,
         };
         let mut cache = TileCache::default();
-        prepaint(&scene, &mut cache, bounds, 1.0, true);
+        let cpu_plan = prepaint(&scene, &mut cache, bounds, 1.0, true);
+        assert!(
+            cpu_plan.draws.is_empty(),
+            "fixture has no resident images yet"
+        );
+        assert!(
+            cpu_plan.composes_images(),
+            "missing CPU tiles must not retry GPU rendering"
+        );
+        let gpu_plan = prepaint(&scene, &mut TileCache::default(), bounds, 1.0, false);
+        assert!(!gpu_plan.composes_images());
         assert!(cache.start_settle_wakeup());
 
         // Zooming below the crisp-image threshold needs no delayed frame.

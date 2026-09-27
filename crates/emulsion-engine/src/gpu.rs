@@ -1,7 +1,10 @@
 //! One wgpu device and queue shared by the compositor, the brush passes and Vello.
 
 use anyhow::{Context, Result};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// Storage format for document tiles on the GPU.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +45,8 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub tile_format: TileFormat,
+    lost: Arc<AtomicBool>,
+    shared_generation: Option<u64>,
 }
 
 impl Gpu {
@@ -111,6 +116,14 @@ impl Gpu {
         device.on_uncaptured_error(Arc::new(|error| {
             tracing::error!(%error, "wgpu error");
         }));
+        let lost = Arc::new(AtomicBool::new(false));
+        device.set_device_lost_callback({
+            let lost = lost.clone();
+            move |reason, message| {
+                lost.store(true, Ordering::Release);
+                tracing::error!(?reason, %message, "canvas device lost");
+            }
+        });
         let info = adapter.get_info();
         tracing::info!(
             adapter = info.name,
@@ -125,6 +138,8 @@ impl Gpu {
             device,
             queue,
             tile_format,
+            lost,
+            shared_generation: None,
         }))
     }
 
@@ -154,7 +169,28 @@ impl Gpu {
             device: (*shared.device).clone(),
             queue: (*shared.queue).clone(),
             tile_format,
+            lost: shared.device_lost.clone(),
+            shared_generation: Some(shared.generation),
         })
+    }
+
+    /// A shared-device generation change invalidates every engine resource.
+    pub fn is_lost(&self) -> bool {
+        if self.lost.load(Ordering::Acquire) {
+            return true;
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(generation) = self.shared_generation {
+            return gpui_wgpu::shared_gpu().is_none_or(|current| {
+                current.generation != generation || current.device_lost.load(Ordering::Acquire)
+            });
+        }
+        false
+    }
+
+    pub fn ensure_alive(&self) -> Result<()> {
+        anyhow::ensure!(!self.is_lost(), "canvas GPU device is recovering");
+        Ok(())
     }
 
     pub fn describe(&self) -> String {

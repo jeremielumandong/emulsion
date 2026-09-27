@@ -1,0 +1,158 @@
+[
+  {
+    "os": "linux",
+    "arch": "x86_64",
+    "debug_assertions": false,
+    "gpu_texture_bytes": 0,
+    "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+    "results": [
+      {
+        "scenario": "pan",
+        "renderer": "cpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "input_to_canvas_submission_ms": {
+          "p50": 2.004292,
+          "p95": 2.1369789999999997
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 6.062326,
+          "p95": 6.133804
+        }
+      },
+      {
+        "scenario": "brush",
+        "renderer": "cpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "input_to_canvas_submission_ms": {
+          "p50": 14.805046,
+          "p95": 15.270683
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 18.171599,
+          "p95": 18.336224
+        }
+      },
+      {
+        "scenario": "vector_edit",
+        "renderer": "cpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "input_to_canvas_submission_ms": {
+          "p50": 15.641532,
+          "p95": 21.234381
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 18.249897,
+          "p95": 24.39357
+        }
+      }
+    ],
+    "fixture_run": "synthetic_cpu"
+  },
+  {
+    "os": "linux",
+    "arch": "x86_64",
+    "debug_assertions": false,
+    "gpu_texture_bytes": 212536534,
+    "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+    "results": [
+      {
+        "scenario": "pan",
+        "renderer": "gpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "input_to_canvas_submission_ms": {
+          "p50": 2.193943,
+          "p95": 2.845646
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 6.056002,
+          "p95": 6.1600589999999995
+        }
+      },
+      {
+        "scenario": "brush",
+        "renderer": "gpu",
+        "gpu_brush": true,
+        "samples": 40,
+        "input_to_canvas_submission_ms": {
+          "p50": 2.438536,
+          "p95": 2.875075
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 6.062780999999999,
+          "p95": 6.14141
+        }
+      },
+      {
+        "scenario": "vector_edit",
+        "renderer": "gpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "input_to_canvas_submission_ms": {
+          "p50": 5.281512,
+          "p95": 8.727762
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 7.924333000000001,
+          "p95": 15.480205999999999
+        }
+      }
+    ],
+    "fixture_run": "synthetic_gpu"
+  },
+  {
+    "os": "linux",
+    "arch": "x86_64",
+    "debug_assertions": false,
+    "gpu_texture_bytes": 1196799873,
+    "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+    "results": [
+      {
+        "scenario": "pan",
+        "renderer": "gpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "input_to_canvas_submission_ms": {
+          "p50": 2.936059,
+          "p95": 3.456228
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 6.063845,
+          "p95": 6.244101000000001
+        }
+      },
+      {
+        "scenario": "brush",
+        "renderer": "gpu",
+        "gpu_brush": true,
+        "samples": 40,
+        "input_to_canvas_submission_ms": {
+          "p50": 3.086367,
+          "p95": 3.78297
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 6.060605,
+          "p95": 6.1991119999999995
+        }
+      },
+      {
+        "scenario": "vector_edit",
+        "renderer": "gpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "input_to_canvas_submission_ms": {
+          "p50": 5.336333000000001,
+          "p95": 5.948548
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 7.2995350000000006,
+          "p95": 10.254854
+        }
+      }
+    ],
+    "fixture_run": "layers_gpu"
+  }
+]

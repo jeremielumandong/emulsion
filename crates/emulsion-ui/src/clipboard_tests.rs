@@ -1,7 +1,7 @@
 //! Clipboard tests use GPUI's simulated OS clipboard, never the real pasteboard.
 use super::*;
 use crate::editor::{EditorView, Tool};
-use emulsion_core::NodeKind;
+use emulsion_core::{NodeId, NodeKind};
 use emulsion_raster::{Mask, select};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ClipboardEntry, ClipboardItem};
@@ -706,5 +706,147 @@ fn clipboard_and_internal_lift_retain_16_bit_precision(cx: &mut TestAppContext) 
             pixel,
             "internal lift must stay in linear 16-bit pixels"
         );
+    });
+}
+
+fn text_clipboard_document() -> (Document, NodeId, emulsion_core::text::TextSpec) {
+    let mut d = Document::new(600, 400);
+    let spec = emulsion_core::text::TextSpec {
+        text: "Crisp text".into(),
+        size: 38.0,
+        x: 90.25,
+        y: 110.5,
+        rotation: 8.0,
+        scale_x: 1.15,
+        bold: true,
+        color: [30, 60, 120, 255],
+        ..Default::default()
+    };
+    let id = Command::AddNode {
+        node: Box::new(Node::text(0, "Heading", spec.clone(), d.width, d.height)),
+        slot: Slot::TOP,
+    }
+    .apply(&mut d)
+    .unwrap()
+    .unwrap();
+    (d, id, spec)
+}
+
+#[gpui_kit::test]
+fn clipboard_text_stays_editable_and_preserves_exact_spec_and_undo(cx: &mut TestAppContext) {
+    let (d, id, spec) = text_clipboard_document();
+    let (ws, cx) = open(cx, d.clone());
+    let e = editor(&ws, cx);
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.selected = Some(id);
+            e.copy_pixels(cx);
+            e.paste_pixels(cx);
+            let pasted = e.selected.unwrap();
+            assert_ne!(pasted, id);
+            let NodeKind::Text {
+                spec: actual,
+                cache,
+            } = &e.editor.doc.node(pasted).unwrap().kind
+            else {
+                panic!("pasted text was rasterized");
+            };
+            assert_eq!(**actual, spec);
+            assert_eq!(cache.size(), (600, 400));
+            assert_eq!(e.editor.history.len(), 1);
+            assert!(matches!(
+                cx.read_from_clipboard().unwrap().entries[0],
+                ClipboardEntry::Image(_)
+            ));
+            e.undo(cx);
+            assert_eq!(e.editor.doc, d);
+            e.redo(cx);
+            assert!(matches!(
+                e.editor.doc.node(pasted).unwrap().kind,
+                NodeKind::Text { .. }
+            ));
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn clipboard_text_cross_tab_uses_destination_cache_and_centers(cx: &mut TestAppContext) {
+    let (d, id, spec) = text_clipboard_document();
+    let bounds = emulsion_core::geometry::node_bounds(&d, id).unwrap();
+    let (ws, cx) = open(cx, d);
+    let source = editor(&ws, cx);
+    cx.update(|_, cx| {
+        source.update(cx, |e, cx| {
+            e.selected = Some(id);
+            e.copy_pixels(cx);
+        })
+    });
+    cx.update(|window, cx| {
+        ws.update(cx, |w, cx| {
+            w.install(
+                Document::new(800, 500),
+                None,
+                None,
+                None,
+                "Destination".into(),
+                window,
+                cx,
+            );
+        })
+    });
+    cx.run_until_parked();
+    let target = editor(&ws, cx);
+    cx.update(|_, cx| {
+        target.update(cx, |e, cx| {
+            e.paste_pixels(cx);
+            let NodeKind::Text {
+                spec: actual,
+                cache,
+            } = &e.editor.doc.node(e.selected.unwrap()).unwrap().kind
+            else {
+                panic!("cross-tab text was rasterized");
+            };
+            assert_eq!(cache.size(), (800, 500));
+            let mut expected = spec.clone();
+            expected.x += (800.0 - bounds.w as f32) / 2.0 - bounds.x as f32;
+            expected.y += (500.0 - bounds.h as f32) / 2.0 - bounds.y as f32;
+            assert!((actual.x - expected.x).abs() < 0.001);
+            assert!((actual.y - expected.y).abs() < 0.001);
+            assert_eq!(actual.text, spec.text);
+            assert_eq!(actual.size, spec.size);
+            assert_eq!(actual.font, spec.font);
+            assert_eq!(e.editor.history.len(), 1);
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn clipboard_text_selection_and_replaced_clipboard_still_paste_pixels(cx: &mut TestAppContext) {
+    let (d, id, _) = text_clipboard_document();
+    let (ws, cx) = open(cx, d);
+    let e = editor(&ws, cx);
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.selected = Some(id);
+            e.copy_pixels(cx);
+            // A different clipboard image must never resurrect our cached text.
+            let bytes = emulsion_io::export::png16(1, 1, &[65535, 0, 0, 65535]).unwrap();
+            let image = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, bytes);
+            cx.write_to_clipboard(ClipboardItem::new_image(&image));
+            e.paste_pixels(cx);
+            assert!(matches!(
+                e.editor.doc.node(e.selected.unwrap()).unwrap().kind,
+                NodeKind::Raster { .. }
+            ));
+            e.set_layer_selection(vec![id], Some(id));
+            e.editor.doc.selection =
+                Some(Arc::new(select::rect(600, 400, 90.0, 110.0, 180.0, 180.0)));
+            e.copy_pixels(cx);
+            e.paste_pixels(cx);
+            assert!(matches!(
+                e.editor.doc.node(e.selected.unwrap()).unwrap().kind,
+                NodeKind::Raster { .. }
+            ));
+        })
     });
 }

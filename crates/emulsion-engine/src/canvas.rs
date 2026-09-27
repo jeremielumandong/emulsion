@@ -14,6 +14,10 @@ use emulsion_raster::{IRect, Raster, TILE, TileCoord};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "canvas_tests.rs"]
+mod tests;
+
 pub const NONE: u32 = u32::MAX;
 pub const OP_WORDS: usize = 16;
 pub const HEADER_WORDS: usize = 8;
@@ -75,13 +79,133 @@ pub(crate) struct BakeKey {
     fill: Option<[u32; 4]>,
 }
 
+struct Baked {
+    key: BakeKey,
+    raster: Arc<Raster>,
+    // Retain the inputs both for tile-level comparison and to keep the Arc
+    // addresses in the key alive until the next bake.
+    node: CompositeNode,
+    source: usize,
+}
+
+fn bake(
+    node: &CompositeNode,
+    width: u32,
+    height: u32,
+    space: BlendSpace,
+    previous: Option<&Baked>,
+) -> Arc<Raster> {
+    let previous = previous.filter(|b| b.raster.width() == width && b.raster.height() == height);
+    let key = Compiler::bake_key(node, previous.is_some_and(|b| b.key.mask_shape));
+    if let Some(b) = previous
+        && b.key == key
+    {
+        return b.raster.clone();
+    }
+    let mut alone = node.clone();
+    alone.visible = true;
+    alone.opacity = 1.0;
+    alone.blend = BlendMode::Normal;
+    alone.blending = Default::default();
+    alone.clip_to = None;
+    let tree = CompositeTree {
+        width,
+        height,
+        space,
+        nodes: vec![alone],
+    };
+    if let Some(b) = previous
+        && (BakeKey {
+            raster: key.raster,
+            ..b.key.clone()
+        }) == key
+        && let Some(coords) = changed_bake_tiles(&b.node, node, width, height)
+    {
+        let changes = coords
+            .into_iter()
+            .map(|c| {
+                let pixels = emulsion_raster::composite::render_tile(&tree, 0, c)
+                    .into_iter()
+                    .map(emulsion_raster::color::f_to_px)
+                    .collect();
+                (c, Some(pixels))
+            })
+            .collect();
+        return Arc::new(b.raster.with_changes(changes));
+    }
+    Arc::new(flatten(&tree, 0))
+}
+
+/// Source-to-document tile damage, including resampling and mip footprints.
+fn changed_bake_tiles(
+    before: &CompositeNode,
+    after: &CompositeNode,
+    width: u32,
+    height: u32,
+) -> Option<std::collections::BTreeSet<TileCoord>> {
+    let NodeContent::Pixels { raster: old, .. } = &before.content else {
+        return None;
+    };
+    let NodeContent::Pixels {
+        raster: new,
+        placement,
+    } = &after.content
+    else {
+        return None;
+    };
+    if old.size() != new.size() {
+        return None;
+    }
+    let (old, new) = (old.get(), new.get());
+    if old.fill() != new.fill() {
+        return None;
+    }
+    let mut dirty = std::collections::BTreeSet::new();
+    let (nx, ny) = new.tiles_at(0);
+    let t = i64::from(TILE);
+    for y in 0..ny {
+        for x in 0..nx {
+            let c = TileCoord::new(x, y);
+            let same = match (old.base_tile(c), new.base_tile(c)) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            };
+            if same {
+                continue;
+            }
+            let damage = emulsion_raster::composite::placed_damage(
+                new,
+                placement,
+                IRect::new(x * TILE as i32, y * TILE as i32, TILE as i32, TILE as i32),
+                IRect::new(0, 0, width as i32, height as i32),
+            )?;
+            if damage.is_empty() {
+                continue;
+            }
+            let (left, top, right, bottom) = (
+                i64::from(damage.x),
+                i64::from(damage.y),
+                i64::from(damage.right()),
+                i64::from(damage.bottom()),
+            );
+            for ty in top / t..=(bottom - 1) / t {
+                for tx in left / t..=(right - 1) / t {
+                    dirty.insert(TileCoord::new(tx as i32, ty as i32));
+                }
+            }
+        }
+    }
+    Some(dirty)
+}
+
 /// A document-aligned raster whose tiles live in the atlas.
 pub struct Source {
     pub name: String,
     /// The document node whose raster this is, when the node compiles to a
     /// direct source. `None` for baked sources, whose pixels are a function of
-    /// a mask or placement rather than the raster alone, and so cannot be
-    /// swapped by [`Canvas::replace_raster`].
+    /// a mask or placement rather than the raster alone, and must be rebaked
+    /// before passing them to [`Canvas::replace_raster`].
     pub node: Option<NodeId>,
     pub raster: Arc<Raster>,
     pub tiles_x: u32,
@@ -159,6 +283,8 @@ pub struct Canvas {
     /// Runs of consecutive vector nodes, each drawn by Vello into one target.
     pub runs: Vec<Vec<VectorItem>>,
     pub unsupported: Vec<String>,
+    /// Vector features rasterized by the CPU to preserve document fidelity.
+    pub rasterized: Vec<String>,
     /// Source that brush strokes paint into.
     pub paint: Option<usize>,
     table: Vec<u32>,
@@ -168,11 +294,11 @@ pub struct Canvas {
     pub dirty: Vec<IRect>,
     /// Baked rasters and the inputs they came from, so a reload can reuse
     /// those whose inputs did not change.
-    pub(crate) baked: Vec<(BakeKey, Arc<Raster>)>,
+    baked: Vec<Baked>,
 }
 
 /// Which document nodes Vello can draw, and how.
-fn vector_nodes(doc: &Document) -> HashMap<NodeId, VectorKind> {
+pub(crate) fn vector_nodes(doc: &Document) -> HashMap<NodeId, VectorKind> {
     doc.nodes
         .iter()
         .filter(|n| n.mask.is_none() && n.blending == Default::default())
@@ -193,13 +319,18 @@ fn vector_nodes(doc: &Document) -> HashMap<NodeId, VectorKind> {
 }
 
 pub fn path_supported(style: &PathStyle) -> bool {
-    matches!(style.fill_paint, PathPaint::Solid)
+    // Vello blends its RGBA8 target in sRGB. Translucent paint must use
+    // the CPU vector rasterizer until Vello supports a linear high-precision target.
+    style.fill.is_none_or(|c| c[3] == 255)
+        && style.stroke.is_none_or(|c| c[3] == 255)
+        && matches!(style.fill_paint, PathPaint::Solid)
         && matches!(style.stroke_paint, PathPaint::Solid)
         && style.alignment == StrokeAlignment::Center
 }
 
 pub fn text_supported(spec: &emulsion_core::text::TextSpec) -> bool {
-    spec.warp.is_identity()
+    spec.color[3] == 255
+        && spec.warp.is_identity()
         && spec.text_path.is_none()
         && !spec.vertical
         && spec.runs.is_empty()
@@ -219,13 +350,14 @@ struct Compiler<'a> {
     /// Index into `ops` of the open run's op, if the last op is a mergeable run.
     open_run: Option<usize>,
     unsupported: Vec<String>,
+    rasterized: Vec<String>,
     alpha_slots: u32,
     paint: Option<(NodeId, usize)>,
     paint_node: Option<NodeId>,
     /// Bakes from the previous compile, reused when their inputs match.
-    baked_prev: Vec<(BakeKey, Arc<Raster>)>,
+    baked_prev: Vec<Baked>,
     /// Bakes this compile produced, kept for the next one.
-    baked_new: Vec<(BakeKey, Arc<Raster>)>,
+    baked_new: Vec<Baked>,
     _doc: &'a Document,
 }
 
@@ -277,30 +409,18 @@ impl Compiler<'_> {
 
     fn bake_cached(&mut self, node: &CompositeNode, mask_shape: bool) -> Arc<Raster> {
         let key = Self::bake_key(node, mask_shape);
-        let hit = self
+        let previous = self
             .baked_prev
             .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, r)| r.clone());
-        let raster = hit.unwrap_or_else(|| self.bake(node));
-        self.baked_new.push((key, raster.clone()));
+            .find(|b| b.key.node == key.node && b.key.mask_shape == key.mask_shape);
+        let raster = bake(node, self.width, self.height, self.space, previous);
+        self.baked_new.push(Baked {
+            key,
+            raster: raster.clone(),
+            node: node.clone(),
+            source: self.sources.len(),
+        });
         raster
-    }
-
-    fn bake(&self, node: &CompositeNode) -> Arc<Raster> {
-        let mut alone = node.clone();
-        alone.visible = true;
-        alone.opacity = 1.0;
-        alone.blend = BlendMode::Normal;
-        alone.blending = Default::default();
-        alone.clip_to = None;
-        let tree = CompositeTree {
-            width: self.width,
-            height: self.height,
-            space: self.space,
-            nodes: vec![alone],
-        };
-        Arc::new(flatten(&tree, 0))
     }
 
     fn list(&mut self, nodes: &[CompositeNode], depth: usize) {
@@ -372,6 +492,13 @@ impl Compiler<'_> {
                     continue;
                 }
                 NodeContent::Pixels { raster, placement } => {
+                    if self._doc.node(node.id).is_some_and(|n| {
+                        matches!(n.kind, NodeKind::Text { .. } | NodeKind::Path { .. })
+                    }) {
+                        self.rasterized.push(format!(
+                            "{name}: vector appearance rasterized for color and feature fidelity"
+                        ));
+                    }
                     let (rw, rh) = raster.size();
                     let source = if placement.is_identity()
                         && node.mask.is_none()
@@ -500,6 +627,7 @@ impl Canvas {
             runs: Vec::new(),
             open_run: None,
             unsupported: Vec::new(),
+            rasterized: Vec::new(),
             alpha_slots: 0,
             paint: None,
             paint_node,
@@ -513,16 +641,23 @@ impl Canvas {
             .iter()
             .flat_map(|(_, r, _)| r.base_tiles().map(|(_, t)| t.as_ptr() as usize))
             .collect();
-        let filled: u32 = compiler
+        // All implicit tiles with the same fill share one atlas slot.
+        let fills: std::collections::HashSet<[u16; 4]> = compiler
             .sources
             .iter()
-            .filter(|(_, r, _)| r.fill() != [0; 4])
-            .map(|(_, r, _)| {
-                let (x, y) = r.tiles_at(0);
-                (x * y) as u32
-            })
-            .sum();
-        let mut atlas = Atlas::new(gpu.clone(), unique.len() as u32 + filled + headroom);
+            .filter_map(|(_, r, _)| (r.fill() != [0; 4]).then_some(r.fill()))
+            .collect();
+        let slots = unique.len() as u64 + fills.len() as u64 + u64::from(headroom);
+        let pages = slots.div_ceil(crate::atlas::PER_PAGE as u64).max(1);
+        // Leave room for the UI and CPU document on shared-memory machines.
+        // Refuse before allocating; the host can render this document on CPU.
+        let bytes = pages * u64::from(crate::atlas::PAGE).pow(2) * 8 * 4 / 3;
+        anyhow::ensure!(
+            pages <= u64::from(gpu.device.limits().max_texture_array_layers)
+                && bytes <= 1536 * 1024 * 1024,
+            "document exceeds the 1536 MiB canvas atlas budget"
+        );
+        let mut atlas = Atlas::new(gpu.clone(), slots as u32);
         let canvas = Self::assemble(compiler, doc, device, &mut atlas)?;
         Ok((canvas, atlas))
     }
@@ -563,6 +698,7 @@ impl Canvas {
             runs: Vec::new(),
             open_run: None,
             unsupported: Vec::new(),
+            rasterized: Vec::new(),
             alpha_slots: 0,
             paint: None,
             paint_node,
@@ -677,6 +813,7 @@ impl Canvas {
             ops: compiler.ops,
             runs: compiler.runs,
             unsupported: compiler.unsupported,
+            rasterized: compiler.rasterized,
             paint: compiler.paint.map(|(_, s)| s),
             table,
             tables,
@@ -706,6 +843,9 @@ impl Canvas {
                     format!("{:?}", node.blending).hash(&mut h);
                     if let NodeContent::Fill(c) = &node.content {
                         c.map(f32::to_bits).hash(&mut h);
+                    }
+                    if let NodeContent::Pixels { raster, .. } = &node.content {
+                        raster.size().hash(&mut h);
                     }
                     h.finish()
                 };
@@ -754,6 +894,74 @@ impl Canvas {
         Some(changed)
     }
 
+    /// Refresh pixel-only edits without rebuilding the program or tile tables.
+    /// A baked source keeps its document alignment and updates its bake inputs
+    /// too, so later structural edits can reuse the refreshed pixels.
+    pub(crate) fn replace_pixels(
+        &mut self,
+        doc: &Document,
+        changed: &[NodeId],
+        queue: &wgpu::Queue,
+        atlas: &mut Atlas,
+    ) -> anyhow::Result<bool> {
+        if !changed.iter().all(|id| {
+            matches!(
+                doc.node(*id).map(|n| &n.kind),
+                Some(NodeKind::Raster { .. })
+            ) && (self.sources.iter().any(|s| s.node == Some(*id))
+                || self
+                    .baked
+                    .iter()
+                    .any(|b| b.key.node == *id && !b.key.mask_shape))
+        }) {
+            return Ok(false);
+        }
+        fn find(nodes: &[CompositeNode], id: NodeId) -> Option<&CompositeNode> {
+            for node in nodes {
+                if node.id == id {
+                    return Some(node);
+                }
+                if let NodeContent::Group(children) = &node.content
+                    && let Some(found) = find(children, id)
+                {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let tree = changed
+            .iter()
+            .any(|id| self.baked.iter().any(|b| b.key.node == *id))
+            .then(|| doc.composite_tree());
+        for id in changed {
+            if let Some(index) = self.sources.iter().position(|s| s.node == Some(*id)) {
+                let NodeKind::Raster { raster, .. } = &doc.node(*id).unwrap().kind else {
+                    unreachable!()
+                };
+                self.replace_raster(queue, atlas, index, raster.clone(), None)?;
+            } else {
+                let index = self
+                    .baked
+                    .iter()
+                    .position(|b| b.key.node == *id && !b.key.mask_shape)
+                    .unwrap();
+                let node = find(&tree.as_ref().unwrap().nodes, *id)
+                    .ok_or_else(|| anyhow::anyhow!("baked source node missing: {id}"))?;
+                let old = &self.baked[index];
+                let raster = bake(node, self.width, self.height, self.space, Some(old));
+                let source = old.source;
+                self.replace_raster(queue, atlas, source, raster.clone(), None)?;
+                self.baked[index] = Baked {
+                    key: Compiler::bake_key(node, false),
+                    node: node.clone(),
+                    raster,
+                    source,
+                };
+            }
+        }
+        Ok(true)
+    }
+
     /// Identity of the vector content, for deciding whether the Vello layer
     /// has to be re-encoded.
     ///
@@ -761,19 +969,24 @@ impl Canvas {
     /// changes because the document stores them behind `Arc`; style is stored
     /// by value and compared directly. Re-encoding every object costs about
     /// 20 ms on a 4K document, so a raster-only edit must not pay it.
-    pub fn vector_signature(&self) -> Vec<(NodeId, usize, Option<PathStyle>)> {
+    pub fn vector_signature(&self) -> Vec<(usize, NodeId, usize, Option<PathStyle>)> {
         self.runs
             .iter()
-            .flatten()
-            .map(|item| match &item.kind {
+            .enumerate()
+            .flat_map(|(run, items)| items.iter().map(move |item| (run, item)))
+            .map(|(run, item)| match &item.kind {
                 VectorKind::Path { path, style } => (
+                    run,
                     item.node,
                     Arc::as_ptr(path) as *const u8 as usize,
                     Some(*style),
                 ),
-                VectorKind::Text { spec } => {
-                    (item.node, Arc::as_ptr(spec) as *const u8 as usize, None)
-                }
+                VectorKind::Text { spec } => (
+                    run,
+                    item.node,
+                    Arc::as_ptr(spec) as *const u8 as usize,
+                    None,
+                ),
             })
             .collect()
     }
@@ -925,7 +1138,7 @@ impl Canvas {
             let new = s.raster.base_tile(c);
             let same = match (old.base_tile(c), new) {
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                (None, None) => true,
+                (None, None) => old.fill() == s.raster.fill(),
                 _ => false,
             };
             if same {
@@ -937,6 +1150,14 @@ impl Canvas {
                         .acquire(tile)
                         .ok_or_else(|| anyhow::anyhow!("tile atlas full"))?,
                 ),
+                None if s.raster.fill() != [0; 4] => {
+                    let tile = atlas.fill_tile(s.raster.fill());
+                    Some(
+                        atlas
+                            .acquire(&tile)
+                            .ok_or_else(|| anyhow::anyhow!("tile atlas full"))?,
+                    )
+                }
                 None => None,
             };
             if let Some(old_slot) = std::mem::replace(&mut s.slots[i], slot) {

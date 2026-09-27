@@ -51,10 +51,27 @@ pub struct Engine {
     /// `None` to recomposite every layer every frame.
     pub cache: Option<CompositeCache>,
     cached_ops: u32,
+    cache_enabled: bool,
     pending: Option<wgpu::CommandEncoder>,
     /// The document structure this program was compiled from, so a reload can
     /// tell a pixel edit from a change that needs a new program.
     signature: Vec<crate::canvas::NodeSig>,
+    vello: bool,
+    paint_node: Option<NodeId>,
+}
+
+/// Enough slots for every visible tile, including a partially visible border.
+/// Above 128 MiB the engine composites directly instead of caching a partial
+/// viewport (which would otherwise leave holes in the rendered document).
+fn cache_slots(document: (u32, u32), screen: (u32, u32), camera: Camera) -> u32 {
+    let span = (emulsion_raster::TILE << camera.level()) as f64;
+    let columns = ((screen.0 as f64 / (camera.zoom * span)).ceil() as u32).saturating_add(1);
+    let rows = ((screen.1 as f64 / (camera.zoom * span)).ceil() as u32).saturating_add(1);
+    let (dx, dy) = emulsion_raster::composite::tiles_at(document.0, document.1, camera.level());
+    columns
+        .min(dx as u32)
+        .saturating_mul(rows.min(dy as u32))
+        .max(1)
 }
 
 impl Engine {
@@ -67,6 +84,7 @@ impl Engine {
         cache: bool,
         screen: (u32, u32),
     ) -> anyhow::Result<Self> {
+        gpu.ensure_alive()?;
         let t = Instant::now();
         // Room for painting a full layer's worth of new tiles.
         let headroom = doc.width.div_ceil(256) * doc.height.div_ceil(256) + 64;
@@ -97,10 +115,14 @@ impl Engine {
         } else {
             0
         };
-        // Four views' worth of tiles at 100% on a 2560×1600 screen.
-        let cache = (cached_ops > 0).then(|| CompositeCache::new(gpu.clone(), 4 * 11 * 8));
+        let camera = Camera::fit((doc.width, doc.height), screen);
+        let slots = cache_slots((doc.width, doc.height), screen, camera);
+        let cache_enabled = cache;
+        let cache =
+            (cached_ops > 0 && slots <= 256).then(|| CompositeCache::new(gpu.clone(), slots));
         Ok(Self {
-            camera: Camera::fit((doc.width, doc.height), screen),
+            camera,
+            cache_enabled,
             cache,
             cached_ops,
             gpu,
@@ -113,6 +135,8 @@ impl Engine {
             hud: Vec::new(),
             pending: None,
             signature: Canvas::signature(doc),
+            vello,
+            paint_node,
         })
     }
 
@@ -135,44 +159,65 @@ impl Engine {
         paint_node: Option<NodeId>,
         vello: bool,
     ) -> anyhow::Result<()> {
-        // Fast path: if the only difference is pixels in direct sources, swap
-        // those rasters. Rebuilding the program costs ~66 ms on a 4K document
-        // where this costs ~1 ms, and a stroke commits every frame.
+        self.gpu.ensure_alive()?;
+        // Pixel-only edits keep the program and tile tables. Masked or placed
+        // sources rebake their changed pixels before replacing atlas tiles.
         let t0 = Instant::now();
         let after = Canvas::signature(doc);
-        if let Some(changed) = Canvas::pixels_only_change(&self.signature, &after)
-            && changed
-                .iter()
-                .all(|id| self.canvas.sources.iter().any(|s| s.node == Some(*id)))
+        if self.canvas.width == doc.width
+            && self.canvas.height == doc.height
+            && self.canvas.space == doc.blend_space
+            && self.vello == vello
+            && self.paint_node == paint_node
+            && let Some(changed) = Canvas::pixels_only_change(&self.signature, &after)
         {
-            for id in changed {
-                let Some(index) = self.canvas.sources.iter().position(|s| s.node == Some(id))
-                else {
-                    continue;
-                };
-                let Some(raster) = doc.node(id).and_then(|n| match &n.kind {
-                    emulsion_core::NodeKind::Raster { raster, .. } => Some(raster.clone()),
-                    _ => None,
-                }) else {
-                    continue;
-                };
-                self.canvas.replace_raster(
-                    &self.gpu.queue,
-                    &mut self.atlas,
-                    index,
-                    raster,
-                    None,
-                )?;
+            let (vectors, pixels): (Vec<_>, Vec<_>) = changed.into_iter().partition(|id| {
+                self.canvas
+                    .runs
+                    .iter()
+                    .flatten()
+                    .any(|item| item.node == *id)
+            });
+            let mut current = if vectors.is_empty() {
+                Default::default()
+            } else {
+                crate::canvas::vector_nodes(doc)
+            };
+            // A style edit can make a formerly Vello-drawn node ineligible.
+            // Such transitions need a new program, not an in-place fragment.
+            if vectors.iter().all(|id| current.contains_key(id))
+                && self
+                    .canvas
+                    .replace_pixels(doc, &pixels, &self.gpu.queue, &mut self.atlas)?
+            {
+                for id in vectors {
+                    let kind = current.remove(&id).expect("checked vector");
+                    for item in self
+                        .canvas
+                        .runs
+                        .iter_mut()
+                        .flatten()
+                        .filter(|item| item.node == id)
+                    {
+                        item.kind = kind.clone();
+                    }
+                    self.vectors.edit(id, |previous| *previous = kind);
+                }
+                self.signature = after;
+                tracing::debug!(
+                    ms = t0.elapsed().as_secs_f64() * 1e3,
+                    "reload: content only"
+                );
+                return Ok(());
             }
-            self.signature = after;
-            tracing::debug!(ms = t0.elapsed().as_secs_f64() * 1e3, "reload: pixels only");
-            return Ok(());
         }
 
         let vectors_before = self.canvas.vector_signature();
         self.canvas
             .recompile(doc, &self.gpu, &mut self.atlas, paint_node, vello)?;
         self.signature = after;
+        self.vello = vello;
+        self.paint_node = paint_node;
         // The compositor holds the serialised op program. Without this the
         // shader keeps running the previous document's ops, so a structural
         // change -- a layer added, removed or reordered -- recompiles and
@@ -197,7 +242,7 @@ impl Engine {
             objects = self.vectors.objects.len(),
             "reload: rebuilt"
         );
-        self.cached_ops = if self.cache.is_some() {
+        self.cached_ops = if self.cache_enabled {
             self.canvas.cacheable_prefix() as u32
         } else {
             0
@@ -251,6 +296,21 @@ impl Engine {
         format: wgpu::TextureFormat,
         output: Output,
     ) -> anyhow::Result<FrameTimes> {
+        self.gpu.ensure_alive()?;
+        let slots = cache_slots(
+            (self.canvas.width, self.canvas.height),
+            self.screen,
+            self.camera,
+        );
+        if self.cached_ops == 0 || slots > 256 {
+            self.cache = None;
+        } else if self
+            .cache
+            .as_ref()
+            .is_none_or(|cache| cache.capacity() < slots || cache.capacity() > slots.max(64) * 3)
+        {
+            self.cache = Some(CompositeCache::new(self.gpu.clone(), slots));
+        }
         let start = Instant::now();
         let mut times = FrameTimes::default();
         let mut encoder = self.pending.take().unwrap_or_else(|| {
@@ -294,7 +354,7 @@ impl Engine {
             let (view, size) = self.vectors.hud(&lines)?;
             (view.clone(), size)
         };
-        let vector_view = self.vectors.view(self.screen).clone();
+        let vector_view = self.vectors.view(self.screen)?.clone();
         let view = ViewUniform {
             screen: [self.screen.0 as f32, self.screen.1 as f32],
             doc: [self.canvas.width as f32, self.canvas.height as f32],

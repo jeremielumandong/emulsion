@@ -133,7 +133,7 @@ impl WgpuContext {
         let backend = WgpuBackend::Native(adapter.get_info().backend);
         let device = Arc::new(device);
         let queue = Arc::new(queue);
-        publish_shared_gpu(&adapter, &device, &queue);
+        publish_shared_gpu(&adapter, &device, &queue, &device_lost);
         Ok(Self {
             instance,
             adapter,
@@ -643,13 +643,20 @@ pub struct SharedGpu {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub generation: u64,
+    /// Shared loss flag; consumers must not replace GPUI's device callback.
+    pub device_lost: Arc<AtomicBool>,
 }
 
 #[cfg(not(target_family = "wasm"))]
 static SHARED_GPU: std::sync::Mutex<Option<SharedGpu>> = std::sync::Mutex::new(None);
 
 #[cfg(not(target_family = "wasm"))]
-fn publish_shared_gpu(adapter: &wgpu::Adapter, device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>) {
+fn publish_shared_gpu(
+    adapter: &wgpu::Adapter,
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
+    device_lost: &Arc<AtomicBool>,
+) {
     let mut shared = SHARED_GPU.lock().unwrap_or_else(|e| e.into_inner());
     let generation = shared.as_ref().map_or(1, |s| s.generation + 1);
     *shared = Some(SharedGpu {
@@ -657,6 +664,7 @@ fn publish_shared_gpu(adapter: &wgpu::Adapter, device: &Arc<wgpu::Device>, queue
         device: Arc::clone(device),
         queue: Arc::clone(queue),
         generation,
+        device_lost: device_lost.clone(),
     });
 }
 

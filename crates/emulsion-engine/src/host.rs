@@ -38,7 +38,9 @@ pub mod backend {
     /// GPUI has created its device by the first paint; the engine adopts it.
     pub fn device(tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {
         let shared = gpui_wgpu::shared_gpu().context("GPUI has not published its wgpu device")?;
-        Ok(Gpu::from_shared(&shared, tiles))
+        let gpu = Gpu::from_shared(&shared, tiles);
+        gpu.ensure_alive()?;
+        Ok(gpu)
     }
 
     /// The previous GPUI frame, including its present, is complete once

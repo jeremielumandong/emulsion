@@ -7,7 +7,14 @@ covers only the integration into the shipping app.*
 *Windows follow-up, 2026-09-26: the build, embedded scenarios, live editor
 workflows and frame-pacing checks below passed on the RX 7700 XT at `96bc42a`.
 See [Stage 2 Windows validation](RESULTS.md#stage-2-windows-validation).
-The other engineering tasks remain open.*
+The engineering follow-up below was implemented on `feat/vello-migration-ui`;
+these Windows results predate that follow-up.*
+
+**Current follow-up:** tasks 1, 2, 4–8, 10 and 12 have implementation and Linux
+regression coverage. Task 11 now has a native EditorView benchmark. Task 3
+remains open for macOS validation. Task 9 retains opaque-vector edge differences;
+the new brush/recovery code also needs a
+Windows follow-up. See [platform validation](PLATFORM_VALIDATION.md).
 
 Stage 1 asked whether an owned wgpu + Vello canvas beats GPUI painting.
 Stage 2 puts that engine behind the real canvas. It runs, it draws, and it
@@ -25,16 +32,18 @@ handed.
 - **`crates/emulsion-ui/src/viewport_gpu.rs`** — the canvas path. It owns the
   engine, paints its texture into the GPUI scene, and refuses whenever it
   cannot reproduce the CPU result, in which case `viewport` takes over. A
-  refusal is sticky, so a fallback costs one frame.
+  refusal is visible in the status strip and retries after document/device
+  changes; transient failures use a two-second backoff on subsequent frames.
 - **Document sync by tile identity** — `Canvas::signature` separates the
-  document's structure from its pixel content. When only pixels in direct
-  sources changed, `Engine::reload` swaps those rasters instead of rebuilding
-  the program.
+  document's structure from its pixel content. Pixel edits refresh direct or baked sources without
+  rebuilding the program. Content-only vector edits update their fragments.
 
 **On by default** where a hosting backend exists. `EMULSION_GPU_CANVAS=0`
 forces the CPU tile path.
 
-### Measured, on the 4K 25-layer test document
+### Original baseline, on the 4K 25-layer test document
+
+These figures predate the follow-up below; they are retained as historical context.
 
 | | |
 |---|---|
@@ -58,12 +67,33 @@ wipe, rulers), so the engine's pixels go between them in the order the tile
 path draws them. Verified in the app: rulers, stage and plate render with the
 engine drawing the document.
 
-**2. Painting on a masked or placed layer costs ~67 ms per frame.** Those
-compile to baked sources, whose pixels are a function of the mask and
-placement rather than the raster alone, so `Canvas::replace_raster` cannot
-swap them and the whole program rebuilds. Fix: re-bake the one changed node
-and replace that source. `BakeKey` in `canvas.rs` already records what a bake
-depends on. Ordinary pixel layers take the 1.5 ms path.
+**2. Painting on a masked or placed layer costs ~67 ms per frame.** *(done)*
+
+Pixel edits now refresh the affected baked source without rebuilding the
+program or tile-table buffer. Bakes retain their input tiles: masked layers
+rebake only document tiles overlapping changed source tiles, including
+fractional translations, rotation, anisotropic scale and flips. Damage includes
+the source mip footprint and bilinear filtering halo. Unchanged output tiles retain their identity,
+atlas slots and composite-cache entries. Erasing and undo/redo use the same path.
+
+Changes to the mask, placement itself, source size or implicit fill retain a
+full bake because their damage is not restricted to changed source pixels.
+The original ~67 ms figure above predates this change; it is not a current
+shipping-editor latency measurement.
+
+Local release microbenchmark on Ryzen 7 8700G (3840×2160 solid layer, uniform mask, one changed
+256×256 source tile, seven iterations): full bake **85.316 ms** median;
+incremental bake **1.319 ms** median. This isolates CPU baking; it does not
+measure total frame time or input-to-pixel latency. Reproduce with:
+
+```sh
+cargo test --locked --release -p emulsion-engine benchmark_masked_tile_rebake -- --ignored --nocapture
+```
+
+Regression checks compare partial bakes to full CPU renders through edits,
+erase, undo/redo, mask/fill/size changes and resampling fallbacks. GPU readback
+on Linux/RADV, RX 7700 XT, also checks pixel parity, retained tile tables,
+composite-cache invalidation and unchanged reloads.
 
 **3. macOS still needs validation; Windows is validated.** The extracted
 engine builds on Windows with `--features gpui`, as do the spike and app.
@@ -72,10 +102,16 @@ WARP also renders the saved test project through a matching D3D12 software
 adapter on this machine. This does not establish support for every Windows
 driver or complete the macOS checks.
 
-**4. Device loss is not handled.** `gpui_wgpu::shared_gpu().generation` exists
-for it and nothing reads it. A GPU reset leaves the canvas dead until
-restart. One was triggered during stage 1 by a long Vello dispatch, so this
-is not hypothetical.
+**4. Device loss recovery.** *(implemented; hardware reset validation remains)*
+
+The engine checks device-loss flags before work and rejects shared devices from
+an older GPUI generation. Linux shares GPUI’s existing loss flag without replacing
+its callback; owned devices install their own callback. The viewport discards
+invalid resources, uses CPU rendering, and retries a replacement device.
+Live brush points are journaled and replayed on CPU after failure, including
+failure after the last input sample. Tests cover owned-device destruction and
+recreation, retry/backoff decisions, and stroke replay; they do not simulate a
+real OS/shared-device reset.
 
 ### Performance
 
@@ -102,6 +138,12 @@ cost nothing -- MCP and batch operations, undo and redo chains, documents
 loaded but not shown, and every intermediate step of a multi-command edit.
 Loading an ORA no longer rasterises its vector layers up front either.
 
+Follow-up: lazy-raster identities now survive rebuilding a composite tree.
+Ready pixels identify the retained source raster; deferred vector pixels use
+the vector cache's identity. Previously each wrapper allocation appeared to be
+new content, defeating no-op reloads and bake reuse. Building signatures still
+does not rasterise vector layers.
+
 **5b. The original diagnosis, for reference.**
 `emulsion-core/src/transform.rs:189` calls `text::rasterize(&updated, w, h)`
 on every transform, where `w, h` are the document's dimensions; paths do the
@@ -115,36 +157,87 @@ across `emulsion-core`, `emulsion-io`, `emulsion-mcp` and `emulsion-ui`, so
 it needs its own session and tests over save, load and export — a missed
 reader renders blank rather than failing.
 
-**6. Structural vector changes re-encode every object.**
-`VectorLayer::resync` keeps the Vello renderer and reuses unchanged
-fragments, so a move re-encodes one object. A structural change still walks
-them all; `VectorLayer::edit` exists for finer updates.
+**6. Incremental vector updates.** *(done)*
 
-**7. The GPU brush is not wired in.** Strokes still stamp on the CPU and
-upload dirty tiles. Brush B — dabs drawn straight into the atlas, read back
-once at stroke end — measured 2.3–2.4× better input-to-pixel in both hosts
-and is the largest interactive win still unclaimed.
+Content-only edits call `VectorLayer::edit` for the affected objects. Structural
+changes still walk the scene to rebuild ordering/culling but reuse unchanged
+encoded fragments. Run boundaries are part of the vector signature, so opacity
+or isolation changes cannot leave old run targets in use. Tests assert that a
+single edit encodes one object and that run topology updates correctly.
+
+**7. GPU brush in the shipping editor.** *(done for compatible brush settings)*
+
+Opaque-color and eraser strokes with the supported round-dab settings stamp
+straight into the atlas, flush at frame boundaries, and read back once on commit.
+The normal document transaction supplies undo/redo. Save/export materializes
+in-progress GPU strokes, and closing detects them as unsaved changes. Cancellation
+discards the preview. QuickShape stays on GPU while moving and replays on CPU
+when a hold needs shape fitting. Device failure replays the complete journal.
+
+Dynamics, wet/secondary brushes, non-default opacity/blending, selections,
+mask painting, transparency locks, symmetry and transformed paint targets retain
+the CPU stroke implementation. GPU/CPU color and eraser parity, recovery,
+QuickShape, save and cancel have regression coverage. Commit readback is currently
+synchronous; it happens once per stroke, not for every input frame.
 
 ### Correctness
 
-**8. Unsupported features fall back silently.** Adjustment layers, layer
-styles, advanced blending, Dissolve and masked vector nodes are not
-implemented; `Canvas::unsupported` lists them and the canvas refuses, so the
-document renders on the CPU path. Correct, but a document can quietly get the
-other renderer with no indication.
+**8. Visible and recoverable fallback.** *(done)*
 
-**9. Translucent overlapping vector content shifts colour.** Vello blends
-within a run in sRGB while Emulsion blends in linear light: 3.25% of pixels
-over one 8-bit code on `vectors-500`, reproduced on Intel to within 0.02
-points of lavapipe. `RESULTS.md` lists the three options; none chosen.
+The status strip shows **CPU canvas** with the refusal reason, or **Compatibility
+rendering** when individual vector appearances use CPU rasterization. Empty/offscreen CPU tile plans no longer accidentally retry the GPU or schedule
+endless fallback redraws. Unsupported
+features are checked after reload as well as initial compilation. Removing them
+or replacing the GPU device permits retry; transient failures back off.
 
-**10. Memory.** 1301 MiB of textures for a 4K document, on an integrated GPU
-where that is system memory, on top of the CPU's own copy.
+**9. Vector color fidelity.** *(translucent paints fixed; broader parity still open)*
 
-**11. Stage-2 results — Windows report added.** `RESULTS.md` now records the
-Windows validation and paced comparisons, with raw data and an editor
-screenshot. A complete shipping-editor latency benchmark is still outstanding;
-the reported frame/latency numbers are from the spike hosts.
+Translucent path fill/stroke and text paints use the reference CPU rasterizer and
+linear-light GPU compositor. Opaque supported content remains Vello-rendered.
+This avoids Vello's sRGB blending shift without switching the whole document to
+CPU compositing. The compatibility badge explains this choice. A GPU readback
+test compares overlapping translucent colored vectors against the reference.
+This is not a new linear-target Vello implementation: compatibility nodes use
+raster pixels at document resolution.
+
+The full original `vectors-500` fixture still differs at 3.250% of pixels by more
+than one display code (0.008% off-edge by more than three codes). Inspection of
+`testdocs::vectors` shows it generates **opaque** paints, so the earlier tracker
+incorrectly attributed that entire figure to translucent paint. The new alpha
+fallback cannot fix those opaque edge/overlap differences. Linear 8-bit Vello
+targets remain worse (14.152% over one code); switching to that mode is not a
+fidelity fix. This item stays open rather than masking the measured result.
+
+**10. Texture memory.** *(allocation improvements and limits implemented)*
+
+Implicit fills are counted once per distinct color when sizing the atlas;
+composite cache capacity follows the visible mip-level tile grid (capped at
+128 MiB, otherwise direct compositing); raster-only scenes use a 1×1 placeholder
+instead of a full-size vector target. Vector targets are bounded to 128 MiB and
+atlas textures to 1536 MiB, with device dimension/layer limits checked before
+allocation. Oversized documents fall back to CPU rather than trigger a validation
+panic. Texture figures exclude CPU document data and driver/Vello internal buffers.
+A 30-layer implicit-fill 4K regression fixture stays below 256 MiB. Dense, unique
+raster content still needs its atlas storage; this is not sparse GPU residency.
+
+**11. Shipping-editor measurement.** *(native harness implemented)*
+
+`editor_canvas_bench`, behind the `canvas-bench` feature, opens the real EditorView
+and exercises pan, brush and editable-text updates. It records renderer/brush
+routing, texture bytes, input-to-canvas-submission and the next platform frame
+callback. CPU samples wait for current tiles. It uses isolated temporary app data.
+These measurements are distinct from physical input-to-photon latency. See
+[platform validation](PLATFORM_VALIDATION.md) and the follow-up in `RESULTS.md`.
+
+**12. Copy/paste rasterises text and loses crispness when enlarged.** *(done
+for one whole text layer copied within the running app)*
+
+Copy retains the text node alongside the portable PNG clipboard image. When
+that image still matches, Paste creates editable text with the original spec
+and a destination-sized lazy raster cache, including across tabs. Same-document
+paste preserves the exact position; cross-document paste centers it. A pixel
+selection or a mixed/multiple-layer copy still copies pixels. External apps
+receive the PNG. Native clipboard data does not persist across app restarts.
 
 ## For the Windows session
 
@@ -164,8 +257,9 @@ Completed on 2026-09-26 at `96bc42a`:
   override (`EMULSION_GPU_CANVAS=0`).
 - [x] Record measurements and limits in `RESULTS.md`.
 
-Both brush pipelines are tested in the **spike**. The editor still uses CPU
-stamping; task 7 remains open. No Windows backend changes were needed.
+At that recorded commit, both brush pipelines were tested only in the **spike**.
+The shipping-editor GPU brush added in this follow-up needs Windows revalidation.
+No Windows backend changes were needed for the earlier validation.
 
 The backend is `mod backend` under `#[cfg(target_os = "windows")]` in
 `crates/emulsion-engine/src/host.rs`: the engine renders into a shared D3D12
@@ -216,6 +310,6 @@ why the free-running ones mislead.
   image_opens_for_editing` ran indefinitely instead of its usual 0.19 s. The
   guard is in `viewport_gpu::enabled`. If a test ever needs the engine, it
   needs a real surface, not that flag removed.
-- `emulsion-ui`'s `tool_usability_tests` brush-studio pair fails
-  intermittently on a clean tree, unrelated to any of this. Two failures
-  there are the expected baseline, not a regression.
+- The Linux follow-up full UI run passed 477 tests with one ignored, including
+  GPU stroke replay/save/cancel and QuickShape lifecycle coverage. Do not treat failing
+  brush-studio tests as automatically acceptable.

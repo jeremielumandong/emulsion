@@ -9,6 +9,13 @@ description = "The Emulsion image editor"
 [lints]
 workspace = true
 
+[features]
+canvas-bench = ["emulsion-ui/canvas-bench"]
+
+[[example]]
+name = "editor_canvas_bench"
+required-features = ["canvas-bench"]
+
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }

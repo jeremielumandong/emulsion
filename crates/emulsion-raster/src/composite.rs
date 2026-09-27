@@ -258,27 +258,46 @@ pub struct LazyRaster {
     /// Known without rendering, so a caller can size and identify the content
     /// it is not going to draw.
     size: (u32, u32),
+    identity: usize,
 }
 
 impl LazyRaster {
     /// Pixels that already exist.
     pub fn ready(raster: Arc<Raster>) -> Self {
         let size = (raster.width(), raster.height());
+        let identity = Arc::as_ptr(&raster) as usize;
         let ready = Arc::new(std::sync::OnceLock::new());
         let _ = ready.set(raster);
         Self {
             ready,
             make: None,
             size,
+            identity,
         }
     }
 
     /// Pixels to render on first use, at a size the caller already knows.
     pub fn deferred(size: (u32, u32), make: Arc<dyn Fn() -> Arc<Raster> + Send + Sync>) -> Self {
+        let ready = Arc::new(std::sync::OnceLock::new());
+        let identity = Arc::as_ptr(&ready) as usize;
         Self {
-            ready: Arc::new(std::sync::OnceLock::new()),
+            ready,
             make: Some(make),
             size,
+            identity,
+        }
+    }
+
+    /// Deferred pixels backed by an existing stable content identity. The
+    /// producer must keep that identity alive and change it when pixels change.
+    pub fn deferred_with_id(
+        size: (u32, u32),
+        identity: usize,
+        make: Arc<dyn Fn() -> Arc<Raster> + Send + Sync>,
+    ) -> Self {
+        Self {
+            identity,
+            ..Self::deferred(size, make)
         }
     }
 
@@ -290,7 +309,7 @@ impl LazyRaster {
     /// A stable identity for these pixels, for callers that key on the content
     /// without needing it. New content gets a new identity.
     pub fn id(&self) -> usize {
-        Arc::as_ptr(&self.ready) as *const u8 as usize
+        self.identity
     }
 
     /// The pixels, rendering them if this is the first ask.
@@ -1033,6 +1052,61 @@ fn source_level(to_doc: &DAffine2, scale: f64, max_level: u32) -> u32 {
         return 0;
     }
     (src_per_out.log2().floor() as u32).min(max_level)
+}
+
+/// Conservative document damage from changed base-level source pixels. Uses
+/// the same mip choice as sampling, including complete reduction blocks and
+/// the bilinear filter's one-texel halo. The result is clipped before integer
+/// conversion so large translations cannot overflow rectangle arithmetic.
+pub fn placed_damage(
+    raster: &Raster,
+    placement: &Placement,
+    changed: IRect,
+    document: IRect,
+) -> Option<IRect> {
+    let transform = placement.to_doc(raster.width(), raster.height());
+    if !transform.is_finite() || transform.matrix2.determinant().abs() < 1e-12 {
+        return None;
+    }
+    let level = source_level(&transform, 1.0, raster.max_level());
+    let step = (1u64 << level) as f64;
+    let exact = *placement == Placement::at(placement.x, placement.y)
+        && placement.x.fract() == 0.0
+        && placement.y.fract() == 0.0;
+    let halo = if exact { 0.0 } else { step };
+    let left = (changed.x as f64 / step).floor() * step - halo;
+    let top = (changed.y as f64 / step).floor() * step - halo;
+    let right = (changed.right() as f64 / step).ceil() * step + halo;
+    let bottom = (changed.bottom() as f64 / step).ceil() * step + halo;
+    let corners = [
+        dvec2(left, top),
+        dvec2(right, top),
+        dvec2(left, bottom),
+        dvec2(right, bottom),
+    ]
+    .map(|p| transform.transform_point2(p));
+    let lo = corners
+        .iter()
+        .fold(DVec2::splat(f64::INFINITY), |lo, p| lo.min(*p));
+    let hi = corners
+        .iter()
+        .fold(DVec2::splat(f64::NEG_INFINITY), |hi, p| hi.max(*p));
+    if !lo.is_finite() || !hi.is_finite() {
+        return None;
+    }
+    let x0 =
+        lo.x.floor()
+            .clamp(document.x as f64, document.right() as f64) as i32;
+    let y0 =
+        lo.y.floor()
+            .clamp(document.y as f64, document.bottom() as f64) as i32;
+    let x1 =
+        hi.x.ceil()
+            .clamp(document.x as f64, document.right() as f64) as i32;
+    let y1 =
+        hi.y.ceil()
+            .clamp(document.y as f64, document.bottom() as f64) as i32;
+    Some(IRect::new(x0, y0, (x1 - x0).max(0), (y1 - y0).max(0)))
 }
 
 /// The sampling grid for one output tile: source-level coordinates of the

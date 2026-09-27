@@ -16,6 +16,8 @@ mod brush_library_ui;
 mod brush_memory;
 mod brush_quick;
 mod brush_studio;
+#[cfg(feature = "canvas-bench")]
+pub mod canvas_benchmark;
 mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
@@ -486,6 +488,9 @@ impl EditorView {
         let start_services = !cx.has_global::<navigation_benchmark::NavigationBenchmark>();
         #[cfg(not(feature = "layout-bench"))]
         let start_services = true;
+        #[cfg(feature = "canvas-bench")]
+        let start_services =
+            start_services && !cx.has_global::<canvas_benchmark::CanvasBenchmark>();
         if start_services {
             crate::tablet::start();
             Self::start_autosave(cx);
@@ -691,7 +696,9 @@ impl EditorView {
     // ── Document changes ────────────────────────────────────────────────
 
     pub(crate) fn has_unsaved_changes(&self) -> bool {
-        self.editor.is_modified() || self.raw.is_pending()
+        self.editor.is_modified()
+            || self.raw.is_pending()
+            || matches!(&self.drag, Some(Drag::Tool(tools::ToolDrag::Stroke { gpu_points: Some(points), .. })) if !points.is_empty())
     }
 
     pub fn execute(&mut self, cmd: Command, cx: &mut Context<Self>) -> Option<NodeId> {
@@ -761,6 +768,7 @@ impl EditorView {
     }
 
     pub(crate) fn invalidate_pending_edits(&mut self) {
+        self.gpu_canvas.borrow_mut().cancel_brush();
         self.cancel_raw_develop();
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
         self.history_epoch = self.history_epoch.wrapping_add(1);
@@ -833,7 +841,11 @@ impl EditorView {
             // normally repaints the canvas after an edit -- never runs. Ask
             // for the repaint here instead, or a stroke would commit without
             // ever being shown.
-            if self.gpu_canvas.borrow().defers_to_gpu(&self.view) {
+            if self
+                .gpu_canvas
+                .borrow()
+                .defers_to_gpu(&self.view, self.editor.revision)
+            {
                 self.notify_canvas(cx);
             }
             self.tree_request = self.tree_request.wrapping_add(1);
@@ -2565,7 +2577,7 @@ impl EditorView {
                         // carries only the chrome -- stage, plate, grid, wipe,
                         // rulers -- which the engine does not draw. A refusal
                         // is sticky, so this yields for one frame at most.
-                        let images = !gpu_canvas.borrow().defers_to_gpu(&gpu_view);
+                        let images = !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev);
                         let plan = viewport::prepaint(
                             &scene,
                             &mut cache.borrow_mut(),
@@ -2620,7 +2632,7 @@ impl EditorView {
                     },
                     move |bounds, plan, window, cx| {
                         if let Some(plan) = plan {
-                            if !plan.has_images() && crate::viewport_gpu::enabled() {
+                            if !plan.composes_images() && crate::viewport_gpu::enabled() {
                                 // The engine draws the document, between the
                                 // chrome that sits under it and the chrome
                                 // that sits over it.
@@ -2634,6 +2646,10 @@ impl EditorView {
                                     window,
                                 );
                                 viewport::paint_over(&plan, &scene2, window, cx);
+                                #[cfg(feature = "canvas-bench")]
+                                if drawn {
+                                    canvas_benchmark::painted("gpu", cx);
+                                }
                                 if !drawn {
                                     // It refused; come back on the tile path.
                                     let again = w2.clone();
@@ -2643,6 +2659,12 @@ impl EditorView {
                                 }
                             } else {
                                 viewport::paint(plan, &scene2, &cache2, window, cx);
+                                #[cfg(feature = "canvas-bench")]
+                                if !cache2.borrow().in_flight
+                                    && cache2.borrow().pending_request_count() == 0
+                                {
+                                    canvas_benchmark::painted("cpu", cx);
+                                }
                             }
                         }
                         if let Some(mask) = &mask_view {
@@ -3000,6 +3022,17 @@ impl EditorView {
                     .text_ellipsis()
                     .test_support(),
             )
+            .children(self.gpu_canvas.borrow().renderer_notice(&self.view).map(
+                |(label, reason)| {
+                    mono(label, 10., p.muted)
+                        .id("canvas-renderer-status")
+                        .flex_none()
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(reason.clone())
+                                .build(window, cx)
+                        })
+                },
+            ))
             .children(controls)
             .test_support()
     }

@@ -512,8 +512,9 @@ impl Document {
                             // tens of milliseconds on a large document.
                             let cache = cache.clone();
                             NodeContent::Pixels {
-                                raster: emulsion_raster::composite::LazyRaster::deferred(
+                                raster: emulsion_raster::composite::LazyRaster::deferred_with_id(
                                     cache.size(),
+                                    cache.id(),
                                     Arc::new(move || cache.pixels().clone()),
                                 ),
                                 placement: emulsion_raster::Placement::default(),

@@ -27,6 +27,25 @@ pub fn test_brush(size: f32) -> Brush {
     }
 }
 
+/// Exact subset implemented by the atlas dab shader. Keep all dynamics,
+/// selection, opacity accumulation and complex tips on the CPU path.
+pub fn supports_brush(brush: Brush, ink: &Ink) -> bool {
+    let expected = Brush {
+        size: brush.size,
+        hardness: brush.hardness,
+        flow: brush.flow,
+        spacing: brush.spacing,
+        ..Default::default()
+    };
+    brush == expected
+        && brush == brush.sanitized()
+        && matches!(ink, Ink::Erase | Ink::Color([_, _, _, 1.0]))
+        && match ink {
+            Ink::Color(c) => c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+            _ => true,
+        }
+}
+
 pub const INK: [f32; 4] = [0.8, 0.12, 0.05, 1.0];
 
 /// Tiles overlapping `rect`.
@@ -124,6 +143,7 @@ pub struct GpuBrush {
     gpu: Arc<Gpu>,
     over: wgpu::RenderPipeline,
     clear: wgpu::RenderPipeline,
+    erase: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     quads: wgpu::Buffer,
     capacity: usize,
@@ -186,12 +206,28 @@ impl GpuBrush {
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
         let clear = pipeline("fs_clear", None);
+        let erase = pipeline(
+            "fs_dab",
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
+        );
         let capacity = 4096;
         let quads = Self::buffer(device, capacity);
         Self {
             gpu,
             over,
             clear,
+            erase,
             layout,
             quads,
             capacity,
@@ -251,6 +287,8 @@ impl DabPath {
 pub struct GpuStroke {
     source: usize,
     brush: Brush,
+    color: [f32; 4],
+    erase: bool,
     path: DabPath,
     pending: Vec<(f32, f32)>,
     touched: BTreeMap<TileCoord, Slot>,
@@ -276,8 +314,14 @@ pub struct Readback {
 
 impl GpuStroke {
     pub fn begin(source: usize, brush: Brush) -> Self {
+        Self::with_ink(source, brush, INK, false)
+    }
+
+    pub fn with_ink(source: usize, brush: Brush, color: [f32; 4], erase: bool) -> Self {
         Self {
             source,
+            color,
+            erase,
             path: DabPath::new(&brush),
             brush,
             pending: Vec::new(),
@@ -287,7 +331,9 @@ impl GpuStroke {
     }
 
     pub fn point(&mut self, x: f32, y: f32) {
-        self.path.feed(x, y, &mut self.pending);
+        if x.is_finite() && y.is_finite() {
+            self.path.feed(x, y, &mut self.pending);
+        }
     }
 
     /// Record draws for the dabs placed since the last frame.
@@ -370,7 +416,7 @@ impl GpuStroke {
                         ay as f32,
                     ],
                     dab: [cx, cy, r, self.brush.hardness],
-                    color: INK,
+                    color: self.color,
                     extra: [self.brush.flow, 0.0, 0.0, 0.0],
                 });
             }
@@ -426,7 +472,11 @@ impl GpuStroke {
                 pass.draw(0..6, clear);
             }
             if !draw.is_empty() {
-                pass.set_pipeline(&brush.over);
+                pass.set_pipeline(if self.erase {
+                    &brush.erase
+                } else {
+                    &brush.over
+                });
                 pass.draw(0..6, draw);
             }
         }
@@ -443,6 +493,10 @@ impl GpuStroke {
             tiles: tiles.len(),
             record_ms: t.elapsed().as_secs_f64() * 1e3,
         })
+    }
+
+    pub fn has_tiles(&self) -> bool {
+        !self.touched.is_empty()
     }
 
     /// Queue the painted tiles for readback. Submit `encoder` before polling.
@@ -489,6 +543,8 @@ impl Readback {
         atlas: &mut Atlas,
         source: usize,
     ) -> anyhow::Result<Arc<Raster>> {
+        gpu.ensure_alive()?;
+        anyhow::ensure!(self.is_ready(), "brush readback is not ready");
         if let Some(e) = self.failed.lock().unwrap().take() {
             anyhow::bail!("readback failed: {e}");
         }
@@ -507,5 +563,48 @@ impl Readback {
         let raster = Arc::new(canvas.sources[source].raster.with_changes(changes));
         canvas.adopt_raster(atlas, source, raster.clone(), &self.coords);
         Ok(raster)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eligibility_preserves_cpu_semantics_for_unsupported_brushes() {
+        let base = test_brush(120.0);
+        assert!(supports_brush(base, &Ink::Color(INK)));
+        assert!(supports_brush(base, &Ink::Erase));
+        for brush in [
+            Brush {
+                opacity: 0.5,
+                ..base
+            },
+            Brush {
+                size_pressure: 1.0,
+                ..base
+            },
+            Brush {
+                wetness: 0.2,
+                ..base
+            },
+            Brush {
+                stabilizer: 0.4,
+                ..base
+            },
+            Brush { tip: 1, ..base },
+            Brush {
+                scatter: 0.5,
+                ..base
+            },
+            Brush {
+                flow: f32::NAN,
+                ..base
+            },
+        ] {
+            assert!(!supports_brush(brush, &Ink::Color(INK)));
+        }
+        assert!(!supports_brush(base, &Ink::Smudge));
+        assert!(!supports_brush(base, &Ink::Color([0.2, 0.0, 0.0, 0.5])));
     }
 }

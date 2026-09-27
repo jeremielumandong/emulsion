@@ -4,13 +4,15 @@ use emulsion_raster::{IRect, Mask, select};
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use std::io::Cursor;
 
-/// The OS clipboard keeps a portable PNG; placement stays local to Emulsion.
+/// The OS clipboard keeps a portable PNG; placement and editable text stay
+/// local to Emulsion, valid only while the clipboard image still matches.
 /// Reuse placement only in the source document with a matching image ID;
 /// other documents center the pasted pixels so they remain on the canvas.
 struct ClipboardOrigin {
     image_id: u64,
     editor_id: EntityId,
     rect: IRect,
+    text: Option<Node>,
 }
 impl Global for ClipboardOrigin {}
 
@@ -382,6 +384,7 @@ impl EditorView {
             image_id: image.id,
             editor_id: cx.entity_id(),
             rect,
+            text: None,
         });
         true
     }
@@ -393,7 +396,23 @@ impl EditorView {
         match self.selected_pixels() {
             Ok((pixels, rect)) => {
                 if self.put_pixels_on_clipboard(&pixels, rect, cx) {
-                    self.set_status("Copied selected layer pixels.", false, cx);
+                    let roots = self.selected_layer_roots();
+                    let text = (self.editor.doc.selection.is_none() && roots.len() == 1)
+                        .then(|| self.editor.doc.node(roots[0]))
+                        .flatten()
+                        .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+                        .cloned();
+                    let editable = text.is_some();
+                    cx.global_mut::<ClipboardOrigin>().text = text;
+                    self.set_status(
+                        if editable {
+                            "Copied editable text layer."
+                        } else {
+                            "Copied selected layer pixels."
+                        },
+                        false,
+                        cx,
+                    );
                 }
             }
             Err(e) => self.set_status(e, true, cx),
@@ -603,6 +622,64 @@ impl EditorView {
             self.set_status("The clipboard does not contain an image.", true, cx);
             return;
         };
+        let text = cx
+            .try_global::<ClipboardOrigin>()
+            .filter(|origin| origin.image_id == image.id)
+            .and_then(|origin| {
+                origin
+                    .text
+                    .clone()
+                    .map(|node| (node, origin.editor_id == cx.entity_id(), origin.rect))
+            });
+        if let Some((mut node, same_document, rect)) = text {
+            let slot = match self.clipboard_slot() {
+                Ok(slot) => slot,
+                Err(e) => {
+                    self.set_status(e, true, cx);
+                    return;
+                }
+            };
+            // The copied spec, not its document-resolution raster, remains the
+            // source of truth. A destination-sized lazy cache also keeps CPU
+            // fallback and export correct when pasting into another document.
+            if let NodeKind::Text { spec, cache } = &mut node.kind {
+                *cache = emulsion_core::vector_cache::VectorRaster::text(
+                    spec.clone(),
+                    self.editor.doc.width,
+                    self.editor.doc.height,
+                );
+            }
+            node.name = format!("{} copy", node.name);
+            node.visible = true;
+            node.locked = false;
+            node.locks = Default::default();
+            node.link_group = None;
+            self.editor.begin("Paste text");
+            let result = self
+                .editor
+                .execute(Command::AddNode {
+                    node: Box::new(node),
+                    slot,
+                })
+                .and_then(|id| {
+                    if let Some(id) = id
+                        && !same_document
+                    {
+                        self.editor.execute(Command::TranslateNode {
+                            id,
+                            dx: (self.editor.doc.width as f64 - rect.w as f64) / 2.0
+                                - rect.x as f64,
+                            dy: (self.editor.doc.height as f64 - rect.h as f64) / 2.0
+                                - rect.y as f64,
+                        })?;
+                    }
+                    self.editor
+                        .execute(Command::SetSelection { selection: None })?;
+                    Ok(id)
+                });
+            self.finish_pixel_transaction(result, cx);
+            return;
+        }
         let raster = match clipboard_raster(&image) {
             Ok(raster) => raster,
             Err(e) => {

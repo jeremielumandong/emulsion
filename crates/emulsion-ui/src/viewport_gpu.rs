@@ -9,14 +9,14 @@
 //! with the spike so both use one implementation: GPUI's own wgpu device on
 //! Linux, an IOSurface on macOS, a shared D3D12 resource on Windows.
 //!
-//! It renders only. Pixel edits update existing atlas sources; structural
-//! changes recompile the program while retaining unchanged tiles in the atlas.
-//! Strokes are not routed to the GPU brush here.
+//! Pixel edits update existing atlas sources; structural changes retain
+//! unchanged tiles. Compatible brush strokes render into the atlas and read
+//! back once at commit, with a replay journal for CPU recovery.
 //!
 //! The path refuses whenever it cannot reproduce the CPU result, and the caller
 //! falls back to [`crate::viewport`]: a rotated view, a document using features
 //! the engine does not implement, or a host that cannot supply a device. A
-//! refusal is sticky, so the fallback costs one frame at most.
+//! refusal is retried after document/device changes; transient failures back off.
 
 use crate::viewport::View;
 
@@ -60,17 +60,81 @@ pub enum Status {
     /// Engine is live and painting.
     Active(Box<Canvas>),
     /// Engine cannot draw this document or view; use the CPU path.
-    Refused,
+    Refused {
+        reason: String,
+        revision: u64,
+        generation: Option<u64>,
+        retry_at: Option<std::time::Instant>,
+    },
+}
+
+fn device_generation() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        gpui_wgpu::shared_gpu().map(|shared| shared.generation)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 impl Status {
-    /// Whether the CPU tile path should stand down this frame.
-    ///
-    /// `Untried` counts, so the first frame doesn't composite tiles that the
-    /// engine is about to make redundant. A refusal is sticky and puts the CPU
-    /// path back permanently.
-    pub fn defers_to_gpu(&self, view: &View) -> bool {
-        enabled() && view.rotation.rem_euclid(360.0) == 0.0 && !matches!(self, Self::Refused)
+    #[cfg(feature = "canvas-bench")]
+    pub(crate) fn texture_bytes(&self) -> u64 {
+        match self {
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            Self::Active(canvas) => canvas.engine.texture_bytes(),
+            _ => 0,
+        }
+    }
+
+    fn retry_due(&self, revision: u64, generation: Option<u64>, now: std::time::Instant) -> bool {
+        match self {
+            Self::Refused {
+                revision: old,
+                generation: previous,
+                retry_at,
+                ..
+            } => {
+                *old != revision || *previous != generation || retry_at.is_some_and(|at| now >= at)
+            }
+            _ => true,
+        }
+    }
+
+    fn refuse(&mut self, reason: String, revision: u64, transient: bool) {
+        *self = Self::Refused {
+            reason,
+            revision,
+            generation: device_generation(),
+            retry_at: transient
+                .then(|| std::time::Instant::now() + std::time::Duration::from_secs(2)),
+        };
+    }
+
+    pub fn defers_to_gpu(&self, view: &View, revision: u64) -> bool {
+        enabled()
+            && view.rotation.rem_euclid(360.0) == 0.0
+            && self.retry_due(revision, device_generation(), std::time::Instant::now())
+    }
+
+    pub fn renderer_notice(&self, view: &View) -> Option<(&'static str, String)> {
+        if !enabled() {
+            return None;
+        }
+        if view.rotation.rem_euclid(360.0) != 0.0 {
+            return Some(("CPU canvas", "Rotated views use CPU rendering.".into()));
+        }
+        match self {
+            Self::Refused { reason, .. } => Some(("CPU canvas", reason.clone())),
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            Self::Active(canvas) if !canvas.engine.canvas.rasterized.is_empty() => Some((
+                "Compatibility rendering",
+                canvas.engine.canvas.rasterized.join("; "),
+            )),
+            _ => None,
+        }
     }
 }
 
@@ -86,6 +150,33 @@ mod unhosted {
     use super::{Status, View};
 
     pub enum Canvas {}
+
+    impl Status {
+        pub(crate) fn begin_brush(
+            &mut self,
+            _: &emulsion_core::Document,
+            _: u64,
+            _: emulsion_core::NodeId,
+            _: emulsion_raster::paint::Brush,
+            _: &emulsion_raster::paint::Ink,
+        ) -> bool {
+            false
+        }
+        pub(crate) fn brush_point(&mut self, _: emulsion_core::NodeId, _: f32, _: f32) {}
+        pub(crate) fn brush_alive(&self, _: emulsion_core::NodeId) -> bool {
+            false
+        }
+        pub(crate) fn flush_brush(&mut self, _: emulsion_core::NodeId) -> anyhow::Result<()> {
+            anyhow::bail!("GPU brush unavailable")
+        }
+        pub(crate) fn finish_brush(
+            &mut self,
+            _: emulsion_core::NodeId,
+        ) -> anyhow::Result<std::sync::Arc<emulsion_raster::Raster>> {
+            anyhow::bail!("GPU brush unavailable")
+        }
+        pub(crate) fn cancel_brush(&mut self) {}
+    }
 
     pub fn paint(
         _status: &mut Status,
@@ -111,9 +202,16 @@ mod hosted {
     use gpui_kit::*;
     use std::sync::Arc;
 
+    struct LiveBrush {
+        node: emulsion_core::NodeId,
+        source: usize,
+        stroke: emulsion_engine::brush::GpuStroke,
+    }
+
     pub struct Canvas {
+        live_brush: Option<LiveBrush>,
         gpu: Arc<Gpu>,
-        engine: Engine,
+        pub(super) engine: Engine,
         target: backend::Target,
         /// Document revision the program and atlas were compiled at.
         revision: u64,
@@ -132,6 +230,7 @@ mod hosted {
             }
             let target = backend::Target::new(&gpu, size)?;
             Ok(Self {
+                live_brush: None,
                 gpu,
                 engine,
                 target,
@@ -148,6 +247,119 @@ mod hosted {
         }
     }
 
+    impl Status {
+        pub(crate) fn begin_brush(
+            &mut self,
+            doc: &Document,
+            revision: u64,
+            node: emulsion_core::NodeId,
+            brush: emulsion_raster::paint::Brush,
+            ink: &emulsion_raster::paint::Ink,
+        ) -> bool {
+            if !super::enabled() || !emulsion_engine::brush::supports_brush(brush, ink) {
+                return false;
+            }
+            let Self::Active(canvas) = self else {
+                return false;
+            };
+            if canvas.live_brush.is_some() || canvas.gpu.is_lost() {
+                return false;
+            }
+            if canvas.revision != revision {
+                if canvas.engine.reload(doc, None, true).is_err()
+                    || !canvas.engine.canvas.unsupported.is_empty()
+                {
+                    *self = Self::Untried;
+                    return false;
+                }
+                canvas.revision = revision;
+            }
+            let Some(source) = canvas
+                .engine
+                .canvas
+                .sources
+                .iter()
+                .position(|source| source.node == Some(node))
+            else {
+                return false;
+            };
+            let (color, erase) = match ink {
+                emulsion_raster::paint::Ink::Color(color) => (*color, false),
+                emulsion_raster::paint::Ink::Erase => ([0.0, 0.0, 0.0, 1.0], true),
+                _ => return false,
+            };
+            canvas.live_brush = Some(LiveBrush {
+                node,
+                source,
+                stroke: emulsion_engine::brush::GpuStroke::with_ink(source, brush, color, erase),
+            });
+            true
+        }
+
+        pub(crate) fn brush_point(&mut self, node: emulsion_core::NodeId, x: f32, y: f32) {
+            if let Self::Active(canvas) = self
+                && let Some(live) = canvas.live_brush.as_mut().filter(|live| live.node == node)
+            {
+                live.stroke.point(x, y);
+            }
+        }
+
+        pub(crate) fn brush_alive(&self, node: emulsion_core::NodeId) -> bool {
+            matches!(self, Self::Active(canvas) if !canvas.gpu.is_lost()
+                && canvas.live_brush.as_ref().is_some_and(|live| live.node == node))
+        }
+
+        pub(crate) fn flush_brush(&mut self, node: emulsion_core::NodeId) -> anyhow::Result<()> {
+            let Self::Active(canvas) = self else {
+                anyhow::bail!("GPU brush unavailable");
+            };
+            canvas.gpu.ensure_alive()?;
+            let live = canvas
+                .live_brush
+                .as_mut()
+                .filter(|live| live.node == node)
+                .ok_or_else(|| anyhow::anyhow!("GPU brush interrupted"))?;
+            let (brush, document, atlas, encoder) = canvas.engine.brush_parts();
+            live.stroke.render(brush, document, atlas, encoder)?;
+            // Each upload of the reusable dab buffer must have its own submit.
+            canvas.engine.flush();
+            Ok(())
+        }
+
+        pub(crate) fn finish_brush(
+            &mut self,
+            node: emulsion_core::NodeId,
+        ) -> anyhow::Result<Arc<emulsion_raster::Raster>> {
+            self.flush_brush(node)?;
+            let Self::Active(canvas) = self else {
+                unreachable!()
+            };
+            let live = canvas.live_brush.take().expect("flushed brush");
+            if !live.stroke.has_tiles() {
+                return Ok(canvas.engine.canvas.sources[live.source].raster.clone());
+            }
+            let (_, _, atlas, encoder) = canvas.engine.brush_parts();
+            let readback = live.stroke.finish(atlas, encoder);
+            canvas.engine.flush();
+            readback.map();
+            canvas.gpu.wait();
+            readback.complete(
+                &canvas.gpu,
+                &mut canvas.engine.canvas,
+                &mut canvas.engine.atlas,
+                live.source,
+            )
+        }
+
+        pub(crate) fn cancel_brush(&mut self) {
+            if matches!(self, Self::Active(canvas) if canvas.live_brush.is_some()) {
+                // The CPU document still holds the pre-stroke pixels. Rebuild
+                // from it; never let detached painted slots survive cancellation.
+                *self = Self::Untried;
+            }
+        }
+    }
+
     /// Render the document into the scene. Returns false when the caller must
     /// fall back to the CPU tile path; `status` is left `Refused` in that case,
     /// so it only costs one frame.
@@ -159,8 +371,13 @@ mod hosted {
         bounds: Bounds<Pixels>,
         window: &mut Window,
     ) -> bool {
-        if !status.defers_to_gpu(view) {
+        if !status.defers_to_gpu(view, revision) {
             return false;
+        }
+        if matches!(status, Status::Refused { .. })
+            || matches!(status, Status::Active(canvas) if canvas.gpu.is_lost())
+        {
+            *status = Status::Untried;
         }
         let scale = window.scale_factor();
         let size = (
@@ -168,6 +385,10 @@ mod hosted {
             ((f32::from(bounds.size.height) * scale).round() as u32).max(1),
         );
 
+        if matches!(status, Status::Active(canvas) if canvas.live_brush.is_some() && canvas.revision != revision)
+        {
+            *status = Status::Untried;
+        }
         // A changed document needs a new program. Rebuild it against the atlas
         // already on the GPU, so unchanged tiles are re-acquired by `Arc`
         // identity rather than re-uploaded; only fall back to a full rebuild if
@@ -178,6 +399,14 @@ mod hosted {
         {
             match canvas.engine.reload(doc, None, true) {
                 Ok(()) => {
+                    if !canvas.engine.canvas.unsupported.is_empty() {
+                        let reason = format!(
+                            "CPU rendering: {}",
+                            canvas.engine.canvas.unsupported.join("; ")
+                        );
+                        status.refuse(reason, revision, false);
+                        return false;
+                    }
                     canvas.revision = revision;
                     tracing::debug!(
                         "gpu canvas reloaded at rev {revision}: {} dirty rect(s), {} atlas tiles",
@@ -207,7 +436,9 @@ mod hosted {
                 }
                 Err(err) => {
                     tracing::info!("gpu canvas unavailable, using the CPU path: {err:#}");
-                    *status = Status::Refused;
+                    let reason = format!("{err:#}");
+                    let transient = !reason.starts_with("document uses unsupported features:");
+                    status.refuse(reason, revision, transient);
                     return false;
                 }
             }
@@ -223,7 +454,11 @@ mod hosted {
 
         if let Err(err) = canvas.resize(size) {
             tracing::warn!("gpu canvas resize failed, using the CPU path: {err:#}");
-            *status = Status::Refused;
+            status.refuse(format!("{err:#}"), revision, true);
+            return false;
+        }
+        if canvas.gpu.is_lost() {
+            status.refuse("Graphics device is recovering.".into(), revision, true);
             return false;
         }
         canvas.engine.camera = Camera {
@@ -257,12 +492,49 @@ mod hosted {
             }
             Err(err) => {
                 tracing::warn!("gpu canvas render failed, using the CPU path: {err:#}");
-                *status = Status::Refused;
+                status.refuse(format!("{err:#}"), revision, true);
                 return false;
             }
         }
         backend::after_render(&canvas.gpu);
+        if canvas.gpu.is_lost() {
+            status.refuse("Graphics device is recovering.".into(), revision, true);
+            return false;
+        }
         canvas.target.paint(window, bounds);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn unsupported_documents_retry_only_after_a_change_or_device_replacement() {
+        let now = Instant::now();
+        let status = Status::Refused {
+            reason: "adjustment layer".into(),
+            revision: 7,
+            generation: Some(1),
+            retry_at: None,
+        };
+        assert!(!status.retry_due(7, Some(1), now + Duration::from_secs(10)));
+        assert!(status.retry_due(8, Some(1), now));
+        assert!(status.retry_due(7, Some(2), now));
+    }
+
+    #[test]
+    fn transient_failures_back_off_and_then_retry_without_a_document_edit() {
+        let now = Instant::now();
+        let status = Status::Refused {
+            reason: "device recovering".into(),
+            revision: 7,
+            generation: None,
+            retry_at: Some(now + Duration::from_secs(2)),
+        };
+        assert!(!status.retry_due(7, None, now));
+        assert!(status.retry_due(7, None, now + Duration::from_secs(2)));
     }
 }

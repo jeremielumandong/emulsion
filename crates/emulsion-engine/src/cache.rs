@@ -101,6 +101,10 @@ impl CompositeCache {
         }
     }
 
+    pub fn capacity(&self) -> u32 {
+        self.pages * PER_PAGE
+    }
+
     pub fn bytes(&self) -> u64 {
         crate::atlas::PAGE as u64 * crate::atlas::PAGE as u64 * 8 * self.pages as u64
     }

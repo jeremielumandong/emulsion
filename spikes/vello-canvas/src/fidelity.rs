@@ -1060,4 +1060,250 @@ mod tests {
         let d = compare("after stroke", size.0 as usize, &gpu_px, &cpu_px, None);
         assert!(d.max_code <= 1, "{d:?}");
     }
+    fn square_node(name: &str, x: f64, color: [u8; 4]) -> emulsion_core::Node {
+        use emulsion_raster::vector::{Anchor, Path, PathStyle, SubPath};
+        emulsion_core::Node::path(
+            0,
+            name,
+            Arc::new(Path {
+                subpaths: vec![SubPath {
+                    anchors: vec![
+                        Anchor::corner((x, 30.0)),
+                        Anchor::corner((x + 90.0, 30.0)),
+                        Anchor::corner((x + 90.0, 120.0)),
+                        Anchor::corner((x, 120.0)),
+                    ],
+                    closed: true,
+                }],
+            }),
+            PathStyle {
+                fill: Some(color),
+                stroke: None,
+                ..Default::default()
+            },
+            256,
+            256,
+        )
+    }
+
+    fn add_node(doc: &mut Document, node: emulsion_core::Node) -> emulsion_core::NodeId {
+        emulsion_core::Command::AddNode {
+            node: Box::new(node),
+            slot: emulsion_core::command::Slot::TOP,
+        }
+        .apply(doc)
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn translucent_vectors_use_reference_pixels_without_color_shifts() {
+        let Some(gpu) = gpu() else { return };
+        for space in [BlendSpace::Linear, BlendSpace::Srgb] {
+            let mut doc = Document::new(256, 256);
+            doc.blend_space = space;
+            add_node(&mut doc, square_node("red", 30.0, [255, 20, 20, 130]));
+            add_node(&mut doc, square_node("blue", 70.0, [20, 30, 240, 160]));
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &doc,
+                None,
+                VectorSpace::Srgb,
+                true,
+                true,
+                (256, 256),
+            )
+            .unwrap();
+            assert_eq!(engine.canvas.vector_count(), 0);
+            assert_eq!(engine.canvas.rasterized.len(), 2);
+            let (cpu, size) = cpu_reference(&doc, 0);
+            let actual = gpu_render(&mut engine, 0).unwrap();
+            let diff = compare("translucent", size.0 as usize, &actual, &cpu, None);
+            assert!(diff.max_code <= 1, "{space:?}: {diff:?}");
+        }
+    }
+
+    #[test]
+    fn vector_edits_encode_one_object_and_run_changes_resync_targets() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = Document::new(256, 256);
+        add_node(&mut doc, square_node("red", 10.0, [255, 0, 0, 255]));
+        let blue = add_node(&mut doc, square_node("blue", 60.0, [0, 0, 255, 255]));
+        let mut engine =
+            Engine::new(gpu, &doc, None, VectorSpace::Srgb, true, true, (256, 256)).unwrap();
+        gpu_render(&mut engine, 0).unwrap();
+        engine.vectors.take_stats();
+        let tables = engine.canvas.tables.clone();
+        emulsion_core::Command::TranslateNode {
+            id: blue,
+            dx: 10.0,
+            dy: 5.0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        engine.reload(&doc, None, true).unwrap();
+        assert_eq!(engine.canvas.tables, tables);
+        assert_eq!(engine.vectors.take_stats().encoded, 1);
+        add_node(&mut doc, square_node("green", 100.0, [0, 255, 0, 255]));
+        engine.reload(&doc, None, true).unwrap();
+        assert_eq!(
+            engine.vectors.take_stats().encoded,
+            1,
+            "unchanged fragments re-encoded"
+        );
+        doc.node_mut(blue).unwrap().opacity = 0.5;
+        engine.reload(&doc, None, true).unwrap();
+        assert_eq!(engine.vectors.run_count(), engine.canvas.runs.len());
+        assert!(engine.vectors.run_count() > 1);
+        assert_eq!(engine.vectors.take_stats().encoded, 0);
+        let (cpu, size) = cpu_reference(&doc, 0);
+        let actual = gpu_render(&mut engine, 0).unwrap();
+        let diff = compare("run split", size.0 as usize, &actual, &cpu, None);
+        assert!(diff.max_code <= 1, "{diff:?}");
+    }
+
+    #[test]
+    fn configured_gpu_brush_and_eraser_match_cpu_and_retain_background() {
+        let Some(gpu) = gpu() else { return };
+        for erase in [false, true] {
+            let base = Arc::new(emulsion_raster::Raster::solid(
+                256,
+                256,
+                [0.15, 0.25, 0.05, 0.7],
+            ));
+            let mut doc = Document::new(256, 256);
+            let id = add_node(
+                &mut doc,
+                emulsion_core::Node::raster(
+                    0,
+                    "paint",
+                    base.clone(),
+                    emulsion_raster::Placement::default(),
+                ),
+            );
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &doc,
+                Some(id),
+                VectorSpace::Srgb,
+                true,
+                true,
+                (256, 256),
+            )
+            .unwrap();
+            let source = engine.canvas.paint.unwrap();
+            let color = if erase {
+                [0.0, 0.0, 0.0, 1.0]
+            } else {
+                [0.02, 0.18, 0.7, 1.0]
+            };
+            let brush = test_brush(36.0);
+            let ink = if erase {
+                emulsion_raster::paint::Ink::Erase
+            } else {
+                emulsion_raster::paint::Ink::Color(color)
+            };
+            let mut cpu = emulsion_raster::paint::Stroke::new(base.clone(), brush, ink, None);
+            let mut stroke = GpuStroke::with_ink(source, brush, color, erase);
+            for i in 0..40 {
+                let (x, y) = (20.0 + i as f32 * 5.0, 110.0 + (i as f32 * 0.2).sin() * 50.0);
+                cpu.point_at(x, y, None, Some(i as f64));
+                stroke.point(x, y);
+                let (b, c, a, e) = engine.brush_parts();
+                stroke.render(b, c, a, e).unwrap();
+                engine.flush();
+            }
+            cpu.finish();
+            let (_, _, atlas, encoder) = engine.brush_parts();
+            let readback = stroke.finish(atlas, encoder);
+            engine.flush();
+            readback.map();
+            gpu.wait();
+            let actual = readback
+                .complete(&gpu, &mut engine.canvas, &mut engine.atlas, source)
+                .unwrap();
+            let expected = cpu.render(&base).0;
+            let mut error = 0u16;
+            for y in 0..256 {
+                for x in 0..256 {
+                    for (a, b) in actual.get(x, y).into_iter().zip(expected.get(x, y)) {
+                        error = error.max(a.abs_diff(b));
+                    }
+                }
+            }
+            let limit = if gpu.tile_format == emulsion_engine::gpu::TileFormat::Unorm16 {
+                32
+            } else {
+                400
+            };
+            assert!(error <= limit, "erase={erase}, max difference={error}");
+            assert_eq!(actual.get(250, 250), base.get(250, 250));
+        }
+    }
+
+    #[test]
+    fn lost_device_is_rejected_and_a_fresh_engine_restores_the_document() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = Document::new(256, 256);
+        crate::bench::add_paint_layer(&mut doc);
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            None,
+            VectorSpace::Srgb,
+            true,
+            true,
+            (256, 256),
+        )
+        .unwrap();
+        gpu_render(&mut engine, 0).unwrap();
+        gpu.wait();
+        gpu.device.destroy();
+        gpu.wait();
+        assert!(gpu.is_lost());
+        assert!(engine.reload(&doc, None, true).is_err());
+        assert!(gpu_render(&mut engine, 0).is_err());
+        let replacement = Gpu::from_adapter(gpu.adapter.clone(), None).unwrap();
+        let mut restored = Engine::new(
+            replacement,
+            &doc,
+            None,
+            VectorSpace::Srgb,
+            true,
+            true,
+            (256, 256),
+        )
+        .unwrap();
+        let (cpu, size) = cpu_reference(&doc, 0);
+        let actual = gpu_render(&mut restored, 0).unwrap();
+        assert!(compare("recovered", size.0 as usize, &actual, &cpu, None).max_code <= 1);
+    }
+
+    #[test]
+    fn memory_tracks_unique_fills_and_visible_cache_without_empty_vector_targets() {
+        let Some(gpu) = gpu() else { return };
+        let mut doc = Document::new(3840, 2160);
+        for _ in 0..30 {
+            add_node(
+                &mut doc,
+                emulsion_core::Node::raster(
+                    0,
+                    "fill",
+                    Arc::new(emulsion_raster::Raster::empty(
+                        3840,
+                        2160,
+                        [13107, 6554, 0, 65535],
+                    )),
+                    emulsion_raster::Placement::default(),
+                ),
+            );
+        }
+        let mut engine =
+            Engine::new(gpu, &doc, None, VectorSpace::Srgb, true, true, (512, 512)).unwrap();
+        assert_eq!(engine.atlas.used(), 1);
+        assert!(engine.atlas.pages() <= 4);
+        gpu_render(&mut engine, 3).unwrap();
+        assert_eq!(engine.vectors.target_bytes(), 4);
+        assert!(engine.texture_bytes() < 256 * 1024 * 1024);
+    }
 }

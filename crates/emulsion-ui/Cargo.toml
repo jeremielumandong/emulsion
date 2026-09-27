@@ -7,6 +7,7 @@ license.workspace = true
 description = "GPUI views and design tokens for Emulsion"
 
 [features]
+canvas-bench = []
 # Opt-in framework benchmark dependencies; absent from ordinary app/test builds.
 layout-bench = ["dep:criterion", "dep:gpui-bench"]
 

@@ -413,7 +413,10 @@ impl VectorLayer {
                 }));
                 self.by_node.insert(*node, index);
                 if fresh {
+                    let started = Instant::now();
                     self.encode(index);
+                    self.stats.encoded += 1;
+                    self.stats.encode_ms += started.elapsed().as_secs_f64() * 1e3;
                 }
                 entries.push(entry(index, &self.objects[index]));
             }
@@ -517,15 +520,24 @@ impl VectorLayer {
         true
     }
 
-    fn ensure_target(&mut self, screen: (u32, u32)) {
+    fn ensure_target(&mut self, screen: (u32, u32)) -> anyhow::Result<()> {
+        let screen = if self.runs.is_empty() { (1, 1) } else { screen };
         let layers = self.runs.len().max(1) as u32;
         if self
             .target
             .as_ref()
             .is_some_and(|t| t.size == screen && t.layers.len() as u32 == layers)
         {
-            return;
+            return Ok(());
         }
+        anyhow::ensure!(
+            layers <= self.gpu.device.limits().max_texture_array_layers
+                && screen.0 <= self.gpu.device.limits().max_texture_dimension_2d
+                && screen.1 <= self.gpu.device.limits().max_texture_dimension_2d
+                && u64::from(screen.0) * u64::from(screen.1) * u64::from(layers) * 4
+                    <= 128 * 1024 * 1024,
+            "vector targets exceed the 128 MiB canvas budget"
+        );
         let texture = texture_2d(&self.gpu, screen, layers, "vector runs");
         let views = (0..layers).map(|l| layer_view(&texture, l)).collect();
         let array = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -538,6 +550,7 @@ impl VectorLayer {
             array,
             size: screen,
         });
+        Ok(())
     }
 
     /// Render every run for this view. Returns the number of runs drawn.
@@ -548,7 +561,7 @@ impl VectorLayer {
         screen: (u32, u32),
     ) -> anyhow::Result<usize> {
         let _span = tracing::info_span!("encode").entered();
-        self.ensure_target(screen);
+        self.ensure_target(screen)?;
         let view = Affine::new(affine);
         let envelope = AABB::from_corners([visible[0], visible[1]], [visible[2], visible[3]]);
         let mut drawn = 0;
@@ -595,9 +608,9 @@ impl VectorLayer {
         std::mem::take(&mut self.stats)
     }
 
-    pub fn view(&mut self, screen: (u32, u32)) -> &wgpu::TextureView {
-        self.ensure_target(screen);
-        &self.target.as_ref().expect("target").array
+    pub fn view(&mut self, screen: (u32, u32)) -> anyhow::Result<&wgpu::TextureView> {
+        self.ensure_target(screen)?;
+        Ok(&self.target.as_ref().expect("target").array)
     }
 
     pub fn target_bytes(&self) -> u64 {

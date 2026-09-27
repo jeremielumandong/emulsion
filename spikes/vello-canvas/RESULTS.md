@@ -642,6 +642,63 @@ does not yet route strokes through brush B. Missing canvas chrome, masked/placed
 layer update cost, device-loss handling, lazy text/path caches, vector blending
 and memory costs remain listed in [STAGE2_PENDING.md](STAGE2_PENDING.md).
 
+## Linux migration follow-up, 2026-09-26
+
+Branch `feat/vello-migration-ui`, uncommitted working tree based on `80f7712`.
+Ryzen 7 8700G, RX 7700 XT, RADV Mesa 26.2.2, Linux/Wayland, display scale 1.25.
+These checks cover the shipping editor integration; earlier spike and Windows
+measurements above remain historical results from their recorded revisions.
+
+The follow-up adds incremental transformed/masked pixel rebakes, per-object vector
+updates, GPU brush/eraser routing with CPU replay recovery, device-generation/loss
+checks, fallback indicators, texture allocation limits, and editable in-process
+text copy/paste. Unsupported brush features retain CPU handling. Translucent vector
+paint uses the CPU reference rasterizer inside the GPU composite.
+
+Validation: **477 UI tests**, **144 core tests**, **161 raster tests**, **6 engine
+tests**, and **15 spike GPU tests** passed; two UI/core tests and one engine
+microbenchmark are intentionally ignored. Clippy with warnings denied, formatting,
+and vendored-GPUI validation passed. GPU checks used the Vulkan hardware adapter.
+Native-window checks additionally assert GPU brush activation, committed pixels,
+and stroke undo/redo. Device-loss coverage destroys an owned engine device; a real
+shared GPUI/OS device reset is still a manual platform check.
+
+### Native EditorView measurements
+
+The opt-in `editor_canvas_bench` example wraps the real editor in the same flex
+sizing contract used by Workspace. It calls the pan and brush input handlers and
+executes editable-text translations, using isolated temporary app data. Each case
+has 8 warm-up inputs and 40 measured inputs. The CPU path waits for current tile
+work. The default synthetic 4K fixture has 24 raster layers plus text and a paint
+layer; the original `layers-4k.ora` fixture gets an added text and paint layer.
+
+JSON records actual canvas dimensions, display scale, adapter, GPU brush routing,
+texture bytes, and commit/readback time. **Input-to-canvas-submission** ends after
+painting the current canvas into the GPUI scene; the second metric ends at the
+following platform frame callback. Neither is physical display latency. Compilation,
+opening the document, and stroke-end readback are outside the input samples.
+Earlier exploratory runs with an undersized standalone parent were discarded.
+
+Raw data: [native editor results](results/editor-linux-rx7700xt-migration.json).
+Use the matched CPU/GPU canvas dimensions in that report when comparing results.
+
+### Fidelity and remaining work
+
+[Full fixture comparisons](results/fidelity-linux-rx7700xt-migration.md) preserve
+all results, including differences. `layers-4k` remains within one display code
+at mip levels 0–2 with direct and cached GPU composition. The targeted translucent
+colored-overlap regression also matches the reference within one display code.
+
+`vectors-500` remains at **3.250%** of pixels over one display code, with **0.008%**
+off-edge over three codes. Its generator uses opaque paints: the previous pending
+tracker's attribution of that whole number to translucent paint was incorrect.
+The translucent-node fix does not resolve the opaque vector edge/overlap differences.
+The linear 8-bit Vello mode is worse (**14.152%** over one code), so it was not
+selected as the shipping fix. Broader vector parity remains open.
+
+macOS integration and Windows revalidation of the new brush/recovery work remain
+open. Reproduce with [the validation script and manual checks](PLATFORM_VALIDATION.md).
+
 ## Reproducing on other hardware
 
 Same files, same window size, vsync off:
