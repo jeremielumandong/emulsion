@@ -1,4 +1,4 @@
-//! Opt-in GPU canvas (experimental), enabled with `EMULSION_GPU_CANVAS=1`.
+//! Experimental GPU canvas, enabled by default; `EMULSION_GPU_CANVAS=0` disables it.
 //!
 //! Draws the document with `emulsion-engine` on the GPU and hands the result to
 //! GPUI's renderer, instead of compositing 256 px tiles on the CPU and
@@ -9,9 +9,9 @@
 //! with the spike so both use one implementation: GPUI's own wgpu device on
 //! Linux, an IOSurface on macOS, a shared D3D12 resource on Windows.
 //!
-//! It renders only. Editing works, but every document change recompiles the
-//! engine's program and atlas, because the engine has no incremental structural
-//! update yet; strokes are not routed to the GPU brush here.
+//! It renders only. Pixel edits update existing atlas sources; structural
+//! changes recompile the program while retaining unchanged tiles in the atlas.
+//! Strokes are not routed to the GPU brush here.
 //!
 //! The path refuses whenever it cannot reproduce the CPU result, and the caller
 //! falls back to [`crate::viewport`]: a rotated view, a document using features

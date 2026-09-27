@@ -71,6 +71,7 @@ Set before starting Emulsion:
 | `EMULSION_GPU=software` | Force a CPU graphics adapter for shader validation; fails compute initialization if none exists, leaving ordinary CPU algorithms available |
 | `EMULSION_GPU_BRUSHES=1` | Also enable experimental final brush composition for eligible batches of 4–32 tiles |
 | `EMULSION_GPU_BRUSHES=persistent` | Instead install the persistent GPU brush backend described in [Making GPU brushes faster](gpu-brush-performance.md); experimental |
+| `EMULSION_GPU_CANVAS=0` | Disable the experimental `emulsion-engine` canvas (enabled by default on supported platforms); independent of image compute and GPU brushes |
 
 Overrides never bypass correctness checks or device/memory limits. Unsupported
 jobs use their complete CPU reference operation. A failed shader is disabled for
@@ -83,6 +84,50 @@ validation was on Linux/Intel, with software compute also tested on Mesa llvmpip
 macOS/Windows runtime performance and pixel parity
 still require testing on those platforms. The native macOS GPUI renderer remains
 unchanged; this does not add a macOS software interface renderer.
+
+## Experimental GPU canvas on Windows
+
+The editor enables the new wgpu/Vello canvas engine by default on Windows,
+Linux and macOS. Only `EMULSION_GPU_CANVAS=0` disables it; leaving the variable
+unset or setting it to `1` enables it. No additional Cargo feature is needed.
+Build and launch from PowerShell:
+
+```powershell
+.\scripts\build-windows.ps1
+Remove-Item Env:EMULSION_GPU_CANVAS -ErrorAction SilentlyContinue
+& .\target\release\emulsion.exe 'C:\images\example.ora'
+```
+
+Replace the example path with your image or project, or omit it to open the home
+screen. To compare the CPU canvas, close the editor, set
+`$env:EMULSION_GPU_CANVAS = '0'`, and launch again. Remove the variable before
+the next launch to restore the GPU canvas. These changes apply to apps launched
+from that PowerShell session.
+
+On Windows, the engine uses D3D12 on the same adapter as GPUI's D3D11 renderer
+and presents through shared textures. It logs `gpu canvas active` when a
+document starts using the engine. An unsupported document or an initialization
+failure logs `gpu canvas unavailable, using the CPU path`; a rotated view also
+uses the existing canvas. The engine presents edits and reuses unchanged GPU
+tiles on reload; editor strokes still use the existing brush implementation.
+Enabling the canvas does not require `EMULSION_GPU_BRUSHES` or `EMULSION_GPU=force`.
+
+Run the engine's regression checks explicitly on the Windows D3D12 backend:
+
+```powershell
+$env:WGPU_BACKEND = 'dx12'
+$env:EMULSION_REQUIRE_GPU_TESTS = '1'
+cargo test --locked --release -p emulsion-engine -p vello-canvas-spike -- --test-threads=1
+Remove-Item Env:WGPU_BACKEND
+Remove-Item Env:EMULSION_REQUIRE_GPU_TESTS
+```
+
+These checks cover compositing, brush readback, atlas reuse, and visibility of
+pixel, layer, and vector changes after reload. Also check the editor itself:
+paint and undo/redo, add and move layers and text, pan/zoom, resize the window,
+and rotate the view to exercise the existing canvas fallback. See the
+[canvas spike results](../spikes/vello-canvas/RESULTS.md) for measurements and
+remaining limitations.
 
 ## Verification
 

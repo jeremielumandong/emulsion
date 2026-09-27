@@ -281,6 +281,11 @@ locks executable files while they are in use. Coding assistant detection support
 native Windows executables and npm launchers, including Claude Code in
 `%USERPROFILE%\.local\bin` and Codex in `%APPDATA%\npm`.
 
+The experimental wgpu/Vello canvas is enabled by default. Set
+`$env:EMULSION_GPU_CANVAS = '0'` before launching to compare the CPU canvas. See
+[GPU canvas on Windows](docs/gpu-rendering.md#experimental-gpu-canvas-on-windows)
+for launch commands and checks.
+
 ## Build (macOS)
 
 ```sh

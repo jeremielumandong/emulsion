@@ -3,7 +3,8 @@
 *2026-09-26. Status: measured on Intel Iris Plus G7 (Vulkan), Apple M1 (Metal),
 AMD Radeon RX 7700 XT (Windows; Vulkan and D3D12) and Mesa lavapipe, in a
 standalone window and embedded in GPUI on all three machines. The GPUI build
-itself not yet measured directly.*
+itself not yet benchmarked directly. Stage 2 Windows editor functionality is
+validated below.*
 
 The GPUI column below is the CPU work the GPUI canvas does for the same scripted
 input. It leaves out GPUI's own layout, atlas upload and present, so where the
@@ -566,8 +567,80 @@ for s in navigate brush-a brush-b; do $S bench $s spikes/out/layers-4k.ora --vsy
 $S bench vector-edit spikes/out/vectors-500.ora --vsync --json $R/bench-$H-vsync.jsonl
 ```
 
-Stage 2, the same embedding in `emulsion-ui`'s canvas behind an opt-in flag,
-waits on that. Brush latency is the main reason to embed, so the stalls matter.
+Stage 2 now embeds the engine in `emulsion-ui` and enables it by default on
+supported platforms. The laptop stalls remain relevant to further integration.
+
+## Stage 2 Windows validation
+
+2026-09-26, source `96bc42a`, on the same RX 7700 XT desktop and 165 Hz display
+described above. D3D12 driver `32.0.31041.1004`, Rust 1.98.1,
+`Rgba16Unorm` tiles. The extracted engine builds independently with
+`cargo build --locked --release -p emulsion-engine --features gpui`; the
+release spike and editor also build. No Windows backend changes were needed.
+
+The shipping editor starts with `EMULSION_GPU_CANVAS` **unset** and reports
+`gpu canvas active` on the RX 7700 XT. A disposable 800×600 document was edited
+through Windows keyboard and mouse input: brush, eraser, undo/redo, bucket fill
+and undo, a committed freeform pen path, and committed text. Raster edits logged
+`reload: pixels only`; new vector content logged a successful vector resync.
+The pen stroke remained visible after leaving the pen tool, and text remained
+visible after committing the text session. The resulting ORA was saved and
+reopened. [Editor screenshot](results/stage2-windows-editor.png).
+
+The following command passed **29 headless UI tests** (no skipped tests),
+covering the editing operations, history and canvas invalidation independently
+of real GPU presentation:
+
+```powershell
+cargo test --locked -p emulsion-ui --lib -- paint_functionality_tests pen_workflow_tests on_canvas_text_tests canvas_invalidation_tests --test-threads=1
+```
+
+Windows WARP also reopened and rendered the saved raster/path/text project with
+the engine active: `Microsoft Basic Render Driver`, D3D12 driver
+`10.0.26100.9549`. Thus a matching D3D12 software adapter **does** exist on this
+Windows build; the older blanket statement that WARP cannot host the engine was
+incorrect. This is a functional check, not a software-rendering performance
+claim. Launching with `EMULSION_GPU_CANVAS=0` also preserves the CPU canvas.
+Device-loss recovery has not been validated or implemented by these checks.
+
+### Paced host comparison
+
+All four scenarios completed in both hosts. Both used D3D12 and actual
+1600×1000 device-pixel canvases, with no concurrent build running. The
+standalone runs used `--vsync`. Navigation covers all 600 frames and vector
+editing all 300; brush scripts deliver the full 1.5-second, 1 kHz input stream.
+Times below are milliseconds, p50 / p99, from one run per scenario and host.
+
+| Workload / measure | GPUI embedded | Standalone, vsync |
+|---|---|---|
+| Navigation frame | 6.07 / 7.90 | 5.94 / 8.53 |
+| Brush A frame | 6.21 / 10.56 | 6.01 / 9.42 |
+| Brush A input-to-pixel | 9.49 / 17.36 | 9.16 / 37.22 |
+| Brush B frame | 6.05 / 7.74 | 5.98 / 12.08 |
+| Brush B input-to-pixel | 9.07 / 12.86 | 9.15 / 30.92 |
+| Vector-edit frame | 6.10 / 7.51 | 5.98 / 7.33 |
+
+Raw data: [GPUI](results/stage2-PCDESKPC-gpui-dx12.jsonl),
+[standalone vsync](results/stage2-PCDESKPC-vsync-dx12.jsonl),
+[standalone brush B rerun](results/stage2-PCDESKPC-vsync-brush-b-rerun.jsonl).
+The first standalone brush B sample reported a final 1×1 surface and is
+excluded from the table; its replacement explicitly reports 1600×1000.
+A hidden-window attempt produced no report and was also excluded. Presentation
+benchmarks must run with an onscreen window and verify the reported size.
+
+The medians sit near the 165 Hz refresh interval (6.06 ms), consistent with
+GPUI's DwmFlush-paced `Present(0)` loop. They do not reveal sub-refresh GPU
+headroom. Brush B readback differs from the CPU stroke by at most 4/65535 per
+channel and one 8-bit display code; its 13 MiB readback completed in 2.9 ms
+embedded and 1.9 ms in the standalone rerun. Both hosts allocated about
+1307 MiB of textures for the 4K document at this viewport size.
+
+Standalone brush tail latency was worse in this sample; repeated measurements
+are needed before attributing that difference to a host or driver. These are
+still **spike-host** timings, not end-to-end shipping-editor latency. The editor
+does not yet route strokes through brush B. Missing canvas chrome, masked/placed
+layer update cost, device-loss handling, lazy text/path caches, vector blending
+and memory costs remain listed in [STAGE2_PENDING.md](STAGE2_PENDING.md).
 
 ## Reproducing on other hardware
 

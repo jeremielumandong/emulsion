@@ -4,6 +4,11 @@
 via Mesa 26.2.2, Wayland. Read `README.md` and `RESULTS.md` first; this
 covers only the integration into the shipping app.*
 
+*Windows follow-up, 2026-09-26: the build, embedded scenarios, live editor
+workflows and frame-pacing checks below passed on the RX 7700 XT at `96bc42a`.
+See [Stage 2 Windows validation](RESULTS.md#stage-2-windows-validation).
+The other engineering tasks remain open.*
+
 Stage 1 asked whether an owned wgpu + Vello canvas beats GPUI painting.
 Stage 2 puts that engine behind the real canvas. It runs, it draws, and it
 edits; the list below is what stands between that and a canvas anyone can be
@@ -57,10 +62,12 @@ swap them and the whole program rebuilds. Fix: re-bake the one changed node
 and replace that source. `BakeKey` in `canvas.rs` already records what a bake
 depends on. Ordinary pixel layers take the 1.5 ms path.
 
-**3. macOS and Windows are unbuilt.** The backends are unchanged from the
-spike, but `fc6b4ff` compiled them into a second crate for the first time,
-behind the `gpui` feature. Neither has been built on its own machine. **This
-is the immediate task for the Windows session** — see below.
+**3. macOS still needs validation; Windows is validated.** The extracted
+engine builds on Windows with `--features gpui`, as do the spike and app.
+The RX 7700 XT passes the embedded scenarios and live editor checks below.
+WARP also renders the saved test project through a matching D3D12 software
+adapter on this machine. This does not establish support for every Windows
+driver or complete the macOS checks.
 
 **4. Device loss is not handled.** `gpui_wgpu::shared_gpu().generation` exists
 for it and nothing reads it. A GPU reset leaves the canvas dead until
@@ -108,10 +115,31 @@ points of lavapipe. `RESULTS.md` lists the three options; none chosen.
 **10. Memory.** 1301 MiB of textures for a 4K document, on an integrated GPU
 where that is system memory, on top of the CPU's own copy.
 
-**11. `RESULTS.md` has no stage-2 section.** None of the above is written up
-there yet.
+**11. Stage-2 results — Windows report added.** `RESULTS.md` now records the
+Windows validation and paced comparisons, with raw data and an editor
+screenshot. A complete shipping-editor latency benchmark is still outstanding;
+the reported frame/latency numbers are from the spike hosts.
 
 ## For the Windows session
+
+Completed on 2026-09-26 at `96bc42a`:
+
+- [x] Release-build `emulsion-engine` independently with `--features gpui`.
+- [x] Release-build the spike and editor.
+- [x] Run navigate, brush A, brush B and vector-edit inside GPUI and with
+  standalone D3D12 vsync at an actual 1600×1000 surface.
+- [x] Start the editor with `EMULSION_GPU_CANVAS` unset and confirm the engine
+  activates on the RX 7700 XT.
+- [x] Exercise brush, eraser, undo/redo, bucket fill, pen and committed text
+  in a disposable document; save the result as an ORA project.
+- [x] Run 29 targeted headless UI tests for painting, pen, text and canvas
+  invalidation. These test editing behavior separately from GPU presentation.
+- [x] Reopen the project under Windows WARP and check the explicit CPU-canvas
+  override (`EMULSION_GPU_CANVAS=0`).
+- [x] Record measurements and limits in `RESULTS.md`.
+
+Both brush pipelines are tested in the **spike**. The editor still uses CPU
+stamping; task 7 remains open. No Windows backend changes were needed.
 
 The backend is `mod backend` under `#[cfg(target_os = "windows")]` in
 `crates/emulsion-engine/src/host.rs`: the engine renders into a shared D3D12

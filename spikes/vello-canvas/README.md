@@ -258,8 +258,10 @@ samples it, and each paint first waits for GPUI's last present.
 
 GPUI presents without vsync (`Present(0)`) but draws on a DwmFlush-paced
 thread, so embedded frames are paced to the refresh rate as on the other
-platforms. WARP (software) rendering has no matching D3D12 adapter; there the
-flag reports an error.
+platforms. WARP (software) rendering requires a matching D3D12 adapter too.
+The Stage 2 Windows check found one and rendered the saved editor test project;
+when none is available, the spike reports an error and the editor falls back
+to its CPU canvas.
 
 Two things the host does for unattended runs, on all three platforms:
 - It turns off GPUI's inactive-window throttle
