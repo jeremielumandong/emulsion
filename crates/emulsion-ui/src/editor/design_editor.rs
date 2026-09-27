@@ -36,7 +36,7 @@ impl EditorView {
                 .into_any_element();
         }
         self.refresh_suggestions(cx);
-        let tabs = self.document_tabs.take();
+        let tabs = self.document_tabs.clone();
         let toolbar = self.design_canvas_toolbar(p, window, cx);
         let canvas = self.canvas_region();
         let inspector = self.is_diagram() || self.design_ui.inspector;

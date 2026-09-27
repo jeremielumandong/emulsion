@@ -210,7 +210,7 @@ fn control(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
 impl EditorView {
     pub(crate) fn compact_header(
         &mut self,
-        tabs: AnyElement,
+        tabs: Entity<crate::workspace::DocumentTabs>,
         theme_controls: AnyElement,
         p: &Palette,
         window: &mut Window,
@@ -220,7 +220,7 @@ impl EditorView {
         // Photo mode docks the tabs above the canvas; the header keeps the
         // menus alone, like Photoshop's menu bar.
         let tabs = if self.compact.overlay {
-            tabs
+            tabs.into_any_element()
         } else {
             self.document_tabs = Some(tabs);
             div().into_any_element()
@@ -999,7 +999,7 @@ impl EditorView {
         let tab_bar = if overlay {
             None
         } else {
-            self.document_tabs.take()
+            self.document_tabs.clone()
         };
         stage = stage
             .child(
@@ -1050,7 +1050,8 @@ impl EditorView {
                                             .min_w_0()
                                             .min_h_0()
                                             .overflow_hidden()
-                                            .child(canvas_view),
+                                            .child(canvas_view)
+                                            .child(self.photo_shortcuts(p, window, cx)),
                                     ),
                             )
                             .children(rights),

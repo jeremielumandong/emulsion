@@ -89,6 +89,7 @@ Each page records the state on its date and is not updated afterwards.
 | [Intrinsic text release measurements](intrinsic-text-release-results.md) | 2026-09-23 | Text layout specialisation benchmarks |
 | [Canvas navigation release measurements](canvas-navigation-release-results.md) | 2026-09-23 | Pan and zoom notification benchmarks |
 | [Live layout setting comparison](live-layout-toggle-results.md) | 2026-09-23 | Manual sample of a running editor with layout reuse off and on |
+| [Cloud project sync and photo sources](cloud-sync-plan.md) | 2026-09-27 | Feasibility and phased plan for Google Drive, Google Photos, Dropbox, and OneDrive |
 
 The `.json` files beside the measurement pages hold the raw benchmark output
 those pages summarise.

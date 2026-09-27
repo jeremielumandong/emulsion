@@ -53,6 +53,25 @@ impl EditorView {
                 .bg(p.panel)
                 .border_b_1()
                 .border_color(p.line)
+                .child(
+                    Button::new("design-select")
+                        .xsmall()
+                        .outline()
+                        .size(px(24.))
+                        .tooltip("Select objects (V); double-click text to edit")
+                        .accessibility_label("Select objects")
+                        .when(self.tool == Tool::Move, |button| button.bg(p.accent))
+                        .child(
+                            rail::tool_icon("mouse-pointer-2")
+                                .text_color(if self.tool == Tool::Move {
+                                    p.accent_fg
+                                } else {
+                                    p.ink
+                                })
+                                .size(px(12.)),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.set_tool(Tool::Move, cx))),
+                )
                 .when(!compact, |bar| {
                     bar.child(
                         div()
@@ -176,6 +195,7 @@ impl EditorView {
                 ),
             )
             .child(self.alignment_controls(p, cx))
+            .child(self.design_layout_controls(p, cx))
             .child(div().text_color(p.muted).child("Layer order"))
             .child(
                 div()

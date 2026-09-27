@@ -1440,6 +1440,7 @@ pub fn region(tree: &CompositeTree, rect: IRect) -> Vec<[f32; 4]> {
     if clip.is_empty() {
         return out;
     }
+    prepare_pixels(&tree.nodes);
     let coords: Vec<TileCoord> = (clip.y.div_euclid(t)..=(clip.bottom() - 1).div_euclid(t))
         .flat_map(|ty| {
             (clip.x.div_euclid(t)..=(clip.right() - 1).div_euclid(t))
@@ -1463,6 +1464,7 @@ pub fn region(tree: &CompositeTree, rect: IRect) -> Vec<[f32; 4]> {
 
 /// Render the whole document at `level` into a premultiplied RGBA16 raster.
 pub fn flatten(tree: &CompositeTree, level: u32) -> Raster {
+    prepare_pixels(&tree.nodes);
     let (lw, lh) = level_size(tree.width, tree.height, level);
     let (tx, ty) = tiles_at(tree.width, tree.height, level);
     let coords: Vec<TileCoord> = (0..ty)
@@ -1485,6 +1487,50 @@ pub fn flatten(tree: &CompositeTree, level: u32) -> Raster {
         out.set_tile(c, t);
     }
     out
+}
+
+/// Resolve CPU sources before distributing tiles. Rasterizing a source can
+/// itself use Rayon; doing that inside a tile job's OnceLock initializer lets
+/// the worker steal another tile that waits on the same initializer.
+/// Scene construction and direct vector rendering remain lazy.
+fn prepare_pixels(nodes: &[CompositeNode]) {
+    let mut clip_bases = vec![None; nodes.len()];
+    for (i, node) in nodes.iter().enumerate() {
+        if let Some(j) = node.clip_to.filter(|j| *j < i) {
+            clip_bases[i] = Some(clip_bases[j].unwrap_or(j));
+        }
+    }
+    for (i, node) in nodes.iter().enumerate() {
+        if !node.visible || clip_bases[i].is_some_and(|j| !nodes[j].visible) {
+            continue;
+        }
+        match &node.content {
+            NodeContent::Pixels { raster, .. } => {
+                raster.get();
+            }
+            NodeContent::Group(children) => prepare_pixels(children),
+            NodeContent::StyledGroup {
+                children,
+                clip_source,
+                effect_mask,
+            } => {
+                prepare_pixels(children);
+                if node.blending.layer_mask_hides_effects
+                    && let Some(mask) = effect_mask
+                {
+                    prepare_pixels(std::slice::from_ref(mask.as_ref()));
+                }
+                if nodes
+                    .iter()
+                    .zip(&clip_bases)
+                    .any(|(n, base)| n.visible && *base == Some(i))
+                {
+                    prepare_pixels(std::slice::from_ref(clip_source.as_ref()));
+                }
+            }
+            NodeContent::Fill(_) | NodeContent::Adjust(_) => {}
+        }
+    }
 }
 
 /// Encode a rendered tile as BGRA8 for display, composited over a
@@ -1534,6 +1580,54 @@ pub fn tile_to_bgra8(
 mod tests {
     use super::*;
     use crate::adjust::Adjustment;
+
+    #[test]
+    fn batch_render_resolves_deferred_pixels_before_parallel_tiles() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for render_region in [false, true] {
+            let caller = std::thread::current().id();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let count = calls.clone();
+            let source = LazyRaster::deferred(
+                (300, 300),
+                Arc::new(move || {
+                    // Fails before invoking nested Rayon if initialization moves
+                    // back into tile jobs, rather than hanging the test suite.
+                    assert_eq!(std::thread::current().id(), caller);
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Arc::new(Raster::from_fn(300, 300, [0; 4], |_, _| [65535; 4]))
+                }),
+            );
+            let hidden = LazyRaster::deferred(
+                (300, 300),
+                Arc::new(|| panic!("hidden content must remain lazy")),
+            );
+            let make_node = |id, raster| CompositeNode {
+                content: NodeContent::Pixels {
+                    raster,
+                    placement: Placement::default(),
+                },
+                ..layer(id, Raster::transparent(1, 1))
+            };
+            let mut hidden_node = make_node(2, hidden.clone());
+            hidden_node.visible = false;
+            let mut clipped = make_node(3, hidden.clone());
+            clipped.clip_to = Some(1);
+            let scene = tree(vec![make_node(1, source.clone()), hidden_node, clipped]);
+            assert!(!source.is_ready());
+            for _ in 0..2 {
+                if render_region {
+                    let pixels = region(&scene, IRect::new(0, 0, 300, 300));
+                    assert!(pixels.iter().all(|p| *p == [1.0; 4]));
+                } else {
+                    let pixels = flatten(&scene, 0);
+                    assert_eq!(pixels.get(299, 299), [65535; 4]);
+                }
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert!(!hidden.is_ready());
+        }
+    }
 
     #[test]
     fn window_quad_matches_four_gets() {

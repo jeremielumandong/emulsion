@@ -317,7 +317,7 @@ fn plain(text: &str) -> Result<Draft> {
     Ok(draft)
 }
 /// Quoted fields, embedded newlines, doubled quotes and CRLF are supported.
-fn csv_rows(text: &str) -> Result<Vec<Vec<String>>> {
+pub(crate) fn csv_rows(text: &str) -> Result<Vec<Vec<String>>> {
     let mut rows = Vec::new();
     let mut row = Vec::new();
     let mut field = String::new();

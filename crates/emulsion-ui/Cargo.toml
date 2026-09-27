@@ -37,6 +37,8 @@ async-channel = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 emulsion-io = { workspace = true }
+emulsion-cloud = { workspace = true }
+tempfile = "3.27"
 emulsion-raster = { workspace = true }
 emulsion-filters = { workspace = true }
 emulsion-gpu = { workspace = true }
@@ -55,6 +57,7 @@ emulsion-core = { workspace = true }
 gpui-pre-wgpu = "=0.3.5"
 wgpu = { workspace = true }
 evdev = "0.13"
+libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_Pointer", "Win32_UI_WindowsAndMessaging"] }
@@ -63,6 +66,9 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "block2"] }
 block2 = "0.6.2"
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+wry = { version = "0.57", default-features = false, features = ["os-webview"] }
 
 [dev-dependencies]
 tempfile = "3.27"

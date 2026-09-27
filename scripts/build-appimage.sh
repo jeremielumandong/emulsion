@@ -8,7 +8,8 @@
 # Wayland and fontconfig are loaded at runtime from the system, which is where
 # they must come from anyway (the GPU driver owns Vulkan). So the AppDir holds
 # the binary, the desktop entry, icons and license notices, without bundling
-# these system libraries.
+# these system libraries. The small embedded video adapter dynamically loads
+# system GTK3/WebKitGTK 4.1/GStreamer; those libraries are not bundled either.
 #
 # appimagetool and the AppImage runtime are downloaded once into the cache,
 # pinned by version and verified by sha256. Nothing else is fetched.
@@ -68,6 +69,11 @@ VERSION=$(awk -F'"' '/^\[workspace.package\]/ { f = 1 } f && /^version/ { print 
 [[ -n "$VERSION" ]] || die "could not read the workspace version from Cargo.toml"
 
 if (( DO_BUILD )); then
+  if [[ -n "${EMULSION_WEB_PLAYER_HELPER:-}" ]]; then
+    [[ -s "$EMULSION_WEB_PLAYER_HELPER" ]] || die "EMULSION_WEB_PLAYER_HELPER must name a nonempty target Linux adapter"
+  else
+    pkg-config --exists webkit2gtk-4.1 gtk+-3.0 gstreamer-1.0 || die "video-enabled packaging requires WebKitGTK 4.1, GTK3 and GStreamer development headers (Ubuntu: libwebkit2gtk-4.1-dev libgstreamer1.0-dev)"
+  fi
   log "Building emulsion $VERSION (release)"
   ( cd "$ROOT_DIR" && cargo build --release --locked -p emulsion-app )
 fi

@@ -17,6 +17,10 @@ pub(super) struct LibraryUi {
     flagged: bool,
 }
 impl Workspace {
+    pub(crate) fn refresh_imported_photo_library(&mut self, cx: &mut Context<Self>) {
+        self.batch.library.loaded = false;
+        self.library_load(cx);
+    }
     fn library_load(&mut self, cx: &mut Context<Self>) {
         if self.batch.library.loaded || self.batch.library.loading {
             return;
@@ -476,6 +480,13 @@ impl Workspace {
             .gap_2()
             .p_2()
             .child(menu)
+            .child(
+                Button::new("library-import-google-photos")
+                    .label("Import from Google Photos…")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| this.cloud_import_photos(cx))),
+            )
             .child(Input::new(self.batch.library.search.as_ref().unwrap()).small())
             .child(
                 div()

@@ -432,11 +432,41 @@ impl EditorView {
                                 .border_color(if id == active { p.accent } else { p.line })
                                 .cursor_pointer()
                                 .children(image.map(|image| {
-                                    img(image).size_full().object_fit(ObjectFit::Contain)
+                                    img(image)
+                                        .size_full()
+                                        .aspect_square()
+                                        .object_fit(ObjectFit::Contain)
                                 }))
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| this.select_page(id, cx)),
                                 ),
+                        )
+                    })
+                    .when(design, |tile| {
+                        tile.child(
+                            Button::new(("project-page-remove", id))
+                                .accessibility_label(format!(
+                                    "Remove page {}: {}",
+                                    index + 1,
+                                    meta.name
+                                ))
+                                .tooltip(if count == 1 {
+                                    "Keep one page. To close the design, use its document tab."
+                                } else {
+                                    "Remove page (Undo restores it)"
+                                })
+                                .label("×")
+                                .xsmall()
+                                .ghost()
+                                .absolute()
+                                .top_0()
+                                .right_0()
+                                .size(px(20.))
+                                .bg(p.panel.opacity(0.95))
+                                .disabled(count == 1)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.delete_project_page(id, cx)
+                                })),
                         )
                     })
                     .child(

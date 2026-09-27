@@ -78,6 +78,14 @@ impl EditorView {
     }
 
     fn text_hit(&self, d: (f64, f64)) -> Option<NodeId> {
+        if self.is_design() {
+            return self.design_hit(d, true).filter(|id| {
+                self.editor
+                    .doc
+                    .node(*id)
+                    .is_some_and(|node| matches!(node.kind, NodeKind::Text { .. }))
+            });
+        }
         self.editor.doc.nodes.iter().rev().find_map(|node| {
             let NodeKind::Text { spec, .. } = &node.kind else {
                 return None;
@@ -161,6 +169,13 @@ impl EditorView {
         self.type_tool.selection = None;
         let hit = self.text_hit(d);
         let editing = self.type_tool.field.as_ref().map(|field| field.id);
+        if self.is_design() && editing.is_some() && hit != editing {
+            self.set_tool(Tool::Move, cx);
+            if self.select_design_at(d, shift, false, cx) {
+                self.begin_move(d, cx);
+            }
+            return;
+        }
         if hit != editing || editing.is_none() {
             self.close_text_field(cx);
             self.editor.begin("Type");
@@ -434,8 +449,18 @@ impl EditorView {
                 .unwrap_or(text.len())
         };
         match key {
-            "escape" => self.cancel_text_field(cx),
-            "enter" if command => self.close_text_field(cx),
+            "escape" => {
+                self.cancel_text_field(cx);
+                if self.is_design() {
+                    self.set_tool(Tool::Move, cx);
+                }
+            }
+            "enter" if command => {
+                self.close_text_field(cx);
+                if self.is_design() {
+                    self.set_tool(Tool::Move, cx);
+                }
+            }
             "t" if command => {
                 self.close_text_field(cx);
                 self.transform_pixels(cx);

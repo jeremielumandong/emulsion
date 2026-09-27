@@ -25,6 +25,7 @@ emulsion-ai = { path = "crates/emulsion-ai" }
 emulsion-mcp = { path = "crates/emulsion-mcp" }
 emulsion-assistant = { path = "crates/emulsion-assistant" }
 emulsion-ui = { path = "crates/emulsion-ui" }
+emulsion-cloud = { path = "crates/emulsion-cloud" }
 
 # ui (pinned exactly; GPUI is pre-1.0)
 gpui-kit = "=0.6.4"

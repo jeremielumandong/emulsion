@@ -282,3 +282,527 @@ mod tests {
         assert_eq!(editor.history.len(), history);
     }
 }
+
+/// A remote embed reference; no video bytes, scripts or remote thumbnails are saved.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct YouTube {
+    pub video_id: String,
+    #[serde(default)]
+    pub start_seconds: u32,
+    pub boundary: NodeId,
+}
+impl YouTube {
+    pub fn url(&self) -> String {
+        format!(
+            "https://www.youtube.com/watch?v={}&t={}s",
+            self.video_id, self.start_seconds
+        )
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if self.video_id.len() != 11
+            || !self
+                .video_id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+            || self.start_seconds > 604_800
+        {
+            return Err("Use a valid YouTube video and a start time of at most seven days.".into());
+        }
+        Ok(())
+    }
+}
+
+/// Accept only ordinary YouTube video links, never arbitrary web content.
+pub fn parse_youtube(input: &str) -> Result<YouTube, String> {
+    let invalid = || "Paste a YouTube watch, shorts, embed or youtu.be video URL.".to_string();
+    let input = input.trim();
+    if input.len() > 4096
+        || input
+            .bytes()
+            .any(|c| c.is_ascii_control() || c.is_ascii_whitespace() || c == b'\\')
+    {
+        return Err(invalid());
+    }
+    let url = input
+        .strip_prefix("https://")
+        .or_else(|| input.strip_prefix("http://"))
+        .ok_or_else(invalid)?;
+    let (host, rest) = url.split_once('/').ok_or_else(invalid)?;
+    let host = host.to_ascii_lowercase();
+    if ![
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "youtu.be",
+        "www.youtube-nocookie.com",
+        "youtube-nocookie.com",
+    ]
+    .contains(&host.as_str())
+    {
+        return Err(invalid());
+    }
+    let (rest, fragment) = rest
+        .split_once('#')
+        .map_or((rest, None), |(r, f)| (r, Some(f)));
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let mut video = None;
+    let mut start = None;
+    let mut time_seen = false;
+    for pair in query.split('&').filter(|v| !v.is_empty()) {
+        let (key, value) = pair.split_once('=').ok_or_else(invalid)?;
+        match key {
+            "v" => {
+                if video.replace(value).is_some() {
+                    return Err(invalid());
+                }
+            }
+            "t" | "start" => {
+                if time_seen {
+                    return Err(invalid());
+                }
+                time_seen = true;
+                start = Some(parse_time(value).ok_or_else(invalid)?);
+            }
+            _ => {}
+        }
+    }
+    if let Some(fragment) = fragment {
+        if let Some(value) = fragment.strip_prefix("t=") {
+            if time_seen {
+                return Err(invalid());
+            }
+            start = Some(parse_time(value).ok_or_else(invalid)?);
+        } else if !fragment.is_empty() {
+            return Err(invalid());
+        }
+    }
+    let video_id = if host == "youtu.be" {
+        if video.is_some() {
+            return Err(invalid());
+        }
+        path
+    } else if path == "watch" && !host.contains("nocookie") {
+        video.ok_or_else(invalid)?
+    } else {
+        if video.is_some() {
+            return Err(invalid());
+        }
+        path.strip_prefix("embed/")
+            .or_else(|| {
+                (!host.contains("nocookie"))
+                    .then(|| path.strip_prefix("shorts/"))
+                    .flatten()
+            })
+            .ok_or_else(invalid)?
+    };
+    let video = YouTube {
+        video_id: video_id.into(),
+        start_seconds: start.unwrap_or(0),
+        boundary: 0,
+    };
+    video.validate()?;
+    Ok(video)
+}
+fn parse_time(input: &str) -> Option<u32> {
+    if !input.is_empty() && input.bytes().all(|b| b.is_ascii_digit()) {
+        return input.parse().ok();
+    }
+    let mut number = String::new();
+    let mut total = 0u32;
+    let mut previous = u32::MAX;
+    for c in input.chars() {
+        if c.is_ascii_digit() {
+            number.push(c);
+            continue;
+        }
+        let factor = match c {
+            'h' => 3600,
+            'm' => 60,
+            's' => 1,
+            _ => return None,
+        };
+        if factor >= previous || number.is_empty() {
+            return None;
+        }
+        total = total.checked_add(number.parse::<u32>().ok()?.checked_mul(factor)?)?;
+        number.clear();
+        previous = factor;
+    }
+    (number.is_empty() && previous != u32::MAX).then_some(total)
+}
+
+fn rectangle(doc: &Document, id: NodeId) -> Option<(f64, f64, f64, f64)> {
+    let NodeKind::Path { path, .. } = &doc.node(id)?.kind else {
+        return None;
+    };
+    let sub = path.subpaths.first()?;
+    if path.subpaths.len() != 1 || !sub.closed || sub.anchors.len() != 4 {
+        return None;
+    }
+    let b = vector_geometry::bounds(path)?;
+    if ![b.0, b.1, b.2, b.3].into_iter().all(f64::is_finite) || b.2 < 1. || b.3 < 1. {
+        return None;
+    }
+    let corners = [
+        (b.0, b.1),
+        (b.0 + b.2, b.1),
+        (b.0 + b.2, b.1 + b.3),
+        (b.0, b.1 + b.3),
+    ];
+    for (i, a) in sub.anchors.iter().enumerate() {
+        if (a.p.0 - corners[i].0).abs() > 1e-7 || (a.p.1 - corners[i].1).abs() > 1e-7 {
+            return None;
+        }
+        let next = &sub.anchors[(i + 1) % 4];
+        if a.p != a.h_in
+            || a.p != a.h_out
+            || !((a.p.0 - next.p.0).abs() < 1e-7 || (a.p.1 - next.p.1).abs() < 1e-7)
+            || !((a.p.0 - b.0).abs() < 1e-7 || (a.p.0 - b.0 - b.2).abs() < 1e-7)
+            || !((a.p.1 - b.1).abs() < 1e-7 || (a.p.1 - b.1 - b.3).abs() < 1e-7)
+        {
+            return None;
+        }
+    }
+    Some(b)
+}
+
+pub(crate) fn validate(
+    media: &std::collections::BTreeMap<NodeId, YouTube>,
+    doc: &Document,
+) -> Result<(), String> {
+    if media.len() > 64 {
+        return Err("A page supports up to 64 video embeds.".into());
+    }
+    for (group, video) in media {
+        video.validate()?;
+        if !doc.node(*group).is_some_and(|n| n.is_group())
+            || !doc
+                .node(video.boundary)
+                .is_some_and(|n| n.parent == Some(*group))
+            || rectangle(doc, video.boundary).is_none()
+        {
+            return Err("A video needs its own rectangular frame. Detach the video before rotating or reshaping it.".into());
+        }
+    }
+    Ok(())
+}
+
+/// Playback bounds in document coordinates. Hidden ancestors suppress playback.
+pub fn bounds(doc: &Document, id: NodeId) -> Option<(f64, f64, f64, f64)> {
+    let video = doc.design.media.get(&id)?;
+    let mut current = Some(video.boundary);
+    for _ in 0..=doc.nodes.len() {
+        let Some(id) = current else {
+            return rectangle(doc, video.boundary);
+        };
+        let node = doc.node(id)?;
+        if !node.visible || node.opacity <= 0. {
+            return None;
+        }
+        current = node.parent;
+    }
+    None
+}
+fn editable(doc: &Document, id: NodeId) -> Result<(), String> {
+    if doc.locked_ancestor(id).is_some() || doc.node(id).is_none() {
+        return Err("Unlock the video before editing it.".into());
+    }
+    Ok(())
+}
+fn commit(editor: &mut crate::Editor, commands: Vec<Command>) -> Result<(), String> {
+    if editor.in_transaction() {
+        return Err("Finish the current edit first.".into());
+    }
+    let mut trial = editor.doc.clone();
+    for command in &commands {
+        command.apply(&mut trial).map_err(|e| e.to_string())?;
+    }
+    editor.begin("Edit YouTube video");
+    for command in commands {
+        if let Err(error) = editor.execute(command) {
+            editor.cancel();
+            return Err(error.to_string());
+        }
+    }
+    editor.end();
+    Ok(())
+}
+
+/// Adds an editable offline poster and its video link as one undoable edit.
+pub fn insert_youtube(
+    editor: &mut crate::Editor,
+    url: &str,
+    origin: (f64, f64),
+    size: (f64, f64),
+) -> Result<NodeId, String> {
+    use crate::{Node, command::Slot};
+    use emulsion_raster::vector::{Anchor, Path, PathStyle, SubPath};
+    use std::sync::Arc;
+    let mut video = parse_youtube(url)?;
+    if ![origin.0, origin.1]
+        .into_iter()
+        .all(|n| n.is_finite() && n.abs() <= 100_000.)
+        || ![size.0, size.1]
+            .into_iter()
+            .all(|n| n.is_finite() && (1. ..=100_000.).contains(&n))
+    {
+        return Err("Choose a video frame of 1–100000 px with a finite position.".into());
+    }
+    let (x, y) = origin;
+    let (w, h) = size;
+    let mut trial = editor.doc.clone();
+    let mut commands = Vec::new();
+    let mut add = |node, parent| -> Result<NodeId, String> {
+        let command = Command::AddNode {
+            node: Box::new(node),
+            slot: Slot::top_of(parent),
+        };
+        let id = command
+            .apply(&mut trial)
+            .map_err(|e| e.to_string())?
+            .ok_or("Video object not created")?;
+        commands.push(command);
+        Ok(id)
+    };
+    let group = add(Node::group(0, "YouTube video"), None)?;
+    let shape = |name, path, color| {
+        Node::path(
+            0,
+            name,
+            Arc::new(path),
+            PathStyle {
+                fill: Some(color),
+                stroke: None,
+                ..Default::default()
+            },
+            editor.doc.width,
+            editor.doc.height,
+        )
+    };
+    video.boundary = add(
+        shape(
+            "Video frame",
+            vector_geometry::rectangle(x, y, w, h),
+            [22, 24, 29, 255],
+        ),
+        Some(group),
+    )?;
+    let r = w.min(h) * 0.10;
+    let path = Path {
+        subpaths: vec![SubPath {
+            closed: true,
+            anchors: vec![
+                Anchor::corner((x + w / 2. - r / 2., y + h / 2. - r)),
+                Anchor::corner((x + w / 2. + r, y + h / 2.)),
+                Anchor::corner((x + w / 2. - r / 2., y + h / 2. + r)),
+            ],
+        }],
+    };
+    add(shape("Play video", path, [255, 255, 255, 255]), Some(group))?;
+    add(
+        Node::text(
+            0,
+            "Video label",
+            crate::text::TextSpec {
+                text: "YouTube".into(),
+                x: (x + 16.) as f32,
+                y: (y + h - 40.) as f32,
+                size: 20.,
+                color: [220, 220, 225, 255],
+                font: "Geist".into(),
+                ..Default::default()
+            },
+            editor.doc.width,
+            editor.doc.height,
+        ),
+        Some(group),
+    )?;
+    let mut design = trial.design.clone();
+    design.media.insert(group, video);
+    commands.push(Command::SetDesign {
+        design: Box::new(design),
+    });
+    commit(editor, commands)?;
+    Ok(group)
+}
+/// Updating a link preserves every editable poster object and its placement.
+pub fn update_youtube(editor: &mut crate::Editor, id: NodeId, url: &str) -> Result<(), String> {
+    editable(&editor.doc, id)?;
+    let previous = editor
+        .doc
+        .design
+        .media
+        .get(&id)
+        .ok_or("Select a YouTube video first.")?;
+    let mut video = parse_youtube(url)?;
+    video.boundary = previous.boundary;
+    let mut design = editor.doc.design.clone();
+    design.media.insert(id, video);
+    commit(
+        editor,
+        vec![Command::SetDesign {
+            design: Box::new(design),
+        }],
+    )
+}
+/// Leaves native poster artwork on the page and removes only the embed link.
+pub fn detach_youtube(editor: &mut crate::Editor, id: NodeId) -> Result<(), String> {
+    editable(&editor.doc, id)?;
+    let mut design = editor.doc.design.clone();
+    if design.media.remove(&id).is_none() {
+        return Err("Select a YouTube video first.".into());
+    }
+    commit(
+        editor,
+        vec![Command::SetDesign {
+            design: Box::new(design),
+        }],
+    )
+}
+
+#[cfg(test)]
+mod youtube_tests {
+    use super::*;
+    use crate::{Editor, command::Slot, fragment::Fragment};
+    const URL: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1m30s";
+    #[test]
+    fn parser_accepts_only_video_links_and_bounded_start_times() {
+        for url in [
+            URL,
+            "https://youtu.be/dQw4w9WgXcQ?si=share&t=90",
+            "https://m.youtube.com/shorts/dQw4w9WgXcQ?start=90",
+            "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ#t=1m30s",
+        ] {
+            let video = parse_youtube(url).unwrap();
+            assert_eq!(video.video_id, "dQw4w9WgXcQ");
+            assert_eq!(video.start_seconds, 90);
+            assert_eq!(parse_youtube(&video.url()).unwrap(), video);
+        }
+        for url in [
+            "https://evil.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com.evil.com/watch?v=dQw4w9WgXcQ",
+            "https://user@youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com:443/watch?v=dQw4w9WgXcQ",
+            "javascript:bad()",
+            "https://youtu.be/short",
+            "https://youtu.be/dQw4w9WgXcQ/extra",
+            "https://youtu.be/dQw4w9WgXcQ?t=-1",
+            "https://youtu.be/dQw4w9WgXcQ?t=700000",
+            "https://youtu.be/dQw4w9WgXcQ?t=1m1h",
+            "https://youtu.be/dQw4w9WgXcQ?t=1&t=2",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ&v=aaaaaaaaaaa",
+            "https://youtu.be/dQw4w9WgXcQ?t=1%26start=3",
+            "https://youtu.be/dQw4w9WgXcQ\n?x=y",
+        ] {
+            assert!(parse_youtube(url).is_err(), "{url}");
+        }
+    }
+    #[test]
+    fn video_metadata_survives_duplicate_clipboard_and_undo() {
+        let mut editor = Editor::new(Document::new(800, 600), None);
+        let empty = editor.doc.clone();
+        let group = insert_youtube(&mut editor, URL, (20., 30.), (400., 225.)).unwrap();
+        let original = editor.doc.clone();
+        assert_eq!(bounds(&editor.doc, group), Some((20., 30., 400., 225.)));
+        assert!(editor.doc.nodes.iter().all(|n| matches!(
+            n.kind,
+            NodeKind::Group { .. } | NodeKind::Path { .. } | NodeKind::Text { .. }
+        )));
+        editor.undo();
+        assert_eq!(editor.doc, empty);
+        editor.redo();
+        assert_eq!(editor.doc, original);
+        let copy = editor
+            .execute(Command::DuplicateNode { id: group })
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            editor.doc.design.media[&copy].boundary,
+            editor.doc.design.media[&group].boundary
+        );
+        assert_eq!(bounds(&editor.doc, copy), bounds(&editor.doc, group));
+        editor.undo();
+        assert_eq!(editor.doc, original);
+        let fragment = Fragment::capture(&editor.doc, &[group]).unwrap();
+        let pasted = fragment.paste(&mut editor, Slot::TOP, (30., 40.)).unwrap()[0];
+        assert_eq!(bounds(&editor.doc, pasted), Some((50., 70., 400., 225.)));
+        assert_ne!(
+            editor.doc.design.media[&pasted].boundary,
+            editor.doc.design.media[&group].boundary
+        );
+        editor.undo();
+        assert_eq!(editor.doc, original);
+        update_youtube(&mut editor, group, "https://youtu.be/aaaaaaaaaaa").unwrap();
+        assert_eq!(editor.doc.nodes, original.nodes);
+        editor.undo();
+        assert_eq!(editor.doc, original);
+        detach_youtube(&mut editor, group).unwrap();
+        assert!(editor.doc.design.media.is_empty());
+        assert_eq!(editor.doc.nodes, original.nodes);
+        editor.undo();
+        assert_eq!(editor.doc, original);
+        let boundary = editor.doc.design.media[&group].boundary;
+        editor
+            .execute(Command::RemoveNode { id: boundary })
+            .unwrap();
+        assert!(editor.doc.design.media.is_empty());
+        editor.undo();
+        assert_eq!(editor.doc, original);
+    }
+    #[test]
+    fn playback_honors_visibility_and_unsupported_transforms_fail_atomically() {
+        let mut editor = Editor::new(Document::new(800, 600), None);
+        let group = insert_youtube(&mut editor, URL, (20., 30.), (400., 225.)).unwrap();
+        let original = editor.doc.clone();
+        for degrees in [37., 90., 180.] {
+            assert!(
+                editor
+                    .execute(Command::RotateNode { id: group, degrees })
+                    .is_err()
+            );
+            assert_eq!(editor.doc, original);
+        }
+        editor.doc.node_mut(group).unwrap().visible = false;
+        assert!(bounds(&editor.doc, group).is_none());
+        editor.doc.node_mut(group).unwrap().visible = true;
+        editor.doc.node_mut(group).unwrap().locked = true;
+        assert!(bounds(&editor.doc, group).is_some());
+        assert!(update_youtube(&mut editor, group, URL).is_err());
+        assert!(detach_youtube(&mut editor, group).is_err());
+        editor.doc.node_mut(group).unwrap().locked = false;
+        assert_eq!(editor.doc, original);
+        let history = editor.history.len();
+        assert!(insert_youtube(&mut editor, "https://evil.com", (0., 0.), (400., 225.)).is_err());
+        assert_eq!(editor.doc, original);
+        assert_eq!(editor.history.len(), history);
+        let old: crate::design_metadata::Design = serde_json::from_str("{}").unwrap();
+        assert!(old.media.is_empty());
+    }
+    #[test]
+    fn independent_video_additions_remap_metadata_when_branches_merge() {
+        let base = Document::new(800, 600);
+        let mut ours = Editor::new(base.clone(), None);
+        let mut theirs = Editor::new(base.clone(), None);
+        insert_youtube(&mut ours, URL, (10., 10.), (400., 225.)).unwrap();
+        insert_youtube(
+            &mut theirs,
+            "https://youtu.be/aaaaaaaaaaa",
+            (50., 60.),
+            (400., 225.),
+        )
+        .unwrap();
+        let outcome =
+            crate::graph::merge(&base, &ours.doc, &theirs.doc, &Default::default()).unwrap();
+        let crate::graph::MergeOutcome::Merged(doc) = outcome else {
+            panic!("independent media additions conflict");
+        };
+        assert_eq!(doc.design.media.len(), 2);
+        assert!(
+            doc.design
+                .media
+                .iter()
+                .all(|(id, _)| bounds(&doc, *id).is_some())
+        );
+        doc.validate().unwrap();
+    }
+}

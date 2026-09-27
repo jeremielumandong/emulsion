@@ -3,6 +3,8 @@
 pub mod brand;
 #[path = "design_media.rs"]
 mod media;
+#[path = "design_templates.rs"]
+mod templates;
 use crate::{Command, Document, Node, NodeKind, command::Slot, text::TextSpec};
 use emulsion_raster::vector::{Anchor, Path, PathStyle, SubPath};
 pub use media::{ImageFit, fit_frame_image};
@@ -86,18 +88,26 @@ pub fn frame_parts(
     selected: crate::NodeId,
 ) -> Option<(crate::NodeId, Option<crate::NodeId>)> {
     let selected = doc.node(selected)?;
+    if doc.design.frames.contains_key(&selected.id)
+        || selected
+            .parent
+            .and_then(|id| doc.design.frames.get(&id))
+            .is_some_and(|frame| frame.boundary == selected.id)
+    {
+        return None;
+    }
     let members = if selected.is_group() {
         doc.children(Some(selected.id))
     } else {
         doc.children(selected.parent)
     };
     let boundary = match &selected.kind {
-        NodeKind::Path { .. } => selected.id,
+        NodeKind::Path { .. } => selected.clip_to.unwrap_or(selected.id),
         NodeKind::Raster { .. } => selected.clip_to?,
         NodeKind::Group { .. } => {
             let mut shapes = members.iter().filter(|id| {
                 doc.node(**id)
-                    .is_some_and(|n| matches!(n.kind, NodeKind::Path { .. }))
+                    .is_some_and(|n| n.clip_to.is_none() && matches!(n.kind, NodeKind::Path { .. }))
             });
             let boundary = *shapes.next()?;
             // A general illustration group is not an unambiguous media frame.
@@ -358,7 +368,24 @@ impl TextPreset {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct TemplateCategory {
+    pub preset: &'static str,
+    pub label: &'static str,
+    pub tint: u32,
+    pub ink: u32,
+    pub back: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum Template {
+    /// Index in the bundled, data-driven starter catalog.
+    Bundled(usize),
+    ProductLaunch,
+    SeasonSale,
+    Resume,
+    DinnerMenu,
+    VideoThumbnail,
+    PhotoCollage,
     Announcement,
     Editorial,
     Quote,
@@ -367,25 +394,137 @@ pub enum Template {
     BusinessCard,
 }
 impl Template {
-    pub const ALL: [Self; 6] = [
-        Self::Announcement,
-        Self::Editorial,
+    pub const CATEGORIES: [TemplateCategory; 11] = [
+        TemplateCategory {
+            preset: "Square post",
+            label: "Instagram Post",
+            tint: 0xf9d3dc,
+            ink: 0x55182a,
+            back: 0xf1a2b5,
+        },
+        TemplateCategory {
+            preset: "Portrait post",
+            label: "Portrait Post",
+            tint: 0xe7d6f8,
+            ink: 0x3a1f5e,
+            back: 0xc9a8ef,
+        },
+        TemplateCategory {
+            preset: "Story",
+            label: "Your Story",
+            tint: 0xf9d6e4,
+            ink: 0x5a1d3a,
+            back: 0xefa6c4,
+        },
+        TemplateCategory {
+            preset: "Classic",
+            label: "Certificate & Quote",
+            tint: 0xd5dcfa,
+            ink: 0x1c285a,
+            back: 0xa7b5f2,
+        },
+        TemplateCategory {
+            preset: "Widescreen",
+            label: "Presentation",
+            tint: 0xfbd9c5,
+            ink: 0x4a2412,
+            back: 0xf0b48c,
+        },
+        TemplateCategory {
+            preset: "Business card",
+            label: "Business Card",
+            tint: 0xd7ddf9,
+            ink: 0x1e2a5c,
+            back: 0xa9b6f0,
+        },
+        TemplateCategory {
+            preset: "A4 flyer",
+            label: "Resume & Flyer",
+            tint: 0xe4d9f9,
+            ink: 0x33205c,
+            back: 0xc1acf0,
+        },
+        TemplateCategory {
+            preset: "Poster",
+            label: "Poster",
+            tint: 0xe9d7f6,
+            ink: 0x3c1d58,
+            back: 0xcba9ec,
+        },
+        TemplateCategory {
+            preset: "Video thumbnail",
+            label: "Video Thumbnail",
+            tint: 0xf8d5ee,
+            ink: 0x521b46,
+            back: 0xeaa4d6,
+        },
+        TemplateCategory {
+            preset: "Banner",
+            label: "Banner",
+            tint: 0xfdf0c4,
+            ink: 0x5a4310,
+            back: 0xf2d67c,
+        },
+        TemplateCategory {
+            preset: "Invitation",
+            label: "Invitation",
+            tint: 0xe8d8f6,
+            ink: 0x3a1f5e,
+            back: 0xcba9ec,
+        },
+    ];
+    pub fn catalog() -> impl Iterator<Item = Self> {
+        (0..templates::starters().len())
+            .map(|i| Self::ALL.get(i).copied().unwrap_or(Self::Bundled(i)))
+    }
+    pub fn category(self) -> Option<usize> {
+        let spec = templates::spec(self)?;
+        Self::CATEGORIES
+            .iter()
+            .position(|category| category.preset == spec.preset)
+    }
+    pub const ALL: [Self; 10] = [
+        Self::ProductLaunch,
+        Self::SeasonSale,
+        Self::Event,
         Self::Quote,
         Self::Presentation,
-        Self::Event,
         Self::BusinessCard,
+        Self::Resume,
+        Self::DinnerMenu,
+        Self::VideoThumbnail,
+        Self::PhotoCollage,
     ];
+    pub const ADDITIONAL: [Self; 2] = [Self::Announcement, Self::Editorial];
     pub fn label(self) -> &'static str {
         match self {
+            Self::Bundled(_) => {
+                templates::spec(self).map_or("Template", |spec| spec.label.as_str())
+            }
+            Self::ProductLaunch => "Product launch",
+            Self::SeasonSale => "Season sale",
+            Self::Resume => "Resume",
+            Self::DinnerMenu => "Dinner menu",
+            Self::VideoThumbnail => "Video thumbnail",
+            Self::PhotoCollage => "Photo collage",
             Self::Announcement => "Bold announcement",
             Self::Editorial => "Editorial story",
             Self::Quote => "Daily inspiration",
             Self::Presentation => "Presentation cover",
             Self::Event => "Event invitation",
-            Self::BusinessCard => "Minimal business card",
+            Self::BusinessCard => "Business card",
         }
     }
+    pub fn native_size(self) -> (u32, u32) {
+        templates::spec(self).map_or((1080, 1080), |spec| (spec.w, spec.h))
+    }
     pub fn create(self, w: u32, h: u32) -> Result<Document, String> {
+        if let Some(spec) = templates::spec(self) {
+            return spec.create(w, h);
+        }
+        if matches!(self, Self::Bundled(_)) {
+            return Err("Unknown bundled template".into());
+        }
         let mut doc = crate::creation::CanvasSpec {
             width: w as f64,
             height: h as f64,
@@ -461,6 +600,7 @@ impl Template {
                 "Your name",
                 "Your role\nhello@example.com · Your website",
             ),
+            _ => unreachable!("bundled starter handled above"),
         };
         for (name, text, y, size, bold) in [
             ("Eyebrow", eyebrow, 0.12, 0.024, true),
@@ -523,15 +663,15 @@ mod tests {
     }
     #[test]
     fn templates_and_elements_are_native_valid_and_scalable() {
-        for template in Template::ALL {
+        for template in Template::catalog() {
             let doc = template.create(1080, 1080).unwrap();
             doc.validate().unwrap();
-            assert_eq!(
+            assert!(
                 doc.nodes
                     .iter()
                     .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
-                    .count(),
-                3
+                    .count()
+                    >= 2
             );
             assert!(
                 doc.nodes

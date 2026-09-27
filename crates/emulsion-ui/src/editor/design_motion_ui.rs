@@ -10,6 +10,8 @@ use gpui_kit::component::{
 pub(super) struct MotionUi {
     pub(super) preview: Option<Document>,
     pub(super) presenting: bool,
+    pub(super) auto_advance: bool,
+    fullscreen_window: Option<AnyWindowHandle>,
     playing: bool,
     time_ms: u32,
     run: u64,
@@ -17,6 +19,17 @@ pub(super) struct MotionUi {
 }
 impl EditorView {
     pub(super) fn stop_motion(&mut self, cx: &mut Context<Self>) -> bool {
+        self.stop_design_video(cx);
+        if let Some(handle) = self.motion.fullscreen_window.take() {
+            cx.defer(move |cx| {
+                cx.update_window(handle, |_, window, _| {
+                    if window.is_fullscreen() {
+                        window.toggle_fullscreen();
+                    }
+                })
+                .ok();
+            });
+        }
         let had = self.motion.preview.is_some() || self.motion.playing || self.motion.presenting;
         self.motion.preview = None;
         self.motion.playing = false;
@@ -90,7 +103,10 @@ impl EditorView {
                                 .iter()
                                 .position(|p| p.id == this.editor.active_page())
                                 .unwrap_or(0);
-                            if index + 1 < this.editor.page_list().len() {
+                            if this.motion.auto_advance
+                                && !this.design_video_playing()
+                                && index + 1 < this.editor.page_list().len()
+                            {
                                 let owner = cx.weak_entity();
                                 cx.defer(move |cx| {
                                     owner
@@ -121,9 +137,11 @@ impl EditorView {
             .unwrap_or(0);
         let to = (index as isize + delta).clamp(0, pages.len() as isize - 1) as usize;
         let id = pages[to].id;
+        let fullscreen = self.motion.fullscreen_window.take();
         self.stop_motion(cx);
         self.select_page(id, cx);
         self.start_motion(true, cx);
+        self.motion.fullscreen_window = fullscreen;
     }
     pub(super) fn presentation_view(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let index = self
@@ -148,9 +166,24 @@ impl EditorView {
                 this.presentation_step(1, cx)
             }))
             .child(self.canvas_region())
+            .when_some(
+                self.status.clone().filter(|(_, error)| *error),
+                |d, (message, _)| {
+                    d.child(
+                        div()
+                            .id("presentation-player-status")
+                            .test_support()
+                            .px_3()
+                            .py_1()
+                            .text_color(p.ink)
+                            .child(message),
+                    )
+                },
+            )
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .justify_center()
                     .gap_3()
@@ -163,6 +196,42 @@ impl EditorView {
                             .on_click(cx.listener(|this, _, _, cx| this.presentation_step(-1, cx))),
                     )
                     .child(format!("Page {index} / {}", self.editor.page_list().len()))
+                    .child(
+                        Button::new("presentation-fullscreen")
+                            .label("Fullscreen")
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.motion.fullscreen_window =
+                                    (!window.is_fullscreen()).then(|| window.window_handle());
+                                window.toggle_fullscreen();
+                                this.fit_pending = true;
+                                cx.notify();
+                            })),
+                    )
+                    .when(self.design_video_playing(), |d| {
+                        d.child(
+                            Button::new("presentation-stop-video")
+                                .label("Stop video")
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(|this, _, _, cx| this.stop_design_video(cx))),
+                        )
+                    })
+                    .child(
+                        Button::new("presentation-auto-advance")
+                            .label(if self.motion.auto_advance {
+                                "Auto advance: on"
+                            } else {
+                                "Auto advance: off"
+                            })
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.motion.auto_advance = !this.motion.auto_advance;
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         Button::new("presentation-next")
                             .label("Next")

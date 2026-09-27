@@ -186,6 +186,11 @@ CPU-only VMs can use Mesa Lavapipe. Windows falls back to WARP when hardware is
 unavailable. See [rendering and VM support](docs/rendering.md) for driver requirements
 and software-renderer testing.
 
+Building the Linux presentation video adapter also requires WebKitGTK 4.1, GTK3
+and GStreamer development headers (`libwebkit2gtk-4.1-dev` and
+`libgstreamer1.0-dev` on Ubuntu). Release packaging checks these dependencies;
+the browser engine itself is not included in the AppImage.
+
 Image processing uses GPU compute selectively for expensive compositing and
 noise reduction, with CPU fallback. See [GPU coverage and controls](docs/gpu-rendering.md).
 
@@ -221,6 +226,13 @@ first. To select a release, use `curl -fsSL https://emulsion.pro/install | EMULS
 The endpoint requires the updated website deployment and a published release
 containing the installer bundle; see [release packaging](docs/releases.md).
 
+YouTube playback inside Design presentations additionally uses the system
+WebKitGTK 4.1 and GStreamer codecs. On Arch install `webkit2gtk-4.1`,
+`gst-plugins-good` and `gst-libav`; on Ubuntu use `libwebkit2gtk-4.1-0`,
+`gstreamer1.0-plugins-good` and `gstreamer1.0-libav`. These are optional for
+editing documents. See [Design video](docs/design-video.md) for platform runtimes
+and playback limitations.
+
 To build and install from a source checkout instead:
 
 ```sh
@@ -247,6 +259,10 @@ fetches crates over the network; when `flatpak-cargo-generator` is installed the
 script also writes `packaging/flatpak/cargo-sources.json` from `Cargo.lock` for an
 offline build, which the shipped manifest does not yet use. The Flatpak sandbox
 cannot see host converters; see [Opening files](#opening-files).
+The current freedesktop 24.08 manifest does not provide WebKitGTK 4.1, so YouTube
+objects can be edited and saved but cannot play inside this Flatpak build.
+Installing WebKit on the host does not change that. Use the native/AppImage build
+with its system runtime for playback; see [Design video](docs/design-video.md).
 
 ## Build (Windows)
 

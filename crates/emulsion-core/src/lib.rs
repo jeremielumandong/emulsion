@@ -6,6 +6,7 @@
 pub mod command;
 pub mod creation;
 pub mod design;
+pub mod design_layout;
 pub mod design_metadata;
 pub mod diagram;
 pub mod document;

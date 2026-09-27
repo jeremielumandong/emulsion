@@ -389,6 +389,28 @@ mod tests {
         ))
     }
     #[test]
+    fn all_supplied_starters_export_without_flattening_text_or_placeholder_frames() {
+        for template in Template::catalog() {
+            let (w, h) = template.native_size();
+            let scale = 320. / w.max(h) as f64;
+            let doc = template
+                .create(
+                    (w as f64 * scale).round() as u32,
+                    (h as f64 * scale).round() as u32,
+                )
+                .unwrap();
+            let (bytes, flat) = svg(&doc).unwrap();
+            assert!(!flat, "{} must retain vector artwork", template.label());
+            let source = String::from_utf8(bytes).unwrap();
+            assert!(
+                !source.contains("<image"),
+                "{} contains a bitmap",
+                template.label()
+            );
+            resvg::usvg::Tree::from_str(&source, &Default::default()).unwrap();
+        }
+    }
+    #[test]
     fn native_templates_export_outlined_svg_and_multi_page_pdf_with_bleed() {
         let mut session = CanvasSpec {
             kind: CanvasKind::Design,

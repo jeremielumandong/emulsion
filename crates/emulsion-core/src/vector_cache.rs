@@ -32,8 +32,8 @@ enum Source {
 
 /// A vector layer's pixels, rendered on demand.
 ///
-/// Cloning shares the rendered result, so passing a node around does not
-/// duplicate the work or the pixels.
+/// Cloning shares the published result. Concurrent cold requests may duplicate
+/// rasterization work, but use the same pixels once publication completes.
 #[derive(Clone, Debug)]
 pub struct VectorRaster {
     ready: Arc<OnceLock<Arc<Raster>>>,
@@ -69,10 +69,17 @@ impl VectorRaster {
 
     /// The pixels, rendering them if this is the first ask.
     pub fn pixels(&self) -> &Arc<Raster> {
-        self.ready.get_or_init(|| match &self.source {
+        if let Some(raster) = self.ready.get() {
+            return raster;
+        }
+        // Rasterization can enter Rayon. A stolen task may ask for these same
+        // pixels, so only publication (never rasterization) holds OnceLock's
+        // initialization lock. Simultaneous cold requests can duplicate work.
+        let raster = match &self.source {
             Source::Path { path, style, w, h } => Arc::new(path.rasterize(style, *w, *h)),
             Source::Text { spec, w, h } => Arc::new(crate::text::rasterize(spec, *w, *h)),
-        })
+        };
+        self.ready.get_or_init(|| raster)
     }
 
     /// Inspect allocated pixels without invoking the CPU rasterizer. Memory
@@ -98,5 +105,47 @@ impl VectorRaster {
         match &self.source {
             Source::Path { w, h, .. } | Source::Text { w, h, .. } => (*w, *h),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cold_vector_callers_publish_one_shared_cache_and_warm_reads_are_stable() {
+        let cache = VectorRaster::path(
+            Arc::new(emulsion_raster::vector_geometry::rectangle(
+                0., 0., 32., 32.,
+            )),
+            PathStyle {
+                fill: Some([255; 4]),
+                stroke: None,
+                ..Default::default()
+            },
+            32,
+            32,
+        );
+        assert!(!cache.is_rendered());
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let cache = cache.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    cache.pixels().clone()
+                })
+            })
+            .collect();
+        let pixels: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        for raster in &pixels {
+            assert!(Arc::ptr_eq(raster, cache.pixels()));
+            assert_eq!(raster.get(16, 16), [65535; 4]);
+        }
+        assert!(cache.is_rendered());
+        assert!(Arc::ptr_eq(
+            cache.rendered_pixels().unwrap(),
+            cache.pixels()
+        ));
     }
 }

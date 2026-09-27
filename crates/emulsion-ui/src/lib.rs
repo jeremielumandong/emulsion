@@ -8,6 +8,7 @@ mod appearance;
 mod assistant;
 mod batch;
 mod busy_card;
+mod cloud_screen;
 pub mod editor;
 mod home;
 mod home_projects;
@@ -21,6 +22,7 @@ pub mod tablet;
 pub mod theme;
 pub mod viewport;
 pub mod viewport_gpu;
+pub mod web_player;
 pub mod widgets;
 pub mod workspace;
 

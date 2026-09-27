@@ -930,6 +930,13 @@ pub fn merge(
 
     let mut design_conflict = false;
     let side = choices.get(&ConflictKey::Design);
+    out.design.frames = merge_metadata(
+        &base.design.frames,
+        &ours.design.frames,
+        &theirs.design.frames,
+        side,
+        &mut design_conflict,
+    );
     out.design.constraints = merge_metadata(
         &base.design.constraints,
         &ours.design.constraints,

@@ -1,7 +1,71 @@
 //! Handoff shell: real panels and routing at desktop and narrow widths.
 use super::*;
+use crate::editor::SidebarTab;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, px, size};
+
+#[gpui_kit::test]
+fn photo_shortcuts_open_switch_close_and_dock_without_editing_the_photo(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(size(px(1280.), px(900.)));
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    for compact in [false, true] {
+        cx.simulate_resize(size(px(1280.), px(900.)));
+        cx.update(|window, cx| {
+            cx.global_mut::<AppSettings>().0.compact_chrome = compact;
+            window.refresh();
+        });
+        cx.run_until_parked();
+        for (i, tab) in [
+            SidebarTab::Properties,
+            SidebarTab::BrushSettings,
+            SidebarTab::History,
+            SidebarTab::Character,
+            SidebarTab::Assistant,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            cx.update(|window, cx| window.click(("photo-shortcut", i), cx));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert!(window.find("photo-shortcut-panel").visible());
+                assert!(editor.read(cx).sidebar_tab == tab);
+                let strip = window.find("photo-shortcut-strip").bounds();
+                let panel = window.find("photo-shortcut-panel").bounds();
+                assert!(panel.right() <= strip.left());
+                assert!(panel.left() >= px(0.));
+                assert_eq!(editor.read(cx).editor.doc, original);
+            });
+        }
+        cx.update(|window, cx| window.click("photo-shortcut-close", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find("photo-shortcut-panel").is_none());
+            window.click(("photo-shortcut", 0usize), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("photo-shortcut-dock", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find("photo-shortcut-panel").is_none());
+            assert!(window.find("sidebar-properties-content").visible());
+            window.click("photo-shortcut-toggle-dock", cx);
+        });
+        cx.run_until_parked();
+        cx.simulate_resize(size(px(480.), px(800.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click(("photo-shortcut", 2usize), cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let panel = window.find("photo-shortcut-panel").bounds();
+            assert!(panel.left() >= px(0.) && panel.right() <= px(480.));
+            assert_eq!(editor.read(cx).editor.doc, original);
+            assert_eq!(editor.read(cx).editor.history.len(), 0);
+        });
+    }
+}
 
 #[gpui_kit::test]
 fn shared_dock_groups_preserve_document_and_saved_panel_choices(cx: &mut TestAppContext) {

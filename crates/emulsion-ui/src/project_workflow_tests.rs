@@ -7,6 +7,295 @@ use emulsion_core::{
 use gpui_kit::test::TestWindowExt;
 
 #[gpui_kit::test]
+fn design_template_categories_search_and_create_editable_invitations(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(600, 400));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap(),
+                "Categories".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-library-search", cx));
+    cx.simulate_input("Invitation");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find(("design-template", 0usize)).is_none());
+        assert!(window.find(("design-template", 100usize)).visible());
+        window.click("design-explore-templates", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            window
+                .try_find(("design-template-category", 0usize))
+                .is_none()
+        );
+        window.click(("design-template-category", 10usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find(("design-template", 0usize)).is_none());
+        for i in 100usize..110 {
+            assert!(window.try_find(("design-template", i)).is_some());
+        }
+        assert!(window.find(("design-template-preview", 100usize)).visible());
+        window.click(("design-template", 100usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let e = view.read(cx);
+        assert_eq!((e.editor.doc.width, e.editor.doc.height), (1500, 2100));
+        assert_eq!(e.editor.page_list().len(), 2);
+        assert!(
+            e.editor.doc.nodes.iter().any(
+                |n| matches!(&n.kind,NodeKind::Text {spec,..} if spec.text=="Elena\n&\nJonas")
+            )
+        );
+        window.click("design-template-all", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find(("design-template", 0usize)).visible());
+        window.click("design-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.page_list().len(), 1));
+}
+
+#[gpui_kit::test]
+fn design_canvas_selects_objects_and_leaves_text_editing(cx: &mut TestAppContext) {
+    use crate::editor::Tool;
+    use gpui_kit::{MouseButton, MouseDownEvent};
+    let mut doc = Document::new(600, 400);
+    let shape = Command::AddNode {
+        node: Box::new(Node::path(
+            0,
+            "Shape",
+            Arc::new(emulsion_raster::vector_geometry::rectangle(
+                30., 280., 100., 60.,
+            )),
+            emulsion_raster::vector::PathStyle {
+                fill: Some([80, 120, 220, 255]),
+                stroke: None,
+                ..Default::default()
+            },
+            600,
+            400,
+        )),
+        slot: Slot::TOP,
+    }
+    .apply(&mut doc)
+    .unwrap()
+    .unwrap();
+    let (ws, cx) = open(cx, doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(900.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, doc).unwrap(),
+                "Selection".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-section", 2usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-text", 0usize), cx));
+    cx.run_until_parked();
+    let (text, text_point, shape_point, blank) = cx.update(|window, cx| {
+        let e = view.read(cx);
+        assert_eq!(e.tool, Tool::Move);
+        assert!(window.find("design-select").visible());
+        let text = e.selected.unwrap();
+        let NodeKind::Text { spec, .. } = &e.editor.doc.node(text).unwrap().kind else {
+            panic!()
+        };
+        let caret = emulsion_core::text::layout(spec).caret(1);
+        let p = spec.transform().transform_point2(glam::dvec2(
+            caret.x as f64,
+            (caret.y + caret.height * 0.5) as f64,
+        ));
+        (
+            text,
+            e.doc_to_window((p.x, p.y)).unwrap(),
+            e.doc_to_window((80., 310.)).unwrap(),
+            e.doc_to_window((560., 350.)).unwrap(),
+        )
+    });
+    cx.simulate_click(shape_point, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).selected, Some(shape)));
+    cx.simulate_click(
+        text_point,
+        gpui_kit::Modifiers {
+            shift: true,
+            ..Default::default()
+        },
+    );
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).selected_layer_ids().len(), 2));
+    cx.simulate_event(MouseDownEvent {
+        position: text_point,
+        button: MouseButton::Left,
+        modifiers: Default::default(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(text_point, MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).tool, Tool::Type));
+    cx.simulate_input("Edited");
+    cx.simulate_click(shape_point, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert_eq!(e.tool, Tool::Move);
+        assert_eq!(e.selected, Some(shape));
+        assert!(e.type_tool.field.is_none());
+        assert_eq!(e.editor.doc.nodes.len(), 2);
+        let NodeKind::Text { spec, .. } = &e.editor.doc.node(text).unwrap().kind else {
+            panic!()
+        };
+        assert!(spec.text.contains("Edited"));
+        assert!(!e.editor.in_transaction());
+    });
+    cx.simulate_click(blank, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(view.read(cx).selected, None);
+        view.update(cx, |e, cx| e.set_tool(Tool::Type, cx));
+    });
+    cx.simulate_click(blank, Default::default());
+    cx.simulate_input("New text");
+    cx.simulate_keystrokes("ctrl-enter");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert_eq!(e.tool, Tool::Move);
+        assert!(e.type_tool.field.is_none());
+        assert_eq!(e.editor.doc.nodes.len(), 3);
+    });
+    cx.update(|window, cx| {
+        view.update(cx, |e, cx| e.set_tool(Tool::Type, cx));
+        window.click("design-select", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).tool, Tool::Move));
+}
+
+#[gpui_kit::test]
+fn design_page_remove_is_visible_undoable_and_keeps_the_last_page(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(600, 400));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap(),
+                "Pages".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            window
+                .find(("compact-document", view.entity_id()))
+                .visible()
+        );
+        assert!(
+            window
+                .find(("compact-document-close", view.entity_id()))
+                .visible()
+        );
+        assert_eq!(view.read(cx).editor.page_list().len(), 1);
+    });
+    cx.update(|window, cx| window.click("project-page-add", cx));
+    cx.run_until_parked();
+    let second = cx.update(|window, cx| {
+        let second = view.read(cx).editor.active_page();
+        assert!(window.find(("project-page-remove", second)).visible());
+        window.click(("project-page-remove", second), cx);
+        second
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.page_list().len(), 1);
+        window.click("design-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.page_list().len(), 2);
+        assert_eq!(view.read(cx).editor.active_page(), second);
+        window.click(("project-page-remove", 1u64), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.active_page(), second);
+        window.click(("project-page-remove", second), cx);
+        assert_eq!(view.read(cx).editor.page_list().len(), 1);
+    });
+}
+
+#[gpui_kit::test]
+fn design_layout_controls_create_a_persistent_frame_and_undo_as_one_edit(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(600, 400));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap(),
+                "Layout".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            e.insert_design_element(emulsion_core::design::Element::Rectangle, cx)
+        })
+    });
+    cx.run_until_parked();
+    let original = cx.update(|window, cx| {
+        window.click("design-position", cx);
+        view.read(cx).editor.doc.clone()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("design-layout-flow", 1usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-layout-fill", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("ok", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            assert_eq!(e.editor.doc.design.frames.len(), 1);
+            let frame = e.editor.doc.design.frames.values().next().unwrap();
+            assert!(frame.children.values().all(|child| child.fill_width));
+            e.undo(cx);
+            assert_eq!(e.editor.doc, original);
+            e.redo(cx);
+            assert_eq!(e.editor.doc.design.frames.len(), 1);
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn design_drawer_templates_text_and_elements_create_editable_objects(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, Document::new(600, 400));
     let view = cx.update(|window, cx| {
@@ -30,7 +319,7 @@ fn design_drawer_templates_text_and_elements_create_editable_objects(cx: &mut Te
     cx.update(|window, cx| {
         let e = view.read(cx);
         assert_eq!(e.editor.page_list().len(), 2);
-        assert_eq!(e.editor.doc.nodes.len(), 5);
+        assert_eq!(e.editor.doc.nodes.len(), 10);
         assert!(
             e.editor
                 .doc
@@ -44,7 +333,7 @@ fn design_drawer_templates_text_and_elements_create_editable_objects(cx: &mut Te
     cx.update(|window, cx| window.click(("design-text", 0usize), cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert_eq!(view.read(cx).editor.doc.nodes.len(), 6);
+        assert_eq!(view.read(cx).editor.doc.nodes.len(), 11);
         window.click(("design-section", 1usize), cx);
     });
     cx.run_until_parked();
@@ -52,15 +341,15 @@ fn design_drawer_templates_text_and_elements_create_editable_objects(cx: &mut Te
     cx.run_until_parked();
     cx.update(|_, cx| {
         view.update(cx, |e, cx| {
-            assert_eq!(e.editor.doc.nodes.len(), 7);
+            assert_eq!(e.editor.doc.nodes.len(), 12);
             assert!(matches!(
                 e.editor.doc.node(e.selected.unwrap()).unwrap().kind,
                 NodeKind::Path { .. }
             ));
             e.undo(cx);
-            assert_eq!(e.editor.doc.nodes.len(), 6);
+            assert_eq!(e.editor.doc.nodes.len(), 11);
             e.undo(cx);
-            assert_eq!(e.editor.doc.nodes.len(), 5);
+            assert_eq!(e.editor.doc.nodes.len(), 10);
             e.undo(cx);
             assert_eq!(e.editor.page_list().len(), 1);
         })

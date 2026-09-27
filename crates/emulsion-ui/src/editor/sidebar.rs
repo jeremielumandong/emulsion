@@ -10,6 +10,7 @@ pub(crate) struct SidebarState {
     pub width: Option<f32>,
     pub collapsed: bool,
     pub overlay_open: bool,
+    pub flyout_open: bool,
     pub upper_collapsed: bool,
     pub layers_collapsed: bool,
     pub colors_collapsed: bool,
@@ -22,6 +23,7 @@ impl Default for SidebarState {
             width: None,
             collapsed: false,
             overlay_open: false,
+            flyout_open: false,
             upper_collapsed: false,
             layers_collapsed: false,
             colors_collapsed: false,
@@ -107,6 +109,7 @@ pub(crate) enum SidebarTab {
     BrushPresets,
     BlendingOptions,
     Assistant,
+    Character,
 }
 
 impl SidebarTab {
@@ -125,6 +128,7 @@ impl SidebarTab {
             Self::BrushPresets => "brush-presets",
             Self::BlendingOptions => "blending-options",
             Self::Assistant => "assistant",
+            Self::Character => "character",
         }
     }
     pub(super) fn from_key(key: &str) -> Self {
@@ -142,6 +146,7 @@ impl SidebarTab {
             Self::BrushPresets,
             Self::BlendingOptions,
             Self::Assistant,
+            Self::Character,
         ]
         .into_iter()
         .find(|t| t.key() == key)
@@ -207,6 +212,7 @@ impl EditorView {
 
     /// Resolve temporary previews before hiding their Apply/Cancel controls.
     pub(crate) fn select_sidebar(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        self.sidebar_layout.flyout_open = false;
         if self.is_design() {
             self.design_ui.inspector = true;
         }
@@ -247,6 +253,95 @@ impl EditorView {
         self.sidebar_menu = false;
         self.menu = None;
         cx.notify();
+    }
+
+    pub(super) fn sidebar_content(
+        &mut self,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match self.sidebar_tab {
+            SidebarTab::Character => {
+                if let Some(properties) = self.text_properties(window, cx) {
+                    div().id("sidebar-character-content").test_support().child(properties).into_any_element()
+                } else {
+                    div().id("sidebar-character-content").test_support().p_3().text_size(px(11.))
+                        .child("Select a text layer to edit its character and paragraph settings.")
+                        .child(Button::new("sidebar-character-tool").label("Add text").small().outline()
+                            .on_click(cx.listener(|this, _, _, cx| this.set_tool(Tool::Type, cx))))
+                        .into_any_element()
+                }
+            }
+            SidebarTab::Assistant => div().id("sidebar-assistant-content").test_support().flex().flex_col().gap_2().p_2()
+                .child(Button::new("sidebar-assistant-prompt").label("Ask about this document…").small().outline().on_click(cx.listener(|this,_,window,cx|this.open_ask(window,cx))))
+                .children(self.assistant_dock(p,cx))
+                .into_any_element(),
+            SidebarTab::BlendingOptions => self.blending_options_panel(p, cx),
+            SidebarTab::BrushSettings => self.brush_settings_panel(p, cx),
+            SidebarTab::BrushPresets => div().children(self.presets_view(p, cx)).into_any_element(),
+            SidebarTab::Properties if self.draw_mode && matches!(self.tool, Tool::Brush | Tool::Clone | Tool::Heal | Tool::Mask) => self.brush_settings_panel(p,cx),
+            SidebarTab::Properties if self.is_diagram() => div()
+                .id("sidebar-properties-content").test_support()
+                .child(self.diagram_selection_panel(p, cx))
+                .child(self.inspector(p, window, cx)).into_any_element(),
+            SidebarTab::Properties => div()
+                .id("sidebar-properties-content")
+                .children(self.shape_properties(window, cx))
+                .children(self.text_properties(window, cx))
+                .child(self.inspector(p, window, cx))
+                .test_support()
+                .into_any_element(),
+            SidebarTab::Adjustments => div()
+                .id("sidebar-adjustments-content")
+                .child(self.quick_adjust_view(p, cx))
+                .test_support()
+                .into_any_element(),
+            SidebarTab::Reference => self.reference_panel(p, cx),
+            SidebarTab::Navigator => div()
+                .children(self.navigator_view(p, cx))
+                .into_any_element(),
+            SidebarTab::Info => div().children(self.info_view(p)).into_any_element(),
+            SidebarTab::Recipes => div()
+                .children(self.recipes_view(p, window, cx))
+                .into_any_element(),
+            SidebarTab::Timeline => div()
+                .children(self.animation_panel(p, cx))
+                .child(
+                    div()
+                        .p(px(12.))
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(6.))
+                        .child(
+                            chip("replay", "Replay drawing", self.anim.replay.is_some(), p)
+                                .on_click(cx.listener(|this, _, _, cx| this.replay_start(cx)))
+                                .test_support(),
+                        )
+                        .child(
+                            chip("replay-export", "Export replay GIF", false, p).on_click(
+                                cx.listener(|this, _, _, cx| this.export_replay_gif(cx)),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .text_size(px(10.5))
+                                .text_color(p.muted)
+                                .child("Replay shows saved versions and the editing steps still available in Undo."),
+                        ),
+                )
+                .into_any_element(),
+            SidebarTab::History => div()
+                .id("sidebar-history-content")
+                .child(self.compact_history(p, cx))
+                .test_support()
+                .into_any_element(),
+            SidebarTab::Histogram => div()
+                .p(px(15.))
+                .child(self.histogram_view(p, cx))
+                .into_any_element(),
+        }
     }
 
     pub(super) fn sidebar(
@@ -382,6 +477,7 @@ impl EditorView {
                     .ghost()
                     .dropdown_menu(move |mut menu, _, _| {
                         for (tab, title) in [
+                            (SidebarTab::Character, "Character"),
                             (SidebarTab::Info, "Info"),
                             (SidebarTab::Reference, "Reference"),
                             (SidebarTab::Navigator, "Navigator"),
@@ -431,75 +527,25 @@ impl EditorView {
                         cx.notify();
                     })),
             );
-        let content = match self.sidebar_tab {
-            SidebarTab::Assistant => div().id("sidebar-assistant-content").test_support().flex().flex_col().gap_2().p_2()
-                .child(Button::new("sidebar-assistant-prompt").label("Ask about this document…").small().outline().on_click(cx.listener(|this,_,window,cx|this.open_ask(window,cx))))
-                .children(self.assistant_dock(p,cx))
-                .into_any_element(),
-            SidebarTab::BlendingOptions => self.blending_options_panel(p, cx),
-            SidebarTab::BrushSettings => self.brush_settings_panel(p, cx),
-            SidebarTab::BrushPresets => div().children(self.presets_view(p, cx)).into_any_element(),
-            SidebarTab::Properties if self.draw_mode && matches!(self.tool, Tool::Brush | Tool::Clone | Tool::Heal | Tool::Mask) => self.brush_settings_panel(p,cx),
-            SidebarTab::Properties if self.is_diagram() => div()
-                .id("sidebar-properties-content").test_support()
-                .child(self.diagram_selection_panel(p, cx))
-                .child(self.inspector(p, window, cx)).into_any_element(),
-            SidebarTab::Properties => div()
-                .id("sidebar-properties-content")
-                .children(self.shape_properties(window, cx))
-                .children(self.text_properties(window, cx))
-                .child(self.inspector(p, window, cx))
-                .test_support()
-                .into_any_element(),
-            SidebarTab::Adjustments => div()
-                .id("sidebar-adjustments-content")
-                .child(self.quick_adjust_view(p, cx))
-                .test_support()
-                .into_any_element(),
-            SidebarTab::Reference => self.reference_panel(p, cx),
-            SidebarTab::Navigator => div()
-                .children(self.navigator_view(p, cx))
-                .into_any_element(),
-            SidebarTab::Info => div().children(self.info_view(p)).into_any_element(),
-            SidebarTab::Recipes => div()
-                .children(self.recipes_view(p, window, cx))
-                .into_any_element(),
-            SidebarTab::Timeline => div()
-                .children(self.animation_panel(p, cx))
+        let content = if self.sidebar_layout.flyout_open {
+            div()
+                .p_3()
+                .text_size(px(11.))
+                .text_color(p.muted)
+                .child("Panel is open beside the canvas.")
                 .child(
-                    div()
-                        .p(px(12.))
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(6.))
-                        .child(
-                            chip("replay", "Replay drawing", self.anim.replay.is_some(), p)
-                                .on_click(cx.listener(|this, _, _, cx| this.replay_start(cx)))
-                                .test_support(),
-                        )
-                        .child(
-                            chip("replay-export", "Export replay GIF", false, p).on_click(
-                                cx.listener(|this, _, _, cx| this.export_replay_gif(cx)),
-                            ),
-                        )
-                        .child(
-                            div()
-                                .w_full()
-                                .text_size(px(10.5))
-                                .text_color(p.muted)
-                                .child("Replay shows saved versions and the editing steps still available in Undo."),
-                        ),
+                    Button::new("sidebar-return-from-flyout")
+                        .label("Move to dock")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sidebar_layout.flyout_open = false;
+                            cx.notify();
+                        })),
                 )
-                .into_any_element(),
-            SidebarTab::History => div()
-                .id("sidebar-history-content")
-                .child(self.compact_history(p, cx))
-                .test_support()
-                .into_any_element(),
-            SidebarTab::Histogram => div()
-                .p(px(15.))
-                .child(self.histogram_view(p, cx))
-                .into_any_element(),
+                .into_any_element()
+        } else {
+            self.sidebar_content(p, window, cx)
         };
         let swatches = (compact && !self.compact.bars[super::compact::Bar::Color as usize].open)
             .then(|| {

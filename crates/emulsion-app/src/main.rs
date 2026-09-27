@@ -16,6 +16,11 @@ mod launch;
 mod memory;
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    emulsion_ui::web_player::register_linux_helper(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/emulsion-web-player"
+    )));
     let memory_configured = memory::configure();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))

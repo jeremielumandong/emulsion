@@ -453,6 +453,7 @@ impl Workspace {
                         p.muted,
                     )),
             )
+            .child(self.cloud_panel(cx))
             .child(self.image_settings_panel(&p, cx))
             .child(
                 section(&p)

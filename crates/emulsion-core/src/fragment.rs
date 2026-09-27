@@ -160,13 +160,14 @@ impl Fragment {
                     })
                     .map_err(|e| e.to_string())?;
             }
-            if !self.design.constraints.is_empty() || !self.design.motion.is_empty() {
+            if !self.design.is_default() {
                 let additions = self.design.remap(&map);
                 let mut design = editor.doc.design.clone();
                 if !additions.motion.is_empty() {
                     design.duration_ms = design.duration_ms.max(additions.duration_ms);
                 }
                 design.constraints.extend(additions.constraints);
+                design.frames.extend(additions.frames);
                 design.motion.extend(additions.motion);
                 editor
                     .execute(Command::SetDesign {

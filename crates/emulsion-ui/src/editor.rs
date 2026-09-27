@@ -30,6 +30,7 @@ pub(crate) mod crop;
 mod design_controls;
 mod design_editor;
 mod design_motion_ui;
+mod design_selection;
 mod design_ui;
 mod diagram_data_ui;
 mod diagram_ui;
@@ -66,6 +67,8 @@ mod presets;
 mod quick_mask;
 #[cfg(test)]
 pub(crate) use presets::shared_library;
+mod design_layout_ui;
+mod photo_shortcuts;
 pub(crate) mod rail;
 mod raw_panel;
 mod raw_settings_ui;
@@ -472,7 +475,7 @@ pub struct EditorView {
     draw_ui: draw_workspace::DrawUi,
     /// The workspace's document tabs, handed over while the header renders
     /// so Photo mode can show them above the canvas, as Photoshop does.
-    document_tabs: Option<AnyElement>,
+    document_tabs: Option<Entity<crate::workspace::DocumentTabs>>,
     quick_mask_cache: Rc<quick_mask::QuickMaskCache>,
     pub(crate) mask_view: mask_view::MaskViewState,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
@@ -1551,6 +1554,11 @@ impl EditorView {
             return;
         }
         if let Some(point) = self.doc_point(e.position) {
+            if self.is_design()
+                && !self.select_design_at(point, e.modifiers.shift, e.modifiers.alt, cx)
+            {
+                return;
+            }
             self.begin_move(point, cx);
         }
     }
@@ -4254,7 +4262,16 @@ impl Render for EditorView {
                             .children(export_panel)
                             .children(ask)
                             .children(self.design_canvas_toolbar(&p, window, cx))
-                            .child(canvas)
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(canvas)
+                                    .child(self.photo_shortcuts(&p, window, cx)),
+                            )
                             .children(dock)
                             .when(self.is_design(), |column| {
                                 column.children(self.project_page_strip(&p, cx))

@@ -216,7 +216,7 @@ pub fn load_sidecar(doc: &Document, path: &Path) -> Result<DevelopParams> {
     load_sidecar_verified(path, &raw.source_sha256)
 }
 
-fn load_sidecar_verified(path: &Path, digest: &str) -> Result<DevelopParams> {
+pub(crate) fn load_sidecar_verified(path: &Path, digest: &str) -> Result<DevelopParams> {
     let saved = read(path, "emulsion-raw-sidecar")?;
     if !saved
         .source_sha256

@@ -33,6 +33,19 @@ pub enum Screen {
     About,
 }
 
+/// Keep document tabs renderable when only the editor refreshes (for example,
+/// when asynchronous template previews arrive).
+pub(crate) struct DocumentTabs {
+    workspace: WeakEntity<Workspace>,
+}
+impl Render for DocumentTabs {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.workspace
+            .update(cx, |workspace, cx| workspace.compact_tabs(cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
 pub struct Workspace {
     pub screen: Screen,
     /// Where Back leaves Settings, Batch or About: the Home or Editor
@@ -1800,7 +1813,8 @@ impl Render for Workspace {
             (compact || project_editor) && self.screen == Screen::Editor && self.editor.is_some();
         let compact_page = compact && !compact_editor;
         let top = if compact_editor {
-            let tabs = self.compact_tabs(cx);
+            let owner = cx.weak_entity();
+            let tabs = cx.new(|_| DocumentTabs { workspace: owner });
             let theme_controls = self.compact_app_controls(window, cx);
             let editor = self.editor.as_ref().unwrap().clone();
             let header = editor.update(cx, |editor, cx| {

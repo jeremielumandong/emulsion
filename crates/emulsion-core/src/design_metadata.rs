@@ -82,6 +82,7 @@ impl Default for Motion {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Design {
+    pub frames: BTreeMap<NodeId, crate::design_layout::Frame>,
     pub constraints: BTreeMap<NodeId, Constraint>,
     pub duration_ms: u32,
     pub fps: u32,
@@ -90,6 +91,7 @@ pub struct Design {
 impl Default for Design {
     fn default() -> Self {
         Self {
+            frames: BTreeMap::new(),
             constraints: BTreeMap::new(),
             duration_ms: 3000,
             fps: 24,
@@ -102,6 +104,7 @@ impl Design {
         self == &Self::default()
     }
     pub fn validate(&self, doc: &Document) -> Result<(), String> {
+        crate::design_layout::validate(&self.frames, doc)?;
         if !(100..=60_000).contains(&self.duration_ms) || !(1..=60).contains(&self.fps) {
             return Err("Choose a duration from 0.1–60 seconds and 1–60 fps.".into());
         }
@@ -131,6 +134,11 @@ impl Design {
         Ok(())
     }
     pub fn retain_nodes(&mut self, ids: &HashSet<NodeId>) {
+        self.frames
+            .retain(|id, frame| ids.contains(id) && ids.contains(&frame.boundary));
+        for frame in self.frames.values_mut() {
+            frame.children.retain(|id, _| ids.contains(id));
+        }
         self.constraints.retain(|id, _| ids.contains(id));
         self.motion.retain(|id, _| ids.contains(id));
     }
@@ -142,6 +150,20 @@ impl Design {
     pub fn remap(&self, map: &HashMap<NodeId, NodeId>) -> Self {
         let id = |id| map.get(&id).copied().unwrap_or(id);
         Self {
+            frames: self
+                .frames
+                .iter()
+                .map(|(key, frame)| {
+                    let mut frame = frame.clone();
+                    frame.boundary = id(frame.boundary);
+                    frame.children = frame
+                        .children
+                        .iter()
+                        .map(|(key, value)| (id(*key), *value))
+                        .collect();
+                    (id(*key), frame)
+                })
+                .collect(),
             constraints: self.constraints.iter().map(|(k, v)| (id(*k), *v)).collect(),
             motion: self
                 .motion

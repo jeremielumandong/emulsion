@@ -1,0 +1,8856 @@
+[
+  {
+    "id": "launch",
+    "label": "Product launch",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#0f1420",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "circle",
+        "name": "Product photo",
+        "x": 0.54,
+        "y": 0.1,
+        "w": 0.4,
+        "h": 0.4,
+        "fill": "#1c2536"
+      },
+      {
+        "kind": "circle",
+        "name": "Dot",
+        "x": 0.08,
+        "y": 0.115,
+        "w": 0.012,
+        "h": 0.012,
+        "fill": "#c8f04a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "INTRODUCING",
+        "x": 0.105,
+        "y": 0.1,
+        "w": 0.4,
+        "size": 0.022,
+        "mono": true,
+        "bold": true,
+        "color": "#c8f04a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Meet the\nnext thing.",
+        "x": 0.08,
+        "y": 0.5,
+        "w": 0.84,
+        "size": 0.1,
+        "bold": true,
+        "color": "#f4f2ec"
+      },
+      {
+        "kind": "text",
+        "name": "Description",
+        "text": "Designed for the way you actually work. Available now.",
+        "x": 0.08,
+        "y": 0.745,
+        "w": 0.56,
+        "size": 0.026,
+        "color": "#a9b0bf"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.08,
+        "y": 0.865,
+        "w": 0.28,
+        "h": 0.07,
+        "fill": "#c8f04a",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Shop now",
+        "x": 0.08,
+        "y": 0.882,
+        "w": 0.28,
+        "size": 0.026,
+        "bold": true,
+        "align": "center",
+        "color": "#0f1420"
+      }
+    ]
+  },
+  {
+    "id": "sale",
+    "label": "Season sale",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#ff4f2e",
+    "els": [
+      {
+        "kind": "star",
+        "name": "Badge",
+        "x": 0.56,
+        "y": 0.02,
+        "w": 0.42,
+        "h": 0.336,
+        "fill": "#ffd23f"
+      },
+      {
+        "kind": "text",
+        "name": "Badge label",
+        "text": "-50%",
+        "x": 0.56,
+        "y": 0.145,
+        "w": 0.42,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#1c0f0a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "END OF SEASON",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.44,
+        "size": 0.022,
+        "mono": true,
+        "bold": true,
+        "color": "#fff6ee"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Everything\nmust go.",
+        "x": 0.08,
+        "y": 0.33,
+        "w": 0.84,
+        "size": 0.115,
+        "bold": true,
+        "color": "#fff6ee"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Product photo",
+        "x": 0.08,
+        "y": 0.57,
+        "w": 0.84,
+        "h": 0.3,
+        "fill": "#d63e22"
+      },
+      {
+        "kind": "text",
+        "name": "Description",
+        "text": "Use code SUMMER50 · Ends Sunday",
+        "x": 0.08,
+        "y": 0.905,
+        "w": 0.84,
+        "size": 0.026,
+        "mono": true,
+        "color": "#fff6ee"
+      }
+    ]
+  },
+  {
+    "id": "event",
+    "label": "Event invitation",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#24173a",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "circle",
+        "name": "Event photo",
+        "x": 0.25,
+        "y": 0.1,
+        "w": 0.5,
+        "h": 0.28125,
+        "fill": "#3a2a55"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "YOU'RE INVITED",
+        "x": 0.1,
+        "y": 0.44,
+        "w": 0.8,
+        "size": 0.022,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#e6c079"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "An evening\nof music",
+        "x": 0.08,
+        "y": 0.49,
+        "w": 0.84,
+        "size": 0.095,
+        "bold": true,
+        "align": "center",
+        "color": "#f7f1e6"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.4,
+        "y": 0.655,
+        "w": 0.2,
+        "h": 0.0016,
+        "fill": "#e6c079"
+      },
+      {
+        "kind": "text",
+        "name": "Date",
+        "text": "Saturday, 14 November · 7 PM",
+        "x": 0.1,
+        "y": 0.69,
+        "w": 0.8,
+        "size": 0.028,
+        "align": "center",
+        "color": "#f7f1e6"
+      },
+      {
+        "kind": "text",
+        "name": "Place",
+        "text": "The Glass House, 21 Harbour Street",
+        "x": 0.1,
+        "y": 0.725,
+        "w": 0.8,
+        "size": 0.028,
+        "align": "center",
+        "color": "#cfc4dc"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.31,
+        "y": 0.84,
+        "w": 0.38,
+        "h": 0.05,
+        "fill": "#e6c079",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "RSVP by 1 November",
+        "x": 0.31,
+        "y": 0.8535,
+        "w": 0.38,
+        "size": 0.024,
+        "bold": true,
+        "align": "center",
+        "color": "#24173a"
+      }
+    ]
+  },
+  {
+    "id": "quote",
+    "label": "Daily inspiration",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#f3ede2",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Quote mark",
+        "text": "“",
+        "x": 0.06,
+        "y": -0.02,
+        "w": 0.3,
+        "size": 0.42,
+        "bold": true,
+        "color": "#2f6f5e"
+      },
+      {
+        "kind": "text",
+        "name": "Quote",
+        "text": "Simplicity is the ultimate sophistication.",
+        "x": 0.08,
+        "y": 0.32,
+        "w": 0.84,
+        "size": 0.085,
+        "bold": true,
+        "color": "#1f1d1a"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.08,
+        "y": 0.72,
+        "w": 0.06,
+        "h": 0.005,
+        "fill": "#2f6f5e"
+      },
+      {
+        "kind": "text",
+        "name": "Attribution",
+        "text": "LEONARDO DA VINCI",
+        "x": 0.16,
+        "y": 0.705,
+        "w": 0.6,
+        "size": 0.026,
+        "mono": true,
+        "color": "#2f6f5e"
+      },
+      {
+        "kind": "circle",
+        "name": "Dot",
+        "x": 0.9,
+        "y": 0.84,
+        "w": 0.05,
+        "h": 0.0667,
+        "fill": "#2f6f5e"
+      }
+    ]
+  },
+  {
+    "id": "presentation",
+    "label": "Presentation cover",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#16161a",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Cover photo",
+        "x": 0,
+        "y": 0,
+        "w": 0.46,
+        "h": 1,
+        "fill": "#24242b"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "Q3 REVIEW · 2026",
+        "x": 0.52,
+        "y": 0.14,
+        "w": 0.4,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#3d7bf6"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Ideas that\nmove us.",
+        "x": 0.52,
+        "y": 0.28,
+        "w": 0.44,
+        "size": 0.12,
+        "bold": true,
+        "color": "#f2efe9"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.52,
+        "y": 0.72,
+        "w": 0.06,
+        "h": 0.004,
+        "fill": "#3d7bf6"
+      },
+      {
+        "kind": "text",
+        "name": "Meta",
+        "text": "Presenter name · Team · 27 September",
+        "x": 0.52,
+        "y": 0.78,
+        "w": 0.44,
+        "size": 0.026,
+        "color": "#9a9aa3"
+      }
+    ]
+  },
+  {
+    "id": "card",
+    "label": "Business card",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#fbfaf7",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Accent bar",
+        "x": 0,
+        "y": 0,
+        "w": 0.07,
+        "h": 1,
+        "fill": "#1f5a3f"
+      },
+      {
+        "kind": "text",
+        "name": "Company",
+        "text": "YOUR STUDIO",
+        "x": 0.6,
+        "y": 0.17,
+        "w": 0.34,
+        "size": 0.032,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#1f5a3f"
+      },
+      {
+        "kind": "text",
+        "name": "Name",
+        "text": "Alex Morgan",
+        "x": 0.14,
+        "y": 0.16,
+        "w": 0.5,
+        "size": 0.095,
+        "bold": true,
+        "color": "#15201b"
+      },
+      {
+        "kind": "text",
+        "name": "Role",
+        "text": "Creative director",
+        "x": 0.14,
+        "y": 0.36,
+        "w": 0.5,
+        "size": 0.04,
+        "color": "#5f6b65"
+      },
+      {
+        "kind": "text",
+        "name": "Email",
+        "text": "hello@example.com",
+        "x": 0.14,
+        "y": 0.66,
+        "w": 0.5,
+        "size": 0.034,
+        "mono": true,
+        "color": "#15201b"
+      },
+      {
+        "kind": "text",
+        "name": "Web",
+        "text": "+1 555 0100 · yourstudio.com",
+        "x": 0.14,
+        "y": 0.745,
+        "w": 0.6,
+        "size": 0.034,
+        "mono": true,
+        "color": "#15201b"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.9,
+        "y": 0.72,
+        "w": 0.04,
+        "h": 0.07,
+        "fill": "#1f5a3f"
+      }
+    ]
+  },
+  {
+    "id": "resume",
+    "label": "Resume",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#ffffff",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Sidebar",
+        "x": 0,
+        "y": 0,
+        "w": 0.34,
+        "h": 1,
+        "fill": "#1e2a3a"
+      },
+      {
+        "kind": "frame",
+        "shape": "circle",
+        "name": "Portrait",
+        "x": 0.07,
+        "y": 0.05,
+        "w": 0.2,
+        "h": 0.1414,
+        "fill": "#2d3c50"
+      },
+      {
+        "kind": "text",
+        "name": "Contact heading",
+        "text": "CONTACT",
+        "x": 0.07,
+        "y": 0.24,
+        "w": 0.22,
+        "size": 0.018,
+        "mono": true,
+        "bold": true,
+        "color": "#d9a441"
+      },
+      {
+        "kind": "text",
+        "name": "Contact",
+        "text": "alex@example.com\n+1 555 0100\nBerlin, DE",
+        "x": 0.07,
+        "y": 0.265,
+        "w": 0.22,
+        "size": 0.017,
+        "color": "#f5f3ee"
+      },
+      {
+        "kind": "text",
+        "name": "Skills heading",
+        "text": "SKILLS",
+        "x": 0.07,
+        "y": 0.35,
+        "w": 0.22,
+        "size": 0.018,
+        "mono": true,
+        "bold": true,
+        "color": "#d9a441"
+      },
+      {
+        "kind": "text",
+        "name": "Skills",
+        "text": "Product strategy\nInteraction design\nPrototyping\nDesign systems",
+        "x": 0.07,
+        "y": 0.375,
+        "w": 0.22,
+        "size": 0.017,
+        "color": "#f5f3ee"
+      },
+      {
+        "kind": "text",
+        "name": "Education heading",
+        "text": "EDUCATION",
+        "x": 0.07,
+        "y": 0.48,
+        "w": 0.22,
+        "size": 0.018,
+        "mono": true,
+        "bold": true,
+        "color": "#d9a441"
+      },
+      {
+        "kind": "text",
+        "name": "Education",
+        "text": "BA Communication Design\nUniversity name · 2016",
+        "x": 0.07,
+        "y": 0.505,
+        "w": 0.22,
+        "size": 0.017,
+        "color": "#f5f3ee"
+      },
+      {
+        "kind": "text",
+        "name": "Name",
+        "text": "Alex Morgan",
+        "x": 0.4,
+        "y": 0.055,
+        "w": 0.54,
+        "size": 0.062,
+        "bold": true,
+        "color": "#1a1a1a"
+      },
+      {
+        "kind": "text",
+        "name": "Role",
+        "text": "PRODUCT DESIGNER",
+        "x": 0.4,
+        "y": 0.118,
+        "w": 0.54,
+        "size": 0.02,
+        "mono": true,
+        "bold": true,
+        "color": "#d9a441"
+      },
+      {
+        "kind": "text",
+        "name": "Profile",
+        "text": "Designer with eight years shipping tools for creative teams. Comfortable from research through production.",
+        "x": 0.4,
+        "y": 0.155,
+        "w": 0.54,
+        "size": 0.017,
+        "color": "#444"
+      },
+      {
+        "kind": "text",
+        "name": "Experience heading",
+        "text": "EXPERIENCE",
+        "x": 0.4,
+        "y": 0.24,
+        "w": 0.54,
+        "size": 0.018,
+        "mono": true,
+        "bold": true,
+        "color": "#1a1a1a"
+      },
+      {
+        "kind": "line",
+        "name": "Rule 1",
+        "x": 0.4,
+        "y": 0.262,
+        "w": 0.54,
+        "h": 0.0006,
+        "fill": "#d6d6d6"
+      },
+      {
+        "kind": "text",
+        "name": "Job 1",
+        "text": "Senior Product Designer — Studio name",
+        "x": 0.4,
+        "y": 0.28,
+        "w": 0.54,
+        "size": 0.021,
+        "bold": true,
+        "color": "#1a1a1a"
+      },
+      {
+        "kind": "text",
+        "name": "Job 1 dates",
+        "text": "2022 — PRESENT",
+        "x": 0.4,
+        "y": 0.302,
+        "w": 0.54,
+        "size": 0.015,
+        "mono": true,
+        "color": "#777"
+      },
+      {
+        "kind": "text",
+        "name": "Job 1 summary",
+        "text": "Led the redesign of the editor, growing weekly active creators by 40%. Built and maintained the design system.",
+        "x": 0.4,
+        "y": 0.322,
+        "w": 0.54,
+        "size": 0.017,
+        "color": "#444"
+      },
+      {
+        "kind": "text",
+        "name": "Job 2",
+        "text": "Product Designer — Company name",
+        "x": 0.4,
+        "y": 0.39,
+        "w": 0.54,
+        "size": 0.021,
+        "bold": true,
+        "color": "#1a1a1a"
+      },
+      {
+        "kind": "text",
+        "name": "Job 2 dates",
+        "text": "2018 — 2022",
+        "x": 0.4,
+        "y": 0.412,
+        "w": 0.54,
+        "size": 0.015,
+        "mono": true,
+        "color": "#777"
+      },
+      {
+        "kind": "text",
+        "name": "Job 2 summary",
+        "text": "Owned onboarding and billing flows across web and mobile.",
+        "x": 0.4,
+        "y": 0.432,
+        "w": 0.54,
+        "size": 0.017,
+        "color": "#444"
+      }
+    ]
+  },
+  {
+    "id": "menu",
+    "label": "Dinner menu",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#f4ecdc",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "MENU",
+        "x": 0.1,
+        "y": 0.07,
+        "w": 0.8,
+        "size": 0.15,
+        "bold": true,
+        "align": "center",
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Subtitle",
+        "text": "DINNER · SEASONAL",
+        "x": 0.1,
+        "y": 0.235,
+        "w": 0.8,
+        "size": 0.024,
+        "mono": true,
+        "align": "center",
+        "color": "#b5482b"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.4875,
+        "y": 0.275,
+        "w": 0.025,
+        "h": 0.01875,
+        "fill": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Starters heading",
+        "text": "STARTERS",
+        "x": 0.12,
+        "y": 0.33,
+        "w": 0.76,
+        "size": 0.03,
+        "bold": true,
+        "color": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Starter 1",
+        "text": "Burrata, heirloom tomato, basil oil",
+        "x": 0.12,
+        "y": 0.375,
+        "w": 0.6,
+        "size": 0.028,
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Starter 1 price",
+        "text": "14",
+        "x": 0.76,
+        "y": 0.375,
+        "w": 0.12,
+        "size": 0.028,
+        "mono": true,
+        "align": "right",
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Starter 2",
+        "text": "Roasted beetroot, whipped feta",
+        "x": 0.12,
+        "y": 0.41,
+        "w": 0.6,
+        "size": 0.028,
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Starter 2 price",
+        "text": "12",
+        "x": 0.76,
+        "y": 0.41,
+        "w": 0.12,
+        "size": 0.028,
+        "mono": true,
+        "align": "right",
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Mains heading",
+        "text": "MAINS",
+        "x": 0.12,
+        "y": 0.48,
+        "w": 0.76,
+        "size": 0.03,
+        "bold": true,
+        "color": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Main 1",
+        "text": "Pan-seared sea bass, fennel, lemon",
+        "x": 0.12,
+        "y": 0.525,
+        "w": 0.6,
+        "size": 0.028,
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Main 1 price",
+        "text": "28",
+        "x": 0.76,
+        "y": 0.525,
+        "w": 0.12,
+        "size": 0.028,
+        "mono": true,
+        "align": "right",
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Main 2",
+        "text": "Braised short rib, celeriac purée",
+        "x": 0.12,
+        "y": 0.56,
+        "w": 0.6,
+        "size": 0.028,
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Main 2 price",
+        "text": "32",
+        "x": 0.76,
+        "y": 0.56,
+        "w": 0.12,
+        "size": 0.028,
+        "mono": true,
+        "align": "right",
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Main 3",
+        "text": "Wild mushroom risotto, aged parmesan",
+        "x": 0.12,
+        "y": 0.595,
+        "w": 0.6,
+        "size": 0.028,
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Main 3 price",
+        "text": "24",
+        "x": 0.76,
+        "y": 0.595,
+        "w": 0.12,
+        "size": 0.028,
+        "mono": true,
+        "align": "right",
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Dessert heading",
+        "text": "DESSERT",
+        "x": 0.12,
+        "y": 0.665,
+        "w": 0.76,
+        "size": 0.03,
+        "bold": true,
+        "color": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Dessert 1",
+        "text": "Dark chocolate tart, sea salt",
+        "x": 0.12,
+        "y": 0.71,
+        "w": 0.6,
+        "size": 0.028,
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Dessert 1 price",
+        "text": "11",
+        "x": 0.76,
+        "y": 0.71,
+        "w": 0.12,
+        "size": 0.028,
+        "mono": true,
+        "align": "right",
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Dessert 2",
+        "text": "Poached pear, vanilla cream",
+        "x": 0.12,
+        "y": 0.745,
+        "w": 0.6,
+        "size": 0.028,
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Dessert 2 price",
+        "text": "10",
+        "x": 0.76,
+        "y": 0.745,
+        "w": 0.12,
+        "size": 0.028,
+        "mono": true,
+        "align": "right",
+        "color": "#2a1f16"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.4,
+        "y": 0.86,
+        "w": 0.2,
+        "h": 0.0012,
+        "fill": "#2a1f16"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Ask about allergens · @yourrestaurant",
+        "x": 0.1,
+        "y": 0.895,
+        "w": 0.8,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#6b5a4b"
+      }
+    ]
+  },
+  {
+    "id": "thumbnail",
+    "label": "Video thumbnail",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#ffd60a",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Creator photo",
+        "x": 0.56,
+        "y": 0.08,
+        "w": 0.4,
+        "h": 0.84,
+        "fill": "#e0b800"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "I TRIED\nTHIS FOR\n30 DAYS",
+        "x": 0.05,
+        "y": 0.1,
+        "w": 0.5,
+        "size": 0.17,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.38,
+        "y": 0.68,
+        "w": 0.16,
+        "h": 0.16,
+        "fill": "#e5261f"
+      },
+      {
+        "kind": "rect",
+        "name": "Badge",
+        "x": 0.05,
+        "y": 0.8,
+        "w": 0.2,
+        "h": 0.12,
+        "fill": "#e5261f",
+        "radius": 0.12
+      },
+      {
+        "kind": "text",
+        "name": "Badge label",
+        "text": "NEW",
+        "x": 0.05,
+        "y": 0.822,
+        "w": 0.2,
+        "size": 0.065,
+        "bold": true,
+        "align": "center",
+        "color": "#ffffff"
+      }
+    ]
+  },
+  {
+    "id": "collage",
+    "label": "Photo collage",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#ebe7df",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.025,
+        "y": 0.1,
+        "w": 0.22,
+        "h": 0.8,
+        "fill": "#cfc9bd"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.26,
+        "y": 0.1,
+        "w": 0.22,
+        "h": 0.8,
+        "fill": "#c4bdb0"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.495,
+        "y": 0.1,
+        "w": 0.22,
+        "h": 0.8,
+        "fill": "#d8d2c6"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "SUMMER 2026",
+        "x": 0.755,
+        "y": 0.2,
+        "w": 0.22,
+        "size": 0.05,
+        "mono": true,
+        "bold": true,
+        "color": "#c2543a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Field\nnotes",
+        "x": 0.755,
+        "y": 0.3,
+        "w": 0.22,
+        "size": 0.2,
+        "bold": true,
+        "color": "#1d1d1b"
+      },
+      {
+        "kind": "circle",
+        "name": "Dot",
+        "x": 0.755,
+        "y": 0.8,
+        "w": 0.02,
+        "h": 0.08,
+        "fill": "#c2543a"
+      }
+    ]
+  },
+  {
+    "id": "flash",
+    "label": "Flash sale · brutalist",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#111111",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Top band",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.08,
+        "fill": "#ffe600"
+      },
+      {
+        "kind": "text",
+        "name": "Ticker",
+        "text": "FLASH SALE · FLASH SALE · FLASH SALE · FLASH",
+        "x": 0.03,
+        "y": 0.024,
+        "w": 1.1,
+        "size": 0.03,
+        "mono": true,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "70%",
+        "x": 0.05,
+        "y": 0.11,
+        "w": 0.9,
+        "size": 0.4,
+        "bold": true,
+        "color": "#ffffff"
+      },
+      {
+        "kind": "text",
+        "name": "Off",
+        "text": "OFF",
+        "x": 0.06,
+        "y": 0.57,
+        "w": 0.5,
+        "size": 0.2,
+        "bold": true,
+        "color": "#ffe600"
+      },
+      {
+        "kind": "star",
+        "name": "Burst",
+        "x": 0.62,
+        "y": 0.5,
+        "w": 0.32,
+        "h": 0.32,
+        "fill": "#ff2d95"
+      },
+      {
+        "kind": "text",
+        "name": "Burst label",
+        "text": "48 HRS\nONLY",
+        "x": 0.62,
+        "y": 0.62,
+        "w": 0.32,
+        "size": 0.03,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Description",
+        "text": "Everything. Every size. Ends midnight.",
+        "x": 0.06,
+        "y": 0.8,
+        "w": 0.54,
+        "size": 0.03,
+        "color": "#bdbdbd"
+      },
+      {
+        "kind": "rect",
+        "name": "Bottom band",
+        "x": 0,
+        "y": 0.92,
+        "w": 1,
+        "h": 0.08,
+        "fill": "#ffe600"
+      },
+      {
+        "kind": "text",
+        "name": "Code",
+        "text": "USE CODE FLASH70 AT CHECKOUT",
+        "x": 0.05,
+        "y": 0.944,
+        "w": 0.9,
+        "size": 0.03,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#111111"
+      }
+    ]
+  },
+  {
+    "id": "neon",
+    "label": "Quote · neon grid",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#05060f",
+    "els": [
+      {
+        "kind": "line",
+        "name": "Grid v1",
+        "x": 0.25,
+        "y": 0,
+        "w": 0.002,
+        "h": 1,
+        "fill": "#1b1f3a"
+      },
+      {
+        "kind": "line",
+        "name": "Grid v2",
+        "x": 0.5,
+        "y": 0,
+        "w": 0.002,
+        "h": 1,
+        "fill": "#1b1f3a"
+      },
+      {
+        "kind": "line",
+        "name": "Grid v3",
+        "x": 0.75,
+        "y": 0,
+        "w": 0.002,
+        "h": 1,
+        "fill": "#1b1f3a"
+      },
+      {
+        "kind": "line",
+        "name": "Grid h1",
+        "x": 0,
+        "y": 0.25,
+        "w": 1,
+        "h": 0.0016,
+        "fill": "#1b1f3a"
+      },
+      {
+        "kind": "line",
+        "name": "Grid h2",
+        "x": 0,
+        "y": 0.5,
+        "w": 1,
+        "h": 0.0016,
+        "fill": "#1b1f3a"
+      },
+      {
+        "kind": "line",
+        "name": "Grid h3",
+        "x": 0,
+        "y": 0.75,
+        "w": 1,
+        "h": 0.0016,
+        "fill": "#1b1f3a"
+      },
+      {
+        "kind": "circle",
+        "name": "Sun",
+        "x": 0.52,
+        "y": 0.05,
+        "w": 0.56,
+        "h": 0.448,
+        "fill": "#ff3cac"
+      },
+      {
+        "kind": "triangle",
+        "name": "Spark",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.07,
+        "h": 0.048,
+        "fill": "#7cf5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Quote",
+        "text": "Make\nsomething\nthat scares\nyou.",
+        "x": 0.08,
+        "y": 0.36,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#ffffff"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.08,
+        "y": 0.845,
+        "w": 0.1,
+        "h": 0.004,
+        "fill": "#ff3cac"
+      },
+      {
+        "kind": "text",
+        "name": "Attribution",
+        "text": "— STUDIO MOTTO, 2026",
+        "x": 0.08,
+        "y": 0.87,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "color": "#ff3cac"
+      }
+    ]
+  },
+  {
+    "id": "countdown",
+    "label": "Event · countdown",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#0b3d2e",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Blob 1",
+        "x": -0.15,
+        "y": 0.04,
+        "w": 0.8,
+        "h": 0.45,
+        "fill": "#ffb703"
+      },
+      {
+        "kind": "circle",
+        "name": "Blob 2",
+        "x": 0.42,
+        "y": 0.3,
+        "w": 0.72,
+        "h": 0.405,
+        "fill": "#fb8500"
+      },
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "3",
+        "x": 0.05,
+        "y": 0.06,
+        "w": 0.62,
+        "size": 0.72,
+        "bold": true,
+        "align": "center",
+        "color": "#0b3d2e"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "DAYS TO GO",
+        "x": 0.1,
+        "y": 0.66,
+        "w": 0.8,
+        "size": 0.03,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#ffb703"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Summer\nBlock Party",
+        "x": 0.08,
+        "y": 0.7,
+        "w": 0.84,
+        "size": 0.085,
+        "bold": true,
+        "align": "center",
+        "color": "#ffffff"
+      },
+      {
+        "kind": "text",
+        "name": "Details",
+        "text": "Sat 21 June · Pier 9 · Free entry",
+        "x": 0.1,
+        "y": 0.83,
+        "w": 0.8,
+        "size": 0.026,
+        "align": "center",
+        "color": "#d9efe6"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.31,
+        "y": 0.895,
+        "w": 0.38,
+        "h": 0.045,
+        "fill": "#ffb703",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Set a reminder",
+        "x": 0.31,
+        "y": 0.906,
+        "w": 0.38,
+        "size": 0.024,
+        "bold": true,
+        "align": "center",
+        "color": "#0b3d2e"
+      }
+    ]
+  },
+  {
+    "id": "stats",
+    "label": "Infographic · big numbers",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#f7f4ee",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "2026 IN NUMBERS",
+        "x": 0.06,
+        "y": 0.09,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "A year of shipping.",
+        "x": 0.06,
+        "y": 0.14,
+        "w": 0.7,
+        "size": 0.08,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Stat 1",
+        "text": "1.2M",
+        "x": 0.06,
+        "y": 0.28,
+        "w": 0.26,
+        "size": 0.12,
+        "bold": true,
+        "color": "#1d4ed8"
+      },
+      {
+        "kind": "rect",
+        "name": "Bar 1",
+        "x": 0.06,
+        "y": 0.42,
+        "w": 0.26,
+        "h": 0.4,
+        "fill": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Caption 1",
+        "text": "DOWNLOADS",
+        "x": 0.06,
+        "y": 0.85,
+        "w": 0.26,
+        "size": 0.02,
+        "mono": true,
+        "color": "#444444"
+      },
+      {
+        "kind": "text",
+        "name": "Stat 2",
+        "text": "84%",
+        "x": 0.37,
+        "y": 0.4,
+        "w": 0.26,
+        "size": 0.12,
+        "bold": true,
+        "color": "#f97316"
+      },
+      {
+        "kind": "rect",
+        "name": "Bar 2",
+        "x": 0.37,
+        "y": 0.54,
+        "w": 0.26,
+        "h": 0.28,
+        "fill": "#f97316"
+      },
+      {
+        "kind": "text",
+        "name": "Caption 2",
+        "text": "RETENTION",
+        "x": 0.37,
+        "y": 0.85,
+        "w": 0.26,
+        "size": 0.02,
+        "mono": true,
+        "color": "#444444"
+      },
+      {
+        "kind": "text",
+        "name": "Stat 3",
+        "text": "312",
+        "x": 0.68,
+        "y": 0.48,
+        "w": 0.26,
+        "size": 0.12,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "rect",
+        "name": "Bar 3",
+        "x": 0.68,
+        "y": 0.62,
+        "w": 0.26,
+        "h": 0.2,
+        "fill": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Caption 3",
+        "text": "RELEASES",
+        "x": 0.68,
+        "y": 0.85,
+        "w": 0.26,
+        "size": 0.02,
+        "mono": true,
+        "color": "#444444"
+      }
+    ]
+  },
+  {
+    "id": "certificate",
+    "label": "Certificate",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#fdfbf5",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Outer border",
+        "x": 0.04,
+        "y": 0.053,
+        "w": 0.92,
+        "h": 0.894,
+        "fill": "#1b1b1b"
+      },
+      {
+        "kind": "rect",
+        "name": "Outer inset",
+        "x": 0.048,
+        "y": 0.064,
+        "w": 0.904,
+        "h": 0.872,
+        "fill": "#fdfbf5"
+      },
+      {
+        "kind": "rect",
+        "name": "Gold border",
+        "x": 0.06,
+        "y": 0.08,
+        "w": 0.88,
+        "h": 0.84,
+        "fill": "#c9a227"
+      },
+      {
+        "kind": "rect",
+        "name": "Gold inset",
+        "x": 0.064,
+        "y": 0.0853,
+        "w": 0.872,
+        "h": 0.8293,
+        "fill": "#fdfbf5"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "CERTIFICATE",
+        "x": 0.1,
+        "y": 0.15,
+        "w": 0.8,
+        "size": 0.09,
+        "bold": true,
+        "align": "center",
+        "color": "#1b1b1b"
+      },
+      {
+        "kind": "text",
+        "name": "Subtitle",
+        "text": "OF ACHIEVEMENT",
+        "x": 0.1,
+        "y": 0.265,
+        "w": 0.8,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#c9a227"
+      },
+      {
+        "kind": "text",
+        "name": "Presented",
+        "text": "presented to",
+        "x": 0.1,
+        "y": 0.37,
+        "w": 0.8,
+        "size": 0.03,
+        "italic": true,
+        "align": "center",
+        "color": "#666666"
+      },
+      {
+        "kind": "text",
+        "name": "Name",
+        "text": "Alex Morgan",
+        "x": 0.1,
+        "y": 0.42,
+        "w": 0.8,
+        "size": 0.11,
+        "bold": true,
+        "align": "center",
+        "color": "#1b1b1b"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.3,
+        "y": 0.575,
+        "w": 0.4,
+        "h": 0.003,
+        "fill": "#1b1b1b"
+      },
+      {
+        "kind": "text",
+        "name": "Description",
+        "text": "for completing the Advanced Design programme with distinction",
+        "x": 0.15,
+        "y": 0.61,
+        "w": 0.7,
+        "size": 0.026,
+        "align": "center",
+        "color": "#444444"
+      },
+      {
+        "kind": "star",
+        "name": "Seal",
+        "x": 0.445,
+        "y": 0.7,
+        "w": 0.11,
+        "h": 0.147,
+        "fill": "#c9a227"
+      },
+      {
+        "kind": "line",
+        "name": "Signature 1",
+        "x": 0.14,
+        "y": 0.83,
+        "w": 0.22,
+        "h": 0.002,
+        "fill": "#1b1b1b"
+      },
+      {
+        "kind": "text",
+        "name": "Signer 1",
+        "text": "DIRECTOR",
+        "x": 0.14,
+        "y": 0.845,
+        "w": 0.22,
+        "size": 0.018,
+        "mono": true,
+        "align": "center",
+        "color": "#666666"
+      },
+      {
+        "kind": "line",
+        "name": "Signature 2",
+        "x": 0.64,
+        "y": 0.83,
+        "w": 0.22,
+        "h": 0.002,
+        "fill": "#1b1b1b"
+      },
+      {
+        "kind": "text",
+        "name": "Signer 2",
+        "text": "DATE",
+        "x": 0.64,
+        "y": 0.845,
+        "w": 0.22,
+        "size": 0.018,
+        "mono": true,
+        "align": "center",
+        "color": "#666666"
+      }
+    ]
+  },
+  {
+    "id": "gig",
+    "label": "Gig poster · acid",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#e8ff47",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Top line",
+        "text": "LIVE · 12 OCT · WAREHOUSE 4",
+        "x": 0.06,
+        "y": 0.035,
+        "w": 0.88,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "circle",
+        "name": "Ring 1",
+        "x": 0.15,
+        "y": 0.09,
+        "w": 0.7,
+        "h": 0.495,
+        "fill": "#111111"
+      },
+      {
+        "kind": "circle",
+        "name": "Ring 2",
+        "x": 0.22,
+        "y": 0.1395,
+        "w": 0.56,
+        "h": 0.396,
+        "fill": "#e8ff47"
+      },
+      {
+        "kind": "circle",
+        "name": "Ring 3",
+        "x": 0.29,
+        "y": 0.189,
+        "w": 0.42,
+        "h": 0.297,
+        "fill": "#111111"
+      },
+      {
+        "kind": "circle",
+        "name": "Ring 4",
+        "x": 0.36,
+        "y": 0.2385,
+        "w": 0.28,
+        "h": 0.198,
+        "fill": "#e8ff47"
+      },
+      {
+        "kind": "circle",
+        "name": "Ring 5",
+        "x": 0.43,
+        "y": 0.288,
+        "w": 0.14,
+        "h": 0.099,
+        "fill": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "NIGHT\nSHIFT",
+        "x": 0.05,
+        "y": 0.56,
+        "w": 0.92,
+        "size": 0.22,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Lineup",
+        "text": "MOTH CLUB · KAVA · DJ TWELVE · GUESTS",
+        "x": 0.06,
+        "y": 0.905,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "DOORS 21:00 · TICKETS AT THE DOOR · 18+",
+        "x": 0.06,
+        "y": 0.935,
+        "w": 0.88,
+        "size": 0.02,
+        "mono": true,
+        "color": "#111111"
+      }
+    ]
+  },
+  {
+    "id": "monogram",
+    "label": "Business card · monogram",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#0a0a0a",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Edge",
+        "x": 0,
+        "y": 0,
+        "w": 0.012,
+        "h": 1,
+        "fill": "#f5f5f5"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.65,
+        "y": 0.16,
+        "w": 0.3,
+        "h": 0.525,
+        "fill": "#f5f5f5"
+      },
+      {
+        "kind": "text",
+        "name": "Initial",
+        "text": "A",
+        "x": 0.65,
+        "y": 0.3,
+        "w": 0.3,
+        "size": 0.3,
+        "bold": true,
+        "align": "center",
+        "color": "#0a0a0a"
+      },
+      {
+        "kind": "text",
+        "name": "Name",
+        "text": "Alex Morgan",
+        "x": 0.08,
+        "y": 0.19,
+        "w": 0.55,
+        "size": 0.09,
+        "bold": true,
+        "color": "#ffffff"
+      },
+      {
+        "kind": "text",
+        "name": "Role",
+        "text": "ARCHITECT",
+        "x": 0.08,
+        "y": 0.36,
+        "w": 0.55,
+        "size": 0.034,
+        "mono": true,
+        "color": "#9a9a9a"
+      },
+      {
+        "kind": "text",
+        "name": "Contact",
+        "text": "alex@studio.com\n+1 555 0100",
+        "x": 0.08,
+        "y": 0.64,
+        "w": 0.55,
+        "size": 0.034,
+        "mono": true,
+        "color": "#ffffff"
+      }
+    ]
+  },
+  {
+    "id": "swiss",
+    "label": "Exhibition poster · Swiss",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#f2f2f2",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "FORM FOLLOWS FEELING",
+        "x": 0.06,
+        "y": 0.05,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "bold": true,
+        "color": "#e63312"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "DESIGN",
+        "x": 0.03,
+        "y": 0.09,
+        "w": 1.2,
+        "size": 0.3,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.5,
+        "y": 0.3,
+        "w": 0.58,
+        "h": 0.435,
+        "fill": "#e63312"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "h": 0.001,
+        "fill": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Details",
+        "text": "Exhibition\n14.03 — 28.04.2026\nHall B, Level 2",
+        "x": 0.06,
+        "y": 0.8,
+        "w": 0.5,
+        "size": 0.032,
+        "mono": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Venue",
+        "text": "Museum of\nApplied Arts",
+        "x": 0.6,
+        "y": 0.8,
+        "w": 0.34,
+        "size": 0.032,
+        "mono": true,
+        "align": "right",
+        "color": "#111111"
+      }
+    ]
+  },
+  {
+    "id": "drop",
+    "label": "Launch banner · split",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#1a1a2e",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Right panel",
+        "x": 0.5,
+        "y": 0,
+        "w": 0.5,
+        "h": 1,
+        "fill": "#ff6b35"
+      },
+      {
+        "kind": "diamond",
+        "name": "Notch",
+        "x": 0.46,
+        "y": 0.2,
+        "w": 0.08,
+        "h": 0.6,
+        "fill": "#1a1a2e"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "DROP 02",
+        "x": 0.05,
+        "y": 0.2,
+        "w": 0.4,
+        "size": 0.09,
+        "mono": true,
+        "bold": true,
+        "color": "#ff6b35"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Out now.",
+        "x": 0.05,
+        "y": 0.34,
+        "w": 0.42,
+        "size": 0.3,
+        "bold": true,
+        "color": "#ffffff"
+      },
+      {
+        "kind": "text",
+        "name": "Sub",
+        "text": "Limited run · ships worldwide",
+        "x": 0.05,
+        "y": 0.76,
+        "w": 0.42,
+        "size": 0.06,
+        "color": "#c8c8d8"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Product photo",
+        "x": 0.57,
+        "y": 0.12,
+        "w": 0.38,
+        "h": 0.76,
+        "fill": "#e0562a"
+      }
+    ]
+  },
+  {
+    "id": "versus",
+    "label": "Video thumbnail · versus",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#111111",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Left",
+        "x": 0,
+        "y": 0,
+        "w": 0.5,
+        "h": 0.78,
+        "fill": "#2563eb"
+      },
+      {
+        "kind": "rect",
+        "name": "Right",
+        "x": 0.5,
+        "y": 0,
+        "w": 0.5,
+        "h": 0.78,
+        "fill": "#dc2626"
+      },
+      {
+        "kind": "frame",
+        "shape": "circle",
+        "name": "Contender A",
+        "x": 0.09,
+        "y": 0.11,
+        "w": 0.32,
+        "h": 0.569,
+        "fill": "#1e40af"
+      },
+      {
+        "kind": "frame",
+        "shape": "circle",
+        "name": "Contender B",
+        "x": 0.59,
+        "y": 0.11,
+        "w": 0.32,
+        "h": 0.569,
+        "fill": "#991b1b"
+      },
+      {
+        "kind": "circle",
+        "name": "VS disc",
+        "x": 0.42,
+        "y": 0.25,
+        "w": 0.16,
+        "h": 0.284,
+        "fill": "#ffe600"
+      },
+      {
+        "kind": "text",
+        "name": "VS",
+        "text": "VS",
+        "x": 0.42,
+        "y": 0.32,
+        "w": 0.16,
+        "size": 0.14,
+        "bold": true,
+        "align": "center",
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "WHICH ONE WINS?",
+        "x": 0.05,
+        "y": 0.815,
+        "w": 0.9,
+        "size": 0.11,
+        "bold": true,
+        "align": "center",
+        "color": "#ffffff"
+      }
+    ]
+  },
+  {
+    "id": "square-post-split-hero",
+    "label": "Split hero",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#0f0f12",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.5,
+        "fill": "#26262c"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "NEW ARRIVAL",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#ff5c1a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Made to\nlast.",
+        "x": 0.08,
+        "y": 0.6,
+        "w": 0.84,
+        "size": 0.1,
+        "bold": true,
+        "color": "#f5f5f0"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Small batch. Big difference. Available this week.",
+        "x": 0.08,
+        "y": 0.82,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#9a9a9f"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.08,
+        "y": 0.905,
+        "w": 0.32,
+        "h": 0.06,
+        "fill": "#ff5c1a",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Shop now",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.32,
+        "size": 0.026,
+        "bold": true,
+        "align": "center",
+        "color": "#0f0f12"
+      }
+    ]
+  },
+  {
+    "id": "square-post-badge",
+    "label": "Badge",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#f6f1e7",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.19,
+        "y": 0.15,
+        "w": 0.62,
+        "h": 0.62,
+        "fill": "#2f6f5e"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Made to\nlast.",
+        "x": 0.19,
+        "y": 0.33599999999999997,
+        "w": 0.62,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#f6f1e7"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "NEW ARRIVAL",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#1c1a17"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.1,
+        "fill": "#e2b04a"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Small batch. Big difference. Available this week.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#6f6a60"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "@yourbrand",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#1c1a17"
+      }
+    ]
+  },
+  {
+    "id": "square-post-bands",
+    "label": "Bands",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#1c2541",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#5bc0be"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#ffd166"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#5bc0be"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "NEW ARRIVAL",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#1c2541"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Made to\nlast.",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#f2f5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Small batch. Big difference. Available this week.",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#a4b0d0"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "@yourbrand",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#1c2541"
+      }
+    ]
+  },
+  {
+    "id": "square-post-framed",
+    "label": "Framed",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#fff1e6",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.05,
+        "w": 0.9,
+        "h": 0.9,
+        "fill": "#2b1d16"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.062,
+        "y": 0.062,
+        "w": 0.876,
+        "h": 0.876,
+        "fill": "#fff1e6"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "NEW ARRIVAL",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#e63946"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Made to\nlast.",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#2b1d16"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#e63946"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Small batch. Big difference. Available this week.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#7a5c4d"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.03,
+        "fill": "#e63946"
+      }
+    ]
+  },
+  {
+    "id": "square-post-big-number",
+    "label": "Big number",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#0b3d2e",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#ffb703"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "NEW ARRIVAL",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#f2f7ec"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Made to\nlast.",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#f2f7ec"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.1,
+        "fill": "#fb8500"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Small batch. Big difference. Available this week.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#9dbfae"
+      }
+    ]
+  },
+  {
+    "id": "square-post-collage",
+    "label": "Collage",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#f4f4f4",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.425,
+        "h": 0.31499999999999995,
+        "fill": "#d8d8d8"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.06,
+        "w": 0.425,
+        "h": 0.31499999999999995,
+        "fill": "#e63312"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.4049999999999999,
+        "w": 0.425,
+        "h": 0.31499999999999995,
+        "fill": "#111111"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.4049999999999999,
+        "w": 0.425,
+        "h": 0.31499999999999995,
+        "fill": "#d8d8d8"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Made to last.",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "@yourbrand",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#e63312"
+      }
+    ]
+  },
+  {
+    "id": "square-post-geometry",
+    "label": "Geometry",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#2a1a3f",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#ff6fb5"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.34,
+        "fill": "#7cf5ff"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.22,
+        "fill": "#f7effa"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Made to\nlast.",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#f7effa"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "NEW ARRIVAL",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#2a1a3f"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "@yourbrand",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#b9a6cf"
+      }
+    ]
+  },
+  {
+    "id": "square-post-polaroid",
+    "label": "Polaroid",
+    "preset": "Square post",
+    "w": 1080,
+    "h": 1080,
+    "bg": "#fffbe6",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.15,
+        "y": 0.07,
+        "w": 0.7,
+        "h": 0.7760000000000001,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.18,
+        "y": 0.1,
+        "w": 0.64,
+        "h": 0.5760000000000001,
+        "fill": "#f1e6a8"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "NEW ARRIVAL",
+        "x": 0.18,
+        "y": 0.7240000000000001,
+        "w": 0.64,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.76,
+        "y": 0.05,
+        "w": 0.14,
+        "h": 0.14,
+        "fill": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Made to last.",
+        "x": 0.08,
+        "y": 0.916,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#1e1b0f"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "@yourbrand",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#6b6650"
+      }
+    ]
+  },
+  {
+    "id": "portrait-post-split-hero",
+    "label": "Split hero",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#f6f1e7",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.5,
+        "fill": "#d9cfbc"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "THIS WEEKEND",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#2f6f5e"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Open\nstudio.",
+        "x": 0.08,
+        "y": 0.6,
+        "w": 0.84,
+        "size": 0.1,
+        "bold": true,
+        "color": "#1c1a17"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Two days of work in progress, coffee and conversation.",
+        "x": 0.08,
+        "y": 0.82,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#6f6a60"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.08,
+        "y": 0.905,
+        "w": 0.32,
+        "h": 0.06,
+        "fill": "#2f6f5e",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Save the date",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.32,
+        "size": 0.026,
+        "bold": true,
+        "align": "center",
+        "color": "#f6f1e7"
+      }
+    ]
+  },
+  {
+    "id": "portrait-post-badge",
+    "label": "Badge",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#1c2541",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.19,
+        "y": 0.212,
+        "w": 0.62,
+        "h": 0.496,
+        "fill": "#5bc0be"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Open\nstudio.",
+        "x": 0.19,
+        "y": 0.3608,
+        "w": 0.62,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#1c2541"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "THIS WEEKEND",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#f2f5ff"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.08,
+        "fill": "#ffd166"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Two days of work in progress, coffee and conversation.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#a4b0d0"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Sat–Sun · 11–18h",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#f2f5ff"
+      }
+    ]
+  },
+  {
+    "id": "portrait-post-bands",
+    "label": "Bands",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#fff1e6",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#e63946"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#f4a261"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#e63946"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "THIS WEEKEND",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#fff1e6"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Open\nstudio.",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#2b1d16"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Two days of work in progress, coffee and conversation.",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#7a5c4d"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Sat–Sun · 11–18h",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#fff1e6"
+      }
+    ]
+  },
+  {
+    "id": "portrait-post-framed",
+    "label": "Framed",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#0b3d2e",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.04,
+        "w": 0.9,
+        "h": 0.92,
+        "fill": "#f2f7ec"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.065,
+        "y": 0.052000000000000005,
+        "w": 0.87,
+        "h": 0.896,
+        "fill": "#0b3d2e"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "THIS WEEKEND",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#ffb703"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Open\nstudio.",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#f2f7ec"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#ffb703"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Two days of work in progress, coffee and conversation.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#9dbfae"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.024,
+        "fill": "#ffb703"
+      }
+    ]
+  },
+  {
+    "id": "portrait-post-big-number",
+    "label": "Big number",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#f4f4f4",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#e63312"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "THIS WEEKEND",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Open\nstudio.",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.08,
+        "fill": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Two days of work in progress, coffee and conversation.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#666666"
+      }
+    ]
+  },
+  {
+    "id": "portrait-post-collage",
+    "label": "Collage",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#2a1a3f",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.048,
+        "w": 0.425,
+        "h": 0.32399999999999995,
+        "fill": "#3d2a58"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.048,
+        "w": 0.425,
+        "h": 0.32399999999999995,
+        "fill": "#ff6fb5"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.39599999999999996,
+        "w": 0.425,
+        "h": 0.32399999999999995,
+        "fill": "#7cf5ff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.39599999999999996,
+        "w": 0.425,
+        "h": 0.32399999999999995,
+        "fill": "#3d2a58"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Open studio.",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#f7effa"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Sat–Sun · 11–18h",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#ff6fb5"
+      }
+    ]
+  },
+  {
+    "id": "portrait-post-geometry",
+    "label": "Geometry",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#fffbe6",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#1d4ed8"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.272,
+        "fill": "#f97316"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.176,
+        "fill": "#1e1b0f"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Open\nstudio.",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#1e1b0f"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "THIS WEEKEND",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#fffbe6"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Sat–Sun · 11–18h",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#6b6650"
+      }
+    ]
+  },
+  {
+    "id": "portrait-post-polaroid",
+    "label": "Polaroid",
+    "preset": "Portrait post",
+    "w": 1080,
+    "h": 1350,
+    "bg": "#101d3a",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.15,
+        "y": 0.07600000000000001,
+        "w": 0.7,
+        "h": 0.6208,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.18,
+        "y": 0.1,
+        "w": 0.64,
+        "h": 0.46080000000000004,
+        "fill": "#1c2c55"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "THIS WEEKEND",
+        "x": 0.18,
+        "y": 0.5992000000000001,
+        "w": 0.64,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.76,
+        "y": 0.05600000000000001,
+        "w": 0.14,
+        "h": 0.11200000000000002,
+        "fill": "#c8f04a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Open studio.",
+        "x": 0.08,
+        "y": 0.7608000000000001,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#eef3ff"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Sat–Sun · 11–18h",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#8f9bc0"
+      }
+    ]
+  },
+  {
+    "id": "story-split-hero",
+    "label": "Split hero",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#1c2541",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.46,
+        "fill": "#2c3a63"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TAP TO SEE",
+        "x": 0.08,
+        "y": 0.52,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#5bc0be"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Behind\nthe scenes",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.1,
+        "bold": true,
+        "color": "#f2f5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "How the new collection came together.",
+        "x": 0.08,
+        "y": 0.76,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#a4b0d0"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.08,
+        "y": 0.87,
+        "w": 0.32,
+        "h": 0.05,
+        "fill": "#5bc0be",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Swipe up",
+        "x": 0.08,
+        "y": 0.882,
+        "w": 0.32,
+        "size": 0.026,
+        "bold": true,
+        "align": "center",
+        "color": "#1c2541"
+      }
+    ]
+  },
+  {
+    "id": "story-badge",
+    "label": "Badge",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#fff1e6",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.19,
+        "y": 0.285625,
+        "w": 0.62,
+        "h": 0.34875,
+        "fill": "#e63946"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Behind\nthe scenes",
+        "x": 0.19,
+        "y": 0.39025,
+        "w": 0.62,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#fff1e6"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TAP TO SEE",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#2b1d16"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.05625,
+        "fill": "#f4a261"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "How the new collection came together.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#7a5c4d"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Part 1 of 3",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#2b1d16"
+      }
+    ]
+  },
+  {
+    "id": "story-bands",
+    "label": "Bands",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#0b3d2e",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#ffb703"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#fb8500"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#ffb703"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TAP TO SEE",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#0b3d2e"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Behind\nthe scenes",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#f2f7ec"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "How the new collection came together.",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#9dbfae"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Part 1 of 3",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#0b3d2e"
+      }
+    ]
+  },
+  {
+    "id": "story-framed",
+    "label": "Framed",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#f4f4f4",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.028125,
+        "w": 0.9,
+        "h": 0.94375,
+        "fill": "#111111"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.07133333333333333,
+        "y": 0.040125,
+        "w": 0.8573333333333334,
+        "h": 0.91975,
+        "fill": "#f4f4f4"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TAP TO SEE",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#e63312"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Behind\nthe scenes",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#111111"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#e63312"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "How the new collection came together.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#666666"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.016874999999999998,
+        "fill": "#e63312"
+      }
+    ]
+  },
+  {
+    "id": "story-big-number",
+    "label": "Big number",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#2a1a3f",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#ff6fb5"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TAP TO SEE",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#f7effa"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Behind\nthe scenes",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#f7effa"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.05625,
+        "fill": "#7cf5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "How the new collection came together.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#b9a6cf"
+      }
+    ]
+  },
+  {
+    "id": "story-collage",
+    "label": "Collage",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#fffbe6",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.033749999999999995,
+        "w": 0.425,
+        "h": 0.3346875,
+        "fill": "#f1e6a8"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.033749999999999995,
+        "w": 0.425,
+        "h": 0.3346875,
+        "fill": "#1d4ed8"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.3853125,
+        "w": 0.425,
+        "h": 0.3346875,
+        "fill": "#f97316"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.3853125,
+        "w": 0.425,
+        "h": 0.3346875,
+        "fill": "#f1e6a8"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Behind the scenes",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#1e1b0f"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Part 1 of 3",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#1d4ed8"
+      }
+    ]
+  },
+  {
+    "id": "story-geometry",
+    "label": "Geometry",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#101d3a",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#c8f04a"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.19125000000000003,
+        "fill": "#3d7bf6"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.12375,
+        "fill": "#eef3ff"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Behind\nthe scenes",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#eef3ff"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TAP TO SEE",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#101d3a"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Part 1 of 3",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#8f9bc0"
+      }
+    ]
+  },
+  {
+    "id": "story-polaroid",
+    "label": "Polaroid",
+    "preset": "Story",
+    "w": 1080,
+    "h": 1920,
+    "bg": "#e8ddd0",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.15,
+        "y": 0.083125,
+        "w": 0.7,
+        "h": 0.4365000000000001,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.18,
+        "y": 0.1,
+        "w": 0.64,
+        "h": 0.32400000000000007,
+        "fill": "#cbbba9"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "TAP TO SEE",
+        "x": 0.18,
+        "y": 0.45100000000000007,
+        "w": 0.64,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.76,
+        "y": 0.063125,
+        "w": 0.14,
+        "h": 0.07875000000000001,
+        "fill": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Behind the scenes",
+        "x": 0.08,
+        "y": 0.5765000000000001,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#231b16"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Part 1 of 3",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#6d5f55"
+      }
+    ]
+  },
+  {
+    "id": "widescreen-split-hero",
+    "label": "Split hero",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#fff1e6",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 0.48,
+        "h": 1,
+        "fill": "#f3cdb3"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TEAM UPDATE",
+        "x": 0.54,
+        "y": 0.14,
+        "w": 0.42,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#e63946"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Where we\nare going",
+        "x": 0.54,
+        "y": 0.24,
+        "w": 0.42,
+        "size": 0.13,
+        "bold": true,
+        "color": "#2b1d16"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Roadmap, priorities and what changes next quarter.",
+        "x": 0.54,
+        "y": 0.64,
+        "w": 0.4,
+        "size": 0.03,
+        "color": "#7a5c4d"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.54,
+        "y": 0.8,
+        "w": 0.22,
+        "h": 0.1,
+        "fill": "#e63946",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Start",
+        "x": 0.54,
+        "y": 0.825,
+        "w": 0.22,
+        "size": 0.028,
+        "bold": true,
+        "align": "center",
+        "color": "#fff1e6"
+      }
+    ]
+  },
+  {
+    "id": "widescreen-badge",
+    "label": "Badge",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#0b3d2e",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.325625,
+        "y": 0.15,
+        "w": 0.34875,
+        "h": 0.62,
+        "fill": "#ffb703"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Where we\nare going",
+        "x": 0.325625,
+        "y": 0.33599999999999997,
+        "w": 0.34875,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#0b3d2e"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TEAM UPDATE",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#f2f7ec"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.17777777777777778,
+        "fill": "#fb8500"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Roadmap, priorities and what changes next quarter.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#9dbfae"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Presenter · Date",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#f2f7ec"
+      }
+    ]
+  },
+  {
+    "id": "widescreen-bands",
+    "label": "Bands",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#f4f4f4",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#e63312"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#111111"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#e63312"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TEAM UPDATE",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#f4f4f4"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Where we\nare going",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Roadmap, priorities and what changes next quarter.",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#666666"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Presenter · Date",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#f4f4f4"
+      }
+    ]
+  },
+  {
+    "id": "widescreen-framed",
+    "label": "Framed",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#2a1a3f",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.08888888888888889,
+        "w": 0.9,
+        "h": 0.8222222222222222,
+        "fill": "#f7effa"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.05675,
+        "y": 0.10088888888888889,
+        "w": 0.8865000000000001,
+        "h": 0.7982222222222222,
+        "fill": "#2a1a3f"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TEAM UPDATE",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#ff6fb5"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Where we\nare going",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#f7effa"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#ff6fb5"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Roadmap, priorities and what changes next quarter.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#b9a6cf"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.05333333333333333,
+        "fill": "#ff6fb5"
+      }
+    ]
+  },
+  {
+    "id": "widescreen-big-number",
+    "label": "Big number",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#fffbe6",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TEAM UPDATE",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#1e1b0f"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Where we\nare going",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#1e1b0f"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.17777777777777778,
+        "fill": "#f97316"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Roadmap, priorities and what changes next quarter.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#6b6650"
+      }
+    ]
+  },
+  {
+    "id": "widescreen-collage",
+    "label": "Collage",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#101d3a",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.10666666666666666,
+        "w": 0.425,
+        "h": 0.27999999999999997,
+        "fill": "#1c2c55"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.10666666666666666,
+        "w": 0.425,
+        "h": 0.27999999999999997,
+        "fill": "#c8f04a"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.43999999999999995,
+        "w": 0.425,
+        "h": 0.27999999999999997,
+        "fill": "#3d7bf6"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.43999999999999995,
+        "w": 0.425,
+        "h": 0.27999999999999997,
+        "fill": "#1c2c55"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Where we are going",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#eef3ff"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Presenter · Date",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#c8f04a"
+      }
+    ]
+  },
+  {
+    "id": "widescreen-geometry",
+    "label": "Geometry",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#e8ddd0",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#b5482b"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.6044444444444446,
+        "fill": "#3f5d4c"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.3911111111111111,
+        "fill": "#231b16"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Where we\nare going",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#231b16"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TEAM UPDATE",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#e8ddd0"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Presenter · Date",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#6d5f55"
+      }
+    ]
+  },
+  {
+    "id": "widescreen-polaroid",
+    "label": "Polaroid",
+    "preset": "Widescreen",
+    "w": 1920,
+    "h": 1080,
+    "bg": "#0f0f12",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.2899999999999999,
+        "y": 0.046666666666666676,
+        "w": 0.42000000000000004,
+        "h": 0.9315555555555557,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.31999999999999995,
+        "y": 0.1,
+        "w": 0.36000000000000004,
+        "h": 0.5760000000000001,
+        "fill": "#26262c"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "TEAM UPDATE",
+        "x": 0.31999999999999995,
+        "y": 0.7613333333333334,
+        "w": 0.36000000000000004,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.6199999999999999,
+        "y": 0.026666666666666675,
+        "w": 0.14,
+        "h": 0.2488888888888889,
+        "fill": "#ff5c1a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Where we are going",
+        "x": 0.08,
+        "y": 1.0715555555555556,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#f5f5f0"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Presenter · Date",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#9a9a9f"
+      }
+    ]
+  },
+  {
+    "id": "classic-split-hero",
+    "label": "Split hero",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#0b3d2e",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.5,
+        "fill": "#155a44"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "WORKSHOP",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#ffb703"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Learn by\nmaking",
+        "x": 0.08,
+        "y": 0.6,
+        "w": 0.84,
+        "size": 0.1,
+        "bold": true,
+        "color": "#f2f7ec"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "A hands-on session for curious beginners.",
+        "x": 0.08,
+        "y": 0.82,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#9dbfae"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.08,
+        "y": 0.905,
+        "w": 0.32,
+        "h": 0.06,
+        "fill": "#ffb703",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Reserve a seat",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.32,
+        "size": 0.026,
+        "bold": true,
+        "align": "center",
+        "color": "#0b3d2e"
+      }
+    ]
+  },
+  {
+    "id": "classic-badge",
+    "label": "Badge",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#f4f4f4",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.2675,
+        "y": 0.15,
+        "w": 0.46499999999999997,
+        "h": 0.62,
+        "fill": "#e63312"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Learn by\nmaking",
+        "x": 0.2675,
+        "y": 0.33599999999999997,
+        "w": 0.46499999999999997,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#f4f4f4"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "WORKSHOP",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#111111"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.13333333333333333,
+        "fill": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "A hands-on session for curious beginners.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#666666"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Room 204 · 10:00",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#111111"
+      }
+    ]
+  },
+  {
+    "id": "classic-bands",
+    "label": "Bands",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#2a1a3f",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#ff6fb5"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#7cf5ff"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#ff6fb5"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "WORKSHOP",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#2a1a3f"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Learn by\nmaking",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#f7effa"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "A hands-on session for curious beginners.",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#b9a6cf"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Room 204 · 10:00",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#2a1a3f"
+      }
+    ]
+  },
+  {
+    "id": "classic-framed",
+    "label": "Framed",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#fffbe6",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.06666666666666667,
+        "w": 0.9,
+        "h": 0.8666666666666667,
+        "fill": "#1e1b0f"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.059000000000000004,
+        "y": 0.07866666666666666,
+        "w": 0.882,
+        "h": 0.8426666666666667,
+        "fill": "#fffbe6"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "WORKSHOP",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Learn by\nmaking",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#1e1b0f"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "A hands-on session for curious beginners.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#6b6650"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.04,
+        "fill": "#1d4ed8"
+      }
+    ]
+  },
+  {
+    "id": "classic-big-number",
+    "label": "Big number",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#101d3a",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#c8f04a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "WORKSHOP",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#eef3ff"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Learn by\nmaking",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#eef3ff"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.13333333333333333,
+        "fill": "#3d7bf6"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "A hands-on session for curious beginners.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#8f9bc0"
+      }
+    ]
+  },
+  {
+    "id": "classic-collage",
+    "label": "Collage",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#e8ddd0",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.08,
+        "w": 0.425,
+        "h": 0.3,
+        "fill": "#cbbba9"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.08,
+        "w": 0.425,
+        "h": 0.3,
+        "fill": "#b5482b"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.42,
+        "w": 0.425,
+        "h": 0.3,
+        "fill": "#3f5d4c"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.42,
+        "w": 0.425,
+        "h": 0.3,
+        "fill": "#cbbba9"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Learn by making",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#231b16"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Room 204 · 10:00",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#b5482b"
+      }
+    ]
+  },
+  {
+    "id": "classic-geometry",
+    "label": "Geometry",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#0f0f12",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#ff5c1a"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.45333333333333337,
+        "fill": "#ffd447"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.29333333333333333,
+        "fill": "#f5f5f0"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Learn by\nmaking",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#f5f5f0"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "WORKSHOP",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#0f0f12"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Room 204 · 10:00",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#9a9a9f"
+      }
+    ]
+  },
+  {
+    "id": "classic-polaroid",
+    "label": "Polaroid",
+    "preset": "Classic",
+    "w": 1024,
+    "h": 768,
+    "bg": "#f6f1e7",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.23,
+        "y": 0.060000000000000005,
+        "w": 0.54,
+        "h": 0.8426666666666667,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.26,
+        "y": 0.1,
+        "w": 0.48,
+        "h": 0.5760000000000001,
+        "fill": "#d9cfbc"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "WORKSHOP",
+        "x": 0.26,
+        "y": 0.74,
+        "w": 0.48,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.6799999999999999,
+        "y": 0.04000000000000001,
+        "w": 0.14,
+        "h": 0.18666666666666668,
+        "fill": "#2f6f5e"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Learn by making",
+        "x": 0.08,
+        "y": 0.9826666666666667,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#1c1a17"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Room 204 · 10:00",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#6f6a60"
+      }
+    ]
+  },
+  {
+    "id": "a4-flyer-split-hero",
+    "label": "Split hero",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#f4f4f4",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.46,
+        "fill": "#d8d8d8"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "COMMUNITY",
+        "x": 0.08,
+        "y": 0.52,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#e63312"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Garden\nmarket",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.1,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Local growers, fresh produce, live music all afternoon.",
+        "x": 0.08,
+        "y": 0.76,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#666666"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.08,
+        "y": 0.87,
+        "w": 0.32,
+        "h": 0.05,
+        "fill": "#e63312",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Free entry",
+        "x": 0.08,
+        "y": 0.882,
+        "w": 0.32,
+        "size": 0.026,
+        "bold": true,
+        "align": "center",
+        "color": "#f4f4f4"
+      }
+    ]
+  },
+  {
+    "id": "a4-flyer-badge",
+    "label": "Badge",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#2a1a3f",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.19,
+        "y": 0.24084378563283923,
+        "w": 0.62,
+        "h": 0.4383124287343215,
+        "fill": "#ff6fb5"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Garden\nmarket",
+        "x": 0.19,
+        "y": 0.37233751425313566,
+        "w": 0.62,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#2a1a3f"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "COMMUNITY",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#f7effa"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.07069555302166476,
+        "fill": "#7cf5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Local growers, fresh produce, live music all afternoon.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#b9a6cf"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Every Sunday · Main Square",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#f7effa"
+      }
+    ]
+  },
+  {
+    "id": "a4-flyer-bands",
+    "label": "Bands",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#fffbe6",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#1d4ed8"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#f97316"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "COMMUNITY",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#fffbe6"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Garden\nmarket",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#1e1b0f"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Local growers, fresh produce, live music all afternoon.",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#6b6650"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Every Sunday · Main Square",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#fffbe6"
+      }
+    ]
+  },
+  {
+    "id": "a4-flyer-framed",
+    "label": "Framed",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#101d3a",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.03534777651083238,
+        "w": 0.9,
+        "h": 0.9293044469783353,
+        "fill": "#eef3ff"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.0669741935483871,
+        "y": 0.047347776510832384,
+        "w": 0.8660516129032259,
+        "h": 0.9053044469783352,
+        "fill": "#101d3a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "COMMUNITY",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#c8f04a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Garden\nmarket",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#eef3ff"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#c8f04a"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Local growers, fresh produce, live music all afternoon.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#8f9bc0"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.02120866590649943,
+        "fill": "#c8f04a"
+      }
+    ]
+  },
+  {
+    "id": "a4-flyer-big-number",
+    "label": "Big number",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#e8ddd0",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "COMMUNITY",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#231b16"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Garden\nmarket",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#231b16"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.07069555302166476,
+        "fill": "#3f5d4c"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Local growers, fresh produce, live music all afternoon.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#6d5f55"
+      }
+    ]
+  },
+  {
+    "id": "a4-flyer-collage",
+    "label": "Collage",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#0f0f12",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.04241733181299886,
+        "w": 0.425,
+        "h": 0.32818700114025084,
+        "fill": "#26262c"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.04241733181299886,
+        "w": 0.425,
+        "h": 0.32818700114025084,
+        "fill": "#ff5c1a"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.39181299885974913,
+        "w": 0.425,
+        "h": 0.32818700114025084,
+        "fill": "#ffd447"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.39181299885974913,
+        "w": 0.425,
+        "h": 0.32818700114025084,
+        "fill": "#26262c"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Garden market",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#f5f5f0"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Every Sunday · Main Square",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#ff5c1a"
+      }
+    ]
+  },
+  {
+    "id": "a4-flyer-geometry",
+    "label": "Geometry",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#f6f1e7",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#2f6f5e"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.2403648802736602,
+        "fill": "#e2b04a"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.1555302166476625,
+        "fill": "#1c1a17"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Garden\nmarket",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#1c1a17"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "COMMUNITY",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#f6f1e7"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Every Sunday · Main Square",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#6f6a60"
+      }
+    ]
+  },
+  {
+    "id": "a4-flyer-polaroid",
+    "label": "Polaroid",
+    "preset": "A4 flyer",
+    "w": 2480,
+    "h": 3508,
+    "bg": "#1c2541",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.15,
+        "y": 0.07879133409350057,
+        "w": 0.7,
+        "h": 0.5485974914481185,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.18,
+        "y": 0.1,
+        "w": 0.64,
+        "h": 0.40720638540478904,
+        "fill": "#2c3a63"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "COMMUNITY",
+        "x": 0.18,
+        "y": 0.5411402508551881,
+        "w": 0.64,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.76,
+        "y": 0.05879133409350057,
+        "w": 0.14,
+        "h": 0.09897377423033069,
+        "fill": "#5bc0be"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Garden market",
+        "x": 0.08,
+        "y": 0.6885974914481187,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#f2f5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Every Sunday · Main Square",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#a4b0d0"
+      }
+    ]
+  },
+  {
+    "id": "business-card-split-hero",
+    "label": "Split hero",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#2a1a3f",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 0.48,
+        "h": 1,
+        "fill": "#3d2a58"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "YOUR STUDIO",
+        "x": 0.54,
+        "y": 0.14,
+        "w": 0.42,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#ff6fb5"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Alex\nMorgan",
+        "x": 0.54,
+        "y": 0.24,
+        "w": 0.42,
+        "size": 0.13,
+        "bold": true,
+        "color": "#f7effa"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Photographer",
+        "x": 0.54,
+        "y": 0.64,
+        "w": 0.4,
+        "size": 0.03,
+        "color": "#b9a6cf"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.54,
+        "y": 0.8,
+        "w": 0.22,
+        "h": 0.1,
+        "fill": "#ff6fb5",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "hello@studio.com",
+        "x": 0.54,
+        "y": 0.825,
+        "w": 0.22,
+        "size": 0.028,
+        "bold": true,
+        "align": "center",
+        "color": "#2a1a3f"
+      }
+    ]
+  },
+  {
+    "id": "business-card-badge",
+    "label": "Badge",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#fffbe6",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.32285714285714284,
+        "y": 0.15,
+        "w": 0.35428571428571426,
+        "h": 0.62,
+        "fill": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Alex\nMorgan",
+        "x": 0.32285714285714284,
+        "y": 0.33599999999999997,
+        "w": 0.35428571428571426,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#fffbe6"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "YOUR STUDIO",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#1e1b0f"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.175,
+        "fill": "#f97316"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Photographer",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#6b6650"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "+1 555 0100",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#1e1b0f"
+      }
+    ]
+  },
+  {
+    "id": "business-card-bands",
+    "label": "Bands",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#101d3a",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#c8f04a"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#3d7bf6"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#c8f04a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "YOUR STUDIO",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#101d3a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Alex\nMorgan",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#eef3ff"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Photographer",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#8f9bc0"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "+1 555 0100",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#101d3a"
+      }
+    ]
+  },
+  {
+    "id": "business-card-framed",
+    "label": "Framed",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#e8ddd0",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.0875,
+        "w": 0.9,
+        "h": 0.825,
+        "fill": "#231b16"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.05685714285714286,
+        "y": 0.09949999999999999,
+        "w": 0.8862857142857143,
+        "h": 0.8009999999999999,
+        "fill": "#e8ddd0"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "YOUR STUDIO",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Alex\nMorgan",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#231b16"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Photographer",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#6d5f55"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.0525,
+        "fill": "#b5482b"
+      }
+    ]
+  },
+  {
+    "id": "business-card-big-number",
+    "label": "Big number",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#0f0f12",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#ff5c1a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "YOUR STUDIO",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#f5f5f0"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Alex\nMorgan",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#f5f5f0"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.175,
+        "fill": "#ffd447"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Photographer",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#9a9a9f"
+      }
+    ]
+  },
+  {
+    "id": "business-card-collage",
+    "label": "Collage",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#f6f1e7",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.105,
+        "w": 0.425,
+        "h": 0.28125,
+        "fill": "#d9cfbc"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.105,
+        "w": 0.425,
+        "h": 0.28125,
+        "fill": "#2f6f5e"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.43875,
+        "w": 0.425,
+        "h": 0.28125,
+        "fill": "#e2b04a"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.43875,
+        "w": 0.425,
+        "h": 0.28125,
+        "fill": "#d9cfbc"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Alex Morgan",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#1c1a17"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "+1 555 0100",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#2f6f5e"
+      }
+    ]
+  },
+  {
+    "id": "business-card-geometry",
+    "label": "Geometry",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#1c2541",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#5bc0be"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.595,
+        "fill": "#ffd166"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.385,
+        "fill": "#f2f5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Alex\nMorgan",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#f2f5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "YOUR STUDIO",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#1c2541"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "+1 555 0100",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#a4b0d0"
+      }
+    ]
+  },
+  {
+    "id": "business-card-polaroid",
+    "label": "Polaroid",
+    "preset": "Business card",
+    "w": 1050,
+    "h": 600,
+    "bg": "#fff1e6",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.28714285714285714,
+        "y": 0.04750000000000001,
+        "w": 0.4257142857142857,
+        "h": 0.926,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.31714285714285717,
+        "y": 0.1,
+        "w": 0.3657142857142857,
+        "h": 0.5760000000000001,
+        "fill": "#f3cdb3"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "YOUR STUDIO",
+        "x": 0.31714285714285717,
+        "y": 0.76,
+        "w": 0.3657142857142857,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.6228571428571428,
+        "y": 0.027500000000000007,
+        "w": 0.14,
+        "h": 0.245,
+        "fill": "#e63946"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Alex Morgan",
+        "x": 0.08,
+        "y": 1.066,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#2b1d16"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "+1 555 0100",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#7a5c4d"
+      }
+    ]
+  },
+  {
+    "id": "poster-split-hero",
+    "label": "Split hero",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#fffbe6",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.46,
+        "fill": "#f1e6a8"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "FILM NIGHT",
+        "x": 0.08,
+        "y": 0.52,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Night\nshift",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.1,
+        "bold": true,
+        "color": "#1e1b0f"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Outdoor screening under the stars.",
+        "x": 0.08,
+        "y": 0.76,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#6b6650"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.08,
+        "y": 0.87,
+        "w": 0.32,
+        "h": 0.05,
+        "fill": "#1d4ed8",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Tickets at the door",
+        "x": 0.08,
+        "y": 0.882,
+        "w": 0.32,
+        "size": 0.026,
+        "bold": true,
+        "align": "center",
+        "color": "#fffbe6"
+      }
+    ]
+  },
+  {
+    "id": "poster-badge",
+    "label": "Badge",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#101d3a",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.19,
+        "y": 0.22749999999999995,
+        "w": 0.62,
+        "h": 0.465,
+        "fill": "#c8f04a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Night\nshift",
+        "x": 0.19,
+        "y": 0.367,
+        "w": 0.62,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#101d3a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "FILM NIGHT",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#eef3ff"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.075,
+        "fill": "#3d7bf6"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Outdoor screening under the stars.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#8f9bc0"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Fri 12 Oct · 21:00",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#eef3ff"
+      }
+    ]
+  },
+  {
+    "id": "poster-bands",
+    "label": "Bands",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#e8ddd0",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#b5482b"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#3f5d4c"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "FILM NIGHT",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#e8ddd0"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Night\nshift",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#231b16"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Outdoor screening under the stars.",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#6d5f55"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Fri 12 Oct · 21:00",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#e8ddd0"
+      }
+    ]
+  },
+  {
+    "id": "poster-framed",
+    "label": "Framed",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#0f0f12",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.0375,
+        "w": 0.9,
+        "h": 0.925,
+        "fill": "#f5f5f0"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.066,
+        "y": 0.0495,
+        "w": 0.868,
+        "h": 0.901,
+        "fill": "#0f0f12"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "FILM NIGHT",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#ff5c1a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Night\nshift",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#f5f5f0"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#ff5c1a"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Outdoor screening under the stars.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#9a9a9f"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.0225,
+        "fill": "#ff5c1a"
+      }
+    ]
+  },
+  {
+    "id": "poster-big-number",
+    "label": "Big number",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#f6f1e7",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#2f6f5e"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "FILM NIGHT",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#1c1a17"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Night\nshift",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#1c1a17"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.075,
+        "fill": "#e2b04a"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Outdoor screening under the stars.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#6f6a60"
+      }
+    ]
+  },
+  {
+    "id": "poster-collage",
+    "label": "Collage",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#1c2541",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.045,
+        "w": 0.425,
+        "h": 0.32625,
+        "fill": "#2c3a63"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.045,
+        "w": 0.425,
+        "h": 0.32625,
+        "fill": "#5bc0be"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.39375,
+        "w": 0.425,
+        "h": 0.32625,
+        "fill": "#ffd166"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.39375,
+        "w": 0.425,
+        "h": 0.32625,
+        "fill": "#2c3a63"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Night shift",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#f2f5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Fri 12 Oct · 21:00",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#5bc0be"
+      }
+    ]
+  },
+  {
+    "id": "poster-geometry",
+    "label": "Geometry",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#fff1e6",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#e63946"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.255,
+        "fill": "#f4a261"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.165,
+        "fill": "#2b1d16"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Night\nshift",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#2b1d16"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "FILM NIGHT",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#fff1e6"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Fri 12 Oct · 21:00",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#7a5c4d"
+      }
+    ]
+  },
+  {
+    "id": "poster-polaroid",
+    "label": "Polaroid",
+    "preset": "Poster",
+    "w": 5400,
+    "h": 7200,
+    "bg": "#0b3d2e",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.15,
+        "y": 0.07750000000000001,
+        "w": 0.7,
+        "h": 0.582,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.18,
+        "y": 0.1,
+        "w": 0.64,
+        "h": 0.432,
+        "fill": "#155a44"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "FILM NIGHT",
+        "x": 0.18,
+        "y": 0.5680000000000001,
+        "w": 0.64,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.76,
+        "y": 0.05750000000000001,
+        "w": 0.14,
+        "h": 0.10500000000000001,
+        "fill": "#ffb703"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Night shift",
+        "x": 0.08,
+        "y": 0.7220000000000001,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#f2f7ec"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Fri 12 Oct · 21:00",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#9dbfae"
+      }
+    ]
+  },
+  {
+    "id": "banner-split-hero",
+    "label": "Split hero",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#101d3a",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 0.48,
+        "h": 1,
+        "fill": "#1c2c55"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "LIMITED",
+        "x": 0.54,
+        "y": 0.14,
+        "w": 0.42,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#c8f04a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Big drop.",
+        "x": 0.54,
+        "y": 0.24,
+        "w": 0.42,
+        "size": 0.13,
+        "bold": true,
+        "color": "#eef3ff"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "New season, new colours.",
+        "x": 0.54,
+        "y": 0.64,
+        "w": 0.4,
+        "size": 0.03,
+        "color": "#8f9bc0"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.54,
+        "y": 0.8,
+        "w": 0.22,
+        "h": 0.1,
+        "fill": "#c8f04a",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "Explore",
+        "x": 0.54,
+        "y": 0.825,
+        "w": 0.22,
+        "size": 0.028,
+        "bold": true,
+        "align": "center",
+        "color": "#101d3a"
+      }
+    ]
+  },
+  {
+    "id": "banner-badge",
+    "label": "Badge",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#e8ddd0",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.4225,
+        "y": 0.15,
+        "w": 0.155,
+        "h": 0.62,
+        "fill": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Big drop.",
+        "x": 0.4225,
+        "y": 0.33599999999999997,
+        "w": 0.155,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#e8ddd0"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "LIMITED",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#231b16"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.4,
+        "fill": "#3f5d4c"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "New season, new colours.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#6d5f55"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Free shipping",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#231b16"
+      }
+    ]
+  },
+  {
+    "id": "banner-bands",
+    "label": "Bands",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#0f0f12",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#ff5c1a"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#ffd447"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#ff5c1a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "LIMITED",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#0f0f12"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Big drop.",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#f5f5f0"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "New season, new colours.",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#9a9a9f"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Free shipping",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#0f0f12"
+      }
+    ]
+  },
+  {
+    "id": "banner-framed",
+    "label": "Framed",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#f6f1e7",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.2,
+        "w": 0.9,
+        "h": 0.6,
+        "fill": "#1c1a17"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.053000000000000005,
+        "y": 0.21200000000000002,
+        "w": 0.894,
+        "h": 0.576,
+        "fill": "#f6f1e7"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "LIMITED",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#2f6f5e"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Big drop.",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#1c1a17"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#2f6f5e"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "New season, new colours.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#6f6a60"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.12,
+        "fill": "#2f6f5e"
+      }
+    ]
+  },
+  {
+    "id": "banner-big-number",
+    "label": "Big number",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#1c2541",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#5bc0be"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "LIMITED",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#f2f5ff"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Big drop.",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#f2f5ff"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.4,
+        "fill": "#ffd166"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "New season, new colours.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#a4b0d0"
+      }
+    ]
+  },
+  {
+    "id": "banner-collage",
+    "label": "Collage",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#fff1e6",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.24,
+        "w": 0.425,
+        "h": 0.18,
+        "fill": "#f3cdb3"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.24,
+        "w": 0.425,
+        "h": 0.18,
+        "fill": "#e63946"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.54,
+        "w": 0.425,
+        "h": 0.18,
+        "fill": "#f4a261"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.54,
+        "w": 0.425,
+        "h": 0.18,
+        "fill": "#f3cdb3"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Big drop.",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#2b1d16"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Free shipping",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#e63946"
+      }
+    ]
+  },
+  {
+    "id": "banner-geometry",
+    "label": "Geometry",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#0b3d2e",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#ffb703"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 1.36,
+        "fill": "#fb8500"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.88,
+        "fill": "#f2f7ec"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Big drop.",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#f2f7ec"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "LIMITED",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#0b3d2e"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Free shipping",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#9dbfae"
+      }
+    ]
+  },
+  {
+    "id": "banner-polaroid",
+    "label": "Polaroid",
+    "preset": "Banner",
+    "w": 1600,
+    "h": 400,
+    "bg": "#f4f4f4",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.39,
+        "y": -0.01999999999999999,
+        "w": 0.22,
+        "h": 1.3760000000000001,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.42,
+        "y": 0.1,
+        "w": 0.16,
+        "h": 0.5760000000000001,
+        "fill": "#d8d8d8"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "LIMITED",
+        "x": 0.42,
+        "y": 0.8680000000000001,
+        "w": 0.16,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.52,
+        "y": -0.039999999999999994,
+        "w": 0.14,
+        "h": 0.56,
+        "fill": "#e63312"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Big drop.",
+        "x": 0.08,
+        "y": 1.516,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Free shipping",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#666666"
+      }
+    ]
+  },
+  {
+    "id": "video-thumbnail-split-hero",
+    "label": "Split hero",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#e8ddd0",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 0.48,
+        "h": 1,
+        "fill": "#cbbba9"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "EPISODE 12",
+        "x": 0.54,
+        "y": 0.14,
+        "w": 0.42,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "I built\nthis in\na day",
+        "x": 0.54,
+        "y": 0.24,
+        "w": 0.42,
+        "size": 0.13,
+        "bold": true,
+        "color": "#231b16"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Full process, no cuts.",
+        "x": 0.54,
+        "y": 0.64,
+        "w": 0.4,
+        "size": 0.03,
+        "color": "#6d5f55"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.54,
+        "y": 0.8,
+        "w": 0.22,
+        "h": 0.1,
+        "fill": "#b5482b",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "NEW",
+        "x": 0.54,
+        "y": 0.825,
+        "w": 0.22,
+        "size": 0.028,
+        "bold": true,
+        "align": "center",
+        "color": "#e8ddd0"
+      }
+    ]
+  },
+  {
+    "id": "video-thumbnail-badge",
+    "label": "Badge",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#0f0f12",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.325625,
+        "y": 0.15,
+        "w": 0.34875,
+        "h": 0.62,
+        "fill": "#ff5c1a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "I built\nthis in\na day",
+        "x": 0.325625,
+        "y": 0.33599999999999997,
+        "w": 0.34875,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#0f0f12"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "EPISODE 12",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#f5f5f0"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.17777777777777778,
+        "fill": "#ffd447"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Full process, no cuts.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#9a9a9f"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#f5f5f0"
+      }
+    ]
+  },
+  {
+    "id": "video-thumbnail-bands",
+    "label": "Bands",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#f6f1e7",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Band 1",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#2f6f5e"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 2",
+        "x": 0,
+        "y": 0.2,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#e2b04a"
+      },
+      {
+        "kind": "rect",
+        "name": "Band 3",
+        "x": 0,
+        "y": 0.8,
+        "w": 1,
+        "h": 0.2,
+        "fill": "#2f6f5e"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "EPISODE 12",
+        "x": 0.06,
+        "y": 0.07,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#f6f1e7"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "I built\nthis in\na day",
+        "x": 0.06,
+        "y": 0.44,
+        "w": 0.88,
+        "size": 0.14,
+        "bold": true,
+        "color": "#1c1a17"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Full process, no cuts.",
+        "x": 0.06,
+        "y": 0.7,
+        "w": 0.6,
+        "size": 0.026,
+        "color": "#6f6a60"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "",
+        "x": 0.06,
+        "y": 0.87,
+        "w": 0.88,
+        "size": 0.026,
+        "mono": true,
+        "bold": true,
+        "color": "#f6f1e7"
+      }
+    ]
+  },
+  {
+    "id": "video-thumbnail-framed",
+    "label": "Framed",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#1c2541",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.08888888888888889,
+        "w": 0.9,
+        "h": 0.8222222222222222,
+        "fill": "#f2f5ff"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.05675,
+        "y": 0.10088888888888889,
+        "w": 0.8865000000000001,
+        "h": 0.7982222222222222,
+        "fill": "#1c2541"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "EPISODE 12",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#5bc0be"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "I built\nthis in\na day",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#f2f5ff"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#5bc0be"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Full process, no cuts.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#a4b0d0"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.05333333333333333,
+        "fill": "#5bc0be"
+      }
+    ]
+  },
+  {
+    "id": "video-thumbnail-big-number",
+    "label": "Big number",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#fff1e6",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#e63946"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "EPISODE 12",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#2b1d16"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "I built\nthis in\na day",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#2b1d16"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.17777777777777778,
+        "fill": "#f4a261"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Full process, no cuts.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#7a5c4d"
+      }
+    ]
+  },
+  {
+    "id": "video-thumbnail-collage",
+    "label": "Collage",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#0b3d2e",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 1",
+        "x": 0.06,
+        "y": 0.10666666666666666,
+        "w": 0.425,
+        "h": 0.27999999999999997,
+        "fill": "#155a44"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 2",
+        "x": 0.515,
+        "y": 0.10666666666666666,
+        "w": 0.425,
+        "h": 0.27999999999999997,
+        "fill": "#ffb703"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 3",
+        "x": 0.06,
+        "y": 0.43999999999999995,
+        "w": 0.425,
+        "h": 0.27999999999999997,
+        "fill": "#fb8500"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo 4",
+        "x": 0.515,
+        "y": 0.43999999999999995,
+        "w": 0.425,
+        "h": 0.27999999999999997,
+        "fill": "#155a44"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "I built this in\na day",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.88,
+        "size": 0.08,
+        "bold": true,
+        "color": "#f2f7ec"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "",
+        "x": 0.06,
+        "y": 0.9,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#ffb703"
+      }
+    ]
+  },
+  {
+    "id": "video-thumbnail-geometry",
+    "label": "Geometry",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#f4f4f4",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#e63312"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.6044444444444446,
+        "fill": "#111111"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.39111111111111113,
+        "fill": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "I built\nthis in\na day",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#111111"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "EPISODE 12",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#f4f4f4"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#666666"
+      }
+    ]
+  },
+  {
+    "id": "video-thumbnail-polaroid",
+    "label": "Polaroid",
+    "preset": "Video thumbnail",
+    "w": 1280,
+    "h": 720,
+    "bg": "#2a1a3f",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.29000000000000004,
+        "y": 0.046666666666666676,
+        "w": 0.42,
+        "h": 0.9315555555555556,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.32,
+        "y": 0.1,
+        "w": 0.36,
+        "h": 0.576,
+        "fill": "#3d2a58"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "EPISODE 12",
+        "x": 0.32,
+        "y": 0.7613333333333333,
+        "w": 0.36,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.6199999999999999,
+        "y": 0.026666666666666675,
+        "w": 0.14,
+        "h": 0.2488888888888889,
+        "fill": "#ff6fb5"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "I built this in\na day",
+        "x": 0.08,
+        "y": 1.0715555555555556,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#f7effa"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#b9a6cf"
+      }
+    ]
+  },
+  {
+    "id": "invitation-wedding",
+    "label": "Wedding",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#f7f2ea",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.06,
+        "y": 0.043,
+        "w": 0.88,
+        "h": 0.914,
+        "fill": "#8a6d4b"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.064,
+        "y": 0.0459,
+        "w": 0.872,
+        "h": 0.9083,
+        "fill": "#f7f2ea"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "TOGETHER WITH THEIR FAMILIES",
+        "x": 0.12,
+        "y": 0.14,
+        "w": 0.76,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#8a6d4b"
+      },
+      {
+        "kind": "text",
+        "name": "Names",
+        "text": "Elena\n&\nJonas",
+        "x": 0.1,
+        "y": 0.22,
+        "w": 0.8,
+        "size": 0.13,
+        "bold": true,
+        "align": "center",
+        "color": "#2b2622"
+      },
+      {
+        "kind": "text",
+        "name": "Invite",
+        "text": "invite you to celebrate their wedding",
+        "x": 0.14,
+        "y": 0.545,
+        "w": 0.72,
+        "size": 0.028,
+        "italic": true,
+        "align": "center",
+        "color": "#7a6f65"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.615,
+        "w": 0.16,
+        "h": 0.002,
+        "fill": "#8a6d4b"
+      },
+      {
+        "kind": "text",
+        "name": "Date",
+        "text": "Saturday, 20 June 2027 · 3 PM",
+        "x": 0.1,
+        "y": 0.65,
+        "w": 0.8,
+        "size": 0.03,
+        "align": "center",
+        "color": "#2b2622"
+      },
+      {
+        "kind": "text",
+        "name": "Place",
+        "text": "Villa Serena, Lake Como",
+        "x": 0.1,
+        "y": 0.69,
+        "w": 0.8,
+        "size": 0.03,
+        "align": "center",
+        "color": "#2b2622"
+      },
+      {
+        "kind": "text",
+        "name": "RSVP",
+        "text": "RSVP BY 1 MAY · ELENAANDJONAS.COM",
+        "x": 0.1,
+        "y": 0.84,
+        "w": 0.8,
+        "size": 0.018,
+        "mono": true,
+        "align": "center",
+        "color": "#8a6d4b"
+      }
+    ]
+  },
+  {
+    "id": "invitation-birthday",
+    "label": "Birthday",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#ff8fab",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Balloon 1",
+        "x": 0.1,
+        "y": 0.06,
+        "w": 0.34,
+        "h": 0.243,
+        "fill": "#ffd166"
+      },
+      {
+        "kind": "circle",
+        "name": "Balloon 2",
+        "x": 0.52,
+        "y": 0.02,
+        "w": 0.4,
+        "h": 0.286,
+        "fill": "#06d6a0"
+      },
+      {
+        "kind": "circle",
+        "name": "Balloon 3",
+        "x": 0.36,
+        "y": 0.2,
+        "w": 0.3,
+        "h": 0.214,
+        "fill": "#4cc9f0"
+      },
+      {
+        "kind": "line",
+        "name": "String 1",
+        "x": 0.27,
+        "y": 0.3,
+        "w": 0.003,
+        "h": 0.14,
+        "fill": "#2a1020"
+      },
+      {
+        "kind": "line",
+        "name": "String 2",
+        "x": 0.72,
+        "y": 0.3,
+        "w": 0.003,
+        "h": 0.16,
+        "fill": "#2a1020"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "YOU'RE INVITED TO",
+        "x": 0.1,
+        "y": 0.48,
+        "w": 0.8,
+        "size": 0.022,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#2a1020"
+      },
+      {
+        "kind": "text",
+        "name": "Name",
+        "text": "Mia's\n7th",
+        "x": 0.08,
+        "y": 0.52,
+        "w": 0.84,
+        "size": 0.16,
+        "bold": true,
+        "align": "center",
+        "color": "#2a1020"
+      },
+      {
+        "kind": "text",
+        "name": "Sub",
+        "text": "BIRTHDAY PARTY",
+        "x": 0.1,
+        "y": 0.755,
+        "w": 0.8,
+        "size": 0.03,
+        "bold": true,
+        "align": "center",
+        "color": "#ffffff"
+      },
+      {
+        "kind": "text",
+        "name": "Details",
+        "text": "Sunday 3 March · 2–5 PM\n14 Orchard Lane",
+        "x": 0.1,
+        "y": 0.82,
+        "w": 0.8,
+        "size": 0.026,
+        "align": "center",
+        "color": "#2a1020"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.88,
+        "w": 0.1,
+        "h": 0.071,
+        "fill": "#ffd166"
+      },
+      {
+        "kind": "star",
+        "name": "Star 2",
+        "x": 0.84,
+        "y": 0.86,
+        "w": 0.1,
+        "h": 0.071,
+        "fill": "#ffd166"
+      }
+    ]
+  },
+  {
+    "id": "invitation-baby-shower",
+    "label": "Baby shower",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#e9f2ee",
+    "els": [
+      {
+        "kind": "circle",
+        "name": "Disc",
+        "x": 0.19,
+        "y": 0.23857142857142857,
+        "w": 0.62,
+        "h": 0.44285714285714284,
+        "fill": "#f4b393"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Baby\nShower",
+        "x": 0.19,
+        "y": 0.37142857142857144,
+        "w": 0.62,
+        "size": 0.1,
+        "bold": true,
+        "align": "center",
+        "color": "#e9f2ee"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "A LITTLE ONE IS ON THE WAY",
+        "x": 0.08,
+        "y": 0.06,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#243b33"
+      },
+      {
+        "kind": "star",
+        "name": "Star",
+        "x": 0.06,
+        "y": 0.78,
+        "w": 0.1,
+        "h": 0.07142857142857142,
+        "fill": "#a8d5c2"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Join us for brunch and games to celebrate Nora.",
+        "x": 0.2,
+        "y": 0.82,
+        "w": 0.6,
+        "size": 0.026,
+        "align": "center",
+        "color": "#5f7a70"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Sat 12 April · 11 AM · 8 Elm Court",
+        "x": 0.08,
+        "y": 0.92,
+        "w": 0.84,
+        "size": 0.02,
+        "mono": true,
+        "align": "center",
+        "color": "#243b33"
+      }
+    ]
+  },
+  {
+    "id": "invitation-graduation",
+    "label": "Graduation",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#141a2e",
+    "els": [
+      {
+        "kind": "text",
+        "name": "Number",
+        "text": "01",
+        "x": -0.02,
+        "y": -0.06,
+        "w": 0.9,
+        "size": 0.62,
+        "bold": true,
+        "color": "#e0b64a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "CLASS OF 2027",
+        "x": 0.08,
+        "y": 0.08,
+        "w": 0.5,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "right",
+        "color": "#f4f1ea"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Graduation\nParty",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.11,
+        "bold": true,
+        "color": "#f4f1ea"
+      },
+      {
+        "kind": "arrow",
+        "name": "Arrow",
+        "x": 0.08,
+        "y": 0.83,
+        "w": 0.1,
+        "h": 0.07142857142857142,
+        "fill": "#f4f1ea"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Celebrate with Sam after the ceremony.",
+        "x": 0.22,
+        "y": 0.84,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#a7acbf"
+      }
+    ]
+  },
+  {
+    "id": "invitation-dinner-party",
+    "label": "Dinner party",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#1d1a17",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.03571428571428571,
+        "w": 0.9,
+        "h": 0.9285714285714286,
+        "fill": "#f3ede2"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.0668,
+        "y": 0.04771428571428571,
+        "w": 0.8664000000000001,
+        "h": 0.9045714285714286,
+        "fill": "#1d1a17"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "YOU ARE INVITED",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Supper\nClub",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#f3ede2"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#b5482b"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Five courses, one long table, good company.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#a89f92"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.02142857142857143,
+        "fill": "#b5482b"
+      }
+    ]
+  },
+  {
+    "id": "invitation-housewarming",
+    "label": "Housewarming",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#fff5e1",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#e07a3f"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.24285714285714288,
+        "fill": "#7fa88a"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.15714285714285714,
+        "fill": "#3a2a1a"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "House\nwarming",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#3a2a1a"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "WE MOVED",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#fff5e1"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Sun 18 Aug · from 3 PM · 41 Birch Road",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#7d6a55"
+      }
+    ]
+  },
+  {
+    "id": "invitation-engagement",
+    "label": "Engagement",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#fbe9ec",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Card",
+        "x": 0.15,
+        "y": 0.07857142857142857,
+        "w": 0.7,
+        "h": 0.5542857142857143,
+        "fill": "#ffffff"
+      },
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0.18,
+        "y": 0.1,
+        "w": 0.64,
+        "h": 0.4114285714285714,
+        "fill": "#f3cfd5"
+      },
+      {
+        "kind": "text",
+        "name": "Caption",
+        "text": "SHE SAID YES",
+        "x": 0.18,
+        "y": 0.5457142857142857,
+        "w": 0.64,
+        "size": 0.026,
+        "mono": true,
+        "align": "center",
+        "color": "#333333"
+      },
+      {
+        "kind": "star",
+        "name": "Sticker",
+        "x": 0.76,
+        "y": 0.058571428571428566,
+        "w": 0.14,
+        "h": 0.10000000000000002,
+        "fill": "#c9525e"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Priya & Tom",
+        "x": 0.08,
+        "y": 0.6942857142857143,
+        "w": 0.84,
+        "size": 0.07,
+        "bold": true,
+        "align": "center",
+        "color": "#3b1f27"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Sat 5 July · 5 PM · The Orangery",
+        "x": 0.08,
+        "y": 0.93,
+        "w": 0.84,
+        "size": 0.022,
+        "mono": true,
+        "align": "center",
+        "color": "#7c5a62"
+      }
+    ]
+  },
+  {
+    "id": "invitation-anniversary",
+    "label": "Anniversary",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#2c1e2e",
+    "els": [
+      {
+        "kind": "rect",
+        "name": "Border",
+        "x": 0.05,
+        "y": 0.03571428571428571,
+        "w": 0.9,
+        "h": 0.9285714285714286,
+        "fill": "#f6eef5"
+      },
+      {
+        "kind": "rect",
+        "name": "Border inset",
+        "x": 0.0668,
+        "y": 0.04771428571428571,
+        "w": 0.8664000000000001,
+        "h": 0.9045714285714286,
+        "fill": "#2c1e2e"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "FIFTY YEARS",
+        "x": 0.12,
+        "y": 0.16,
+        "w": 0.76,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "align": "center",
+        "color": "#d4a24c"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Golden\nAnniversary",
+        "x": 0.1,
+        "y": 0.34,
+        "w": 0.8,
+        "size": 0.12,
+        "bold": true,
+        "align": "center",
+        "color": "#f6eef5"
+      },
+      {
+        "kind": "line",
+        "name": "Rule",
+        "x": 0.42,
+        "y": 0.7,
+        "w": 0.16,
+        "h": 0.004,
+        "fill": "#d4a24c"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Honouring Ruth & David — dinner and dancing.",
+        "x": 0.16,
+        "y": 0.74,
+        "w": 0.68,
+        "size": 0.026,
+        "align": "center",
+        "color": "#b9a7b8"
+      },
+      {
+        "kind": "diamond",
+        "name": "Mark",
+        "x": 0.485,
+        "y": 0.83,
+        "w": 0.03,
+        "h": 0.02142857142857143,
+        "fill": "#d4a24c"
+      }
+    ]
+  },
+  {
+    "id": "invitation-kids-party",
+    "label": "Kids party",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#fff1a8",
+    "els": [
+      {
+        "kind": "triangle",
+        "name": "Triangle",
+        "x": -0.1,
+        "y": -0.05,
+        "w": 0.7,
+        "h": 0.55,
+        "fill": "#ff5c1a"
+      },
+      {
+        "kind": "circle",
+        "name": "Circle",
+        "x": 0.58,
+        "y": 0.18,
+        "w": 0.34,
+        "h": 0.24285714285714288,
+        "fill": "#3d7bf6"
+      },
+      {
+        "kind": "diamond",
+        "name": "Diamond",
+        "x": 0.72,
+        "y": 0.5,
+        "w": 0.22,
+        "h": 0.15714285714285714,
+        "fill": "#1f1f1f"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Pool\nParty!",
+        "x": 0.06,
+        "y": 0.6,
+        "w": 0.7,
+        "size": 0.13,
+        "bold": true,
+        "color": "#1f1f1f"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "JUMP IN",
+        "x": 0.06,
+        "y": 0.06,
+        "w": 0.6,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#fff1a8"
+      },
+      {
+        "kind": "text",
+        "name": "Footer",
+        "text": "Sat 22 June · 1–4 PM · Riverside Pool",
+        "x": 0.06,
+        "y": 0.92,
+        "w": 0.88,
+        "size": 0.022,
+        "mono": true,
+        "color": "#5f5a3a"
+      }
+    ]
+  },
+  {
+    "id": "invitation-retirement",
+    "label": "Retirement",
+    "preset": "Invitation",
+    "w": 1500,
+    "h": 2100,
+    "bg": "#f2f4f7",
+    "els": [
+      {
+        "kind": "frame",
+        "shape": "rect",
+        "name": "Photo",
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 0.46,
+        "fill": "#dbe2ee"
+      },
+      {
+        "kind": "text",
+        "name": "Eyebrow",
+        "text": "AFTER 32 YEARS",
+        "x": 0.08,
+        "y": 0.52,
+        "w": 0.84,
+        "size": 0.024,
+        "mono": true,
+        "bold": true,
+        "color": "#1d4ed8"
+      },
+      {
+        "kind": "text",
+        "name": "Title",
+        "text": "Happy\nRetirement",
+        "x": 0.08,
+        "y": 0.56,
+        "w": 0.84,
+        "size": 0.1,
+        "bold": true,
+        "color": "#1e2a3a"
+      },
+      {
+        "kind": "text",
+        "name": "Body",
+        "text": "Join us to celebrate Maria and wish her well.",
+        "x": 0.08,
+        "y": 0.76,
+        "w": 0.7,
+        "size": 0.026,
+        "color": "#5f6b7d"
+      },
+      {
+        "kind": "rect",
+        "name": "Button",
+        "x": 0.08,
+        "y": 0.87,
+        "w": 0.32,
+        "h": 0.05,
+        "fill": "#1d4ed8",
+        "radius": 0.5
+      },
+      {
+        "kind": "text",
+        "name": "Button label",
+        "text": "RSVP",
+        "x": 0.08,
+        "y": 0.882,
+        "w": 0.32,
+        "size": 0.026,
+        "bold": true,
+        "align": "center",
+        "color": "#f2f4f7"
+      }
+    ]
+  }
+]

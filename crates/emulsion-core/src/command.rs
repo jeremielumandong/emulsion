@@ -490,7 +490,7 @@ impl Command {
 
     /// The region this command changes on screen, given the document before.
     pub fn dirty(&self, before: &Document) -> Dirty {
-        if before.diagram.is_some() {
+        if before.diagram.is_some() || !before.design.frames.is_empty() {
             return Dirty::All;
         }
         match self {
@@ -655,6 +655,12 @@ impl Command {
         }
         next.design
             .retain_nodes(&next.nodes.iter().map(|n| n.id).collect());
+        if !next.design.frames.is_empty() {
+            crate::design_layout::prune(&mut next);
+            if !self.is_view_only() {
+                crate::design_layout::reflow(&mut next).map_err(crate::DocumentError::BadDesign)?;
+            }
+        }
         next.normalize();
         next.validate()?;
         *doc = next;
@@ -919,6 +925,7 @@ impl Command {
                     .fragment(&ids.iter().copied().collect())
                     .remap(&map);
                 doc.design.constraints.extend(settings.constraints);
+                doc.design.frames.extend(settings.frames);
                 doc.design.motion.extend(settings.motion);
                 if let Some(diagram) = &doc.diagram {
                     let additions = diagram.fragment(&ids.iter().copied().collect()).remap(&map);

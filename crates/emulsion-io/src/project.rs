@@ -275,6 +275,83 @@ mod tests {
         assert_eq!(cover(&file).unwrap(), project.pages[0].doc);
         std::fs::remove_file(file).unwrap();
     }
+
+    #[test]
+    fn supplied_starters_and_responsive_layout_round_trip_as_editable_pages() {
+        use emulsion_core::{
+            design::Template,
+            design_layout::{self, Frame},
+        };
+        let mut session = ProjectEditor::new_project(
+            ProjectKind::Design,
+            Template::ProductLaunch.create(216, 216).unwrap(),
+        )
+        .unwrap();
+        let ids = session
+            .doc
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+            .take(2)
+            .map(|n| n.id)
+            .collect();
+        let group = session
+            .execute(Command::Group {
+                ids,
+                name: "Responsive heading".into(),
+            })
+            .unwrap()
+            .unwrap();
+        session.begin("Layout");
+        design_layout::enable(
+            &mut session,
+            group,
+            Frame {
+                padding: [8.; 4],
+                gap: 8.,
+                ..Default::default()
+            },
+            (180., 180.),
+        )
+        .unwrap();
+        session.end();
+        let mut projects = Vec::new();
+        for template in Template::catalog().skip(1) {
+            let (w, h) = template.native_size();
+            let k = 240. / w.max(h) as f64;
+            let doc = template
+                .create((w as f64 * k).round() as u32, (h as f64 * k).round() as u32)
+                .unwrap();
+            if session.page_list().len() == MAX_PAGES {
+                projects.push(session.snapshot().unwrap());
+                session = ProjectEditor::new_project(ProjectKind::Design, doc).unwrap();
+            } else {
+                session.add_page(doc, template.label().into(), 0.).unwrap();
+            }
+        }
+        projects.push(session.snapshot().unwrap());
+        assert_eq!(projects.iter().map(|p| p.pages.len()).sum::<usize>(), 110);
+        for (i, original) in projects.iter().enumerate() {
+            let file = path("supplied-starters");
+            write(original, &file).unwrap();
+            let reopened = read(&file).unwrap();
+            assert_eq!(reopened.pages.len(), original.pages.len());
+            for (before, after) in original.pages.iter().zip(&reopened.pages) {
+                assert_eq!(before.doc, after.doc);
+                assert!(
+                    after
+                        .doc
+                        .nodes
+                        .iter()
+                        .any(|n| matches!(n.kind, NodeKind::Text { .. }))
+                );
+            }
+            if i == 0 {
+                assert_eq!(reopened.pages[0].doc.design.frames.len(), 1);
+            }
+            std::fs::remove_file(file).unwrap();
+        }
+    }
     #[test]
     fn rejects_future_versions_and_missing_pages_without_partial_documents() {
         for (label, manifest) in [

@@ -591,6 +591,19 @@ pub fn bind(cx: &mut App) {
             Some("PopupMenu > Slider"),
         ));
     }
+    // A focused embedded player owns playback keys. Prevent the surrounding
+    // canvas/workspace shortcuts from consuming them before its key callbacks.
+    for key in [
+        "left", "right", "up", "down", "space", "escape", "home", "end", "k", "j", "l", "f", "m",
+        "c", "t", "i", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ",", ".", "shift-,",
+        "shift-.",
+    ] {
+        bindings.push(KeyBinding::new(
+            key,
+            gpui_kit::NoAction,
+            Some("EmbeddedVideo"),
+        ));
+    }
     cx.bind_keys(bindings);
 }
 

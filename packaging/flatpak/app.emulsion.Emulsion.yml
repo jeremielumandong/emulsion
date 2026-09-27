@@ -9,6 +9,11 @@
 # and `cargo --offline` against a generated cargo-sources.json; the script
 # already generates that file when flatpak-cargo-generator is installed.
 app-id: app.emulsion.Emulsion
+# freedesktop 24.08 supplies GTK3 but not WebKitGTK 4.1. This manifest does
+# not bundle a browser engine or launch a host player: YouTube objects remain
+# editable, but in-app playback is unavailable in this Flatpak build. See
+# docs/design-video.md. Playback also needs sandbox audio access when a future
+# compatible shared runtime is selected.
 runtime: org.freedesktop.Platform
 runtime-version: "24.08"
 sdk: org.freedesktop.Sdk

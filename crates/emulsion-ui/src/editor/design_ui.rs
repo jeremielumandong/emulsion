@@ -12,6 +12,18 @@ use gpui_kit::component::{
 };
 use std::path::PathBuf;
 
+fn template_matches(template: Template, query: &str) -> bool {
+    let category = template.category().map(|i| Template::CATEGORIES[i]);
+    format!(
+        "{} {} {}",
+        template.label(),
+        category.map_or("", |c| c.label),
+        category.map_or("", |c| c.preset)
+    )
+    .to_lowercase()
+    .contains(query)
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum Section {
     #[default]
@@ -79,7 +91,12 @@ pub(super) struct DesignUi {
     search: Option<Entity<InputState>>,
     subscription: Option<Subscription>,
     template_size: Option<(u32, u32)>,
+    template_category: Option<usize>,
+    categories_open: bool,
+    scroll: ScrollHandle,
     preview_size: Option<(u32, u32)>,
+    preview_loading: bool,
+    preview_attempted: std::collections::HashSet<usize>,
     previews: HashMap<usize, Arc<RenderImage>>,
 }
 impl Default for DesignUi {
@@ -91,7 +108,12 @@ impl Default for DesignUi {
             search: None,
             subscription: None,
             template_size: None,
+            template_category: None,
+            categories_open: false,
+            scroll: ScrollHandle::new(),
             preview_size: None,
+            preview_loading: false,
+            preview_attempted: Default::default(),
             previews: HashMap::new(),
         }
     }
@@ -146,7 +168,7 @@ impl EditorView {
             cx,
         ) {
             self.set_layer_selection(vec![id], Some(id));
-            self.set_tool(Tool::Type, cx);
+            self.set_tool(Tool::Move, cx);
         }
     }
     pub(crate) fn add_design_template(&mut self, template: Template, cx: &mut Context<Self>) {
@@ -156,7 +178,7 @@ impl EditorView {
         let size = self
             .design_ui
             .template_size
-            .unwrap_or((self.editor.doc.width, self.editor.doc.height));
+            .unwrap_or_else(|| template.native_size());
         let result = template
             .create(size.0, size.1)
             .and_then(|doc| self.editor.add_page(doc, template.label().into(), 0.));
@@ -188,28 +210,65 @@ impl EditorView {
         }
     }
 
-    fn load_design_previews(&mut self, cx: &mut Context<Self>) {
-        let size = self
-            .design_ui
-            .template_size
-            .unwrap_or((self.editor.doc.width, self.editor.doc.height));
-        if self.design_ui.preview_size == Some(size) {
+    fn load_design_previews(&mut self, query: &str, cx: &mut Context<Self>) {
+        let size = self.design_ui.template_size.unwrap_or((0, 0));
+        if self.design_ui.preview_size != Some(size) {
+            self.design_ui.preview_size = Some(size);
+            self.design_ui.previews.clear();
+            self.design_ui.preview_attempted.clear();
+        }
+        if self.design_ui.preview_loading {
             return;
         }
-        self.design_ui.preview_size = Some(size);
-        self.design_ui.previews.clear();
+        let category = self.design_ui.template_category;
+        let categories_open = self.design_ui.categories_open;
+        let first_row =
+            ((-f32::from(self.design_ui.scroll.offset().y) - 100.).max(0.) / 114.) as usize;
+        let skip = if categories_open {
+            0
+        } else {
+            (first_row * 2).saturating_sub(4)
+        };
+        let batch: Vec<_> = Template::catalog()
+            .chain(Template::ADDITIONAL)
+            .enumerate()
+            .filter(|(i, t)| {
+                if categories_open {
+                    t.category().is_some_and(|category| {
+                        Template::catalog().position(|t| t.category() == Some(category)) == Some(*i)
+                    })
+                } else {
+                    (category.is_none() || t.category() == category) && template_matches(*t, query)
+                }
+            })
+            .skip(skip)
+            .take(24)
+            .filter(|(i, _)| !self.design_ui.preview_attempted.contains(i))
+            .take(12)
+            .collect();
+        if batch.is_empty() {
+            return;
+        }
+        self.design_ui
+            .preview_attempted
+            .extend(batch.iter().map(|(i, _)| *i));
+        self.design_ui.preview_loading = true;
         cx.spawn(async move |this, cx| {
             let previews = cx
                 .background_spawn(async move {
-                    let scale = 384. / f64::from(size.0.max(size.1));
-                    let preview_size = (
-                        (f64::from(size.0) * scale).round().max(1.) as u32,
-                        (f64::from(size.1) * scale).round().max(1.) as u32,
-                    );
-                    Template::ALL
+                    batch
                         .into_iter()
-                        .enumerate()
                         .filter_map(|(i, template)| {
+                            let size = if size == (0, 0) {
+                                template.native_size()
+                            } else {
+                                size
+                            };
+                            let scale = 768. / f64::from(size.0.max(size.1));
+                            let preview_size = (
+                                (f64::from(size.0) * scale).round().max(1.) as u32,
+                                (f64::from(size.1) * scale).round().max(1.) as u32,
+                            );
                             let doc = template.create(preview_size.0, preview_size.1).ok()?;
                             let (w, h, bytes) = super::history::doc_thumb(&doc, 216);
                             Some((i, Arc::new(viewport::bgra_image(w, h, bytes))))
@@ -218,10 +277,11 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                this.design_ui.preview_loading = false;
                 if this.design_ui.preview_size == Some(size) {
-                    this.design_ui.previews = previews;
-                    cx.notify();
+                    this.design_ui.previews.extend(previews);
                 }
+                cx.notify();
             })
             .ok();
         })
@@ -379,8 +439,9 @@ impl EditorView {
         self.load_creative_library(cx);
         if self.design_ui.search.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search this library"));
-            self.design_ui.subscription = Some(cx.subscribe(&input, |_, _, event, cx| {
+            self.design_ui.subscription = Some(cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
+                    this.design_ui.scroll.set_offset(point(px(0.), px(0.)));
                     cx.notify();
                 }
             }));
@@ -479,11 +540,16 @@ impl EditorView {
                     ),
             )
             .child(
-                div().px(px(10.)).pt(px(8.)).child(
-                    Styled::h(Input::new(&search).small(), px(26.))
-                        .text_size(px(11.))
-                        .prefix(rail::tool_icon("search").text_color(p.ink).size(px(11.))),
-                ),
+                div()
+                    .id("design-library-search")
+                    .test_support()
+                    .px(px(10.))
+                    .pt(px(8.))
+                    .child(
+                        Styled::h(Input::new(&search).small(), px(26.))
+                            .text_size(px(11.))
+                            .prefix(rail::tool_icon("search").text_color(p.ink).size(px(11.))),
+                    ),
             );
         let mut content = div()
             .id("design-drawer-content")
@@ -493,10 +559,109 @@ impl EditorView {
             .p(px(10.))
             .flex_1()
             .min_h_0()
+            .track_scroll(&self.design_ui.scroll)
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .overflow_y_scroll();
         match section {
             Section::Templates => {
-                self.load_design_previews(cx);
+                self.load_design_previews(&query, cx);
+                content = content.child(
+                    Button::new("design-explore-templates")
+                        .label("Explore templates")
+                        .small()
+                        .outline()
+                        .w_full()
+                        .selected(self.design_ui.categories_open)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.design_ui.categories_open = !this.design_ui.categories_open;
+                            this.design_ui.scroll.set_offset(point(px(0.), px(0.)));
+                            cx.notify();
+                        })),
+                );
+                if self.design_ui.categories_open {
+                    let mut categories = div()
+                        .id("design-template-categories")
+                        .test_support()
+                        .grid()
+                        .grid_cols(2)
+                        .gap(px(8.));
+                    for (index, category) in Template::CATEGORIES.iter().enumerate() {
+                        if !format!("{} {}", category.label, category.preset)
+                            .to_lowercase()
+                            .contains(&query)
+                        {
+                            continue;
+                        }
+                        let preview = Template::catalog()
+                            .position(|t| t.category() == Some(index))
+                            .and_then(|i| self.design_ui.previews.get(&i))
+                            .cloned();
+                        categories = categories.child(
+                            Button::new(("design-template-category", index))
+                                .accessibility_label(format!("{} — 10 templates", category.label))
+                                .tooltip(format!("{} — 10 templates", category.label))
+                                .outline()
+                                .p_0()
+                                .w_full()
+                                .h(px(96.))
+                                .rounded(px(14.))
+                                .child(
+                                    div()
+                                        .relative()
+                                        .w_full()
+                                        .h(px(94.))
+                                        .rounded(px(13.))
+                                        .overflow_hidden()
+                                        .bg(rgb(category.tint))
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .right(px(10.))
+                                                .bottom(px(-6.))
+                                                .size(px(68.))
+                                                .rounded(px(4.))
+                                                .bg(rgb(category.back)),
+                                        )
+                                        .when_some(preview, |tile, preview| {
+                                            tile.child(
+                                                img(preview)
+                                                    .absolute()
+                                                    .right(px(-6.))
+                                                    .bottom(px(-10.))
+                                                    .size(px(76.))
+                                                    .aspect_square()
+                                                    .object_fit(ObjectFit::Contain),
+                                            )
+                                        })
+                                        .child(
+                                            div()
+                                                .relative()
+                                                .p(px(12.))
+                                                .max_w(relative(0.85))
+                                                .text_size(px(12.))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(rgb(category.ink))
+                                                .child(category.label),
+                                        ),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.design_ui.template_category =
+                                        if this.design_ui.template_category == Some(index) {
+                                            None
+                                        } else {
+                                            Some(index)
+                                        };
+                                    this.design_ui.categories_open = false;
+                                    this.design_ui.scroll.set_offset(point(px(0.), px(0.)));
+                                    if let Some(search) = &this.design_ui.search {
+                                        search.update(cx, |s, cx| s.set_value("", window, cx));
+                                    }
+                                    cx.notify();
+                                })),
+                        );
+                    }
+                    content = content.child(categories);
+                }
                 content = content.child(
                     div().flex().flex_wrap().gap(px(4.)).children(
                         [
@@ -517,7 +682,12 @@ impl EditorView {
                                 .rounded_full()
                                 .selected(self.design_ui.template_size == Some(size))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.design_ui.template_size = Some(size);
+                                    this.design_ui.template_size =
+                                        if this.design_ui.template_size == Some(size) {
+                                            None
+                                        } else {
+                                            Some(size)
+                                        };
                                     cx.notify();
                                 }))
                         }),
@@ -527,18 +697,58 @@ impl EditorView {
                     .id("design-template-grid")
                     .test_support()
                     .grid()
+                    .flex_none()
                     .grid_cols(2)
                     .gap(px(6.));
-                for (i, t) in Template::ALL
-                    .into_iter()
+                let category = self.design_ui.template_category;
+                let templates: Vec<_> = Template::catalog()
+                    .chain(Template::ADDITIONAL)
                     .enumerate()
-                    .filter(|(_, t)| t.label().to_lowercase().contains(&query))
-                {
+                    .filter(|(_, t)| category.is_none() || t.category() == category)
+                    .filter(|(_, t)| template_matches(*t, &query))
+                    .collect();
+                content = content.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .id("design-template-count")
+                                .test_support()
+                                .flex_1()
+                                .text_size(px(11.))
+                                .child(format!(
+                                    "{} · {}",
+                                    category
+                                        .map_or("All templates", |i| Template::CATEGORIES[i].label),
+                                    templates.len()
+                                )),
+                        )
+                        .when(category.is_some(), |row| {
+                            row.child(
+                                Button::new("design-template-all")
+                                    .label("All")
+                                    .xsmall()
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.design_ui.template_category = None;
+                                        cx.notify();
+                                    })),
+                            )
+                        }),
+                );
+                for (i, t) in templates {
                     let preview = self.design_ui.previews.get(&i).cloned();
                     grid = grid.child(
                         Button::new(("design-template", i))
                             .accessibility_label(t.label())
-                            .tooltip(t.label())
+                            .tooltip(format!(
+                                "{} · {} × {}",
+                                t.label(),
+                                t.native_size().0,
+                                t.native_size().1
+                            ))
                             .outline()
                             .w_full()
                             .h(px(108.))
@@ -553,14 +763,19 @@ impl EditorView {
                                     .child(
                                         div()
                                             .h(px(78.))
+                                            .flex_none()
                                             .w_full()
                                             .overflow_hidden()
                                             .bg(p.soft_bg)
                                             .when_some(preview, |tile, preview| {
                                                 tile.child(
                                                     img(preview)
-                                                        .size_full()
-                                                        .object_fit(ObjectFit::Contain),
+                                                        .w_full()
+                                                        .h(px(78.))
+                                                        .aspect_ratio(112. / 78.)
+                                                        .object_fit(ObjectFit::Contain)
+                                                        .id(("design-template-preview", i))
+                                                        .test_support(),
                                                 )
                                             }),
                                     )
@@ -579,7 +794,9 @@ impl EditorView {
                     );
                 }
                 content = content
-                    .child(grid)
+                    .when(!self.design_ui.categories_open, |content| {
+                        content.child(grid)
+                    })
                     .child(
                         div()
                             .text_size(px(11.))

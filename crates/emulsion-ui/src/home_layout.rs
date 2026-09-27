@@ -608,7 +608,16 @@ impl Workspace {
                     .text_color(p.muted)
                     .child(format!("{count} files")),
             )
-            .child(div().flex_1());
+            .child(div().flex_1())
+            .child(
+                Button::new("home-cloud")
+                    .label("Cloud & Photos")
+                    .xsmall()
+                    .outline()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.set_screen(crate::workspace::Screen::Settings, window, cx);
+                    })),
+            );
         for (i, kind) in [
             None,
             Some(CanvasKind::Photo),
