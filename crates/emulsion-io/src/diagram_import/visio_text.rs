@@ -275,8 +275,8 @@ fn load_images(
             .and_then(|f| f.child("Rel"))
             .and_then(|r| rels.get(r.attr("id")))
         {
-            if !resources.images.contains_key(part) {
-                if let Some(bytes) = package.entries.get(part) {
+            if !resources.images.contains_key(part)
+                && let Some(bytes) = package.entries.get(part) {
                     // Compressed package limits alone do not bound bitmap allocation.
                     let dimensions = image::ImageReader::new(std::io::Cursor::new(bytes))
                         .with_guessed_format()
@@ -308,7 +308,6 @@ fn load_images(
                         }
                     }
                 }
-            }
             node.image_part = Some(part.clone());
         }
         for child in &mut node.children {

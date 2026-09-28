@@ -348,7 +348,7 @@ fn parse(bytes: &[u8]) -> Result<Profile> {
     if curve.len() > 8192 || !curve.len().is_multiple_of(2) {
         return Err(bad("invalid tone curve"));
     }
-    let curve: Vec<[f32; 2]> = curve.chunks_exact(2).map(|p| [p[0], p[1]]).collect();
+    let curve: Vec<[f32; 2]> = curve.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect();
     if (!curve.is_empty()
         && (curve.len() < 2 || curve[0][0] != 0. || curve.last().unwrap()[0] != 1.))
         || curve.iter().flatten().any(|v| !(0.0..=1.0).contains(v))
@@ -372,7 +372,7 @@ fn parse(bytes: &[u8]) -> Result<Profile> {
         {
             return Err(bad("invalid table length"));
         }
-        if data.chunks_exact(3).any(|p| {
+        if data.as_chunks::<3>().0.iter().any(|p| {
             p[0].abs() > 360. || !(0.0..=16.0).contains(&p[1]) || !(0.0..=16.0).contains(&p[2])
         }) {
             return Err(bad("invalid hue/saturation/value correction"));
@@ -383,7 +383,7 @@ fn parse(bytes: &[u8]) -> Result<Profile> {
         }
         Ok(Some(Table {
             dims,
-            data: data.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect(),
+            data: data.as_chunks::<3>().0.iter().map(|p| [p[0], p[1], p[2]]).collect(),
             srgb_encoding: encoding == 1.,
         }))
     };

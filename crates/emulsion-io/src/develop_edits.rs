@@ -455,7 +455,7 @@ pub fn visualize_dust(bgra: &mut [u8], width: u32, height: u32) {
         return;
     }
     let luma: Vec<f32> = bgra
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .map(|p| (p[2] as f32 * 0.2126 + p[1] as f32 * 0.7152 + p[0] as f32 * 0.0722) / 255.)
         .collect();
     let (w, h) = (width as usize, height as usize);

@@ -318,7 +318,7 @@ impl PhotoView {
         };
         let srgb = ColorProfile::new_srgb();
         let mut pixels = bgra
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .flat_map(|p| [p[2] as f32 / 255., p[1] as f32 / 255., p[0] as f32 / 255.])
             .collect::<Vec<_>>();
         let mut gamut = vec![false; pixels.len() / 3];
@@ -346,7 +346,7 @@ impl PhotoView {
                 .map_err(bad)?;
             reverse.transform(&output, &mut pixels).map_err(bad)?;
             for (i, (a, b)) in original
-                .chunks_exact(3)
+                .as_chunks::<3>().0.iter()
                 .zip(pixels.chunks_exact(3))
                 .enumerate()
             {

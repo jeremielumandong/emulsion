@@ -129,7 +129,7 @@ pub(super) fn nurbs(
     size: DVec2,
     scale: DVec2,
 ) -> Option<String> {
-    if values.len() < 8 || values.len() % 4 != 0 {
+    if values.len() < 8 || !values.len().is_multiple_of(4) {
         return None;
     }
     let degree = values[1] as usize;
@@ -140,7 +140,7 @@ pub(super) fn nurbs(
     let mut knots = vec![ends[2]];
     let sx = if values[2] == 0. { size.x } else { scale.x };
     let sy = if values[3] == 0. { size.y } else { scale.y };
-    for p in values[4..].chunks_exact(4) {
+    for p in values[4..].as_chunks::<4>().0 {
         points.push([p[0] * sx * p[3], p[1] * sy * p[3], p[3]]);
         knots.push(p[2]);
     }

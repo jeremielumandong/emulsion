@@ -149,11 +149,9 @@ impl Resources {
                     .child("srgbClr")
                     .map(|c| c.attr("val"))
                     .or_else(|| entry.child("sysClr").map(|c| c.attr("lastClr")))
-                {
-                    if let Ok(c) = color(&format!("#{rgb}")) {
+                    && let Ok(c) = color(&format!("#{rgb}")) {
                         self.theme_colors.insert(entry.name.clone(), c);
                     }
-                }
             }
         }
     }
@@ -209,14 +207,13 @@ impl Resources {
         warnings: &mut BTreeSet<String>,
     ) -> [u8; 4] {
         let resolved = value(node, key);
-        if resolved.is_none_or(|v| v.eq_ignore_ascii_case("Themed")) {
-            if let Some(c) = self
+        if resolved.is_none_or(|v| v.eq_ignore_ascii_case("Themed"))
+            && let Some(c) = self
                 .formula_color(node, key)
                 .or_else(|| master.and_then(|m| self.formula_color(m, key)))
             {
                 return c;
             }
-        }
         let Some(value) = resolved
             .filter(|v| !v.eq_ignore_ascii_case("Themed"))
             .or_else(|| master.and_then(|n| value(n, key)))
@@ -1108,7 +1105,7 @@ fn geometry(
                     {
                         let px = if values[0] == 0. { w } else { scale_x };
                         let py = if values[1] == 0. { h } else { scale_y };
-                        for pair in values[2..].chunks_exact(2) {
+                        for pair in values[2..].as_chunks::<2>().0 {
                             svg.push_str(&format!("L {} {} ", pair[0] * px, pair[1] * py));
                         }
                     } else {

@@ -35,7 +35,7 @@ pub(super) fn read(path: &Path) -> Result<Imported> {
 fn convert(path: &Path, tool: &str) -> Result<Imported> {
     let output = tempfile::tempfile()?;
     let mut child = Command::new(tool)
-        .arg(&path)
+        .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(output.try_clone()?))
         .stderr(Stdio::null())
