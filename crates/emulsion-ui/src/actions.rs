@@ -17,6 +17,7 @@ gpui_kit::actions!(
         ConfirmExport,
         Print,
         SynchronizeRaw,
+        DevelopOriginal,
         Undo,
         Redo,
         ZoomIn,
@@ -218,7 +219,7 @@ macro_rules! make_binding {
 /// A binding for the action called `name`, or None for an unknown name.
 pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> {
     make_binding!(name, keys, ctx;
-        NewDocument, Open, Save, SaveAs, Export, Print, SynchronizeRaw, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
+        NewDocument, Open, Save, SaveAs, Export, Print, SynchronizeRaw, DevelopOriginal, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
         Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleDrawMode, ToggleQuickMask, ToggleTheme, ShowHome,
         ShowEditor, ShowBatch, ShowAbout, DeleteNode, NewLayer, DuplicateNode, GroupNodes, Ungroup, RenameLayer, MergeLayers, MergeVisible, FlattenImage, LinkLayers, UnlinkLayers, CopyLayerStyle, PasteLayerStyle, ApplyLayerMask, MoveNodeUp, MoveNodeDown,
         ToggleNodeVisible, NextBlendMode, PreviousBlendMode, Ask, ToolHand, ToolRotateView, RepeatFilter, ToolMove, ToolPen, ToolType, ToolVerticalType, ConvertToSmartObject, ConvertSmartToLayers, RasterizeLayer, ToolMarquee, ToolLasso,

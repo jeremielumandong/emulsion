@@ -92,6 +92,8 @@ pub struct Assistant {
     native_tool_steps: bool,
     pub(crate) reference: Option<crate::reference::AttachedReference>,
     pub(crate) reference_loading: bool,
+    pub(crate) reference_attachments: Vec<crate::reference::Attachment>,
+    pub(crate) reference_focus: Option<FocusHandle>,
     pub(crate) reference_collapsed: bool,
     relay: Option<Relay>,
     session: Option<Session>,
@@ -253,7 +255,7 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
     match tool {
         "describe_document" => "read the document".into(),
         "get_view" => "look at the image".into(),
-        "get_reference_image" => "look at the reference".into(),
+        "get_reference_image" | "get_reference_attachments" => "look at the reference".into(),
         "set_visibility" => format!(
             "{} {}",
             if input["visible"].as_bool() == Some(true) {
@@ -487,7 +489,7 @@ impl EditorView {
             self.set_status("Wait for the reference image to finish loading.", false, cx);
             return;
         }
-        if self.assistant.reference.is_some() {
+        if self.assistant.reference.is_some() || !self.assistant.reference_attachments.is_empty() {
             if let Err(e) = self.start_turn(text, cx) {
                 self.set_status(e, true, cx);
             }
@@ -777,7 +779,7 @@ impl EditorView {
         }
         self.assistant.native_tool_steps = false;
         self.editor.begin(format!("Assistant: {}", short(&text)));
-        let prompt = crate::reference::reference_prompt(&text, self.assistant.reference.as_ref());
+        let prompt = self.reference_turn_prompt(&text);
         let sent = self
             .assistant
             .session
@@ -1103,7 +1105,13 @@ impl EditorView {
     /// Run a relayed tool call against this document, or hold it for the
     /// person's Apply/Skip when the CLI does not ask first itself.
     fn run_tool(&mut self, call: RelayCall, cx: &mut Context<Self>) {
-        if self.library_only && !emulsion_mcp::library_tools::is_tool(&call.name) {
+        if self.library_only
+            && !emulsion_mcp::library_tools::is_tool(&call.name)
+            && !matches!(
+                call.name.as_str(),
+                "get_reference_image" | "get_reference_attachments" | "attach_reference_folder"
+            )
+        {
             call.reply(emulsion_mcp::ToolResult::error("This is a Library session. Use the Library tools; open_library_photo opens a selected photo when document tools are needed."));
             return;
         }
@@ -1183,6 +1191,7 @@ impl EditorView {
             "list_brushes"
                 | "list_fonts"
                 | "get_reference_image"
+                | "get_reference_attachments"
                 | "get_library"
                 | "get_library_preview"
                 | "cancel_library_export"
@@ -1402,7 +1411,45 @@ impl EditorView {
             self.complete_tool_work(tool_generation, cx);
             return;
         }
-        if call.name == "get_reference_image" {
+        if call.name == "attach_reference_folder" {
+            let path = call.arguments.get("path").and_then(serde_json::Value::as_str)
+                .map(std::path::PathBuf::from);
+            let Some(path) = path.filter(|p| p.is_absolute() && p.is_dir()) else {
+                call.reply(emulsion_mcp::ToolResult::error("Provide an absolute path to an existing folder."));
+                self.complete_tool_work(tool_generation, cx);
+                return;
+            };
+            if self.assistant.reference_attachments.len() + usize::from(self.assistant.reference.is_some()) >= 16 {
+                call.reply(emulsion_mcp::ToolResult::error("Remove a reference before attaching more than 16 items."));
+                self.complete_tool_work(tool_generation, cx);
+                return;
+            }
+            cx.spawn(async move |this, cx| {
+                let result = cx.background_spawn(async move {
+                    crate::reference::Attachment::load(&path)
+                }).await;
+                this.update(cx, |this, cx| {
+                    if tool_generation != this.assistant.tool_generation {
+                        call.reply(emulsion_mcp::ToolResult::error("Reference attachment cancelled."));
+                        return;
+                    }
+                    match result {
+                        Ok(attachment) => {
+                            this.assistant.reference_attachments.push(attachment);
+                            call.reply(this.reference_result());
+                            cx.notify();
+                        }
+                        Err(error) => call.reply(emulsion_mcp::ToolResult::error(error)),
+                    }
+                    this.complete_tool_work(tool_generation, cx);
+                }).ok();
+            }).detach();
+            return;
+        }
+        if matches!(
+            call.name.as_str(),
+            "get_reference_image" | "get_reference_attachments"
+        ) {
             call.reply(self.reference_result());
             return;
         }
@@ -2299,11 +2346,26 @@ impl EditorView {
                 .child(Input::new(&state).appearance(false).bordered(false)),
         );
         if chosen.is_none() {
-            input = input.child(
-                chip("ask-reference", "Add reference", false, p)
-                    .on_click(cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)))
-                    .test_support(),
-            );
+            input = input
+                .child(
+                    chip("ask-reference", "Add reference", false, p)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)),
+                        )
+                        .test_support(),
+                )
+                .child(
+                    chip("ask-reference-paste", "Paste reference", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.paste_reference(cx)))
+                        .test_support(),
+                )
+                .child(
+                    chip("ask-reference-folder", "Attach folder", false, p)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.prompt_reference_folder(window, cx)
+                        }))
+                        .test_support(),
+                );
         }
         input = input.child(
             chip("ask-close", "esc", false, p)
@@ -2823,6 +2885,41 @@ mod mutation_queue_tests {
                 view
             })
         })
+    }
+
+    #[gpui_kit::test]
+    fn codebase_folder_mcp_attaches_reads_and_preserves_diagram(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("README.md"), "Browser -> API -> database").unwrap();
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        view.update(cx, |v, _| {
+            v.editor = ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600)).unwrap();
+        });
+        for (name, args) in [
+            ("attach_reference_folder", serde_json::json!({"path":folder.path()})),
+            ("get_reference_attachments", serde_json::json!({})),
+        ] {
+            let (request, reply) = call(&relay, name, args);
+            view.update(cx, |v, cx| v.run_tool_now(request, cx));
+            cx.run_until_parked();
+            let response = reply.join().unwrap();
+            assert_eq!(response["isError"], false, "{response}");
+            assert!(response.to_string().contains("Browser -> API"));
+        }
+        view.update(cx, |v, _| {
+            assert!(v.editor.doc.nodes.is_empty());
+            assert_eq!(v.assistant.reference_attachments.len(), 1);
+            assert!(v.reference_turn_prompt("Draw the request flow").contains("editable diagram"));
+        });
+        let (request, reply) = call(&relay, "insert_diagram_stencil",
+            serde_json::json!({"stencil":"process", "bounds":[40,40,160,80]}));
+        view.update(cx, |v, cx| v.run_tool_now(request, cx));
+        cx.run_until_parked();
+        let response = reply.join().unwrap();
+        assert_eq!(response["isError"], false, "{response}");
+        view.update(cx, |v, _| assert_eq!(v.editor.doc.diagram.as_ref().unwrap().shapes.len(), 1));
     }
 
     #[gpui_kit::test]

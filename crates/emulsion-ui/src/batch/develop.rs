@@ -73,6 +73,9 @@ pub(super) struct Develop {
     pub(super) module_develop: bool,
     pub list: bool,
     pub compare: bool,
+    pub(super) comparison_position: Option<f32>,
+    pub(super) comparison_dragging: bool,
+    pub(super) comparison_bounds: crate::widgets::TrackBounds,
     baseline_preview: Option<(PathBuf, Arc<RenderImage>)>,
     pub anchor: Option<usize>,
     pub inspector: usize,
@@ -1109,6 +1112,30 @@ impl Workspace {
         }
         panel = panel
             .child(
+                Button::new("library-white-balance-picker")
+                    .label("Pick neutral white balance")
+                    .disabled(self.batch.develop.saving || self.batch.develop.busy)
+                    .small()
+                    .ghost()
+                    .selected(self.batch.develop.canvas_tool == 11)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.develop.canvas_tool = if this.batch.develop.canvas_tool == 11 {
+                            0
+                        } else {
+                            11
+                        };
+                        this.batch.develop.before = false;
+                        this.batch.develop.compare = false;
+                        this.batch.develop.detail_region = None;
+                        this.batch.note = Some((
+                            "Click a neutral, unclipped area of the photo.".into(),
+                            false,
+                        ));
+                        this.invalidate_library_preview();
+                        cx.notify();
+                    })),
+            )
+            .child(
                 Button::new("library-raw-as-shot")
                     .label("As shot white balance")
                     .disabled(self.batch.develop.saving)
@@ -1335,7 +1362,11 @@ impl Workspace {
 }
 
 impl Workspace {
-    pub(super) fn library_comparison_view(&self, after: AnyElement, cx: &App) -> AnyElement {
+    pub(super) fn library_comparison_view(
+        &self,
+        after: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let p = classic::palette(cx);
         let path = self
             .batch
@@ -1348,7 +1379,7 @@ impl Workspace {
             .baseline_preview
             .as_ref()
             .filter(|(p, _)| Some(p) == path)
-            .map(|(_, i)| i.clone());
+            .map(|(_, image)| image.clone());
         let before = match before {
             Some(image) => img(ImageSource::Render(image))
                 .size_full()
@@ -1358,27 +1389,125 @@ impl Workspace {
                 .child(mono("Rendering original…", 11., p.muted))
                 .into_any_element(),
         };
+        let position = self
+            .batch
+            .develop
+            .comparison_position
+            .unwrap_or(0.5)
+            .clamp(0.02, 0.98);
+        let measured = self.batch.develop.comparison_bounds.clone();
         div()
-            .flex()
+            .id("library-comparison")
+            .test_support()
+            .relative()
             .size_full()
-            .gap_2()
+            .overflow_hidden()
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if event.pressed_button != Some(MouseButton::Left) {
+                    this.batch.develop.comparison_dragging = false;
+                    return;
+                }
+                if this.batch.develop.comparison_dragging
+                    && let Some(value) = crate::widgets::track_fraction(
+                        &this.batch.develop.comparison_bounds,
+                        event.position.x,
+                    )
+                {
+                    this.batch.develop.comparison_position = Some(value.clamp(0.02, 0.98));
+                    cx.notify();
+                    cx.stop_propagation();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.batch.develop.comparison_dragging = false),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.batch.develop.comparison_dragging = false),
+            )
+            .child(div().absolute().inset_0().child(after))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .child(mono("Before · original photo", 10., p.muted))
-                    .child(div().flex_1().min_h_0().child(before)),
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(relative(position))
+                    .overflow_hidden()
+                    .child(div().h_full().w(relative(1. / position)).child(before)),
+            )
+            .child(
+                canvas(
+                    move |bounds, _, _| measured.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
             )
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .child(mono("After · current settings", 10., p.muted))
-                    .child(div().flex_1().min_h_0().child(after)),
+                    .absolute()
+                    .top(px(8.))
+                    .left(px(8.))
+                    .bg(p.panel)
+                    .px_2()
+                    .child(mono("Before", 11., p.ink)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(8.))
+                    .right(px(8.))
+                    .bg(p.panel)
+                    .px_2()
+                    .child(mono("After", 11., p.ink)),
+            )
+            .child(
+                div()
+                    .id("library-comparison-divider")
+                    .test_support()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(relative(position))
+                    .ml(px(-8.))
+                    .w(px(16.))
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.batch.develop.comparison_dragging = true;
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                        if event.click_count() == 2 {
+                            this.batch.develop.comparison_position = Some(0.5);
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(7.))
+                            .top_0()
+                            .bottom_0()
+                            .w(px(2.))
+                            .bg(p.accent),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(relative(0.5))
+                            .left(px(-7.))
+                            .px_2()
+                            .py_1()
+                            .bg(p.panel)
+                            .border_1()
+                            .border_color(p.accent)
+                            .child("↔"),
+                    ),
             )
             .into_any_element()
     }

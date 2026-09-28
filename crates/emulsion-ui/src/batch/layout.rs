@@ -316,6 +316,7 @@ impl Workspace {
                 .test_support()
                 .flex_none()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .px_2()
@@ -329,11 +330,14 @@ impl Workspace {
                         .selected(self.batch.develop.compare)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.batch.develop.compare = !this.batch.develop.compare;
+                            this.batch.develop.canvas_tool = 0;
+                            this.batch.develop.detail_region = None;
                             this.batch.develop.before = false;
                             this.invalidate_library_preview();
                             cx.notify();
                         })),
                 )
+                .child(self.library_edit_photo_button(cx))
                 .child(self.library_hdr_button(cx))
                 .child(self.library_color_view_panel(cx))
                 .child(div().flex_1())
@@ -354,7 +358,9 @@ impl Workspace {
         }
         div().id("library-workflow-toolbar").flex().flex_wrap().items_center().gap_1().px_2()
             .child(self.library_hdr_button(cx))
-            .when(self.batch.develop.module_develop,|d|d.child(Button::new("library-before-after").label("Before / After").small().ghost().selected(self.batch.develop.compare).on_click(cx.listener(|this,_,_,cx|{this.batch.develop.compare = !this.batch.develop.compare;this.batch.develop.before=false;this.invalidate_library_preview();cx.notify();}))))
+            .when(self.batch.develop.module_develop,|d|d.child(Button::new("library-before-after").label("Before / After").small().ghost().selected(self.batch.develop.compare).on_click(cx.listener(|this,_,_,cx|{this.batch.develop.compare = !this.batch.develop.compare;
+                            this.batch.develop.canvas_tool = 0;
+                            this.batch.develop.detail_region = None;this.batch.develop.before=false;this.invalidate_library_preview();cx.notify();}))))
             .child(Checkbox::new("library-auto-advance").label("Auto advance").checked(self.batch.develop.auto_advance)
                 .on_change(cx.listener(|this,value,_,cx|{this.batch.develop.auto_advance = *value;cx.notify();})))
             .children([(1usize,"Compare photos"),(2usize,"Survey")].into_iter().map(|(mode,title)|Button::new(("library-culling-mode",mode)).label(title).small().ghost().selected(self.batch.develop.culling_mode==mode).on_click(cx.listener(move|this,_,_,cx|{this.batch.develop.module_develop=false;this.batch.develop.culling_mode=if this.batch.develop.culling_mode==mode{0}else{mode};this.batch.develop.loupe=true;cx.notify();}))))

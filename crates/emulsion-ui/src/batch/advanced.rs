@@ -1924,6 +1924,12 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .children(host.ask_bar(&p, cx))
+                    .when(
+                        host.assistant.reference.is_some()
+                            || !host.assistant.reference_attachments.is_empty()
+                            || host.assistant.reference_loading,
+                        |d| d.child(host.reference_panel(&p, cx)),
+                    )
                     .children(host.assistant_dock(&p, cx))
                     .children(
                         host.status

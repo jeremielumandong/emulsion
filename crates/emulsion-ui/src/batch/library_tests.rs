@@ -1564,3 +1564,54 @@ fn library_depth_and_rgb_gamut_edits_persist_and_undo(cx: &mut TestAppContext) {
     assert_eq!(state["develop"]["settings"]["depth_blur"], 0.);
     assert_eq!(std::fs::read(&path).unwrap(), original);
 }
+
+#[gpui_kit::test]
+fn library_neutral_picker_preserves_geometry_and_saves_recipe(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("neutral.dng");
+    crate::raw_test_fixture::write_dng(&path);
+    let source = emulsion_io::photo_develop::PhotoSource::load(&path).unwrap();
+    let params = emulsion_core::raw::DevelopParams {
+        rotation: 1,
+        crop: [0.1, 0.1, 0.9, 0.9],
+        ..Default::default()
+    };
+    source.save(params).unwrap();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1500.), gpui_kit::px(1100.)));
+    cx.update(|window, cx| ws.update(cx, |ws, cx| ws.open_path(path.clone(), window, cx)));
+    cx.run_until_parked();
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &fixture.0.join("catalog"),
+        "set_library_view",
+        serde_json::json!({"canvas_tool":"white_balance"}),
+    ));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let position = window.find("library-preview").bounds().center();
+        window.drag(position, position, cx);
+    });
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    cx.run_until_parked();
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &fixture.0.join("catalog"),
+        "get_library",
+        serde_json::json!({}),
+    ));
+    assert_eq!(state["layout"]["canvas_tool"], 0, "{state}");
+    let sampled: emulsion_core::raw::DevelopParams =
+        serde_json::from_value(state["develop"]["settings"].clone()).unwrap();
+    assert!(sampled.wb_override.is_some());
+    assert_eq!(sampled.crop, params.crop);
+    assert_eq!(sampled.rotation, params.rotation);
+    assert_eq!(
+        emulsion_io::raw_settings::adjacent_settings(&path, &source.source_sha256).unwrap(),
+        sampled
+    );
+}

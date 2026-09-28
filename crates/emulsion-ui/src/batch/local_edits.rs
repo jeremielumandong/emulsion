@@ -573,6 +573,80 @@ impl Workspace {
             (4 - rotation) % 4,
         ))
     }
+    pub(super) fn library_pick_white_balance(&mut self, point: [f32; 2], cx: &mut Context<Self>) {
+        let Some(source) = self.batch.develop.source.clone() else {
+            return;
+        };
+        let Some(path) = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone())
+        else {
+            return;
+        };
+        let Some(params) = self.batch.develop.current_params(&path) else {
+            return;
+        };
+        self.batch.develop.busy = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    // Canvas tools display the uncropped, camera-oriented source.
+                    let sample_params = emulsion_core::raw::DevelopParams {
+                        rotation: 0,
+                        crop: [0., 0., 1., 1.],
+                        straighten: 0.,
+                        perspective: [0.; 2],
+                        distortion: 0.,
+                        lens_profile: None,
+                        aberration: [0.; 2],
+                        ..params
+                    };
+                    let image = source.develop_with(&sample_params)?;
+                    let x = (point[0] * image.width() as f32) as u32;
+                    let y = (point[1] * image.height() as f32) as u32;
+                    source.neutral_white_balance(
+                        &sample_params,
+                        x.min(image.width() - 1),
+                        y.min(image.height() - 1),
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.batch.develop.busy = false;
+                if this
+                    .batch
+                    .current
+                    .and_then(|i| this.batch.items.get(i))
+                    .is_some_and(|i| i.path == path)
+                    && this.batch.develop.current_params(&path) == Some(params)
+                {
+                    match result {
+                        Ok(sample) => {
+                            this.batch.develop.canvas_tool = 0;
+                            this.library_adjust(
+                                emulsion_core::raw::DevelopParams {
+                                    temperature: sample.temperature,
+                                    tint: sample.tint,
+                                    kelvin: sample.kelvin,
+                                    wb_override: sample.wb_override,
+                                    ..params
+                                },
+                                cx,
+                            );
+                        }
+                        Err(error) => this.batch.note = Some((error.to_string().into(), true)),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub(super) fn library_canvas_down(
         &mut self,
         event: &MouseDownEvent,
@@ -586,6 +660,10 @@ impl Workspace {
             return true;
         }
         if let Some(point) = self.library_canvas_point(event.position) {
+            if self.batch.develop.canvas_tool == 11 {
+                self.library_pick_white_balance(point, cx);
+                return true;
+            }
             if event.modifiers.alt {
                 self.batch.develop.clone_source = Some(point);
             } else {

@@ -688,6 +688,31 @@ pub fn create_virtual(source: &Path, params: DevelopParams, directory: &Path) ->
         "Too many virtual copies with this name".into(),
     ))
 }
+/// Create an independent Photo document from the saved Library recipe.
+/// Pixels are developed once; the original and sidecar remain Library-owned.
+pub fn open_developed_photo(path: &Path) -> Result<emulsion_core::Document> {
+    let source = PhotoSource::load(path)?;
+    let params = raw_settings::adjacent_settings(path, &source.source_sha256)?;
+    let raster = source.develop_with(&params)?;
+    let original = if is_virtual(path) {
+        reference(path)?.source
+    } else {
+        source.source.clone()
+    };
+    let mut doc = emulsion_core::Document::new(raster.width(), raster.height());
+    doc.source_depth = 16;
+    doc.info = crate::exif::read(&original);
+    doc.raw_originals.push(original);
+    doc.nodes.push(emulsion_core::Node::raster(
+        1,
+        "Developed photo",
+        std::sync::Arc::new(raster),
+        Default::default(),
+    ));
+    doc.next_id = 2;
+    Ok(doc)
+}
+
 pub fn open_virtual(path: &Path) -> Result<emulsion_core::Document> {
     let source = PhotoSource::load(path)?;
     let params = raw_settings::adjacent_settings(path, &source.source_sha256)?;

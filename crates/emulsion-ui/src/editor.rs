@@ -1593,6 +1593,10 @@ impl EditorView {
         if e.button != MouseButton::Left {
             return;
         }
+        if self.diagram_corner_down(e) {
+            cx.notify();
+            return;
+        }
         if let Some(point) = self.doc_point(e.position)
             && self.diagram_pointer_down(
                 point,

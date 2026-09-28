@@ -14,6 +14,8 @@ pub const READ_ONLY: &[&str] = &[
     "describe_document",
     "get_view",
     "get_reference_image",
+    "get_reference_attachments",
+    "attach_reference_folder",
     "list_history",
     "compare",
     "list_brushes",
@@ -255,6 +257,18 @@ pub fn definitions() -> Vec<ToolDef> {
                 "region": view_region(),
                 "max_size": { "type": "integer", "minimum": 64, "maximum": 1568, "description": "Longest side in pixels, default 1024." }
             }),
+            &[],
+        ),
+        def(
+            "attach_reference_folder",
+            "Attach a local codebase or documentation folder explicitly requested by the person. Captures a bounded text snapshot for subsequent get_reference_attachments calls. Does not modify artwork. Use source evidence and the person's requirements to build an editable diagram with diagram tools. Requires the running app host.",
+            json!({"path": {"type": "string", "description": "Absolute path of the folder requested by the person."}}),
+            &["path"],
+        ),
+        def(
+            "get_reference_attachments",
+            "Read the person's attached references: pasted text, data files, folder snapshots, and images. Text is UTF-8 and bounded; truncation and unreadable/binary files are explicitly marked. Images include their coordinate mapping. References are separate from document contents. Accepts no file path; only reads material explicitly attached in the UI.",
+            json!({}),
             &[],
         ),
         def(

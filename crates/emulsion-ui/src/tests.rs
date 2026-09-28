@@ -705,6 +705,105 @@ mod reference_images {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[gpui_kit::test]
+    fn clipboard_and_folder_references_preserve_artwork_and_are_readable(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("data.csv"), "name,value\nSample,42").unwrap();
+        let (ws, cx) = open(cx, doc(&["Artwork"], None));
+        let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        let before = cx.update(|_, cx| view.read(cx).editor.doc.clone());
+        cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.load_reference_paths(vec![directory.path().to_path_buf()], cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let view = view.read(cx);
+            assert!(
+                view.reference_result()
+                    .content
+                    .iter()
+                    .any(|v| v["text"].as_str().is_some_and(|s| s.contains("Sample,42")))
+            );
+            let focus = view.assistant.reference_focus.as_ref().unwrap().clone();
+            window.focus(&focus, cx);
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                "Use these supplied notes as context.".into(),
+            ));
+        });
+        cx.simulate_keystrokes("ctrl-v");
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert_eq!(view.read(cx).assistant.reference_attachments.len(), 2);
+            let bytes = emulsion_io::export::png8(3, 2, &[255, 0, 0, 255].repeat(6)).unwrap();
+            let image = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, bytes);
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_image(&image));
+            view.update(cx, |view, cx| view.paste_reference(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                let result = view.reference_result();
+                assert!(!result.is_error);
+                assert!(result.content.iter().any(|v| v["type"] == "image"));
+                assert!(result.content.iter().any(|v| {
+                    v["text"]
+                        .as_str()
+                        .is_some_and(|s| s.contains("supplied notes"))
+                }));
+                assert!(
+                    view.reference_turn_prompt("Please use the references")
+                        .contains("get_reference_attachments")
+                );
+                assert_eq!(view.editor.doc, before);
+                assert!(view.editor.history.is_empty());
+                view.assistant.running = true;
+                view.paste_reference(cx);
+                view.remove_reference(cx);
+                assert_eq!(view.assistant.reference_attachments.len(), 3);
+                view.assistant.running = false;
+                view.remove_reference(cx);
+                assert!(view.reference_result().is_error);
+            })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn library_reference_paste_stays_in_library_host(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestWindowExt;
+        let (ws, cx) = open(cx, doc(&["Other tab"], None));
+        let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        cx.update(|window, cx| {
+            ws.update(cx, |ws, cx| {
+                ws.screen = crate::workspace::Screen::Batch;
+                ws.open_assistant(window, cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                "Library reference notes".into(),
+            ));
+            window.click("ask-reference-paste", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("reference-panel").visible());
+            let ws = ws.read(cx);
+            assert!(matches!(ws.screen, crate::workspace::Screen::Batch));
+            assert!(editor.read(cx).assistant.reference_attachments.is_empty());
+            let host = ws.batch.assistant_host.as_ref().unwrap().read(cx);
+            assert_eq!(host.assistant.reference_attachments.len(), 1);
+            assert!(
+                host.reference_result().content[0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Library reference notes")
+            );
+        });
+    }
+
     struct Fixture(PathBuf);
 
     impl Fixture {

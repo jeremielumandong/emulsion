@@ -1486,7 +1486,9 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
     }
     let (w, h) = (doc.width, doc.height);
     match name {
-        "get_reference_image" => Err(crate::reference::missing_reference()),
+        "get_reference_image" | "get_reference_attachments" | "attach_reference_folder" => {
+            Err(crate::reference::missing_reference())
+        }
         "save_recipe" => {
             let result = save_recipe(doc, args, &emulsion_io::recent::data_dir().join("recipes"))?;
             let message = result
@@ -2406,7 +2408,9 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             serde_json::to_string_pretty(&describe(editor)).unwrap_or_default(),
         )),
         "get_view" => view(&editor.doc, args),
-        "get_reference_image" => Err(crate::reference::missing_reference()),
+        "get_reference_image" | "get_reference_attachments" | "attach_reference_folder" => {
+            Err(crate::reference::missing_reference())
+        }
         "set_visibility" => {
             let id = id_arg(args, "node")?;
             let visible = args
@@ -4043,7 +4047,9 @@ pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, T
         "get_raw_preview" => crate::raw_preview::preview(doc, args),
         "describe_raw" => crate::raw_tools::describe(doc, args),
         "get_view" => view(doc, args),
-        "get_reference_image" => Err(crate::reference::missing_reference()),
+        "get_reference_image" | "get_reference_attachments" | "attach_reference_folder" => {
+            Err(crate::reference::missing_reference())
+        }
         "critique" => crate::review::critique(doc, args),
         "list_brushes" => crate::brush_discovery::list(args),
         _ => Err(err(format!("not an inspection tool: {name}"))),

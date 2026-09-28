@@ -120,6 +120,9 @@ pub struct Settings {
     /// The workspace Draw mode last used, restored when switching to it.
     pub draw_workspace: Option<WorkspaceLayout>,
     pub shape_stroke_presets: Vec<ShapeStrokePreset>,
+    /// Persistent diagram toolbox groups; General is displayed as Standard.
+    pub diagram_shape_libraries: Vec<String>,
+    pub diagram_stencil_packs: Vec<u64>,
     /// Per-effect defaults used when adding a layer style.
     pub layer_style_defaults: Vec<emulsion_core::styles::LayerStyle>,
     pub layer_style_option_defaults:
@@ -217,6 +220,8 @@ impl Default for Settings {
             model: None,
             layer_style_defaults: Vec::new(),
             shape_stroke_presets: Vec::new(),
+            diagram_shape_libraries: vec!["General".into(), "Flowchart".into()],
+            diagram_stencil_packs: Vec::new(),
             layer_style_option_defaults: Default::default(),
             jev_api_key: None,
             auto_apply: false,

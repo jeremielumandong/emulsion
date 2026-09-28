@@ -13,7 +13,7 @@ pixel-for-pixel compatibility with another application.
 | Object controls | Right-click arrange/alignment, grouping, locking, copy/paste style, annotations and selection export; floating selection toolbar |
 | Selection | Mouse marquee, Ctrl/Shift selection, group/ungroup, graph-aware copy/paste/delete, connected movement, undo/redo |
 | Formatting | Fill/stroke/text color pickers, typography, thin dark default outlines, white/soft teal/soft blue palettes, line patterns, rounded elbows, filled/hollow connector markers, theme application |
-| Library | Shapes, Templates, Containers, Themes and Stencil packs drawers; search; 82 original default stencils, 22 editable templates, nine themes |
+| Library | Shapes, Templates, Containers, Themes and Stencil packs drawers; search; 92 original built-in stencils, 22 editable templates, nine themes |
 | Diagram objects as stencils | Imported and existing shapes automatically appear in the temporary Imported data group; cached background previews, search and pagination; click/drag reuses editable artwork with fresh IDs and one undo step, excluding connections and container contents |
 | Installed stencils | Per-entry vector-generated previews; click or drag an installed entry to the pointer position; a drop is one undo step |
 | Offline vendor packs | AWS, Azure, Google Cloud, Kubernetes, Cisco, network devices, BPMN, flowchart, floor plans, electrical, wireframes and office; all available entries in each family, paginated 96 at a time |
@@ -240,3 +240,12 @@ file does not imply that its bitmap source imagery becomes vector geometry.
 Connector mode accepts any picked position on an object as a relative attachment. The point follows object movement, resizing, rotation and reflection; the visible midpoint handles remain available as shortcuts.
 
 Visio loose lines import as native connectors with owned free endpoints and conservative outline-contact inference. Common numeric ShapeSheet formulas and explicit single-theme palette references are supported. See [follow-up validation](../specs/reports/diagram-gap-followup.md) for the supported subset and remaining format differences.
+
+
+### Discovering shape libraries
+
+The fixed **Add shapes…** button opens a searchable modal. Standard and Flowchart are the only default toolbox groups. Browse native libraries, all 49 bundled draw.io families, and installed personal packs; preview entries in pages of 24, check the desired groups and choose **Use selected shapes**. Cancel discards the draft selection. Enabled groups persist across restarts. Unchecking a group hides it without deleting installed files or changing canvas objects.
+
+Additional packs are built sequentially in the background only after Apply. The catalog includes Android/iOS mockups, AWS, Azure and Azure Enterprise, Google Cloud, BPMN, geometric shapes, arrows, server racks, process engineering, value stream and network libraries. Original AI workflow symbols cover agents, language models, prompts, retrieval, tools, memory, guardrails and human review; they are not third-party provider logos.
+
+Corner resize handles take precedence over blank-canvas selection on nonrectangular stencils, so circles, diamonds and imported vector artwork can be resized from their bounding-box corners.

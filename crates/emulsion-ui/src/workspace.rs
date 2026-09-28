@@ -1002,6 +1002,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if emulsion_io::photo_develop::is_raw_photo(&path) {
+            self.open_library_develop(path, window, cx);
+            return;
+        }
         if emulsion_io::pptx::is_pptx(&path)
             || path
                 .extension()
@@ -1016,13 +1020,34 @@ impl Workspace {
             self.open_project_path(path, false, window, cx);
             return;
         }
-        self.open_image_path(path, kind, window, cx);
+        self.open_image_path(path, kind, false, window, cx);
     }
 
     pub fn open_photo_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if emulsion_io::photo_develop::is_raw_photo(&path) {
+            self.open_library_develop(path, window, cx);
+        } else {
+            self.open_image_path(
+                path,
+                Some(emulsion_core::creation::CanvasKind::Photo),
+                false,
+                window,
+                cx,
+            );
+        }
+    }
+
+    /// Library development is baked into a new Photo document for layer editing.
+    pub(crate) fn edit_library_photo_path(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.open_image_path(
             path,
             Some(emulsion_core::creation::CanvasKind::Photo),
+            true,
             window,
             cx,
         );
@@ -1032,6 +1057,7 @@ impl Workspace {
         &mut self,
         path: PathBuf,
         preferred_kind: Option<emulsion_core::creation::CanvasKind>,
+        developed_photo: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1041,14 +1067,23 @@ impl Workspace {
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
                 let result = cx
-                    .background_spawn(async move { emulsion_io::open_full(&p) })
+                    .background_spawn(async move {
+                        if developed_photo && emulsion_io::photo_develop::supported(&p) {
+                            Ok(emulsion_io::Opened { doc: emulsion_io::photo_develop::open_developed_photo(&p)?, graph: None, history_error: None })
+                        } else { emulsion_io::open_full(&p) }
+                    })
                     .await;
                 this.update_in(cx, |this, window, cx| {
                     this.busy = None;
                     match result {
                         Ok(opened) => {
                             let native = emulsion_io::is_native(&path);
-                            let (doc, graph, broken) = (opened.doc, opened.graph, opened.history_error);
+                            let (mut doc, graph, broken) = (opened.doc, opened.graph, opened.history_error);
+                            if developed_photo {
+                                if let Some(raw) = doc.raw.take() {
+                                    if !doc.raw_originals.contains(&raw.source) { doc.raw_originals.push(raw.source); }
+                                }
+                            }
                             this.recents = recent::push(&path, summary(&doc));
                             this.install(
                                 doc,
@@ -2343,6 +2378,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleNodeVisible, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_selected_visible(cx))
+            }))
+            .on_action(cx.listener(|this, _: &DevelopOriginal, window, cx| {
+                this.develop_photo_original(window, cx);
             }))
             .on_action(cx.listener(|this, _: &Ask, window, cx| {
                 this.open_assistant(window, cx);

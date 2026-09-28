@@ -88,11 +88,25 @@ fn diagram_default_categories_insert_network_stencils_with_undo(cx: &mut TestApp
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        window.click(("diagram-stencil-category", 0usize), cx);
-        window.click(("diagram-stencil-category", 1usize), cx);
+        assert!(window.try_find(("diagram-stencil-category", 5usize)).is_none());
+        window.click("diagram-more-shapes", cx);
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.click(("diagram-stencil-category", 5usize), cx));
+    cx.update(|window, cx| {
+        assert!(window.find("shape-library-picker").visible());
+        window.click(("shape-library-check", 5usize), cx);
+        window.click("shape-library-cancel", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find(("diagram-stencil-category", 5usize)).is_none());
+        window.click("diagram-more-shapes", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click(("shape-library-check", 5usize), cx);
+        window.click("shape-library-apply", cx);
+    });
     cx.run_until_parked();
     let server = emulsion_core::diagram::stencils::STENCILS
         .iter()
@@ -657,8 +671,7 @@ fn diagram_library_templates_containers_themes_and_packs_are_functional(cx: &mut
     });
     cx.run_until_parked();
     cx.update(|window, _| {
-        assert!(window.find("diagram-stencil-packs").visible());
-        assert!(window.find(("diagram-pack-added", 0usize)).visible());
+        assert!(window.find("diagram-browse-libraries").visible());
     });
 }
 
@@ -759,6 +772,7 @@ fn diagram_installed_pack_drag_drops_once_and_undoes(cx: &mut TestAppContext) {
         let view = ws.read(cx).editor.clone().unwrap();
         view.update(cx, |e, cx| {
             e.install_catalog(catalog.clone());
+            crate::app_state::update_settings(cx, |s| s.diagram_stencil_packs = vec![asset]);
             cx.notify();
         });
         view
@@ -1750,4 +1764,84 @@ fn rounded_elbow_segment_drag_moves_both_corners_without_stubs(cx: &mut TestAppC
     });
     cx.run_until_parked();
     cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc.diagram, original));
+}
+
+#[gpui_kit::test]
+fn diagram_stencil_corner_resizes_outside_artwork_and_undoes(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton};
+    let (ws, cx) = open(cx, emulsion_core::Document::new(900, 700));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    for stencil_id in ["ellipse", "decision", "web-browser", "imported"] {
+        let (doc, id) = if stencil_id == "imported" {
+            let name = emulsion_io::diagram_packs::entries("android")[0];
+            let doc = emulsion_io::diagram_packs::document(name).unwrap();
+            let id = *doc.diagram.as_ref().unwrap().shapes.keys().next().unwrap();
+            (doc, id)
+        } else {
+            let mut editor =
+                emulsion_core::Editor::new(emulsion_core::Document::new(900, 700), None);
+            let stencil = emulsion_core::diagram::stencils::STENCILS
+                .iter()
+                .find(|s| s.id == stencil_id)
+                .unwrap();
+            let id = stencil
+                .insert(&mut editor, [160., 160., 240., 160.])
+                .unwrap();
+            (editor.doc, id)
+        };
+        let original = doc.clone();
+        let view = cx.update(|window, cx| {
+            ws.update(cx, |ws, cx| {
+                ws.install_project(
+                    ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap(),
+                    "Resize stencil".into(),
+                    window,
+                    cx,
+                )
+            });
+            let view = ws.read(cx).editor.clone().unwrap();
+            view.update(cx, |e, cx| {
+                e.set_layer_selection(vec![id], Some(id));
+                cx.notify();
+            });
+            view
+        });
+        cx.run_until_parked();
+        for (dx, dy) in [(35., 25.), (-20., -15.)] {
+            let (from, to, before) = cx.update(|_, cx| {
+                let e = view.read(cx);
+                let corner = e.transform_box().unwrap()[2];
+                (
+                    e.doc_to_window(corner).unwrap(),
+                    e.doc_to_window((corner.0 + dx, corner.1 + dy)).unwrap(),
+                    emulsion_core::geometry::node_bounds(&e.editor.doc, id).unwrap(),
+                )
+            });
+            cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::none());
+            cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                let e = view.read(cx);
+                let after = emulsion_core::geometry::node_bounds(&e.editor.doc, id).unwrap();
+                if dx > 0. {
+                    assert!(
+                        after.w > before.w && after.h > before.h,
+                        "{stencil_id} must grow"
+                    );
+                } else {
+                    assert!(
+                        after.w < before.w && after.h < before.h,
+                        "{stencil_id} must shrink"
+                    );
+                }
+                assert_eq!(e.selected, Some(id));
+            });
+        }
+        for _ in 0..2 {
+            cx.update(|window, cx| window.click("project-undo", cx));
+            cx.run_until_parked();
+        }
+        cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original, "{stencil_id} undo"));
+    }
 }

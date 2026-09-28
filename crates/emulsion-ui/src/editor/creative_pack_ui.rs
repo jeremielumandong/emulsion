@@ -66,32 +66,6 @@ impl EditorView {
             )
             .into_any_element()
     }
-    pub(super) fn install_bundled_diagram_pack(&mut self, pack: String, cx: &mut Context<Self>) {
-        self.set_status("Preparing stencil previews…", false, cx);
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    let (pack, notes) = emulsion_io::diagram_packs::build(&pack)?;
-                    let (catalog, _) = template_pack::install(&library::root(), pack)?;
-                    Ok::<_, emulsion_io::IoError>((catalog, notes))
-                })
-                .await;
-            this.update(cx, |this, cx| match result {
-                Ok((catalog, notes)) => {
-                    this.install_catalog(catalog);
-                    this.diagram_import_notes(notes.clone());
-                    this.set_status(
-                        format!("Stencil pack installed · {} import notes", notes.len()),
-                        false,
-                        cx,
-                    );
-                }
-                Err(e) => this.set_status(e.to_string(), true, cx),
-            })
-            .ok();
-        })
-        .detach();
-    }
     pub(super) fn install_diagram_stencils(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -117,11 +91,13 @@ impl EditorView {
                     let (pack, warnings) = template_pack::read_stencil_source(&path)?;
                     let count = pack.project.pages.len();
                     template_pack::install(&library::root(), pack)
-                        .map(|(catalog, _)| (catalog, count, warnings))
+                        .map(|(catalog, id)| (catalog, id, count, warnings))
                 })
                 .await;
             this.update(cx, |this, cx| match result {
-                Ok((catalog, count, warnings)) => {
+                Ok((catalog, id, count, warnings)) => {
+                    crate::app_state::update_settings(cx,|s| { if !s.diagram_stencil_packs.contains(&id) {s.diagram_stencil_packs.push(id);} });
+                    this.diagram_ui.expanded_stencil_packs.insert(id);
                     this.install_catalog(catalog);
                     this.diagram_import_notes(warnings.clone());
                     this.set_status(
@@ -189,11 +165,9 @@ impl EditorView {
             Kind::Design
         };
         if kind == Kind::Stencil {
-            for page in &mut project.pages {
-                page.doc
-                    .nodes
-                    .retain(|n| !(n.parent.is_none() && matches!(n.kind, NodeKind::Fill { .. })));
-                page.graph = emulsion_core::graph::Graph::new(page.doc.clone(), "Stencil");
+            match template_pack::stencil_project(&project) {
+                Ok(stencils) => project = stencils,
+                Err(error) => { self.set_status(error.to_string(), true, cx); return; }
             }
         }
         let fields = [
@@ -217,9 +191,15 @@ impl EditorView {
                     let project=project.clone();
                     owner.update(cx,|this,cx|{
                         let dir=this.editor.path.as_ref().and_then(|p|p.parent()).map(PathBuf::from).unwrap_or_else(||std::env::home_dir().unwrap_or_else(||".".into()));
-                        let file=format!("template.{}",kind.extension());let rx=cx.prompt_for_new_path(&dir,Some(&file));
+                        let file=format!("{}.{}", manifest.name.chars().map(|c| if c.is_alphanumeric() || c==' ' || c=='-' || c=='_' {c} else {'_'}).collect::<String>(),kind.extension());let rx=cx.prompt_for_new_path(&dir,Some(&file));
                         cx.spawn(async move|this,cx|{
-                            let Ok(Ok(Some(mut path)))=rx.await else{return;};path.set_extension(kind.extension());let output=path.clone();
+                            let path = match rx.await {
+                                Ok(Ok(Some(path))) => path,
+                                Ok(Ok(None)) => return,
+                                _ => { this.update(cx, |this,cx|this.set_status("Could not open the export file picker.",true,cx)).ok(); return; }
+                            };
+                            let mut path=path;path.set_extension(kind.extension());let output=path.clone();
+                            this.update(cx, |this,cx|this.set_status(format!("Exporting {}…",path.display()),false,cx)).ok();
                             let result=cx.background_spawn(async move{template_pack::write(&project,&manifest,&output)}).await;
                             this.update(cx,|this,cx|match result{Ok(())=>this.set_status(format!("Exported {}. Share this file, or unzip its contents into a GitHub repository.",path.display()),false,cx),Err(e)=>this.set_status(e.to_string(),true,cx)}).ok();
                         }).detach();
@@ -314,6 +294,7 @@ impl EditorView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let enabled = crate::app_state::settings(cx).diagram_stencil_packs.clone();
         let mut list = div().flex().flex_col().gap_1();
         let collected = self
             .creative
@@ -321,7 +302,7 @@ impl EditorView {
             .assets
             .iter()
             .filter(|a| {
-                a.kind == AssetKind::Stencil && a.tags.iter().any(|t| t == "Imported shapes")
+                a.kind == AssetKind::Stencil && enabled.contains(&a.id) && a.tags.iter().any(|t| t == "Imported shapes")
             })
             .map(|a| a.id)
             .collect::<Vec<_>>();
@@ -341,7 +322,7 @@ impl EditorView {
             .assets
             .iter()
             .filter(|a| {
-                a.kind == AssetKind::Stencil
+                a.kind == AssetKind::Stencil && enabled.contains(&a.id)
                     && (self.diagram_ui.expanded_stencil_packs.contains(&a.id) || !query.is_empty())
             })
             .map(|a| {
@@ -366,7 +347,7 @@ impl EditorView {
             .catalog
             .assets
             .iter()
-            .filter(|a| a.kind == AssetKind::Stencil)
+            .filter(|a| a.kind == AssetKind::Stencil && enabled.contains(&a.id))
         {
             if !format!(
                 "{} {} {}",

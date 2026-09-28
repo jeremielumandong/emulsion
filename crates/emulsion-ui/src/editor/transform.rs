@@ -573,6 +573,16 @@ impl EditorView {
         }))
     }
 
+    pub(super) fn diagram_corner_down(&mut self, event: &MouseDownEvent) -> bool {
+        // A nonrectangular stencil's bounding-box corner can be empty canvas.
+        // Its visible resize handle must win before diagram selection starts a marquee.
+        self.is_diagram()
+            && self.tool == Tool::Move
+            && !self.diagram_ui.connecting
+            && matches!(self.handle_hit(event.position), Some(Handle::Corner(_)))
+            && self.transform_down(event)
+    }
+
     fn handle_hit(&self, pos: Point<Pixels>) -> Option<Handle> {
         let (_, w, h, p) = self.transformable()?;
         let b = self.canvas_bounds()?;

@@ -2,6 +2,25 @@
 
 Reference layout: `Emulsion Editor v2.dc.html`, Library screen.
 
+## RAW development and Photo editing
+
+Opening a RAW file enters Library Develop. Library owns its non-destructive
+recipe, white-balance picker, rotation, and draggable Before / After comparison.
+Drag the comparison divider to inspect either version; double-click it to center it.
+
+Choose **Edit in Photo…** after Library finishes saving to open the developed
+image in a new Photo tab for layers, selections, compositing and retouching.
+The Photo document contains the developed pixels, without a second RAW control
+panel. Its original remains protected; save the layered work as a Photo project.
+Later Library adjustments do not change an already opened Photo document. Choose
+Edit in Photo again to create a new version.
+
+Older Photo projects with an embedded RAW recipe show **RAW original → Develop
+in Library…**. This creates an independent Library virtual copy carrying that
+recipe, including unsaved development settings. Existing Photo layers and the
+original's sidecar stay unchanged. Editing the copy does not update those layers.
+Legacy RAW automation remains available for existing projects.
+
 ## Layout and implemented workflow
 
 - Library/Develop module bar, resizable GPUI Kit side panels, central grid/canvas,
@@ -195,7 +214,7 @@ Library requests rather than silently operating on a different catalog/session.
 | Save/load output presets | `library_catalog` (`save_export_preset`, `load_export_preset`) |
 | Export selection with output settings and stop export | `export_library`, `cancel_library_export` |
 | Open the active saved photo | `open_library_photo` (returns the document ID) |
-| Photo-side RAW editing, picker, source relinking, camera defaults, comparison and open-tab synchronization | Existing `describe_raw`, `develop_raw`, `auto_develop_raw`, `pick_raw_white_balance`, `reset_raw`, `relink_raw`, `raw_settings`, `get_raw_preview`, `set_raw_comparison`, `list_raw_documents`, `synchronize_raw` |
+| Legacy Photo-project RAW automation (interactive development lives in Library) | Existing `describe_raw`, `develop_raw`, `auto_develop_raw`, `pick_raw_white_balance`, `reset_raw`, `relink_raw`, `raw_settings`, `get_raw_preview`, `set_raw_comparison`, `list_raw_documents`, `synchronize_raw` |
 | Recipe discovery/import and additional export formats/options | Existing `list_recipes`, `import_recipe`, `batch_export` |
 
 Mutating Library tools are serialized across document relays. Read-only inspection

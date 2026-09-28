@@ -22,7 +22,7 @@ mod rotation;
 use crate::theme;
 use crate::viewport::bgra_image;
 use crate::widgets::{button, chip, label, mono};
-use crate::workspace::Workspace;
+use crate::workspace::{Screen, Workspace};
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node};
 use emulsion_io::export::ExportOptions;
@@ -34,7 +34,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{
-    Sizable,
+    Disableable, Sizable,
     button::{Button, ButtonVariants},
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -577,6 +577,76 @@ impl Workspace {
                 }
                 Err(e) => {
                     this.batch.note = Some((e.to_string().into(), true));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn open_library_develop(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.batch.running.is_some() {
+            self.error = Some("Finish the Library export before opening another RAW photo.".into());
+            cx.notify();
+            return;
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        let mut paths: Vec<_> = self.batch.items.iter().map(|i| i.path.clone()).collect();
+        if !paths.contains(&path) {
+            paths.push(path.clone());
+        }
+        let folder = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        self.load_batch(folder, paths, cx);
+        if let Some(index) = self.batch.items.iter().position(|i| i.path == path) {
+            self.library_select(index, false, false, cx);
+        }
+        self.batch.develop.module_develop = true;
+        self.batch.develop.loupe = true;
+        self.set_screen(Screen::Batch, window, cx);
+    }
+
+    /// Older Photo projects retain their exact recipe in an independent Library copy.
+    pub(crate) fn develop_photo_original(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(raw) = self
+            .editor
+            .as_ref()
+            .and_then(|e| e.read(cx).editor.doc.raw.clone())
+        else {
+            return;
+        };
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.read(cx).raw.is_pending())
+        {
+            self.error = Some("Wait for pending development before opening Library.".into());
+            cx.notify();
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    emulsion_io::photo_develop::PhotoSource::load_verified(
+                        &raw.source,
+                        &raw.source_sha256,
+                    )?;
+                    emulsion_io::photo_develop::create_virtual(
+                        &raw.source,
+                        raw.params,
+                        &emulsion_io::creative_library::root().join("virtual-copies"),
+                    )
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(path) => this.open_library_develop(path, window, cx),
+                Err(error) => {
+                    this.error = Some(error.to_string().into());
                     cx.notify();
                 }
             })
@@ -1532,7 +1602,16 @@ impl Workspace {
             )
             .child(
                 Button::new("library-open-photo")
-                    .label("Open in Photo")
+                    .label(if self.batch.develop.saving {
+                        "Saving edits…"
+                    } else {
+                        "Edit in Photo…"
+                    })
+                    .disabled(
+                        self.batch.current.is_none()
+                            || self.batch.develop.dirty()
+                            || self.batch.develop.saving,
+                    )
                     .small()
                     .ghost()
                     .on_click(
@@ -1553,7 +1632,7 @@ impl Workspace {
             )
             .child(
                 Button::new("library-compare-view")
-                    .label("Compare")
+                    .label("Before / After")
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1564,6 +1643,8 @@ impl Workspace {
                             .is_some_and(|i| emulsion_io::photo_develop::supported(&i.path))
                         {
                             this.batch.develop.compare = !this.batch.develop.compare;
+                            this.batch.develop.canvas_tool = 0;
+                            this.batch.develop.detail_region = None;
                             this.batch.develop.module_develop = true;
                             this.batch.develop.loupe = true;
                             this.batch.develop.before = false;

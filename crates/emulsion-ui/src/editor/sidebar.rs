@@ -487,7 +487,7 @@ impl EditorView {
                 |tabs| {
                     tabs.child(
                         Button::new("sidebar-develop")
-                            .label("Develop")
+                            .label("RAW original")
                             .xsmall()
                             .ghost()
                             .when(self.sidebar_tab == SidebarTab::Develop, |b| {

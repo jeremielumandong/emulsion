@@ -171,6 +171,8 @@ pub const CATEGORIES: &[&str] = &[
     "Electrical",
     "Planning",
     "Web systems",
+    "AI workflows",
+    "Containers",
 ];
 /// The initial twelve IDs retain the existing drawer's ordering for shortcuts.
 pub const STENCILS: &[Stencil] = &[
@@ -796,6 +798,72 @@ pub const STENCILS: &[Stencil] = &[
         "assets files",
         Process
     ),
+    vector!(
+        "ai-agent",
+        "AI Agent",
+        "AI workflows",
+        "agent autonomous assistant robot",
+        "M15 25H85V85H15ZM35 25V15H65V25M30 45H40V55H30ZM60 45H70V55H60ZM30 70H70M5 40V70M95 40V70",
+        true
+    ),
+    vector!(
+        "ai-model",
+        "Language Model",
+        "AI workflows",
+        "llm inference generative language model",
+        "M10 20H90V80H10ZM30 35L20 50L30 65M70 35L80 50L70 65M58 30L42 70",
+        true
+    ),
+    vector!(
+        "ai-prompt",
+        "Prompt",
+        "AI workflows",
+        "input instruction chat message",
+        "M10 15H90V70H45L20 90V70H10ZM25 32H75M25 48H60",
+        true
+    ),
+    vector!(
+        "ai-retrieval",
+        "Retrieval",
+        "AI workflows",
+        "rag vector search knowledge embeddings",
+        "M10 20C10 5 70 5 70 20C70 35 10 35 10 20V65C10 80 50 80 55 70M70 20V45M78 52C92 52 92 76 78 76C64 76 64 52 78 52ZM87 73L98 88",
+        true
+    ),
+    vector!(
+        "ai-tool",
+        "Tool Call",
+        "AI workflows",
+        "api function tool integration",
+        "M10 25H90V75H10ZM28 38L18 50L28 62M72 38L82 50L72 62M45 32L55 68",
+        true
+    ),
+    vector!(
+        "ai-memory",
+        "Agent Memory",
+        "AI workflows",
+        "context history storage memory",
+        "M10 20C10 0 90 0 90 20C90 40 10 40 10 20V80C10 100 90 100 90 80V20M10 50C10 70 90 70 90 50",
+        true
+    ),
+    vector!(
+        "ai-guardrail",
+        "Guardrail",
+        "AI workflows",
+        "safety validation policy filter",
+        "M50 5L90 20V55Q85 80 50 95Q15 80 10 55V20ZM28 48L45 65L75 32",
+        true
+    ),
+    vector!(
+        "ai-human",
+        "Human Review",
+        "AI workflows",
+        "human in the loop approval review user",
+        "M50 10C75 10 75 45 50 45C25 45 25 10 50 10ZM15 90V72C15 45 85 45 85 72V90Z",
+        true
+    ),
+    native!("container-frame", "Container frame", "Containers", "group boundary frame", Container),
+    native!("container-swimlane", "Swimlane", "Containers", "pool lane responsibility", Swimlane),
 ];
 
 #[cfg(test)]

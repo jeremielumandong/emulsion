@@ -750,7 +750,7 @@ async fn run(
                 Ok((ws.library_window, active(ws)?))
             })??;
             window.update(cx, |_, window, cx| {
-                this.update(cx, |ws, cx| ws.open_photo_path(path, window, cx))
+                this.update(cx, |ws, cx| ws.edit_library_photo_path(path, window, cx))
             })??;
             settle(this, cx).await?;
             return this.update(cx,|ws,_|{if let Some(error)=&ws.error{bail!("{error}")}Ok(ToolResult::text(json!({"document_id":ws.editor.as_ref().map(|e|e.entity_id().as_u64()),"opened":true}).to_string()))})?;
@@ -802,6 +802,7 @@ fn apply_view(
                 "radial",
                 "linear",
                 "content_aware",
+                "white_balance",
             ]
             .iter()
             .position(|v| v == name)
@@ -920,7 +921,13 @@ fn apply_view(
     if let Some(tool) = canvas_tool {
         ws.batch.develop.canvas_tool = tool;
         if tool != 0 {
-            ws.batch.develop.section = if (5..=7).contains(&tool) { 1 } else { 5 };
+            ws.batch.develop.section = if tool == 11 {
+                0
+            } else if (5..=7).contains(&tool) {
+                1
+            } else {
+                5
+            };
             ws.batch.develop.slider_key = None;
         }
         ws.invalidate_library_preview();

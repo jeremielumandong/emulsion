@@ -5,44 +5,20 @@ use emulsion_core::raw::{DevelopParams, RawDocument, RawMetadata};
 use crate::raw_test_fixture as raw_fixture;
 
 #[gpui_kit::test]
-fn raw_curve_graph_drags_points_and_keeps_monotonic_limits(cx: &mut TestAppContext) {
+fn legacy_photo_raw_controls_link_to_library(cx: &mut TestAppContext) {
     use gpui_kit::test::TestWindowExt;
-    let mut before = raw_document();
-    before.raw.as_mut().unwrap().params.smooth_curve = false;
+    let before = raw_document();
     let (ws, cx) = open(cx, before.clone());
-    let ed = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
-    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1600.)));
     cx.run_until_parked();
-    cx.update(|window, cx| window.click("raw-curve", cx));
-    cx.run_until_parked();
-    let bounds = cx.update(|_, cx| {
-        ed.read(cx)
-            .raw_curve_bounds()
-            .expect("RAW curve graph laid out")
-    });
-    let at = |x: f32, y: f32| {
-        bounds.origin + gpui_kit::point(bounds.size.width * x, bounds.size.height * (1. - y))
-    };
-    cx.update(|window, cx| window.drag(at(0.5, 0.5), at(0.5, 0.65), cx));
-    cx.update(|_, cx| {
-        let params = ed.read(cx).raw_params().unwrap();
-        assert!(
-            params.smooth_curve,
-            "dragging upgrades a legacy curve to smooth interpolation"
+    cx.update(|window, cx| {
+        assert!(window.find("photo-develop-in-library").visible());
+        assert!(window.find("photo-edit-raw-library").visible());
+        assert!(window.try_find("raw-adjust").is_none());
+        assert!(window.try_find("raw-before-after").is_none());
+        assert_eq!(
+            ws.read(cx).editor.as_ref().unwrap().read(cx).editor.doc,
+            before
         );
-        let curve = params.tone_curve;
-        assert!((curve[2] - 0.65).abs() < 0.02, "{curve:?}");
-        assert_eq!(curve[1], 0.25);
-        assert_eq!(curve[3], 0.75);
-    });
-    cx.update(|window, cx| window.drag(at(0.5, 0.65), at(0.5, 0.95), cx));
-    cx.update(|_, cx| {
-        ed.update(cx, |e, cx| {
-            assert_eq!(e.raw_params().unwrap().tone_curve[2], 0.75);
-            e.undo(cx);
-            assert!(!e.raw.is_pending());
-            assert_eq!(e.editor.doc, before);
-        })
     });
 }
 
@@ -112,42 +88,68 @@ impl Drop for SidecarFixture {
 }
 
 #[gpui_kit::test]
-fn opening_raw_shows_histogram_alongside_develop_controls(cx: &mut TestAppContext) {
+fn opening_raw_routes_to_library_then_hands_developed_pixels_to_photo(cx: &mut TestAppContext) {
+    use crate::workspace::Screen;
     use gpui_kit::test::TestWindowExt;
-
     let fixture = SidecarFixture::new();
-    let document = emulsion_io::open(&fixture.0).unwrap();
-    let before = document.clone();
-    let (ws, cx) = open(cx, document);
-    let ed = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    let original_bytes = std::fs::read(&fixture.0).unwrap();
+    let original = emulsion_io::open(&fixture.0).unwrap();
+    let raw = original.raw.as_ref().unwrap();
+    let params = DevelopParams {
+        exposure: 0.75,
+        rotation: 1,
+        ..raw.params
+    };
+    emulsion_io::raw_settings::save_photo_settings(&fixture.0, &raw.source_sha256, &params)
+        .unwrap();
+    let expected = emulsion_io::photo_develop::open_developed_photo(&fixture.0).unwrap();
+    let expected_pixels =
+        emulsion_raster::composite::flatten(&expected.composite_tree(), 0).to_srgba8();
+    let (ws, cx) = open(cx, doc(&["Existing Photo"], None));
+    let previous = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(1100.)));
+    cx.update(|window, cx| ws.update(cx, |ws, cx| ws.open_path(fixture.0.clone(), window, cx)));
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find("raw-histogram").visible());
-        assert!(window.find("raw-adjust").visible());
-        window.click(("photo-shortcut", 0usize), cx);
+        assert!(matches!(ws.read(cx).screen, Screen::Batch));
+        assert_eq!(ws.read(cx).editor.as_ref().unwrap(), &previous);
+        assert!(window.find("library-histogram-panel").visible());
+        window.click("library-compare-view", cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find("photo-shortcut-panel").visible());
-        assert!(window.find("raw-adjust").visible());
-        assert!(ed.read(cx).sidebar_tab == crate::editor::SidebarTab::Develop);
-        window.click("raw-curve", cx);
+        let bounds = window.find("library-comparison").bounds();
+        let start = window.find("library-comparison-divider").bounds().center();
+        let end = gpui_kit::point(bounds.left() + bounds.size.width * 0.75, start.y);
+        window.drag(start, end, cx);
     });
-    cx.run_until_parked();
-    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1600.)));
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find("raw-histogram").visible());
-        assert!(window.find("raw-curve-linear").visible());
-        ed.update(cx, |e, cx| {
-            assert!(
-                e.histogram(cx).is_some(),
-                "histogram finishes in the background"
-            );
-            assert_eq!(e.editor.doc, before);
-            assert!(e.editor.history.is_empty());
-        });
+        let bounds = window.find("library-comparison").bounds();
+        let divider = window.find("library-comparison-divider").bounds().center();
+        assert!(
+            (f32::from(divider.x - bounds.left()) / f32::from(bounds.size.width) - 0.75).abs()
+                < 0.02
+        );
+        window.click("library-open-photo", cx);
     });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert!(matches!(ws.read(cx).screen, Screen::Editor));
+        let ed = ws.read(cx).editor.as_ref().unwrap().read(cx);
+        assert!(ed.editor.doc.raw.is_none());
+        assert!(ed.editor.doc.raw_originals.contains(&raw.source));
+        assert_eq!(
+            emulsion_raster::composite::flatten(&ed.editor.doc.composite_tree(), 0).to_srgba8(),
+            expected_pixels
+        );
+        assert_eq!(previous.read(cx).editor.doc.nodes[0].name, "Existing Photo");
+    });
+    assert_eq!(std::fs::read(&fixture.0).unwrap(), original_bytes);
+    assert_eq!(
+        emulsion_io::raw_settings::adjacent_settings(&fixture.0, &raw.source_sha256).unwrap(),
+        params
+    );
 }
 
 #[gpui_kit::test]
@@ -369,10 +371,7 @@ fn raw_before_after_handle_drags_without_edits_and_escape_restores_view(cx: &mut
     });
     cx.run_until_parked();
     let revision = cx.update(|_, cx| ed.read(cx).editor.revision);
-    cx.update(|window, cx| {
-        assert!(window.find("raw-before-after").visible());
-        window.click("raw-before-after", cx);
-    });
+    cx.update(|_, cx| ed.update(cx, |e, cx| e.raw_toggle_split(cx)));
     cx.run_until_parked();
     cx.executor()
         .advance_clock(std::time::Duration::from_millis(250));
@@ -662,22 +661,21 @@ fn raw_real_dng_preview_and_clipping_buttons_leave_history_unchanged_and_escape_
 
     for control in ["raw-tone-preview", "raw-clipping"] {
         let prior_generation = cx.update(|_, cx| ed.read(cx).render_gen);
-        cx.update(|window, cx| {
-            if !window.find(control).visible() {
-                window.scroll(
-                    ("sidebar-content", ed.read(cx).sidebar_tab as usize),
-                    gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
-                        gpui_kit::px(0.),
-                        gpui_kit::px(-160.),
-                    )),
+        cx.update(|_, cx| {
+            ed.update(cx, |e, cx| {
+                e.raw_comparison_wait(
+                    &emulsion_mcp::raw_preview::Comparison {
+                        mode: if control == "raw-tone-preview" {
+                            emulsion_mcp::raw_preview::Mode::WithoutTone
+                        } else {
+                            emulsion_mcp::raw_preview::Mode::Clipping
+                        },
+                        position: 0.5,
+                    },
                     cx,
-                );
-            }
-            assert!(
-                window.find(control).visible(),
-                "{control} must be discoverable in RAW properties"
-            );
-            window.click(control, cx);
+                )
+                .unwrap();
+            })
         });
         cx.run_until_parked();
         cx.executor()

@@ -919,7 +919,7 @@ impl Workspace {
     pub(super) fn library_open_photo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.batch.develop.dirty() || self.batch.develop.saving {
             self.batch.note = Some((
-                "Save RAW edits in Develop before opening in Photo.".into(),
+                "Wait for Library edits to finish saving before opening in Photo.".into(),
                 true,
             ));
             cx.notify();
@@ -931,7 +931,7 @@ impl Workspace {
             .and_then(|i| self.batch.items.get(i))
             .map(|i| i.path.clone())
         {
-            self.open_photo_path(path, window, cx);
+            self.edit_library_photo_path(path, window, cx);
         }
     }
     pub(super) fn library_filmstrip(&mut self, cx: &mut Context<Self>) -> AnyElement {

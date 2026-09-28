@@ -84,13 +84,6 @@ type RawRow = (&'static str, &'static str, String, f32, (f32, f32, f32));
 const SETTLE_MS: u64 = 220;
 
 impl EditorView {
-    #[cfg(test)]
-    pub(crate) fn raw_curve_bounds(&self) -> Option<Bounds<Pixels>> {
-        self.tracks
-            .get(&SliderKey::Raw("curve-graph"))
-            .and_then(|track| track.get())
-    }
-
     fn raw_curve_graph(
         &mut self,
         params: DevelopParams,
@@ -722,6 +715,13 @@ impl EditorView {
     ) -> Option<AnyElement> {
         if self.raw_node() != Some(id) {
             return None;
+        }
+        if !self.library_only {
+            return Some(div().id("photo-develop-in-library").test_support().flex().flex_col().gap_2()
+                .child(label("RAW development is in Library",p))
+                .child("Continue this recipe in an independent Library copy. This Photo document and its layers stay unchanged.")
+                .child(Button::new("photo-edit-raw-library").label("Develop in Library…").small().on_click(|_,window,cx|window.dispatch_action(Box::new(crate::actions::DevelopOriginal),cx)))
+                .into_any_element());
         }
         let raw = self.editor.doc.raw.as_ref()?;
         let prm = if self.raw.split_requested {

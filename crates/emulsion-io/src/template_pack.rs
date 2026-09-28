@@ -322,6 +322,42 @@ fn read_archive<R: Read + Seek>(reader: R, prefix: Option<&str>) -> Result<Pack>
         project_bytes,
     })
 }
+/// Build a shareable stencil snapshot without dropping referenced clipping bases.
+/// Removing raw Fill nodes alone left dangling clip/design references in real diagrams.
+pub fn stencil_project(project: &Project) -> Result<Project> {
+    use emulsion_core::NodeKind;
+    let mut shared = project.clone();
+    if shared.kind != ProjectKind::Diagram {
+        return Err(error("Stencil export requires a Diagram project."));
+    }
+    for page in &mut shared.pages {
+        let clips = page
+            .doc
+            .nodes
+            .iter()
+            .filter_map(|n| n.clip_to)
+            .collect::<HashSet<_>>();
+        page.doc.nodes.retain(|n| {
+            !(n.parent.is_none()
+                && matches!(n.kind, NodeKind::Fill { .. })
+                && n.mask.is_none()
+                && n.styles.is_empty()
+                && !clips.contains(&n.id))
+        });
+        let ids = page.doc.nodes.iter().map(|n| n.id).collect();
+        page.doc.design.retain_nodes(&ids);
+        page.doc.validate().map_err(|e| error(e.to_string()))?;
+        page.graph = emulsion_core::graph::Graph::new(page.doc.clone(), "Stencil");
+    }
+    if shared.pages.iter().all(|p| p.doc.nodes.is_empty()) {
+        return Err(error(
+            "There is no artwork to export. Place shapes on a diagram page first.",
+        ));
+    }
+    shared.validate().map_err(error)?;
+    Ok(shared)
+}
+
 pub fn write(project: &Project, manifest: &Manifest, path: &Path) -> Result<()> {
     manifest.validate()?;
     project.validate().map_err(error)?;
@@ -540,6 +576,28 @@ mod tests {
         std::fs::create_dir_all(&p).unwrap();
         p
     }
+    #[test]
+    fn stencil_export_requires_artwork_and_preserves_source() {
+        let blank = ProjectEditor::new_project(ProjectKind::Diagram,
+            emulsion_core::Document::new(400, 240)).unwrap().snapshot().unwrap();
+        assert!(stencil_project(&blank).is_err());
+        let mut builder = emulsion_core::diagram::Builder::new(400, 240).unwrap();
+        builder.add_shape(emulsion_core::diagram::ShapeKind::Process,
+            [20., 20., 120., 60.], "Service").unwrap();
+        let original = ProjectEditor::new_project(ProjectKind::Diagram,
+            builder.finish().unwrap()).unwrap().snapshot().unwrap();
+        let before = original.clone();
+        let prepared = stencil_project(&original).unwrap();
+        assert_eq!(original.pages[0].doc, before.pages[0].doc);
+        assert_eq!(prepared.pages[0].doc.diagram, original.pages[0].doc.diagram);
+        assert!(prepared.pages[0].doc.nodes.iter().all(|n| !matches!(n.kind, NodeKind::Fill { .. })));
+        let root = folder("export-preparation");
+        let path = root.join("service.emustencil");
+        write(&prepared, &Manifest::new(Kind::Stencil, "Service".into()), &path).unwrap();
+        assert_eq!(read(&path).unwrap().project.pages[0].doc, prepared.pages[0].doc);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn portable_templates_preserve_pages_sources_and_install_offline() {
         let root = folder("roundtrip");

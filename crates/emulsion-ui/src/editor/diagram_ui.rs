@@ -77,7 +77,7 @@ pub(super) struct DiagramUi {
     open: bool,
     pub(super) search: Option<Entity<InputState>>,
     subscription: Option<Subscription>,
-    connecting: bool,
+    pub(super) connecting: bool,
     source: Option<Endpoint>,
     pointer: Option<(f64, f64)>,
     hover_shape: Option<NodeId>,
@@ -90,8 +90,8 @@ pub(super) struct DiagramUi {
     property_tab: usize,
     pub(super) library_tab: usize,
     pub(super) theme_selection: bool,
-    pub(super) pack_filter: usize,
     pub(super) stencil_page: usize,
+    pub(super) library_installing: bool,
     pub(super) expanded_stencil_packs: std::collections::HashSet<u64>,
     import_notes: Vec<String>,
     pub(super) collapsed_categories: std::collections::HashSet<&'static str>,
@@ -124,8 +124,8 @@ impl Default for DiagramUi {
             property_tab: 0,
             library_tab: 0,
             theme_selection: false,
-            pack_filter: 0,
             stencil_page: 0,
+            library_installing: false,
             expanded_stencil_packs: Default::default(),
             import_notes: Vec::new(),
             collapsed_categories: diagram::stencils::CATEGORIES
@@ -2153,6 +2153,7 @@ impl EditorView {
         }
         self.load_creative_library(cx);
         if self.diagram_ui.search.is_none() {
+            self.diagram_ui.expanded_stencil_packs.extend(crate::app_state::settings(cx).diagram_stencil_packs.iter().copied());
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search library"));
             self.diagram_ui.subscription = Some(cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -2184,6 +2185,10 @@ impl EditorView {
                     "Stencil packs",
                 ][self.diagram_ui.library_tab],
             )
+            .when(self.diagram_ui.open, |header| header.child(
+                Button::new("diagram-more-shapes").label("Add shapes…").xsmall().ghost()
+                    .on_click(cx.listener(|this,_,window,cx| this.diagram_library_dialog(window,cx)))
+            ))
             .child(
                 Button::new("diagram-toggle-drawer")
                     .label(if self.diagram_ui.open { "‹" } else { "›" })
@@ -2274,7 +2279,12 @@ impl EditorView {
             content = content.child(self.document_stencil_toolbox(&query, p, window, cx));
         }
         if matches!(self.diagram_ui.library_tab, 0 | 2) {
-            for (category_index, &label) in diagram::stencils::CATEGORIES.iter().enumerate() {
+            let enabled = crate::app_state::settings(cx).diagram_shape_libraries.clone();
+            let mut categories = diagram::stencils::CATEGORIES.iter().enumerate().collect::<Vec<_>>();
+            categories.sort_by_key(|(i, label)| match **label { "General" => 0, "Flowchart" => 1, _ => i + 2 });
+            for (category_index, &label) in categories {
+                if self.diagram_ui.library_tab == 0 && !enabled.iter().any(|c| c == label) { continue; }
+                let display_label = if label == "General" { "Standard" } else { label };
                 let stencils = diagram::stencils::STENCILS
                     .iter()
                     .copied()
@@ -2294,7 +2304,7 @@ impl EditorView {
                 content = content.child(
                     Button::new(("diagram-stencil-category", category_index))
                         .label(format!(
-                            "{} {label} ({})",
+                            "{} {display_label} ({})",
                             if collapsed { "›" } else { "⌄" },
                             stencils.len()
                         ))
@@ -2311,7 +2321,7 @@ impl EditorView {
                 if collapsed {
                     continue;
                 }
-                let mut grid = div().id(label).grid().grid_cols(4).gap(px(4.));
+                let mut grid = div().id(label).grid().grid_cols(5).gap(px(4.));
                 for (i, stencil) in stencils {
                     let ink = p.ink;
                     let glyph = canvas(
@@ -2349,7 +2359,7 @@ impl EditorView {
                             .test_support()
                             .cursor_pointer()
                             .w_full()
-                            .h(px(50.))
+                            .h(px(42.))
                             .border_1()
                             .border_color(p.line)
                             .rounded(px(5.))
@@ -2504,9 +2514,11 @@ impl EditorView {
                 );
             }
         }
-        content = content
-            .child(self.creative_pack_controls(cx))
-            .child(self.stencil_pack_list(&query, p, cx));
+        if self.diagram_ui.library_tab == 4 {
+            content = content.child(self.creative_pack_controls(cx));
+        } else if self.diagram_ui.library_tab == 0 {
+            content = content.child(self.stencil_pack_list(&query, p, cx));
+        }
         content=content.child(div().text_size(px(11.)).text_color(p.muted).child("Drag on empty canvas to select. Ctrl/Shift-click adds or removes objects. Ctrl+G groups the selection. Double-click text to edit it. Connectors follow moved shapes."));
         let narrow = window.viewport_size().width < px(1100.);
         let drawer = div()
