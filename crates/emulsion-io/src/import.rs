@@ -58,9 +58,10 @@ pub fn from_dynamic(img: DynamicImage) -> Result<Decoded> {
 pub fn decode(path: &Path) -> Result<Decoded> {
     if let Some((image, report)) = crate::photo_hdr::load(path)? {
         return Ok(Decoded {
-            raster: image.develop(
+            raster: image.develop_display(
                 &Default::default(),
                 report.display_exposure,
+                report.panorama,
                 &std::sync::atomic::AtomicBool::new(false),
             )?,
             depth: 16,

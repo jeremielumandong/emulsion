@@ -77,3 +77,12 @@ real denoise-model noise reduction/color/seams, real depth inference, focus edit
 textured overlap registration, panorama save/reopen/no-clobber output, and HDR inputs
 larger than 24 MP. Broader camera vendors, calibrated color charts, real handheld
 panorama sets and difficult motion/occlusion scenes still need photographic evaluation.
+
+Final targeted validation: 22 Library desktop tests, 23 RAW IO tests, 11 core RAW
+recipe/history tests, 7 Library MCP tests and 12 RAW-related MCP tests passed.
+Formatting and all-target Clippy with warnings denied passed for emulsion-io,
+emulsion-ai, emulsion-mcp and emulsion-ui. The broader IO run had 367 passes and
+one failure in `drawio::tests_compat::bundled_stencils_keep_custom_geometry_in_drawio`;
+workspace Clippy also reported an item-order warning in `diagram_library_web.rs`.
+Those concurrent diagram changes are outside this Library validation result.
+The running application was not replaced or restarted.

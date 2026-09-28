@@ -143,10 +143,15 @@ impl PhotoSource {
         })
     }
     pub fn load_verified(path: &Path, digest: &str) -> Result<Self> {
+        if !raw::source_digest(path)?.eq_ignore_ascii_case(digest) {
+            return Err(IoError::Manifest(
+                "Photo original SHA-256 changed; reload before editing".into(),
+            ));
+        }
         let source = Self::load(path)?;
         if !source.source_sha256.eq_ignore_ascii_case(digest) {
             return Err(IoError::Manifest(
-                "Photo original changed; reload before editing".into(),
+                "Photo original SHA-256 changed; reload before editing".into(),
             ));
         }
         Ok(source)
@@ -254,7 +259,7 @@ impl PhotoSource {
             };
             if raw::source_digest(&path)? != expected {
                 return Err(IoError::Manifest(
-                    "Photo original changed; reload before editing".into(),
+                    "Photo original SHA-256 changed; reload before editing".into(),
                 ));
             }
             let image = crate::photo_wide::decode(&path)?;

@@ -298,53 +298,65 @@ fn estimate_profile_temperature(
 }
 
 /// Estimate clipped channels only where a nearby unclipped color ratio supplies evidence.
-fn reconstruct<const N: usize>(pixels: &mut [[f32; N]], w: usize, h: usize, strength: f32) {
+fn reconstruct<const N: usize>(
+    pixels: &mut [[f32; N]],
+    w: usize,
+    h: usize,
+    strength: f32,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    cancelled(cancel)?;
     if strength == 0. {
-        return;
+        return Ok(());
     }
     let source = pixels.to_vec();
-    pixels.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-        for (x, p) in row.iter_mut().enumerate() {
-            let original = source[y * w + x];
-            let Some(reference) = (0..N)
-                .filter(|&c| original[c] > 0.01 && original[c] < 0.97)
-                .max_by(|&a, &b| original[a].total_cmp(&original[b]))
-            else {
-                continue;
-            };
-            for c in 0..N {
-                if original[c] < 0.98 {
+    pixels
+        .par_chunks_mut(w)
+        .enumerate()
+        .try_for_each(|(y, row)| -> Result<()> {
+            cancelled(cancel)?;
+            for (x, p) in row.iter_mut().enumerate() {
+                let original = source[y * w + x];
+                let Some(reference) = (0..N)
+                    .filter(|&c| original[c] > 0.01 && original[c] < 0.97)
+                    .max_by(|&a, &b| original[a].total_cmp(&original[b]))
+                else {
                     continue;
-                }
-                let mut sum = 0.;
-                let mut weights = 0.;
-                for yy in y.saturating_sub(12)..=(y + 12).min(h - 1) {
-                    for xx in x.saturating_sub(12)..=(x + 12).min(w - 1) {
-                        let q = source[yy * w + xx];
-                        if q[c] <= 0.02
-                            || q[c] >= 0.95
-                            || q[reference] <= 0.02
-                            || q[reference] >= 0.95
-                        {
-                            continue;
+                };
+                for c in 0..N {
+                    if original[c] < 0.98 {
+                        continue;
+                    }
+                    let mut sum = 0.;
+                    let mut weights = 0.;
+                    for yy in y.saturating_sub(12)..=(y + 12).min(h - 1) {
+                        for xx in x.saturating_sub(12)..=(x + 12).min(w - 1) {
+                            let q = source[yy * w + xx];
+                            if q[c] <= 0.02
+                                || q[c] >= 0.95
+                                || q[reference] <= 0.02
+                                || q[reference] >= 0.95
+                            {
+                                continue;
+                            }
+                            let weight = 1.
+                                / (1.
+                                    + (xx as f32 - x as f32).powi(2)
+                                    + (yy as f32 - y as f32).powi(2));
+                            sum += (q[c] / q[reference]).clamp(0.0625, 16.) * weight;
+                            weights += weight;
                         }
-                        let weight = 1.
-                            / (1.
-                                + (xx as f32 - x as f32).powi(2)
-                                + (yy as f32 - y as f32).powi(2));
-                        sum += (q[c] / q[reference]).clamp(0.0625, 16.) * weight;
-                        weights += weight;
+                    }
+                    if weights > 0. {
+                        let inferred = (original[reference] * sum / weights)
+                            .max(original[c])
+                            .min(16.);
+                        p[c] += (inferred - original[c]) * strength;
                     }
                 }
-                if weights > 0. {
-                    let inferred = (original[reference] * sum / weights)
-                        .max(original[c])
-                        .min(16.);
-                    p[c] += (inferred - original[c]) * strength;
-                }
             }
-        }
-    });
+            Ok(())
+        })
 }
 
 fn white_balance(raw: &RawImage, params: &DevelopParams, channels: usize) -> Result<[f32; 4]> {
@@ -654,7 +666,7 @@ pub(super) fn render_in_space(
         params.demosaic_version,
         cancel,
     )?;
-    let (w, h, mut pixels) = working_rgb(raw, params, developed)?;
+    let (w, h, mut pixels) = working_rgb(raw, params, developed, cancel)?;
     if let Some(d) = params.camera_profile {
         let profile = crate::camera_profiles::load(&d)?;
         crate::camera_profiles::apply(
@@ -794,7 +806,8 @@ pub(super) fn preview(
                 stage.width,
                 stage.height,
                 p.highlight_reconstruction,
-            );
+                cancel,
+            )?;
             &reconstructed
         } else {
             &stage.data
@@ -940,6 +953,7 @@ fn working_rgb(
     raw: &RawImage,
     params: &DevelopParams,
     developed: Intermediate,
+    cancel: &AtomicBool,
 ) -> Result<(usize, usize, Vec<[f32; 3]>)> {
     Ok(match developed {
         Intermediate::Monochrome(pixels) => (
@@ -953,7 +967,8 @@ fn working_rgb(
                 pixels.width,
                 pixels.height,
                 params.highlight_reconstruction,
-            );
+                cancel,
+            )?;
             let matrix = profile_matrix(raw, params, 3)?;
             let wb = white_balance(raw, params, 3)?;
             let data = pixels
@@ -969,7 +984,8 @@ fn working_rgb(
                 pixels.width,
                 pixels.height,
                 params.highlight_reconstruction,
-            );
+                cancel,
+            )?;
             let matrix = profile_matrix(raw, params, 4)?;
             let wb = white_balance(raw, params, 4)?;
             let data = pixels
@@ -1076,7 +1092,12 @@ pub(super) fn neutral_white_balance(
 pub(super) fn auto_adjust(raw: &RawImage, params: &DevelopParams) -> Result<DevelopParams> {
     params.validate().map_err(invalid)?;
     validate(raw)?;
-    let (_, _, pixels) = working_rgb(raw, params, demosaic(raw, &AtomicBool::new(false))?)?;
+    let (_, _, pixels) = working_rgb(
+        raw,
+        params,
+        demosaic(raw, &AtomicBool::new(false))?,
+        &AtomicBool::new(false),
+    )?;
     let stride = pixels.len().div_ceil(65536).max(1);
     let samples: Vec<_> = pixels
         .iter()
@@ -1275,7 +1296,7 @@ pub(super) fn linear_hdr(
         wb_override: Some(wb),
         ..Default::default()
     };
-    let (w, h, rgb) = working_rgb(raw, &params, developed)?;
+    let (w, h, rgb) = working_rgb(raw, &params, developed, cancel)?;
     let swap = matches!(
         raw.orientation,
         Orientation::Transpose
@@ -1880,7 +1901,7 @@ mod reconstruction_tests {
         let mut pixels = vec![[0.8, 0.4, 0.2]; 25 * 25];
         pixels[12 * 25 + 12] = [1., 0.8, 0.4];
         pixels[0] = [1.; 3];
-        reconstruct(&mut pixels, 25, 25, 1.);
+        reconstruct(&mut pixels, 25, 25, 1., &AtomicBool::new(false)).unwrap();
         assert!((pixels[12 * 25 + 12][0] - 1.6).abs() < 0.001);
         assert_eq!(pixels[12 * 25 + 12][1], 0.8);
         assert_eq!(pixels[0], [1.; 3]);

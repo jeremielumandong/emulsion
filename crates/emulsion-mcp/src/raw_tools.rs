@@ -8,7 +8,7 @@ use emulsion_core::{
     raw::{DevelopParams, RawDocument},
 };
 use emulsion_io::{
-    raw::RawSource,
+    photo_develop::PhotoSource,
     raw_settings::{self as settings, RawSettingsGroup},
 };
 use serde_json::{Value, json};
@@ -66,7 +66,7 @@ pub fn describe(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> 
     strict(args, &[])?;
     let raw = raw(doc)?;
     Ok(ToolResult::text(json!({"raw":raw,"source_exists":raw.source.is_file(),
-        "working_space":"linear sRGB", "white_balance_units":"relative offsets, not Kelvin",
+        "working_space":if raw.params.wide_gamut {"linear ProPhoto RGB"} else {"linear sRGB"}, "white_balance_units":"relative offsets, not Kelvin",
         "neutral_picker_coordinates":"oriented/cropped RAW raster pixels, before layer transforms",
         "curve_presets":{"linear":DevelopParams::LINEAR_CURVE,"medium":DevelopParams::MEDIUM_CONTRAST_CURVE,"strong":DevelopParams::STRONG_CONTRAST_CURVE},
         "settings_format":"Emulsion JSON, not Adobe XMP", "original_preserved":true}).to_string()))
@@ -82,7 +82,7 @@ fn planned(commands: Vec<Command>, message: impl Into<String>) -> Planned {
 fn develop(
     doc: &Document,
     params: DevelopParams,
-    source: Option<RawSource>,
+    source: Option<PhotoSource>,
 ) -> Result<Planned, ToolResult> {
     params.validate().map_err(error)?;
     let raw = raw(doc)?;
@@ -91,7 +91,7 @@ fn develop(
     }
     let source = match source {
         Some(s) => s,
-        None => RawSource::load_verified(&raw.source, &raw.source_sha256).map_err(error)?,
+        None => PhotoSource::load_verified(&raw.source, &raw.source_sha256).map_err(error)?,
     };
     let raster = Arc::new(source.develop_with(&params).map_err(error)?);
     Ok(planned(
@@ -181,7 +181,7 @@ pub fn plan(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolRes
         "auto_develop_raw" => {
             strict(args, &[])?;
             let source =
-                RawSource::load_verified(&raw.source, &raw.source_sha256).map_err(error)?;
+                PhotoSource::load_verified(&raw.source, &raw.source_sha256).map_err(error)?;
             develop(
                 doc,
                 source.auto_adjust(&raw.params).map_err(error)?,
@@ -198,7 +198,7 @@ pub fn plan(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolRes
             };
             let (x, y) = (coordinate("x")?, coordinate("y")?);
             let source =
-                RawSource::load_verified(&raw.source, &raw.source_sha256).map_err(error)?;
+                PhotoSource::load_verified(&raw.source, &raw.source_sha256).map_err(error)?;
             develop(
                 doc,
                 source

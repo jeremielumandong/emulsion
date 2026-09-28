@@ -258,6 +258,15 @@ mod tests {
         assert!(merged.save(&output, &cancel).is_err());
         let loaded = crate::photo_hdr::load(&output).unwrap().unwrap();
         assert_eq!(loaded.0.width, merged.image.width);
+        assert!(loaded.1.panorama);
+        let preview = merged.preview(false, &cancel).unwrap();
+        let decoded = crate::import::decode(&output).unwrap();
+        assert_eq!(preview.to_pixels(), decoded.raster.to_pixels());
+        let input = merged.image.pixels
+            [(merged.image.height / 2 * merged.image.width + merged.image.width / 2) as usize];
+        let pixel = preview.get(merged.image.width / 2, merged.image.height / 2);
+        assert!((pixel[0] as f32 / 65535. - input[0]).abs() < 0.0001);
+        crate::import::import(&output).unwrap();
         for (path, hash) in paths.iter().zip(hashes) {
             assert_eq!(crate::raw::source_digest(path).unwrap(), hash);
         }

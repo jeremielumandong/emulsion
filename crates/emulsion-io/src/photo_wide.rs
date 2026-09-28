@@ -62,6 +62,12 @@ pub fn has_rgb_profile(path: &std::path::Path) -> Result<bool> {
     let mut decoder = image::ImageReader::open(path)?
         .with_guessed_format()?
         .into_decoder()?;
+    if matches!(
+        decoder.color_type(),
+        image::ColorType::Rgb32F | image::ColorType::Rgba32F
+    ) {
+        return Ok(false);
+    }
     Ok(decoder
         .icc_profile()?
         .and_then(|b| ColorProfile::new_from_slice(&b).ok())
