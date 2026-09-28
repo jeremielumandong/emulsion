@@ -203,7 +203,40 @@ impl Files {
         Ok(())
     }
     fn upload_drive(&self, revision: &Revision, path: &Path) -> Result<()> {
-        let metadata = json!({"name":revision.object_name(), "parents":[self.account.root], "appProperties":{"emulsion":"revision-v1"}});
+        ensure!(
+            !self.account.root.is_empty() && self.account.root != "root",
+            "Reconnect Google Drive to create its Emulsion folder"
+        );
+        let mut request = |method: &str, url: &str, body: Option<Value>| {
+            self.client
+                .json(method, url, Some(&self.token), body.as_ref())
+        };
+        let parent = if let Some(home) = &revision.home {
+            let (key, name) = home
+                .folder
+                .as_ref()
+                .map_or(("unfiled", "Unfiled"), |f| (f.id.as_str(), f.name.as_str()));
+            drive_folder(
+                &self.account.root,
+                "project-v1",
+                key,
+                name,
+                false,
+                &mut request,
+            )?
+        } else {
+            // Legacy queued revisions remain usable, grouped by their real filename.
+            self.account.root.clone()
+        };
+        let folder = drive_folder(
+            &parent,
+            "file-v1",
+            &revision.project,
+            &revision.name,
+            true,
+            &mut request,
+        )?;
+        let metadata = json!({"name":revision.object_name(), "parents":[folder], "appProperties":{"emulsion":"revision-v1"}});
         let size = path.metadata()?.len();
         let response = self.client.send(
             "POST",
@@ -339,6 +372,81 @@ impl Files {
         Ok(())
     }
 }
+/// Locate only app-owned folders by stable identity. File folders can move
+/// between Home projects without leaving a second folder after a rename.
+fn drive_folder(
+    parent: &str,
+    kind: &str,
+    key: &str,
+    name: &str,
+    movable: bool,
+    request: &mut impl FnMut(&str, &str, Option<Value>) -> Result<Value>,
+) -> Result<String> {
+    let escape = |s: &str| s.replace('\\', "\\\\").replace('\'', "\\'");
+    let mut query = format!(
+        "trashed = false and mimeType = 'application/vnd.google-apps.folder' and appProperties has {{ key='emulsion' and value='{}' }} and appProperties has {{ key='identity' and value='{}' }}",
+        escape(kind),
+        escape(key)
+    );
+    if !movable {
+        query.push_str(&format!(" and '{}' in parents", escape(parent)));
+    }
+    let url = http::query(
+        DRIVE,
+        &[
+            ("q", &query),
+            ("fields", "files(id,name,parents),nextPageToken"),
+            ("pageSize", "1000"),
+            ("orderBy", "createdTime"),
+        ],
+    );
+    let result = request("GET", &url, None)?;
+    if let Some(folder) = result["files"]
+        .as_array()
+        .context("Invalid Drive folder listing")?
+        .first()
+    {
+        let id = http::field(folder, "id")?;
+        let parents = folder["parents"]
+            .as_array()
+            .context("Drive folder is missing its parent")?;
+        let moved = !parents.iter().any(|p| p.as_str() == Some(parent));
+        if moved || folder["name"].as_str() != Some(name) {
+            let base = format!("{DRIVE}/{}", http::segment(&id));
+            let old = parents
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",");
+            let url = if moved {
+                http::query(
+                    &base,
+                    &[
+                        ("addParents", parent),
+                        ("removeParents", &old),
+                        ("fields", "id"),
+                    ],
+                )
+            } else {
+                base
+            };
+            request("PATCH", &url, Some(json!({"name":name})))?;
+        }
+        Ok(id)
+    } else {
+        http::field(
+            &request(
+                "POST",
+                DRIVE,
+                Some(json!({
+                    "name":name, "mimeType":"application/vnd.google-apps.folder", "parents":[parent],
+                    "appProperties":{"emulsion":kind,"identity":key}
+                })),
+            )?,
+            "id",
+        )
+    }
+}
 impl FileProvider for Files {
     fn list(&self) -> Result<Vec<RemoteRevision>> {
         let mut out = Vec::new();
@@ -468,6 +576,58 @@ pub fn connected(store: &Store, account: &Account) -> Result<Files> {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    #[test]
+    fn drive_folder_creation_and_moves_keep_stable_identity() {
+        let mut calls = vec![];
+        let id = drive_folder(
+            "project-folder",
+            "file-v1",
+            "stable-file",
+            "portrait.jpg",
+            true,
+            &mut |method, url, body| {
+                calls.push((method.to_string(), url.to_string(), body));
+                Ok(if method == "GET" {
+                    json!({"files":[]})
+                } else {
+                    json!({"id":"file-folder"})
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(id, "file-folder");
+        assert_eq!(
+            calls[1].2.as_ref().unwrap()["parents"],
+            json!(["project-folder"])
+        );
+        assert_eq!(calls[1].2.as_ref().unwrap()["name"], "portrait.jpg");
+        calls.clear();
+        let id = drive_folder("other-project", "file-v1", "stable-file", "renamed.jpg", true,
+            &mut |method, url, body| {
+                calls.push((method.to_string(), url.to_string(), body));
+                Ok(if method == "GET" { json!({"files":[{"id":"file-folder","name":"portrait.jpg","parents":["project-folder"]}]}) } else { json!({"id":"file-folder"}) })
+            }).unwrap();
+        assert_eq!(id, "file-folder");
+        assert_eq!(calls[1].0, "PATCH");
+        let url = url::Url::parse(&calls[1].1).unwrap();
+        assert!(
+            url.query_pairs()
+                .any(|(k, v)| k == "addParents" && v == "other-project")
+        );
+        assert!(
+            url.query_pairs()
+                .any(|(k, v)| k == "removeParents" && v == "project-folder")
+        );
+        assert_eq!(calls[1].2.as_ref().unwrap()["name"], "renamed.jpg");
+        let mut count = 0;
+        drive_folder("other-project", "file-v1", "stable-file", "renamed.jpg", true,
+            &mut |method, _, _| {
+                count += 1;
+                assert_eq!(method, "GET");
+                Ok(json!({"files":[{"id":"file-folder","name":"renamed.jpg","parents":["other-project"]}]}))
+            }).unwrap();
+        assert_eq!(count, 1);
+    }
     struct Fake {
         entries: RefCell<Vec<(RemoteRevision, Vec<u8>)>>,
         ambiguous: RefCell<bool>,

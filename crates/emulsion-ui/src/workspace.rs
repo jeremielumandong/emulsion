@@ -84,6 +84,7 @@ pub struct Workspace {
     pub(crate) about_all_crates: bool,
     pub(crate) model_jobs: crate::settings_models::ModelJobs,
     pub(crate) batch: crate::batch::BatchState,
+    pub(crate) library_window: AnyWindowHandle,
     /// The landing image, decoded once in the background.
     pub(crate) landing: Option<crate::landing::LandingImages>,
     /// Recovery copies left by an earlier session that did not close cleanly.
@@ -112,7 +113,11 @@ impl Workspace {
                 .filter(|other| *other != tab)
                 .map(Entity::downgrade)
                 .collect();
-            tab.update(cx, |editor, _| editor.raw_peers = peers);
+            let workspace = cx.weak_entity();
+            tab.update(cx, |editor, _| {
+                editor.raw_peers = peers;
+                editor.library_workspace = Some(workspace);
+            });
         }
     }
 
@@ -236,6 +241,7 @@ impl Workspace {
             about_all_crates: false,
             model_jobs: Default::default(),
             batch: Default::default(),
+            library_window: window.window_handle(),
             landing,
             splash: show_splash,
         }
@@ -1418,6 +1424,41 @@ impl Workspace {
         .detach();
     }
 
+    fn print_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.style_dialog_open(cx) || self.screen != Screen::Editor {
+            return;
+        }
+        let Some(editor) = self.editor.clone() else {
+            return;
+        };
+        editor.update(cx, |e, cx| e.finish_gpu_stroke(cx));
+        let e = editor.read(cx);
+        if e.raw.is_pending() || e.editor.in_transaction() {
+            editor.update(cx, |e, cx| {
+                e.set_status(
+                    "Finish the current edit or RAW development before printing.",
+                    false,
+                    cx,
+                )
+            });
+            return;
+        }
+        let name = e.name.clone();
+        let active = e
+            .editor
+            .page_list()
+            .iter()
+            .position(|p| p.id == e.editor.active_page())
+            .unwrap_or(0);
+        let docs = e
+            .editor
+            .page_list()
+            .iter()
+            .filter_map(|p| e.editor.page(p.id).map(|e| (p.name.clone(), e.doc.clone())))
+            .collect();
+        crate::print_dialog::open(name, docs, active, window, cx);
+    }
+
     fn export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.style_dialog_open(cx) {
             return;
@@ -1817,6 +1858,23 @@ impl Render for Workspace {
             window.set_window_title(&title);
             self.last_title = title;
         }
+        if self.screen == Screen::Editor
+            && let Some(editor) = self.editor.as_ref()
+            && editor.read(cx).is_clean_presentation(window)
+        {
+            return div()
+                .id("workspace-presentation")
+                .test_support()
+                .key_context("Workspace")
+                .track_focus(&self.focus)
+                .size_full()
+                .flex()
+                .flex_col()
+                .bg(gpui_kit::black())
+                .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
+                .child(editor.clone())
+                .into_any_element();
+        }
         let title_bar = gpui_kit::component::TitleBar::new()
             .on_close_window(|_, window, cx| {
                 window.dispatch_action(Box::new(Quit), cx);
@@ -1916,6 +1974,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Save, window, cx| this.save(false, window, cx)))
             .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.save(true, window, cx)))
             .on_action(cx.listener(|this, _: &Export, window, cx| this.export(window, cx)))
+            .on_action(cx.listener(|this, _: &Print, window, cx| this.print_document(window, cx)))
             .on_action(
                 cx.listener(|this, _: &SynchronizeRaw, window, cx| {
                     this.synchronize_raw(window, cx)
@@ -2349,6 +2408,7 @@ impl Render for Workspace {
             .children(self.busy_overlay(cx))
             .when(self.splash, |d| d.child(self.splash_view(window, cx)))
             .children(gpui_kit::component::Root::render_dialog_layer(window, cx))
+            .into_any_element()
     }
 }
 

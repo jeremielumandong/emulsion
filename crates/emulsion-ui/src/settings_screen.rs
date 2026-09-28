@@ -299,7 +299,6 @@ impl Workspace {
                     .child(div().text_size(px(40.)).font_weight(FontWeight::SEMIBOLD).child("Every tier is optional."))
                     .child(body("Emulsion is a complete editor with none of these. Each tier you add makes it better, and anything that needs a missing tier falls back or stays hidden.", &p)),
             )
-            .child(self.cloud_panel(cx))
             .child(
                 div()
                     .flex()

@@ -233,6 +233,11 @@ impl Editor {
         self.txn.is_some()
     }
 
+    /// Lets hosts avoid closing an outer operation while a nested gesture owns it.
+    pub fn transaction_depth(&self) -> u32 {
+        self.txn.as_ref().map_or(0, |(_, _, _, depth)| *depth)
+    }
+
     /// Abandon the open transaction: the document returns to how it was
     /// when the outermost `begin` ran, and nothing reaches the history.
     pub fn cancel(&mut self) {

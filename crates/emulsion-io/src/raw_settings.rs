@@ -43,10 +43,19 @@ pub fn merge_settings(
             target.exposure = source.exposure;
             target.highlights = source.highlights;
             target.shadows = source.shadows;
+            target.whites = source.whites;
+            target.blacks = source.blacks;
             target.black_point = source.black_point;
             target.brightness = source.brightness;
             target.contrast = source.contrast;
             target.saturation = source.saturation;
+            target.vibrance = source.vibrance;
+            target.texture = source.texture;
+            target.clarity = source.clarity;
+            target.dehaze = source.dehaze;
+            target.vignette = source.vignette;
+            target.sharpening = source.sharpening;
+            target.noise_reduction = source.noise_reduction;
         }
         RawSettingsGroup::Curve => {
             target.tone_curve = source.tone_curve;
@@ -232,7 +241,7 @@ pub(crate) fn load_sidecar_verified(path: &Path, digest: &str) -> Result<Develop
 
 /// Missing means an unedited original; any present but unreadable recipe is an
 /// error, never an excuse to silently discard previously saved adjustments.
-pub(crate) fn adjacent_settings(source: &Path, digest: &str) -> Result<DevelopParams> {
+pub fn adjacent_settings(source: &Path, digest: &str) -> Result<DevelopParams> {
     let path = sidecar_path(source)?;
     match std::fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -247,6 +256,13 @@ pub(crate) fn adjacent_settings(source: &Path, digest: &str) -> Result<DevelopPa
             path.display()
         ))
     })
+}
+
+/// Persist library development with the same fingerprint-bound format as Photo.
+pub fn save_source_settings(source: &crate::raw::RawSource, params: DevelopParams) -> Result<()> {
+    let mut saved = record("emulsion-raw-sidecar", params)?;
+    saved.source_sha256 = Some(source.source_sha256.to_ascii_lowercase());
+    write(&sidecar_path(&source.source)?, &saved)
 }
 
 pub(crate) fn original_layer_name(source: &Path, model: &str) -> String {

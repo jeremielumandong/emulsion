@@ -1,0 +1,91 @@
+//! Page-aware diagram interchange and generation; graph edits use diagram_tools.
+use crate::{ToolDef, ToolResult};
+use emulsion_core::{diagram, project::{ProjectEditor, ProjectKind}};
+use serde_json::{Value, json};
+use std::path::Path;
+pub fn is_tool(name:&str)->bool {matches!(name,"import_diagram"|"export_diagram"|"generate_diagram"|"quick_create_diagram")}
+fn text<'a>(v:&'a Value,key:&str)->Result<&'a str,String>{v[key].as_str().ok_or_else(||format!("{key} must be a string"))}
+pub fn execute(editor:&mut ProjectEditor,name:&str,args:&Value)->ToolResult {
+    match run(editor,name,args) {Ok(v)=>ToolResult::text(v.to_string()),Err(e)=>ToolResult::error(e)}
+}
+fn run(editor:&mut ProjectEditor,name:&str,args:&Value)->Result<Value,String>{
+    if editor.kind()!=Some(ProjectKind::Diagram){return Err("Open a Diagram project first".into());}
+    if editor.in_transaction(){return Err("Finish the current edit first".into());}
+    let def=definitions().into_iter().find(|d|d.name==name).ok_or("Unknown diagram tool")?;
+    let object=args.as_object().ok_or("Arguments must be an object")?;
+    let props=def.input_schema["properties"].as_object().unwrap();
+    for (key,value) in object {
+        let schema=props.get(key).ok_or_else(||format!("Unknown argument {key}"))?;
+        let valid=match schema["type"].as_str(){Some("string")=>value.is_string(),Some("boolean")=>value.is_boolean(),Some("integer")=>value.as_u64().is_some_and(|v|v>0),_=>true};
+        if !valid || schema["enum"].as_array().is_some_and(|items|!items.contains(value)){return Err(format!("Invalid argument {key}"));}
+    }
+    match name {
+        "import_diagram"=>{
+            let imported=match (args.get("path"),args.get("xml")) {
+                (Some(path),None)=>{let path=Path::new(path.as_str().unwrap());if emulsion_io::template_pack::is_pack(path){let pack=emulsion_io::template_pack::read(path).map_err(|e|e.to_string())?;emulsion_io::drawio::Imported{project:pack.project,warnings:Vec::new()}}else{emulsion_io::diagram_import::read(path).map_err(|e|e.to_string())?}},
+                (None,Some(xml))=>emulsion_io::drawio::from_xml(xml.as_str().unwrap()).map_err(|e|e.to_string())?,
+                _=>return Err("Provide exactly one of path or xml".into()),
+            };
+            let pages=editor.import_pages(imported.project)?;
+            Ok(json!({"pages":pages,"warnings":imported.warnings}))
+        }
+        "export_diagram"=>{
+            let project=editor.snapshot().ok_or("No project")?;
+            if let Some(path)=args.get("path") {
+                let path=Path::new(path.as_str().unwrap());
+                if path.exists() && args["overwrite"]!=true{return Err("Destination exists; set overwrite=true to replace it".into());}
+                emulsion_io::drawio::write(&project,path).map_err(|e|e.to_string())?;
+                Ok(json!({"path":path,"pages":project.pages.len()}))
+            }else{Ok(json!({"xml":emulsion_io::drawio::to_xml(&project).map_err(|e|e.to_string())?}))}
+        }
+        "generate_diagram"=>{
+            let format=match text(args,"format")?{"text"=>emulsion_io::diagram_data::Format::Text,"csv"=>emulsion_io::diagram_data::Format::Csv,"mermaid"=>emulsion_io::diagram_data::Format::Mermaid,"sql"=>emulsion_io::diagram_data::Format::Sql,_=>return Err("Unknown data format".into())};
+            let draft=emulsion_io::diagram_data::parse(text(args,"text")?,format).map_err(|e|e.to_string())?;
+            if args["refresh"]==true {
+                let commands=draft.refresh_commands(&editor.doc).map_err(|e|e.to_string())?;
+                editor.begin("Refresh diagram data");
+                for command in commands {if let Err(e)=editor.execute(command){editor.cancel();return Err(e.to_string());}}
+                editor.end(); Ok(json!({"refreshed":true}))
+            }else{
+                let doc=draft.document().map_err(|e|e.to_string())?;
+                let page=editor.add_page(doc,args["name"].as_str().unwrap_or("Generated diagram").into(),0.)?;
+                Ok(json!({"page":page}))
+            }
+        }
+        "quick_create_diagram"=>{
+            let source=args["source"].as_u64().ok_or("source must be a node ID")?;
+            let direction=serde_json::from_value(args["direction"].clone()).map_err(|e|e.to_string())?;
+            let kind=serde_json::from_value(args["kind"].clone()).map_err(|e|e.to_string())?;
+            let node=diagram::quick_create(editor,source,direction,kind)?;
+            Ok(json!({"node":node}))
+        }
+        _=>Err("Unknown diagram project tool".into()),
+    }
+}
+pub(crate) fn definitions()->Vec<ToolDef>{
+    let string=json!({"type":"string"});let boolean=json!({"type":"boolean"});
+    let def=|name:&str,description:&str,properties:Value,required:&[&str]|ToolDef{name:name.into(),description:description.into(),input_schema:json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})};
+    vec![
+        def("import_diagram","Add all pages from a local draw.io, supported Visio/Lucid file or native stencil/template pack; alternatively supply draw.io XML. Returns compatibility warnings. One undo step; binary legacy Visio requires conversion first.",json!({"path":string,"xml":string}),&[]),
+        def("export_diagram","Export every project page as editable draw.io. Omit path to return XML; existing destinations require overwrite=true. Unsupported artwork fails explicitly. Use export_project for PDF or image archives and export_template_pack for portable stencils.",json!({"path":string,"overwrite":boolean}),&[]),
+        def("generate_diagram","Generate a new editable page from text, CSV, Mermaid flowchart or SQL schema. refresh=true updates data-linked shapes on the current page in one undo step.",json!({"format":{"type":"string","enum":["text","csv","mermaid","sql"]},"text":string,"name":string,"refresh":boolean}),&["format","text"]),
+        def("quick_create_diagram","Add a connected neighboring shape in one undo step.",json!({"source":{"type":"integer","minimum":1},"direction":{"type":"string","enum":["north","east","south","west"]},"kind":{"type":"string","enum":["process","decision","terminator","data","document","database","note","class","entity","container","swimlane","cloud"]}}),&["source","direction","kind"]),
+    ]
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use emulsion_core::Document;
+    fn call(e:&mut ProjectEditor,name:&str,args:Value)->Value{let r=execute(e,name,&args);assert!(!r.is_error,"{name}: {:?}",r.content);serde_json::from_str(r.content[0]["text"].as_str().unwrap()).unwrap()}
+    fn project()->ProjectEditor{ProjectEditor::new_project(ProjectKind::Diagram,Document::new(800,600)).unwrap()}
+    #[test]
+    fn diagram_project_mcp_generation_import_export_undo(){
+        let mut e=project();call(&mut e,"generate_diagram",json!({"format":"mermaid","text":"flowchart LR\n A[Start] --> B[Finish]"}));assert_eq!(e.page_list().len(),2);
+        let source=*e.doc.diagram.as_ref().unwrap().shapes.keys().next().unwrap();
+        call(&mut e,"quick_create_diagram",json!({"source":source,"direction":"south","kind":"class"}));assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(),3);e.undo();assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(),2);
+        let xml=call(&mut e,"export_diagram",json!({}));let mut target=project();call(&mut target,"import_diagram",json!({"xml":xml["xml"]}));assert_eq!(target.page_list().len(),3);target.undo();assert_eq!(target.page_list().len(),1);target.redo();assert_eq!(target.page_list().len(),3);
+        let before=target.stamp();assert!(execute(&mut target,"import_diagram",&json!({"xml":"<broken>"})).is_error);assert_eq!(target.stamp(),before);
+        assert!(execute(&mut target,"generate_diagram",&json!({"format":"text","text":"A -> B","refresh":"true"})).is_error);
+        for name in ["import_diagram","export_diagram","generate_diagram","quick_create_diagram"]{assert_eq!(crate::tools::definitions().iter().filter(|d|d.name==name).count(),1);assert!(crate::tools::uses_native_history(name));}
+    }
+}

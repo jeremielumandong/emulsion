@@ -38,7 +38,20 @@ impl Fragment {
             })
             .map(|node| node.id)
             .collect();
-        let included: HashSet<_> = roots.iter().flat_map(|id| doc.subtree(*id)).collect();
+        let mut included: HashSet<_> = roots.iter().flat_map(|id| doc.subtree(*id)).collect();
+        let components: Vec<_> = doc
+            .design
+            .component_links
+            .iter()
+            .filter(|(id, _)| included.contains(id))
+            .map(|(_, link)| link.component.clone())
+            .collect();
+        for name in components {
+            for root in doc.design.components[&name].variants.values() {
+                included.extend(doc.subtree(*root));
+            }
+        }
+        let sources = crate::design_components::source_roots(&doc.design);
         let nodes = doc
             .nodes
             .iter()
@@ -47,7 +60,7 @@ impl Fragment {
                 let mut n = n.clone();
                 if roots.contains(&n.id) {
                     n.parent = None;
-                    n.visible = true;
+                    n.visible = !sources.contains(&n.id);
                 }
                 if n.clip_to.is_some_and(|id| !included.contains(&id)) {
                     n.clip_to = None;
@@ -108,6 +121,7 @@ impl Fragment {
                     }
                     let target = match original.parent {
                         Some(parent) => Slot::top_of(Some(map[&parent])),
+                        None if !self.roots.contains(&original.id) => Slot::TOP,
                         None => Slot {
                             parent: slot.parent,
                             index: slot.index.saturating_add(
@@ -166,6 +180,8 @@ impl Fragment {
                 if !additions.motion.is_empty() {
                     design.duration_ms = design.duration_ms.max(additions.duration_ms);
                 }
+                crate::design_styles::merge_into(&mut design, &additions);
+                crate::design_components::merge_into(&mut design, &additions);
                 design.constraints.extend(additions.constraints);
                 design.frames.extend(additions.frames);
                 design.charts.extend(additions.charts);

@@ -14,6 +14,7 @@ gpui_kit::actions!(
         Save,
         SaveAs,
         Export,
+        Print,
         SynchronizeRaw,
         Undo,
         Redo,
@@ -216,7 +217,7 @@ macro_rules! make_binding {
 /// A binding for the action called `name`, or None for an unknown name.
 pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> {
     make_binding!(name, keys, ctx;
-        NewDocument, Open, Save, SaveAs, Export, SynchronizeRaw, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
+        NewDocument, Open, Save, SaveAs, Export, Print, SynchronizeRaw, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
         Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleDrawMode, ToggleQuickMask, ToggleTheme, ShowHome,
         ShowEditor, ShowBatch, ShowAbout, DeleteNode, NewLayer, DuplicateNode, GroupNodes, Ungroup, RenameLayer, MergeLayers, MergeVisible, FlattenImage, LinkLayers, UnlinkLayers, CopyLayerStyle, PasteLayerStyle, ApplyLayerMask, MoveNodeUp, MoveNodeDown,
         ToggleNodeVisible, NextBlendMode, PreviousBlendMode, Ask, ToolHand, ToolRotateView, RepeatFilter, ToolMove, ToolPen, ToolType, ToolVerticalType, ConvertToSmartObject, ConvertSmartToLayers, RasterizeLayer, ToolMarquee, ToolLasso,
@@ -266,6 +267,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "CloseTab", "ctrl-w"),
     ("workspace", "Save", "ctrl-s"),
     ("workspace", "SaveAs", "ctrl-shift-s"),
+    ("workspace", "Print", "ctrl-p"),
     // Photoshop: Export As, and Save for Web (Legacy).
     ("workspace", "Export", "ctrl-alt-shift-w"),
     ("workspace", "Export", "ctrl-alt-shift-s"),

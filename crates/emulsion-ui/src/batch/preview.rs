@@ -266,7 +266,13 @@ mod tests {
                 let mut ws = Workspace::new(window, cx);
                 ws.splash = false;
                 ws.screen = Screen::Batch;
+                ws.batch.develop.loupe = true;
                 ws.batch.current = Some(0);
+                ws.batch.items.push(BatchItem {
+                    path: "preview.png".into(),
+                    selected: false,
+                    thumb: None,
+                });
                 ws.batch.preview = Some((
                     "preview.png".into(),
                     None,

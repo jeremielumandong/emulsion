@@ -247,6 +247,7 @@ impl NewCanvas {
                 if let Some(editor) = &workspace.editor {
                     editor.update(cx, |editor, cx| {
                         editor.home_folder_on_save = Some(folder);
+                        editor.home_canvas_kind = Some(spec.kind);
                         if editor.draw_mode != (spec.kind == CanvasKind::Paint) {
                             editor.toggle_draw_mode(cx);
                         }

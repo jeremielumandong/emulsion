@@ -17,6 +17,8 @@ pub mod creative_library;
 pub mod design_bulk;
 pub mod design_charts;
 pub mod design_media;
+#[cfg(test)]
+mod design_styles_tests;
 pub mod diagram_data;
 pub mod diagram_import;
 pub mod drawio;
@@ -30,6 +32,7 @@ pub mod jxl;
 pub mod lensfun;
 pub mod ora;
 mod path_data;
+pub mod printing;
 pub mod project;
 pub mod project_animation;
 pub mod project_export;
@@ -87,6 +90,7 @@ pub const OPEN_EXTENSIONS: &[&str] = &[
     "ora",
     "emu",
     "drawio",
+    "xml",
     "vsdx",
     "vsdm",
     "vstx",
@@ -463,3 +467,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod design_components_tests;

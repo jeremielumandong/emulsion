@@ -34,6 +34,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod raw_mcp;
+mod project_mcp;
+mod presentation_mcp;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CardStatus {
@@ -82,6 +84,8 @@ pub struct Turn {
 
 #[derive(Default)]
 pub struct Assistant {
+    /// After a native Design/project tool, each operation owns its Undo step.
+    native_tool_steps: bool,
     pub(crate) reference: Option<crate::reference::AttachedReference>,
     pub(crate) reference_loading: bool,
     pub(crate) reference_collapsed: bool,
@@ -759,6 +763,7 @@ impl EditorView {
             }
             return Err(error);
         }
+        self.assistant.native_tool_steps = false;
         self.editor.begin(format!("Assistant: {}", short(&text)));
         let prompt = crate::reference::reference_prompt(&text, self.assistant.reference.as_ref());
         let sent = self
@@ -828,7 +833,7 @@ impl EditorView {
             "The assistant request ended before this change completed.",
             cx,
         );
-        if self.editor.in_transaction() {
+        if self.editor.in_transaction() && !self.assistant.native_tool_steps {
             self.editor.end();
         }
         let mut cost = cost;
@@ -991,7 +996,7 @@ impl EditorView {
                 let tool = strip_prefix(&tool_name);
                 let settings = app_state::settings(cx);
                 let auto = settings.approve_all
-                    || (settings.auto_apply && !tools::DESTRUCTIVE.contains(&tool.as_str()));
+                    || (settings.auto_apply && !tools::is_destructive(&tool));
                 if auto {
                     if let Some(s) = &mut self.assistant.session
                         && let Err(e) = s.allow(&request_id, &tool_use_id, &input)
@@ -1094,9 +1099,9 @@ impl EditorView {
         }
         let settings = app_state::settings(cx);
         let auto = settings.approve_all
-            || (settings.auto_apply && !tools::DESTRUCTIVE.contains(&call.name.as_str()));
+            || (settings.auto_apply && !tools::is_destructive(&call.name));
         let asks_itself = provider(cx).permission_prompts;
-        if !asks_itself && !auto && !tools::READ_ONLY.contains(&call.name.as_str()) {
+        if !asks_itself && !auto && !tools::is_read_only(&call.name) {
             let doc = self.editor.doc.clone();
             self.assistant.held_counter += 1;
             let id = format!("relay-{}", self.assistant.held_counter);
@@ -1157,7 +1162,7 @@ impl EditorView {
         // Discovery of brushes, fonts and the attached reference is independent
         // of document edits. Other reads can depend on preceding operations,
         // including list_models after a download or list_recipes after import.
-        !matches!(name, "list_brushes" | "list_fonts" | "get_reference_image")
+        !matches!(name, "list_brushes" | "list_fonts" | "get_reference_image" | "get_library" | "get_library_preview" | "cancel_library_export")
     }
 
     fn complete_tool_work(&mut self, generation: u64, cx: &mut Context<Self>) {
@@ -1210,6 +1215,49 @@ impl EditorView {
     fn execute_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
         let tool_generation = self.assistant.tool_generation;
         let ordered = Self::ordered_tool(&call.name);
+        if self.presentation_active() && !tools::is_read_only(&call.name)
+            && !emulsion_mcp::design_motion_tools::HOST_TOOLS.contains(&call.name.as_str())
+        {
+            call.reply(emulsion_mcp::ToolResult::error("End the presentation before editing the project."));
+            self.complete_tool_work(tool_generation, cx);
+            return;
+        }
+        let native_history = tools::uses_native_history(&call.name)
+            || (self.editor.kind().is_some() && matches!(call.name.as_str(), "undo" | "redo" | "save_document"));
+        if native_history && self.assistant.running && !self.assistant.native_tool_steps {
+            if self.editor.transaction_depth() > 1 {
+                call.reply(emulsion_mcp::ToolResult::error("Finish the active gesture before changing project structure or native Design assets."));
+                self.complete_tool_work(tool_generation, cx);
+                return;
+            }
+            self.editor.end();
+            self.assistant.native_tool_steps = true;
+        }
+        if emulsion_mcp::library_tools::is_tool(&call.name) {
+            let workspace = self.library_workspace.clone();
+            cx.spawn(async move |this, cx| {
+                let task = workspace.and_then(|workspace| workspace.update(cx, |ws, cx| {
+                    ws.library_mcp(&call.name, &call.arguments, cx)
+                }).ok());
+                let result = match task {
+                    Some(task) => task.await,
+                    None => emulsion_mcp::ToolResult::error("No live Library workspace is attached to this document"),
+                };
+                call.reply(result);
+                if ordered { this.update(cx, |this, cx| this.complete_tool_work(tool_generation, cx)).ok(); }
+            }).detach();
+            return;
+        }
+        if emulsion_mcp::design_motion_tools::HOST_TOOLS.contains(&call.name.as_str()) {
+            self.execute_presentation_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::project_tools::is_tool(&call.name)
+            || (self.editor.kind().is_some() && matches!(call.name.as_str(), "undo" | "redo" | "save_document"))
+        {
+            self.execute_project_host_tool(call, cx);
+            return;
+        }
         if emulsion_mcp::brush_tools::is_tool(&call.name) {
             // The catalog has its own revision and is shared by every document.
             // Once a transaction starts, report its actual result even if the
@@ -2545,6 +2593,74 @@ mod mutation_queue_tests {
                 view
             })
         })
+    }
+
+    #[gpui_kit::test]
+    fn project_mcp_pages_assets_save_and_undo_use_live_project_history(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        use serde_json::json;
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        view.update(cx, |view, _| {
+            view.editor = ProjectEditor::new_project(ProjectKind::Design, Document::new(64,64)).unwrap();
+            view.editor.begin("Assistant project request");
+        });
+        let (add, reply) = call(&relay, "add_project_page", json!({"name":"Second","width":96}));
+        view.update(cx, |view,cx|view.run_tool_now(add,cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"],false);
+        view.read_with(cx, |view,_| {
+            assert_eq!(view.editor.page_list().len(),2);
+            assert!(view.assistant.native_tool_steps);
+            assert!(!view.editor.in_transaction());
+        });
+        let (add,reply)=call(&relay,"add_text",json!({"text":"Native style source","x":4,"y":4,"size":12}));
+        view.update(cx, |view,cx|view.run_tool_now(add,cx));
+        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
+        let node=view.read_with(cx, |view,_|view.editor.doc.nodes.last().unwrap().id);
+        let (style,reply)=call(&relay,"create_design_style",json!({"node":node,"name":"Heading"}));
+        view.update(cx, |view,cx|view.run_tool_now(style,cx));
+        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
+        view.read_with(cx, |view,_|assert!(view.editor.doc.design.saved_styles.contains_key("Heading")));
+        let path=std::env::temp_dir().join(format!("emulsion-live-mcp-project-{}.emu",std::process::id()));
+        let (save,reply)=call(&relay,"save_document",json!({"path":path}));
+        view.update(cx, |view,cx|view.run_tool_now(save,cx));
+        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
+        let restored=emulsion_io::project::read(&path).unwrap();
+        assert_eq!(restored.pages.len(),2);
+        assert!(restored.pages[1].doc.design.saved_styles.contains_key("Heading"));
+        std::fs::remove_file(path).unwrap();
+        // Global Undo traverses the saved style, text insertion, then page creation.
+        for _ in 0..3 {
+            let (undo,reply)=call(&relay,"undo",json!({}));
+            view.update(cx, |view,cx|view.run_tool_now(undo,cx));
+            cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
+        }
+        view.read_with(cx, |view,_|assert_eq!(view.editor.page_list().len(),1));
+        let (redo,reply)=call(&relay,"redo",json!({}));
+        view.update(cx, |view,cx|view.run_tool_now(redo,cx));
+        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
+        view.read_with(cx, |view,_|assert_eq!(view.editor.page_list().len(),2));
+    }
+
+    #[gpui_kit::test]
+    fn project_mcp_does_not_close_nested_user_gesture(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        let relay=Relay::start().unwrap();
+        let view=painting(cx,false);
+        view.update(cx, |view,_| {
+            view.editor=ProjectEditor::new_project(ProjectKind::Design,Document::new(64,64)).unwrap();
+            view.editor.begin("Assistant");
+            view.editor.begin("Pointer gesture");
+        });
+        let (add,reply)=call(&relay,"add_project_page",serde_json::json!({"name":"No"}));
+        view.update(cx, |view,cx|view.run_tool_now(add,cx));
+        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],true);
+        view.read_with(cx, |view,_| {
+            assert_eq!(view.editor.transaction_depth(),2);
+            assert_eq!(view.editor.page_list().len(),1);
+            assert!(!view.assistant.native_tool_steps);
+        });
     }
 
     #[gpui_kit::test]

@@ -32,6 +32,27 @@ fn node_label(doc: &Document, id: NodeId) -> String {
 /// Run `name` with `args` against `editor`. Every change goes through the
 /// Command API for document edits; brush tools commit the independent catalog.
 pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
+    if let Some(result) = crate::diagram_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_motion_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_layout_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_appearance_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_asset_tools::execute(editor, name, args) {
+        return result;
+    }
+    if crate::project_tools::is_tool(name) {
+        return err("Project tools require the live Emulsion workspace relay");
+    }
+    if crate::library_tools::is_tool(name) {
+        return err("Library tools require the live Emulsion workspace relay");
+    }
     if crate::brush_tools::is_tool(name) {
         return crate::brush_tools::execute(name, args);
     }
@@ -1399,6 +1420,9 @@ fn doc_raster(doc: &Document) -> Raster {
 }
 
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
+    if name == "import_image" {
+        return crate::image_import_tools::plan(doc, args);
+    }
     if crate::raw_tools::HEAVY.contains(&name) {
         return crate::raw_tools::plan(doc, name, args);
     }
@@ -3954,6 +3978,12 @@ pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, T
         };
     }
     match name {
+        "list_diagram_stencils" | "describe_diagram" => {
+            let mut editor = Editor::new(doc.clone(), None);
+            let result = crate::diagram_tools::execute(&mut editor, name, args)
+                .unwrap_or_else(|| err(format!("not an inspection tool: {name}")));
+            if result.is_error { Err(result) } else { Ok(result) }
+        }
         "get_raw_preview" => crate::raw_preview::preview(doc, args),
         "describe_raw" => crate::raw_tools::describe(doc, args),
         "get_view" => view(doc, args),

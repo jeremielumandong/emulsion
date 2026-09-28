@@ -84,7 +84,7 @@ fn transform(s: &str) -> DAffine2 {
 }
 
 /// `#rgb`, `#rrggbb`, `rgb(r,g,b)`, a few names, or `none`.
-fn color(s: &str) -> Option<Option<[u8; 4]>> {
+pub(crate) fn color(s: &str) -> Option<Option<[u8; 4]>> {
     let s = s.trim();
     if s.is_empty() {
         return None;

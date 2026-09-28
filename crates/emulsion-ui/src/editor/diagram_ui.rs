@@ -19,6 +19,9 @@ pub(super) struct DiagramUi {
     source: Option<Endpoint>,
     reconnect: Option<(NodeId, bool)>,
     pub(super) grid: bool,
+    property_tab: usize,
+    import_notes: Vec<String>,
+    collapsed_categories: std::collections::HashSet<&'static str>,
 }
 impl Default for DiagramUi {
     fn default() -> Self {
@@ -30,6 +33,13 @@ impl Default for DiagramUi {
             source: None,
             reconnect: None,
             grid: true,
+            property_tab: 0,
+            import_notes: Vec::new(),
+            collapsed_categories: diagram::stencils::CATEGORIES
+                .iter()
+                .copied()
+                .filter(|c| !matches!(*c, "General" | "Flowchart"))
+                .collect(),
         }
     }
 }
@@ -188,12 +198,20 @@ impl EditorView {
                         .map(|ids| (ids, imported.warnings))
                 }) {
                     Ok((ids, warnings)) => {
+                        this.diagram_import_notes(warnings.clone());
                         this.after_change(cx);
                         this.set_status(
                             format!(
                                 "Imported {} editable page(s). {}",
                                 ids.len(),
-                                warnings.join(" ")
+                                if warnings.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(
+                                        "{} import notes are available in the Shapes drawer.",
+                                        warnings.len()
+                                    )
+                                }
                             ),
                             !warnings.is_empty(),
                             cx,
@@ -230,6 +248,27 @@ impl EditorView {
             let result=cx.background_spawn(async move{emulsion_io::drawio::write(&project,&output)}).await;
             this.update(cx,|this,cx|match result{Ok(())=>this.set_status(format!("Exported editable diagram to {}. Save the .emu project to retain history and all native effects.",path.display()),false,cx),Err(e)=>this.set_status(e.to_string(),true,cx)}).ok();
         }).detach();
+    }
+
+    pub(crate) fn diagram_import_notes(&mut self, notes: Vec<String>) {
+        self.diagram_ui.import_notes = notes;
+    }
+
+    fn show_diagram_import_notes(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let notes = self.diagram_ui.import_notes.clone();
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog.title("Diagram import notes").child(
+                div()
+                    .id("diagram-import-notes-body")
+                    .max_h(px(420.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .text_size(px(12.))
+                    .children(notes.iter().map(|note| div().child(note.clone()))),
+            )
+        });
     }
 
     pub(super) fn is_diagram(&self) -> bool {
@@ -464,7 +503,11 @@ impl EditorView {
             Err(e) => self.set_status(e, true, cx),
         }
     }
-    pub(crate) fn insert_diagram_shape(&mut self, kind: ShapeKind, cx: &mut Context<Self>) {
+    pub(crate) fn insert_diagram_stencil(
+        &mut self,
+        stencil: diagram::stencils::Stencil,
+        cx: &mut Context<Self>,
+    ) {
         if !self.prepare_page_action(cx) {
             return;
         }
@@ -474,14 +517,14 @@ impl EditorView {
             .diagram
             .as_ref()
             .map_or(0, |d| d.shapes.len());
-        let (w, h) = if kind.is_container() {
+        let (w, h) = if stencil.kind.is_container() {
             (420., 280.)
         } else {
             (140., 80.)
         };
         let x = (self.editor.doc.width as f64 / 2. - w / 2. + (count % 5) as f64 * 24.).max(20.);
         let y = (self.editor.doc.height as f64 / 2. - h / 2. + (count % 5) as f64 * 24.).max(20.);
-        match diagram::add_shape(&mut self.editor, kind, [x, y, w, h], kind.label()) {
+        match stencil.insert(&mut self.editor, [x, y, w, h]) {
             Ok(id) => {
                 self.set_layer_selection(vec![id], Some(id));
                 self.after_change(cx);
@@ -794,6 +837,164 @@ impl EditorView {
             cx,
         );
     }
+    pub(super) fn diagram_inspector(
+        &mut self,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut tabs = div()
+            .h(px(38.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(3.))
+            .px(px(6.))
+            .border_b_1()
+            .border_color(p.line);
+        for (index, label) in ["Style", "Text", "Arrange", "Data"].into_iter().enumerate() {
+            tabs = tabs.child(
+                Button::new(("diagram-property-tab", index))
+                    .label(label)
+                    .xsmall()
+                    .ghost()
+                    .selected(self.diagram_ui.property_tab == index)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.diagram_ui.property_tab = index;
+                        cx.notify();
+                    })),
+            );
+        }
+        let mut panel = div()
+            .id("diagram-inspector")
+            .test_support()
+            .flex()
+            .flex_col()
+            .child(tabs);
+        match self.diagram_ui.property_tab {
+            1 => {
+                panel = panel.child(
+                    Button::new("diagram-edit-text")
+                        .label("Edit label…")
+                        .small()
+                        .ghost()
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.diagram_properties(window, cx)),
+                        ),
+                );
+                panel = if let Some(properties) = self.text_properties(window, cx) {
+                    panel.child(properties)
+                } else {
+                    panel.child(
+                        div()
+                            .p_3()
+                            .text_size(px(11.))
+                            .child("Select a shape or connector to format its label."),
+                    )
+                };
+            }
+            2 => {
+                let mut layouts = div()
+                    .p_3()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(self.alignment_controls(p, cx));
+                for (index, layout) in Layout::ALL.into_iter().enumerate() {
+                    layouts = layouts.child(
+                        Button::new(("diagram-inspector-layout", index))
+                            .label(layout.label())
+                            .small()
+                            .outline()
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.layout_diagram(layout, cx)),
+                            ),
+                    );
+                }
+                panel = panel.child(layouts).child(self.inspector(p, window, cx));
+            }
+            3 => {
+                let mut data = div()
+                    .p_3()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .text_size(px(11.5))
+                    .child(
+                        Button::new("diagram-edit-data")
+                            .label("Edit label and data…")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.diagram_properties(window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("diagram-data-condition")
+                            .label("Conditional fill…")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.diagram_conditional_fill(window, cx)
+                            })),
+                    );
+                if let Some(shape) = self
+                    .diagram_object()
+                    .and_then(|id| self.editor.doc.diagram.as_ref()?.shapes.get(&id))
+                {
+                    for (key, value) in &shape.data {
+                        if !key.starts_with("emulsion_") && key != "drawio_geometry_style" {
+                            data = data.child(div().child(format!("{key}: {value}")));
+                        }
+                    }
+                }
+                panel = panel.child(data);
+            }
+            _ => {
+                panel = panel
+                    .child(self.diagram_selection_panel(p, cx))
+                    .children(self.shape_properties(window, cx));
+            }
+        }
+        panel.into_any_element()
+    }
+
+    pub(crate) fn diagram_fill(&mut self, color: [u8; 4], cx: &mut Context<Self>) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let Some(model) = self.editor.doc.diagram.as_ref() else {
+            return;
+        };
+        let commands = self
+            .selected_layer_roots()
+            .iter()
+            .filter_map(|id| {
+                let shape = model.shapes.get(id).or_else(|| {
+                    model
+                        .shapes
+                        .values()
+                        .find(|s| s.body == *id || s.label == *id)
+                })?;
+                let NodeKind::Path { path, style, .. } = &self.editor.doc.node(shape.body)?.kind
+                else {
+                    return None;
+                };
+                let mut style = *style;
+                style.fill = Some(color);
+                style.fill_paint = emulsion_raster::vector::PathPaint::Solid;
+                Some(Command::SetPath {
+                    id: shape.body,
+                    path: path.clone(),
+                    style,
+                })
+            })
+            .collect::<Vec<_>>();
+        if !commands.is_empty() {
+            self.execute_layer_commands("Diagram fill", commands, cx);
+        }
+    }
+
     pub(super) fn diagram_selection_panel(
         &mut self,
         p: &Palette,
@@ -809,6 +1010,54 @@ impl EditorView {
             .text_size(px(11.5))
             .child(div().font_weight(FontWeight::MEDIUM).child("Selection"));
         if let Some(id) = self.diagram_object() {
+            if self
+                .editor
+                .doc
+                .diagram
+                .as_ref()
+                .is_some_and(|d| d.shapes.contains_key(&id))
+            {
+                let mut swatches = div().flex().gap(px(4.));
+                for (index, color) in [
+                    [255, 255, 255, 255],
+                    [233, 239, 251, 255],
+                    [218, 232, 252, 255],
+                    [213, 232, 212, 255],
+                    [255, 242, 204, 255],
+                    [248, 206, 204, 255],
+                    [225, 213, 231, 255],
+                    [0, 0, 0, 0],
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let title = if color[3] == 0 {
+                        "Transparent".to_string()
+                    } else {
+                        format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2])
+                    };
+                    swatches = swatches.child(
+                        Button::new(("diagram-fill", index))
+                            .accessibility_label(title.clone())
+                            .tooltip(title)
+                            .xsmall()
+                            .outline()
+                            .p_0()
+                            .size(px(23.))
+                            .child(
+                                div()
+                                    .size(px(15.))
+                                    .bg(gpui::rgba(u32::from_be_bytes(color)))
+                                    .border_1()
+                                    .border_color(p.line),
+                            )
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.diagram_fill(color, cx)),
+                            ),
+                    );
+                }
+                content = content.child("Fill").child(swatches);
+            }
             content = content.child(
                 Button::new("diagram-properties")
                     .label("Edit label and properties…")
@@ -1061,9 +1310,7 @@ impl EditorView {
                 );
             }
         }
-        content
-            .child(self.alignment_controls(p, cx))
-            .into_any_element()
+        content.into_any_element()
     }
 
     pub(super) fn diagram_drawer(
@@ -1129,28 +1376,61 @@ impl EditorView {
             .px(px(10.))
             .py(px(8.))
             .child(Styled::h(Input::new(&search).small(), px(26.)));
-        for (label, kinds) in [
-            ("General / Flowchart", &ShapeKind::ALL[..7]),
-            ("UML / Entity / Containers", &ShapeKind::ALL[7..]),
-        ] {
-            let kinds = kinds
+        if !self.diagram_ui.import_notes.is_empty() {
+            content = content.child(
+                Button::new("diagram-import-notes")
+                    .label(format!(
+                        "Import notes ({})",
+                        self.diagram_ui.import_notes.len()
+                    ))
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_diagram_import_notes(window, cx)
+                    })),
+            );
+        }
+        for (category_index, &label) in diagram::stencils::CATEGORIES.iter().enumerate() {
+            let stencils = diagram::stencils::STENCILS
                 .iter()
                 .copied()
-                .filter(|kind| kind.label().to_lowercase().contains(&query))
+                .enumerate()
+                .filter(|(_, stencil)| stencil.category == label && stencil.matches(&query))
                 .collect::<Vec<_>>();
-            if kinds.is_empty() {
+            if stencils.is_empty() {
+                continue;
+            }
+            let collapsed =
+                query.is_empty() && self.diagram_ui.collapsed_categories.contains(label);
+            content = content.child(
+                Button::new(("diagram-stencil-category", category_index))
+                    .label(format!(
+                        "{} {label} ({})",
+                        if collapsed { "›" } else { "⌄" },
+                        stencils.len()
+                    ))
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.diagram_ui.collapsed_categories.remove(label) {
+                            this.diagram_ui.collapsed_categories.insert(label);
+                        }
+                        cx.notify();
+                    })),
+            );
+            if collapsed {
                 continue;
             }
             let mut grid = div().id(label).grid().grid_cols(4).gap(px(4.));
-            for kind in kinds {
-                let i = ShapeKind::ALL.iter().position(|k| *k == kind).unwrap();
+            for (i, stencil) in stencils {
                 let ink = p.ink;
                 let glyph = canvas(
                     |_, _, _| (),
                     move |bounds, _, window, _| {
                         let x = f32::from(bounds.left()) + 5.;
                         let y = f32::from(bounds.top()) + 8.;
-                        let path = kind.path([
+                        let path = stencil.path([
                             x as f64,
                             y as f64,
                             (f32::from(bounds.size.width) - 10.) as f64,
@@ -1176,26 +1456,19 @@ impl EditorView {
                 .size_full();
                 grid = grid.child(
                     Button::new(("diagram-shape", i))
-                        .accessibility_label(kind.label())
-                        .tooltip(kind.label())
+                        .accessibility_label(stencil.label)
+                        .tooltip(format!("{} · {}", stencil.label, stencil.category))
                         .outline()
                         .p_0()
                         .w_full()
                         .h(px(50.))
                         .child(glyph)
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.insert_diagram_shape(kind, cx)),
-                        ),
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.insert_diagram_stencil(stencil, cx)
+                        })),
                 );
             }
-            content = content
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(label),
-                )
-                .child(grid);
+            content = content.child(grid);
         }
         content=content.child(Button::new("diagram-connect").label(if self.diagram_ui.connecting{"Cancel connection"}else{"Connect shapes"}).selected(self.diagram_ui.connecting).outline().on_click(cx.listener(|this,_,_,cx|{let active=this.diagram_ui.connecting;this.set_tool(Tool::Move,cx);this.diagram_cancel_connection();this.diagram_ui.connecting= !active;this.set_status(if active{"Connection cancelled."}else{"Click a source shape, then a destination. Click near an edge midpoint for a fixed port."},false,cx);})));
         let owner = cx.weak_entity();

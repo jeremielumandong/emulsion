@@ -62,6 +62,15 @@ impl EditorView {
                         this.design_video_dialog(false, window, cx)
                     })),
             )
+            .child(
+                Button::new("design-playback-setup")
+                    .label("Video playback setup…")
+                    .small()
+                    .ghost()
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.playback_setup_dialog(window, cx)),
+                    ),
+            )
             .when(editing, |d| {
                 d.child(
                     Button::new("design-youtube-edit")

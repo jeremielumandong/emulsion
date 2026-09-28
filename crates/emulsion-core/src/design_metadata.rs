@@ -79,9 +79,18 @@ impl Default for Motion {
         }
     }
 }
+pub type PageTransition = Effect;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Design {
+    pub speaker_notes: String,
+    pub page_transition: PageTransition,
+    pub transition_ms: u32,
+    pub saved_styles: BTreeMap<String, crate::design_styles::SavedStyle>,
+    pub style_links: BTreeMap<NodeId, String>,
+    pub components: BTreeMap<String, crate::design_components::Definition>,
+    pub component_links: BTreeMap<NodeId, crate::design_components::Instance>,
     pub media: BTreeMap<NodeId, crate::design::media::YouTube>,
     pub charts: BTreeMap<NodeId, crate::design_charts::Chart>,
     pub frames: BTreeMap<NodeId, crate::design_layout::Frame>,
@@ -93,6 +102,13 @@ pub struct Design {
 impl Default for Design {
     fn default() -> Self {
         Self {
+            speaker_notes: String::new(),
+            page_transition: PageTransition::None,
+            transition_ms: 400,
+            saved_styles: BTreeMap::new(),
+            style_links: BTreeMap::new(),
+            components: BTreeMap::new(),
+            component_links: BTreeMap::new(),
             media: BTreeMap::new(),
             charts: BTreeMap::new(),
             frames: BTreeMap::new(),
@@ -108,6 +124,13 @@ impl Design {
         self == &Self::default()
     }
     pub fn validate(&self, doc: &Document) -> Result<(), String> {
+        if self.speaker_notes.chars().count() > 20_000
+            || !(100..=3000).contains(&self.transition_ms)
+        {
+            return Err("Speaker notes or page transition duration exceeds its limit.".into());
+        }
+        crate::design_styles::validate(self, doc)?;
+        crate::design_components::validate(self, doc)?;
         crate::design::media::validate(&self.media, doc)?;
         if self.charts.len() > 256 {
             return Err("A page supports up to 256 charts and tables.".into());
@@ -148,6 +171,18 @@ impl Design {
         Ok(())
     }
     pub fn retain_nodes(&mut self, ids: &HashSet<NodeId>) {
+        self.style_links.retain(|id, _| ids.contains(id));
+        self.components.retain(|_, definition| {
+            definition.variants.retain(|_, id| ids.contains(id));
+            !definition.variants.is_empty()
+        });
+        self.component_links.retain(|id, link| {
+            ids.contains(id)
+                && self
+                    .components
+                    .get(&link.component)
+                    .is_some_and(|d| d.variants.contains_key(&link.variant))
+        });
         self.media
             .retain(|id, video| ids.contains(id) && ids.contains(&video.boundary));
         self.charts.retain(|id, _| ids.contains(id));
@@ -162,11 +197,35 @@ impl Design {
     pub fn fragment(&self, ids: &HashSet<NodeId>) -> Self {
         let mut out = self.clone();
         out.retain_nodes(ids);
+        out.saved_styles
+            .retain(|name, _| out.style_links.values().any(|link| link == name));
         out
     }
     pub fn remap(&self, map: &HashMap<NodeId, NodeId>) -> Self {
         let id = |id| map.get(&id).copied().unwrap_or(id);
         Self {
+            style_links: self
+                .style_links
+                .iter()
+                .map(|(key, value)| (id(*key), value.clone()))
+                .collect(),
+            components: self
+                .components
+                .iter()
+                .map(|(key, value)| {
+                    let mut value = value.clone();
+                    value
+                        .variants
+                        .values_mut()
+                        .for_each(|root| *root = id(*root));
+                    (key.clone(), value)
+                })
+                .collect(),
+            component_links: self
+                .component_links
+                .iter()
+                .map(|(key, value)| (id(*key), value.clone()))
+                .collect(),
             media: self
                 .media
                 .iter()
@@ -437,6 +496,42 @@ pub fn at_time(source: &Document, time_ms: u32) -> Result<Document, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn presentation_metadata_defaults_bounds_and_undo() {
+        let defaults: super::Design = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.transition_ms, 400);
+        assert_eq!(defaults.page_transition, super::PageTransition::None);
+        let mut editor = crate::Editor::new(crate::Document::new(200, 100), None);
+        let mut design = defaults.clone();
+        design.speaker_notes = "Presenter notes 日本語".into();
+        design.page_transition = super::PageTransition::Slide;
+        design.transition_ms = 1200;
+        editor
+            .execute(crate::Command::SetDesign {
+                design: Box::new(design.clone()),
+            })
+            .unwrap();
+        assert_eq!(editor.doc.design, design);
+        editor.undo();
+        assert_eq!(editor.doc.design, defaults);
+        editor.redo();
+        let before = editor.doc.clone();
+        design.speaker_notes = "x".repeat(20_001);
+        assert!(
+            editor
+                .execute(crate::Command::SetDesign {
+                    design: Box::new(design.clone())
+                })
+                .is_err()
+        );
+        assert_eq!(editor.doc, before);
+        design.speaker_notes.clear();
+        design.transition_ms = 99;
+        assert!(design.validate(&editor.doc).is_err());
+        design.transition_ms = 3001;
+        assert!(design.validate(&editor.doc).is_err());
+    }
+
     use super::*;
     use crate::{Node, command::Slot, fragment::Fragment};
     use std::sync::Arc;

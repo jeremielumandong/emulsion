@@ -39,12 +39,13 @@ impl Workspace {
                             if let Some(editor) = &this.editor {
                                 editor.update(cx, |e, cx| {
                                     let message = if !warnings.is_empty() {
-                                        format!("Imported with notes: {}", warnings.join(" "))
+                                        format!("Imported with {} notes. Review Import notes in the Shapes drawer.", warnings.len())
                                     } else if is_pack {
                                         "Package installed in your local library. This is an editable copy.".into()
                                     } else {
                                         "Imported editable diagram. Save as an Emulsion project to retain all page history.".into()
                                     };
+                                    e.diagram_import_notes(warnings.clone());
                                     e.set_status(message, !warnings.is_empty(), cx);
                                 });
                             }

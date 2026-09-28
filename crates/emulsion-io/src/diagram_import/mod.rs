@@ -24,13 +24,30 @@ fn error(message: impl Into<String>) -> IoError {
     IoError::Manifest(message.into())
 }
 pub fn is_diagram(path: &Path) -> bool {
+    if path
+        .extension()
+        .is_some_and(|s| s.eq_ignore_ascii_case("svg"))
+    {
+        // A bounded header probe keeps ordinary SVG artwork on its existing path.
+        let mut header = Vec::new();
+        return std::fs::File::open(path).ok().is_some_and(|file| {
+            file.take(8192).read_to_end(&mut header).is_ok()
+                && String::from_utf8_lossy(&header).contains("<svg")
+                && String::from_utf8_lossy(&header).contains("content=")
+        });
+    }
     path.extension().and_then(|s| s.to_str()).is_some_and(|s| {
         [
             "drawio",
+            "xml",
             "vsdx",
             "vsdm",
             "vstx",
             "vssx",
+            "vssm",
+            "vstm",
+            "vss",
+            "vst",
             "vdx",
             "vsx",
             "lucid",
@@ -48,12 +65,12 @@ pub fn read(path: &Path) -> Result<Imported> {
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
-        "vsdx" | "vsdm" | "vstx" | "vssx" => visio::package(path),
+        "vsdx" | "vsdm" | "vstx" | "vssx" | "vssm" | "vstm" => visio::package(path),
         "vdx" | "vsx" => visio::from_xml(&read_text(path)?),
         "lucid" => lucid::package(path),
         "lucidjson" | "json" => lucid::from_json(&read_text(path)?),
-        "vsd" => Err(error(
-            "Legacy binary .vsd needs conversion to .vsdx or .vdx. Open in Visio or LibreOffice and save an XML drawing.",
+        "vsd" | "vss" | "vst" => Err(error(
+            "Legacy binary Visio files need conversion in Visio to .vsdx, .vssx, or .vstx before editable import.",
         )),
         "xml" => {
             let text = read_text(path)?;

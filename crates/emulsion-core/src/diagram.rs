@@ -15,6 +15,9 @@ use std::{
 mod builder;
 pub use builder::Builder;
 
+#[path = "diagram_stencils.rs"]
+pub mod stencils;
+
 #[path = "diagram_layout.rs"]
 mod layout;
 #[path = "diagram_router.rs"]
@@ -157,7 +160,8 @@ impl Port {
     fn valid(self) -> bool {
         match self {
             Self::Custom { x, y } => {
-                x.is_finite() && y.is_finite() && (0. ..=1.).contains(&x) && (0. ..=1.).contains(&y)
+                // Imported connection points may lie outside the shape perimeter.
+                x.is_finite() && y.is_finite() && x.abs() <= 100. && y.abs() <= 100.
             }
             _ => true,
         }
@@ -798,7 +802,7 @@ fn add_shape_inner(
     label: &str,
     own_transaction: bool,
 ) -> Result<NodeId, String> {
-    if !valid_bounds(bounds) || label.chars().count() > 2000 {
+    if !valid_bounds(bounds) || label.chars().count() > crate::text::MAX_CHARS {
         return Err("Invalid shape size or label.".into());
     }
     if own_transaction && editor.in_transaction() {
@@ -947,7 +951,7 @@ fn connect_inner(
         || !diagram.shapes.contains_key(&target.shape)
         || !source.port.valid()
         || !target.port.valid()
-        || label.chars().count() > 2000
+        || label.chars().count() > crate::text::MAX_CHARS
     {
         return Err("Choose existing shapes and valid ports.".into());
     }

@@ -339,7 +339,7 @@ pub fn path_supported(style: &PathStyle) -> bool {
 
 pub fn text_supported(spec: &emulsion_core::text::TextSpec) -> bool {
     spec.color[3] == 255
-        && spec.warp.is_identity()
+        && (spec.warp.is_identity() || emulsion_core::text::vector_paths(spec).is_some())
         && spec.text_path.is_none()
         && !spec.vertical
         && spec.runs.iter().all(|run| run.style.color[3] == 255)

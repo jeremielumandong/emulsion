@@ -1,4 +1,6 @@
 //! Portable cloud payloads retain native history and fingerprinted RAW originals.
+#[path = "cloud_home_metadata.rs"]
+pub mod home;
 use anyhow::{Context, Result, ensure};
 use emulsion_cloud::{
     Store,
@@ -94,11 +96,23 @@ pub fn enqueue_saved(path: &Path) -> Result<bool> {
     enqueue(&store, &source)
 }
 pub fn enqueue(store: &Store, source: &Path) -> Result<bool> {
+    let catalog = home::catalog(&crate::creative_library::root())?;
+    enqueue_with_home(
+        store,
+        source,
+        home::metadata(&catalog, &source.canonicalize()?),
+    )
+}
+fn enqueue_with_home(
+    store: &Store,
+    source: &Path,
+    home: Option<emulsion_cloud::HomeMetadata>,
+) -> Result<bool> {
     private_dir(&store.root)?;
     let temp = tempfile::tempdir_in(&store.root)?;
     let payload = temp.path().join("payload.zip");
     pack(source, &payload)?;
-    store.enqueue(source, &payload)
+    store.enqueue_with_home(source, &payload, home)
 }
 
 pub fn pack(source: &Path, destination: &Path) -> Result<()> {

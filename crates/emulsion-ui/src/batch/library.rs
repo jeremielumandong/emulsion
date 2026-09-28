@@ -8,13 +8,25 @@ use gpui_kit::component::{
 };
 #[derive(Default)]
 pub(super) struct LibraryUi {
-    catalog: Catalog,
-    loaded: bool,
-    loading: bool,
-    search: Option<Entity<InputState>>,
-    collection: Option<u64>,
-    rating: u8,
-    flagged: bool,
+    pub(super) catalog: Catalog,
+    pub(super) source_paths: Option<Vec<PathBuf>>,
+    pub(super) raw_only: bool,
+    pub(super) unedited: bool,
+    pub(super) reverse: bool,
+    pub(super) capture_sort: bool,
+    pub(super) info_busy: bool,
+    metadata_all_pending: bool,
+    pub(super) metadata: std::collections::HashMap<PathBuf, Option<emulsion_core::document::ImageInfo>>,
+    pub(super) loaded: bool,
+    pub(super) loading: bool,
+    pub(super) search: Option<Entity<InputState>>,
+    pub(super) search_subscription: Option<Subscription>,
+    pub(super) collection: Option<u64>,
+    pub(super) rating: u8,
+    pub(super) flagged: bool,
+    pub(super) rejected: bool,
+    pub(super) color_label: u8,
+    pub(super) focus: Option<FocusHandle>,
 }
 impl Workspace {
     pub(crate) fn refresh_imported_photo_library(&mut self, cx: &mut Context<Self>) {
@@ -37,6 +49,9 @@ impl Workspace {
                     Ok(c) => {
                         if c.revision >= this.batch.library.catalog.revision {
                             this.batch.library.catalog = c;
+                        }
+                        if this.batch.items.is_empty() {
+                            this.library_show(cx);
                         }
                     }
                     Err(e) => this.batch.note = Some((e.to_string().into(), true)),
@@ -61,6 +76,14 @@ impl Workspace {
                     Ok((c, _)) => {
                         if c.revision >= this.batch.library.catalog.revision {
                             this.batch.library.catalog = c;
+                        }
+                        if this.batch.running.is_none()
+                            && (this.batch.library.rating > 0
+                                || this.batch.library.flagged
+                                || this.batch.library.rejected
+                                || this.batch.library.color_label > 0)
+                        {
+                            this.library_show(cx);
                         }
                         this.batch.note = Some(("Local library updated.".into(), false));
                     }
@@ -87,7 +110,7 @@ impl Workspace {
         }
         paths
     }
-    fn library_show(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn library_show(&mut self, cx: &mut Context<Self>) {
         if self.batch.running.is_some() {
             self.batch.note = Some((
                 "Finish the export before changing collections.".into(),
@@ -106,28 +129,95 @@ impl Workspace {
             .collection
             .and_then(|id| state.catalog.collections.iter().find(|c| c.id == id));
         let mut missing = 0;
-        let paths = state
-            .catalog
-            .assets
-            .iter()
-            .filter(|a| {
-                a.kind == AssetKind::Image
-                    && a.rating >= state.rating
-                    && (!state.flagged || a.flagged)
-                    && members.is_none_or(|c| c.assets.contains(&a.id))
+        let source = state.source_paths.clone().unwrap_or_else(|| {
+            state
+                .catalog
+                .assets
+                .iter()
+                .filter(|a| a.kind == AssetKind::Image)
+                .map(|a| a.path.clone())
+                .collect()
+        });
+        let mut paths = source
+            .into_iter()
+            .filter(|path| {
+                let asset = state
+                    .catalog
+                    .assets
+                    .iter()
+                    .find(|a| a.path == *path && a.kind == AssetKind::Image);
+                let raw = emulsion_io::raw::is_raw(path);
+                let edited =
+                    raw && emulsion_io::raw_settings::sidecar_path(path).is_ok_and(|p| p.exists());
+                asset.map_or(0, |a| a.rating) >= state.rating
+                    && (!state.flagged || asset.is_some_and(|a| a.flagged))
+                    && (!state.rejected || asset.is_some_and(|a| a.rejected))
+                    && (state.color_label == 0
+                        || asset.is_some_and(|a| a.color_label == state.color_label))
+                    && (!state.raw_only || raw)
+                    && (!state.unedited || !edited)
+                    && members.is_none_or(|c| asset.is_some_and(|a| c.assets.contains(&a.id)))
                     && (query.is_empty()
-                        || a.name.to_lowercase().contains(&query)
-                        || a.tags.iter().any(|t| t.to_lowercase().contains(&query)))
+                        || path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_lowercase()
+                            .contains(&query)
+                        || asset.is_some_and(|a| {
+                            a.tags.iter().any(|t| t.to_lowercase().contains(&query))
+                        }))
             })
-            .filter_map(|a| {
-                if a.path.is_file() {
-                    Some(a.path.clone())
+            .filter(|p| {
+                if p.is_file() {
+                    true
                 } else {
                     missing += 1;
-                    None
+                    false
                 }
             })
             .collect::<Vec<_>>();
+        paths.sort_by_key(|p| {
+            let name = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase();
+            let taken = if state.capture_sort {
+                state
+                    .metadata
+                    .get(p)
+                    .and_then(|v| v.as_ref())
+                    .map(|v| v.taken.clone())
+                    .filter(|s| !s.is_empty())
+            } else {
+                None
+            };
+            (
+                state.capture_sort && taken.is_none(),
+                taken.unwrap_or_default(),
+                name,
+            )
+        });
+        if state.reverse {
+            paths.reverse();
+        }
+        let source_paths = state.source_paths.clone();
+        let out_dir = self.batch.out_dir.clone();
+        let loupe = self.batch.develop.loupe;
+        let compare = self.batch.develop.compare;
+        let selected: HashSet<_> = self
+            .batch
+            .items
+            .iter()
+            .filter(|i| i.selected)
+            .map(|i| i.path.clone())
+            .collect();
+        let current = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone());
         let folder = paths
             .first()
             .and_then(|p| p.parent())
@@ -135,13 +225,24 @@ impl Workspace {
             .or_else(|| self.batch.folder.clone())
             .unwrap_or_else(catalog::root);
         self.load_batch(folder, paths, cx);
+        self.batch.library.source_paths = source_paths;
+        self.batch.develop.loupe = loupe;
+        self.batch.develop.compare = compare;
+        if out_dir.is_some() {
+            self.batch.out_dir = out_dir;
+        }
+        for item in &mut self.batch.items {
+            item.selected = selected.contains(&item.path);
+        }
+        self.batch.current =
+            current.and_then(|p| self.batch.items.iter().position(|i| i.path == p));
         if missing > 0 {
             self.batch.note=Some((format!("{missing} missing file(s) omitted. Relink their entries from Design asset properties.").into(),true));
         }
     }
     fn library_metadata(&mut self, collection: bool, window: &mut Window, cx: &mut Context<Self>) {
         let paths = self.library_paths();
-        if paths.is_empty() {
+        if paths.is_empty() && !collection {
             self.batch.note = Some(("Select one or more photos first.".into(), true));
             cx.notify();
             return;
@@ -243,6 +344,9 @@ impl Workspace {
                                             a.tags = tags.clone();
                                             a.rating = rating;
                                             a.flagged = flagged;
+                                            if flagged {
+                                                a.rejected = false;
+                                            }
                                         }
                                     }
                                     if collection {
@@ -287,50 +391,23 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.library_load(cx);
+        self.library_read_metadata(false, cx);
+        self.batch
+            .library
+            .focus
+            .get_or_insert_with(|| cx.focus_handle());
         if self.batch.library.search.is_none() {
-            self.batch.library.search = Some(
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search names / keywords")),
-            );
+            let input =
+                cx.new(|cx| InputState::new(window, cx).placeholder("Search names / keywords"));
+            self.batch.library.search_subscription =
+                Some(cx.subscribe(&input, |this, _, event, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.library_show(cx);
+                    }
+                }));
+            self.batch.library.search = Some(input);
         }
-        let owner = cx.weak_entity();
-        let collections = self.batch.library.catalog.collections.clone();
         let selected = self.batch.library.collection;
-        let title = collections
-            .iter()
-            .find(|c| Some(c.id) == selected)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| "All library photos".into());
-        let menu = Button::new("library-collection")
-            .label(format!("{title} ▾"))
-            .small()
-            .outline()
-            .dropdown_menu(move |mut menu, _, _| {
-                let all = owner.clone();
-                menu = menu.item(PopupMenuItem::new("All library photos").on_click(
-                    move |_, _, cx| {
-                        all.update(cx, |this, cx| {
-                            this.batch.library.collection = None;
-                            this.library_show(cx);
-                        })
-                        .ok();
-                    },
-                ));
-                for c in &collections {
-                    let owner = owner.clone();
-                    let id = c.id;
-                    menu = menu.item(PopupMenuItem::new(c.name.clone()).on_click(
-                        move |_, _, cx| {
-                            owner
-                                .update(cx, |this, cx| {
-                                    this.batch.library.collection = Some(id);
-                                    this.library_show(cx);
-                                })
-                                .ok();
-                        },
-                    ));
-                }
-                menu
-            });
         let owner = cx.weak_entity();
         let collections = self.batch.library.catalog.collections.clone();
         let actions = Button::new("library-manage")
@@ -472,6 +549,197 @@ impl Workspace {
                     }),
                 )
             });
+        let p = theme::palette(cx);
+        let mut rows = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .child(label("Library", &p))
+                    .child(
+                        Button::new("library-new-collection")
+                            .label("+")
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.library_metadata(true, window, cx)
+                            })),
+                    ),
+            )
+            .child(label("Collections", &p));
+        rows = rows.child(
+            Button::new("library-all-photos")
+                .label(format!(
+                    "All photos · {}",
+                    self.batch
+                        .library
+                        .catalog
+                        .assets
+                        .iter()
+                        .filter(|a| a.kind == AssetKind::Image)
+                        .count()
+                ))
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.batch.library.collection = None;
+                    this.batch.library.source_paths = None;
+                    this.library_show(cx);
+                })),
+        );
+        for collection in &self.batch.library.catalog.collections {
+            let id = collection.id;
+            rows = rows.child(
+                Button::new(("library-collection-row", id))
+                    .label(format!("{} · {}", collection.name, collection.assets.len()))
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.batch.library.collection = Some(id);
+                        this.batch.library.source_paths = None;
+                        this.library_show(cx);
+                    })),
+            );
+        }
+        rows = rows.child(label("Filter", &p));
+        let mut stars = div().flex().flex_wrap().gap_1();
+        for rating in 0..=5u8 {
+            stars = stars.child(
+                Button::new(("library-rating-filter", rating as usize))
+                    .label(if rating == 0 {
+                        "All".into()
+                    } else {
+                        format!("{rating}★")
+                    })
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.batch.library.rating = rating;
+                        this.library_show(cx);
+                    })),
+            );
+        }
+        rows = rows.child(stars);
+        for (id, title, on) in [
+            (
+                "library-filter-flagged",
+                "Flagged",
+                self.batch.library.flagged,
+            ),
+            (
+                "library-filter-raw",
+                "RAW only",
+                self.batch.library.raw_only,
+            ),
+            (
+                "library-filter-unedited",
+                "Unedited RAW",
+                self.batch.library.unedited,
+            ),
+        ] {
+            rows = rows.child(
+                Button::new(id)
+                    .label(format!("{} {title}", if on { "☑" } else { "☐" }))
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        match id {
+                            "library-filter-flagged" => {
+                                this.batch.library.flagged = !this.batch.library.flagged
+                            }
+                            "library-filter-raw" => {
+                                this.batch.library.raw_only = !this.batch.library.raw_only
+                            }
+                            _ => this.batch.library.unedited = !this.batch.library.unedited,
+                        }
+                        this.library_show(cx);
+                    })),
+            );
+        }
+        let mut colors = div().flex().gap_1();
+        for (index, name, color) in COLORS {
+            colors = colors.child(
+                div()
+                    .id(("library-color-filter", index as usize))
+                    .h(px(16.))
+                    .flex_1()
+                    .rounded(px(3.))
+                    .bg(rgb(color))
+                    .border_2()
+                    .border_color(if self.batch.library.color_label == index {
+                        p.ink
+                    } else {
+                        rgb(color).into()
+                    })
+                    .cursor_pointer()
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(name).build(window, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.batch.library.color_label = if this.batch.library.color_label == index
+                        {
+                            0
+                        } else {
+                            index
+                        };
+                        this.library_show(cx);
+                    })),
+            );
+        }
+        rows = rows.child(colors).child(
+            Button::new("library-filter-rejected")
+                .label(if self.batch.library.rejected {
+                    "☑ Rejected"
+                } else {
+                    "☐ Rejected"
+                })
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.batch.library.rejected = !this.batch.library.rejected;
+                    this.library_show(cx);
+                })),
+        );
+        rows = rows.child(
+            Button::new("library-reset-filters")
+                .label("Clear filters")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let state = &mut this.batch.library;
+                    state.rating = 0;
+                    state.flagged = false;
+                    state.rejected = false;
+                    state.raw_only = false;
+                    state.unedited = false;
+                    state.color_label = 0;
+                    if let Some(input) = state.search.clone() {
+                        input.update(cx, |input, cx| input.set_value("", window, cx));
+                    }
+                    this.library_show(cx);
+                })),
+        );
+        rows = rows.child(label("RAW presets", &p));
+        for (i, name) in [
+            "Clean neutral",
+            "Warm recovery",
+            "Mono contrast",
+            "Strong contrast",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            rows = rows.child(
+                Button::new(("library-raw-preset", i))
+                    .label(name)
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, _, cx| this.library_raw_preset(i, cx))),
+            );
+        }
         div()
             .id("library-controls")
             .test_support()
@@ -479,7 +747,7 @@ impl Workspace {
             .flex_col()
             .gap_2()
             .p_2()
-            .child(menu)
+            .child(rows)
             .child(
                 Button::new("library-import-google-photos")
                     .label("Import from Google Photos…")
@@ -487,22 +755,703 @@ impl Workspace {
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.cloud_import_photos(cx))),
             )
-            .child(Input::new(self.batch.library.search.as_ref().unwrap()).small())
             .child(
                 div()
                     .flex()
                     .flex_wrap()
                     .gap_1()
-                    .child(
-                        Button::new("library-search")
-                            .label("Search")
-                            .small()
-                            .outline()
-                            .on_click(cx.listener(|this, _, _, cx| this.library_show(cx))),
-                    )
                     .child(filters)
                     .child(actions),
             )
             .into_any_element()
+    }
+}
+
+impl Workspace {
+    pub(super) fn library_badge(&self, path: &Path) -> String {
+        let asset = self
+            .batch
+            .library
+            .catalog
+            .assets
+            .iter()
+            .find(|a| a.path == path);
+        let stars = asset
+            .map(|a| "★".repeat(a.rating as usize))
+            .unwrap_or_default();
+        let flag = if asset.is_some_and(|a| a.rejected) {
+            "Rejected "
+        } else if asset.is_some_and(|a| a.flagged) {
+            "⚑ "
+        } else {
+            ""
+        };
+        let label = asset
+            .and_then(|a| COLORS.iter().find(|(id, _, _)| *id == a.color_label))
+            .map(|(_, name, _)| *name)
+            .unwrap_or("");
+        format!(
+            "{}{}{} {label}",
+            if emulsion_io::raw::is_raw(path) {
+                "RAW "
+            } else {
+                ""
+            },
+            flag,
+            stars
+        )
+    }
+    pub(super) fn library_open_photo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.batch.develop.dirty() || self.batch.develop.saving {
+            self.batch.note = Some((
+                "Save RAW edits in Develop before opening in Photo.".into(),
+                true,
+            ));
+            cx.notify();
+            return;
+        }
+        if let Some(path) = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone())
+        {
+            self.open_photo_path(path, window, cx);
+        }
+    }
+    pub(super) fn library_filmstrip(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let p = theme::palette(cx);
+        let current = self.batch.current.unwrap_or(0);
+        let start = current.saturating_sub(12);
+        let end = (start + 25).min(self.batch.items.len());
+        if self.batch.develop.loupe {
+            self.batch.thumbs_visible = start..end;
+            let owner = cx.weak_entity();
+            cx.defer(move |cx| {
+                owner.update(cx, |this, cx| this.batch_thumbs(cx)).ok();
+            });
+        }
+        let mut strip = div()
+            .id("library-filmstrip")
+            .test_support()
+            .h(px(74.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .border_t_1()
+            .border_color(p.line)
+            .child(
+                Button::new("library-previous")
+                    .label("‹")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let i = this.batch.current.unwrap_or(0).saturating_sub(1);
+                        this.library_select(i, false, false, cx);
+                    })),
+            );
+        let mut photos = div()
+            .id("library-filmstrip-scroll")
+            .flex_1()
+            .min_w_0()
+            .overflow_x_scroll()
+            .flex()
+            .gap_1();
+        for i in start..end {
+            let item = &self.batch.items[i];
+            let mut tile = div()
+                .id(("library-filmstrip-photo", i))
+                .test_support()
+                .flex_none()
+                .w(px(64.))
+                .h(px(50.))
+                .border_2()
+                .border_color(if self.batch.current == Some(i) {
+                    p.accent
+                } else {
+                    p.line
+                })
+                .rounded(px(3.))
+                .overflow_hidden()
+                .cursor_pointer();
+            if let Some(thumb) = &item.thumb {
+                tile = tile.child(
+                    img(ImageSource::Render(thumb.clone()))
+                        .size_full()
+                        .object_fit(ObjectFit::Cover),
+                );
+            } else {
+                tile = tile.child(mono(
+                    item.path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                    9.,
+                    p.muted,
+                ));
+            }
+            photos = photos.child(tile.on_click(cx.listener(
+                move |this, e: &ClickEvent, _, cx| {
+                    this.library_select(
+                        i,
+                        e.modifiers().shift,
+                        e.modifiers().control || e.modifiers().platform,
+                        cx,
+                    )
+                },
+            )));
+        }
+        strip = strip.child(photos).child(
+            Button::new("library-next")
+                .label("›")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let i = (this.batch.current.unwrap_or(0) + 1)
+                        .min(this.batch.items.len().saturating_sub(1));
+                    this.library_select(i, false, false, cx);
+                })),
+        );
+        strip.into_any_element()
+    }
+}
+
+impl Workspace {
+    pub(super) fn library_selection_controls(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = theme::palette(cx);
+        let count = self.batch.items.iter().filter(|i| i.selected).count();
+        if count == 0 {
+            return div().into_any_element();
+        }
+        let mut row = div()
+            .id("library-selection-actions")
+            .test_support()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_1()
+            .px_3()
+            .py_1()
+            .bg(p.soft_bg)
+            .border_b_1()
+            .border_color(p.line)
+            .child(mono(format!("{count} selected"), 10., p.ink));
+        for rating in 0..=5u8 {
+            row =
+                row.child(
+                    Button::new(("library-rate", rating as usize))
+                        .label(if rating == 0 {
+                            "Clear ★".into()
+                        } else {
+                            format!("{rating}★")
+                        })
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.library_rate(Some(rating), None, cx)
+                        })),
+                );
+        }
+        row.child(
+            Button::new("library-flag")
+                .label("Flag")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| this.library_rate(None, Some(true), cx))),
+        )
+        .child(
+            Button::new("library-unflag")
+                .label("Unflag")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| this.library_rate(None, Some(false), cx))),
+        )
+        .child(
+            Button::new("library-keywords")
+                .label("Add keywords…")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, window, cx| this.library_add_keywords(window, cx))),
+        )
+        .child(
+            Button::new("library-reject")
+                .label("Reject")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| this.library_cull(None, Some(true), cx))),
+        )
+        .child(
+            Button::new("library-label-clear")
+                .label("Clear label")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| this.library_cull(Some(0), None, cx))),
+        )
+        .children(COLORS.into_iter().map(|(index, name, color)| {
+            div()
+                .id(("library-label", index as usize))
+                .size(px(16.))
+                .rounded(px(3.))
+                .bg(rgb(color))
+                .cursor_pointer()
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(name).build(window, cx)
+                })
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.library_cull(Some(index), None, cx)),
+                )
+        }))
+        .child(
+            Button::new("library-selection-sync")
+                .label("Sync settings")
+                .small()
+                .outline()
+                .on_click(cx.listener(|this, _, _, cx| this.library_save_develop(true, cx))),
+        )
+        .into_any_element()
+    }
+    fn library_rate(&mut self, rating: Option<u8>, flagged: Option<bool>, cx: &mut Context<Self>) {
+        let paths = self.library_paths();
+        self.library_edit(
+            move |catalog| {
+                for path in paths {
+                    let id = catalog.add_asset(path, AssetKind::Image)?;
+                    let asset = catalog.assets.iter_mut().find(|a| a.id == id).unwrap();
+                    if let Some(rating) = rating {
+                        asset.rating = rating;
+                    }
+                    if let Some(flagged) = flagged {
+                        asset.flagged = flagged;
+                        asset.rejected = false;
+                    }
+                }
+                Ok(())
+            },
+            cx,
+        );
+    }
+}
+
+impl Workspace {
+    pub(super) fn library_workspace_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::workspace::destinations::Destination;
+        let p = theme::palette(cx);
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .h(px(36.))
+            .border_b_1()
+            .border_color(p.line)
+            .children(Destination::ALL.map(|destination| {
+                Button::new((ElementId::from("library-destination"), destination.label()))
+                    .label(destination.label())
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.visit_destination(destination, window, cx)
+                    }))
+            }))
+            .into_any_element()
+    }
+    pub(super) fn library_grid_tools(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = theme::palette(cx);
+        let title = self
+            .batch
+            .library
+            .collection
+            .and_then(|id| {
+                self.batch
+                    .library
+                    .catalog
+                    .collections
+                    .iter()
+                    .find(|c| c.id == id)
+            })
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| {
+                if self.batch.library.source_paths.is_some() {
+                    "Current folder".into()
+                } else {
+                    "All photos".into()
+                }
+            });
+        div()
+            .id("library-grid-tools")
+            .test_support()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(p.line)
+            .child(label(title, &p))
+            .child(div().flex_1())
+            .children(
+                self.batch
+                    .library
+                    .search
+                    .as_ref()
+                    .map(|input| div().w(px(180.)).child(Input::new(input).small())),
+            )
+            .child(
+                Button::new("library-search")
+                    .label("Search")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| this.library_show(cx))),
+            )
+            .child(
+                Button::new("library-sort")
+                    .label(if self.batch.library.reverse {
+                        if self.batch.library.capture_sort {
+                            "Capture time ↓"
+                        } else {
+                            "Filename ↓"
+                        }
+                    } else {
+                        if self.batch.library.capture_sort {
+                            "Capture time ↑"
+                        } else {
+                            "Filename ↑"
+                        }
+                    })
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.library.reverse = !this.batch.library.reverse;
+                        this.library_show(cx);
+                    })),
+            )
+            .child(
+                Button::new("library-sort-capture")
+                    .label(if self.batch.library.info_busy {
+                        "Reading EXIF…"
+                    } else if self.batch.library.capture_sort {
+                        "Sort by filename"
+                    } else {
+                        "Sort by capture time"
+                    })
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.batch.library.capture_sort {
+                            this.batch.library.capture_sort = false;
+                            this.library_show(cx);
+                        } else {
+                            this.batch.library.capture_sort = true;
+                            this.library_read_metadata(true, cx);
+                            this.library_show(cx);
+                        }
+                    })),
+            )
+            .into_any_element()
+    }
+    pub(super) fn library_info_panel(&self, keywords: bool, cx: &mut Context<Self>) -> AnyElement {
+        let p = theme::palette(cx);
+        let mut panel = div().flex().flex_col().gap_3();
+        let Some(item) = self.batch.current.and_then(|i| self.batch.items.get(i)) else {
+            return panel
+                .child(mono("Select a photo.", 11., p.muted))
+                .into_any_element();
+        };
+        let asset = self
+            .batch
+            .library
+            .catalog
+            .assets
+            .iter()
+            .find(|a| a.path == item.path);
+        if !keywords {
+            panel = panel
+                .child(label("File", &p))
+                .child(mono(
+                    item.path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                    11.,
+                    p.ink,
+                ))
+                .child(mono(item.path.display().to_string(), 10., p.muted))
+                .child(mono(
+                    format!("Rating · {} / 5", asset.map_or(0, |a| a.rating)),
+                    11.,
+                    p.muted,
+                ))
+                .child(mono(
+                    if asset.is_some_and(|a| a.flagged) {
+                        "Flag · Pick"
+                    } else {
+                        "Flag · None"
+                    },
+                    11.,
+                    p.muted,
+                ));
+        }
+        if !keywords && let Some(Some(info)) = self.batch.library.metadata.get(&item.path) {
+            panel = panel
+                .child(label("Camera", &p))
+                .child(mono(info.summary(), 11., p.muted))
+                .child(mono(
+                    format!(
+                        "Captured · {}",
+                        if info.taken.is_empty() {
+                            "Unknown"
+                        } else {
+                            &info.taken
+                        }
+                    ),
+                    10.,
+                    p.muted,
+                ));
+        }
+        panel
+            .child(label("Keywords", &p))
+            .child(mono(
+                asset
+                    .map(|a| a.tags.join(", "))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "No keywords".into()),
+                11.,
+                p.muted,
+            ))
+            .child(
+                Button::new("library-edit-keywords")
+                    .label("Edit selected metadata…")
+                    .small()
+                    .outline()
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.library_metadata(false, window, cx)),
+                    ),
+            )
+            .into_any_element()
+    }
+}
+
+const COLORS: [(u8, &str, u32); 5] = [
+    (1, "Red", 0xd93a1e),
+    (2, "Yellow", 0xe9c46a),
+    (3, "Green", 0x2a9d8f),
+    (4, "Blue", 0x4a7bd0),
+    (5, "Purple", 0x9b5de5),
+];
+impl Workspace {
+    fn library_cull(&mut self, label: Option<u8>, rejected: Option<bool>, cx: &mut Context<Self>) {
+        let paths = self.library_paths();
+        self.library_edit(
+            move |catalog| {
+                for path in paths {
+                    let id = catalog.add_asset(path, AssetKind::Image)?;
+                    let asset = catalog.assets.iter_mut().find(|a| a.id == id).unwrap();
+                    if let Some(label) = label {
+                        asset.color_label = label;
+                    }
+                    if let Some(rejected) = rejected {
+                        asset.rejected = rejected;
+                        if rejected {
+                            asset.flagged = false;
+                        }
+                    }
+                }
+                Ok(())
+            },
+            cx,
+        );
+    }
+    pub(super) fn library_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .batch
+            .library
+            .focus
+            .as_ref()
+            .is_some_and(|f| f.is_focused(window))
+        {
+            return;
+        }
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.control || modifiers.platform || modifiers.alt {
+            return;
+        }
+        match event.keystroke.key.as_str() {
+            "0" => self.library_rate(Some(0), None, cx),
+            "1" => self.library_rate(Some(1), None, cx),
+            "2" => self.library_rate(Some(2), None, cx),
+            "3" => self.library_rate(Some(3), None, cx),
+            "4" => self.library_rate(Some(4), None, cx),
+            "5" => self.library_rate(Some(5), None, cx),
+            "p" => self.library_rate(None, Some(true), cx),
+            "u" => self.library_rate(None, Some(false), cx),
+            "x" => self.library_cull(None, Some(true), cx),
+            "g" => {
+                self.batch.develop.loupe = false;
+                cx.notify();
+            }
+            "e" | "d" => {
+                self.batch.develop.loupe = true;
+                cx.notify();
+            }
+            "left" => self.library_select(
+                self.batch.current.unwrap_or(0).saturating_sub(1),
+                modifiers.shift,
+                false,
+                cx,
+            ),
+            "right" => self.library_select(
+                (self.batch.current.unwrap_or(0) + 1).min(self.batch.items.len().saturating_sub(1)),
+                modifiers.shift,
+                false,
+                cx,
+            ),
+            "enter" => self.library_open_photo(window, cx),
+            _ => return,
+        }
+        cx.stop_propagation();
+    }
+}
+
+impl Workspace {
+    pub(super) fn library_read_metadata(&mut self, all: bool, cx: &mut Context<Self>) {
+        if self.batch.library.info_busy {
+            self.batch.library.metadata_all_pending |= all;
+            return;
+        }
+        let paths: Vec<_> = if all {
+            self.batch.library.source_paths.clone().unwrap_or_else(|| {
+                self.batch
+                    .library
+                    .catalog
+                    .assets
+                    .iter()
+                    .filter(|a| a.kind == AssetKind::Image)
+                    .map(|a| a.path.clone())
+                    .collect()
+            })
+        } else {
+            self.batch
+                .current
+                .and_then(|i| self.batch.items.get(i))
+                .map(|i| vec![i.path.clone()])
+                .unwrap_or_default()
+        };
+        let paths: Vec<_> = paths
+            .into_iter()
+            .filter(|p| !self.batch.library.metadata.contains_key(p))
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        self.batch.library.info_busy = true;
+        cx.spawn(async move |this, cx| {
+            let metadata = cx
+                .background_spawn(async move {
+                    paths
+                        .into_iter()
+                        .map(|path| {
+                            let info = emulsion_io::exif::read(&path);
+                            (path, info)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.batch.library.info_busy = false;
+                this.batch.library.metadata.extend(metadata);
+                if std::mem::take(&mut this.batch.library.metadata_all_pending) {
+                    this.library_read_metadata(true, cx);
+                }
+                if this.batch.library.capture_sort {
+                    this.library_show(cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+    pub(super) fn library_import_folder(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.library_edit(
+            move |catalog| {
+                for path in paths {
+                    catalog.add_asset(path, AssetKind::Image)?;
+                }
+                Ok(())
+            },
+            cx,
+        );
+    }
+}
+
+impl Workspace {
+    fn library_add_keywords(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = self.library_paths();
+        if paths.is_empty() {
+            return;
+        }
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Keywords, separated by commas"));
+        let owner = cx.weak_entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let input = input.clone();
+            let submitted = input.clone();
+            let paths = paths.clone();
+            let owner = owner.clone();
+            dialog
+                .title("Add keywords to selected photos")
+                .child(Input::new(&input))
+                .footer(crate::widgets::form_dialog_footer("Add"))
+                .on_ok(move |_, _, cx| {
+                    let tags: Vec<_> = submitted
+                        .read(cx)
+                        .value()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                    if tags.is_empty() {
+                        return false;
+                    }
+                    let paths = paths.clone();
+                    owner
+                        .update(cx, |this, cx| {
+                            this.library_edit(
+                                move |catalog| {
+                                    for path in paths {
+                                        let id = catalog.add_asset(path, AssetKind::Image)?;
+                                        let asset =
+                                            catalog.assets.iter_mut().find(|a| a.id == id).unwrap();
+                                        for tag in &tags {
+                                            if !asset.tags.contains(tag) {
+                                                asset.tags.push(tag.clone());
+                                            }
+                                        }
+                                    }
+                                    Ok(())
+                                },
+                                cx,
+                            )
+                        })
+                        .ok();
+                    true
+                })
+        });
     }
 }

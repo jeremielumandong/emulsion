@@ -5,6 +5,10 @@ use serde_json::{Value, json};
 
 /// Tools that only read; the CLI may run them without asking.
 pub const READ_ONLY: &[&str] = &[
+    "list_diagram_stencils",
+    "describe_diagram",
+    "get_library",
+    "get_library_preview",
     "describe_raw",
     "get_raw_preview",
     "list_raw_documents",
@@ -37,6 +41,7 @@ pub const DESTRUCTIVE: &[&str] = &[
 
 /// Tools that compute for a while; hosts run them off the UI thread.
 pub const HEAVY: &[&str] = &[
+    "import_image",
     "develop_raw",
     "auto_develop_raw",
     "pick_raw_white_balance",
@@ -766,7 +771,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "save_document",
-            "Save to an explicit OpenRaster (.ora) path or the existing project path. With path omitted, a directly imported RAW containing only RAW development saves its adjacent .emulsion-raw.json sidecar and marks those edits saved; reopening the original restores them. Originals are never overwritten. Extra layers, painting, or other edits require an .ora path.",
+            "In a live Design/Diagram project, save every page and history to .emu (or use save_project explicitly). For a single photo, save to OpenRaster .ora. With path omitted, a directly imported RAW containing only RAW development saves its adjacent .emulsion-raw.json sidecar; reopening the original restores those edits. RAW originals are never overwritten.",
             json!({ "path": { "type": "string" } }),
             &[],
         ),
@@ -955,11 +960,56 @@ pub fn definitions() -> Vec<ToolDef> {
             &[],
         ),
     ];
+    definitions.extend(crate::image_import_tools::definitions());
     definitions.extend(crate::brush_catalog::definitions());
     definitions.extend(crate::brush_assets::definitions());
     definitions.extend(crate::raw_tools::definitions());
+    definitions.extend(crate::library_tools::definitions());
     definitions.extend(crate::raw_preview::definitions());
+    definitions.extend(crate::design_asset_tools::definitions());
+    definitions.extend(crate::design_appearance_tools::definitions());
+    definitions.extend(crate::design_layout_tools::definitions());
+    definitions.extend(crate::design_motion_tools::definitions());
+    definitions.extend(crate::diagram_project_tools::definitions());
+    definitions.extend(crate::project_tools::definitions());
     definitions
+}
+
+/// Include feature modules in the same approval policy as the original tools.
+pub fn read_only_names() -> impl Iterator<Item = &'static str> {
+    READ_ONLY.iter().chain(crate::design_asset_tools::READ_ONLY)
+        .chain(crate::design_appearance_tools::READ_ONLY)
+        .chain(crate::design_layout_tools::READ_ONLY)
+        .chain(crate::design_motion_tools::READ_ONLY)
+        .chain(crate::diagram_tools::READ_ONLY)
+        .chain(crate::project_tools::READ_ONLY).copied()
+}
+
+pub fn is_read_only(name: &str) -> bool {
+    read_only_names().any(|candidate| candidate == name)
+}
+
+pub fn is_destructive(name: &str) -> bool {
+    DESTRUCTIVE.contains(&name) || crate::design_asset_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_appearance_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_layout_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_motion_tools::DESTRUCTIVE.contains(&name)
+        || crate::diagram_tools::DESTRUCTIVE.contains(&name)
+        || crate::project_tools::DESTRUCTIVE.contains(&name)
+}
+
+/// These operations own atomic native transactions or change project pages.
+/// A live assistant must first finish its previous batch of ordinary edits.
+pub fn uses_native_history(name: &str) -> bool {
+    !is_read_only(name) && [
+        crate::design_asset_tools::definitions(),
+        crate::design_appearance_tools::definitions(),
+        crate::design_layout_tools::definitions(),
+        crate::design_motion_tools::definitions(),
+        crate::diagram_tools::definitions(),
+        crate::project_tools::definitions(),
+        crate::diagram_project_tools::definitions(),
+    ].iter().flatten().any(|tool| tool.name == name)
 }
 
 /// Tool names as the CLI sees them.

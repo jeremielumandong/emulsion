@@ -1,8 +1,9 @@
 //! Copy object formatting without copying geometry, content, masks or identity.
 use crate::{Command, Node, NodeKind};
 use emulsion_raster::{blend::BlendMode, vector::PathStyle};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Appearance {
     opacity: f32,
     blend: BlendMode,
@@ -21,6 +22,40 @@ pub struct Appearance {
 }
 
 impl Appearance {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.opacity.is_finite()
+            || !(0. ..=1.).contains(&self.opacity)
+            || !self.blending.valid()
+            || self.styles.len() > crate::styles::MAX_STYLES
+            || self.options.len() > self.styles.len()
+            || self.options.iter().any(|option| !option.valid())
+            || self
+                .styles
+                .iter()
+                .flat_map(|style| style.params())
+                .any(|param| {
+                    !param.value.is_finite() || param.value < param.min || param.value > param.max
+                })
+            || self.path.is_some_and(|style| style != style.sanitized())
+        {
+            return Err("Saved style contains invalid appearance settings.".into());
+        }
+        if let Some((style, line_height, _, _)) = &self.text
+            && (style.font.chars().count() > 512
+                || !style.size.is_finite()
+                || !(1. ..=4000.).contains(&style.size)
+                || !style.letter_spacing.is_finite()
+                || !(-50. ..=500.).contains(&style.letter_spacing)
+                || !style.baseline.is_finite()
+                || !(-4000. ..=4000.).contains(&style.baseline)
+                || !line_height.is_finite()
+                || !(0.5..=4.).contains(line_height))
+        {
+            return Err("Saved style contains invalid typography settings.".into());
+        }
+        Ok(())
+    }
+
     pub fn capture(node: &Node) -> Self {
         let (path, text, color) = match &node.kind {
             NodeKind::Path { style, .. } => (Some(*style), None, style.fill),

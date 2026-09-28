@@ -112,7 +112,7 @@ impl Store {
                 ensure!(existing.provider == provider && existing.account_id == account.id, "This file is bound to another cloud account. Download a separate copy or stop its existing sync first.");
                 existing.paused = false;
             } else {
-                i.bindings.push(Binding { path, provider, account_id: account.id.clone(), project: id(), base: None, saved_hash: None, paused: false });
+                i.bindings.push(Binding { path, provider, account_id: account.id.clone(), project: id(), base: None, saved_hash: None, saved_home: None, paused: false });
             }
             Ok(())
         })
@@ -138,6 +138,17 @@ impl Store {
     /// Caller holds the completed save generation stable until this returns.
     /// The payload can be a native portability bundle; `source` is its local binding.
     pub fn enqueue(&self, source: &Path, payload: &Path) -> Result<bool> {
+        self.enqueue_with_home(source, payload, None)
+    }
+    pub fn enqueue_with_home(
+        &self,
+        source: &Path,
+        payload: &Path,
+        home: Option<crate::HomeMetadata>,
+    ) -> Result<bool> {
+        if let Some(home) = &home {
+            home.validate()?;
+        }
         let source = source.canonicalize()?;
         let Some(binding) = self.read()?.bindings.into_iter().find(|b| b.path == source) else {
             return Ok(false);
@@ -153,7 +164,7 @@ impl Store {
                 .iter_mut()
                 .find(|b| b.path == source && b.project == binding.project)
                 .context("Cloud binding changed during snapshot")?;
-            if b.saved_hash.as_ref() == Some(&hash) {
+            if b.saved_hash.as_ref() == Some(&hash) && b.saved_home == home {
                 return Ok(false);
             }
             ensure!(
@@ -173,6 +184,7 @@ impl Store {
                 created: now(),
                 device: i.device.clone(),
                 bytes,
+                home,
             };
             revision.validate()?;
             let path = self.object_path(&revision.id)?;
@@ -187,6 +199,7 @@ impl Store {
             verify_object(&path, &revision)?;
             b.base = Some(revision.id.clone());
             b.saved_hash = Some(revision.hash.clone());
+            b.saved_home = revision.home.clone();
             i.jobs.push(Job {
                 revision,
                 provider: b.provider,
@@ -261,6 +274,7 @@ impl Store {
                 project: remote.revision.project.clone(),
                 base: Some(remote.revision.id.clone()),
                 saved_hash: None,
+                saved_home: remote.revision.home.clone(),
                 paused: false,
             });
             Ok(())
@@ -382,6 +396,59 @@ mod tests {
         store.connect(account.clone()).unwrap();
         store.bind(&file, account.provider).unwrap();
         (dir, store, file, account)
+    }
+    #[test]
+    fn organization_changes_create_revisions_without_losing_names_or_legacy_support() {
+        let (_dir, store, file, account) = setup();
+        let home = crate::HomeMetadata {
+            name: "Cover artwork".into(),
+            folder: Some(crate::HomeFolder {
+                id: id(),
+                name: "Incubarity".into(),
+            }),
+            kind: Some("Photo".into()),
+        };
+        assert!(
+            store
+                .enqueue_with_home(&file, &file, Some(home.clone()))
+                .unwrap()
+        );
+        assert!(
+            !store
+                .enqueue_with_home(&file, &file, Some(home.clone()))
+                .unwrap()
+        );
+        let mut moved = home.clone();
+        moved.folder.as_mut().unwrap().name = "Campaign".into();
+        assert!(
+            store
+                .enqueue_with_home(&file, &file, Some(moved.clone()))
+                .unwrap()
+        );
+        let jobs = store.pending(&account).unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].revision.hash, jobs[1].revision.hash);
+        assert_eq!(jobs[1].revision.name, "art.ora");
+        assert_eq!(jobs[1].revision.home, Some(moved));
+        assert_eq!(jobs[1].revision.parent, Some(jobs[0].revision.id.clone()));
+        verify_object(
+            &store.object_path(&jobs[1].revision.id).unwrap(),
+            &jobs[1].revision,
+        )
+        .unwrap();
+        let mut legacy = serde_json::to_value(&jobs[0].revision).unwrap();
+        legacy.as_object_mut().unwrap().remove("home");
+        let legacy: Revision = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.home.is_none());
+        legacy.validate().unwrap();
+        let mut invalid = home;
+        invalid.name = "bad\nname".into();
+        assert!(
+            store
+                .enqueue_with_home(&file, &file, Some(invalid))
+                .is_err()
+        );
+        assert_eq!(store.pending(&account).unwrap().len(), 2);
     }
     #[test]
     fn restart_preserves_snapshots_and_parent_chain() {

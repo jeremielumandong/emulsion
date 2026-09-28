@@ -53,9 +53,9 @@ impl EditorView {
             .into_any_element()
     }
 
-    /// The app icon and name, first in the menu row, opening the app menu.
-    pub(super) fn app_menu(&self, p: &Palette, wide: bool, cx: &Context<Self>) -> AnyElement {
-        let editor = cx.entity().downgrade();
+    /// The brand is a direct Home link; application commands live in the menus.
+    pub(super) fn app_menu(&self, p: &Palette, wide: bool, _cx: &Context<Self>) -> AnyElement {
+        let focus = self.canvas_focus.clone();
         div()
             .id("app-menu")
             .test_support()
@@ -63,7 +63,8 @@ impl EditorView {
                 Button::new("app-menu-button")
                     .small()
                     .ghost()
-                    .accessibility_label("Emulsion")
+                    .accessibility_label("Emulsion · Home")
+                    .tooltip("Go to Home")
                     .child(
                         div()
                             .flex()
@@ -79,18 +80,9 @@ impl EditorView {
                                 )
                             }),
                     )
-                    .dropdown_menu(move |menu, _, cx| {
-                        let Some(editor) = editor.upgrade() else {
-                            return menu;
-                        };
-                        let focus = editor.read(cx).canvas_focus.clone();
-                        menu.action_context(focus)
-                            .menu("About Emulsion", Box::new(ShowAbout))
-                            .separator()
-                            .menu("Settings…", Box::new(crate::actions::ShowSettings))
-                            .menu("Home", Box::new(crate::actions::ShowHome))
-                            .separator()
-                            .menu("Quit Emulsion", Box::new(Quit))
+                    .on_click(move |_, window, cx| {
+                        focus.focus(window, cx);
+                        window.dispatch_action(Box::new(ShowHome), cx);
                     }),
             )
             .into_any_element()
@@ -105,6 +97,7 @@ impl EditorView {
                 .menu("Save", Box::new(Save))
                 .menu("Save As…", Box::new(SaveAs))
                 .separator()
+                .menu("Print…", Box::new(Print))
                 .menu("Export…", Box::new(Export))
                 .menu("Batch…", Box::new(ShowBatch))
                 .separator()

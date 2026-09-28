@@ -924,6 +924,19 @@ impl Command {
                     .design
                     .fragment(&ids.iter().copied().collect())
                     .remap(&map);
+                crate::design_styles::merge_into(&mut doc.design, &settings);
+                // Duplicating an instance shares its existing local definition.
+                let links: Vec<_> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        doc.design
+                            .component_links
+                            .get(id)
+                            .cloned()
+                            .map(|link| (map[id], link))
+                    })
+                    .collect();
+                doc.design.component_links.extend(links);
                 doc.design.constraints.extend(settings.constraints);
                 doc.design.frames.extend(settings.frames);
                 doc.design.charts.extend(settings.charts);

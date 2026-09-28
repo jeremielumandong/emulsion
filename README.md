@@ -158,6 +158,15 @@ editing behaviors tested automatically.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and pull request guidance.
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
+## Printing
+
+Use **File → Print…** (Ctrl+P / Cmd+P) for a paper preview, printer selection,
+fit/fill/actual-size placement, page ranges, contact sheets and tiled posters.
+Choose an installed printer or save the composed sheets as PDF. Native adapters
+are included for Linux, macOS and Windows; physical output and platform acceptance
+are still being validated. See [Printing](docs/printing.md) for available controls,
+platform requirements and current limits.
+
 ## Documentation
 
 This README is the feature reference. The [documentation index](docs/README.md)

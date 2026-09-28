@@ -476,6 +476,26 @@ impl VectorLayer {
                     bounds.y1 + 1.0,
                 ];
             }
+            VectorKind::Text { spec } if !spec.warp.is_identity() => {
+                // Nonlinear glyph warps stay vectors at every canvas zoom.
+                // The compiler validated outline availability before choosing
+                // this branch; bitmap-only/color fonts retain the CPU fallback.
+                let mut bounds: Option<Rect> = None;
+                for (path, color) in emulsion_core::text::vector_paths(spec).unwrap_or_default() {
+                    let shape = bez_path(&path);
+                    let b = shape.bounding_box();
+                    bounds = Some(bounds.map_or(b, |previous| previous.union(b)));
+                    object.fragment.fill(
+                        Fill::NonZero,
+                        Affine::IDENTITY,
+                        space.color(color),
+                        None,
+                        &shape,
+                    );
+                }
+                let b = bounds.unwrap_or(Rect::ZERO).inflate(2., 2.);
+                object.bounds = [b.x0, b.y0, b.x1, b.y1];
+            }
             VectorKind::Text { spec } => {
                 let shaped = self.fonts.shape(spec);
                 let t = spec.transform().to_cols_array();
@@ -780,6 +800,42 @@ mod font_tests {
     }
 
     #[test]
+    fn curved_design_text_selects_vector_renderer_and_keeps_color_fallback() {
+        use emulsion_core::{
+            Command, Document, Node,
+            command::Slot,
+            text_effects::{TextWarp, WarpStyle},
+        };
+        let spec = TextSpec {
+            warp: TextWarp {
+                style: WarpStyle::Arc,
+                bend: 60.,
+                ..Default::default()
+            },
+            ..rich_spec()
+        };
+        assert!(crate::canvas::text_supported(&spec));
+        let mut doc = Document::new(600, 400);
+        let id = Command::AddNode {
+            node: Box::new(Node::text(0, "Curved heading", spec.clone(), 600, 400)),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            crate::canvas::vector_nodes(&doc).get(&id),
+            Some(VectorKind::Text { .. })
+        ));
+        let mut translucent = spec.clone();
+        translucent.color[3] = 128;
+        assert!(!crate::canvas::text_supported(&translucent));
+        let mut vertical = spec;
+        vertical.vertical = true;
+        assert!(!crate::canvas::text_supported(&vertical));
+    }
+
+    #[test]
     fn rich_text_keeps_colors_font_instances_and_baseline_geometry() {
         let spec = rich_spec();
         assert!(crate::canvas::text_supported(&spec));
@@ -819,6 +875,104 @@ mod font_tests {
         assert!(crate::canvas::text_supported(&clipped));
         clipped.width = None;
         assert!(!crate::canvas::text_supported(&clipped));
+    }
+
+    #[test]
+    #[ignore = "requires an offscreen wgpu adapter"]
+    fn curved_text_gpu_renders_outlines_at_canvas_resolution() {
+        use crate::{Engine, Offscreen, Output};
+        use emulsion_core::{
+            Command, Document, Node, NodeKind,
+            command::Slot,
+            text_effects::{TextWarp, WarpStyle},
+        };
+        let gpu = Gpu::new(wgpu::Instance::default(), None, None).unwrap();
+        let spec = TextSpec {
+            text: "Curved type".into(),
+            font: "Geist".into(),
+            size: 32.,
+            x: 35.,
+            y: 65.,
+            warp: TextWarp {
+                style: WarpStyle::Arc,
+                bend: 55.,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for zoom in [1., 3.] {
+            let mut doc = Document::new(280, 180);
+            Command::AddNode {
+                node: Box::new(Node::text(0, "Curve", spec.clone(), 280, 180)),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let size = ((280. * zoom) as u32, (180. * zoom) as u32);
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &doc,
+                None,
+                VectorSpace::Srgb,
+                true,
+                false,
+                size,
+            )
+            .unwrap();
+            assert_eq!(engine.canvas.vector_count(), 1);
+            assert!(engine.canvas.rasterized.is_empty());
+            let NodeKind::Text { cache, .. } = &doc.nodes[0].kind else {
+                panic!()
+            };
+            assert!(!cache.is_rendered());
+            engine.camera = crate::Camera {
+                center: [140., 90.],
+                zoom,
+            };
+            let output = Offscreen::new(&gpu, size, wgpu::TextureFormat::Rgba32Float);
+            engine
+                .render(&output.view, output.format, Output::Raw)
+                .unwrap();
+            let actual = output.read(&gpu).unwrap();
+            let mut reference = spec.clone();
+            reference.x *= zoom as f32;
+            reference.y *= zoom as f32;
+            reference.scale_x *= zoom as f32;
+            reference.scale_y *= zoom as f32;
+            let mut outlines = Document::new(size.0, size.1);
+            for (path, color) in emulsion_core::text::vector_paths(&reference).unwrap() {
+                Command::AddNode {
+                    node: Box::new(Node::path(
+                        0,
+                        "Glyph",
+                        Arc::new(path),
+                        PathStyle {
+                            fill: Some(color),
+                            stroke: None,
+                            ..Default::default()
+                        },
+                        size.0,
+                        size.1,
+                    )),
+                    slot: Slot::TOP,
+                }
+                .apply(&mut outlines)
+                .unwrap();
+            }
+            let expected = emulsion_raster::composite::flatten(&outlines.composite_tree(), 0);
+            let (mut intersection, mut union) = (0, 0);
+            for (i, bytes) in actual.as_chunks::<16>().0.iter().enumerate() {
+                let a = f32::from_le_bytes(bytes[12..16].try_into().unwrap()) > 0.5;
+                let b = expected.get(i as u32 % size.0, i as u32 / size.0)[3] > 32767;
+                intersection += usize::from(a && b);
+                union += usize::from(a || b);
+            }
+            assert!(union > 100);
+            assert!(
+                intersection as f64 / union as f64 > 0.94,
+                "curved vector glyph coverage at {zoom}x: {intersection}/{union}"
+            );
+        }
     }
 
     #[test]

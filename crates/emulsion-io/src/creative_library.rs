@@ -37,6 +37,11 @@ pub struct Asset {
     #[serde(default)]
     pub flagged: bool,
     #[serde(default)]
+    pub rejected: bool,
+    /// 0: none; 1–5: red, yellow, green, blue, purple.
+    #[serde(default)]
+    pub color_label: u8,
+    #[serde(default)]
     pub variants: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,6 +67,9 @@ pub struct ProjectRecord {
     pub path: PathBuf,
     pub name: String,
     pub kind: Option<emulsion_core::creation::CanvasKind>,
+    /// A user's classification (or explicit new-canvas choice) survives inference.
+    #[serde(default)]
+    pub kind_override: Option<emulsion_core::creation::CanvasKind>,
     pub folder: Option<u64>,
     pub trashed: bool,
     pub opened: u64,
@@ -71,6 +79,9 @@ pub struct ProjectRecord {
 pub struct ProjectFolder {
     pub id: u64,
     pub name: String,
+    /// Stable across devices; old local folders receive an ID when first synced.
+    #[serde(default)]
+    pub cloud_id: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -151,6 +162,8 @@ impl Catalog {
             if !label(&asset.name)
                 || asset.path.as_os_str().is_empty()
                 || asset.rating > 5
+                || asset.color_label > 5
+                || (asset.flagged && asset.rejected)
                 || asset.tags.len() > 50
                 || asset.tags.iter().any(|s| !label(s))
                 || asset.attribution.len() > 4000
@@ -196,6 +209,11 @@ impl Catalog {
         kind: Option<emulsion_core::creation::CanvasKind>,
     ) -> Result<u64> {
         let path = recent.path.canonicalize()?;
+        let kind = kind.or_else(|| {
+            image::ImageFormat::from_path(&path)
+                .ok()
+                .map(|_| emulsion_core::creation::CanvasKind::Photo)
+        });
         if !path.is_file() || recent.summary.len() > 4000 {
             return Err(error("Choose a local project file."));
         }
@@ -224,12 +242,36 @@ impl Catalog {
             path,
             name,
             kind,
+            kind_override: None,
             folder: None,
             trashed: false,
             opened: recent.opened,
             summary: recent.summary.clone(),
         });
         Ok(id)
+    }
+    pub fn move_project(&mut self, id: u64, folder: Option<u64>) -> Result<()> {
+        if folder.is_some_and(|id| !self.folders.iter().any(|f| f.id == id)) {
+            return Err(error("Destination project no longer exists."));
+        }
+        self.projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| error("File no longer exists in Home."))?
+            .folder = folder;
+        Ok(())
+    }
+    pub fn classify_project(
+        &mut self,
+        id: u64,
+        kind: Option<emulsion_core::creation::CanvasKind>,
+    ) -> Result<()> {
+        self.projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| error("File no longer exists in Home."))?
+            .kind_override = kind;
+        Ok(())
     }
     pub fn add_project_folder(&mut self, name: String) -> Result<u64> {
         if !label(&name) || self.folders.len() >= 500 || self.next_id >= u64::MAX - 1 {
@@ -239,7 +281,11 @@ impl Catalog {
         }
         let id = self.next_id;
         self.next_id += 1;
-        self.folders.push(ProjectFolder { id, name });
+        self.folders.push(ProjectFolder {
+            id,
+            name,
+            cloud_id: None,
+        });
         Ok(id)
     }
     pub fn remove_project_folder(&mut self, id: u64) {
@@ -288,6 +334,8 @@ impl Catalog {
             license: String::new(),
             rating: 0,
             flagged: false,
+            rejected: false,
+            color_label: 0,
             variants: Vec::new(),
         });
         self.validate()?;
@@ -443,6 +491,50 @@ pub fn import_brand(root: &Path, path: &Path) -> Result<Catalog> {
 mod tests {
     use super::*;
     #[test]
+    fn file_moves_and_classification_preserve_source_and_explicit_choices() {
+        use emulsion_core::creation::CanvasKind;
+        let root =
+            std::env::temp_dir().join(format!("emulsion-home-organize-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("portrait.jpg");
+        fs::write(&path, b"unchanged photo source").unwrap();
+        let entry = crate::recent::Recent {
+            path: path.clone(),
+            opened: 1,
+            summary: "1 layer".into(),
+        };
+        let mut catalog = Catalog::default();
+        let id = catalog
+            .remember_project(&entry, Some(CanvasKind::Paint))
+            .unwrap();
+        let mut old = serde_json::to_value(&catalog).unwrap();
+        old["projects"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("kind_override");
+        catalog = serde_json::from_value(old).unwrap();
+        catalog.remember_project(&entry, None).unwrap();
+        assert_eq!(catalog.projects[0].kind, Some(CanvasKind::Photo));
+        let folder = catalog.add_project_folder("Campaign".into()).unwrap();
+        catalog.move_project(id, Some(folder)).unwrap();
+        assert_eq!(catalog.projects[0].folder, Some(folder));
+        assert!(catalog.move_project(id, Some(9999)).is_err());
+        assert_eq!(catalog.projects[0].folder, Some(folder));
+        catalog
+            .classify_project(id, Some(CanvasKind::Paint))
+            .unwrap();
+        catalog
+            .remember_project(&entry, Some(CanvasKind::Photo))
+            .unwrap();
+        let restored: Catalog =
+            serde_json::from_slice(&serde_json::to_vec(&catalog).unwrap()).unwrap();
+        assert_eq!(restored.projects[0].kind_override, Some(CanvasKind::Paint));
+        catalog.move_project(id, None).unwrap();
+        assert_eq!(catalog.projects[0].folder, None);
+        assert_eq!(fs::read(path).unwrap(), b"unchanged photo source");
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
     fn library_updates_preserve_other_windows_and_bad_edits_are_atomic() {
         let root =
             std::env::temp_dir().join(format!("emulsion-creative-library-{}", std::process::id()));
@@ -526,5 +618,35 @@ mod project_tests {
         assert_eq!(load(&root).unwrap(), restored);
         assert_eq!(fs::read(path).unwrap(), b"untouched original");
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod photo_metadata_tests {
+    use super::*;
+    #[test]
+    fn classic_labels_and_reject_flags_roundtrip_and_old_catalogs_default_to_none() {
+        let legacy = serde_json::json!({"id":1,"path":"/photos/camera.dng","name":"Camera","kind":"image","rating":3,"flagged":true});
+        let mut asset: Asset = serde_json::from_value(legacy).unwrap();
+        assert!(!asset.rejected);
+        assert_eq!(asset.color_label, 0);
+        asset.flagged = false;
+        asset.rejected = true;
+        asset.color_label = 4;
+        let catalog = Catalog {
+            next_id: 2,
+            assets: vec![asset],
+            ..Default::default()
+        };
+        catalog.validate().unwrap();
+        let restored: Catalog =
+            serde_json::from_slice(&serde_json::to_vec(&catalog).unwrap()).unwrap();
+        assert_eq!(restored, catalog);
+        let mut invalid = catalog.clone();
+        invalid.assets[0].flagged = true;
+        assert!(invalid.validate().is_err());
+        invalid = catalog;
+        invalid.assets[0].color_label = 6;
+        assert!(invalid.validate().is_err());
     }
 }

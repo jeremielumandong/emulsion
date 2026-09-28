@@ -56,6 +56,38 @@ pub struct Account {
     pub persistent_credentials: bool,
 }
 
+/// Portable Home identity, independent of a device's local catalog IDs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HomeFolder {
+    pub id: String,
+    pub name: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HomeMetadata {
+    pub name: String,
+    pub folder: Option<HomeFolder>,
+    pub kind: Option<String>,
+}
+impl HomeMetadata {
+    pub fn validate(&self) -> Result<()> {
+        let label = |s: &str| {
+            !s.trim().is_empty() && s.chars().count() <= 200 && !s.chars().any(char::is_control)
+        };
+        anyhow::ensure!(label(&self.name), "Invalid Home file name");
+        if let Some(folder) = &self.folder {
+            uuid::Uuid::parse_str(&folder.id)?;
+            anyhow::ensure!(label(&folder.name), "Invalid Home project name");
+        }
+        anyhow::ensure!(
+            self.kind
+                .as_deref()
+                .is_none_or(|k| matches!(k, "Photo" | "Paint" | "Design" | "Diagram")),
+            "Invalid Home classification"
+        );
+        Ok(())
+    }
+}
+
 /// An immutable object is its own commit marker: it contains the entire portable file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Revision {
@@ -67,9 +99,14 @@ pub struct Revision {
     pub created: u64,
     pub device: String,
     pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<HomeMetadata>,
 }
 impl Revision {
     pub fn validate(&self) -> Result<()> {
+        if let Some(home) = &self.home {
+            home.validate()?;
+        }
         for id in [&self.project, &self.id, &self.device] {
             uuid::Uuid::parse_str(id)?;
         }
@@ -115,6 +152,8 @@ pub struct Binding {
     pub project: String,
     pub base: Option<String>,
     pub saved_hash: Option<String>,
+    #[serde(default)]
+    pub saved_home: Option<HomeMetadata>,
     pub paused: bool,
 }
 

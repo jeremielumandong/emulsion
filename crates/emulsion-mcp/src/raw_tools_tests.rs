@@ -83,13 +83,13 @@ fn raw_tools_roundtrip_validation_and_deferred_save() {
     assert!(crate::exec::apply(&mut locked, p).is_error);
     assert_eq!(locked.doc, locked_before);
     for args in [
-        json!({"settings":{"exposure":4}}),
+        json!({"settings":{"exposure":6}}),
         json!({"settings":{"unknown":1}}),
         json!({"settings":{"tone_curve":[0.,0.7,0.4,0.8,1.]}}),
         json!({"settings":{"tint":null}}),
         json!({"settings":{"wb_override":[1.,1.]}}),
     ] {
-        assert!(plan(&editor.doc, "develop_raw", &args).is_err());
+        assert!(plan(&editor.doc, "develop_raw", &args).is_err(), "{args}");
         assert_eq!(before, editor.doc);
     }
     let p = plan(&editor.doc,"develop_raw",&json!({"settings":{"exposure":0.5,"brightness":0.2,"saturation":-0.1},"curve_preset":"medium"})).unwrap();

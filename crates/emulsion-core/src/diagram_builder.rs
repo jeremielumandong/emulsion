@@ -28,7 +28,7 @@ impl Builder {
         label: &str,
     ) -> Result<NodeId, String> {
         if !valid_bounds(bounds)
-            || label.chars().count() > 2000
+            || label.chars().count() > crate::text::MAX_CHARS
             || self.model.shapes.len() >= MAX_SHAPES
             || self.doc.nodes.len() + self.edges.len() + 3 > crate::document::MAX_NODES
         {
@@ -114,7 +114,7 @@ impl Builder {
             || !self.model.shapes.contains_key(&target.shape)
             || !source.port.valid()
             || !target.port.valid()
-            || label.chars().count() > 2000
+            || label.chars().count() > crate::text::MAX_CHARS
             || self.model.edges.len() >= MAX_EDGES
             || self.doc.nodes.len() + self.edges.len() + 4 > crate::document::MAX_NODES
         {

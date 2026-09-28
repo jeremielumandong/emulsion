@@ -168,3 +168,35 @@ fn recursive_visio_master_is_rejected_without_unbounded_recursion() {
         .to_string();
     assert!(error.contains("nesting"), "{error}");
 }
+
+#[test]
+fn visio_stencil_uses_masters_instead_of_placeholder_page() {
+    let file = temp("placeholder.vssx");
+    write_zip(&file,&[
+        ("visio/document.xml",b"<VisioDocument/>"),
+        ("visio/pages/pages.xml",br#"<Pages><Page ID="0" Name="Placeholder"><PageSheet/></Page></Pages>"#),
+        ("visio/masters/masters.xml",br#"<Masters><Master ID="0" Name="Server"><Rel r:id="m1"/></Master></Masters>"#),
+        ("visio/masters/_rels/masters.xml.rels",br#"<Relationships><Relationship Id="m1" Target="master1.xml"/></Relationships>"#),
+        ("visio/masters/master1.xml",br#"<MasterContents><Shapes><Shape ID="1"><Cell N="Width" V="1"/><Cell N="Height" V="1"/><Text>Server</Text></Shape></Shapes></MasterContents>"#),
+    ]);
+    let imported = read(&file).unwrap();
+    assert_eq!(imported.project.pages.len(), 1);
+    assert_eq!(imported.project.pages[0].meta.name, "Server");
+    assert_eq!(
+        imported.project.pages[0]
+            .doc
+            .diagram
+            .as_ref()
+            .unwrap()
+            .shapes
+            .len(),
+        1
+    );
+    assert!(
+        imported
+            .warnings
+            .iter()
+            .any(|w| w.contains("stencil masters"))
+    );
+    std::fs::remove_file(file).unwrap();
+}

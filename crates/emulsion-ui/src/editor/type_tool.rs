@@ -62,7 +62,19 @@ fn word_range(text: &str, byte: usize) -> Range<usize> {
 
 impl EditorView {
     pub(crate) fn text_target(&self) -> Option<(NodeId, Arc<TextSpec>)> {
-        let id = self.selected?;
+        let selected = self.selected?;
+        let id = self
+            .editor
+            .doc
+            .diagram
+            .as_ref()
+            .and_then(|d| {
+                d.shapes
+                    .get(&selected)
+                    .map(|s| s.label)
+                    .or_else(|| d.edges.get(&selected).map(|e| e.label))
+            })
+            .unwrap_or(selected);
         match &self.editor.doc.node(id)?.kind {
             NodeKind::Text { spec, .. } => Some((id, spec.clone())),
             _ => None,

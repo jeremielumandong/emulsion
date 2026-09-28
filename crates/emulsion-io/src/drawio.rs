@@ -2,9 +2,10 @@
 //! Format reference: https://www.drawio.com/docs/reference/diagram-generation/
 use crate::{IoError, Result};
 use base64::Engine;
+#[cfg(test)]
+use emulsion_core::Editor;
 use emulsion_core::{
-    Command, Document, Editor, Node, NodeId, NodeKind,
-    command::Slot,
+    Document, Node, NodeId, NodeKind,
     diagram::{self, Endpoint, Port, Routing, ShapeKind},
     project::{PageMeta, Project, ProjectKind, ProjectPage},
 };
@@ -28,6 +29,8 @@ struct Cell {
     geometry: BTreeMap<String, String>,
     points: Vec<(f64, f64)>,
     offset: (f64, f64),
+    source_point: Option<(f64, f64)>,
+    target_point: Option<(f64, f64)>,
 }
 struct Page {
     name: String,
@@ -67,6 +70,7 @@ fn attributes(e: &BytesStart) -> Result<BTreeMap<String, String>> {
 fn number(map: &BTreeMap<String, String>, key: &str, default: f64) -> Result<f64> {
     let value = map
         .get(key)
+        .filter(|s| !s.is_empty())
         .map(|s| s.parse::<f64>())
         .transpose()
         .map_err(|_| error(format!("Invalid {key}")))?
@@ -157,7 +161,7 @@ fn parse_pages(xml: &str, depth: usize, budget: &mut usize) -> Result<Vec<Page>>
                     }
                     "mxGraphModel" => {
                         found_model = true;
-                        if let Some(value) = attrs.get("background") {
+                        if let Some(value) = attrs.get("background").filter(|v| !v.is_empty()) {
                             page.background = color(value)?.unwrap_or([0; 4]);
                         }
                         page.width =
@@ -211,6 +215,20 @@ fn parse_pages(xml: &str, depth: usize, budget: &mut usize) -> Result<Vec<Page>>
                             cell.offset = (number(&attrs, "x", 0.)?, number(&attrs, "y", 0.)?);
                         }
                     }
+                    "mxPoint"
+                        if attrs
+                            .get("as")
+                            .is_some_and(|v| v == "sourcePoint" || v == "targetPoint") =>
+                    {
+                        if let Some(cell) = &mut current {
+                            let point = (number(&attrs, "x", 0.)?, number(&attrs, "y", 0.)?);
+                            if attrs["as"] == "sourcePoint" {
+                                cell.source_point = Some(point);
+                            } else {
+                                cell.target_point = Some(point);
+                            }
+                        }
+                    }
                     "mxPoint" if point_array => {
                         if let Some(cell) = &mut current {
                             if cell.points.len() >= 128 {
@@ -236,7 +254,13 @@ fn parse_pages(xml: &str, depth: usize, budget: &mut usize) -> Result<Vec<Page>>
                         page.cells.push(cell);
                     }
                     if !found_model && !compressed.trim().is_empty() {
-                        let text = decompress(&compressed)?;
+                        let content = quick_xml::escape::unescape(compressed.trim())
+                            .map_err(|e| error(e.to_string()))?;
+                        let text = if content.starts_with('<') {
+                            content.into_owned()
+                        } else {
+                            decompress(&content)?
+                        };
                         let mut decoded = parse_pages(&text, depth + 1, budget)?;
                         if decoded.len() != 1 {
                             return Err(error("Compressed page must contain one graph."));
@@ -258,6 +282,11 @@ fn parse_pages(xml: &str, depth: usize, budget: &mut usize) -> Result<Vec<Page>>
             },
             Event::Text(text) if in_diagram && !found_model => compressed.push_str(text.as_ref()),
             Event::CData(text) if in_diagram && !found_model => compressed.push_str(text.as_ref()),
+            Event::GeneralRef(text) if in_diagram && !found_model => {
+                compressed.push('&');
+                compressed.push_str(text.as_ref());
+                compressed.push(';');
+            }
             Event::DocType(_) => {
                 return Err(error("Document type declarations are not supported."));
             }
@@ -280,18 +309,29 @@ fn parse_pages(xml: &str, depth: usize, budget: &mut usize) -> Result<Vec<Page>>
     Ok(pages)
 }
 fn style(cell: &Cell) -> BTreeMap<String, String> {
-    cell.attrs
+    let mut result = BTreeMap::new();
+    let mut parts = cell
+        .attrs
         .get("style")
-        .into_iter()
-        .flat_map(|s| s.split(';'))
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            s.split_once('=')
-                .map_or((s.to_owned(), "1".into()), |(k, v)| {
-                    (k.to_owned(), v.to_owned())
-                })
-        })
-        .collect()
+        .map_or("", String::as_str)
+        .split(';')
+        .peekable();
+    while let Some(part) = parts.next() {
+        if part.is_empty() {
+            continue;
+        }
+        let (key, value) = part.split_once('=').unwrap_or((part, "1"));
+        let mut value = value.to_string();
+        if key == "image"
+            && value.starts_with("data:")
+            && parts.peek().is_some_and(|s| s.starts_with("base64,"))
+        {
+            value.push(';');
+            value.push_str(parts.next().unwrap());
+        }
+        result.insert(key.to_string(), value);
+    }
+    result
 }
 fn shape_kind(style: &BTreeMap<String, String>, warnings: &mut BTreeSet<String>) -> ShapeKind {
     let shape = style.get("shape").map(String::as_str).unwrap_or("");
@@ -311,7 +351,11 @@ fn shape_kind(style: &BTreeMap<String, String>, warnings: &mut BTreeSet<String>)
         return ShapeKind::Terminator;
     }
     match shape {
-        "" | "rectangle" | "rect" => ShapeKind::Process,
+        "" | "rectangle" | "rect" | "image" | "text" | "hexagon" | "triangle" | "line"
+        | "doubleEllipse" | "cross" | "partialRectangle" | "actor" | "umlActor" => {
+            ShapeKind::Process
+        }
+        value if value.starts_with("stencil(") => ShapeKind::Process,
         "parallelogram" => ShapeKind::Data,
         "cylinder" | "cylinder3" => ShapeKind::Database,
         "document" => ShapeKind::Document,
@@ -321,24 +365,21 @@ fn shape_kind(style: &BTreeMap<String, String>, warnings: &mut BTreeSet<String>)
         "table" => ShapeKind::Entity,
         other => {
             warnings.insert(format!(
-                "Shape {other:?} imported as an editable rectangle."
+                "Shape {:?} imported as an editable rectangle.",
+                other
+                    .split('(')
+                    .next()
+                    .unwrap_or(other)
+                    .chars()
+                    .take(120)
+                    .collect::<String>()
             ));
             ShapeKind::Process
         }
     }
 }
 fn color(text: &str) -> Result<Option<[u8; 4]>> {
-    if text == "none" {
-        return Ok(None);
-    }
-    let hex = text
-        .strip_prefix('#')
-        .ok_or_else(|| error("Expected a hexadecimal color"))?;
-    if hex.len() != 6 {
-        return Err(error("Expected a six-digit color"));
-    }
-    let n = u32::from_str_radix(hex, 16).map_err(|_| error("Invalid color"))?;
-    Ok(Some([(n >> 16) as u8, (n >> 8) as u8, n as u8, 255]))
+    crate::svg::color(text).ok_or_else(|| error(format!("Unsupported color {text:?}")))
 }
 fn plain_label(text: &str, html: bool, warnings: &mut BTreeSet<String>) -> String {
     if !html {
@@ -361,18 +402,26 @@ fn plain_label(text: &str, html: bool, warnings: &mut BTreeSet<String>) -> Strin
             _ => {}
         }
     }
-    quick_xml::escape::unescape(&out)
+    quick_xml::escape::unescape(&out.replace("&nbsp;", " "))
         .map(|s| s.trim_end().replace("&nbsp;", " "))
         .unwrap_or(out)
 }
-fn port(style: &BTreeMap<String, String>, prefix: &str) -> Result<Port> {
+fn port(
+    style: &BTreeMap<String, String>,
+    prefix: &str,
+    warnings: &mut BTreeSet<String>,
+) -> Result<Port> {
     let x = format!("{prefix}X");
     let y = format!("{prefix}Y");
     if !style.contains_key(&x) && !style.contains_key(&y) {
         return Ok(Port::Auto);
     }
-    let x = number(style, &x, 0.5)?;
-    let y = number(style, &y, 0.5)?;
+    let (Ok(x), Ok(y)) = (number(style, &x, 0.5), number(style, &y, 0.5)) else {
+        warnings.insert(
+            "Invalid connector port coordinates were replaced with automatic attachment.".into(),
+        );
+        return Ok(Port::Auto);
+    };
     Ok(match (x, y) {
         (0.5, 0.) => Port::North,
         (1., 0.5) => Port::East,
@@ -382,7 +431,7 @@ fn port(style: &BTreeMap<String, String>, prefix: &str) -> Result<Port> {
     })
 }
 fn apply_style(
-    editor: &mut Editor,
+    doc: &mut Document,
     body: NodeId,
     label: NodeId,
     style: &BTreeMap<String, String>,
@@ -393,7 +442,7 @@ fn apply_style(
             path, style: old, ..
         },
         ..
-    }) = editor.doc.node(body)
+    }) = doc.node(body)
     {
         let path = path.clone();
         let mut paint = *old;
@@ -445,18 +494,17 @@ fn apply_style(
                 paint.dash[i] = value * paint.width.max(1.);
             }
         }
-        editor
-            .execute(Command::SetPath {
-                id: body,
-                path,
-                style: paint,
-            })
-            .map_err(|e| error(e.to_string()))?;
+        let (w, h) = (doc.width, doc.height);
+        doc.node_mut(body).unwrap().kind = NodeKind::Path {
+            cache: emulsion_core::vector_cache::VectorRaster::path(path.clone(), paint, w, h),
+            path,
+            style: paint,
+        };
     }
     if let Some(Node {
         kind: NodeKind::Text { spec, .. },
         ..
-    }) = editor.doc.node(label)
+    }) = doc.node(label)
     {
         let mut spec = (**spec).clone();
         spec.size = number(style, "fontSize", spec.size as f64)?.clamp(1., 1000.) as f32;
@@ -479,21 +527,27 @@ fn apply_style(
         {
             spec.color = color;
         }
-        editor
-            .execute(Command::SetText {
-                id: label,
-                spec: Box::new(spec),
-            })
-            .map_err(|e| error(e.to_string()))?;
+        let (w, h) = (doc.width, doc.height);
+        let spec = Arc::new(spec.sanitized());
+        doc.node_mut(label).unwrap().kind = NodeKind::Text {
+            cache: emulsion_core::vector_cache::VectorRaster::text(spec.clone(), w, h),
+            spec,
+        };
     }
-    for key in [
-        "rotation",
-        "gradientColor",
-        "image",
-        "shadow",
-        "sketch",
-        "curved",
-    ] {
+    for key in ["startArrow", "endArrow"] {
+        if let Some(arrow) = style
+            .get(key)
+            .filter(|v| !matches!(v.as_str(), "none" | "block" | "classic"))
+        {
+            warnings.insert(format!(
+                "Arrow style {arrow:?} uses a triangle; specialized arrowheads need review."
+            ));
+        }
+    }
+    if style.get("jumpStyle").is_some_and(|v| v != "none") {
+        warnings.insert("Connector line jumps are not rendered.".into());
+    }
+    for key in ["rotation", "gradientColor", "shadow", "sketch", "curved"] {
         if style.get(key).is_some_and(|v| v != "0" && v != "none") {
             warnings.insert(format!("Style {key} requires manual review after import."));
         }
@@ -501,21 +555,17 @@ fn apply_style(
     Ok(())
 }
 fn apply_cell(
-    editor: &mut Editor,
+    doc: &mut Document,
     id: NodeId,
     cell: &Cell,
     style: &BTreeMap<String, String>,
 ) -> Result<()> {
     let opacity = number(style, "opacity", 100.)?.clamp(0., 100.) as f32 / 100.;
-    editor
-        .execute(Command::SetOpacity { id, opacity })
-        .map_err(|e| error(e.to_string()))?;
-    editor
-        .execute(Command::SetVisible {
-            id,
-            visible: cell.attrs.get("visible").is_none_or(|v| v != "0"),
-        })
-        .map_err(|e| error(e.to_string()))?;
+    let node = doc
+        .node_mut(id)
+        .ok_or_else(|| error("Missing imported cell"))?;
+    node.opacity = opacity;
+    node.visible = cell.attrs.get("visible").is_none_or(|v| v != "0");
     Ok(())
 }
 fn label_style(doc: &Document, id: NodeId) -> Result<String> {
@@ -538,176 +588,100 @@ fn label_style(doc: &Document, id: NodeId) -> Result<String> {
         }
     ))
 }
-fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Result<ProjectPage> {
-    let mut seen = HashSet::new();
-    let mut cells = BTreeMap::new();
-    for cell in page.cells {
-        let key = cell
-            .attrs
-            .get("id")
-            .ok_or_else(|| error("Cell is missing an ID"))?
-            .clone();
-        if !seen.insert(key.clone()) {
-            return Err(error("Duplicate diagram cell ID"));
+mod build;
+mod images;
+mod shapes;
+mod stencils;
+use build::build;
+/// SVG exports may embed the complete editable mxfile in the root content attribute.
+fn embedded_xml(xml: &str) -> Result<Option<String>> {
+    let mut reader = Reader::from_str(xml);
+    loop {
+        match reader.read_event().map_err(|e| error(e.to_string()))? {
+            Event::Start(e) | Event::Empty(e) => {
+                return if e.local_name().as_ref() == "svg" {
+                    let attrs = attributes(&e)?;
+                    let content = attrs.get("content").ok_or_else(|| {
+                        error("SVG has no embedded draw.io model; import it as artwork.")
+                    })?;
+                    Ok(Some(if content.trim_start().starts_with('%') {
+                        percent_decode(content)?
+                    } else {
+                        content.clone()
+                    }))
+                } else {
+                    Ok(None)
+                };
+            }
+            Event::DocType(ref d)
+                if d.as_ref().starts_with("svg PUBLIC ") && !d.as_ref().contains('[') => {}
+            Event::DocType(_) => {
+                return Err(error("Document type declarations are not supported."));
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
         }
-        cells.insert(key, cell);
     }
-    let mut editor = Editor::new(Document::new(page.width, page.height), None);
-    editor
-        .execute(Command::AddNode {
-            node: Box::new(Node::new(
-                0,
-                "Background",
-                NodeKind::Fill {
-                    rgba: page.background,
-                },
-            )),
-            slot: Slot::TOP,
-        })
-        .map_err(|e| error(e.to_string()))?;
-    let mut map = HashMap::new();
-    let mut positions = HashMap::new();
-    let mut waiting = cells
-        .iter()
-        .filter(|(_, c)| c.attrs.get("vertex").is_some_and(|v| v == "1"))
-        .collect::<Vec<_>>();
-    while !waiting.is_empty() {
-        let count = waiting.len();
-        let mut next = Vec::new();
-        for (key, cell) in waiting {
-            let parent = cell.attrs.get("parent").filter(|p| {
-                cells
-                    .get(*p)
-                    .is_some_and(|c| c.attrs.get("vertex").is_some_and(|v| v == "1"))
-            });
-            if parent.is_some_and(|p| !map.contains_key(p)) {
-                next.push((key, cell));
-                continue;
-            }
-            let offset = parent
-                .and_then(|p| positions.get(p))
-                .copied()
-                .unwrap_or((0., 0.));
-            let bounds = [
-                number(&cell.geometry, "x", 0.)? + offset.0,
-                number(&cell.geometry, "y", 0.)? + offset.1,
-                number(&cell.geometry, "width", 120.)?,
-                number(&cell.geometry, "height", 60.)?,
-            ];
-            let style = style(cell);
-            let mut kind = shape_kind(&style, warnings);
-            if !kind.is_container()
-                && cells.values().any(|c| {
-                    c.attrs.get("parent") == Some(key)
-                        && c.attrs.get("vertex").is_some_and(|v| v == "1")
-                })
-            {
-                kind = ShapeKind::Container;
-            }
-            let label = plain_label(
-                cell.attrs.get("value").map(String::as_str).unwrap_or(""),
-                style.get("html").is_some_and(|v| v == "1"),
-                warnings,
-            );
-            let node = diagram::add_shape(&mut editor, kind, bounds, &label).map_err(error)?;
-            let mut model = editor.doc.diagram.as_deref().unwrap().clone();
-            let shape = model.shapes.get_mut(&node).unwrap();
-            let (body, text) = (shape.body, shape.label);
-            if let Some(data) = cell.attrs.get("emulsionData") {
-                shape.data = serde_json::from_str(data)
-                    .map_err(|e| error(format!("Invalid shape data: {e}")))?;
-            }
-            editor
-                .execute(Command::SetDiagram {
-                    diagram: Some(Arc::new(model)),
-                })
-                .map_err(|e| error(e.to_string()))?;
-            if let Some(parent) = parent {
-                editor
-                    .execute(Command::MoveNode {
-                        id: node,
-                        slot: Slot::top_of(Some(map[parent])),
-                    })
+}
+fn library_pages(xml: &str, budget: &mut usize) -> Result<Option<Vec<Page>>> {
+    let mut reader = Reader::from_str(xml);
+    loop {
+        match reader.read_event().map_err(|e| error(e.to_string()))? {
+            Event::Start(e) if e.name().as_ref() == "mxlibrary" => {
+                let json = reader
+                    .read_text(e.name())
                     .map_err(|e| error(e.to_string()))?;
+                let json = quick_xml::escape::unescape(&json).map_err(|e| error(e.to_string()))?;
+                let items: Vec<serde_json::Value> =
+                    serde_json::from_str(&json).map_err(|e| error(e.to_string()))?;
+                if items.len() > emulsion_core::project::MAX_PAGES {
+                    return Err(error("Too many library entries"));
+                }
+                let mut pages = Vec::new();
+                for (i, item) in items.iter().enumerate() {
+                    let text = item.get("xml").and_then(|v| v.as_str()).ok_or_else(|| {
+                        error("Image-only library entry: import its image as artwork.")
+                    })?;
+                    let text = if text.trim_start().starts_with('<') {
+                        text.to_string()
+                    } else {
+                        decompress(text)?
+                    };
+                    let mut decoded = parse_pages(&text, 1, budget)?;
+                    if decoded.len() != 1 {
+                        return Err(error("Library entry must contain one model"));
+                    }
+                    decoded[0].name = item
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                        .map_or_else(|| format!("Stencil {}", i + 1), str::to_string);
+                    pages.extend(decoded);
+                }
+                return Ok(Some(pages));
             }
-            apply_style(&mut editor, body, text, &style, warnings)?;
-            apply_cell(&mut editor, node, cell, &style)?;
-            map.insert(key.clone(), node);
-            positions.insert(key.clone(), (bounds[0], bounds[1]));
+            Event::Start(_) | Event::Empty(_) | Event::Eof => return Ok(None),
+            Event::DocType(_) => {
+                return Err(error("Document type declarations are not supported."));
+            }
+            _ => {}
         }
-        if next.len() == count {
-            return Err(error("Diagram contains cyclic or missing containers."));
-        }
-        waiting = next;
     }
-    for (key, cell) in &cells {
-        if !cell.attrs.get("edge").is_some_and(|v| v == "1") {
-            continue;
-        }
-        let source = cell.attrs.get("source").and_then(|s| map.get(s));
-        let target = cell.attrs.get("target").and_then(|s| map.get(s));
-        let (Some(source), Some(target)) = (source, target) else {
-            return Err(error(format!(
-                "Connector {key} has an unbound or unsupported endpoint. No pages were imported."
-            )));
-        };
-        let style = style(cell);
-        let routing = if style
-            .get("edgeStyle")
-            .is_some_and(|s| s == "orthogonalEdgeStyle" || s == "elbowEdgeStyle")
-        {
-            Routing::Orthogonal
-        } else {
-            Routing::Straight
-        };
-        let label = plain_label(
-            cell.attrs.get("value").map(String::as_str).unwrap_or(""),
-            style.get("html").is_some_and(|v| v == "1"),
-            warnings,
-        );
-        let edge = diagram::connect(
-            &mut editor,
-            Endpoint {
-                shape: *source,
-                port: port(&style, "exit")?,
-            },
-            Endpoint {
-                shape: *target,
-                port: port(&style, "entry")?,
-            },
-            &label,
-            routing,
-        )
-        .map_err(error)?;
-        let mut model = editor.doc.diagram.as_deref().unwrap().clone();
-        let e = model.edges.get_mut(&edge).unwrap();
-        e.waypoints = cell.points.clone();
-        e.label_offset = cell.offset;
-        e.arrow_end = style.get("endArrow").is_none_or(|v| v != "none");
-        e.arrow_start = style.get("startArrow").is_some_and(|v| v != "none");
-        let (path, label) = (e.path, e.label);
-        editor
-            .execute(Command::SetDiagram {
-                diagram: Some(Arc::new(model)),
-            })
-            .map_err(|e| error(e.to_string()))?;
-        apply_style(&mut editor, path, label, &style, warnings)?;
-        apply_cell(&mut editor, edge, cell, &style)?;
-    }
-    editor.doc.validate().map_err(|e| error(e.to_string()))?;
-    let graph = Editor::new(editor.doc.clone(), None).graph;
-    Ok(ProjectPage {
-        meta: PageMeta {
-            id,
-            name: page.name,
-            bleed_mm: 0.,
-        },
-        doc: editor.doc,
-        graph,
-    })
 }
 pub fn from_xml(xml: &str) -> Result<Imported> {
-    let pages = parse_pages(xml, 0, &mut (MAX_BYTES * 2))?;
+    if xml.len() > MAX_BYTES {
+        return Err(error("Diagram exceeds 32 MiB."));
+    }
+    let embedded = embedded_xml(xml)?;
+    let xml = embedded.as_deref().unwrap_or(xml);
+    if xml.len() > MAX_BYTES {
+        return Err(error("Diagram exceeds 32 MiB."));
+    }
+    let mut budget = MAX_BYTES * 2;
+    let pages = match library_pages(xml, &mut budget)? {
+        Some(pages) => pages,
+        None => parse_pages(xml, 0, &mut budget)?,
+    };
     let mut warnings = BTreeSet::new();
     let pages = pages
         .into_iter()
@@ -799,6 +773,26 @@ pub fn to_xml(project: &Project) -> Result<String> {
         let doc = &page.doc;
         let empty = diagram::Diagram::default();
         let model = doc.diagram.as_deref().unwrap_or(&empty);
+        let expected: HashSet<_> = model
+            .shapes
+            .iter()
+            .flat_map(|(id, s)| [*id, s.body, s.label])
+            .chain(
+                model
+                    .edges
+                    .iter()
+                    .flat_map(|(id, e)| [*id, e.path, e.arrow, e.label]),
+            )
+            .collect();
+        if doc
+            .nodes
+            .iter()
+            .any(|n| !expected.contains(&n.id) && !matches!(n.kind, NodeKind::Fill { .. }))
+        {
+            return Err(error(
+                "This diagram contains additional artwork or labels. Save as a native project or export SVG/PDF to retain them.",
+            ));
+        }
         let included: HashSet<_> = model
             .shapes
             .keys()
@@ -826,6 +820,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
             })
             .unwrap_or([0; 4]);
         xml.push_str(&format!("<diagram id=\"{}\" name=\"{}\"><mxGraphModel pageWidth=\"{}\" pageHeight=\"{}\" background=\"{}\" grid=\"1\" gridSize=\"20\"><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/>",page.meta.id,escape(&page.meta.name),doc.width,doc.height,hex((background[3]>0).then_some(background))));
+        let mut cells = HashMap::new();
         for (id, shape) in &model.shapes {
             let [mut x, mut y, w, h] =
                 diagram::shape_bounds(doc, shape).ok_or_else(|| error("Missing shape bounds"))?;
@@ -837,6 +832,9 @@ pub fn to_xml(project: &Project) -> Result<String> {
             {
                 x -= container[0];
                 y -= container[1];
+            }
+            if shape.data.contains_key(build::ANCHOR) {
+                continue;
             }
             let style = match shape.kind {
                 ShapeKind::Process => "rounded=0;",
@@ -852,16 +850,39 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 ShapeKind::Swimlane => "swimlane;",
                 ShapeKind::Cloud => "shape=cloud;",
             };
+            let custom = if shape.data.contains_key("emulsion_stencil")
+                || shape.data.contains_key("drawio_custom_path")
+            {
+                if let NodeKind::Path { path, .. } = &doc.node(shape.body).unwrap().kind {
+                    Some(stencils::encode(
+                        path,
+                        diagram::shape_bounds(doc, shape).unwrap(),
+                    )?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let node = doc.node(*id).unwrap();
+            let label_position = if let NodeKind::Text { spec, .. } = &doc.node(shape.label).unwrap().kind {
+                let [bx, by, _, bh] = diagram::shape_bounds(doc, shape).unwrap();
+                format!("emulsionLabelX={};emulsionLabelY={};emulsionLabelWidth={};{}", spec.x as f64-bx, spec.y as f64-by, spec.width.unwrap_or(w as f32), if spec.y as f64 >= by+bh { "verticalLabelPosition=bottom;verticalAlign=top;" } else { "" })
+            } else { String::new() };
             let style = escape(&format!(
-                "{style}{}{}opacity={};html=0;whiteSpace=wrap;",
+                "{}{}{}opacity={};html=0;whiteSpace=wrap;{label_position}",
+                custom.as_deref().unwrap_or_else(|| shape
+                    .data
+                    .get("drawio_geometry_style")
+                    .map_or(style, String::as_str)),
                 paint(doc, shape.body),
                 label_style(doc, shape.label)?,
                 node.opacity * 100.
             ));
-            xml.push_str(&format!("<mxCell id=\"s{id}\" value=\"{}\" vertex=\"1\" visible=\"{}\" parent=\"{parent}\" style=\"{style}\" emulsionData=\"{}\"><mxGeometry x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" as=\"geometry\"/></mxCell>",escape(&text(doc,shape.label)),u8::from(node.visible),escape(&serde_json::to_string(&shape.data).map_err(|e|error(e.to_string()))?)));
+            cells.insert(*id, format!("<mxCell id=\"s{id}\" value=\"{}\" vertex=\"1\" visible=\"{}\" parent=\"{parent}\" style=\"{style}\" emulsionData=\"{}\"><mxGeometry x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" as=\"geometry\"/></mxCell>",escape(&text(doc,shape.label)),u8::from(node.visible),escape(&serde_json::to_string(&shape.data).map_err(|e|error(e.to_string()))?)));
         }
         for (id, edge) in &model.edges {
+            let mut cell_xml = String::new();
             let routing = if edge.routing == Routing::Orthogonal {
                 "edgeStyle=orthogonalEdgeStyle;"
             } else {
@@ -878,11 +899,32 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 if edge.arrow_end { "block" } else { "none" },
                 if edge.arrow_start { "block" } else { "none" }
             ));
-            xml.push_str(&format!("<mxCell id=\"e{id}\" value=\"{}\" visible=\"{}\" edge=\"1\" parent=\"1\" source=\"s{}\" target=\"s{}\" style=\"{style}\"><mxGeometry relative=\"1\" as=\"geometry\"><mxPoint x=\"{}\" y=\"{}\" as=\"offset\"/><Array as=\"points\">",escape(&text(doc,edge.label)),u8::from(node.visible),edge.source.shape,edge.target.shape,edge.label_offset.0,edge.label_offset.1));
-            for (x, y) in &edge.waypoints {
-                xml.push_str(&format!("<mxPoint x=\"{x}\" y=\"{y}\"/>"));
+            let mut refs = String::new();
+            let mut endpoints = String::new();
+            for (name, endpoint) in [("source", &edge.source), ("target", &edge.target)] {
+                let shape = &model.shapes[&endpoint.shape];
+                if shape.data.contains_key(build::ANCHOR) {
+                    let bounds = diagram::shape_bounds(doc, shape)
+                        .ok_or_else(|| error("Missing endpoint bounds"))?;
+                    let ((x, y), _) = endpoint.port.anchor(bounds, (bounds[0], bounds[1]));
+                    endpoints.push_str(&format!(
+                        "<mxPoint x=\"{x}\" y=\"{y}\" as=\"{name}Point\"/>"
+                    ));
+                } else {
+                    refs.push_str(&format!(" {name}=\"s{}\"", endpoint.shape));
+                }
             }
-            xml.push_str("</Array></mxGeometry></mxCell>");
+            cell_xml.push_str(&format!("<mxCell id=\"e{id}\" value=\"{}\" visible=\"{}\" edge=\"1\" parent=\"1\"{refs} style=\"{style}\"><mxGeometry relative=\"1\" as=\"geometry\">{endpoints}<mxPoint x=\"{}\" y=\"{}\" as=\"offset\"/><Array as=\"points\">",escape(&text(doc,edge.label)),u8::from(node.visible),edge.label_offset.0,edge.label_offset.1));
+            for (x, y) in &edge.waypoints {
+                cell_xml.push_str(&format!("<mxPoint x=\"{x}\" y=\"{y}\"/>"));
+            }
+            cell_xml.push_str("</Array></mxGeometry></mxCell>");
+            cells.insert(*id, cell_xml);
+        }
+        for node in &doc.nodes {
+            if let Some(cell) = cells.get(&node.id) {
+                xml.push_str(cell);
+            }
         }
         xml.push_str("</root></mxGraphModel></diagram>");
     }
@@ -1033,7 +1075,14 @@ mod tests {
     fn invalid_references_do_not_silently_drop_connectors() {
         assert!(from_xml(&GRAPH.replace("target=\"b\"", "target=\"missing\"")).is_err());
         assert!(from_xml(&GRAPH.replace("id=\"b\"", "id=\"a\"")).is_err());
-        assert!(from_xml(&GRAPH.replace("exitX=1", "exitX=NaN")).is_err());
+        assert!(
+            from_xml(&GRAPH.replace("exitX=1", "exitX=NaN"))
+                .unwrap()
+                .warnings
+                .iter()
+                .any(|s| s.contains("port coordinates"))
+        );
+        assert!(from_xml(&GRAPH.replace("x=\"40\"", "x=\"NaN\"")).is_err());
         assert!(from_xml("<!DOCTYPE mxfile><mxGraphModel/>").is_err());
         assert!(from_xml("<mxfile><diagram>bad base64!</diagram></mxfile>").is_err());
     }
@@ -1064,3 +1113,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tests_compat;

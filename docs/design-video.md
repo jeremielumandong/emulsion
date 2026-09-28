@@ -35,6 +35,10 @@ can continue editing the poster and link without an internet connection.
 
 ## Platforms and application size
 
+**Elements → Video playback setup…** provides runtime setup without adding a browser to Emulsion's download. On supported Arch and Debian/Ubuntu native installations, **Install playback packages…** invokes the system package manager through the operating system's administrator-authentication dialog. It installs only the listed WebKitGTK/GStreamer packages; cancellation or installation errors leave the design untouched. This action runs only when the user presses the installation button. If the authentication helper is unavailable, the dialog lists the packages for manual installation. The installer itself is not exercised by automated tests.
+
+Windows setup opens Microsoft's [official WebView2 installer page](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section); macOS uses built-in WebKit and needs no separate runtime installer. The package lists follow [Arch's WebKitGTK package dependencies](https://archlinux.org/packages/extra/x86_64/webkit2gtk-4.1/) and [Ubuntu's WebKitGTK package](https://packages.ubuntu.com/jammy-updates/libwebkit2gtk-4.1-0). Other Linux distributions receive manual setup guidance. Flatpak setup explains its runtime limitation and does not attempt to install host packages.
+
 Emulsion does not bundle Chromium or another browser engine. It uses an installed
 system web runtime when playback starts:
 

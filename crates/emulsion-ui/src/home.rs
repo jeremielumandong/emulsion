@@ -10,7 +10,7 @@ use emulsion_io::recent;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{Disableable, IconName, Selectable, Sizable};
 use gpui_kit::prelude::FluentBuilder;
@@ -45,7 +45,7 @@ pub(crate) struct HomeState {
     pub(crate) projects: crate::home_projects::HomeProjects,
     search: Option<(Entity<InputState>, Subscription)>,
     rows: bool,
-    details: bool,
+    pub(crate) details: bool,
     management: bool,
     sort_name: bool,
     pub(crate) unfiled: bool,
@@ -53,6 +53,8 @@ pub(crate) struct HomeState {
     filter: HomeFilter,
     pub(crate) selected: Option<PathBuf>,
     pub(crate) checked: HashSet<PathBuf>,
+    pub(crate) cloud_files: bool,
+    pub(crate) page: usize,
 }
 
 fn path_id(prefix: &'static str, path: &Path) -> ElementId {
@@ -340,6 +342,7 @@ mod tests {
                 catalog.folders = vec![ProjectFolder {
                     id: 50,
                     name: "Campaign".into(),
+                    cloud_id: None,
                 }];
                 catalog.projects = this
                     .recents
@@ -354,6 +357,7 @@ mod tests {
                         } else {
                             CanvasKind::Design
                         }),
+                        kind_override: None,
                         folder: if i == 1 { Some(50) } else { None },
                         trashed: false,
                         opened: r.opened,
@@ -489,6 +493,106 @@ mod tests {
             assert_eq!(workspace.read(cx).tabs.len(), 1);
         });
     }
+
+    #[gpui_kit::test]
+    fn file_context_menu_targets_its_card_and_brand_returns_home(cx: &mut TestAppContext) {
+        let (workspace, cx) = browser(cx);
+        let path = Path::new("prints/Poster.ora");
+        cx.update(|window, cx| {
+            workspace.update(cx, |this, _| {
+                this.home_state.selected = Some("photos/Portrait.png".into())
+            });
+            window.click(path_id("home-file-actions", path), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(1usize, cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert_eq!(
+                workspace.read(cx).home_state.selected.as_deref(),
+                Some(path)
+            )
+        });
+        let at = cx.update(|window, _| {
+            window
+                .find(path_id("home-file-card", path))
+                .bounds()
+                .center()
+        });
+        cx.simulate_mouse_down(at, MouseButton::Right, Default::default());
+        cx.simulate_mouse_up(at, MouseButton::Right, Default::default());
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(window.find("popup-menu").visible()));
+        cx.simulate_keystrokes("escape");
+        cx.update(|window, cx| {
+            workspace.update(cx, |this, cx| {
+                this.install(
+                    Document::new(32, 32),
+                    None,
+                    None,
+                    None,
+                    "unsaved".into(),
+                    window,
+                    cx,
+                );
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("app-menu-button", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(workspace.read(cx).screen, crate::workspace::Screen::Home);
+            assert_eq!(workspace.read(cx).tabs.len(), 1);
+            assert!(window.try_find("popup-menu").is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn home_paginates_large_local_collections(cx: &mut TestAppContext) {
+        let (workspace, cx) = browser(cx);
+        cx.update(|_, cx| {
+            workspace.update(cx, |this, cx| {
+                this.recents = (0..1000)
+                    .map(|i| recent::Recent {
+                        path: format!("/tmp/emulsion-large-library/photo-{i:04}.jpg").into(),
+                        opened: 1000 - i,
+                        summary: String::new(),
+                    })
+                    .collect();
+                for r in &this.recents {
+                    this.thumbs.insert(
+                        r.path.clone(),
+                        GalleryThumbnail {
+                            requested_width: 2048,
+                            image: None,
+                            file_bytes: None,
+                        },
+                    );
+                }
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            assert!(
+                window
+                    .try_find(path_id(
+                        "home-file-card",
+                        Path::new("/tmp/emulsion-large-library/photo-0047.jpg")
+                    ))
+                    .is_some()
+            );
+            assert!(
+                window
+                    .try_find(path_id(
+                        "home-file-card",
+                        Path::new("/tmp/emulsion-large-library/photo-0048.jpg")
+                    ))
+                    .is_none()
+            );
+            assert!(window.try_find("home-pages").is_some());
+        });
+    }
 }
 
 impl Workspace {
@@ -520,7 +624,18 @@ impl Workspace {
     }
 
     fn load_thumbs(&mut self, width: u32, cx: &mut Context<Self>) {
-        for r in self.visible_recents(cx) {
+        if self.home_state.cloud_files {
+            return;
+        }
+        let visible: Vec<_> = self
+            .visible_recents(cx)
+            .into_iter()
+            .skip(self.home_state.page * 48)
+            .take(48)
+            .collect();
+        let visible_paths: HashSet<_> = visible.iter().map(|r| &r.path).collect();
+        self.thumbs.retain(|path, _| visible_paths.contains(path));
+        for r in visible {
             if self
                 .thumbs
                 .get(&r.path)
@@ -582,8 +697,10 @@ impl Workspace {
         if self.home_state.search.is_none() {
             let input =
                 cx.new(|cx| InputState::new(window, cx).placeholder("Search work and folders…"));
-            let subscription = cx.subscribe(&input, |_, _, event, cx| {
+            let subscription = cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
+                    this.home_state.page = 0;
+                    this.cloud_reset_page();
                     cx.notify();
                 }
             });
@@ -599,54 +716,64 @@ impl Workspace {
         })
     }
 
-    fn visible_recents(&self, cx: &App) -> Vec<recent::Recent> {
-        let query = self
-            .home_state
+    pub(crate) fn home_search_query(&self, cx: &App) -> String {
+        self.home_state
             .search
             .as_ref()
             .map(|(input, _)| input.read(cx).value().to_lowercase())
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+    fn visible_recents(&self, cx: &App) -> Vec<recent::Recent> {
+        let query = self.home_search_query(cx);
         let query = query.trim();
         let stars = &crate::app_state::settings(cx).starred_files;
         let now = recent::now();
+        let state = &self.home_state.projects;
+        let records: std::collections::HashMap<_, _> = state
+            .catalog
+            .projects
+            .iter()
+            .map(|p| (&p.path, p))
+            .collect();
         let mut entries = self.home_project_entries();
         if self.home_state.sort_name {
-            entries.sort_by_key(|entry| self.home_project_name(&entry.path).to_lowercase());
+            entries.sort_by_key(|entry| {
+                records
+                    .get(&entry.path)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| file_name(&entry.path))
+                    .to_lowercase()
+            });
         }
         entries
-            .iter()
+            .into_iter()
             .filter(|entry| {
-                let folder = self
-                    .home_state
-                    .folder
-                    .as_ref()
-                    .is_none_or(|folder| entry.path.parent() == Some(folder.as_path()));
+                let record = records.get(&entry.path).copied();
                 let search = query.is_empty()
                     || entry.path.to_string_lossy().to_lowercase().contains(query)
-                    || self
-                        .home_project_name(&entry.path)
-                        .to_lowercase()
-                        .contains(query);
+                    || record.is_some_and(|p| p.name.to_lowercase().contains(query));
                 let filter = match self.home_state.filter {
                     HomeFilter::All => true,
                     HomeFilter::Unfinished => self.unfinished(&entry.path, cx),
                     HomeFilter::Today => now.saturating_sub(entry.opened) < 86_400,
                     HomeFilter::Starred => stars.contains(&entry.path),
                 };
-                folder
-                    && search
+                search
                     && filter
-                    && self.home_project_matches(&entry.path)
-                    && (!self.home_state.unfiled
-                        || !self
-                            .home_state
-                            .projects
-                            .catalog
-                            .projects
-                            .iter()
-                            .any(|p| p.path == entry.path && p.folder.is_some()))
+                    && self
+                        .home_state
+                        .folder
+                        .as_ref()
+                        .is_none_or(|f| entry.path.parent() == Some(f.as_path()))
+                    && record.is_some_and(|p| p.trashed) == state.trash
+                    && state
+                        .folder
+                        .is_none_or(|id| record.is_some_and(|p| p.folder == Some(id)))
+                    && state.kind.is_none_or(|kind| {
+                        crate::home_projects::file_classification(&entry.path, record) == Some(kind)
+                    })
+                    && (!self.home_state.unfiled || record.is_none_or(|p| p.folder.is_none()))
             })
-            .cloned()
             .collect()
     }
 
@@ -734,13 +861,6 @@ impl Workspace {
     pub(crate) fn home(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_home_search(window, cx);
         self.ensure_home_projects(cx);
-        self.load_thumbs(
-            thumbnail_width(
-                f32::from(window.viewport_size().width),
-                window.scale_factor(),
-            ),
-            cx,
-        );
         let p = theme::palette(cx);
         let width = f32::from(window.viewport_size().width) / f32::from(window.rem_size());
         let inspector = self.home_state.details;
@@ -751,9 +871,23 @@ impl Workspace {
             (width - sidebar_width - if docked_inspector { 15.625 } else { 0. }).clamp(12., 77.5);
         let columns = ((center_width - 4.) / 13.25).floor().clamp(1., 6.) as u16;
         let visible = self.visible_recents(cx);
+        self.home_state.page = self
+            .home_state
+            .page
+            .min(visible.len().saturating_sub(1) / 48);
+
+        self.load_thumbs(
+            thumbnail_width(
+                f32::from(window.viewport_size().width),
+                window.scale_factor(),
+            ),
+            cx,
+        );
         let selected = self.selected_recent(cx);
         let cells = visible
             .iter()
+            .skip(self.home_state.page * 48)
+            .take(if self.home_state.cloud_files { 0 } else { 48 })
             .map(|entry| {
                 self.home_recent(
                     entry,
@@ -764,7 +898,9 @@ impl Workspace {
                 )
             })
             .collect::<Vec<_>>();
-        let gallery = if cells.is_empty() {
+        let gallery = if self.home_state.cloud_files {
+            self.cloud_home_browser(columns, cx)
+        } else if cells.is_empty() {
             div()
                 .id("home-empty")
                 .test_support()
@@ -823,25 +959,35 @@ impl Workspace {
                     .pb(px(32.))
                     .gap(px(22.))
                     .child(self.home_welcome(&p, cx))
-                    .child(self.home_starts(if narrow { 2 } else { 5 }, &p, cx))
-                    .children(self.recovered_rows(&p, cx))
-                    .children(self.home_project_cards(center_width, &p, cx))
-                    .child(self.home_file_controls(visible.len(), &p, cx))
-                    .children(self.cloud_home_notice())
-                    .when(self.home_state.management, |column| {
+                    .when(!self.home_state.cloud_files, |column| {
                         column
-                            .child(self.home_projects_controls(&p, cx))
-                            .child(self.home_locations(cx))
-                            .child(
-                                control("home-edit-artwork", "Edit welcome artwork", &p).on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.open_landing(window, cx)
-                                    }),
-                                ),
-                            )
-                            .child(self.home_presets(&p, cx))
+                            .child(self.home_starts(if narrow { 2 } else { 5 }, &p, cx))
+                            .children(self.recovered_rows(&p, cx))
+                            .children(self.home_project_cards(center_width, &p, cx))
+                            .child(self.home_file_controls(visible.len(), &p, cx))
                     })
-                    .child(gallery),
+                    .children(self.cloud_home_notice())
+                    .children(self.home_project_notice())
+                    .when(
+                        self.home_state.management && !self.home_state.cloud_files,
+                        |column| {
+                            column
+                                .child(self.home_projects_controls(&p, cx))
+                                .child(self.home_locations(cx))
+                                .child(
+                                    control("home-edit-artwork", "Edit welcome artwork", &p)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.open_landing(window, cx)
+                                        })),
+                                )
+                                .child(self.home_presets(&p, cx))
+                        },
+                    )
+                    .child(gallery)
+                    .when(
+                        !self.home_state.cloud_files && visible.len() > 48,
+                        |column| column.child(self.home_page_controls(visible.len(), cx)),
+                    ),
             );
         div()
             .id("home")
@@ -875,6 +1021,44 @@ impl Workspace {
                         .child(self.home_inspector(selected, &p, cx)),
                 )
             })
+            .into_any_element()
+    }
+
+    fn home_page_controls(&self, total: usize, cx: &Context<Self>) -> AnyElement {
+        let page = self.home_state.page;
+        div()
+            .id("home-pages")
+            .test_support()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                Button::new("home-page-prev")
+                    .label("Previous")
+                    .small()
+                    .outline()
+                    .disabled(page == 0)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.home_state.page = this.home_state.page.saturating_sub(1);
+                        cx.notify();
+                    })),
+            )
+            .child(format!(
+                "{}–{} of {total} files",
+                page * 48 + 1,
+                ((page + 1) * 48).min(total)
+            ))
+            .child(
+                Button::new("home-page-next")
+                    .label("Next")
+                    .small()
+                    .outline()
+                    .disabled((page + 1) * 48 >= total)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.home_state.page += 1;
+                        cx.notify();
+                    })),
+            )
             .into_any_element()
     }
 
@@ -1318,59 +1502,15 @@ impl Workspace {
                 }
                 cx.notify();
             }));
-        let owner = cx.weak_entity();
-        let menu_path = path.clone();
+        let menu = self.home_file_menu(path.clone(), star, cx);
         let actions = Button::new(path_id("home-file-actions", &path))
             .label("•••")
             .accessibility_label(format!("Actions for {name}"))
             .xsmall()
             .ghost()
             .size(px(24.))
-            .dropdown_menu(move |menu, _, _| {
-                let open = owner.clone();
-                let open_path = menu_path.clone();
-                let details = owner.clone();
-                let details_path = menu_path.clone();
-                let pinned_path = menu_path.clone();
-                let forget = owner.clone();
-                let forget_path = menu_path.clone();
-                menu.item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
-                    open.update(cx, |this, cx| this.open_path(open_path.clone(), window, cx))
-                        .ok();
-                }))
-                .item(
-                    PopupMenuItem::new("File details").on_click(move |_, _, cx| {
-                        details
-                            .update(cx, |this, cx| {
-                                this.home_state.selected = Some(details_path.clone());
-                                this.home_state.details = true;
-                                cx.notify();
-                            })
-                            .ok();
-                    }),
-                )
-                .item(
-                    PopupMenuItem::new(if star { "Unpin" } else { "Pin" }).on_click(
-                        move |_, _, cx| {
-                            crate::app_state::update_settings(cx, |settings| {
-                                if settings.starred_files.contains(&pinned_path) {
-                                    settings.starred_files.retain(|path| path != &pinned_path);
-                                } else {
-                                    settings.starred_files.push(pinned_path.clone());
-                                }
-                            });
-                            cx.refresh_windows();
-                        },
-                    ),
-                )
-                .item(
-                    PopupMenuItem::new("Forget entry · keep file").on_click(move |_, _, cx| {
-                        forget
-                            .update(cx, |this, cx| this.remove_recent(&forget_path, cx))
-                            .ok();
-                    }),
-                )
-            });
+            .dropdown_menu(menu.clone());
+        let card_id = path_id("home-file-card", &path);
         let sync = self.cloud_file_control(&path, cx);
         let select = Button::new(path_id("home-recent", &path))
             .ghost()
@@ -1392,6 +1532,8 @@ impl Workspace {
             }));
         if self.home_state.rows {
             div()
+                .id(card_id)
+                .test_support()
                 .flex()
                 .items_center()
                 .gap(px(12.))
@@ -1405,9 +1547,12 @@ impl Workspace {
                 .child(div().flex_1().min_w_0().child(select))
                 .child(sync)
                 .child(actions)
+                .context_menu(menu)
                 .into_any_element()
         } else {
             div()
+                .id(card_id)
+                .test_support()
                 .relative()
                 .min_w_0()
                 .rounded(px(crate::app_state::settings(cx).corners.radius() + 2.))
@@ -1426,6 +1571,7 @@ impl Workspace {
                 )
                 .child(div().absolute().left(px(10.)).top(px(36.)).child(check))
                 .child(div().px(px(12.)).pb(px(10.)).child(sync))
+                .context_menu(menu)
                 .into_any_element()
         }
     }

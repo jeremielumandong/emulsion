@@ -15,3 +15,15 @@ Act, inspect and recover:
 - Some transport/dispatch failures include a second JSON text block with ok=false, code, execution_state, retry_policy and recovery guidance. Keep the first human-readable error too. not_started means this failed attempt was not submitted for execution; unknown means it may have run or still be running. Never repeat a mutation merely because its response was lost or timed out. Reconnect or wait as directed, then inspect document state and fresh images before deciding what remains. Catalog/file operations require inspecting their own state as well.
 - A protocol ping cannot settle an uncertain edit. Recovery hints do not authorize new changes, override a skipped action or cancel an in-flight operation. Never retry a skipped change. Errors without recovery metadata must not be assumed to have rolled back.
 - Review each meaningful stage and obtain a fresh full get_view after the final change. critique provides measurements and images for your visual judgment, not an automatic art-quality verdict. Prioritize brief fidelity, readable construction and overlaps before decoration; give evidenced repairs and recheck their visible effect. Critique-only requests do not authorize edits. Report unresolved issues or missing evidence plainly.
+
+For the desktop Library/Develop workflow, start with `get_library` and use its
+canonical photo paths. `import_library`, `set_library_view`, and
+`select_library_photos` manage browsing; `edit_library_metadata` and
+`library_collection` persist culling and organization. `develop_library` edits the
+active RAW, saves sidecars, applies presets, undoes edits and synchronizes selected
+RAWs. Inspect `get_library_preview` to verify pixels. Use `export_library` for the
+live selection, or `batch_export` for explicit saved paths and more output options.
+Check dirty/save errors before opening Photo or exporting. `reload` explicitly
+discards a draft. `cancel_library_export` stops the queue, but an in-flight file
+may finish. These tools require the live workspace relay; they are not offline
+catalog tools. Full Lightroom Classic feature parity is not implied.

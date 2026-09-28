@@ -451,19 +451,29 @@ pub fn font_families() -> Vec<String> {
     names
 }
 
-/// Unhinted, document-space glyph outlines for scalable interchange. Advanced
-/// text effects return None so exporters can retain their rendered appearance.
+/// Unhinted, document-space glyph outlines for scalable display and interchange.
+/// Warps map editable glyph contours to bounded, finely sampled vector paths.
+/// Unsupported frame/path layouts return None to retain rendered appearance.
 pub fn vector_paths(spec: &TextSpec) -> Option<Vec<(emulsion_raster::vector::Path, [u8; 4])>> {
     use cosmic_text::{CacheKey, CacheKeyFlags, Command};
     use std::fmt::Write;
     if spec.vertical
         || spec.height.is_some()
-        || !spec.warp.is_identity()
         || spec.text_path.is_some()
         || spec.anti_alias == AntiAliasMode::None
     {
         return None;
     }
+    // raw_layout also takes the font mutex; obtain effect bounds before locking.
+    let mapper = (!spec.warp.is_identity()).then(|| {
+        let b = raw_layout(spec).bounds();
+        crate::text_effects::TextEffectMapper::new(
+            crate::text_effects::EffectRect::new(b.x, b.y, b.width, b.height),
+            spec.size,
+            spec.warp,
+            None,
+        )
+    });
     let mut fonts = fonts().lock().unwrap_or_else(|e| e.into_inner());
     let Fonts { system, swash } = &mut *fonts;
     let (buffer, styles) = shaped_buffer(spec, system);
@@ -497,8 +507,12 @@ pub fn vector_paths(spec: &TextSpec) -> Option<Vec<(emulsion_raster::vector::Pat
                 run.line_y + glyph.y - glyph.font_size * glyph.y_offset - style.baseline,
             );
             let point = |x: f32, y: f32| {
-                let p = transform
-                    .transform_point2(glam::dvec2((origin.0 + x) as f64, (origin.1 - y) as f64));
+                let local = glam::dvec2((origin.0 + x) as f64, (origin.1 - y) as f64);
+                let p = if mapper.is_some() {
+                    local
+                } else {
+                    transform.transform_point2(local)
+                };
                 format!("{} {}", p.x, p.y)
             };
             let mut path = String::new();
@@ -520,13 +534,109 @@ pub fn vector_paths(spec: &TextSpec) -> Option<Vec<(emulsion_raster::vector::Pat
                 }
                 .ok()?;
             }
-            output.push((
-                emulsion_raster::vector::Path::from_svg(&path).ok()?,
-                style.color,
-            ));
+            let mut path = emulsion_raster::vector::Path::from_svg(&path).ok()?;
+            if let Some(mapper) = &mapper {
+                path = warped_vector_path(&path, mapper, transform)?;
+            }
+            output.push((path, style.color));
         }
     }
     Some(output)
+}
+
+/// Subdivide the mapped cubic itself, rather than transforming its control
+/// points (a nonlinear warp cannot preserve a cubic's original handles). Error
+/// is measured after the text transform, with a fixed work/size ceiling.
+fn warped_vector_path(
+    path: &emulsion_raster::vector::Path,
+    mapper: &crate::text_effects::TextEffectMapper,
+    transform: glam::DAffine2,
+) -> Option<emulsion_raster::vector::Path> {
+    use emulsion_raster::vector::{Anchor, Path, SubPath};
+    type Pt = (f64, f64);
+    const MAX_POINTS: usize = 20_000;
+    fn split(
+        f: &impl Fn(f64) -> Pt,
+        a: f64,
+        b: f64,
+        p: Pt,
+        q: Pt,
+        depth: u8,
+        out: &mut Vec<Anchor>,
+    ) -> Option<()> {
+        let distance = |r: Pt| {
+            let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+            let len = dx * dx + dy * dy;
+            let t = if len > 1e-20 {
+                (((r.0 - p.0) * dx + (r.1 - p.1) * dy) / len).clamp(0., 1.)
+            } else {
+                0.
+            };
+            ((r.0 - p.0 - dx * t).powi(2) + (r.1 - p.1 - dy * t).powi(2)).sqrt()
+        };
+        let mid = f((a + b) / 2.);
+        let error = distance(mid)
+            .max(distance(f(a + (b - a) * 0.25)))
+            .max(distance(f(a + (b - a) * 0.75)));
+        if !error.is_finite() || out.len() >= MAX_POINTS {
+            return None;
+        }
+        if error <= 0.015 || depth >= 14 {
+            out.push(Anchor::corner(q));
+        } else {
+            split(f, a, (a + b) / 2., p, mid, depth + 1, out)?;
+            split(f, (a + b) / 2., b, mid, q, depth + 1, out)?;
+        }
+        Some(())
+    }
+    let map = |p: Pt| {
+        let p = mapper.map(p);
+        let p = transform.transform_point2(glam::dvec2(p.0, p.1));
+        (p.x, p.y)
+    };
+    let mut result = Path::default();
+    let mut total = 0;
+    for sub in &path.subpaths {
+        let Some(first) = sub.anchors.first() else {
+            continue;
+        };
+        let mut anchors = vec![Anchor::corner(map(first.p))];
+        let segments = if sub.closed {
+            sub.anchors.len()
+        } else {
+            sub.anchors.len().saturating_sub(1)
+        };
+        for i in 0..segments {
+            let a = &sub.anchors[i];
+            let b = &sub.anchors[(i + 1) % sub.anchors.len()];
+            let cubic = |t: f64| {
+                let u = 1. - t;
+                map((
+                    u * u * u * a.p.0
+                        + 3. * u * u * t * a.h_out.0
+                        + 3. * u * t * t * b.h_in.0
+                        + t * t * t * b.p.0,
+                    u * u * u * a.p.1
+                        + 3. * u * u * t * a.h_out.1
+                        + 3. * u * t * t * b.h_in.1
+                        + t * t * t * b.p.1,
+                ))
+            };
+            split(&cubic, 0., 1., map(a.p), map(b.p), 0, &mut anchors)?;
+        }
+        if sub.closed {
+            anchors.pop();
+        }
+        total += anchors.len();
+        if total > MAX_POINTS {
+            return None;
+        }
+        result.subpaths.push(SubPath {
+            anchors,
+            closed: sub.closed,
+        });
+    }
+    Some(result)
 }
 
 /// Reload installed system fonts and clear cached glyph images.
@@ -1347,6 +1457,63 @@ mod tests {
             IRect::new(0, 0, 0, 0)
         } else {
             IRect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+        }
+    }
+
+    #[test]
+    fn curved_text_has_bounded_scalable_outlines_and_keeps_editable_geometry() {
+        use crate::text_effects::{TextWarp, WarpStyle};
+        let base = TextSpec {
+            text: "Curved text".into(),
+            font: "Geist".into(),
+            size: 48.,
+            x: 100.,
+            y: 100.,
+            rotation: 12.,
+            ..Default::default()
+        };
+        let original = vector_paths(&base).unwrap();
+        for style in [WarpStyle::Arc, WarpStyle::Bulge, WarpStyle::Flag] {
+            let spec = TextSpec {
+                warp: TextWarp {
+                    style,
+                    bend: 65.,
+                    horizontal: 12.,
+                    vertical: -8.,
+                },
+                ..base.clone()
+            };
+            let paths = vector_paths(&spec).expect("warped text keeps glyph outlines");
+            assert_eq!(paths.len(), original.len());
+            assert_ne!(paths, original);
+            assert!(
+                paths
+                    .iter()
+                    .all(|(p, _)| p.anchor_count() > 0 && p.anchor_count() <= 20_000)
+            );
+            assert!(
+                paths
+                    .iter()
+                    .flat_map(|(p, _)| &p.subpaths)
+                    .flat_map(|s| &s.anchors)
+                    .all(|a| a.p.0.is_finite() && a.p.1.is_finite())
+            );
+            let shifted = TextSpec {
+                x: base.x + 0.25,
+                ..spec.clone()
+            };
+            for ((a, _), (b, _)) in paths.iter().zip(vector_paths(&shifted).unwrap()) {
+                for (a, b) in a
+                    .subpaths
+                    .iter()
+                    .flat_map(|s| &s.anchors)
+                    .zip(b.subpaths.iter().flat_map(|s| &s.anchors))
+                {
+                    assert!((b.p.0 - a.p.0 - 0.25).abs() < 0.001);
+                    assert!((b.p.1 - a.p.1).abs() < 0.001);
+                }
+            }
+            assert_eq!(spec.text, base.text);
         }
     }
 

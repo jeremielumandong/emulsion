@@ -26,8 +26,18 @@ mod new_canvas_tests;
 #[path = "project_workflow_tests.rs"]
 mod project_workflow_tests;
 
+#[path = "diagram_workflow_tests.rs"]
+mod diagram_workflow_tests;
+
+#[path = "design_appearance_workflow_tests.rs"]
+mod design_appearance_workflow_tests;
+
 #[path = "design_chart_tests.rs"]
 mod design_chart_tests;
+#[path = "design_component_tests.rs"]
+mod design_component_tests;
+#[path = "design_styles_tests.rs"]
+mod design_styles_tests;
 #[path = "design_video_tests.rs"]
 mod design_video_tests;
 
@@ -1070,6 +1080,9 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
 #[path = "batch/progress_tests.rs"]
 mod batch_progress_tests;
 
+#[path = "batch/library_tests.rs"]
+mod batch_library_tests;
+
 #[gpui_kit::test]
 fn batch_export_keeps_the_failed_filename_and_reason(cx: &mut TestAppContext) {
     use crate::workspace::Screen;
@@ -1168,7 +1181,11 @@ fn batch_folder_loads_thumbnails_without_selecting_or_exporting(cx: &mut TestApp
     cx.update(|_, cx| {
         let batch = &ws.read(cx).batch;
         assert_eq!(batch.current, Some(1));
-        assert!(!batch.items[1].selected);
+        assert!(batch.items[1].selected);
+        assert!(
+            !batch.items[0].selected,
+            "plain click replaces the selection"
+        );
         assert!(batch.items[1].thumb.is_some());
         assert!(batch.items[2].thumb.is_some());
         assert!(batch.running.is_none());

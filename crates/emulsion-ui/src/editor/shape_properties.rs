@@ -112,7 +112,20 @@ impl EditorView {
     }
 
     fn shape_target(&self) -> Option<NodeId> {
-        self.selected.filter(|id| {
+        let selected = self.selected?;
+        let target = self
+            .editor
+            .doc
+            .diagram
+            .as_ref()
+            .and_then(|d| {
+                d.shapes
+                    .get(&selected)
+                    .map(|s| s.body)
+                    .or_else(|| d.edges.get(&selected).map(|e| e.path))
+            })
+            .unwrap_or(selected);
+        Some(target).filter(|id| {
             self.editor
                 .doc
                 .node(*id)

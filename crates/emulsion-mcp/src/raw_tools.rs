@@ -313,8 +313,9 @@ pub fn definitions() -> Vec<ToolDef> {
             "develop_raw",
             "Patch high-precision RAW development; omitted settings are preserved. One undo step updates pixels and recipe together. Temperature/tint are relative offsets, not Kelvin. tone_curve is five monotonic output values at inputs 0,.25,.5,.75,1; wb_override null restores camera gains.",
             json!({"settings":{"type":"object","additionalProperties":false,"properties":{
-            "exposure":range(-3.,3.),"temperature":range(-1.,1.),"tint":range(-1.,1.),"highlights":range(0.,1.),"shadows":range(-1.,1.),"black_point":range(0.,0.25),"brightness":range(-1.,1.),"contrast":range(-1.,1.),"saturation":range(-1.,1.),
-            "tone_curve":{"type":"array","minItems":5,"maxItems":5,"items":range(0.,1.)},"wb_override":{"type":["array","null"],"minItems":4,"maxItems":4,"items":range(0.01,100.)}}},"curve_preset":{"type":"string","enum":["linear","medium","strong"]}}),
+            "exposure":range(-5.,5.),"temperature":range(-1.,1.),"tint":range(-1.,1.),"highlights":range(-1.,1.),"shadows":range(-1.,1.),"black_point":range(0.,0.25),"brightness":range(-1.,1.),"contrast":range(-1.,1.),"saturation":range(-1.,1.),
+            "whites":range(-1.,1.),"blacks":range(-1.,1.),"vibrance":range(-1.,1.),"texture":range(-1.,1.),"clarity":range(-1.,1.),"dehaze":range(-1.,1.),"vignette":range(-1.,1.),"sharpening":range(0.,1.),"noise_reduction":range(0.,1.),
+            "smooth_curve":{"type":"boolean"},"tone_curve":{"type":"array","minItems":5,"maxItems":5,"items":range(0.,1.)},"wb_override":{"type":["array","null"],"minItems":4,"maxItems":4,"items":range(0.01,100.)}}},"curve_preset":{"type":"string","enum":["linear","medium","strong"]}}),
             &[],
         ),
         def(

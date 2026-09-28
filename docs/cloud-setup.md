@@ -41,7 +41,7 @@ Google Auth Platform. During development, use an External audience in Testing
 and add your Google account as a test user. Create a **Desktop app** OAuth
 client and download the JSON file.
 
-Open **Settings → Cloud projects and photos → Import app registration…** and
+Open **Home → Cloud files → Manage connections… → Import app registration…** and
 select that JSON. It configures both Google features, but each connects
 separately. The Photos Library API is not needed for selected-photo imports.
 Google registrations in Testing have provider-imposed limits; complete the
@@ -113,7 +113,7 @@ require administrator consent even for delegated access.
 ## Registration JSON for Dropbox and Microsoft
 
 Save a local file such as `emulsion-cloud-clients.json`, replace the placeholders
-with your public application identifiers, and import it through Settings:
+with your public application identifiers, and import it through **Home → Cloud files → Manage connections…**:
 
 ```json
 {
@@ -131,13 +131,13 @@ service-account credential file.
 
 ## Using the integration
 
-1. Open **Home → Cloud & Photos**, or the cloud section at the top of Settings.
+1. Open **Home → Cloud files** in the sidebar (or **Cloud & Photos** above local files).
+   Use **Manage connections…** to connect accounts.
 2. Connect the desired provider and finish sign-in in your system browser.
 3. On Home or inside a project, use **Sync to Google Drive** directly beneath
    a saved photo/file card (also available in list view). If multiple storage
    providers are connected, **Sync to cloud…** offers a destination menu.
-   This enables automatic sync and starts uploading immediately. Settings'
-   **Sync current file** uses the same action for the open document.
+   This enables automatic sync and starts uploading immediately.
    Native projects include their referenced RAW originals, including references
    retained by native history. A missing/mismatched original prevents queueing
    a misleadingly incomplete portable revision.
@@ -148,14 +148,17 @@ service-account credential file.
    enabled for that file. **Sync now** on a card retries its saved copy;
    paused files offer **Resume sync**. Status describes Emulsion's saved
    snapshots; files changed externally are checked when next queued.
-   **Sync now / retry** in Settings uploads pending revisions and lists remote versions.
+   **Refresh / retry** in Home’s cloud browser uploads pending revisions and refreshes the file list.
    Subsequent successful saves automatically queue snapshots; the running app
-   also checks periodically. Pause stops uploads but retains queued work.
+   also checks periodically. The file’s right-click or three-dot menu has **Pause sync**
+   and **Cloud version history…**. Pausing retains queued work.
 5. On another installation using the same app registration and provider
-   account, connect and sync, select **Download copy**, then **Open downloaded
-   copy**. Every download gets a separate local directory. Conflicting heads
-   are labeled and both remain available.
-6. Use **Library → Import from Google Photos…** or the Photos button in Settings
+   account, connect and refresh **Cloud files**, select **Download copy**, then
+   **Open downloaded copy**. Each cloud file appears once, with provider filters,
+   filename search, and 48 files per page. **Version history…** opens only that
+   file’s revisions, also paginated. Every download gets a separate local directory.
+   Conflicts require choosing a version in history; both remain available.
+6. Use **Library → Import from Google Photos…** or the Photos button under **Manage connections…**
    to select images in Google's Picker. Imports are local creative copies;
    Google may omit location metadata. Unsupported media and failed downloads
    are counted separately. They are not continuously synchronized with Photos.
@@ -165,6 +168,26 @@ and a portable payload, rather than a mutable `.ora`/`.emu` at a fixed remote
 path. Old versions consume provider storage; automatic pruning is not enabled.
 This format preserves concurrent edits without provider-specific overwrite
 races. A project is synchronized to one provider at a time.
+
+Google Drive stores uploads inside its dedicated **Emulsion** folder. New
+snapshots with Home organization use **Emulsion / project name / original
+filename / revision.emulsion**; unassigned files use **Unfiled**. The filename
+entry is a folder containing immutable versions, not a directly viewable JPEG.
+Use **Home → Cloud files → Open Drive folder** to open the storage location.
+Previously uploaded snapshots remain discoverable in their existing locations.
+
+Each synced file now records its Home project identity/name, assigned display
+name, original filename, and classification. Downloading a copy restores those
+details and groups files from the same project together. Separate projects with
+identical names stay separate. Name or membership changes queue a new snapshot
+on the next sync check, even when the saved image bytes have not changed.
+Google Drive moves the file's version folder when its project changes. Dropbox
+and OneDrive retain their provider app-folder layout, with the same portable
+Home metadata in their snapshots.
+
+This preserves the membership of files individually enabled for sync. It does
+not enable uploads for other project members, save empty Home projects, or
+replace downloading individual files with a whole-project restore action.
 
 Disconnect removes the saved OAuth credential and stops that provider's work;
 local documents, imports, and pending revisions remain. Reconnecting the same
@@ -203,3 +226,17 @@ selection, offline queued saves, native RAW portability, and selected Photos
 imports. Existing arbitrary Drive/Dropbox/OneDrive folder browsing, library
 metadata sync, automatic merge, background sync while Emulsion is closed,
 remote version deletion, and Photos export remain follow-on work.
+
+## Organizing Home
+
+Right-click a photo/file card, or open its three-dot menu, for **Move to project…**,
+**Classify as…**, rename, trash/restore, and cloud history. Moves update Home’s
+project membership; the source path and its cloud binding stay intact. Explicit
+classification survives reopening and saving. Photo classification no longer
+follows the editor’s Paint workspace preference.
+
+Local collections render 48 files per page and load thumbnails only for that
+page. Cloud browsing groups revisions into files before paging. The provider
+adapters still fetch the full remote metadata listing on refresh; this UI change
+does not implement incremental provider indexing. Clicking the Emulsion brand
+in the editor returns straight to Home and preserves open tabs.

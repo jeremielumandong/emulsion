@@ -421,3 +421,14 @@ Design/Diagram capabilities are still open.
 See [the native fidelity audit](template-fidelity.md) for the surface dimensions,
 responsive behavior, retained workflows and native adaptations. Advanced Design,
 Diagram and migration gates above remain separate from the layout work.
+
+
+## September 27 follow-up: Diagram sample compatibility
+
+See [Diagram functionality and draw.io compatibility](diagram-functionality.md)
+for the current inventory, corpus results, handoff inspector work, and remaining
+visual gaps. The importer now loads 620 sample drawings/libraries (820 pages),
+including loose connectors, relative geometry, embedded SVGs and XML libraries.
+A template URL index is not a drawing; one source sample contains a missing
+connector reference. Custom stencil and advanced label/edge fidelity remain open;
+this does not close the complete draw.io compatibility milestone.

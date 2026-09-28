@@ -1,0 +1,1115 @@
+//! Library RAW development uses Photo's decoder and portable sidecars.
+use super::*;
+use emulsion_io::{
+    raw::{DevelopParams, RawSource},
+    raw_settings,
+};
+use gpui_kit::component::{
+    Disableable, Selectable,
+    slider::{Slider, SliderEvent, SliderState},
+};
+use std::collections::HashMap;
+
+#[derive(Default)]
+pub(super) struct Develop {
+    pub(super) source: Option<Arc<RawSource>>,
+    pub(super) drafts: HashMap<PathBuf, DevelopParams>,
+    pub(super) saved: HashMap<PathBuf, DevelopParams>,
+    pub(super) fingerprints: HashMap<PathBuf, String>,
+    pub(super) history: HashMap<PathBuf, Vec<DevelopParams>>,
+    sliders: Vec<(Entity<SliderState>, Subscription)>,
+    slider_key: Option<(PathBuf, DevelopParams)>,
+    pub busy: bool,
+    pub saving: bool,
+    pub before: bool,
+    pub histogram: [u32; 32],
+    pub loupe: bool,
+    pub list: bool,
+    pub compare: bool,
+    baseline_preview: Option<(PathBuf, Arc<RenderImage>)>,
+    pub anchor: Option<usize>,
+    pub inspector: usize,
+    pub(super) save_task: Option<Task<()>>,
+    pub(super) sync_group: raw_settings::RawSettingsGroup,
+}
+
+impl Develop {
+    pub fn refresh_saved(&mut self) {
+        // Returning from Photo rereads persisted settings. Keep any failed or
+        // pending local drafts, which must never be discarded by navigation.
+        self.drafts
+            .retain(|path, params| self.saved.get(path) != Some(params));
+        self.saved.retain(|path, _| self.drafts.contains_key(path));
+        self.source = None;
+        self.slider_key = None;
+        self.baseline_preview = None;
+    }
+    pub fn dirty(&self) -> bool {
+        self.drafts
+            .iter()
+            .any(|(p, v)| self.saved.get(p) != Some(v))
+    }
+    pub(super) fn current_params(&self, path: &Path) -> Option<DevelopParams> {
+        self.drafts
+            .get(path)
+            .copied()
+            .or_else(|| self.saved.get(path).copied())
+    }
+}
+
+pub(super) fn display_raster(raster: &Raster) -> Option<(u32, u32, Vec<u8>)> {
+    let image = image::RgbaImage::from_raw(raster.width(), raster.height(), raster.to_srgba8())?;
+    let small = image::DynamicImage::ImageRgba8(image)
+        .thumbnail(PREVIEW, PREVIEW)
+        .into_rgba8();
+    Some((small.width(), small.height(), small.into_raw()))
+}
+
+pub(super) fn histogram(bytes: &[u8]) -> [u32; 32] {
+    let mut bins = [0; 32];
+    for px in bytes.as_chunks::<4>().0 {
+        if px[3] == 0 {
+            continue;
+        }
+        let luminance = (54 * px[0] as usize + 183 * px[1] as usize + 19 * px[2] as usize) / 256;
+        bins[(luminance / 8).min(31)] += 1;
+    }
+    bins
+}
+
+impl Workspace {
+    pub(super) fn invalidate_library_preview(&mut self) {
+        self.batch.preview_generation = self.batch.preview_generation.wrapping_add(1);
+        self.batch.preview = None;
+        self.batch.preview_loading = None;
+        self.batch.preview_failed = None;
+    }
+
+    pub(super) fn library_select(
+        &mut self,
+        index: usize,
+        shift: bool,
+        toggle: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.batch.items.len() {
+            return;
+        }
+        if shift {
+            let anchor = self
+                .batch
+                .develop
+                .anchor
+                .unwrap_or(index)
+                .min(self.batch.items.len() - 1);
+            for (i, item) in self.batch.items.iter_mut().enumerate() {
+                if !toggle {
+                    item.selected = false;
+                }
+                if (anchor.min(index)..=anchor.max(index)).contains(&i) {
+                    item.selected = true;
+                }
+            }
+        } else if toggle {
+            self.batch.items[index].selected = !self.batch.items[index].selected;
+            self.batch.develop.anchor = Some(index);
+        } else {
+            for (i, item) in self.batch.items.iter_mut().enumerate() {
+                item.selected = i == index;
+            }
+            self.batch.develop.anchor = Some(index);
+        }
+        self.batch.current = Some(index);
+        self.batch.develop.before = false;
+        self.invalidate_library_preview();
+        cx.notify();
+    }
+
+    pub(super) fn library_raw_preview(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.batch.develop.busy {
+            return;
+        }
+        let key = (path.clone(), self.batch.recipe.clone());
+        if self
+            .batch
+            .preview
+            .as_ref()
+            .is_some_and(|(p, r, _)| (p, r) == (&key.0, &key.1))
+            || self.batch.preview_loading.as_ref() == Some(&key)
+            || self.batch.preview_failed.as_ref() == Some(&key)
+        {
+            return;
+        }
+        let generation = self.batch.preview_generation;
+        let params = self.batch.develop.current_params(&path);
+        let cached = self
+            .batch
+            .develop
+            .source
+            .clone()
+            .filter(|s| s.source == path);
+        let before = self.batch.develop.before;
+        let compare = self.batch.develop.compare;
+        let recipe = if before { None } else { self.chosen_recipe() };
+        self.batch.develop.busy = true;
+        self.batch.preview_loading = Some(key.clone());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let source = match cached {
+                        Some(s) => s,
+                        None => Arc::new(RawSource::load(&path).map_err(|e| e.to_string())?),
+                    };
+                    let saved =
+                        raw_settings::adjacent_settings(&source.source, &source.source_sha256)
+                            .map_err(|e| e.to_string())?;
+                    let params = params.unwrap_or(saved);
+                    let raster = source
+                        .develop_with(&if before {
+                            DevelopParams::default()
+                        } else {
+                            params
+                        })
+                        .map_err(|e| e.to_string())?;
+                    let (w, h, rgba) =
+                        display_raster(&raster).ok_or("Could not build RAW preview")?;
+                    let bins = histogram(&rgba);
+                    let pixels =
+                        render_with(Arc::new(Raster::from_srgba8(w, h, &rgba)), recipe.as_ref())
+                            .ok_or("Could not render recipe")?;
+                    let baseline = if compare {
+                        let raster = source
+                            .develop_with(&DevelopParams::default())
+                            .map_err(|e| e.to_string())?;
+                        let (w, h, mut rgba) =
+                            display_raster(&raster).ok_or("Could not build comparison")?;
+                        for px in rgba.as_chunks_mut::<4>().0 {
+                            px.swap(0, 2);
+                        }
+                        Some((w, h, rgba))
+                    } else {
+                        None
+                    };
+                    Ok::<_, String>((source, saved, params, pixels, bins, baseline))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.batch.develop.busy = false;
+                if this.batch.preview_generation != generation
+                    || this
+                        .batch
+                        .current
+                        .and_then(|i| this.batch.items.get(i))
+                        .map(|i| &i.path)
+                        != Some(&key.0)
+                {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok((source, saved, params, pixels, bins, baseline)) => {
+                        // Cache just one decoded mosaic. Drafts contain settings, never full images.
+                        this.batch
+                            .develop
+                            .fingerprints
+                            .entry(key.0.clone())
+                            .or_insert_with(|| source.source_sha256.clone());
+                        this.batch.develop.source = Some(source);
+                        this.batch
+                            .develop
+                            .saved
+                            .entry(key.0.clone())
+                            .or_insert(saved);
+                        this.batch
+                            .develop
+                            .drafts
+                            .entry(key.0.clone())
+                            .or_insert(params);
+                        let path = key.0.clone();
+                        if this.batch.finish_preview(generation, key, Some(pixels)) {
+                            if let Some((w, h, bytes)) = baseline {
+                                this.batch.develop.baseline_preview =
+                                    Some((path, Arc::new(bgra_image(w, h, bytes))));
+                            }
+                            this.batch.develop.histogram = bins;
+                        }
+                    }
+                    Err(e) => {
+                        if this.batch.finish_preview(generation, key, None) {
+                            this.batch.note = Some((e.into(), true));
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn library_adjust(&mut self, params: DevelopParams, cx: &mut Context<Self>) {
+        let Some(path) = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone())
+        else {
+            return;
+        };
+        if let Some(previous) = self.batch.develop.current_params(&path) {
+            let history = self.batch.develop.history.entry(path.clone()).or_default();
+            if previous != params {
+                history.push(previous);
+                if history.len() > 100 {
+                    history.remove(0);
+                }
+            }
+        }
+        self.batch.develop.drafts.insert(path, params);
+        self.batch.develop.before = false;
+        self.invalidate_library_preview();
+        self.library_schedule_save(cx);
+        cx.notify();
+    }
+
+    pub(super) fn library_save_develop(&mut self, sync: bool, cx: &mut Context<Self>) {
+        if self.batch.develop.saving || self.batch.running.is_some() {
+            return;
+        }
+        let mut edits: Vec<_> = self
+            .batch
+            .develop
+            .drafts
+            .iter()
+            .filter(|(p, v)| self.batch.develop.saved.get(*p) != Some(*v))
+            .map(|(p, v)| (p.clone(), *v))
+            .collect();
+        if sync {
+            let Some(path) = self
+                .batch
+                .current
+                .and_then(|i| self.batch.items.get(i))
+                .map(|i| &i.path)
+            else {
+                return;
+            };
+            let Some(params) = self.batch.develop.current_params(path) else {
+                return;
+            };
+            if params.wb_override.is_some()
+                && matches!(
+                    self.batch.develop.sync_group,
+                    raw_settings::RawSettingsGroup::All
+                        | raw_settings::RawSettingsGroup::WhiteBalance
+                )
+            {
+                self.batch.note=Some(("Sampled white balance is camera-specific. Use As shot before syncing across the library.".into(),true));
+                cx.notify();
+                return;
+            }
+            edits = self
+                .batch
+                .items
+                .iter()
+                .filter(|i| i.selected && emulsion_io::raw::is_raw(&i.path))
+                .map(|i| (i.path.clone(), params))
+                .collect();
+        }
+        if edits.is_empty() {
+            return;
+        }
+        let group = self.batch.develop.sync_group;
+        let drafts = self.batch.develop.drafts.clone();
+        let cached_source = self.batch.develop.source.clone();
+        let expected = self.batch.develop.saved.clone();
+        let fingerprints = self.batch.develop.fingerprints.clone();
+        self.batch.develop.saving = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let results = cx
+                .background_spawn(async move {
+                    edits
+                        .into_iter()
+                        .map(|(path, mut params)| {
+                            let mut previous = None;
+                            let result = (|| {
+                                let source = match cached_source.as_ref().filter(|s|s.source==path) {
+                                    Some(source) => {if emulsion_io::raw::source_digest(&path)? != source.source_sha256 {return Err(emulsion_io::IoError::Manifest("RAW original changed; reload before saving.".into()));} source.clone()},
+                                    None => Arc::new(RawSource::load(&path)?),
+                                };
+                                // Validate existing settings before replacing them, including fingerprint.
+                                let current = raw_settings::adjacent_settings(&source.source, &source.source_sha256)?;
+                                if (expected.get(&path).is_some_and(|p| *p != current) || fingerprints.get(&path).is_some_and(|d| d != &source.source_sha256)) {
+                                    return Err(emulsion_io::IoError::Manifest("The original or its saved settings changed outside Library; reload before saving.".into()));
+                                }
+                                if sync {let before=drafts.get(&path).copied().unwrap_or(current);previous=Some(before);params=raw_settings::merge_settings(before,params,group);}
+                                raw_settings::save_source_settings(&source, params)
+                            })();
+                            (path, params, previous, result.map_err(|e| e.to_string()))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.batch.develop.saving = false;
+                let mut failed = Vec::new();
+                let mut saved = 0;
+                for (path, params, previous, result) in results {
+                    match result {
+                        Ok(()) => {
+                            this.batch.develop.saved.insert(path.clone(), params);
+                            if sync && this.batch.develop.drafts.get(&path).is_none_or(|draft| Some(*draft) == previous) {
+                                if let Some(previous) = previous.filter(|p| *p != params) {
+                                    let history = this.batch.develop.history.entry(path.clone()).or_default();
+                                    history.push(previous);
+                                    if history.len() > 100 { history.remove(0); }
+                                }
+                                this.batch.develop.drafts.insert(path.clone(), params);
+                            }
+                            this.batch.thumbs_requested.remove(&path);
+                            for item in &mut this.batch.items {
+                                if item.path == path {
+                                    item.thumb = None;
+                                }
+                            }
+                            saved += 1;
+                        }
+                        Err(e) => failed.push(format!("{}: {e}", path.display())),
+                    }
+                }
+                this.batch.invalidate_thumbs();
+                this.invalidate_library_preview();
+                if failed.is_empty() && this.batch.develop.dirty() {this.library_schedule_save(cx);}
+                this.batch.note = Some((
+                    if failed.is_empty() {
+                        format!("Saved RAW settings for {saved} photo(s). Originals preserved.")
+                    } else {
+                        format!("Saved {saved}; {} failed. {}", failed.len(), failed[0])
+                    }
+                    .into(),
+                    !failed.is_empty(),
+                ));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn library_auto(&mut self, cx: &mut Context<Self>) {
+        let Some(source) = self.batch.develop.source.clone() else {
+            return;
+        };
+        let Some(path) = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone())
+        else {
+            return;
+        };
+        if source.source != path || self.batch.develop.busy {
+            return;
+        }
+        let params = self.batch.develop.current_params(&path).unwrap_or_default();
+        self.batch.develop.busy = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { source.auto_adjust(&params) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.batch.develop.busy = false;
+                // Never replace a newer adjustment or another photo's controls.
+                if this.batch.develop.current_params(&path) == Some(params) {
+                    match result {
+                        Ok(next) => {
+                            if next != params {
+                                let history =
+                                    this.batch.develop.history.entry(path.clone()).or_default();
+                                history.push(params);
+                                if history.len() > 100 {
+                                    history.remove(0);
+                                }
+                            }
+                            this.batch.develop.drafts.insert(path, next);
+                            this.invalidate_library_preview();
+                            this.library_schedule_save(cx);
+                        }
+                        Err(e) => this.batch.note = Some((e.to_string().into(), true)),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn library_develop_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let p = theme::palette(cx);
+        let path = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone());
+        let params = path
+            .as_ref()
+            .and_then(|p| self.batch.develop.current_params(p));
+        let mut panel = div()
+            .id("library-develop")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_3()
+            .border_b_1()
+            .border_color(p.line)
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .child(label("Develop", &p))
+                    .child(mono(
+                        if self.batch.develop.saving {
+                            "Saving…"
+                        } else if self.batch.develop.dirty() {
+                            "Unsaved edits"
+                        } else {
+                            "Saved"
+                        },
+                        10.,
+                        p.muted,
+                    )),
+            );
+        let mut tabs = div().flex().gap_1();
+        for (index, title) in ["Develop", "Info", "Keywords"].into_iter().enumerate() {
+            tabs = tabs.child(
+                Button::new(("library-inspector-tab", index))
+                    .label(title)
+                    .small()
+                    .ghost()
+                    .selected(self.batch.develop.inspector == index)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.batch.develop.inspector = index;
+                        cx.notify();
+                    })),
+            );
+        }
+        panel = panel.child(tabs);
+        if self.batch.develop.dirty() {
+            panel = panel.child(
+                Button::new("library-save-all-drafts")
+                    .label("Save all RAW edits")
+                    .small()
+                    .primary()
+                    .disabled(self.batch.develop.saving)
+                    .on_click(cx.listener(|this, _, _, cx| this.library_save_develop(false, cx))),
+            );
+        }
+        if self.batch.develop.inspector != 0 {
+            return panel
+                .child(self.library_info_panel(self.batch.develop.inspector == 2, cx))
+                .into_any_element();
+        }
+        let Some(params) =
+            params.filter(|_| path.as_ref().is_some_and(|p| emulsion_io::raw::is_raw(p)))
+        else {
+            return panel
+                .child(mono(
+                    if self.batch.develop.busy {
+                        "Loading RAW controls…"
+                    } else {
+                        "Select a RAW photo to develop."
+                    },
+                    11.,
+                    p.muted,
+                ))
+                .into_any_element();
+        };
+        let path = path.unwrap();
+        let bins = self.batch.develop.histogram;
+        let peak = bins.iter().copied().max().unwrap_or(1).max(1) as f32;
+        panel = panel
+            .child(
+                div()
+                    .h(px(65.))
+                    .flex()
+                    .items_end()
+                    .gap(px(1.))
+                    .bg(p.stage)
+                    .children(
+                        bins.into_iter()
+                            .map(|n| div().flex_1().h(px(60. * n as f32 / peak)).bg(p.muted)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        Button::new("library-raw-auto")
+                            .label("Auto")
+                            .small()
+                            .outline()
+                            .disabled(self.batch.develop.busy || self.batch.develop.saving)
+                            .on_click(cx.listener(|this, _, _, cx| this.library_auto(cx))),
+                    )
+                    .child(
+                        Button::new("library-raw-bw")
+                            .label("B&W")
+                            .small()
+                            .ghost()
+                            .disabled(self.batch.develop.saving)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.library_adjust(
+                                    DevelopParams {
+                                        saturation: -1.,
+                                        ..params
+                                    },
+                                    cx,
+                                )
+                            })),
+                    )
+                    .child(
+                        Button::new("library-raw-reset")
+                            .label("Reset")
+                            .small()
+                            .ghost()
+                            .disabled(self.batch.develop.saving)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.library_adjust(DevelopParams::default(), cx)
+                            })),
+                    ),
+            )
+            .child(mono("Profile · Camera color", 10., p.muted));
+        panel = panel.child(
+            Button::new("library-raw-undo")
+                .label("Undo adjustment")
+                .small()
+                .ghost()
+                .disabled(
+                    self.batch.develop.saving
+                        || !self
+                            .batch
+                            .develop
+                            .history
+                            .get(&path)
+                            .is_some_and(|h| !h.is_empty()),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(path) = this
+                        .batch
+                        .current
+                        .and_then(|i| this.batch.items.get(i))
+                        .map(|i| i.path.clone())
+                        && let Some(params) = this
+                            .batch
+                            .develop
+                            .history
+                            .get_mut(&path)
+                            .and_then(|h| h.pop())
+                    {
+                        this.batch.develop.drafts.insert(path, params);
+                        this.batch.develop.before = false;
+                        this.invalidate_library_preview();
+                        this.library_schedule_save(cx);
+                        cx.notify();
+                    }
+                })),
+        );
+        let fields: [(&str, f32, f32, f32, f32); 16] = [
+            ("Exposure", params.exposure, -5., 5., 0.05),
+            ("Contrast", params.contrast, -1., 1., 0.01),
+            ("Highlights", -params.highlights, -1., 1., 0.01),
+            ("Shadows", params.shadows, -1., 1., 0.01),
+            ("Blacks", params.blacks, -1., 1., 0.01),
+            ("Whites", params.whites, -1., 1., 0.01),
+            ("Temperature", params.temperature, -1., 1., 0.01),
+            ("Tint", params.tint, -1., 1., 0.01),
+            ("Saturation", params.saturation, -1., 1., 0.01),
+            ("Vibrance", params.vibrance, -1., 1., 0.01),
+            ("Texture", params.texture, -1., 1., 0.01),
+            ("Clarity", params.clarity, -1., 1., 0.01),
+            ("Dehaze", params.dehaze, -1., 1., 0.01),
+            ("Vignette", params.vignette, -1., 1., 0.01),
+            ("Sharpening", params.sharpening, 0., 1., 0.01),
+            ("Noise reduction", params.noise_reduction, 0., 1., 0.01),
+        ];
+        if self.batch.develop.slider_key.as_ref() != Some(&(path.clone(), params)) {
+            self.batch.develop.sliders.clear();
+            for (index, (_, value, min, max, step)) in fields.iter().enumerate() {
+                let slider = cx.new(|_| {
+                    SliderState::new()
+                        .min(*min)
+                        .max(*max)
+                        .step(*step)
+                        .default_value(*value)
+                });
+                let sub = cx.subscribe(&slider, move |this, _, event, cx| {
+                    if let SliderEvent::Change(value) = event {
+                        let Some(path) = this
+                            .batch
+                            .current
+                            .and_then(|i| this.batch.items.get(i))
+                            .map(|i| i.path.clone())
+                        else {
+                            return;
+                        };
+                        let Some(mut params) = this.batch.develop.current_params(&path) else {
+                            return;
+                        };
+                        let v = value.end();
+                        match index {
+                            0 => params.exposure = v,
+                            1 => params.contrast = v,
+                            2 => params.highlights = -v,
+                            3 => params.shadows = v,
+                            4 => params.blacks = v,
+                            5 => params.whites = v,
+                            6 => params.temperature = v,
+                            7 => params.tint = v,
+                            8 => params.saturation = v,
+                            9 => params.vibrance = v,
+                            10 => params.texture = v,
+                            11 => params.clarity = v,
+                            12 => params.dehaze = v,
+                            13 => params.vignette = v,
+                            14 => params.sharpening = v,
+                            _ => params.noise_reduction = v,
+                        }
+                        this.batch.develop.slider_key = Some((path, params));
+                        this.library_adjust(params, cx);
+                    }
+                });
+                self.batch.develop.sliders.push((slider, sub));
+            }
+            self.batch.develop.slider_key = Some((path.clone(), params));
+        }
+        for (index, (name, value, _, _, _)) in fields.into_iter().enumerate() {
+            if [0, 6, 10, 14].contains(&index) {
+                panel = panel.child(label(
+                    match index {
+                        0 => "Light",
+                        6 => "Color · relative to as shot",
+                        10 => "Effects",
+                        _ => "Detail",
+                    },
+                    &p,
+                ));
+            }
+            panel = panel.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .child(mono(name, 11., p.muted))
+                            .child(mono(
+                                if index == 0 {
+                                    format!("{value:+.2} EV")
+                                } else {
+                                    format!("{:+.0}", value * 100.)
+                                },
+                                10.,
+                                p.ink,
+                            )),
+                    )
+                    .child(
+                        Slider::new(&self.batch.develop.sliders[index].0)
+                            .disabled(self.batch.develop.saving),
+                    ),
+            );
+        }
+        panel = panel
+            .child(
+                Button::new("library-raw-as-shot")
+                    .label("As shot white balance")
+                    .disabled(self.batch.develop.saving)
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.library_adjust(
+                            DevelopParams {
+                                temperature: 0.,
+                                tint: 0.,
+                                wb_override: None,
+                                ..params
+                            },
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        Button::new("library-raw-before")
+                            .label("Before")
+                            .small()
+                            .ghost()
+                            .selected(self.batch.develop.before)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.batch.develop.before = !this.batch.develop.before;
+                                this.invalidate_library_preview();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("library-raw-save")
+                            .label("Save edits")
+                            .small()
+                            .primary()
+                            .disabled(!self.batch.develop.dirty() || self.batch.develop.saving)
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.library_save_develop(false, cx)),
+                            ),
+                    ),
+            )
+            .child(
+                Button::new("library-raw-sync")
+                    .label("Sync to selected RAW photos")
+                    .small()
+                    .outline()
+                    .disabled(
+                        self.batch.develop.saving
+                            || self
+                                .batch
+                                .items
+                                .iter()
+                                .filter(|i| i.selected && emulsion_io::raw::is_raw(&i.path))
+                                .count()
+                                < 2,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.library_save_develop(true, cx))),
+            );
+        let mut groups = div()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .child(mono("Sync:", 10., p.muted));
+        for (index, name, group) in [
+            (0, "All", raw_settings::RawSettingsGroup::All),
+            (1, "Tone / effects", raw_settings::RawSettingsGroup::Tone),
+            (
+                2,
+                "White balance",
+                raw_settings::RawSettingsGroup::WhiteBalance,
+            ),
+            (3, "Curve", raw_settings::RawSettingsGroup::Curve),
+        ] {
+            groups = groups.child(
+                Button::new(("library-sync-group", index as usize))
+                    .label(name)
+                    .small()
+                    .ghost()
+                    .selected(self.batch.develop.sync_group == group)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.batch.develop.sync_group = group;
+                        cx.notify();
+                    })),
+            );
+        }
+        panel = panel.child(groups).child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(
+                    Button::new("library-save-preset")
+                        .label("Save preset…")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| this.library_preset_file(true, cx))),
+                )
+                .child(
+                    Button::new("library-load-preset")
+                        .label("Load preset…")
+                        .small()
+                        .ghost()
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.library_preset_file(false, cx)),
+                        ),
+                )
+                .child(
+                    Button::new("library-reload-raw")
+                        .label("Reload saved")
+                        .small()
+                        .ghost()
+                        .disabled(self.batch.develop.saving)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(path) = this
+                                .batch
+                                .current
+                                .and_then(|i| this.batch.items.get(i))
+                                .map(|i| i.path.clone())
+                            {
+                                this.batch.develop.drafts.remove(&path);
+                                this.batch.develop.saved.remove(&path);
+                                this.batch.develop.fingerprints.remove(&path);
+                                this.batch.develop.history.remove(&path);
+                                this.batch.develop.source = None;
+                                this.invalidate_library_preview();
+                                cx.notify();
+                            }
+                        })),
+                ),
+        );
+        if let Some(source) = self
+            .batch
+            .develop
+            .source
+            .as_ref()
+            .filter(|s| s.source == path)
+        {
+            panel = panel.child(label("Info", &p)).child(mono(
+                format!(
+                    "{} {} · {} × {}",
+                    source.metadata.make,
+                    source.metadata.model,
+                    source.info.width,
+                    source.info.height
+                ),
+                10.,
+                p.muted,
+            ));
+        }
+        panel.into_any_element()
+    }
+}
+
+impl Workspace {
+    pub(super) fn library_raw_preset(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(path) = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone())
+        else {
+            return;
+        };
+        let Some(mut params) = self.batch.develop.current_params(&path) else {
+            self.batch.note = Some((
+                "Select a RAW photo to apply a develop preset.".into(),
+                false,
+            ));
+            cx.notify();
+            return;
+        };
+        if self.batch.develop.saving {
+            return;
+        }
+        match index {
+            0 => params = DevelopParams::default(),
+            1 => {
+                params.temperature = 0.15;
+                params.shadows = 0.12;
+                params.highlights = 0.2;
+            }
+            2 => {
+                params.saturation = -1.;
+                params.tone_curve = DevelopParams::MEDIUM_CONTRAST_CURVE;
+                params.smooth_curve = true;
+            }
+            _ => {
+                params.tone_curve = DevelopParams::STRONG_CONTRAST_CURVE;
+                params.smooth_curve = true;
+            }
+        }
+        self.library_adjust(params, cx);
+    }
+}
+
+impl Workspace {
+    fn library_schedule_save(&mut self, cx: &mut Context<Self>) {
+        self.batch.develop.save_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(450))
+                .await;
+            this.update(cx, |this, cx| this.library_save_develop(false, cx))
+                .ok();
+        }));
+    }
+}
+
+impl Workspace {
+    pub(super) fn library_comparison_view(&self, after: AnyElement, cx: &App) -> AnyElement {
+        let p = theme::palette(cx);
+        let path = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| &i.path);
+        let before = self
+            .batch
+            .develop
+            .baseline_preview
+            .as_ref()
+            .filter(|(p, _)| Some(p) == path)
+            .map(|(_, i)| i.clone());
+        let before = match before {
+            Some(image) => img(ImageSource::Render(image))
+                .size_full()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            None => div()
+                .child(mono("Rendering original…", 11., p.muted))
+                .into_any_element(),
+        };
+        div()
+            .flex()
+            .size_full()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .child(mono("Before · original RAW", 10., p.muted))
+                    .child(div().flex_1().min_h_0().child(before)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .child(mono("After · current settings", 10., p.muted))
+                    .child(div().flex_1().min_h_0().child(after)),
+            )
+            .into_any_element()
+    }
+}
+
+impl Workspace {
+    fn library_preset_file(&mut self, save: bool, cx: &mut Context<Self>) {
+        let Some(path) = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone())
+        else {
+            return;
+        };
+        let Some(params) = self.batch.develop.current_params(&path) else {
+            return;
+        };
+        let pick = if save {
+            let rx = cx.prompt_for_new_path(
+                path.parent().unwrap_or(Path::new(".")),
+                Some("settings.emulsion-preset.json"),
+            );
+            cx.spawn(async move |_, _| rx.await.ok().and_then(|r| r.ok()).flatten())
+        } else {
+            let rx = cx.prompt_for_paths(PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: false,
+                prompt: Some("Load Emulsion RAW preset".into()),
+            });
+            cx.spawn(async move |_, _| {
+                rx.await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .flatten()
+                    .and_then(|p| p.into_iter().next())
+            })
+        };
+        cx.spawn(async move |this, cx| {
+            let Some(file) = pick.await else { return };
+            let result = cx
+                .background_spawn(async move {
+                    if save {
+                        raw_settings::save_preset(params, &file).map(|_| None)
+                    } else {
+                        raw_settings::load_preset(&file).map(Some)
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(Some(loaded)) => {
+                        if this
+                            .batch
+                            .current
+                            .and_then(|i| this.batch.items.get(i))
+                            .map(|i| &i.path)
+                            == Some(&path)
+                            && this.batch.develop.current_params(&path) == Some(params)
+                            && !this.batch.develop.saving
+                        {
+                            this.library_adjust(loaded, cx);
+                        } else {
+                            this.batch.note = Some((
+                                "Preset not applied because the active photo changed.".into(),
+                                false,
+                            ));
+                        }
+                    }
+                    Ok(None) => this.batch.note = Some(("RAW preset saved.".into(), false)),
+                    Err(error) => this.batch.note = Some((error.to_string().into(), true)),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+    #[test]
+    fn luminance_histogram_counts_opaque_pixels_in_correct_bins() {
+        let bins = histogram(&[
+            0, 0, 0, 255, 255, 255, 255, 255, 128, 128, 128, 255, 255, 0, 0, 0,
+        ]);
+        assert_eq!(bins.iter().sum::<u32>(), 3);
+        assert_eq!((bins[0], bins[16], bins[31]), (1, 1, 1));
+    }
+    #[test]
+    fn returning_from_photo_reloads_saved_settings_but_keeps_unsaved_drafts() {
+        let mut state = Develop::default();
+        let clean = PathBuf::from("saved.dng");
+        let dirty = PathBuf::from("pending.dng");
+        let original = DevelopParams::default();
+        let edited = DevelopParams {
+            exposure: 1.,
+            ..original
+        };
+        state.saved.insert(clean.clone(), original);
+        state.drafts.insert(clean.clone(), original);
+        state.saved.insert(dirty.clone(), original);
+        state.drafts.insert(dirty.clone(), edited);
+        state.refresh_saved();
+        assert_eq!(state.current_params(&clean), None);
+        assert_eq!(state.current_params(&dirty), Some(edited));
+        assert_eq!(state.saved.get(&dirty), Some(&original));
+        assert!(state.dirty());
+    }
+    #[test]
+    fn drafts_remain_dirty_until_the_exact_settings_are_saved() {
+        let path = PathBuf::from("photo.dng");
+        let mut state = Develop::default();
+        let baseline = DevelopParams::default();
+        state.saved.insert(path.clone(), baseline);
+        state.drafts.insert(
+            path.clone(),
+            DevelopParams {
+                exposure: 1.,
+                ..baseline
+            },
+        );
+        assert!(state.dirty());
+        state.saved.insert(path.clone(), state.drafts[&path]);
+        assert!(!state.dirty());
+        state.drafts.insert(path, baseline);
+        assert!(state.dirty(), "undoing a saved edit must also be saved");
+    }
+}

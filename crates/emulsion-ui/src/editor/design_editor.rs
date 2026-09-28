@@ -92,6 +92,7 @@ impl EditorView {
                             .overflow_hidden()
                             .children(tabs)
                             .children(toolbar)
+                            .children(self.design_appearance_controls(p, cx))
                             .children(self.diagram_canvas_toolbar(p, window, cx))
                             .when(
                                 !matches!(
@@ -312,6 +313,15 @@ impl EditorView {
                     }))
                     .item(item(&editor, "Paste style", can_paste, |e, _, cx| {
                         e.paste_design_appearance(cx)
+                    }))
+                    .item(item(
+                        &editor,
+                        "Save as reusable style…",
+                        true,
+                        |e, window, cx| e.save_design_style_dialog(None, window, cx),
+                    ))
+                    .item(item(&editor, "Saved styles", true, |e, _, cx| {
+                        e.show_design_section(super::design_ui::Section::Brand, cx)
                     }))
                     .item(item(&editor, "Flip horizontally", !locked, |e, _, cx| {
                         e.flip_transform_selection(true, cx)

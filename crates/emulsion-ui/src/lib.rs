@@ -14,6 +14,8 @@ mod home;
 mod home_projects;
 pub mod image_viewer;
 pub mod landing;
+mod playback_setup;
+mod print_dialog;
 mod reference;
 mod settings_models;
 mod settings_screen;

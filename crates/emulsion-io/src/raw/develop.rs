@@ -1,4 +1,5 @@
 use super::{DevelopParams, cancelled};
+mod detail;
 use crate::{IoError, Result};
 use emulsion_raster::{Raster, TILE, TILE_PX, TileCoord};
 use rawler::{
@@ -204,10 +205,20 @@ fn shape(value: f32, params: &DevelopParams) -> f32 {
         let over = value - 0.7;
         value = 0.7 + over / (1.0 + over * params.highlights * 3.0);
     }
+    if params.highlights < 0.0 && value > 0.5 {
+        value += -params.highlights * (value - 0.5) * 0.5;
+    }
     if params.shadows != 0.0 {
         value = value.powf(1.0 - 0.35 * params.shadows);
     }
     value = ((value - params.black_point) / (1.0 - params.black_point)).max(0.0);
+    if params.whites != 0.0 || params.blacks != 0.0 {
+        let level = value.clamp(0., 1.);
+        value = (value
+            + params.whites * level * level * 0.35
+            + params.blacks * (1. - level).powi(2) * 0.08)
+            .max(0.);
+    }
     // Brightness moves midtones while leaving the black and white endpoints.
     if params.brightness != 0.0 {
         value = value.powf(2f32.powf(-params.brightness));
@@ -244,11 +255,33 @@ fn tone(pixel: [f32; 3], params: &DevelopParams) -> [f32; 3] {
             [after; 3]
         };
     }
-    if params.saturation == 0.0 {
+    if params.dehaze != 0.0 {
+        if params.dehaze > 0.0 {
+            let dark = pixel
+                .iter()
+                .copied()
+                .fold(f32::INFINITY, f32::min)
+                .clamp(0., 0.8);
+            let transmission = (1. - params.dehaze * dark * 0.8).max(0.2);
+            pixel = pixel.map(|v| (v - (1. - transmission)) / transmission);
+        } else {
+            let haze = -params.dehaze * 0.3;
+            pixel = pixel.map(|v| v * (1. - haze) + haze);
+        }
+    }
+    if params.saturation == 0.0 && params.vibrance == 0.0 {
         return pixel;
     }
     let gray = luminance(pixel);
-    pixel.map(|v| gray + (v - gray) * (1.0 + params.saturation))
+    let max = pixel.iter().copied().fold(0., f32::max);
+    let min = pixel.iter().copied().fold(f32::INFINITY, f32::min);
+    let chroma = if max > 1e-6 {
+        ((max - min) / max).clamp(0., 1.)
+    } else {
+        0.
+    };
+    let vibrance = 1. + params.vibrance * (1. - chroma);
+    pixel.map(|v| gray + (v - gray) * (1.0 + params.saturation) * vibrance)
 }
 
 pub(super) fn render(
@@ -442,7 +475,7 @@ pub(super) fn auto_adjust(raw: &RawImage, params: &DevelopParams) -> Result<Deve
     if white <= 1e-6 {
         return Ok(result);
     }
-    result.exposure = (0.95 / white).log2().clamp(-3.0, 3.0);
+    result.exposure = (0.95 / white).log2().clamp(-5.0, 5.0);
     let gain = 2f32.powf(result.exposure);
     // Ignore a small dark tail, but do not crush an entirely low-contrast scene.
     let low = levels[(levels.len() - 1) / 200];
@@ -483,6 +516,16 @@ fn finish(
             | Orientation::Rotate270
     );
     let (ow, oh) = if swap { (h, w) } else { (w, h) };
+    let spatial = params.texture != 0.
+        || params.clarity != 0.
+        || params.sharpening != 0.
+        || params.noise_reduction != 0.;
+    let rgb = if spatial {
+        let toned: Vec<_> = rgb.into_par_iter().map(|v| tone(v, params)).collect();
+        detail::apply(w, h, toned, params, cancel)?
+    } else {
+        rgb
+    };
     let edge = TILE as usize;
     let columns = ow.div_ceil(edge);
     // Write linear RGBA16 directly into tiles, avoiding a full-frame buffer
@@ -498,8 +541,19 @@ fn finish(
                 cancelled(cancel)?;
                 for lx in 0..edge.min(ow - x0) {
                     let index = oriented_index(w, h, orientation, x0 + lx, y0 + ly);
-                    let p = tone(rgb[index], params)
-                        .map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
+                    let mut p = if spatial {
+                        rgb[index]
+                    } else {
+                        tone(rgb[index], params)
+                    };
+                    if params.vignette != 0. {
+                        let nx = ((x0 + lx) as f32 + 0.5) / ow as f32 * 2. - 1.;
+                        let ny = ((y0 + ly) as f32 + 0.5) / oh as f32 * 2. - 1.;
+                        let falloff = ((nx * nx + ny * ny) * 0.5).clamp(0., 1.);
+                        let gain = 2f32.powf(params.vignette * falloff * 2.);
+                        p = p.map(|v| v * gain);
+                    }
+                    let p = p.map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
                     tile[ly * edge + lx] = [p[0], p[1], p[2], u16::MAX];
                 }
             }

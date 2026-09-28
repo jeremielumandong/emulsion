@@ -835,7 +835,9 @@ impl EditorView {
             }
             Section::Elements => {
                 content = content.child(self.design_video_controls(cx));
-                content = content.child(self.design_chart_controls(cx));
+                content = content
+                    .child(self.design_chart_controls(cx))
+                    .child(self.design_component_controls(p, cx));
                 content = content.child(
                     div()
                         .flex()
@@ -1037,7 +1039,9 @@ impl EditorView {
                 content=content.child(div().text_size(px(11.)).text_color(p.muted).child("Placed assets are embedded in the project. Photos, SVG, and native layers stay local."));
             }
             Section::Brand => {
-                content = content.child(self.brand_drawer(&query, p, cx));
+                content = content
+                    .child(self.design_saved_style_controls(&query, p, cx))
+                    .child(self.brand_drawer(&query, p, cx));
             }
             Section::Motion => {
                 content = content.child(self.design_motion_controls(p, cx));

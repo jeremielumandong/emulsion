@@ -103,6 +103,8 @@ impl Workspace {
             .unwrap_or_else(|| file_kind(path))
     }
     fn pick_home_folder(&mut self, id: Option<u64>, unfiled: bool, cx: &mut Context<Self>) {
+        self.home_state.cloud_files = false;
+        self.home_state.page = 0;
         self.home_state.projects.folder = id;
         self.home_state.unfiled = unfiled;
         self.home_state.projects.trash = false;
@@ -131,6 +133,27 @@ impl Workspace {
             .into_any_element()
     }
     pub(super) fn home_welcome(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+        if self.home_state.cloud_files {
+            return div()
+                .id("home-welcome")
+                .test_support()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_size(px(22.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Cloud files"),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(p.muted)
+                        .child("Browse synced files. Open a file’s history to see older versions."),
+                )
+                .into_any_element();
+        }
         let folder = self.home_state.projects.folder.and_then(|id| {
             self.home_state
                 .projects
@@ -139,16 +162,20 @@ impl Workspace {
                 .iter()
                 .find(|f| f.id == id)
         });
-        let title = folder.map(|f| f.name.clone()).unwrap_or_else(|| {
-            if self.home_state.unfiled {
-                "Unfiled"
-            } else if self.home_state.projects.trash {
-                "Trash"
-            } else {
-                "Welcome back"
-            }
-            .into()
-        });
+        let title = if self.home_state.cloud_files {
+            "Cloud files".into()
+        } else {
+            folder.map(|f| f.name.clone()).unwrap_or_else(|| {
+                if self.home_state.unfiled {
+                    "Unfiled"
+                } else if self.home_state.projects.trash {
+                    "Trash"
+                } else {
+                    "Welcome back"
+                }
+                .into()
+            })
+        };
         div()
             .id("home-welcome")
             .test_support()
@@ -170,7 +197,9 @@ impl Workspace {
                             .child(title),
                     )
                     .child(div().text_size(px(12.)).text_color(p.muted).child(
-                        if folder.is_some() {
+                        if self.home_state.cloud_files {
+                            "Browse synced files. Open a file’s history to see older versions."
+                        } else if folder.is_some() {
                             "New files here save to this project."
                         } else {
                             "Pick up where you left off, or start something new."
@@ -215,6 +244,13 @@ impl Workspace {
         let search = self.home_state.search.as_ref().unwrap().0.clone();
         let state = &self.home_state.projects;
         let entries = self.home_project_entries();
+        let trashed_paths: HashSet<_> = state
+            .catalog
+            .projects
+            .iter()
+            .filter(|p| p.trashed)
+            .map(|p| &p.path)
+            .collect();
         let mut list = div()
             .id("home-library-list")
             .flex()
@@ -258,11 +294,7 @@ impl Workspace {
             let count = entries
                 .iter()
                 .filter(|entry| {
-                    let trashed = state
-                        .catalog
-                        .projects
-                        .iter()
-                        .any(|p| p.path == entry.path && p.trashed);
+                    let trashed = trashed_paths.contains(&entry.path);
                     trashed == trash
                         && match filter {
                             HomeFilter::Starred => crate::app_state::settings(cx)
@@ -276,7 +308,8 @@ impl Workspace {
                         }
                 })
                 .count();
-            let active = self.home_state.filter == filter
+            let active = !self.home_state.cloud_files
+                && self.home_state.filter == filter
                 && state.trash == trash
                 && state.folder.is_none()
                 && !self.home_state.unfiled;
@@ -305,6 +338,8 @@ impl Workspace {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.pick_home_folder(None, false, cx);
+                        this.home_state.cloud_files = false;
+                        this.home_state.page = 0;
                         this.home_state.filter = filter;
                         this.home_state.projects.trash = trash;
                         cx.notify();
@@ -335,7 +370,7 @@ impl Workspace {
                     .ghost()
                     .h(px(28.))
                     .w_full()
-                    .selected(state.folder == Some(id))
+                    .selected(!self.home_state.cloud_files && state.folder == Some(id))
                     .child(
                         div()
                             .flex()
@@ -370,7 +405,7 @@ impl Workspace {
                     .ghost()
                     .w_full()
                     .h(px(28.))
-                    .selected(self.home_state.unfiled)
+                    .selected(!self.home_state.cloud_files && self.home_state.unfiled)
                     .on_click(cx.listener(|this, _, _, cx| this.pick_home_folder(None, true, cx))),
             )
             .child(
@@ -398,12 +433,29 @@ impl Workspace {
             .bg(p.panel)
             .child(list)
             .child(
-                button("home-more", "More file actions…")
+                Button::new("home-cloud-sidebar")
+                    .label("Cloud files")
+                    .ghost()
+                    .w_full()
+                    .selected(self.home_state.cloud_files)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_cloud_home(window, cx))),
+            )
+            .child(
+                button("home-more", "Project tools…")
                     .ghost()
                     .w_full()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.home_state.management = !this.home_state.management;
                         cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("home-library-sidebar")
+                    .label("Library")
+                    .ghost()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.visit_destination(Destination::Library, window, cx)
                     })),
             )
             .child(
@@ -615,7 +667,7 @@ impl Workspace {
                     .xsmall()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.set_screen(crate::workspace::Screen::Settings, window, cx);
+                        this.open_cloud_home(window, cx);
                     })),
             );
         for (i, kind) in [
@@ -639,6 +691,7 @@ impl Workspace {
                     .selected(self.home_state.projects.kind == kind)
                     .child(div().text_size(px(11.)).child(label))
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        this.home_state.page = 0;
                         this.home_state.projects.kind = kind;
                         cx.notify();
                     })),

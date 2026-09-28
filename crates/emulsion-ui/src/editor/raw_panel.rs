@@ -313,6 +313,15 @@ impl EditorView {
                     | "brightness"
                     | "contrast"
                     | "saturation"
+                    | "whites"
+                    | "blacks"
+                    | "vibrance"
+                    | "texture"
+                    | "clarity"
+                    | "dehaze"
+                    | "vignette"
+                    | "sharpening"
+                    | "noise_reduction"
                     | "curve0"
                     | "curve1"
                     | "curve2"
@@ -345,6 +354,15 @@ impl EditorView {
             "brightness" => p.brightness = v / 100.0,
             "contrast" => p.contrast = v / 100.0,
             "saturation" => p.saturation = v / 100.0,
+            "whites" => p.whites = v / 100.0,
+            "blacks" => p.blacks = v / 100.0,
+            "vibrance" => p.vibrance = v / 100.0,
+            "texture" => p.texture = v / 100.0,
+            "clarity" => p.clarity = v / 100.0,
+            "dehaze" => p.dehaze = v / 100.0,
+            "vignette" => p.vignette = v / 100.0,
+            "sharpening" => p.sharpening = v / 100.0,
+            "noise_reduction" => p.noise_reduction = v / 100.0,
             "curve0" | "curve1" | "curve2" | "curve3" | "curve4" => {
                 let ix = (name.as_bytes()[5] - b'0') as usize;
                 let low = if ix == 0 { 0.0 } else { p.tone_curve[ix - 1] };
@@ -991,13 +1009,39 @@ impl EditorView {
                     .child("Click a neutral gray area in the photo. Escape cancels."),
             );
         }
-        let rows: [RawRow; 9] = [
+        body = body.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(
+                    Button::new("raw-tone-preview")
+                        .label("Compare without tone")
+                        .xsmall()
+                        .ghost()
+                        .disabled(self.raw.is_pending())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.raw_preview(RawSection::Adjust, false, cx)
+                        })),
+                )
+                .child(
+                    Button::new("raw-clipping")
+                        .label("Show clipping")
+                        .xsmall()
+                        .ghost()
+                        .disabled(self.raw.is_pending())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.raw_preview(RawSection::Adjust, true, cx)
+                        })),
+                ),
+        );
+        let mut rows: Vec<RawRow> = vec![
             (
                 "exposure",
                 "exposure",
                 format!("{:+.2} EV", prm.exposure),
-                (prm.exposure + 3.0) / 6.0,
-                (-300.0, 300.0, 5.0),
+                (prm.exposure + 5.0) / 10.0,
+                (-500.0, 500.0, 5.0),
             ),
             (
                 "temperature",
@@ -1037,8 +1081,8 @@ impl EditorView {
                 "highlights",
                 "highlights",
                 format!("{:.0}", prm.highlights * 100.0),
-                prm.highlights,
-                (0.0, 100.0, 1.0),
+                (prm.highlights + 1.0) / 2.0,
+                (-100.0, 100.0, 1.0),
             ),
             (
                 "shadows",
@@ -1076,6 +1120,30 @@ impl EditorView {
                 (-100.0, 100.0, 1.0),
             ),
         ];
+        for (key, name, value, positive) in [
+            ("whites", "Whites", prm.whites, false),
+            ("blacks", "Blacks", prm.blacks, false),
+            ("vibrance", "Vibrance", prm.vibrance, false),
+            ("texture", "Texture", prm.texture, false),
+            ("clarity", "Clarity", prm.clarity, false),
+            ("dehaze", "Dehaze", prm.dehaze, false),
+            ("vignette", "Vignette", prm.vignette, false),
+            ("sharpening", "Sharpening", prm.sharpening, true),
+            (
+                "noise_reduction",
+                "Noise reduction",
+                prm.noise_reduction,
+                true,
+            ),
+        ] {
+            rows.push((
+                key,
+                name,
+                format!("{:+.0}", value * 100.),
+                if positive { value } else { (value + 1.) / 2. },
+                (if positive { 0. } else { -100. }, 100., 1.),
+            ));
+        }
         for (key, name, display, norm, spec) in rows {
             body = body.child(self.param_slider(
                 SliderKey::Raw(key),
@@ -1087,32 +1155,6 @@ impl EditorView {
                 cx,
             ));
         }
-        body = body.child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_1()
-                .child(
-                    Button::new("raw-tone-preview")
-                        .label("Compare without tone")
-                        .xsmall()
-                        .ghost()
-                        .disabled(self.raw.is_pending())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.raw_preview(RawSection::Adjust, false, cx)
-                        })),
-                )
-                .child(
-                    Button::new("raw-clipping")
-                        .label("Show clipping")
-                        .xsmall()
-                        .ghost()
-                        .disabled(self.raw.is_pending())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.raw_preview(RawSection::Adjust, true, cx)
-                        })),
-                ),
-        );
         body = body.child(mono(
             "re-develops the camera file; adjustments above it stay as they are",
             9.5,

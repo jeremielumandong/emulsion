@@ -27,10 +27,13 @@ mod contextual_tools;
 mod creative_pack_ui;
 mod creative_ui;
 pub(crate) mod crop;
+mod design_appearance_ui;
 mod design_controls;
 mod design_editor;
 mod design_motion_ui;
+mod design_presentation_ui;
 mod design_selection;
+mod design_styles_ui;
 mod design_ui;
 mod diagram_data_ui;
 mod diagram_ui;
@@ -57,6 +60,7 @@ mod movement;
 pub mod navigation_benchmark;
 mod panels;
 mod pen;
+mod playback_setup_ui;
 mod project_pages;
 mod remove_tool;
 mod render_regions;
@@ -70,6 +74,7 @@ pub(crate) use presets::shared_library;
 mod design_bulk_ui;
 mod design_chart_data;
 mod design_charts_ui;
+mod design_components_ui;
 mod design_layout_ui;
 mod design_video_ui;
 mod photo_shortcuts;
@@ -397,6 +402,7 @@ pub struct EditorView {
     /// RAW develop panel state.
     pub(crate) raw: raw_panel::RawState,
     /// Other open tabs, supplied by the workspace; weak references never keep closed photos alive.
+    pub(crate) library_workspace: Option<WeakEntity<crate::workspace::Workspace>>,
     pub(crate) raw_peers: Vec<WeakEntity<EditorView>>,
     /// Generative fill prompt and state.
     pub(crate) generate: generate_ui::GenState,
@@ -409,6 +415,7 @@ pub struct EditorView {
     /// Paint mode: painter's tools within the shared editor shell.
     pub(crate) draw_mode: bool,
     pub(crate) home_folder_on_save: Option<Option<u64>>,
+    pub(crate) home_canvas_kind: Option<emulsion_core::creation::CanvasKind>,
     /// Export chooser state and the last format picked.
     pub(crate) export_prefs: export_ui::ExportPrefs,
     pub(crate) fit_pending: bool,
@@ -555,11 +562,13 @@ impl EditorView {
             name,
             source,
             home_folder_on_save: None,
+            home_canvas_kind: None,
             view: View::default(),
             warp: None,
             anim: Default::default(),
             raw: Default::default(),
             raw_peers: Vec::new(),
+            library_workspace: None,
             generate: Default::default(),
             rail: Default::default(),
             compact: compact::CompactLayout::for_mode(draw_mode, cx),
@@ -2367,9 +2376,9 @@ impl EditorView {
         let previewing = self.previewing();
         let presenting = self.motion.presenting;
         let overlay = self.overlay(window.scale_factor());
-        let zoom_cursor = self.zoom_cursor(p, window);
-        let replay = self.replay_overlay(p, cx);
-        let job_card = self.ai_job_card(p, cx);
+        let zoom_cursor = (!presenting).then(|| self.zoom_cursor(p, window)).flatten();
+        let replay = (!presenting).then(|| self.replay_overlay(p, cx)).flatten();
+        let job_card = (!presenting).then(|| self.ai_job_card(p, cx)).flatten();
         let accent = p.accent;
         let view_for_overlay = self.view;
         let quick_mask = self
@@ -2383,6 +2392,7 @@ impl EditorView {
         let mask_view_cache = self.mask_view.cache.clone();
         // Fit once the canvas has been laid out.
         if self.fit_pending
+            && !presenting
             && let Some(b) = self.canvas_bounds()
         {
             self.view
@@ -2403,7 +2413,11 @@ impl EditorView {
             rev: self.render_gen,
             before,
             raw_compare: self.raw_split_active(),
-            stage: p.stage,
+            stage: if presenting {
+                rgb(0x000000).into()
+            } else {
+                p.stage
+            },
             ink: p.ink,
             accent: p.accent,
             rulers: self.rulers && !presenting,
@@ -2418,16 +2432,23 @@ impl EditorView {
         });
         let cache = self.cache.clone();
         let cache2 = self.cache.clone();
-        let gpu_canvas = self.gpu_canvas.clone();
-        let gpu_canvas2 = self.gpu_canvas.clone();
-        let gpu_doc = self.editor.doc.clone();
-        let gpu_rev = self.editor.revision;
+        let presentation_frame = self.presentation_gpu_frame();
+        let native_presentation = presentation_frame.is_some();
+        let (gpu_doc, gpu_rev, gpu_canvas) = presentation_frame.unwrap_or_else(|| {
+            (
+                self.editor.doc.clone(),
+                self.editor.revision,
+                self.gpu_canvas.clone(),
+            )
+        });
+        let gpu_canvas2 = gpu_canvas.clone();
         let gpu_view = self.view;
         let bounds_cell = self.canvas_bounds.clone();
         let fit_pending = self.fit_pending;
         let weak = cx.entity().downgrade();
         let (w1, w2, w3, w4) = (weak.clone(), weak.clone(), weak.clone(), weak.clone());
         let cursor = match (&self.drag, self.space_held) {
+            _ if presenting => CursorStyle::Arrow,
             (Some(Drag::Compare), _) => CursorStyle::ResizeLeftRight,
             (Some(Drag::Pan { .. } | Drag::RotateView { .. }), _) => CursorStyle::ClosedHand,
             (Some(Drag::Guide { vertical: true, .. }), _) => CursorStyle::ResizeLeftRight,
@@ -2452,7 +2473,9 @@ impl EditorView {
             .min_h_0()
             .overflow_hidden()
             .track_focus(&self.canvas_focus)
-            .key_context(if self.type_tool.field.is_some() {
+            .key_context(if presenting {
+                "Presentation"
+            } else if self.type_tool.field.is_some() {
                 "CanvasText"
             } else {
                 "Canvas"
@@ -2592,12 +2615,22 @@ impl EditorView {
                     window.focus(&this.canvas_focus, cx);
                 }
             }))
-            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.scroll(e, window, cx)))
+            .on_scroll_wheel(cx.listener(|this, e, window, cx| {
+                if !this.motion.presenting {
+                    this.scroll(e, window, cx);
+                }
+            }))
             .on_drop(cx.listener(|this, d: &DraggedColor, window, cx| {
+                if this.motion.presenting {
+                    return;
+                }
                 let pos = window.mouse_position();
                 this.color_drop(d.0, pos, cx);
             }))
             .on_pinch(cx.listener(|this, e: &PinchEvent, window, cx| {
+                if this.motion.presenting {
+                    return;
+                }
                 if let Some(b) = this.canvas_bounds() {
                     this.view.zoom_at(
                         1.0 + e.delta as f64,
@@ -2611,18 +2644,10 @@ impl EditorView {
                 }
             }))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                // Presentation captures navigation above the canvas. Keys it
+                // leaves unconsumed belong to the focused embedded player.
                 if this.motion.presenting {
-                    let step = match e.keystroke.key.as_str() {
-                        "space" if e.keystroke.modifiers.shift => Some(-1),
-                        "space" | "pagedown" => Some(1),
-                        "pageup" => Some(-1),
-                        _ => None,
-                    };
-                    if let Some(step) = step {
-                        this.presentation_step(step, cx);
-                        cx.stop_propagation();
-                        return;
-                    }
+                    return;
                 }
                 if this.raw_split_active() {
                     let next = match e.keystroke.key.as_str() {
@@ -2665,7 +2690,38 @@ impl EditorView {
             .child(
                 canvas(
                     move |b, window, cx| {
+                        let bounds_changed = bounds_cell.get() != Some(b);
                         bounds_cell.set(Some(b));
+                        if presenting {
+                            let fitted = design_presentation_ui::fit_page(
+                                scene.doc_size.0,
+                                scene.doc_size.1,
+                                b,
+                            )?;
+                            if fit_pending || bounds_changed || scene.view != fitted {
+                                cx.defer(move |cx| {
+                                    w1.update(cx, |this, cx| {
+                                        // An old layout callback must not refit a later page,
+                                        // resized window or restored editing viewport.
+                                        if this.motion.presenting
+                                            && this.canvas_bounds() == Some(b)
+                                            && let Some(view) = design_presentation_ui::fit_page(
+                                                this.editor.doc.width,
+                                                this.editor.doc.height,
+                                                b,
+                                            )
+                                        {
+                                            this.view = view;
+                                            this.fit_pending = false;
+                                            this.notify_canvas(cx);
+                                            cx.notify();
+                                        }
+                                    })
+                                    .ok();
+                                });
+                                return None;
+                            }
+                        }
                         if fit_pending {
                             cx.defer(move |cx| {
                                 w1.update(cx, |_, cx| cx.notify()).ok();
@@ -2677,8 +2733,8 @@ impl EditorView {
                         // carries only the chrome -- stage, plate, grid, wipe,
                         // rulers -- which the engine does not draw. A refusal
                         // is sticky, so this yields for one frame at most.
-                        let images =
-                            previewing || !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev);
+                        let images = (previewing && !native_presentation)
+                            || !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev);
                         let plan = viewport::prepaint(
                             &scene,
                             &mut cache.borrow_mut(),
@@ -2795,7 +2851,7 @@ impl EditorView {
                                 window,
                             );
                         }
-                        if let Some(editor) = w4.upgrade() {
+                        if !presenting && let Some(editor) = w4.upgrade() {
                             editor
                                 .read(cx)
                                 .paint_text_editing(bounds, window, cx, editor.clone());
@@ -2897,25 +2953,31 @@ impl EditorView {
                         )
                         .test_support(),
                 )
-            })
-            .context_menu({
-                let editor = cx.weak_entity();
-                let focus = self.canvas_focus.clone();
-                move |menu, window, cx| {
-                    let Some(editor) = editor.upgrade() else {
-                        return menu;
-                    };
-                    let menu = if editor.read(cx).brushy() {
-                        brush_quick::menu(menu, &editor, cx).separator()
-                    } else {
-                        menu
-                    };
-                    let menu = editor.update(cx, |editor, cx| {
-                        editor.clipboard_menu(menu, focus.clone(), cx)
-                    });
-                    clipboard::transform_menu(menu, &editor, focus.clone(), window, cx)
-                }
             });
+        let canvas = if presenting {
+            canvas.into_any_element()
+        } else {
+            canvas
+                .context_menu({
+                    let editor = cx.weak_entity();
+                    let focus = self.canvas_focus.clone();
+                    move |menu, window, cx| {
+                        let Some(editor) = editor.upgrade() else {
+                            return menu;
+                        };
+                        let menu = if editor.read(cx).brushy() {
+                            brush_quick::menu(menu, &editor, cx).separator()
+                        } else {
+                            menu
+                        };
+                        let menu = editor.update(cx, |editor, cx| {
+                            editor.clipboard_menu(menu, focus.clone(), cx)
+                        });
+                        clipboard::transform_menu(menu, &editor, focus.clone(), window, cx)
+                    }
+                })
+                .into_any_element()
+        };
         div()
             .relative()
             .flex()
@@ -2926,10 +2988,13 @@ impl EditorView {
             .child(canvas)
             // Inputs must be siblings of the Canvas key context: its editing
             // shortcuts otherwise compete with the inline font-size field.
-            .children(self.design_selection_toolbar(p, window, cx))
+            .when(!presenting, |area| {
+                area.children(self.design_selection_toolbar(p, window, cx))
+            })
             .children(self.design_video_overlays(p, window, cx))
             .when(
-                (!self.is_design() && !self.is_diagram()) || self.design_full_tools(),
+                !presenting
+                    && ((!self.is_design() && !self.is_diagram()) || self.design_full_tools()),
                 |area| area.child(self.contextual_taskbar(cx)),
             )
     }
@@ -4198,7 +4263,7 @@ impl Render for EditorView {
         let p = theme::palette(cx);
         self.sync_trees(cx);
         if self.motion.presenting {
-            return self.presentation_view(&p, cx);
+            return self.presentation_view(&p, window, cx);
         }
         self.sync_transform_fields(window, cx);
         self.sync_rotation_fields(window, cx);

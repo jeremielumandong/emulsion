@@ -231,11 +231,13 @@ different quota systems; do not size imports using the Library quota.
 
 ## Product behavior
 
-- **Settings → Connected accounts:** connect, disconnect, choose account,
-  inspect storage use, pause transfers, and control downloads. Connecting
-  Drive does not automatically connect Google Photos.
-- **Home → Cloud projects:** choose a provider, enable sync per project, see
-  other-device projects, and download/open them through the existing editor.
+- **Home → Cloud files → Manage connections:** connect and disconnect accounts
+  and import app registrations. Connecting Drive does not automatically connect
+  Google Photos. Storage-use reporting remains follow-on work.
+- **Home → Cloud files:** search and filter one card per file, browse 48 files
+  per page, and download/open other-device files. Open version history for one
+  file at a time. Local cards expose sync actions and status; their context menus
+  include project moves, classification, pause/resume, and cloud history.
 - **Library → Add source:** local files, Photos selection, and authorized
   provider files. Display source badges and download status; search the local
   catalog and expose remote search only when supported.

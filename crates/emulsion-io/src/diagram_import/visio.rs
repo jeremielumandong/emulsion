@@ -189,7 +189,8 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
         }
     }
     let mut scenes = Vec::new();
-    if package.entries.contains_key("visio/pages/pages.xml") {
+    let stencil_package = path.extension().and_then(|e| e.to_str()).is_some_and(|e| ["vssx", "vssm"].iter().any(|ext|e.eq_ignore_ascii_case(ext)));
+    if !stencil_package && package.entries.contains_key("visio/pages/pages.xml") {
         let pages = xml::parse(package.text("visio/pages/pages.xml")?)?;
         let rels = relationships(&package, "visio/pages/pages.xml")?;
         let mut page_ids = HashSet::new();

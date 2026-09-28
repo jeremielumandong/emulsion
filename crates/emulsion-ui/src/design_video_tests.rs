@@ -4,7 +4,7 @@ use emulsion_core::project::{ProjectEditor, ProjectKind};
 use gpui_kit::test::TestWindowExt;
 
 #[cfg(target_os = "linux")]
-fn changed_video_view_stops_safely(cx: &mut TestAppContext, rotate: bool) {
+fn changed_video_view_is_safe(cx: &mut TestAppContext, rotate: bool) {
     let _helper = crate::web_player::test_helper(b"#!/bin/sh\nwhile read command; do :; done\n");
     let mut editor = emulsion_core::Editor::new(Document::new(800, 600), None);
     let id = emulsion_core::design::media::insert_youtube(
@@ -34,28 +34,60 @@ fn changed_video_view_stops_safely(cx: &mut TestAppContext, rotate: bool) {
     cx.update(|window, cx| window.click(("design-video-play", id as usize), cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find("presentation-stop-video").visible());
-        view.update(cx, |e, cx| {
-            if rotate {
+        assert!(
+            window.try_find("presentation-stop-video").is_some(),
+            "Video did not start: {:?}",
+            view.read(cx).status
+        );
+        if rotate {
+            view.update(cx, |e, cx| {
                 e.view.rotation = 15.;
-            } else {
-                e.view.zoom = 0.1;
-            }
-            e.notify_canvas(cx);
-        });
+                e.notify_canvas(cx);
+            });
+        } else {
+            window.click("presentation-fullscreen", cx);
+        }
     });
     cx.run_until_parked();
+    if !rotate {
+        // Audience fit intentionally overrides manual zoom. Exercise a real
+        // viewport change that makes this video frame smaller than 200 × 200.
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(320.), gpui_kit::px(240.)));
+        cx.run_until_parked();
+    }
     cx.executor()
         .advance_clock(std::time::Duration::from_millis(40));
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("design-presentation").visible());
-        assert!(window.try_find("presentation-stop-video").is_none());
-        if !rotate {
-            assert!(window.find("presentation-player-status").visible());
+        let editor = view.read(cx);
+        assert_eq!(editor.editor.doc, original);
+        if rotate {
+            // Presentation automatically restores an axis-aligned fitted view;
+            // the player can continue safely rather than remaining rotated.
+            assert_eq!(editor.view.rotation, 0.);
+            assert!(window.find("presentation-stop-video").visible());
+            window.click("presentation-exit", cx);
+        } else {
+            assert!(window.is_fullscreen());
+            assert!(
+                window.find(("design-video-play", id as usize)).visible(),
+                "undersized video must stop and offer retry"
+            );
+            assert!(
+                editor
+                    .status
+                    .as_ref()
+                    .is_some_and(|(message, error)| *error && message.contains("minimum 200")),
+                "missing size error: {:?}",
+                editor.status
+            );
+            assert!(
+                window.try_find("presentation-player-status").is_none(),
+                "fullscreen audience must not expose app banners"
+            );
+            window.press("escape", cx);
         }
-        assert_eq!(view.read(cx).editor.doc, original);
-        window.click("presentation-exit", cx);
     });
     cx.run_until_parked();
 }
@@ -63,13 +95,13 @@ fn changed_video_view_stops_safely(cx: &mut TestAppContext, rotate: bool) {
 #[cfg(target_os = "linux")]
 #[gpui_kit::test]
 fn shrinking_video_view_stops_playback_without_panicking(cx: &mut TestAppContext) {
-    changed_video_view_stops_safely(cx, false);
+    changed_video_view_is_safe(cx, false);
 }
 
 #[cfg(target_os = "linux")]
 #[gpui_kit::test]
-fn rotating_video_view_stops_playback_without_panicking(cx: &mut TestAppContext) {
-    changed_video_view_stops_safely(cx, true);
+fn rotating_video_view_refits_safely_without_panicking(cx: &mut TestAppContext) {
+    changed_video_view_is_safe(cx, true);
 }
 
 #[cfg(target_os = "linux")]

@@ -1,4 +1,6 @@
 //! Connected accounts and explicit cloud actions; all file/network work is off-frame.
+#[path = "cloud_home.rs"]
+mod home;
 use crate::{
     theme,
     workspace::{Screen, Workspace},
@@ -36,6 +38,9 @@ pub(crate) struct CloudUi {
     cancelled: Option<Arc<AtomicBool>>,
     remote: Vec<(Account, RemoteRevision)>,
     page: usize,
+    provider_filter: Option<Provider>,
+    history: Option<(Account, String)>,
+    connections_open: bool,
     ready: Option<PathBuf>,
     syncing_file: Option<(PathBuf, Provider)>,
     sync_error: Option<(PathBuf, Provider)>,
@@ -138,6 +143,7 @@ struct Outcome {
     remote: Option<Vec<(Account, RemoteRevision)>>,
     ready: Option<PathBuf>,
     photos: Vec<PathBuf>,
+    catalog: Option<emulsion_io::creative_library::Catalog>,
 }
 impl Workspace {
     pub(crate) fn cloud_home_notice(&self) -> Option<AnyElement> {
@@ -234,43 +240,44 @@ impl Workspace {
         )
         .disabled(self.cloud.busy || !self.cloud.loaded);
         let path = path.to_path_buf();
-        let button =
-            if destinations.len() == 1 {
-                let provider = destinations[0];
-                button
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.cloud_sync_file(path.clone(), provider, cx)
-                    }))
-                    .into_any_element()
-            } else if destinations.is_empty() {
-                button
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.set_screen(Screen::Settings, window, cx)
-                    }))
-                    .into_any_element()
-            } else {
-                let owner = cx.weak_entity();
-                button
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for provider in &destinations {
-                            let provider = *provider;
-                            let owner = owner.clone();
-                            let path = path.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(format!("Sync to {}", provider.label()))
-                                    .on_click(move |_, _, cx| {
-                                        owner
-                                            .update(cx, |this, cx| {
-                                                this.cloud_sync_file(path.clone(), provider, cx)
-                                            })
-                                            .ok();
-                                    }),
-                            );
-                        }
-                        menu
-                    })
-                    .into_any_element()
-            };
+        let button = if destinations.len() == 1 {
+            let provider = destinations[0];
+            button
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.cloud_sync_file(path.clone(), provider, cx)
+                }))
+                .into_any_element()
+        } else if destinations.is_empty() {
+            button
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.cloud.connections_open = true;
+                    this.open_cloud_home(window, cx);
+                }))
+                .into_any_element()
+        } else {
+            let owner = cx.weak_entity();
+            button
+                .dropdown_menu(move |mut menu, _, _| {
+                    for provider in &destinations {
+                        let provider = *provider;
+                        let owner = owner.clone();
+                        let path = path.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(format!("Sync to {}", provider.label())).on_click(
+                                move |_, _, cx| {
+                                    owner
+                                        .update(cx, |this, cx| {
+                                            this.cloud_sync_file(path.clone(), provider, cx)
+                                        })
+                                        .ok();
+                                },
+                            ),
+                        );
+                    }
+                    menu
+                })
+                .into_any_element()
+        };
         div()
             .flex()
             .flex_col()
@@ -441,10 +448,14 @@ impl Workspace {
                 }
                 match result {
                     Ok(outcome) => {
+                        if let Some(catalog) = outcome.catalog
+                            && catalog.revision >= this.home_state.projects.catalog.revision
+                        {
+                            this.home_state.projects.catalog = catalog;
+                        }
                         this.cloud.note = outcome.note;
                         if let Some(remote) = outcome.remote {
                             this.cloud.remote = remote;
-                            this.cloud.page = 0;
                         }
                         if let Some(ready) = outcome.ready {
                             this.cloud.ready = Some(ready);
@@ -523,7 +534,7 @@ impl Workspace {
                 }
                 let accounts = store.read()?.accounts;
                 let mut rows = vec![];
-                let mut errors = vec![];
+                let mut errors = emulsion_io::cloud::home::enqueue_changes(&store)?;
                 for account in accounts
                     .into_iter()
                     .filter(|a| a.provider != Provider::GooglePhotos)
@@ -537,7 +548,11 @@ impl Workspace {
                 }
                 let pending = store.read()?.jobs.len();
                 let note = if errors.is_empty() {
-                    format!("Cloud checked · {pending} pending revision(s).")
+                    if pending == 0 {
+                        "Cloud is up to date.".into()
+                    } else {
+                        format!("{pending} uploads queued.")
+                    }
                 } else {
                     errors.join(" · ")
                 };
@@ -616,25 +631,6 @@ impl Workspace {
             cx,
         );
     }
-    fn cloud_bind_current(&mut self, provider: Provider, cx: &mut Context<Self>) {
-        let Some(editor) = &self.editor else {
-            self.cloud.note = "Open and save a project or image first.".into();
-            cx.notify();
-            return;
-        };
-        let e = editor.read(cx);
-        if e.history.save_busy || e.editor.is_modified() {
-            self.cloud.note = "Save the current edits before enabling cloud sync.".into();
-            cx.notify();
-            return;
-        }
-        let Some(path) = e.editor.path.clone().or_else(|| e.source.clone()) else {
-            self.cloud.note = "Save this document to a file first.".into();
-            cx.notify();
-            return;
-        };
-        self.cloud_sync_file(path, provider, cx);
-    }
     fn cloud_pause(&mut self, path: PathBuf, paused: bool, cx: &mut Context<Self>) {
         self.cloud_task(
             move |store| {
@@ -668,9 +664,15 @@ impl Workspace {
                 let path = emulsion_io::cloud::unpack(payload.path(), destination.path())?;
                 store.adopt(&path, &account, &remote)?;
                 let _ = destination.keep();
+                let catalog = emulsion_io::cloud::home::restore(
+                    &emulsion_io::creative_library::root(),
+                    &path,
+                    &remote.revision,
+                )?;
                 Ok(Outcome {
                     note: "Downloaded and verified a separate local copy. Open it below.".into(),
                     ready: Some(path),
+                    catalog: Some(catalog),
                     ..Default::default()
                 })
             },
@@ -692,8 +694,10 @@ impl Workspace {
             })
             .cloned();
         let Some(account) = account else {
-            self.cloud.note = "Connect Google Photos in Settings before importing photos.".into();
-            self.screen = Screen::Settings;
+            self.cloud.note = "Connect Google Photos below before importing photos.".into();
+            self.home_state.cloud_files = true;
+            self.cloud.connections_open = true;
+            self.screen = Screen::Home;
             cx.notify();
             return;
         };
@@ -747,12 +751,11 @@ impl Workspace {
             .map(|i| i.accounts.clone())
             .unwrap_or_default();
         let mut panel = div().id("cloud-settings").test_support().px(px(40.)).py(px(24.)).flex().flex_col().gap(px(12.)).border_b_1().border_color(p.line)
-            .child(div().text_xl().child("Cloud projects and photos"))
-            .child(div().text_sm().text_color(p.muted).child("Choose which saved projects to sync. Files stay editable offline. Google Photos imports only the photos you select."))
+            .child(div().text_xl().child("Cloud connections"))
+            .child(div().text_sm().text_color(p.muted).child("Connect storage accounts or import selected photos from Google Photos."))
             .child(div().text_sm().text_color(p.muted).child("Enabling sync uploads the saved file and its required originals to the selected provider. Photo imports stay on this device until you choose to sync or export them."))
             .child(div().flex().flex_wrap().gap(px(8.))
-                .child(Button::new("cloud-registration").label("Import app registration…").small().outline().disabled(busy).on_click(cx.listener(|this, _, _, cx| this.cloud_import_config(cx))))
-                .child(Button::new("cloud-refresh").label("Sync now / retry").small().outline().disabled(busy || accounts.is_empty()).on_click(cx.listener(|this, _, _, cx| this.cloud_sync(true, cx)))));
+                .child(Button::new("cloud-registration").label("Import app registration…").small().outline().disabled(busy).on_click(cx.listener(|this, _, _, cx| this.cloud_import_config(cx)))));
         if !self.cloud.note.is_empty() {
             panel = panel.child(div().text_sm().child(self.cloud.note.clone()));
         }
@@ -813,18 +816,7 @@ impl Workspace {
                             this.cloud_disconnect(account.clone(), cx)
                         })),
                 );
-                if provider != Provider::GooglePhotos {
-                    row = row.child(
-                        Button::new(("cloud-bind", provider_index))
-                            .label("Sync current file")
-                            .small()
-                            .outline()
-                            .disabled(busy)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.cloud_bind_current(provider, cx)
-                            })),
-                    );
-                } else {
+                if provider == Provider::GooglePhotos {
                     row = row.child(
                         Button::new("cloud-photos-import")
                             .label("Import selected photos…")
@@ -854,141 +846,6 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_path(path.clone(), window, cx)
                     })),
-            );
-        }
-        if let Some(index) = &self.cloud.index {
-            for (n, binding) in index.bindings.iter().enumerate().take(100) {
-                let jobs = index
-                    .jobs
-                    .iter()
-                    .filter(|j| j.revision.project == binding.project)
-                    .collect::<Vec<_>>();
-                let state = if !accounts
-                    .iter()
-                    .any(|a| a.provider == binding.provider && a.id == binding.account_id)
-                {
-                    "Account disconnected".into()
-                } else if binding.paused {
-                    "Paused".to_string()
-                } else if let Some(error) = jobs.iter().find_map(|j| j.error.as_ref()) {
-                    error.clone()
-                } else if binding.saved_hash.is_none() {
-                    "Snapshot needed".into()
-                } else if jobs.is_empty() {
-                    "Synced".into()
-                } else {
-                    format!("{} queued", jobs.len())
-                };
-                let path = binding.path.clone();
-                let paused = binding.paused;
-                panel = panel.child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(div().text_sm().child(format!(
-                                "{} · {} · {state}",
-                                binding
-                                    .path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy(),
-                                binding.provider.label()
-                            )))
-                        .child(
-                            Button::new(("cloud-pause", n))
-                                .label(if paused { "Resume" } else { "Pause" })
-                                .small()
-                                .outline()
-                                .disabled(busy)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.cloud_pause(path.clone(), !paused, cx)
-                                })),
-                        ),
-                );
-            }
-        }
-        if !self.cloud.remote.is_empty() {
-            panel = panel.child(div().text_lg().child("Cloud versions"));
-            let start = self.cloud.page * 20;
-            for (n, (account, remote)) in self.cloud.remote.iter().enumerate().skip(start).take(20)
-            {
-                let account = account.clone();
-                let remote = remote.clone();
-                let same_project = self
-                    .cloud
-                    .remote
-                    .iter()
-                    .filter(|(a, r)| {
-                        a.provider == account.provider
-                            && a.id == account.id
-                            && r.revision.project == remote.revision.project
-                    })
-                    .map(|(_, r)| r.clone())
-                    .collect::<Vec<_>>();
-                let heads = emulsion_cloud::heads(&same_project);
-                let state = if heads.iter().any(|h| h.revision.id == remote.revision.id) {
-                    if heads.len() > 1 {
-                        "Conflict · both versions preserved"
-                    } else {
-                        "Latest"
-                    }
-                } else {
-                    "Earlier version"
-                };
-                panel = panel.child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(div().text_sm().child(format!(
-                            "{} · {} · {state} · {} · device {} · {}",
-                            remote.revision.name,
-                            account.provider.label(),
-                            emulsion_io::recent::ago(remote.revision.created),
-                            &remote.revision.device[..8],
-                            &remote.revision.id[..8]
-                        )))
-                        .child(
-                            Button::new(("cloud-download", n))
-                                .label("Download copy")
-                                .small()
-                                .outline()
-                                .disabled(busy)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.cloud_download(account.clone(), remote.clone(), cx)
-                                })),
-                        ),
-                );
-            }
-            panel = panel.child(
-                div()
-                    .flex()
-                    .gap(px(8.))
-                    .child(
-                        Button::new("cloud-prev")
-                            .label("Previous")
-                            .small()
-                            .outline()
-                            .disabled(self.cloud.page == 0)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.cloud.page = this.cloud.page.saturating_sub(1);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("cloud-next")
-                            .label("Next")
-                            .small()
-                            .outline()
-                            .disabled(start + 20 >= self.cloud.remote.len())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.cloud.page += 1;
-                                cx.notify();
-                            })),
-                    ),
             );
         }
         panel.into_any_element()
@@ -1121,9 +978,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn cloud_settings_explain_missing_registrations_and_keep_connect_inactive(
-        cx: &mut TestAppContext,
-    ) {
+    fn cloud_home_connections_explain_missing_registrations(cx: &mut TestAppContext) {
         let (workspace, cx) = crate::tests::open(cx, emulsion_core::Document::new(32, 32));
         cx.run_until_parked();
         cx.simulate_resize(size(px(1440.), px(1100.)));
@@ -1134,7 +989,10 @@ mod tests {
                     index: Some(Index::default()),
                     ..Default::default()
                 };
-                this.set_screen(Screen::Settings, window, cx);
+                {
+                    this.cloud.connections_open = true;
+                    this.open_cloud_home(window, cx);
+                };
             })
         });
         cx.run_until_parked();
@@ -1158,7 +1016,8 @@ mod tests {
             workspace.update(cx, |this, cx| {
                 this.cloud.index = Some(Index::default());
                 this.cloud_import_photos(cx);
-                assert_eq!(this.screen, Screen::Settings);
+                assert_eq!(this.screen, Screen::Home);
+                assert!(this.home_state.cloud_files);
                 assert!(!this.cloud.busy);
                 assert!(this.cloud.note.contains("Connect Google Photos"));
             })

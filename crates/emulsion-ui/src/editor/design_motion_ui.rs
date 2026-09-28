@@ -9,17 +9,43 @@ use gpui_kit::component::{
 #[derive(Default)]
 pub(super) struct MotionUi {
     pub(super) preview: Option<Document>,
+    /// Preview scenes must never reuse the authored document's GPU cache.
+    pub(super) preview_gpu: Rc<RefCell<crate::viewport_gpu::Status>>,
     pub(super) presenting: bool,
     pub(super) auto_advance: bool,
-    fullscreen_window: Option<AnyWindowHandle>,
-    playing: bool,
+    pub(super) fullscreen_window: Option<AnyWindowHandle>,
+    pub(super) session: Option<super::design_presentation_ui::PresentationSession>,
+    pub(super) transition: Option<super::design_presentation_ui::SlideTransition>,
+    pub(super) playing: bool,
     time_ms: u32,
-    run: u64,
+    pub(super) run: u64,
     task: Option<Task<()>>,
 }
 impl EditorView {
+    /// Return an isolated GPU scene identity for this evaluated presentation frame.
+    /// Repeated paints of a paused frame reuse its compiled scene. A new run or
+    /// evaluated time invalidates that scene even when the authored revision is unchanged.
+    pub(super) fn presentation_gpu_frame(
+        &self,
+    ) -> Option<(Document, u64, Rc<RefCell<crate::viewport_gpu::Status>>)> {
+        if !self.motion.presenting {
+            return None;
+        }
+        let doc = self.motion.preview.as_ref()?.clone();
+        let time = if doc.design.motion.is_empty() {
+            0
+        } else {
+            self.motion.time_ms
+        };
+        let key = self.motion.run.wrapping_shl(32) ^ u64::from(time);
+        Some((doc, key, self.motion.preview_gpu.clone()))
+    }
+
     pub(super) fn stop_motion(&mut self, cx: &mut Context<Self>) -> bool {
+        let had = self.motion.preview.is_some() || self.motion.playing || self.motion.presenting;
         self.stop_design_video(cx);
+        self.finish_presentation_session(cx);
+        self.clear_presentation_transition(cx);
         if let Some(handle) = self.motion.fullscreen_window.take() {
             cx.defer(move |cx| {
                 cx.update_window(handle, |_, window, _| {
@@ -30,8 +56,10 @@ impl EditorView {
                 .ok();
             });
         }
-        let had = self.motion.preview.is_some() || self.motion.playing || self.motion.presenting;
         self.motion.preview = None;
+        // Replace the cell rather than resetting it in place: a retained paint
+        // closure can finish with its old scene without repopulating this run's cache.
+        self.motion.preview_gpu = Default::default();
         self.motion.playing = false;
         self.motion.presenting = false;
         self.motion.task = None;
@@ -47,11 +75,20 @@ impl EditorView {
         if !self.prepare_page_action(cx) {
             return;
         }
+        self.start_motion_prepared(presenting, cx);
+    }
+    pub(super) fn start_motion_prepared(&mut self, presenting: bool, cx: &mut Context<Self>) {
         self.anim.open = false;
         self.anim.playing = false;
         self.stop_motion(cx);
         let doc = self.editor.doc.clone();
-        let duration = doc.design.duration_ms;
+        let duration = doc.design.duration_ms.max(
+            if presenting && doc.design.page_transition != design::PageTransition::None {
+                doc.design.transition_ms.saturating_add(1)
+            } else {
+                0
+            },
+        );
         let fps = doc.design.fps;
         let ticket = self.edit_ticket();
         self.motion.playing = true;
@@ -63,8 +100,38 @@ impl EditorView {
             self.fit_pending = true;
             self.status = None;
         }
+        if presenting {
+            self.begin_presentation_session(cx);
+            self.motion.transition = (doc.design.page_transition != design::PageTransition::None)
+                .then(|| {
+                    super::design_presentation_ui::SlideTransition::new(doc.design.page_transition)
+                });
+        }
         self.motion.task = Some(cx.spawn(async move |this, cx| {
+            if presenting && doc.design.page_transition != design::PageTransition::None {
+                let source = design::at_time(&doc, 0).unwrap_or_else(|_| doc.clone());
+                let (w, h, pixels) = cx
+                    .background_spawn(async move { super::history::doc_thumb(&source, 2048) })
+                    .await;
+                let keep = this
+                    .update(cx, |this, cx| {
+                        if this.motion.run != run || this.edit_ticket() != ticket {
+                            return false;
+                        }
+                        if let Some(transition) = &mut this.motion.transition {
+                            transition.image = Some(Arc::new(viewport::bgra_image(w, h, pixels)));
+                        }
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    return;
+                }
+            }
             let start = cx.background_executor().now();
+            let static_slide = doc.design.motion.is_empty();
+            let mut last_visual_time = None;
             loop {
                 let elapsed = cx
                     .background_executor()
@@ -77,28 +144,58 @@ impl EditorView {
                 } else {
                     (elapsed % u64::from(duration)) as u32
                 };
-                let source = doc.clone();
-                let result = cx
-                    .background_spawn(async move { design::at_time(&source, time) })
-                    .await;
+                let visual_time = if static_slide {
+                    0
+                } else {
+                    time.min(doc.design.duration_ms - 1)
+                };
+                let result = if last_visual_time != Some(visual_time) {
+                    let source = doc.clone();
+                    last_visual_time = Some(visual_time);
+                    Some(
+                        cx.background_spawn(async move { design::at_time(&source, visual_time) })
+                            .await,
+                    )
+                } else {
+                    None
+                };
                 let more = this
                     .update(cx, |this, cx| {
                         if !this.visible || this.motion.run != run || this.edit_ticket() != ticket {
                             return false;
                         }
+                        this.motion.time_ms = time;
+                        let transition_changed = this.motion.transition.is_some();
+                        if let Some(transition) = &mut this.motion.transition {
+                            transition.progress =
+                                (elapsed as f32 / doc.design.transition_ms as f32).clamp(0., 1.);
+                        }
+                        if this
+                            .motion
+                            .transition
+                            .as_ref()
+                            .is_some_and(|t| t.progress >= 1.)
+                        {
+                            this.clear_presentation_transition(cx);
+                        }
+                        if transition_changed {
+                            cx.notify();
+                        }
                         match result {
-                            Ok(preview) => {
+                            Some(Ok(preview)) => {
                                 this.motion.preview = Some(preview);
                                 this.motion.time_ms = time;
                                 this.seen_rev = u64::MAX;
                                 this.tree_dirty = emulsion_core::Dirty::All;
+                                this.notify_canvas(cx);
                                 cx.notify();
                             }
-                            Err(e) => {
+                            Some(Err(e)) => {
                                 this.stop_motion(cx);
                                 this.set_status(e, true, cx);
                                 return false;
                             }
+                            None => {}
                         }
                         if done {
                             this.motion.playing = false;
@@ -127,14 +224,30 @@ impl EditorView {
                 if !more {
                     break;
                 }
+                let delay = if static_slide
+                    && (!presenting
+                        || doc.design.page_transition == design::PageTransition::None
+                        || elapsed >= u64::from(doc.design.transition_ms))
+                {
+                    if presenting {
+                        u64::from(duration).saturating_sub(elapsed).max(1)
+                    } else {
+                        u64::from(duration)
+                    }
+                } else {
+                    1000 / u64::from(fps)
+                };
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(1000 / u64::from(fps)))
+                    .timer(std::time::Duration::from_millis(delay))
                     .await;
             }
         }));
         cx.notify();
     }
     pub(super) fn presentation_step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if !self.motion.presenting {
+            return;
+        }
         let pages = self.editor.page_list();
         let index = pages
             .iter()
@@ -142,11 +255,21 @@ impl EditorView {
             .unwrap_or(0);
         let to = (index as isize + delta).clamp(0, pages.len() as isize - 1) as usize;
         let id = pages[to].id;
+        if id == self.editor.active_page() {
+            return;
+        }
         let fullscreen = self.motion.fullscreen_window.take();
+        let session = self.motion.session.take();
         self.stop_motion(cx);
-        self.select_page(id, cx);
-        self.start_motion(true, cx);
+        // Presentation navigation has no authored edits to finalize and must
+        // also work while an authorized assistant host request is running.
+        if self.editor.set_active_page(id).is_ok() {
+            self.after_change(cx);
+            self.start_motion_prepared(true, cx);
+        }
         self.motion.fullscreen_window = fullscreen;
+        self.motion.session = session;
+        cx.refresh_windows();
     }
     pub(super) fn resume_presentation_advance(&mut self, cx: &mut Context<Self>) {
         if self.motion.presenting
@@ -162,7 +285,13 @@ impl EditorView {
             self.presentation_step(1, cx);
         }
     }
-    pub(super) fn presentation_view(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn presentation_view(
+        &mut self,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let clean = window.is_fullscreen();
         let index = self
             .editor
             .page_list()
@@ -177,16 +306,21 @@ impl EditorView {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .bg(p.stage)
+            .bg(rgb(0x000000))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.presentation_key(event, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &crate::actions::NudgeLeft, _, cx| {
                 this.presentation_step(-1, cx)
             }))
             .on_action(cx.listener(|this, _: &crate::actions::NudgeRight, _, cx| {
                 this.presentation_step(1, cx)
             }))
-            .child(self.canvas_region())
+            .child(self.presentation_stage())
             .when_some(
-                self.status.clone().filter(|(_, error)| *error),
+                self.status.clone().filter(|(_, error)| *error && !clean),
                 |d, (message, _)| {
                     d.child(
                         div()
@@ -199,80 +333,92 @@ impl EditorView {
                     )
                 },
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .justify_center()
-                    .gap_3()
-                    .p_2()
-                    .child(
-                        Button::new("presentation-prev")
-                            .label("Previous")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| this.presentation_step(-1, cx))),
-                    )
-                    .child(format!("Page {index} / {}", self.editor.page_list().len()))
-                    .child(
-                        Button::new("presentation-fullscreen")
-                            .label("Fullscreen")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.motion.fullscreen_window =
-                                    (!window.is_fullscreen()).then(|| window.window_handle());
-                                window.toggle_fullscreen();
-                                this.fit_pending = true;
-                                cx.notify();
-                            })),
-                    )
-                    .when(self.design_video_playing(), |d| {
-                        d.child(
-                            Button::new("presentation-stop-video")
-                                .label("Stop video")
+            .when(!clean, |d| {
+                d.child(
+                    div()
+                        .id("presentation-controls")
+                        .test_support()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .p_2()
+                        .child(
+                            Button::new("presentation-prev")
+                                .label("Previous")
+                                .small()
+                                .ghost()
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.presentation_step(-1, cx)),
+                                ),
+                        )
+                        .child(format!("Page {index} / {}", self.editor.page_list().len()))
+                        .child(
+                            Button::new("presentation-presenter-view")
+                                .label("Presenter view")
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_presenter(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("presentation-fullscreen")
+                                .label("Fullscreen")
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_presentation_fullscreen(window, cx)
+                                })),
+                        )
+                        .when(self.design_video_playing(), |d| {
+                            d.child(
+                                Button::new("presentation-stop-video")
+                                    .label("Stop video")
+                                    .small()
+                                    .outline()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.stop_design_video(cx);
+                                        this.resume_presentation_advance(cx);
+                                    })),
+                            )
+                        })
+                        .child(
+                            Button::new("presentation-auto-advance")
+                                .label(if self.motion.auto_advance {
+                                    "Auto advance: on"
+                                } else {
+                                    "Auto advance: off"
+                                })
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.motion.auto_advance = !this.motion.auto_advance;
+                                    this.resume_presentation_advance(cx);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("presentation-next")
+                                .label("Next")
+                                .small()
+                                .ghost()
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.presentation_step(1, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new("presentation-exit")
+                                .label("Exit presentation · Esc")
                                 .small()
                                 .outline()
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.stop_design_video(cx);
-                                    this.resume_presentation_advance(cx);
+                                    this.stop_motion(cx);
                                 })),
-                        )
-                    })
-                    .child(
-                        Button::new("presentation-auto-advance")
-                            .label(if self.motion.auto_advance {
-                                "Auto advance: on"
-                            } else {
-                                "Auto advance: off"
-                            })
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.motion.auto_advance = !this.motion.auto_advance;
-                                this.resume_presentation_advance(cx);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("presentation-next")
-                            .label("Next")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| this.presentation_step(1, cx))),
-                    )
-                    .child(
-                        Button::new("presentation-exit")
-                            .label("Exit presentation · Esc")
-                            .small()
-                            .outline()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.stop_motion(cx);
-                                this.fit_pending = true;
-                            })),
-                    ),
-            )
+                        ),
+                )
+            })
             .into_any_element()
     }
     fn set_resize_anchor(
@@ -486,6 +632,7 @@ impl EditorView {
             .flex()
             .flex_col()
             .gap_2()
+            .child(self.presentation_authoring_controls(cx))
             .child(
                 Button::new("design-resize-copy")
                     .label("Copy and resize page…")

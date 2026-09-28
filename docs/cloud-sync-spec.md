@@ -114,6 +114,32 @@ download/open, and photo import. Save completion captures a portable snapshot
 on its existing background worker. RAW originals from both live state and
 history are included and remapped on the receiving device.
 
+Home owns file management. Local cards expose sync state and destination, plus
+right-click/three-dot actions for project moves, classification, pause/resume,
+and cloud history. The Cloud files sidebar view groups revisions into one card
+per file, with name search, provider filters, and 48 files per page. History is
+scoped to a selected file and separately paginated. Account connections are a
+collapsible section of this browser; Settings contains no per-file cloud list.
+Local galleries also page by 48 and retain thumbnails only for the current page.
+Moving between Home projects preserves source paths and sync bindings. Explicit
+classification overrides persist; automatic image classification does not depend
+on the editor's Paint preference. The Emulsion brand returns directly to Home.
+
+Revisions optionally include portable Home metadata: stable project-folder UUID,
+project name, file display name, and classification. Original filenames remain
+in the payload manifest and revision header. Old revisions without Home metadata
+remain valid. Upload deduplication compares saved Home metadata as well as payload
+hashes, so project moves and renames can create a revision without a content edit.
+Downloads restore membership by UUID rather than name, avoiding accidental merges
+of unrelated same-name projects. Local paths and catalog numeric IDs stay local.
+
+Google Drive uses its existing Emulsion root, then app-owned project and filename
+folders. Folder lookups use private stable IDs; file folders move on project
+changes and retain their saved versions. Existing flat revisions remain readable.
+This uses Drive's [folder parent and move API](https://developers.google.com/workspace/drive/api/guides/folder).
+Other storage adapters retain their app-folder layout and carry the same metadata.
+Empty-project backup and bulk project restore remain outside this file-sync scope.
+
 Local automated evidence: cloud storage/authentication-boundary tests, a fake
 provider test for ambiguous commit recovery, native/history/RAW portability
 round trips, unsafe bundle rejection, and headless UI tests for unconfigured
@@ -131,6 +157,14 @@ the [setup guide](cloud-setup.md). The wider library/metadata sync milestones
 from the feasibility plan remain future work.
 
 ## Verification — 2026-09-27
+
+Home management follow-up: 16 Home-focused UI tests and six cloud UI tests
+passed (the filters overlap), plus two creative-library persistence tests.
+Synthetic collections cover 1,000 local files and 1,000 cloud files with 3,000
+revisions, including page boundaries, search, grouping, and revision-head order.
+Interaction tests cover card-specific context menus, direct brand navigation,
+classification independent of Paint preferences, and sync status in grid/list
+views. These collection checks do not upload 1,000 files to a live provider.
 
 - Cloud crate: **10 tests passed**, including account/registration isolation,
   restart recovery, divergent revision heads, and ambiguous upload recovery.

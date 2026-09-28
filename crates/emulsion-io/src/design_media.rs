@@ -196,6 +196,9 @@ mod tests {
             (400., 225.),
         )
         .unwrap();
+        editor.doc.design.speaker_notes = "Private presenter notes".into();
+        editor.doc.design.page_transition = emulsion_core::design_metadata::PageTransition::Slide;
+        editor.doc.design.transition_ms = 500;
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -214,7 +217,7 @@ mod tests {
         crate::project::write(&project, &path).unwrap();
         let loaded = crate::project::read(&path).unwrap().pages.remove(0).doc;
         std::fs::remove_file(path).unwrap();
-        assert_eq!(loaded.design.media, editor.doc.design.media);
+        assert_eq!(loaded.design, editor.doc.design);
         assert_eq!(loaded.nodes, editor.doc.nodes);
         assert_eq!(media::bounds(&loaded, id), Some((20., 30., 400., 225.)));
     }

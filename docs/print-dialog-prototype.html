@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emulsion · Print concept</title>
+<style>
+@font-face{font-family:Geist;src:url('../assets/fonts/Geist.ttf')}
+:root{font-family:Geist,system-ui,sans-serif;color:#ececea;background:#101012;font-size:13px;color-scheme:dark;--muted:#a6a5a1;--line:#ffffff14;--accent:#d93a1e}
+*{box-sizing:border-box}body{margin:0;padding:28px}button,input,select{font:inherit}button,select,input[type=number]{border:1px solid #ffffff25;border-radius:6px;background:#252528;color:inherit;padding:9px 11px}button,select{cursor:pointer}button:hover{background:#333337}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #ff8067;outline-offset:3px}button:disabled{opacity:.4;cursor:default}input[type=checkbox]{accent-color:var(--accent)}.shell{max-width:1170px;margin:auto}.brand{display:flex;align-items:center;gap:10px;margin:0 0 20px;font-size:16px;letter-spacing:-.5px}.mark{display:grid;place-items:center;background:var(--accent);border-radius:6px;width:26px;height:26px;color:white;font-weight:700}.concept{margin-left:auto;font-size:11px;letter-spacing:.05em;color:var(--muted)}.dialog{border:1px solid #ffffff22;background:#1b1b1e;border-radius:12px;overflow:hidden;box-shadow:0 28px 80px #0006}header{padding:22px 26px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}h1{font-size:22px;margin:0 0 5px;font-weight:560;letter-spacing:-.6px}p{margin:0;color:var(--muted);line-height:1.5}.tag{padding:6px 9px;border:1px solid #ffffff25;border-radius:5px;font-size:11px;color:var(--muted)}.main{display:grid;grid-template-columns:minmax(0,1fr) 345px}.preview{background:#141416;display:flex;flex-direction:column;min-width:0}.toolbar{padding:17px 22px;border-bottom:1px solid var(--line);display:flex;gap:6px;flex-wrap:wrap}.toolbar button{background:transparent;border-color:transparent;color:var(--muted);padding:8px 12px}.toolbar button[aria-pressed=true]{background:#302421;color:#ff9c87;border-color:#d93a1e55}.stage{min-height:475px;flex:1;padding:28px 40px 22px;display:flex;flex-direction:column;align-items:center;justify-content:center;background-image:radial-gradient(#ffffff0d .7px,transparent .7px);background-size:14px 14px}.dimension{font-size:11px;color:var(--muted);margin-bottom:12px;font-variant-numeric:tabular-nums}.paper{position:relative;background:#fff;box-shadow:0 10px 25px #0007;flex-shrink:0;overflow:hidden}.artbox{position:absolute;overflow:hidden;display:grid;place-items:center}.artbox svg{display:block;width:100%;height:100%}.boundary{position:absolute;border:1px dashed #5558;pointer-events:none}.paper.gray .artbox{filter:grayscale(1)}.sheet-note{margin-top:18px;font-size:11px;color:var(--muted)}.assembly{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;pointer-events:none}.assembly span{border:1px dashed #fff9;color:white;font-size:10px;text-shadow:0 1px 2px #000;padding:8px}.preview-meta{display:flex;gap:20px;padding:15px 22px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#8dc4a1;margin-right:5px}.settings{max-height:610px;overflow-y:auto;border-left:1px solid var(--line);scrollbar-width:thin}.section{padding:19px 22px;border-bottom:1px solid var(--line)}h2{font-size:12px;margin:0 0 13px;font-weight:600}.section>label{display:block;margin-top:12px}.field-label{display:block;margin-bottom:6px;color:var(--muted);font-size:11px}select{width:100%;padding-right:6px}.row{display:flex;gap:10px;margin-top:13px}.row>label{flex:1;min-width:0}.row input{width:100%}.status{font-size:11px;margin-top:9px;color:#9ac6a9;line-height:1.5}.links{display:flex;gap:14px;margin-top:10px}.link{padding:0;border:0;background:transparent;color:#bebdb9;font-size:11px}.link:hover{background:none;color:white}.check{display:flex!important;align-items:center;gap:7px;font-size:12px}.hint{font-size:11px;margin-top:10px;line-height:1.5;color:var(--muted)}details summary{cursor:pointer;font-size:12px}.warning{font-size:12px;color:#eac08a;padding:13px 22px;background:#b9761910;min-height:44px;border-top:1px solid var(--line)}footer{padding:17px 23px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px}footer .summary{margin-right:auto;font-size:12px}footer .summary p{font-size:11px;margin-top:4px}.primary{background:var(--accent);border-color:var(--accent);color:white;min-width:110px}.primary:hover{background:#bd3018}.footnote{margin:16px 0 0;font-size:11px;color:var(--muted);line-height:1.6}.footnote a{color:#ddd}.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:15px 22px;border:1px solid #ffffff35;background:#302824;color:#f5e9df;border-radius:8px;box-shadow:0 8px 30px #0008;max-width:90%;z-index:2}.hidden{display:none!important}
+@media(max-width:800px){body{padding:12px}.main{grid-template-columns:1fr}.settings{max-height:none;border-left:0;border-top:1px solid var(--line)}.stage{min-height:440px}.concept{font-size:9px}footer{flex-wrap:wrap}footer .summary{width:100%}.preview-meta{flex-wrap:wrap;gap:8px}}
+</style>
+<div class="shell">
+  <div class="brand"><span class="mark">e</span> emulsion <span class="concept">PRINT DIALOG / INTERACTIVE CONCEPT</span></div>
+  <main class="dialog" aria-labelledby="title">
+    <header><div><h1 id="title">Print</h1><p id="source">Quiet places · sample artwork</p></div><span class="tag">Design preview</span></header>
+    <div class="main">
+      <section class="preview" aria-label="Sheet preview">
+        <nav class="toolbar" aria-label="Print layout">
+          <button data-mode="photo" aria-pressed="true">Single image</button><button data-mode="design" aria-pressed="false">Design page</button><button data-mode="contact" aria-pressed="false">Contact sheet</button><button data-mode="poster" aria-pressed="false">Tiled poster</button>
+        </nav>
+        <div class="stage"><div class="dimension" id="dimension"></div><div class="paper" id="paper" role="img" aria-label="Print layout preview"></div><div class="sheet-note" id="sheet-note"></div></div>
+        <div class="preview-meta"><span><span class="dot"></span>Sample vector artwork</span><span id="placement"></span><span>Dashed line · printable area</span></div>
+        <div class="warning" id="warning" aria-live="polite"></div>
+      </section>
+      <aside class="settings" aria-label="Print settings">
+        <section class="section"><h2>Destination</h2>
+          <label><span class="field-label">Printer</span><select id="printer"><option value="studio">Studio photo printer · Demo</option><option value="office">Office laser · Demo</option><option value="offline">Offline printer · Demo</option><option value="none">No printers found · Demo</option><option value="portal">System print dialog · Demo</option><option value="pdf">Save as PDF</option></select></label>
+          <div class="status" id="status"></div><div class="links"><button class="link" id="refresh">Refresh</button><button class="link" id="setup">Printer setup…</button></div>
+        </section>
+        <section class="section"><h2>Paper</h2>
+          <label><span class="field-label">Paper size</span><select id="size"></select></label>
+          <div class="row"><label><span class="field-label">Orientation</span><select id="orientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label><label><span class="field-label">Paper type</span><select id="media"><option>Plain paper</option><option>Matte photo</option><option>Glossy photo</option></select></label></div>
+          <label class="check"><input type="checkbox" id="borderless"> Borderless</label><p class="hint" id="border-hint"></p>
+        </section>
+        <section class="section"><h2>Layout</h2>
+          <label><span class="field-label">Image placement</span><select id="fit"><option value="fit">Fit · keep the entire artwork</option><option value="fill">Fill · crop to the printable area</option></select></label>
+          <div class="row"><label><span class="field-label">Copies</span><input id="copies" type="number" min="1" max="99" value="1"></label><label><span class="field-label">Sides</span><select id="sides"><option value="one">One-sided</option><option value="long">Duplex · long edge</option><option value="short">Duplex · short edge</option></select></label></div>
+          <p class="hint" id="layout-hint"></p>
+        </section>
+        <section class="section"><h2>Color & quality</h2><div class="row"><label><span class="field-label">Output</span><select id="color"><option value="color">Color</option><option value="gray">Grayscale</option></select></label><label><span class="field-label">Quality</span><select id="quality"><option>Normal</option><option>High</option><option>Draft</option></select></label></div><p class="hint">Printer manages color. Image resolution is checked at the final print size.</p></section>
+        <section class="section"><details><summary>Advanced options · planned</summary><p class="hint">Actual size, custom dimensions, crop position, extra margins, paper tray, page ranges, bleed and crop marks. See the design specification for behavior and delivery phases.</p></details></section>
+      </aside>
+    </div>
+    <footer><div class="summary"><span id="summary"></span><p id="destination"></p></div><button id="reset">Reset demo</button><button class="primary" id="print">Print</button></footer>
+  </main>
+  <p class="footnote">Interactive design study. All printers are simulated; no files are saved and no print jobs are sent. Try the printer states, layouts and paper controls. <a href="print-dialog-plan.md">Read the specification →</a></p>
+</div>
+<div class="toast hidden" id="toast" role="status"></div>
+<script>
+const $ = id => document.getElementById(id);
+let mode='photo', toastTimer;
+const dimensions={a4:[210,297,'A4'],letter:[215.9,279.4,'US Letter'],photo:[101.6,152.4,'4 × 6 in'],a3:[297,420,'A3']};
+const printers={
+ studio:{name:'Studio photo printer',status:'Ready · sample network queue',sizes:['a4','letter','photo','a3'],border:true,duplex:false},
+ office:{name:'Office laser',status:'Ready · sample USB queue',sizes:['a4','letter'],border:false,duplex:true},
+ offline:{name:'Offline printer',status:'Offline · check the connection, then refresh',sizes:['a4','letter'],border:false,duplex:false},
+ none:{name:'No printer selected',status:'No printers found. Add a printer, then refresh.',sizes:['a4','letter'],border:false,duplex:false},
+ portal:{name:'System print dialog',status:'Choose a printer in the system dialog.',sizes:['a4','letter'],border:false,duplex:false},
+ pdf:{name:'PDF document',status:'Save a copy of the composed sheets',sizes:['a4','letter','photo','a3'],border:true,duplex:false}
+};
+function notify(message){$('toast').textContent=message;$('toast').classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.add('hidden'),5000)}
+function landscape(index=0){return `<rect width="600" height="400" fill="${['#dbd9c5','#d2d9d5','#e5cebd','#d9d9e0'][index%4]}"/><circle cx="452" cy="100" r="43" fill="#fff4ce"/><path d="M0 280 160 105 300 292 422 177 600 314V400H0Z" fill="#798d82"/><path d="m99 171 61-66 63 88-58-25-19 13-18-29Z" fill="#eeeae0"/><path d="M0 338 158 271 278 333 480 240 600 284V400H0Z" fill="#3b625c"/><path d="M0 358Q166 305 300 360T600 339V400H0Z" fill="#173e3c"/><path d="M260 338q75 19 108 62h90q-65-61-198-62" fill="#aec4b7"/>`}
+function art(index=0){if(mode==='design')return `<rect width="600" height="800" fill="#e9e3d4"/><rect x="28" y="28" width="544" height="460" fill="#cfd6ca"/><svg x="28" y="28" width="544" height="460" viewBox="0 0 600 400" preserveAspectRatio="xMidYMid slice">${landscape()}</svg><text x="35" y="540" fill="#4c645a" font-size="14" letter-spacing="4">FIELD NOTES / 001</text><text x="30" y="621" fill="#24483e" font-family="Georgia,serif" font-size="73">Quiet places.</text><text x="35" y="677" fill="#4c645a" font-size="17">An invitation to take the long way home.</text><path d="M35 722H565" stroke="#8f9c8e"/><text x="35" y="759" fill="#4c645a" font-size="13" letter-spacing="2">THE LANDSCAPE SERIES</text>`;return landscape(index)}
+function updatePrinter(){const p=printers[$('printer').value],old=$('size').value;$('size').replaceChildren(...p.sizes.map(k=>{const o=document.createElement('option');o.value=k;o.textContent=dimensions[k][2];return o}));if(p.sizes.includes(old))$('size').value=old;$('borderless').checked=false;$('sides').value='one';$('media').value='Plain paper';update()}
+function update(){
+ const id=$('printer').value,p=printers[id],pdf=id==='pdf',unavailable=['none','portal'].includes(id);
+ const borderSupported=p.border&&(pdf||$('size').value==='photo'&&$('media').value!=='Plain paper');
+ $('borderless').disabled=!borderSupported;if(!borderSupported)$('borderless').checked=false;
+ $('border-hint').textContent=pdf?'Allow artwork to reach the PDF page edge.':borderSupported?'Supported for this sample paper and media combination.':'Photo demo: choose 4 × 6 and photo paper for borderless.';
+ $('media').disabled=id!=='studio';$('quality').disabled=pdf||unavailable;$('color').disabled=unavailable;
+ $('sides').disabled=!p.duplex||mode==='poster';if($('sides').disabled)$('sides').value='one';
+ $('status').textContent=p.status;$('status').style.color=['none','offline'].includes(id)?'#eac08a':'#9ac6a9';
+ let [w,h,label]=dimensions[$('size').value];if($('orientation').value==='landscape')[w,h]=[h,w];
+ const scale=Math.min(360/h,Math.max(200,document.querySelector('.stage').clientWidth-80)/w),pw=w*scale,ph=h*scale;
+ const paper=$('paper');paper.style.width=pw+'px';paper.style.height=ph+'px';paper.classList.toggle('gray',$('color').value==='gray');paper.replaceChildren();
+ const margin=$('borderless').checked?0:5,box={x:margin*scale,y:margin*scale,w:(w-2*margin)*scale,h:(h-2*margin)*scale};
+ const contact=mode==='contact',poster=mode==='poster',cols=contact?2:1,rows=contact?3:1,gap=contact?5*scale:0;
+ const aw=600,ah=mode==='design'?800:400,fill=$('fit').value==='fill';
+ for(let i=0;i<cols*rows;i++){const cellw=(box.w-gap*(cols-1))/cols,cellh=(box.h-gap*(rows-1))/rows,labelSpace=contact?12:0;const a=document.createElement('div');a.className='artbox';Object.assign(a.style,{left:(box.x+(i%cols)*(cellw+gap))+'px',top:(box.y+Math.floor(i/cols)*(cellh+gap))+'px',width:cellw+'px',height:(cellh-labelSpace)+'px'});a.innerHTML=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${aw} ${ah}" preserveAspectRatio="xMidYMid ${fill?'slice':'meet'}" aria-hidden="true">${art(i)}</svg>`;paper.append(a);if(contact){const caption=document.createElement('span');caption.textContent=`FIELD STUDY / 0${i+1}`;Object.assign(caption.style,{position:'absolute',left:a.style.left,top:(box.y+Math.floor(i/cols)*(cellh+gap)+cellh-9)+'px',fontSize:'6px',color:'#444'});paper.append(caption)}}
+ const boundary=document.createElement('div');boundary.className='boundary';Object.assign(boundary.style,{left:box.x+'px',top:box.y+'px',width:box.w+'px',height:box.h+'px'});paper.append(boundary);
+ if(poster){const assembly=document.createElement('div');assembly.className='assembly';assembly.innerHTML='<span>1 / TOP LEFT</span><span>2 / TOP RIGHT</span><span>3 / BOTTOM LEFT</span><span>4 / BOTTOM RIGHT</span>';paper.append(assembly)}
+ $('dimension').textContent=poster?'2 × 2 sheets · assembly concept':`${label} · ${w} × ${h} mm`;
+ $('sheet-note').textContent=poster?'Assembly overview · overlap and final size are planned controls':'Sheet 1 of 1 · centered on paper';
+ $('placement').textContent=fill?'Fill · edges are cropped':'Fit · entire artwork visible';
+ $('source').textContent={photo:'Quiet places · sample artwork',design:'Quiet places · sample design page',contact:'Field studies · 6 sample images',poster:'Quiet places · poster assembly'}[mode];
+ $('layout-hint').textContent={photo:'Print one image per sheet. Custom photo dimensions are planned.',design:'One page per sheet. Page selection, actual size and trim controls are planned.',contact:'Six sample images · 2 columns × 3 rows · 5 mm gutter.',poster:'Four sheets in reading order. This view illustrates assembly, not exact tile geometry.'}[mode];
+ const copies=Number($('copies').value),valid=Number.isInteger(copies)&&copies>=1&&copies<=99,sheets=poster?4:1;
+ $('summary').textContent=valid?`${sheets} ${sheets===1?'sheet':'sheets'} × ${copies} ${copies===1?'copy':'copies'} · ${sheets*copies} total`:'Enter 1–99 copies';
+ $('destination').textContent=p.name+(pdf?' · file destination':unavailable?'':' · simulated destination');
+ $('warning').textContent=id==='none'?'No printers configured. Save as PDF remains available.':id==='offline'?'Printer offline. Reconnect or choose another destination.':id==='portal'?'The native app will obtain paper settings from the system dialog.':!valid?'Enter a whole number from 1 to 99 for copies.':poster?'Poster concept: final dimensions, overlap and individual tile previews are specified in the plan.':fill?'Fill crops the artwork. Check every edge before printing.':'Preview uses sample artwork. Final image quality will be checked from your document.';
+ $('print').textContent=pdf?'Save PDF…':id==='portal'?'Choose printer…':'Print';$('print').disabled=['none','offline'].includes(id)||!valid;
+ $('paper').setAttribute('aria-label',`${mode} layout on ${label}, ${$('orientation').value}, ${fill?'cropped to fill':'fit within margins'}`);
+ document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===mode)));
+}
+document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.mode;update()}));
+$('printer').addEventListener('change',updatePrinter);
+document.querySelectorAll('input,select').forEach(el=>{if(el.id!=='printer')el.addEventListener('input',update)});
+$('refresh').addEventListener('click',()=>notify('Demo refreshed. The native app will query the operating system for available printers.'));
+$('setup').addEventListener('click',()=>notify('In the native app, this opens your system printer settings.'));
+$('print').addEventListener('click',()=>notify($('printer').value==='pdf'?'Design preview only. The native app will save the composed sheets as PDF.':$('printer').value==='portal'?'Design preview only. The native app will open system printer selection, then refresh this preview.':'Design preview only. No print job was sent.'));
+$('reset').addEventListener('click',()=>{mode='photo';$('printer').value='studio';$('orientation').value='portrait';$('fit').value='fit';$('copies').value='1';$('color').value='color';$('quality').value='Normal';$('size').value='a4';updatePrinter()});
+window.addEventListener('resize',update);updatePrinter();
+</script>
+</html>

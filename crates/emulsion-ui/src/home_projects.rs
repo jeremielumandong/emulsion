@@ -10,7 +10,7 @@ use emulsion_io::recent;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::{
     input::{Input, InputState},
-    menu::{DropdownMenu, PopupMenuItem},
+    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -27,7 +27,232 @@ pub(crate) struct HomeProjects {
     recents: Vec<recent::Recent>,
     message: String,
 }
+
+pub(crate) fn file_classification(
+    path: &Path,
+    record: Option<&library::ProjectRecord>,
+) -> Option<CanvasKind> {
+    record
+        .and_then(|p| p.kind_override)
+        .or_else(|| {
+            (image::ImageFormat::from_path(path).is_ok() || emulsion_io::raw::is_raw(path))
+                .then_some(CanvasKind::Photo)
+        })
+        .or_else(|| record.and_then(|p| p.kind))
+}
 impl Workspace {
+    pub(crate) fn home_project_notice(&self) -> Option<AnyElement> {
+        (!self.home_state.projects.message.is_empty()).then(|| {
+            div()
+                .text_sm()
+                .child(self.home_state.projects.message.clone())
+                .into_any_element()
+        })
+    }
+    pub(crate) fn home_file_menu(
+        &self,
+        path: std::path::PathBuf,
+        star: bool,
+        cx: &Context<Self>,
+    ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + Clone + use<> {
+        let owner = cx.weak_entity();
+        let record = self
+            .home_state
+            .projects
+            .catalog
+            .projects
+            .iter()
+            .find(|p| p.path == path)
+            .cloned();
+        let folders = self.home_state.projects.catalog.folders.clone();
+        let cloud_menu = self.cloud_file_menu(path.clone(), cx);
+        move |menu, window, cx| {
+            let open = owner.clone();
+            let open_path = path.clone();
+            let details = owner.clone();
+            let details_path = path.clone();
+            let pinned = path.clone();
+            let mut menu = menu
+                .item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
+                    open.update(cx, |this, cx| this.open_path(open_path.clone(), window, cx))
+                        .ok();
+                }))
+                .item(
+                    PopupMenuItem::new("File details").on_click(move |_, _, cx| {
+                        details
+                            .update(cx, |this, cx| {
+                                this.home_state.selected = Some(details_path.clone());
+                                this.home_state.details = true;
+                                cx.notify();
+                            })
+                            .ok();
+                    }),
+                )
+                .item(
+                    PopupMenuItem::new(if star { "Unpin" } else { "Pin" }).on_click(
+                        move |_, _, cx| {
+                            crate::app_state::update_settings(cx, |s| {
+                                if s.starred_files.contains(&pinned) {
+                                    s.starred_files.retain(|p| p != &pinned);
+                                } else {
+                                    s.starred_files.push(pinned.clone());
+                                }
+                            });
+                            cx.refresh_windows();
+                        },
+                    ),
+                )
+                .separator();
+            if let Some(record) = &record {
+                let rename = owner.clone();
+                let id = record.id;
+                menu = menu.item(PopupMenuItem::new("Rename in Home…").on_click(
+                    move |_, window, cx| {
+                        rename
+                            .update(cx, |this, cx| {
+                                this.home_project_name_dialog(Some(id), None, window, cx)
+                            })
+                            .ok();
+                    },
+                ));
+            }
+            let move_owner = owner.clone();
+            let move_path = path.clone();
+            let destinations = folders.clone();
+            let current = record.as_ref().and_then(|p| p.folder);
+            menu = menu.submenu("Move to project…", window, cx, move |mut menu, _, _| {
+                for (folder, name) in std::iter::once((None, "Unfiled".to_string()))
+                    .chain(destinations.iter().map(|f| (Some(f.id), f.name.clone())))
+                {
+                    let owner = move_owner.clone();
+                    let path = move_path.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(name)
+                            .checked(folder == current)
+                            .disabled(folder == current)
+                            .on_click(move |_, _, cx| {
+                                owner
+                                    .update(cx, |this, cx| {
+                                        this.home_edit_file(
+                                            path.clone(),
+                                            move |c, id| c.move_project(id, folder),
+                                            cx,
+                                        );
+                                    })
+                                    .ok();
+                            }),
+                    );
+                }
+                menu
+            });
+            let classify = owner.clone();
+            let classify_path = path.clone();
+            let selected = record.as_ref().and_then(|p| p.kind_override);
+            menu = menu.submenu("Classify as…", window, cx, move |mut menu, _, _| {
+                for kind in std::iter::once(None).chain(CanvasKind::ALL.into_iter().map(Some)) {
+                    let owner = classify.clone();
+                    let path = classify_path.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(kind.map_or("Automatic", CanvasKind::label))
+                            .checked(selected == kind)
+                            .on_click(move |_, _, cx| {
+                                owner
+                                    .update(cx, |this, cx| {
+                                        this.home_edit_file(
+                                            path.clone(),
+                                            move |c, id| c.classify_project(id, kind),
+                                            cx,
+                                        );
+                                    })
+                                    .ok();
+                            }),
+                    );
+                }
+                menu
+            });
+            let trash = owner.clone();
+            let trash_path = path.clone();
+            let trashed = record.as_ref().is_some_and(|p| p.trashed);
+            menu = menu.separator().item(
+                PopupMenuItem::new(if trashed {
+                    "Restore file"
+                } else {
+                    "Move to Trash"
+                })
+                .on_click(move |_, _, cx| {
+                    trash
+                        .update(cx, |this, cx| {
+                            this.home_edit_file(
+                                trash_path.clone(),
+                                move |c, id| {
+                                    c.projects.iter_mut().find(|p| p.id == id).unwrap().trashed =
+                                        !trashed;
+                                    Ok(())
+                                },
+                                cx,
+                            )
+                        })
+                        .ok();
+                }),
+            );
+            let forget = owner.clone();
+            let forget_path = path.clone();
+            cloud_menu(menu).item(PopupMenuItem::new("Forget entry · keep file").on_click(
+                move |_, _, cx| {
+                    forget
+                        .update(cx, |this, cx| this.remove_recent(&forget_path, cx))
+                        .ok();
+                },
+            ))
+        }
+    }
+    fn home_edit_file(
+        &mut self,
+        path: std::path::PathBuf,
+        edit: impl FnOnce(&mut Catalog, u64) -> emulsion_io::Result<()> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let kind = self.home_project_kind(&path);
+        let entry = self
+            .home_project_entries()
+            .into_iter()
+            .find(|r| r.path == path)
+            .unwrap_or(recent::Recent {
+                path,
+                opened: recent::now(),
+                summary: String::new(),
+            });
+        self.home_project_edit(
+            move |c| {
+                let id = c.remember_project(&entry, kind)?;
+                edit(c, id)
+            },
+            cx,
+        );
+    }
+    fn home_editor_kind(&self, e: &crate::editor::EditorView) -> CanvasKind {
+        match e.editor.kind() {
+            Some(emulsion_core::project::ProjectKind::Design) => CanvasKind::Design,
+            Some(emulsion_core::project::ProjectKind::Diagram) => CanvasKind::Diagram,
+            None => e.home_canvas_kind.unwrap_or_else(|| {
+                let path = e.editor.path.as_deref().or(e.source.as_deref());
+                path.and_then(|path| {
+                    self.home_state
+                        .projects
+                        .catalog
+                        .projects
+                        .iter()
+                        .find(|p| p.path == path)
+                        .and_then(|p| {
+                            p.kind_override.or_else(|| {
+                                emulsion_io::is_native(path).then_some(p.kind).flatten()
+                            })
+                        })
+                })
+                .unwrap_or(CanvasKind::Photo)
+            }),
+        }
+    }
     pub(crate) fn remember_saved_project(
         &mut self,
         path: std::path::PathBuf,
@@ -36,12 +261,8 @@ impl Workspace {
     ) {
         let e = editor.read(cx);
         let folder = e.home_folder_on_save;
-        let kind = match e.editor.kind() {
-            Some(emulsion_core::project::ProjectKind::Design) => CanvasKind::Design,
-            Some(emulsion_core::project::ProjectKind::Diagram) => CanvasKind::Diagram,
-            None if e.draw_mode => CanvasKind::Paint,
-            None => CanvasKind::Photo,
-        };
+        let kind = self.home_editor_kind(e);
+        let explicit_kind = e.home_canvas_kind;
         let entry = recent::Recent {
             path,
             opened: recent::now(),
@@ -52,6 +273,15 @@ impl Workspace {
                 .background_spawn(async move {
                     library::update(&library::root(), move |catalog| {
                         let id = catalog.remember_project(&entry, Some(kind))?;
+                        if let Some(kind) = explicit_kind {
+                            catalog
+                                .projects
+                                .iter_mut()
+                                .find(|p| p.id == id)
+                                .unwrap()
+                                .kind_override
+                                .get_or_insert(kind);
+                        }
                         if let Some(folder) = folder {
                             let folder =
                                 folder.filter(|id| catalog.folders.iter().any(|f| f.id == *id));
@@ -74,6 +304,9 @@ impl Workspace {
                     editor.update(cx, |e, _| {
                         if e.home_folder_on_save == folder {
                             e.home_folder_on_save = None;
+                        }
+                        if e.home_canvas_kind == explicit_kind {
+                            e.home_canvas_kind = None;
                         }
                     });
                     cx.notify();
@@ -104,12 +337,7 @@ impl Workspace {
                 let kind = self.tabs.iter().find_map(|ed| {
                     let ed = ed.read(cx);
                     let path = ed.editor.path.as_ref().or(ed.source.as_ref());
-                    (path == Some(&r.path)).then_some(match ed.editor.kind() {
-                        Some(emulsion_core::project::ProjectKind::Design) => CanvasKind::Design,
-                        Some(emulsion_core::project::ProjectKind::Diagram) => CanvasKind::Diagram,
-                        None if ed.draw_mode => CanvasKind::Paint,
-                        None => CanvasKind::Photo,
-                    })
+                    (path == Some(&r.path)).then(|| self.home_editor_kind(ed))
                 });
                 (r.clone(), kind)
             })
@@ -211,29 +439,15 @@ impl Workspace {
             .unwrap_or_else(|| file_name(path))
     }
     pub(crate) fn home_project_kind(&self, path: &Path) -> Option<CanvasKind> {
-        self.home_state
-            .projects
-            .catalog
-            .projects
-            .iter()
-            .find(|p| p.path == path)
-            .and_then(|p| p.kind)
-            .or_else(|| {
-                image::ImageFormat::from_path(path)
-                    .ok()
-                    .map(|_| CanvasKind::Photo)
-            })
-    }
-    pub(crate) fn home_project_matches(&self, path: &Path) -> bool {
-        let state = &self.home_state.projects;
-        let project = state.catalog.projects.iter().find(|p| p.path == path);
-        project.is_some_and(|p| p.trashed) == state.trash
-            && state
-                .folder
-                .is_none_or(|id| project.is_some_and(|p| p.folder == Some(id)))
-            && state
-                .kind
-                .is_none_or(|kind| self.home_project_kind(path) == Some(kind))
+        file_classification(
+            path,
+            self.home_state
+                .projects
+                .catalog
+                .projects
+                .iter()
+                .find(|p| p.path == path),
+        )
     }
     pub(crate) fn home_project_name_dialog(
         &mut self,
@@ -460,84 +674,6 @@ impl Workspace {
                 },
             ));
         }
-        if let Some(project) = self
-            .home_state
-            .selected
-            .as_ref()
-            .and_then(|path| state.catalog.projects.iter().find(|p| &p.path == path))
-        {
-            let id = project.id;
-            let trashed = project.trashed;
-            let owner = cx.weak_entity();
-            let folders = state.catalog.folders.clone();
-            row = row.child(
-                control("home-project-manage", "Selected project ▾", p).dropdown_menu(
-                    move |mut menu, _, _| {
-                        let rename = owner.clone();
-                        menu = menu.item(PopupMenuItem::new("Rename in Home…").on_click(
-                            move |_, window, cx| {
-                                rename
-                                    .update(cx, |this, cx| {
-                                        this.home_project_name_dialog(Some(id), None, window, cx)
-                                    })
-                                    .ok();
-                            },
-                        ));
-                        for (folder, name) in
-                            std::iter::once((None, "Move to All projects".to_string())).chain(
-                                folders
-                                    .iter()
-                                    .map(|f| (Some(f.id), format!("Move to {}", f.name))),
-                            )
-                        {
-                            let owner = owner.clone();
-                            menu = menu.item(PopupMenuItem::new(name).on_click(move |_, _, cx| {
-                                owner
-                                    .update(cx, |this, cx| {
-                                        this.home_project_edit(
-                                            move |c| {
-                                                if let Some(p) =
-                                                    c.projects.iter_mut().find(|p| p.id == id)
-                                                {
-                                                    p.folder = folder;
-                                                }
-                                                Ok(())
-                                            },
-                                            cx,
-                                        )
-                                    })
-                                    .ok();
-                            }));
-                        }
-                        let owner = owner.clone();
-                        menu.separator().item(
-                            PopupMenuItem::new(if trashed {
-                                "Restore project"
-                            } else {
-                                "Move to Trash · keep source file"
-                            })
-                            .on_click(move |_, _, cx| {
-                                owner
-                                    .update(cx, |this, cx| {
-                                        this.home_project_edit(
-                                            move |c| {
-                                                if let Some(p) =
-                                                    c.projects.iter_mut().find(|p| p.id == id)
-                                                {
-                                                    p.trashed = !trashed;
-                                                }
-                                                Ok(())
-                                            },
-                                            cx,
-                                        )
-                                    })
-                                    .ok();
-                            }),
-                        )
-                    },
-                ),
-            );
-        }
         div()
             .flex()
             .flex_col()
@@ -552,5 +688,35 @@ impl Workspace {
                 )
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+    #[gpui_kit::test]
+    fn photo_classification_does_not_follow_paint_workspace_preferences(cx: &mut TestAppContext) {
+        let (workspace, cx) = crate::tests::open(cx, emulsion_core::Document::new(32, 32));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let editor = workspace.read(cx).editor.as_ref().unwrap().clone();
+            editor.update(cx, |editor, _| {
+                editor.draw_mode = true;
+                editor.source = Some("/tmp/portrait.jpg".into());
+                editor.home_canvas_kind = None;
+            });
+            assert_eq!(
+                workspace.read(cx).home_editor_kind(editor.read(cx)),
+                CanvasKind::Photo
+            );
+            editor.update(cx, |editor, _| {
+                editor.home_canvas_kind = Some(CanvasKind::Paint)
+            });
+            assert_eq!(
+                workspace.read(cx).home_editor_kind(editor.read(cx)),
+                CanvasKind::Paint
+            );
+        });
     }
 }

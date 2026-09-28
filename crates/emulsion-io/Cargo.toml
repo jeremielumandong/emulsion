@@ -45,6 +45,13 @@ emulsion-brushes = { workspace = true }
 emulsion-filters = { workspace = true }
 emulsion-color = { workspace = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libloading = "0.8"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "print"] }
+pollster = { workspace = true }
+
 [dev-dependencies]
 emulsion-raster = { workspace = true }
 xcf-rs = { workspace = true }

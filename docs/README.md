@@ -10,6 +10,8 @@ behavior.
 
 ## Using Emulsion
 
+- [Printing](printing.md): shared print preview, paper/layout controls, native printer connections and validation limits.
+
 - [Cloud accounts and setup](cloud-setup.md): experimental project sync,
   selected-photo imports, and local OAuth registrations for open-source builds.
 - [Files, folders and environment](files-and-environment.md): the command line,
@@ -35,6 +37,9 @@ behavior.
   limits, and the opt-in test.
 - [Camera Raw 3 reference: gap assessment](camera-raw-3-gap.md): Emulsion's RAW
   controls compared feature by feature against a Camera Raw 3 reference.
+
+- [Library and Develop](library-develop.md): the template layout, Lightroom Classic
+  workflow, RAW persistence, and remaining parity work.
 
 ## Assistant and MCP
 
@@ -77,6 +82,7 @@ Each page records the state on its date and is not updated afterwards.
 
 | Page | Date | Topic |
 | --- | --- | --- |
+| [Print dialog design](print-dialog-plan.md) · [interactive concept](print-dialog-prototype.html) | 2026-09-27 | Shared photo/design print flow, printer connections, physical layout and delivery plan |
 | [Phase 0 spike results](../spikes/RESULTS.md) | 2026-09-18 | Twelve feasibility spikes (tiled viewport, wgpu beside GPUI, assistant over MCP, dependencies); several still pending |
 | [Common-tool audit](tool-audit-2026-09-19.md) | 2026-09-19 | Baseline audit of the twelve toolbar tools |
 | [Tool repair plan](tool-repair-plan.md) | 2026-09-19 | Fixes and remaining manual checks following the tool audit |
