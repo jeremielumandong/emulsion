@@ -189,9 +189,14 @@ impl Fragment {
             if !self.design.is_default() {
                 let additions = self.design.remap(&map);
                 let mut design = editor.doc.design.clone();
-                if !additions.motion.is_empty() {
+                if !additions.motion.is_empty() || !additions.keyframes.is_empty() {
                     design.duration_ms = design.duration_ms.max(additions.duration_ms);
                 }
+                crate::design_variables::merge_into(&mut design, &additions);
+                design.interactions.extend(additions.interactions.clone());
+                design.overlays.extend(additions.overlays.clone());
+                design.local_media.extend(additions.local_media.clone());
+                design.keyframes.extend(additions.keyframes.clone());
                 crate::design_styles::merge_into(&mut design, &additions);
                 crate::design_components::merge_into(&mut design, &additions);
                 design.constraints.extend(additions.constraints);

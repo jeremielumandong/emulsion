@@ -76,6 +76,7 @@ pub(super) struct DiagramUi {
     property_tab: usize,
     pub(super) library_tab: usize,
     pub(super) theme_selection: bool,
+    pub(super) pack_filter: usize,
     import_notes: Vec<String>,
     pub(super) collapsed_categories: std::collections::HashSet<&'static str>,
 }
@@ -103,6 +104,7 @@ impl Default for DiagramUi {
             property_tab: 0,
             library_tab: 0,
             theme_selection: false,
+            pack_filter: 0,
             import_notes: Vec::new(),
             collapsed_categories: diagram::stencils::CATEGORIES
                 .iter()
@@ -2146,14 +2148,27 @@ impl EditorView {
                     )
                     .size_full();
                     grid = grid.child(
-                        Button::new(("diagram-shape", i))
-                            .accessibility_label(stencil.label)
-                            .tooltip(format!("{} · {}", stencil.label, stencil.category))
-                            .outline()
-                            .p_0()
+                        div()
+                            .id(("diagram-shape", i))
+                            .test_support()
+                            .cursor_pointer()
                             .w_full()
                             .h(px(50.))
+                            .border_1()
+                            .border_color(p.line)
+                            .rounded(px(5.))
+                            .hover(|d| d.border_color(p.accent).bg(p.accent.opacity(0.08)))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(format!(
+                                    "{} · Drag to canvas",
+                                    stencil.label
+                                ))
+                                .build(window, cx)
+                            })
                             .child(glyph)
+                            .on_drag(DraggedStencil(stencil), |drag, _, _, cx| {
+                                cx.new(|_| drag.clone())
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.insert_diagram_stencil(stencil, cx)
                             })),
@@ -2162,133 +2177,136 @@ impl EditorView {
                 content = content.child(grid);
             }
         }
-        content=content.child(Button::new("diagram-connect").label(if self.diagram_ui.connecting{"Cancel connection"}else{"Connect shapes"}).selected(self.diagram_ui.connecting).outline().on_click(cx.listener(|this,_,_,cx|{let active=this.diagram_ui.connecting;this.set_tool(Tool::Move,cx);this.diagram_cancel_connection();this.diagram_ui.connecting= !active;this.set_status(if active{"Connection cancelled."}else{"Click a source shape, then a destination. Click near an edge midpoint for a fixed port."},false,cx);})));
-        let owner = cx.weak_entity();
-        content = content.child(
-            Button::new("diagram-layout")
-                .label("Arrange diagram ▾")
-                .outline()
-                .dropdown_menu(move |mut menu, _, _| {
-                    for layout in Layout::ALL {
-                        let owner = owner.clone();
-                        menu = menu.item(PopupMenuItem::new(layout.label()).on_click(
-                            move |_, _, cx| {
-                                owner
-                                    .update(cx, |this, cx| this.layout_diagram(layout, cx))
-                                    .ok();
-                            },
-                        ));
-                    }
-                    menu
-                }),
-        );
-        content = content.child(
-            div()
-                .flex()
-                .gap_1()
+        if self.diagram_ui.library_tab == 0 {
+            content=content.child(Button::new("diagram-connect").label(if self.diagram_ui.connecting{"Cancel connection"}else{"Connect shapes"}).selected(self.diagram_ui.connecting).outline().on_click(cx.listener(|this,_,_,cx|{let active=this.diagram_ui.connecting;this.set_tool(Tool::Move,cx);this.diagram_cancel_connection();this.diagram_ui.connecting= !active;this.set_status(if active{"Connection cancelled."}else{"Click a source shape, then a destination. Click near an edge midpoint for a fixed port."},false,cx);})));
+            let owner = cx.weak_entity();
+            content = content.child(
+                Button::new("diagram-layout")
+                    .label("Arrange diagram ▾")
+                    .outline()
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for layout in Layout::ALL {
+                            let owner = owner.clone();
+                            menu = menu.item(PopupMenuItem::new(layout.label()).on_click(
+                                move |_, _, cx| {
+                                    owner
+                                        .update(cx, |this, cx| this.layout_diagram(layout, cx))
+                                        .ok();
+                                },
+                            ));
+                        }
+                        menu
+                    }),
+            );
+            content = content.child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        Button::new("diagram-grid")
+                            .label("Grid")
+                            .selected(self.diagram_ui.grid)
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.diagram_ui.grid = !this.diagram_ui.grid;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("diagram-minimap")
+                            .label("Minimap")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_navigator(cx))),
+                    ),
+            );
+            content = content
                 .child(
-                    Button::new("diagram-grid")
-                        .label("Grid")
-                        .selected(self.diagram_ui.grid)
+                    Button::new("diagram-import-file")
+                        .label("Import diagram pages…")
                         .small()
                         .outline()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.diagram_ui.grid = !this.diagram_ui.grid;
-                            cx.notify();
-                        })),
+                        .on_click(cx.listener(|this, _, _, cx| this.import_diagram_file(cx))),
                 )
                 .child(
-                    Button::new("diagram-minimap")
-                        .label("Minimap")
+                    Button::new("diagram-export-file")
+                        .label("Export editable .drawio…")
                         .small()
                         .outline()
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_navigator(cx))),
-                ),
-        );
-        content = content
-            .child(
-                Button::new("diagram-import-file")
-                    .label("Import diagram pages…")
+                        .on_click(cx.listener(|this, _, _, cx| this.export_drawio_file(cx))),
+                );
+            let owner = cx.weak_entity();
+            content = content.child(
+                Button::new("diagram-generate")
+                    .label("Generate from data ▾")
                     .small()
                     .outline()
-                    .on_click(cx.listener(|this, _, _, cx| this.import_diagram_file(cx))),
-            )
-            .child(
-                Button::new("diagram-export-file")
-                    .label("Export editable .drawio…")
-                    .small()
-                    .outline()
-                    .on_click(cx.listener(|this, _, _, cx| this.export_drawio_file(cx))),
-            );
-        let owner = cx.weak_entity();
-        content = content.child(
-            Button::new("diagram-generate")
-                .label("Generate from data ▾")
-                .small()
-                .outline()
-                .dropdown_menu(move |mut menu, _, _| {
-                    for format in emulsion_io::diagram_data::Format::ALL {
-                        let owner = owner.clone();
-                        menu = menu.item(PopupMenuItem::new(format.label()).on_click(
-                            move |_, window, cx| {
-                                owner
-                                    .update(cx, |this, cx| {
-                                        this.diagram_data_dialog(format, false, window, cx)
-                                    })
-                                    .ok();
-                            },
-                        ));
-                    }
-                    let import = owner.clone();
-                    let refresh = owner.clone();
-                    menu.separator()
-                        .item(PopupMenuItem::new("Import local data file…").on_click(
-                            move |_, _, cx| {
-                                import
-                                    .update(cx, |this, cx| this.import_diagram_data(cx))
-                                    .ok();
-                            },
-                        ))
-                        .item(
-                            PopupMenuItem::new("Refresh mapped labels and data from CSV…")
-                                .on_click(move |_, window, cx| {
-                                    refresh
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for format in emulsion_io::diagram_data::Format::ALL {
+                            let owner = owner.clone();
+                            menu = menu.item(PopupMenuItem::new(format.label()).on_click(
+                                move |_, window, cx| {
+                                    owner
                                         .update(cx, |this, cx| {
-                                            this.diagram_data_dialog(
-                                                emulsion_io::diagram_data::Format::Csv,
-                                                true,
-                                                window,
-                                                cx,
-                                            )
+                                            this.diagram_data_dialog(format, false, window, cx)
                                         })
                                         .ok();
-                                }),
-                        )
-                }),
-        );
-        content = content.child(
-            Button::new("diagram-conditional-fill")
-                .label("Color shapes by data…")
-                .small()
-                .ghost()
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.diagram_conditional_fill(window, cx)),
-                ),
-        );
-        if self
-            .editor
-            .doc
-            .diagram
-            .as_ref()
-            .is_some_and(|d| d.shapes.values().any(|s| !s.conditions.is_empty()))
-        {
-            content = content.child(
-                Button::new("diagram-clear-conditions")
-                    .label("Clear selected color rules")
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(|this, _, _, cx| this.clear_diagram_conditions(cx))),
+                                },
+                            ));
+                        }
+                        let import = owner.clone();
+                        let refresh = owner.clone();
+                        menu.separator()
+                            .item(PopupMenuItem::new("Import local data file…").on_click(
+                                move |_, _, cx| {
+                                    import
+                                        .update(cx, |this, cx| this.import_diagram_data(cx))
+                                        .ok();
+                                },
+                            ))
+                            .item(
+                                PopupMenuItem::new("Refresh mapped labels and data from CSV…")
+                                    .on_click(move |_, window, cx| {
+                                        refresh
+                                            .update(cx, |this, cx| {
+                                                this.diagram_data_dialog(
+                                                    emulsion_io::diagram_data::Format::Csv,
+                                                    true,
+                                                    window,
+                                                    cx,
+                                                )
+                                            })
+                                            .ok();
+                                    }),
+                            )
+                    }),
             );
+            content =
+                content.child(
+                    Button::new("diagram-conditional-fill")
+                        .label("Color shapes by data…")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.diagram_conditional_fill(window, cx)
+                        })),
+                );
+            if self
+                .editor
+                .doc
+                .diagram
+                .as_ref()
+                .is_some_and(|d| d.shapes.values().any(|s| !s.conditions.is_empty()))
+            {
+                content = content.child(
+                    Button::new("diagram-clear-conditions")
+                        .label("Clear selected color rules")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| this.clear_diagram_conditions(cx))),
+                );
+            }
         }
         content = content
             .child(self.creative_pack_controls(cx))

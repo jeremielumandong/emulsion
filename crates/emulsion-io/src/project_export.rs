@@ -120,7 +120,7 @@ fn label_geometry(spec: &emulsion_core::text::TextSpec) -> Result<std::sync::Arc
     };
     for (path, color) in paths {
         if let Some(previous) = current
-            && previous != color
+            && (previous != color || color[3] != 255)
         {
             flush(&mut out, &mut pending, previous);
         }
@@ -251,12 +251,18 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
                 outlined.height = None;
             }
             // Outline at the origin so moving an object reuses its contours.
-            let transform = outlined.transform();
-            outlined.x = 0.;
-            outlined.y = 0.;
-            outlined.rotation = 0.;
-            outlined.scale_x = 1.;
-            outlined.scale_y = 1.;
+            let transform = if outlined.warp.is_identity() {
+                let transform = outlined.transform();
+                outlined.x = 0.;
+                outlined.y = 0.;
+                outlined.rotation = 0.;
+                outlined.scale_x = 1.;
+                outlined.scale_y = 1.;
+                transform
+            } else {
+                // Warp tessellation depends on the output scale and rotation.
+                glam::DAffine2::IDENTITY
+            };
             let geometry = label_geometry(&outlined)?;
             if let Some((width, height)) = frame {
                 write!(out,

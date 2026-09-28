@@ -100,7 +100,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         def(
             "set_design_component_overrides",
             "Choose which current member properties survive component publishing. Omitted booleans are false; {} clears all flags. Appearance groups paint, typography, blend and effects; opacity/visibility are separate. Content supports text and raster images; geometry supports text, paths and images. Reset instance restores source values and clears flags. instance defaults to the innermost owning linked group.",
-            json!({"node":node(),"instance":node(),"overrides":{"type":"object","properties":{"content":{"type":"boolean"},"appearance":{"type":"boolean"},"geometry":{"type":"boolean"},"opacity":{"type":"boolean"},"visibility":{"type":"boolean"}},"additionalProperties":false}}),
+            json!({"node":node(),"instance":node(),"overrides":{"type":"object","properties":{"content":{"type":"boolean"},"appearance":{"type":"boolean"},"geometry":{"type":"boolean"},"opacity":{"type":"boolean"},"visibility":{"type":"boolean"},"fill":{"type":"boolean"},"stroke":{"type":"boolean"},"stroke_width":{"type":"boolean"},"font_family":{"type":"boolean"},"font_size":{"type":"boolean"},"text_color":{"type":"boolean"},"position":{"type":"boolean"},"size":{"type":"boolean"},"effects":{"type":"boolean"}},"additionalProperties":false}}),
             &["node", "overrides"],
         ),
         def(
@@ -165,12 +165,14 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         ),
     ];
     let properties = json!({
-        "kind":{"type":"string","enum":["bar","line","pie","table"]},
+        "kind":{"type":"string","enum":["bar","line","pie","table","area","scatter","stacked_bar","donut"]},
         "title":{"type":"string","maxLength":200},
         "rows":{"type":"array","minItems":2,"maxItems":51,"items":{"type":"array","minItems":2,"maxItems":9,"items":{"type":"string","maxLength":1000}},"description":"Header row followed by 1–50 data rows. Numeric series use decimal strings. All rows must have equal width; pie needs exactly one nonnegative series."},
         "colors":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"integer","minimum":0,"maximum":255}}},
         "size":{"type":"array","items":{"type":"number","minimum":160,"maximum":10000},"minItems":2,"maxItems":2,"description":"[width,height] in document pixels."},
-        "origin":pair()
+        "origin":pair(),
+        "x_axis":chart_axis_schema(),"y_axis":chart_axis_schema(),
+        "merges":{"type":"array","maxItems":459,"description":"Table merged ranges. Zero-based row/column; row0 is the header. Covered data is retained; [] unmerges all. Regions may not overlap.","items":{"type":"object","additionalProperties":false,"required":["row","column","rows","columns"],"properties":{"row":{"type":"integer","minimum":0,"maximum":50},"column":{"type":"integer","minimum":0,"maximum":8},"rows":{"type":"integer","minimum":1,"maximum":51},"columns":{"type":"integer","minimum":1,"maximum":9}}}}
     });
     defs.push(def("add_design_chart","Create a native editable chart or table. Omitted fields use the chosen kind's example data; default kind bar, size[600,400], origin[0,0].",properties.clone(),&[]));
     let mut properties = properties;
@@ -227,6 +229,24 @@ fn optional_pair(args: &Value, key: &str, default: (f64, f64)) -> Result<(f64, f
         }
     }
 }
+fn chart_axis_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"description":"Patch axis settings; omitted fields stay unchanged, null min/max restores automatic range. X numeric bounds/ticks affect scatter; other Cartesian charts use category labels.","properties":{"min":{"type":["number","null"],"minimum":-1e12,"maximum":1e12},"max":{"type":["number","null"],"minimum":-1e12,"maximum":1e12},"ticks":{"type":"integer","minimum":2,"maximum":20},"label":{"type":"string","maxLength":100},"show_labels":{"type":"boolean"}}})
+}
+fn patch_chart_axis(
+    axis: &mut emulsion_core::design_charts::Axis,
+    value: &Value,
+) -> Result<(), String> {
+    let patch = value.as_object().ok_or("Axis settings must be an object")?;
+    let mut merged = serde_json::to_value(&*axis).unwrap();
+    for (key, value) in patch {
+        merged
+            .as_object_mut()
+            .unwrap()
+            .insert(key.clone(), value.clone());
+    }
+    *axis = serde_json::from_value(merged).map_err(|e| format!("Invalid axis settings: {e}"))?;
+    Ok(())
+}
 fn patch_chart(chart: &mut Chart, args: &Value) -> Result<(), String> {
     macro_rules! field {
         ($field:ident) => {
@@ -241,6 +261,13 @@ fn patch_chart(chart: &mut Chart, args: &Value) -> Result<(), String> {
     field!(rows);
     field!(colors);
     field!(size);
+    field!(merges);
+    if let Some(value) = args.get("x_axis") {
+        patch_chart_axis(&mut chart.x_axis, value)?;
+    }
+    if let Some(value) = args.get("y_axis") {
+        patch_chart_axis(&mut chart.y_axis, value)?;
+    }
     chart.validate()
 }
 fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
@@ -834,5 +861,88 @@ mod component_override_tests {
             e.doc.node(text).unwrap().kind,
             NodeKind::Text { .. }
         ));
+    }
+}
+
+#[cfg(test)]
+mod advanced_chart_tests {
+    use super::*;
+    use emulsion_core::Document;
+    fn call(editor: &mut Editor, name: &str, args: Value) -> Value {
+        let result = execute(editor, name, &args).unwrap();
+        assert!(!result.is_error, "{:?}", result.content);
+        serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap()
+    }
+    #[test]
+    fn advanced_charts_partial_axes_clear_merges_and_undo_are_native() {
+        let mut e = Editor::new(Document::new(800, 600), None);
+        for kind in ["area", "scatter", "stacked_bar", "donut"] {
+            let id = call(
+                &mut e,
+                "add_design_chart",
+                json!({"kind":kind,"y_axis":{"min":0,"max":100,"ticks":6,"label":"Amount"}}),
+            )["node"]
+                .as_u64()
+                .unwrap();
+            let before = e.doc.clone();
+            let history = e.history.len();
+            call(
+                &mut e,
+                "update_design_chart",
+                json!({"node":id,"y_axis":{"min":null,"show_labels":false}}),
+            );
+            let axis = &e.doc.design.charts[&id].y_axis;
+            assert_eq!(axis.min, None);
+            assert_eq!(axis.max, Some(100.));
+            assert_eq!(axis.ticks, 6);
+            assert!(!axis.show_labels);
+            assert_eq!(e.history.len(), history + 1);
+            e.undo();
+            assert_eq!(e.doc, before);
+            for axis in [
+                json!({"ticks":1}),
+                json!({"ticks":"5"}),
+                json!({"min":120}),
+                json!({"show_labels":null}),
+                json!({"unknown":1}),
+            ] {
+                assert!(
+                    execute(
+                        &mut e,
+                        "update_design_chart",
+                        &json!({"node":id,"y_axis":axis})
+                    )
+                    .unwrap()
+                    .is_error
+                );
+                assert_eq!(e.doc, before);
+            }
+        }
+        let id = call(
+            &mut e,
+            "add_design_chart",
+            json!({"kind":"table","merges":[{"row":0,"column":0,"rows":1,"columns":2}]}),
+        )["node"]
+            .as_u64()
+            .unwrap();
+        let before = e.doc.clone();
+        call(
+            &mut e,
+            "update_design_chart",
+            json!({"node":id,"merges":[]}),
+        );
+        assert!(e.doc.design.charts[&id].merges.is_empty());
+        e.undo();
+        assert_eq!(e.doc, before);
+        assert!(
+            execute(
+                &mut e,
+                "update_design_chart",
+                &json!({"node":id,"merges":[{"row":0,"column":0,"rows":99,"columns":2}]})
+            )
+            .unwrap()
+            .is_error
+        );
+        assert_eq!(e.doc, before);
     }
 }

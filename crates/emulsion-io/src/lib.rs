@@ -481,3 +481,6 @@ mod tests {
 
 #[cfg(test)]
 mod design_components_tests;
+
+#[cfg(test)]
+mod design_variable_tests;

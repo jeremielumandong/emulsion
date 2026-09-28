@@ -158,7 +158,43 @@ pub fn read_stencil_source(path: &Path) -> Result<(Pack, Vec<String>)> {
         }
         let mut pages = Vec::new();
         for (index, path) in paths.drain(..).enumerate() {
-            let doc = crate::open(&path)?;
+            let mut doc = crate::open(&path)?;
+            // Ordinary SVG artwork also needs a graph object so toolbox drops,
+            // picking, moving and attached connectors work like native stencils.
+            if doc.diagram.is_none() {
+                use emulsion_core::{
+                    Command, Editor, NodeKind,
+                    command::Slot,
+                    diagram::{self, ShapeKind},
+                };
+                let roots = doc.children(None);
+                let (w, h) = (doc.width as f64, doc.height as f64);
+                let mut editor = Editor::new(doc, None);
+                let group = diagram::add_shape(&mut editor, ShapeKind::Process, [0., 0., w, h], "")
+                    .map_err(error)?;
+                let body = editor.doc.diagram.as_ref().unwrap().shapes[&group].body;
+                if let NodeKind::Path { path, style, .. } = &editor.doc.node(body).unwrap().kind {
+                    let mut style = *style;
+                    style.fill = None;
+                    style.stroke = None;
+                    editor
+                        .execute(Command::SetPath {
+                            id: body,
+                            path: path.clone(),
+                            style,
+                        })
+                        .map_err(|e| error(e.to_string()))?;
+                }
+                for id in roots {
+                    editor
+                        .execute(Command::MoveNode {
+                            id,
+                            slot: Slot::top_of(Some(group)),
+                        })
+                        .map_err(|e| error(e.to_string()))?;
+                }
+                doc = editor.doc;
+            }
             let id = index as u64 + 1;
             let title = path
                 .file_stem()
@@ -635,5 +671,25 @@ mod tests {
         ] {
             assert!(GithubSource::parse(url).is_err(), "{url}");
         }
+    }
+    #[test]
+    fn svg_folder_installs_reusable_editable_stencil_entries() {
+        let root =
+            std::env::temp_dir().join(format!("emulsion-diagram-pack-{}", std::process::id()));
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("Box.svg"),r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><rect x="1" y="1" width="98" height="58" fill="#ff8800"/></svg>"##).unwrap();
+        let (pack, warnings) = read_stencil_source(&source).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(pack.project.pages.len(), 1);
+        let doc = &pack.project.pages[0].doc;
+        doc.validate().unwrap();
+        assert_eq!(doc.diagram.as_ref().unwrap().shapes.len(), 1);
+        let (catalog, id) = install(&root.join("library"), pack).unwrap();
+        let asset = catalog.assets.iter().find(|a| a.id == id).unwrap();
+        assert_eq!(asset.variants, vec!["Box"]);
+        assert!(asset.path.exists());
+        project::read(&asset.path).unwrap().validate().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

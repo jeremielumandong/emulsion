@@ -266,6 +266,11 @@ pub(super) fn copy_group(
         design.constraints.remove(id);
         design.motion.remove(id);
         design.style_links.remove(id);
+        design.variable_bindings.remove(id);
+        design.interactions.remove(id);
+        design.overlays.remove(id);
+        design.local_media.remove(id);
+        design.keyframes.remove(id);
     }
     if let Some(link) = before.design.component_links.get(&dest) {
         design.component_links.insert(dest, link.clone());
@@ -281,6 +286,12 @@ pub(super) fn copy_group(
         }
         design.component_links.insert(id, link);
     }
+    crate::design_variables::merge_into(&mut design, &additions);
+    design.interactions.extend(additions.interactions.clone());
+    design.overlays.extend(additions.overlays.clone());
+    design.local_media.extend(additions.local_media.clone());
+    if !additions.keyframes.is_empty() { design.duration_ms=design.duration_ms.max(additions.duration_ms); }
+    design.keyframes.extend(additions.keyframes.clone());
     crate::design_styles::merge_into(&mut design, &additions);
     design.charts.extend(additions.charts);
     design.frames.extend(additions.frames);
@@ -362,7 +373,7 @@ pub(super) fn import_into(
         let definition = source.design.components[&original].clone();
         let mut variants = BTreeMap::new();
         let mut sources = HashMap::new();
-        for (variant, root) in definition.variants {
+        for (variant, root) in definition.variants.clone() {
             let (dest, map) = copy_group(plan, source, root, None, true, &BTreeMap::new(), false)?;
             for node in plan.doc.subtree(dest) {
                 if let Some(link) = plan.doc.design.component_links.get_mut(&node) {
@@ -387,7 +398,11 @@ pub(super) fn import_into(
         plan.doc
             .design
             .components
-            .insert(chosen.clone(), Definition { variants });
+            .insert(chosen.clone(), Definition {
+                variants,
+                library_id: definition.library_id,
+                member_keys: definition.member_keys.into_iter().filter_map(|(id,key)|sources.get(&id).map(|to|(*to,key))).collect(),
+            });
         renamed.insert(original.clone(), chosen.clone());
         definition_ids.extend(sources);
     }

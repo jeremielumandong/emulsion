@@ -17,6 +17,8 @@ pub mod brush_tools;
 mod design_appearance_tools;
 mod design_asset_tools;
 mod design_layout_tools;
+mod design_interaction_tools;
+mod design_variable_tools;
 pub mod design_motion_tools;
 pub mod diagram_project_tools;
 pub mod exec;

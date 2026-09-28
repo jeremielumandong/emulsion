@@ -12,16 +12,36 @@ pub struct Overrides {
     pub geometry: bool,
     pub opacity: bool,
     pub visibility: bool,
+    pub fill: bool,
+    pub stroke: bool,
+    pub stroke_width: bool,
+    pub font_family: bool,
+    pub font_size: bool,
+    pub text_color: bool,
+    pub position: bool,
+    pub size: bool,
+    pub effects: bool,
 }
 impl Overrides {
     pub fn is_empty(self) -> bool {
         self == Self::default()
     }
     pub fn validate(self, node: &Node) -> Result<(), String> {
+        if (self.font_family || self.font_size || self.text_color)
+            && !matches!(node.kind, NodeKind::Text { .. })
+        {
+            return Err("Typography overrides need a text object.".into());
+        }
+        if self.fill && !matches!(node.kind, NodeKind::Path { .. } | NodeKind::Fill { .. }) {
+            return Err("Fill overrides need a path or fill object.".into());
+        }
+        if (self.stroke || self.stroke_width) && !matches!(node.kind, NodeKind::Path { .. }) {
+            return Err("Stroke overrides need a path object.".into());
+        }
         if self.content && !matches!(node.kind, NodeKind::Text { .. } | NodeKind::Raster { .. }) {
             return Err("Content overrides support text and raster images.".into());
         }
-        if self.geometry
+        if (self.geometry || self.position || self.size)
             && !matches!(
                 node.kind,
                 NodeKind::Text { .. }
@@ -43,7 +63,17 @@ pub(super) fn restore(
 ) -> Result<(), String> {
     flags.validate(old)?;
     if std::mem::discriminant(&old.kind) != std::mem::discriminant(&next.kind)
-        && (flags.content || flags.appearance || flags.geometry)
+        && (flags.content
+            || flags.appearance
+            || flags.geometry
+            || flags.fill
+            || flags.stroke
+            || flags.stroke_width
+            || flags.font_family
+            || flags.font_size
+            || flags.text_color
+            || flags.position
+            || flags.size)
     {
         return Err(
             "An overridden member changed object type. Clear its overrides before publishing."
@@ -60,6 +90,11 @@ pub(super) fn restore(
         if flags.appearance {
             next.blend = old.blend;
             next.blending = old.blending;
+            next.styles = old.styles.clone();
+            next.style_options = old.style_options.clone();
+            next.effects_enabled = old.effects_enabled;
+        }
+        if flags.effects {
             next.styles = old.styles.clone();
             next.style_options = old.style_options.clone();
             next.effects_enabled = old.effects_enabled;
@@ -90,6 +125,8 @@ pub(super) fn restore(
                     value.color = old.color;
                     value.bold = old.bold;
                     value.italic = old.italic;
+                    value.underline = old.underline;
+                    value.strikethrough = old.strikethrough;
                     value.line_height = old.line_height;
                     value.align = old.align;
                     value.anti_alias = old.anti_alias;
@@ -151,6 +188,111 @@ pub(super) fn restore(
             *paint = *rgba;
         }
         _ => (),
+    }
+    match (&old.kind, &mut next.kind) {
+        (NodeKind::Text { spec: old, .. }, NodeKind::Text { spec: next, .. }) => {
+            let value = std::sync::Arc::make_mut(next);
+            if geometry {
+                if flags.position {
+                    value.x = old.x;
+                    value.y = old.y;
+                }
+                if flags.size {
+                    value.width = old.width;
+                    value.height = old.height;
+                    value.scale_x = old.scale_x;
+                    value.scale_y = old.scale_y;
+                }
+            } else {
+                if flags.font_family {
+                    value.font = old.font.clone();
+                    for run in &mut value.runs {
+                        run.style.font = old.font.clone();
+                    }
+                }
+                if flags.font_size {
+                    value.size = old.size;
+                    for run in &mut value.runs {
+                        run.style.size = old.size;
+                    }
+                }
+                if flags.text_color {
+                    value.color = old.color;
+                    for run in &mut value.runs {
+                        run.style.color = old.color;
+                    }
+                }
+            }
+        }
+        (
+            NodeKind::Path {
+                path: old, style, ..
+            },
+            NodeKind::Path {
+                path, style: paint, ..
+            },
+        ) => {
+            if geometry && !flags.geometry && (flags.position || flags.size) {
+                let before = emulsion_raster::vector_geometry::bounds(old)
+                    .ok_or("Cannot retain geometry of an empty path.")?;
+                let current = emulsion_raster::vector_geometry::bounds(path)
+                    .ok_or("Cannot retain geometry of an empty path.")?;
+                let (x, y) = if flags.position {
+                    (before.0, before.1)
+                } else {
+                    (current.0, current.1)
+                };
+                let (sx, sy) = if flags.size {
+                    if current.2 <= 1e-8 || current.3 <= 1e-8 {
+                        return Err("Cannot retain size of a degenerate path.".into());
+                    }
+                    (before.2 / current.2, before.3 / current.3)
+                } else {
+                    (1., 1.)
+                };
+                std::sync::Arc::make_mut(path).transform(
+                    glam::DAffine2::from_translation(glam::dvec2(x, y))
+                        * glam::DAffine2::from_scale(glam::dvec2(sx, sy))
+                        * glam::DAffine2::from_translation(glam::dvec2(-current.0, -current.1)),
+                );
+            }
+            if !geometry {
+                if flags.fill {
+                    paint.fill = style.fill;
+                }
+                if flags.stroke {
+                    paint.stroke = style.stroke;
+                }
+                if flags.stroke_width {
+                    paint.width = style.width;
+                }
+            }
+        }
+        (NodeKind::Fill { rgba }, NodeKind::Fill { rgba: paint }) if !geometry && flags.fill => {
+            *paint = *rgba
+        }
+        (
+            NodeKind::Raster { placement: old, .. },
+            NodeKind::Raster {
+                placement: next, ..
+            },
+        )
+        | (
+            NodeKind::Smart { placement: old, .. },
+            NodeKind::Smart {
+                placement: next, ..
+            },
+        ) if geometry => {
+            if flags.position {
+                next.x = old.x;
+                next.y = old.y;
+            }
+            if flags.size {
+                next.scale_x = old.scale_x;
+                next.scale_y = old.scale_y;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }

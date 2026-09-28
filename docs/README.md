@@ -32,6 +32,10 @@ behavior.
 - [Design starters and layout](design-starters-and-layout.md): editable templates,
   responsive frames, reusable formatting and bulk creation.
 - [Design charts and tables](design-charts.md): local data authoring and editable artwork.
+- [Design variables](design-variables.md): typed colors/numbers and native object bindings.
+- [Interactive presentations](design-interactions.md): click navigation, overlays and component states.
+- [Local media and keyframes](design-local-media-keyframes.md): embedded video/audio, trim and property animation.
+- [Text formatting](design-text-formatting.md): native decorations and editable lists.
 - [Design video](design-video.md): YouTube objects, presentation playback and system runtime requirements.
 - [Experimental Nikon HE/HE★ support](nikon-he.md): the pinned decoder, its
   limits, and the opt-in test.

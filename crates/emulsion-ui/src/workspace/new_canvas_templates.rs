@@ -327,52 +327,52 @@ impl NewCanvas {
             let pick = template.clone();
             let preview = self.templates.previews.get(&template.id);
             grid = grid.child(
-                div()
-                    .id(SharedString::from(format!("new-template-{}", template.id)))
-                    .test_support()
-                    .flex()
-                    .flex_col()
-                    .min_w_0()
-                    .gap_1()
+                Button::new(SharedString::from(format!("new-template-{}", template.id)))
+                    .accessibility_label(template.name.clone())
+                    .tooltip(template.description.clone())
+                    .outline()
+                    .w_full()
+                    .h(px(174.))
                     .p_2()
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(if selected.is_some_and(|s| s.id == template.id) {
-                        p.accent
-                    } else {
-                        p.line
-                    })
-                    .bg(p.panel)
-                    .cursor_pointer()
+                    .selected(selected.is_some_and(|s| s.id == template.id))
+                    .disabled(self.submitted)
                     .child(
                         div()
-                            .h(px(110.))
-                            .w_full()
                             .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(p.soft_bg)
-                            .child(match preview {
-                                Some(Ok(preview)) => img(preview.image.clone())
-                                    .size_full()
-                                    .object_fit(ObjectFit::Contain)
-                                    .into_any_element(),
-                                Some(Err(_)) => div()
+                            .flex_col()
+                            .min_w_0()
+                            .w_full()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .h(px(110.))
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(p.soft_bg)
+                                    .child(match preview {
+                                        Some(Ok(preview)) => img(preview.image.clone())
+                                            .size_full()
+                                            .object_fit(ObjectFit::Contain)
+                                            .into_any_element(),
+                                        Some(Err(_)) => div()
+                                            .text_color(p.muted)
+                                            .child("Preview unavailable")
+                                            .into_any_element(),
+                                        None => div()
+                                            .text_color(p.muted)
+                                            .child("Loading preview…")
+                                            .into_any_element(),
+                                    }),
+                            )
+                            .child(div().text_ellipsis().child(template.name.clone()))
+                            .child(
+                                div()
+                                    .text_size(px(10.))
                                     .text_color(p.muted)
-                                    .child("Preview unavailable")
-                                    .into_any_element(),
-                                None => div()
-                                    .text_color(p.muted)
-                                    .child("Loading preview…")
-                                    .into_any_element(),
-                            }),
-                    )
-                    .child(div().text_ellipsis().child(template.name.clone()))
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(p.muted)
-                            .child(template.description.clone()),
+                                    .child(template.description.clone()),
+                            ),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if this.submitted {
@@ -425,7 +425,7 @@ impl NewCanvas {
                 Button::new(("new-canvas-kind", kind as usize)).label(kind.label()).small().ghost().selected(self.spec.kind == kind).disabled(self.submitted)
                     .on_click(cx.listener(move |this, _, window, cx| this.pick_kind(kind, window, cx)))
             })))
-            .child(div().id("new-canvas-scroll").max_h((window.viewport_size().height - px(285.)).max(px(150.))).overflow_y_scroll()
+            .child(div().id("new-canvas-scroll").h((window.viewport_size().height - px(360.)).clamp(px(150.), px(520.))).flex_none().overflow_y_scroll()
                 .child(div().flex().flex_wrap().gap_4()
                     .child(div().flex_1().min_w(px(240.)).flex().flex_col().gap_3()
                         .child(div().id("new-canvas-search").test_support().child(Input::new(&self.search).small()))
@@ -439,7 +439,7 @@ impl NewCanvas {
                                 .on_click(cx.listener(|this, _, _, cx| { this.templates.page += 1; cx.notify(); }))))))
                     .child(details)))
             .when_some(self.notice.clone(), |d, notice| d.child(div().text_color(p.muted).child(notice)))
-            .child(div().flex().items_center().justify_end().gap_2()
+            .child(div().flex().flex_none().items_center().justify_end().gap_2()
                 .child(Button::new("new-canvas-cancel").label("Cancel").small().on_click(cx.listener(|this, _, window, cx| { this.cancelled = true; window.close_dialog(cx); })))
                 .child(Button::new("new-canvas-create").label(if self.submitted { "Creating…" } else { "Use template" }).small().primary().disabled(selected.is_none() || self.submitted)
                     .on_click(cx.listener(|this, _, window, cx| this.submit_template(window, cx)))))

@@ -32,12 +32,14 @@ fn node_label(doc: &Document, id: NodeId) -> String {
 /// Run `name` with `args` against `editor`. Every change goes through the
 /// Command API for document edits; brush tools commit the independent catalog.
 pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
+    if let Some(result)=crate::design_interaction_tools::execute(editor,name,args){return result;}
     if let Some(result) = crate::diagram_tools::execute(editor, name, args) {
         return result;
     }
     if let Some(result) = crate::design_motion_tools::execute(editor, name, args) {
         return result;
     }
+    if let Some(result) = crate::design_variable_tools::execute(editor, name, args) { return result; }
     if let Some(result) = crate::design_layout_tools::execute(editor, name, args) {
         return result;
     }

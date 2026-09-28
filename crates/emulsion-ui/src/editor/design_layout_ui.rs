@@ -64,6 +64,7 @@ impl EditorView {
             .flex_col()
             .gap(px(6.))
             .child(div().text_color(p.muted).child("Responsive layout"))
+            .child(self.responsive_preview_controls(cx))
             .child(
                 div().grid().grid_cols(3).gap(px(4.)).children(
                     [

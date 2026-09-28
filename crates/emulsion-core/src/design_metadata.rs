@@ -84,6 +84,12 @@ pub type PageTransition = Effect;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Design {
+    pub variables: BTreeMap<String, crate::design_variables::Value>,
+    pub variable_bindings: BTreeMap<NodeId, BTreeMap<crate::design_variables::Property, String>>,
+    pub interactions: BTreeMap<NodeId, Vec<crate::design_interactions::Action>>,
+    pub overlays: std::collections::BTreeSet<NodeId>,
+    pub local_media: BTreeMap<NodeId, crate::design::media::LocalMedia>,
+    pub keyframes: BTreeMap<NodeId, Vec<crate::design_keyframes::Track>>,
     pub speaker_notes: String,
     pub page_transition: PageTransition,
     pub transition_ms: u32,
@@ -102,6 +108,12 @@ pub struct Design {
 impl Default for Design {
     fn default() -> Self {
         Self {
+            variables: BTreeMap::new(),
+            variable_bindings: BTreeMap::new(),
+            interactions: BTreeMap::new(),
+            overlays: Default::default(),
+            local_media: BTreeMap::new(),
+            keyframes: BTreeMap::new(),
             speaker_notes: String::new(),
             page_transition: PageTransition::None,
             transition_ms: 400,
@@ -129,6 +141,25 @@ impl Design {
         {
             return Err("Speaker notes or page transition duration exceeds its limit.".into());
         }
+        crate::design_variables::validate(self, doc)?;
+        crate::design_interactions::validate(&self.interactions, &self.overlays, doc)?;
+        crate::design::media::validate_local(&self.local_media, doc)?;
+        if self
+            .local_media
+            .keys()
+            .any(|id| self.media.contains_key(id))
+        {
+            return Err("An object cannot contain both local and YouTube media.".into());
+        }
+        crate::design_keyframes::validate_with_media(
+            &self.keyframes,
+            doc,
+            self.duration_ms,
+            self.media
+                .values()
+                .map(|m| m.boundary)
+                .chain(self.local_media.values().map(|m| m.boundary)),
+        )?;
         crate::design_styles::validate(self, doc)?;
         crate::design_components::validate(self, doc)?;
         crate::design::media::validate(&self.media, doc)?;
@@ -171,9 +202,19 @@ impl Design {
         Ok(())
     }
     pub fn retain_nodes(&mut self, ids: &HashSet<NodeId>) {
+        self.variable_bindings.retain(|id, _| ids.contains(id));
+        self.local_media
+            .retain(|id, media| ids.contains(id) && ids.contains(&media.boundary));
+        self.keyframes.retain(|id, _| ids.contains(id));
+        self.overlays.retain(|id| ids.contains(id));
+        self.interactions.retain(|id, actions| {
+            actions.retain(|action| action.retain_targets(ids));
+            ids.contains(id) && !actions.is_empty()
+        });
         self.style_links.retain(|id, _| ids.contains(id));
         self.components.retain(|_, definition| {
             definition.variants.retain(|_, id| ids.contains(id));
+            definition.member_keys.retain(|id, _| ids.contains(id));
             !definition.variants.is_empty()
         });
         self.component_links.retain(|id, link| {
@@ -203,6 +244,11 @@ impl Design {
     pub fn fragment(&self, ids: &HashSet<NodeId>) -> Self {
         let mut out = self.clone();
         out.retain_nodes(ids);
+        out.variables.retain(|name, _| {
+            out.variable_bindings
+                .values()
+                .any(|b| b.values().any(|v| v == name))
+        });
         out.saved_styles
             .retain(|name, _| out.style_links.values().any(|link| link == name));
         out
@@ -210,6 +256,31 @@ impl Design {
     pub fn remap(&self, map: &HashMap<NodeId, NodeId>) -> Self {
         let id = |id| map.get(&id).copied().unwrap_or(id);
         Self {
+            variable_bindings: self
+                .variable_bindings
+                .iter()
+                .map(|(k, v)| (id(*k), v.clone()))
+                .collect(),
+            interactions: self
+                .interactions
+                .iter()
+                .map(|(k, v)| (id(*k), v.iter().map(|a| a.remap(map)).collect()))
+                .collect(),
+            overlays: self.overlays.iter().map(|k| id(*k)).collect(),
+            local_media: self
+                .local_media
+                .iter()
+                .map(|(k, v)| {
+                    let mut v = v.clone();
+                    v.boundary = id(v.boundary);
+                    (id(*k), v)
+                })
+                .collect(),
+            keyframes: self
+                .keyframes
+                .iter()
+                .map(|(k, v)| (id(*k), v.clone()))
+                .collect(),
             style_links: self
                 .style_links
                 .iter()
@@ -224,6 +295,11 @@ impl Design {
                         .variants
                         .values_mut()
                         .for_each(|root| *root = id(*root));
+                    value.member_keys = value
+                        .member_keys
+                        .into_iter()
+                        .map(|(key, value)| (id(key), value))
+                        .collect();
                     (key.clone(), value)
                 })
                 .collect(),
@@ -495,6 +571,7 @@ pub fn at_time(source: &Document, time_ms: u32) -> Result<Document, String> {
             }
         }
     }
+    doc = crate::design_keyframes::evaluate(&doc, time_ms)?;
     crate::diagram::synchronize(&doc.clone(), &mut doc)?;
     doc.validate().map_err(|e| e.to_string())?;
     Ok(doc)

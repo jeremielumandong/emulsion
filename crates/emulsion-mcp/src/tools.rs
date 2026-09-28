@@ -162,6 +162,8 @@ fn character_style_properties() -> Value {
         "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$" },
         "bold": { "type": "boolean" },
         "italic": { "type": "boolean" },
+        "underline": { "type": "boolean" },
+        "strikethrough": { "type": "boolean" },
         "letter_spacing": { "type": "number", "minimum": -50, "maximum": 500 },
         "baseline": { "type": "number", "minimum": -4000, "maximum": 4000 }
     })
@@ -172,6 +174,7 @@ fn text_properties(include_text: bool) -> Value {
     let object = properties.as_object_mut().unwrap();
     if include_text {
         object.insert("text".into(), json!({ "type": "string" }));
+        object.insert("list".into(), json!({"type":"string","enum":["none","bullet","numbered"]}));
     }
     object.extend(json!({
         "x": { "type": "number" }, "y": { "type": "number" },
@@ -967,6 +970,8 @@ pub fn definitions() -> Vec<ToolDef> {
     definitions.extend(crate::design_asset_tools::definitions());
     definitions.extend(crate::design_appearance_tools::definitions());
     definitions.extend(crate::design_layout_tools::definitions());
+    definitions.extend(crate::design_interaction_tools::definitions());
+    definitions.extend(crate::design_variable_tools::definitions());
     definitions.extend(crate::design_motion_tools::definitions());
     definitions.extend(crate::diagram_tools::definitions());
     definitions.extend(crate::diagram_project_tools::definitions());
@@ -981,6 +986,8 @@ pub fn read_only_names() -> impl Iterator<Item = &'static str> {
         .chain(crate::design_asset_tools::READ_ONLY)
         .chain(crate::design_appearance_tools::READ_ONLY)
         .chain(crate::design_layout_tools::READ_ONLY)
+        .chain(crate::design_interaction_tools::READ_ONLY)
+        .chain(crate::design_variable_tools::READ_ONLY)
         .chain(crate::design_motion_tools::READ_ONLY)
         .chain(crate::diagram_tools::READ_ONLY)
         .chain(crate::project_tools::READ_ONLY)
@@ -996,6 +1003,8 @@ pub fn is_destructive(name: &str) -> bool {
         || crate::design_asset_tools::DESTRUCTIVE.contains(&name)
         || crate::design_appearance_tools::DESTRUCTIVE.contains(&name)
         || crate::design_layout_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_interaction_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_variable_tools::DESTRUCTIVE.contains(&name)
         || crate::design_motion_tools::DESTRUCTIVE.contains(&name)
         || crate::diagram_tools::DESTRUCTIVE.contains(&name)
         || crate::project_tools::DESTRUCTIVE.contains(&name)
@@ -1009,6 +1018,8 @@ pub fn uses_native_history(name: &str) -> bool {
             crate::design_asset_tools::definitions(),
             crate::design_appearance_tools::definitions(),
             crate::design_layout_tools::definitions(),
+            crate::design_interaction_tools::definitions(),
+            crate::design_variable_tools::definitions(),
             crate::design_motion_tools::definitions(),
             crate::diagram_tools::definitions(),
             crate::project_tools::definitions(),

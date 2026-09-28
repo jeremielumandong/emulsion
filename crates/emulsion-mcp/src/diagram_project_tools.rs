@@ -15,6 +15,7 @@ pub fn is_tool(name: &str) -> bool {
             | "generate_diagram"
             | "quick_create_diagram"
             | "insert_diagram_template"
+            | "insert_diagram_pack_entry"
     )
 }
 fn text<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -84,6 +85,50 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
         }
     }
     match name {
+        "insert_diagram_pack_entry" => {
+            let project = emulsion_io::project::read(Path::new(text(args, "path")?))
+                .map_err(|e| e.to_string())?;
+            let page = args["page"].as_u64().unwrap_or(1);
+            let page = project
+                .pages
+                .get((page - 1) as usize)
+                .ok_or("Stencil page does not exist")?;
+            let roots: Vec<_> = page
+                .doc
+                .nodes
+                .iter()
+                .filter(|n| {
+                    n.parent.is_none() && !matches!(n.kind, emulsion_core::NodeKind::Fill { .. })
+                })
+                .map(|n| n.id)
+                .collect();
+            let fragment = emulsion_core::fragment::Fragment::capture(&page.doc, &roots)?;
+            let bounds = roots
+                .iter()
+                .filter_map(|id| emulsion_core::geometry::node_bounds(&page.doc, *id))
+                .fold(emulsion_raster::IRect::default(), |a, b| a.union(&b));
+            let center = match args.get("center") {
+                None => (editor.doc.width as f64 / 2., editor.doc.height as f64 / 2.),
+                Some(value) => {
+                    let values = value
+                        .as_array()
+                        .filter(|v| v.len() == 2)
+                        .ok_or("center must be [x,y]")?;
+                    let x = values[0].as_f64().ok_or("Invalid center x")?;
+                    let y = values[1].as_f64().ok_or("Invalid center y")?;
+                    if !x.is_finite() || !y.is_finite() || x.abs() > 1e6 || y.abs() > 1e6 {
+                        return Err("Center must be finite and within 1e6 document pixels".into());
+                    }
+                    (x, y)
+                }
+            };
+            let offset = (
+                center.0 - bounds.x as f64 - bounds.w as f64 / 2.,
+                center.1 - bounds.y as f64 - bounds.h as f64 / 2.,
+            );
+            let nodes = fragment.paste(editor, emulsion_core::command::Slot::TOP, offset)?;
+            Ok(json!({"nodes":nodes}))
+        }
         "insert_diagram_template" => {
             let id = text(args, "template")?;
             let template = *emulsion_core::diagram_library::TEMPLATES
@@ -181,6 +226,12 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
     };
     vec![
+        def(
+            "insert_diagram_pack_entry",
+            "Place an installed stencil entry onto the active diagram, preserving editable artwork and connections. Use a path returned by list_diagram_stencil_packs; page is one-based (default 1). Optional center [x,y] defaults to the canvas center. One undo step.",
+            json!({"path":string,"page":{"type":"integer","minimum":1},"center":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}}),
+            &["path"],
+        ),
         def(
             "install_diagram_stencil_pack",
             "Install a local .emustencil, draw.io XML/library, supported Visio file or SVG folder into the reusable offline stencil catalog. Returns compatibility warnings.",
@@ -292,6 +343,47 @@ mod tests {
             assert!(crate::tools::uses_native_history(name));
         }
     }
+    #[test]
+    fn diagram_pack_entry_preserves_connections_and_undo() {
+        let doc = emulsion_core::diagram_library::TEMPLATES[0]
+            .build()
+            .unwrap();
+        let source = ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("emulsion-stencil-mcp-{}.emu", std::process::id()));
+        emulsion_io::project::write(&source.snapshot().unwrap(), &path).unwrap();
+        let mut e = project();
+        let before = e.doc.clone();
+        let result = call(
+            &mut e,
+            "insert_diagram_pack_entry",
+            json!({"path":path,"center":[400.,300.]}),
+        );
+        assert!(!result["nodes"].as_array().unwrap().is_empty());
+        assert_eq!(e.page_list().len(), 1);
+        assert_eq!(
+            e.doc.diagram.as_ref().unwrap().edges.len(),
+            source.doc.diagram.as_ref().unwrap().edges.len()
+        );
+        e.doc.validate().unwrap();
+        let stamp = e.stamp();
+        assert!(
+            execute(
+                &mut e,
+                "insert_diagram_pack_entry",
+                &json!({"path":path,"page":0})
+            )
+            .is_error
+        );
+        assert_eq!(e.stamp(), stamp);
+        assert!(e.undo());
+        assert_eq!(e.doc, before);
+        std::fs::remove_file(path).unwrap();
+        assert!(crate::tools::uses_native_history(
+            "insert_diagram_pack_entry"
+        ));
+    }
+
     #[test]
     fn template_insertion_adds_one_undoable_page() {
         let mut e = project();

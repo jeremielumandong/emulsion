@@ -19,13 +19,44 @@ impl EditorView {
             .flex()
             .flex_col()
             .gap_2();
+        panel = panel.child(
+            div().flex().flex_wrap().gap_1().children(
+                ["All", "Cloud", "UML", "Network", "UI", "Business"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, label)| {
+                        Button::new(("diagram-pack-filter", index))
+                            .label(label)
+                            .xsmall()
+                            .ghost()
+                            .selected(self.diagram_ui.pack_filter == index)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.diagram_ui.pack_filter = index;
+                                cx.notify();
+                            }))
+                    }),
+            ),
+        );
         for (index, category) in emulsion_core::diagram::stencils::CATEGORIES
             .iter()
             .enumerate()
         {
-            if !category.to_lowercase().contains(query) {
+            let category_match = match self.diagram_ui.pack_filter {
+                1 => category.contains("Cloud"),
+                2 => category.contains("UML"),
+                3 => category.contains("Network"),
+                4 => category.contains("Wireframe"),
+                5 => {
+                    category.contains("Business")
+                        || category.contains("Planning")
+                        || category.contains("Entity")
+                }
+                _ => true,
+            };
+            if !category_match || !category.to_lowercase().contains(query) {
                 continue;
             }
+
             let count = emulsion_core::diagram::stencils::STENCILS
                 .iter()
                 .filter(|s| s.category == *category)

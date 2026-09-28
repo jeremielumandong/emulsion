@@ -3146,3 +3146,6 @@ mod tools {
         assert!(px[0] > 150 && px[1] < 90, "healed to red, got {px:?}");
     }
 }
+
+#[path = "design_variable_workflow_tests.rs"]
+mod design_variable_workflow_tests;

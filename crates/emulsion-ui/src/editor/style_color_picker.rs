@@ -244,7 +244,11 @@ impl StyleColorPicker {
         }
         self.publish(Some(index), window, cx);
     }
-    pub(in crate::editor) fn commit_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(in crate::editor) fn commit_pending(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         for (index, limit) in LIMITS.iter().copied().enumerate() {
             if number(self.fields[index].read(cx).value().as_str(), limit).is_none() {
                 self.invalid = Some(index);

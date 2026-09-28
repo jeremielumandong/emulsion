@@ -29,8 +29,16 @@ impl SvgViewport {
         dirty: emulsion_raster::IRect,
         bytes: &mut [u8],
     ) -> Result<()> {
-        if bytes.len() != size.0 as usize * size.1 as usize * 4 {
+        if size.0 == 0
+            || size.1 == 0
+            || u64::from(size.0) * u64::from(size.1) > 36_000_000
+            || !transform.iter().all(|v| v.is_finite() && v.abs() < 1e12)
+            || bytes.len() != size.0 as usize * size.1 as usize * 4
+        {
             return Err(IoError::Unsupported("Invalid viewport buffer".into()));
+        }
+        if dirty.is_empty() {
+            return Ok(());
         }
         let [a, b, c, d, e, f] = transform;
         let points = [
@@ -122,6 +130,7 @@ pub fn changed_bounds(before: &Document, after: &Document) -> Option<emulsion_ra
     use emulsion_core::NodeKind;
     if (before.width, before.height) != (after.width, after.height)
         || before.nodes.len() != after.nodes.len()
+        || before.design != after.design
     {
         return None;
     }
@@ -146,7 +155,11 @@ pub fn changed_bounds(before: &Document, after: &Document) -> Option<emulsion_ra
             return None;
         }
         for (doc, id) in [(before, old.id), (after, new.id)] {
-            dirty = dirty.union(&emulsion_core::geometry::node_bounds(doc, id)?);
+            // Empty connector labels and absent arrowheads have no ink bounds.
+            // Their siblings still contribute all changed visible geometry.
+            if let Some(bounds) = emulsion_core::geometry::node_bounds(doc, id) {
+                dirty = dirty.union(&bounds);
+            }
         }
     }
     Some(dirty)
@@ -205,6 +218,36 @@ mod tests {
                 .is_err()
         );
     }
+    #[test]
+    fn letter_curve_remains_vector_at_sixty_four_times_zoom() {
+        let mut builder = Builder::new(320, 180).unwrap();
+        let id = builder
+            .add_shape(ShapeKind::Process, [20., 20., 200., 90.], "n")
+            .unwrap();
+        let doc = builder.finish().unwrap();
+        let label = doc.diagram.as_ref().unwrap().shapes[&id].label;
+        let bounds = emulsion_core::geometry::node_bounds(&doc, label).unwrap();
+        let scene = SvgViewport::new(&doc).unwrap();
+        let x = bounds.x as f64;
+        let y = bounds.y as f64;
+        let low = scene.render((16, 24), [1., 0., 0., 1., -x, -y]).unwrap();
+        let high = scene
+            .render((1024, 1536), [64., 0., 0., 64., -x * 64., -y * 64.])
+            .unwrap();
+        let mut differences = 0;
+        for y in 0..1536usize {
+            for x in 0..1024usize {
+                let a = &high[(y * 1024 + x) * 4..][..4];
+                let b = &low[((y / 64) * 16 + x / 64) * 4..][..4];
+                differences += usize::from(a != b);
+            }
+        }
+        assert!(
+            differences > 10_000,
+            "Extreme zoom must resample the glyph curve"
+        );
+    }
+
     #[test]
     fn moved_vector_patch_matches_full_render_at_zoom_and_rotation() {
         use emulsion_core::{Command, Editor};

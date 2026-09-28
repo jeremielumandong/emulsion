@@ -624,6 +624,10 @@ impl Command {
                 }
             }
         }
+        next.design.retain_nodes(&next.nodes.iter().map(|n|n.id).collect());
+        if !next.design.variable_bindings.is_empty() && !self.is_view_only() {
+            crate::design_variables::synchronize(doc, &mut next).map_err(crate::DocumentError::BadDesign)?;
+        }
         if next.diagram.is_some() {
             let protected = next
                 .nodes
@@ -924,7 +928,12 @@ impl Command {
                     .design
                     .fragment(&ids.iter().copied().collect())
                     .remap(&map);
+                crate::design_variables::merge_into(&mut doc.design, &settings);
                 crate::design_styles::merge_into(&mut doc.design, &settings);
+                doc.design.interactions.extend(settings.interactions);
+                doc.design.overlays.extend(settings.overlays);
+                doc.design.local_media.extend(settings.local_media);
+                doc.design.keyframes.extend(settings.keyframes);
                 // Duplicating an instance shares its existing local definition.
                 let links: Vec<_> = ids
                     .iter()

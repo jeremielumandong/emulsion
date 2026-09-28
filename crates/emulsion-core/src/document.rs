@@ -782,6 +782,11 @@ impl Document {
         {
             out.extend(selection.buffer_allocations());
         }
+        for media in self.design.local_media.values() {
+            if planes.insert(Arc::as_ptr(&media.bytes) as usize) {
+                out.push((media.bytes.as_ptr() as usize, media.bytes.len()));
+            }
+        }
         out
     }
 }

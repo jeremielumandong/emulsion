@@ -52,11 +52,11 @@ pass a zero-based page index as its third argument.
 | Handoff shell | Searchable 250 px stencil drawer, grid canvas, canvas toolbar, page tabs, navigator; Style/Text/Arrange/Data inspector tabs |
 | Creation | 68 default stencils across 11 searchable/collapsible categories, twelve underlying shape kinds, containers/swimlanes, connected quick-create, text editing |
 | Connections | Bound/custom ports, straight/orthogonal routing, reconnect, editable waypoints, label offsets, start/end triangle arrows, dashed lines |
-| Editing | Native paths/text, graph-aware copy/cut/delete, connected movement, undo/redo, fill swatches, native paint and text controls |
+| Editing | Native paths/text, mouse box selection, Ctrl/Shift multi-selection, grouping/ungrouping, graph-aware copy/cut/delete, connected movement, undo/redo, fill/stroke/text color pickers |
 | Layout | Four automatic layouts, layout locks, align/distribute controls, container membership |
 | Pages and persistence | Multiple pages, native project save/reopen, page operations and history |
 | Data | Text/CSV/Mermaid/SQL generation, shape data, CSV refresh, conditional fills |
-| Libraries | Native stencils and portable local/GitHub packs; draw.io XML libraries open as named editable pages |
+| Libraries | Shapes, Templates, Containers, Themes and Stencil packs tabs; 8 editable templates, 6 themes, drag-to-canvas bundled stencils, local SVG folder/draw.io/Visio stencil installation |
 | Interchange | Editable common draw.io graph export, Visio XML/OPC and Lucid import, native/SVG/PDF alternatives |
 
 ## Improvements in this change
@@ -107,7 +107,7 @@ pass a zero-based page index as its third argument.
 | Appearance | Rotation support varies by primitive; shadow, sketch, gradients, symbolic colors and advanced image fitting require further compatibility work. |
 | External images | Retain a warning/placeholder; local asset replacement is required. Embedded SVG images are image layers, not editable SVG internals. |
 | Page semantics | Content fits within the native canvas limit, but draw.io infinite-canvas paper tiling/background-page references are not fully reproduced. |
-| Stencil installation | XML libraries open as pages; a dedicated catalog installation/management workflow for these libraries remains to be added. |
+| Stencil installation | Supported XML libraries, Visio and SVG folders install into the offline catalog. Vendor-family bundling, pack removal controls and legacy Visio conversion remain incomplete. |
 | Handoff polish | Advanced controls, custom port authoring, accessibility, narrow-window visual review and native screenshots still need acceptance review. |
 | Collaboration | Local MCP graph/project actions are available; multi-user collaboration remains separate work. |
 
@@ -121,7 +121,13 @@ family; import counts alone must not close the compatibility milestone.
 Supported diagram pages now display through an SVG scene containing vector glyph
 outlines. Labels remain editable native text. The scene is rendered at the current
 zoom and physical display resolution, avoiding enlargement of document-sized text
-bitmaps. Pan, zoom and rotation reuse the parsed scene; document edits rebuild it.
+bitmaps. Pan, zoom and rotation reuse the parsed scene. A bounded glyph-outline cache avoids
+reshaping unchanged labels. Document edits rebuild the scene in the background,
+with one build in flight; the previous scene stays visible until it is ready.
+Selection-only clicks reuse the rendered frame. Ordinary vector moves redraw the
+union of the old/new object and connector bounds; structural and effect edits
+fall back to a full viewport render. This is a native SVG scene rasterized at
+physical screen resolution, not a browser SVG DOM or a GPU-only SVG renderer.
 Pages with unsupported SVG effects retain the existing compositor.
 
 Hover over or select a shape to expose circular connection ports. Drag a port onto
@@ -132,22 +138,30 @@ the existing `add_diagram_connector` and `set_diagram_connector` graph operation
 
 ## Validation
 
-- 22 focused draw.io tests pass, including compression, libraries, inline stencil
-  geometry and fallbacks, embedded SVG,
-  loose endpoint round trips/movement/copying, relative geometry, hidden layers,
-  canvas expansion, long labels, malformed references and native project persistence.
-- Six Diagram UI tests pass, including category expansion, network stencil
-  insertion/undo, inspector navigation, fills, connected shape copy/cut restoration
-  and text-generated diagrams. Real mouse-event tests cover port dragging,
-  two-click connections, undo and cancellation; canvas tests cover SVG rebuilds
-  after label edits.
-- One SVG viewport test passes, checking editable text, vector geometry, rendering
-  at increased display resolution and invalid viewport rejection.
-- Six MCP diagram tests pass, covering schema discovery, native graph operations,
-  metadata protection, failed-edit rollback, generation, import/export and undo.
-- Fifteen core diagram tests pass, including all 68 stencil insertions and their
-  connection/undo behavior.
+- 23 focused draw.io tests pass, including compressed pages, libraries, geometry,
+  measured wrapped-label placement, connector defaults and round trips.
+- 11 Diagram UI tests pass: selection/grouping/movement, actual toolbox drag/drop,
+  connection gestures, color apply/cancel/undo, gallery navigation and SVG caching.
+- Three SVG viewport tests pass: editable vector text, 64× glyph zoom, and partial
+  redraw versus full rendering after movement at zoom and rotation.
+- Five SVG/PDF export tests and five portable-pack tests pass, including SVG folder
+  installation and editable stencil connections after persistence.
+- Nine MCP diagram tests and sixteen core diagram/library tests pass.
+- The nested tile-scratch regression test passes. The captured crash was a
+  reentrant `RefCell` borrow during nested rendering; scratch storage now releases
+  its borrow before entering the renderer.
 - The full supplied XML/draw.io/SVG corpus was exercised with the audit example.
+
+The local 100-shape benchmark measured roughly 27 ms for a complete 1440×1080
+viewport redraw versus 0.57 ms (median) / 0.60 ms (95th percentile) for a movement
+patch in the final run. Background scene preparation was 10.03 ms median /
+10.16 ms at the 95th percentile; initial cold preparation was 94.02 ms.
+These are CPU timing samples, not end-to-end UI FPS;
+image upload, input handling and compositor costs are additional. Reproduce with:
+
+```sh
+cargo run --release --locked -p emulsion-io --example diagram_viewport_bench -- 100
+```
 
 The broader workspace contains concurrent changes outside this diagram work;
 these checks do not claim validation of every unrelated subsystem.
@@ -172,7 +186,8 @@ canvas and clear stale selections through the existing page lifecycle.
 
 | Functionality | MCP entry points |
 | --- | --- |
-| Discover and inspect | `list_diagram_stencils`, `describe_diagram`, `describe_project`, `get_view` |
+| Discover and inspect | `list_diagram_stencils`, `list_diagram_library`, `list_diagram_stencil_packs`, `describe_diagram`, `describe_project`, `get_view` |
+| Templates, themes and packs | `insert_diagram_template`, `apply_diagram_theme`, `install_diagram_stencil_pack`; installed entries use `insert_diagram_pack_entry` |
 | Create and connect | `add_diagram_shape`, `insert_diagram_stencil`, `add_diagram_connector`, `quick_create_diagram` |
 | Ports, reconnect, routing, bends, labels, arrows | `set_diagram_connector` |
 | Labels, data, conditional fills, layout locks, containment | `set_diagram_shape` |
@@ -186,10 +201,11 @@ canvas and clear stale selections through the existing page lifecycle.
 | History | `undo`, `redo` through the project-aware host |
 
 This covers the implemented diagram editing workflows, not every UI-only action
-or every unsupported feature of draw.io/Visio. Imported draw.io/Visio libraries
-currently open as pages; a dedicated installation workflow for those library
-formats remains incomplete. Remote catalog installation and multi-user editing
-are not claimed as covered by these diagram tools.
+or every unsupported feature of draw.io/Visio. Supported draw.io/Visio libraries can open as pages or install into the offline
+stencil catalog. Grouping uses the existing `group_nodes`/`ungroup` tools; color
+pickers correspond to `set_path`/`set_text`. Mouse selection, pointer gestures and
+viewport rasterization are UI mechanics, not separate MCP tools. Multi-user
+editing is not claimed as covered by these diagram tools.
 
 
 ## Supplied Visio collection

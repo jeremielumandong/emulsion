@@ -9,7 +9,7 @@ pub const READ_ONLY: &[&str] = &[
     "list_design_data_fields",
     "list_project_design_assets",
 ];
-pub const DESTRUCTIVE: &[&str] = &["delete_project_page"];
+pub const DESTRUCTIVE: &[&str] = &["delete_project_page", "publish_project_component"];
 pub const IO_TOOLS: &[&str] = &[
     "save_project",
     "export_project",
@@ -43,8 +43,14 @@ pub fn definitions() -> Vec<ToolDef> {
             &[],
         ),
         def(
+            "publish_project_component",
+            "Publish an active-page component instance to matching component families across project pages. Retains local overrides and stable object identities. Validates every affected page before one project-wide Undo step.",
+            json!({"node":id}),
+            &["node"],
+        ),
+        def(
             "insert_component_from_page",
-            "Import a component definition from another project page and place a linked instance on the active page as one Undo step. Local definitions stay independent between pages; offsets default to 24 px.",
+            "Import a component definition from another project page and place a linked instance on the active page as one Undo step. Imported families support explicit publish_project_component across pages; offsets default to 24 px.",
             json!({"page":id,"name":{"type":"string","minLength":1,"maxLength":80},"variant":{"type":"string","minLength":1,"maxLength":80},"x_offset":{"type":"number","minimum":-1000000,"maximum":1000000},"y_offset":{"type":"number","minimum":-1000000,"maximum":1000000}}),
             &["page", "name"],
         ),
@@ -258,11 +264,14 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
                 .map_err(|e| e.to_string())?;
             editor.add_page(doc, args["name"].as_str().unwrap().into(), 0.)?;
         }
+        "publish_project_component" => {
+            let count=emulsion_core::design_components::publish_project(editor,args["node"].as_u64().unwrap())?;
+            extra=json!({"updated_pages":count});
+        }
         "insert_component_from_page" => {
-            let source = editor.page(page).ok_or("Unknown source page")?.doc.clone();
-            let id = emulsion_core::design_components::import_and_insert(
+            let id = emulsion_core::design_components::insert_project(
                 editor,
-                &source,
+                page,
                 args["name"].as_str().unwrap(),
                 args["variant"].as_str().unwrap_or("Default"),
                 (
@@ -508,6 +517,35 @@ mod tests {
         );
         assert!(editor.undo());
         assert_eq!(editor.page_list().len(), 2);
+    }
+    #[test]
+    fn design_project_publish_tool_validates_and_undoes_both_pages() {
+        use emulsion_core::{Command, Node, command::Slot, design_components, text::TextSpec};
+        let mut editor = ProjectEditor::new_project(ProjectKind::Design, Document::new(400,300)).unwrap();
+        let id = editor.execute(Command::AddNode { node: Box::new(Node::text(0,"Title", TextSpec { text:"Reusable".into(), ..Default::default() },400,300)), slot:Slot::TOP }).unwrap().unwrap();
+        let instance = design_components::create(&mut editor, &[id], "Card").unwrap();
+        let first = editor.active_page();
+        editor.add_page(Document::new(400,300), "Second".into(), 0.).unwrap();
+        let second = editor.active_page();
+        let result = execute(&mut editor,"insert_component_from_page", &json!({"page":first,"name":"Card"}));
+        assert!(!result.is_error, "{result:?}");
+        let second_before = editor.doc.clone();
+        editor.set_active_page(first).unwrap();
+        editor.execute(Command::SetOpacity { id, opacity:0.5 }).unwrap();
+        let first_before = editor.doc.clone();
+        for args in [json!({"node":instance,"extra":true}), json!({"node":0}), json!({"node":999999})] {
+            assert!(execute(&mut editor,"publish_project_component", &args).is_error);
+            assert_eq!(editor.doc, first_before);
+            assert_eq!(editor.page(second).unwrap().doc,second_before);
+        }
+        let result = execute(&mut editor,"publish_project_component",&json!({"node":instance}));
+        assert!(!result.is_error, "{result:?}");
+        assert_ne!(editor.page(second).unwrap().doc,second_before);
+        assert!(editor.undo());
+        assert_eq!(editor.page(first).unwrap().doc,first_before);
+        assert_eq!(editor.page(second).unwrap().doc,second_before);
+        assert!(editor.redo());
+        editor.snapshot().unwrap().validate().unwrap();
     }
     #[test]
     fn save_roundtrip_keeps_every_page_and_rejects_flattening_extension() {

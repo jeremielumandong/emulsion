@@ -32,7 +32,10 @@ fn main() -> anyhow::Result<()> {
     let mut e = Editor::new(doc, None);
     let mut prepare = Vec::new();
     let mut render = Vec::new();
-    let mut pixels = SvgViewport::new(&e.doc)?.render((1440, 1080), [0.6, 0., 0., 0.6, 0., 0.])?;
+    let start = Instant::now();
+    let initial = SvgViewport::new(&e.doc)?;
+    let cold = start.elapsed().as_secs_f64() * 1000.;
+    let mut pixels = initial.render((1440, 1080), [0.6, 0., 0., 0.6, 0., 0.])?;
     for _ in 0..21 {
         let before = e.doc.clone();
         e.execute(Command::TranslateNode {
@@ -48,7 +51,7 @@ fn main() -> anyhow::Result<()> {
         scene.render_update((1440, 1080), [0.6, 0., 0., 0.6, 0., 0.], dirty, &mut pixels)?;
         render.push(start.elapsed().as_secs_f64() * 1000.);
     }
-    let cold = prepare.remove(0);
+    prepare.remove(0);
     render.remove(0);
     prepare.sort_by(f64::total_cmp);
     render.sort_by(f64::total_cmp);

@@ -34,10 +34,11 @@ mod design_motion_ui;
 mod design_presentation_ui;
 mod design_selection;
 mod design_styles_ui;
+mod design_variables_ui;
 mod design_ui;
 mod diagram_data_ui;
-mod diagram_ui;
 mod diagram_library_ui;
+mod diagram_ui;
 mod draw_workspace;
 pub(crate) mod export_ui;
 mod filters;
@@ -77,6 +78,7 @@ mod design_chart_data;
 mod design_charts_ui;
 mod design_components_ui;
 mod design_layout_ui;
+mod design_responsive_preview_ui;
 mod design_video_ui;
 mod photo_shortcuts;
 pub(crate) mod rail;
@@ -382,6 +384,7 @@ pub struct EditorView {
     design_ui: design_ui::DesignUi,
     creative: creative_ui::CreativeUi,
     motion: design_motion_ui::MotionUi,
+    responsive_preview: design_responsive_preview_ui::ResponsivePreview,
     video: design_video_ui::VideoUi,
     diagram_ui: diagram_ui::DiagramUi,
     pub(crate) visible: bool,
@@ -552,6 +555,7 @@ impl EditorView {
             design_ui: Default::default(),
             creative: Default::default(),
             motion: Default::default(),
+            responsive_preview: Default::default(),
             video: Default::default(),
             diagram_ui: Default::default(),
             visible: true,
@@ -749,6 +753,7 @@ impl EditorView {
     }
 
     pub fn execute(&mut self, cmd: Command, cx: &mut Context<Self>) -> Option<NodeId> {
+        if self.responsive_preview_active(){self.set_status("Exit responsive preview before editing.",false,cx);return None;}
         match self.editor.execute(cmd) {
             Ok(created) => {
                 self.after_change(cx);
@@ -762,6 +767,7 @@ impl EditorView {
     }
 
     pub(crate) fn after_change(&mut self, cx: &mut Context<Self>) {
+        self.exit_responsive_preview(cx);
         self.stop_motion(cx);
         self.sync_page_view(cx);
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
@@ -1482,6 +1488,11 @@ impl EditorView {
     // ── Pointer ─────────────────────────────────────────────────────────
 
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.responsive_preview_active(){return;}
+        if self.motion.presenting {
+            self.presentation_interaction_click(e, window, cx);
+            return;
+        }
         if self.motion.preview.is_some() || self.motion.presenting {
             return;
         }
@@ -2426,13 +2437,13 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let previewing = self.previewing();
-        let presenting = self.motion.presenting;
+        let presenting = self.motion.presenting || self.responsive_preview_active();
         self.prepare_diagram_svg(cx);
         let svg_key = (self.editor.active_page(), self.editor.revision);
         let svg_enabled = self.is_diagram() && !previewing && !presenting && !self.before_active();
         let svg_canvas = self.svg_canvas.clone();
         let svg_canvas2 = svg_canvas.clone();
-        let overlay = self.overlay(window.scale_factor());
+        let overlay = if presenting {tools::Overlay::default()} else {self.overlay(window.scale_factor())};
         let zoom_cursor = (!presenting).then(|| self.zoom_cursor(p, window)).flatten();
         let replay = (!presenting).then(|| self.replay_overlay(p, cx)).flatten();
         let job_card = (!presenting).then(|| self.ai_job_card(p, cx)).flatten();
@@ -2457,7 +2468,8 @@ impl EditorView {
             self.fit_pending = false;
         }
         let max_level = {
-            let m = self.editor.doc.width.max(self.editor.doc.height).max(1);
+            let size = self.responsive_canvas_size();
+            let m = size.0.max(size.1).max(1);
             31 - m.leading_zeros()
         };
         let before = self
@@ -2465,7 +2477,7 @@ impl EditorView {
             .then_some((self.before_gen, self.compare));
         let scene = Scene {
             view: self.view,
-            doc_size: (self.editor.doc.width, self.editor.doc.height),
+            doc_size: self.responsive_canvas_size(),
             max_level,
             rev: self.render_gen,
             before,
@@ -2489,7 +2501,7 @@ impl EditorView {
         });
         let cache = self.cache.clone();
         let cache2 = self.cache.clone();
-        let presentation_frame = self.presentation_gpu_frame();
+        let presentation_frame = self.responsive_preview_gpu_frame().or_else(||self.presentation_gpu_frame());
         let native_presentation = presentation_frame.is_some();
         let (gpu_doc, gpu_rev, gpu_canvas) = presentation_frame.unwrap_or_else(|| {
             (
@@ -2673,22 +2685,24 @@ impl EditorView {
                 }
             }))
             .on_scroll_wheel(cx.listener(|this, e, window, cx| {
-                if !this.motion.presenting {
+                if !this.motion.presenting && !this.responsive_preview_active() {
                     this.scroll(e, window, cx);
                 }
             }))
-            .on_drop(cx.listener(|this, d: &diagram_ui::DraggedStencil, window, cx| {
-                this.drop_diagram_stencil(d.0,window.mouse_position(),cx);
-            }))
+            .on_drop(
+                cx.listener(|this, d: &diagram_ui::DraggedStencil, window, cx| {
+                    this.drop_diagram_stencil(d.0, window.mouse_position(), cx);
+                }),
+            )
             .on_drop(cx.listener(|this, d: &DraggedColor, window, cx| {
-                if this.motion.presenting {
+                if this.motion.presenting || this.responsive_preview_active() {
                     return;
                 }
                 let pos = window.mouse_position();
                 this.color_drop(d.0, pos, cx);
             }))
             .on_pinch(cx.listener(|this, e: &PinchEvent, window, cx| {
-                if this.motion.presenting {
+                if this.motion.presenting || this.responsive_preview_active() {
                     return;
                 }
                 if let Some(b) = this.canvas_bounds() {
@@ -2706,7 +2720,7 @@ impl EditorView {
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 // Presentation captures navigation above the canvas. Keys it
                 // leaves unconsumed belong to the focused embedded player.
-                if this.motion.presenting {
+                if this.motion.presenting || this.responsive_preview_active() {
                     return;
                 }
                 if this.raw_split_active() {
@@ -2764,11 +2778,11 @@ impl EditorView {
                                     w1.update(cx, |this, cx| {
                                         // An old layout callback must not refit a later page,
                                         // resized window or restored editing viewport.
-                                        if this.motion.presenting
+                                        if (this.motion.presenting || this.responsive_preview_active())
                                             && this.canvas_bounds() == Some(b)
                                             && let Some(view) = design_presentation_ui::fit_page(
-                                                this.editor.doc.width,
-                                                this.editor.doc.height,
+                                                this.responsive_canvas_size().0,
+                                                this.responsive_canvas_size().1,
                                                 b,
                                             )
                                         {
@@ -3219,6 +3233,19 @@ impl EditorView {
     }
 
     fn status_strip(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let svg_active = self.is_diagram()
+            && !self.previewing()
+            && !self.motion.presenting
+            && !self.before_active()
+            && self
+                .svg_canvas
+                .borrow()
+                .displayable((self.editor.active_page(), self.editor.revision));
+        let renderer_notice = if svg_active {
+            Some(("SVG canvas", "Vector shapes and glyph outlines rendered at the current zoom and display resolution.".to_string()))
+        } else {
+            self.gpu_canvas.borrow().renderer_notice(&self.view)
+        };
         let compact =
             crate::app_state::settings(cx).compact_chrome || self.is_design() || self.is_diagram();
         let controls = if compact {
@@ -3293,17 +3320,14 @@ impl EditorView {
                     .text_ellipsis()
                     .test_support(),
             )
-            .children(self.gpu_canvas.borrow().renderer_notice(&self.view).map(
-                |(label, reason)| {
-                    mono(label, 10., p.muted)
-                        .id("canvas-renderer-status")
-                        .flex_none()
-                        .tooltip(move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(reason.clone())
-                                .build(window, cx)
-                        })
-                },
-            ))
+            .children(renderer_notice.map(|(label, reason)| {
+                mono(label, 10., p.muted)
+                    .id("canvas-renderer-status")
+                    .flex_none()
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(reason.clone()).build(window, cx)
+                    })
+            }))
             .children(controls)
             .test_support()
     }
@@ -4350,6 +4374,7 @@ impl Render for EditorView {
         }
         let p = theme::palette(cx);
         self.sync_trees(cx);
+        if self.responsive_preview_active(){return self.responsive_preview_view(&p,cx);}
         if self.motion.presenting {
             return self.presentation_view(&p, window, cx);
         }

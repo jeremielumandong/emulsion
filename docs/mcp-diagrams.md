@@ -29,7 +29,7 @@ A shape-data and conditional-fill update can use:
 
 `data` replaces user fields while preserving read-only `emulsion_*`/`drawio_*` metadata; `conditions` replaces the rules; omitted properties are unchanged. Set `container` to a container shape ID, or `null` to remove containment. Cycles and non-container targets are rejected. Automatic layout respects layout/position locks and moves containers with their children.
 
-Each mutation uses one Undo step and rejects an in-progress interactive transaction. Property edits preflight protected descendants, labels and graph validation before committing; invalid arguments do not partially update the diagram. Mutating property/layout tools carry the host's destructive classification. The two discovery tools are read-only. Library package import/export, custom stencil authoring and page navigation are handled by the project/library host tools, rather than these bundled-stencil operations.
+Each mutation uses one Undo step and rejects an in-progress interactive transaction. Property edits preflight protected descendants, labels and graph validation before committing; invalid arguments do not partially update the diagram. Mutating property/layout tools carry the host's destructive classification. The discovery tools are read-only. Library package import/export, custom stencil authoring and page navigation are handled by the project/library host tools, rather than these bundled-stencil operations.
 
 
 ## Page-aware diagram workflows
@@ -45,3 +45,20 @@ These tools require an open Diagram project. Existing project tools handle page
 selection, add/duplicate/delete/reorder/rename, native saving, PDF and image
 archives, and template/stencil packs. See the [functionality audit](diagram-functionality.md)
 for sample coverage, the default catalog and remaining compatibility limits.
+
+
+## Templates, themes and stencil packs
+
+| Tool | Purpose |
+| --- | --- |
+| `list_diagram_library` | Discover the eight bundled templates and six theme IDs. |
+| `insert_diagram_template` | Insert a discovered template as a new editable page, with one undo step. |
+| `apply_diagram_theme` | Apply a theme to the whole diagram or supplied `nodes`, atomically and with undo. |
+| `list_diagram_stencil_packs` | Inspect installed offline stencil packs and their entry paths. |
+| `insert_diagram_pack_entry` | Place an installed entry on the active canvas, preserving editable objects and connections, with one undo step. |
+| `install_diagram_stencil_pack` | Install a supported local draw.io/Visio library, SVG file/folder or native pack; returns import warnings and refreshes the UI catalog. |
+
+Installed entries use the `insert_diagram_pack_entry` tool. The color picker uses
+native path/text operations (`set_path`, `set_text`); grouping uses `group_nodes`
+and `ungroup`. Template/theme mutations share core commands with the gallery.
+Stencil installation changes the local library rather than document history.

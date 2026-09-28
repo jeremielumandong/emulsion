@@ -18,6 +18,10 @@ pub enum AntiAliasMode {
     None,
 }
 
+#[path = "text_features.rs"]
+mod features;
+pub use features::{ListStyle, apply_list, decoration_rects};
+
 /// Character formatting stored on a UTF-8 byte range.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -27,6 +31,8 @@ pub struct TextStyle {
     pub color: [u8; 4],
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
     pub letter_spacing: f32,
     /// Positive values raise characters from the baseline, in pixels.
     pub baseline: f32,
@@ -40,6 +46,8 @@ impl Default for TextStyle {
             color: [0, 0, 0, 255],
             bold: false,
             italic: false,
+            underline: false,
+            strikethrough: false,
             letter_spacing: 0.0,
             baseline: 0.0,
         }
@@ -115,6 +123,8 @@ pub struct TextSpec {
     pub color: [u8; 4],
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
     /// Upright glyphs flow downward; new lines start a new column.
     pub vertical: bool,
     /// Editable local-axis scaling; negative values mirror the text.
@@ -149,6 +159,8 @@ impl Default for TextSpec {
             color: [0, 0, 0, 255],
             bold: false,
             italic: false,
+            underline: false,
+            strikethrough: false,
             vertical: false,
             scale_x: 1.0,
             scale_y: 1.0,
@@ -226,6 +238,8 @@ impl TextSpec {
             color: self.color,
             bold: self.bold,
             italic: self.italic,
+            underline: self.underline,
+            strikethrough: self.strikethrough,
             letter_spacing: self.letter_spacing,
             baseline: 0.0,
         }
@@ -474,6 +488,7 @@ pub fn vector_paths(spec: &TextSpec) -> Option<Vec<(emulsion_raster::vector::Pat
             None,
         )
     });
+    let decorations = decoration_rects(spec);
     let mut fonts = fonts().lock().unwrap_or_else(|e| e.into_inner());
     let Fonts { system, swash } = &mut *fonts;
     let (buffer, styles) = shaped_buffer(spec, system);
@@ -540,6 +555,16 @@ pub fn vector_paths(spec: &TextSpec) -> Option<Vec<(emulsion_raster::vector::Pat
             }
             output.push((path, style.color));
         }
+    }
+    for (rect, color) in decorations {
+        let mut path =
+            emulsion_raster::vector_geometry::rectangle(rect[0], rect[1], rect[2], rect[3]);
+        if let Some(mapper) = &mapper {
+            path = warped_vector_path(&path, mapper, transform)?;
+        } else {
+            path.transform(transform);
+        }
+        output.push((path, color));
     }
     Some(output)
 }
@@ -751,6 +776,7 @@ fn draw_glyphs(spec: &TextSpec, mut draw: impl FnMut(i32, i32, u32, u32, [u8; 4]
     if spec.text.trim().is_empty() {
         return;
     }
+    let decorations = decoration_rects(spec);
     let mut f = fonts().lock().unwrap_or_else(|e| e.into_inner());
     let Fonts { system, swash } = &mut *f;
     if spec.vertical {
@@ -809,6 +835,18 @@ fn draw_glyphs(spec: &TextSpec, mut draw: impl FnMut(i32, i32, u32, u32, [u8; 4]
                 );
             },
         );
+    }
+    drop(f);
+    for ([x, y, w, h], color) in decorations {
+        for py in y.floor() as i32..(y + h).ceil() as i32 {
+            for px in x.floor() as i32..(x + w).ceil() as i32 {
+                let coverage = ((px as f64 + 1.).min(x + w) - (px as f64).max(x)).max(0.)
+                    * ((py as f64 + 1.).min(y + h) - (py as f64).max(y)).max(0.);
+                if coverage > 0. {
+                    draw(px, py, 1, 1, color, coverage as f32);
+                }
+            }
+        }
     }
 }
 

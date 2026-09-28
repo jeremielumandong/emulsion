@@ -14,8 +14,9 @@ pub(super) struct CreativeUi {
     loading: bool,
 }
 impl EditorView {
-    pub(crate) fn refresh_creative_library(&mut self,cx:&mut Context<Self>) {
-        self.creative.loaded=false;self.load_creative_library(cx);
+    pub(crate) fn refresh_creative_library(&mut self, cx: &mut Context<Self>) {
+        self.creative.loaded = false;
+        self.load_creative_library(cx);
     }
     pub(super) fn load_creative_library(&mut self, cx: &mut Context<Self>) {
         if self.creative.loaded || self.creative.loading {

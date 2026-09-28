@@ -547,6 +547,18 @@ impl Editor {
         Ok(())
     }
 
+    /// A validated project-wide edit shares one chronological history order.
+    pub(crate) fn commit_project_document(&mut self, doc: Document, label: &str, order: u64) {
+        if self.doc == doc { return; }
+        self.replace_document(doc, label);
+        self.group_history(false, order);
+        self.last_edit_order = order;
+    }
+    pub(crate) fn group_history(&mut self, redo: bool, order: u64) {
+        let stack=if redo {&mut self.history.redo} else {&mut self.history.undo};
+        if let Some(step)=stack.last_mut() {step.order=order;}
+    }
+
     /// Swap in a whole document as one undo step.
     fn replace_document(&mut self, mut doc: Document, label: &str) {
         self.end_all();

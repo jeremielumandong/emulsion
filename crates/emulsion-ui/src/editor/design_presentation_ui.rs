@@ -9,7 +9,14 @@ use gpui_kit::component::{
 };
 use std::collections::HashSet;
 
+#[path = "design_interactions_ui.rs"]
+mod interactions;
+
 pub(super) struct PresentationSession {
+    interactions: emulsion_core::design_interactions::Runtime,
+    interaction_source: RefCell<Option<(u64, Document)>>,
+    back_stack: Vec<PageId>,
+    navigating_back: bool,
     return_page: PageId,
     return_view: View,
     return_selection: Vec<NodeId>,
@@ -121,9 +128,19 @@ impl EditorView {
                     self.toggle_presentation_fullscreen(window, cx);
                 }
             }
+            HostAction::Trigger(node) => self.trigger_presentation_object(node, window, cx)?,
+            HostAction::ResponsivePreview(width) => {
+                if let Some(width) = width {
+                    self.set_responsive_preview(width, cx)?;
+                } else {
+                    self.exit_responsive_preview(cx);
+                }
+                window.focus(&self.canvas_focus, cx);
+            }
         }
         cx.notify();
         Ok(serde_json::json!({
+            "responsive_preview": self.responsive_preview_state(),
             "presenting": self.motion.presenting,
             "page_id": self.editor.active_page(),
             "page_index": self.editor.page_list().iter().position(|p| p.id == self.editor.active_page()).map(|n|n+1),
@@ -134,6 +151,8 @@ impl EditorView {
             "video_playing": self.design_video_playing(),
             "presenter_open": self.motion.session.as_ref().is_some_and(|s| s.presenter.is_some()),
             "presenter_opening": self.motion.session.as_ref().is_some_and(|s| s.presenter_opening),
+            "open_overlays": self.motion.session.as_ref().map(|s|&s.interactions.open_overlays),
+            "component_variants": self.motion.session.as_ref().map(|s|&s.interactions.variants),
         }))
     }
     pub(crate) fn is_clean_presentation(&self, window: &Window) -> bool {
@@ -155,6 +174,10 @@ impl EditorView {
     pub(super) fn begin_presentation_session(&mut self, cx: &mut Context<Self>) {
         if self.motion.session.is_none() {
             self.motion.session = Some(PresentationSession {
+                interactions: Default::default(),
+                interaction_source: Default::default(),
+                back_stack: Vec::new(),
+                navigating_back: false,
                 return_page: self.editor.active_page(),
                 return_view: self.view,
                 return_selection: self.selected_layer_ids(),
@@ -211,6 +234,10 @@ impl EditorView {
         }
         let key = event.keystroke.key.as_str();
         if key == "escape" {
+            if self.close_presentation_overlay(cx) {
+                window.focus(&self.canvas_focus, cx);
+                return true;
+            }
             self.stop_motion(cx);
             window.focus(&self.canvas_focus, cx);
             return true;
@@ -320,6 +347,15 @@ impl EditorView {
             .flex()
             .flex_col()
             .gap_2()
+            .child(
+                Button::new("design-interactions")
+                    .label("Object click action…")
+                    .outline()
+                    .disabled(self.selected.is_none())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.design_interactions_dialog(window, cx)
+                    })),
+            )
             .child(
                 Button::new("design-speaker-notes")
                     .label("Speaker notes…")
@@ -1420,3 +1456,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "design_interaction_workflow_tests.rs"]
+mod interaction_tests;

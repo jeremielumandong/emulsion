@@ -6,8 +6,12 @@ use crate::{Command, Document, Editor, NodeId, design_metadata::Design};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Definition {
+    #[serde(default)]
+    pub library_id: String,
+    #[serde(default)]
+    pub member_keys: BTreeMap<NodeId, String>,
     pub variants: BTreeMap<String, NodeId>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -131,7 +135,8 @@ impl Plan {
         })?;
         Ok(())
     }
-    fn commit(self, editor: &mut Editor, label: &str) -> Result<(), String> {
+    fn commit(mut self, editor: &mut Editor, label: &str) -> Result<(), String> {
+        project::refresh_keys(&mut self.doc);
         editor.commit_design_document(self.doc, label)
     }
 }
@@ -209,6 +214,7 @@ pub fn create(editor: &mut Editor, ids: &[NodeId], name: &str) -> Result<NodeId,
         name.into(),
         Definition {
             variants: BTreeMap::from([("Default".into(), source)]),
+            ..Default::default()
         },
     );
     design.component_links.insert(
@@ -716,3 +722,7 @@ mod tests {
 #[cfg(test)]
 #[path = "design_component_nested_tests.rs"]
 mod nested_tests;
+
+#[path = "design_component_project.rs"]
+mod project;
+pub use project::{insert_project, publish_project};

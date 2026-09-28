@@ -601,3 +601,61 @@ fn diagram_library_templates_containers_themes_and_packs_are_functional(cx: &mut
         assert!(window.find(("diagram-pack-added", 0usize)).visible());
     });
 }
+
+#[gpui_kit::test]
+fn diagram_toolbox_drag_drops_one_stencil_at_pointer_and_undoes(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton};
+    let doc = emulsion_core::Document::new(800, 600);
+    let (ws, cx) = open(cx, doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap(),
+                "Drop".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    let (from, to) = cx.update(|window, cx| {
+        (
+            window.find(("diagram-shape", 0usize)).bounds().center(),
+            view.read(cx).doc_to_window((420., 330.)).unwrap(),
+        )
+    });
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        from + gpui_kit::point(gpui_kit::px(12.), gpui_kit::px(0.)),
+        Some(MouseButton::Left),
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let e = view.read(cx);
+        let model = e
+            .editor
+            .doc
+            .diagram
+            .as_ref()
+            .expect("drop creates a diagram");
+        assert_eq!(
+            model.shapes.len(),
+            1,
+            "Dragging must not also trigger click insertion"
+        );
+        let shape = model.shapes.values().next().unwrap();
+        let [x, y, w, h] = emulsion_core::diagram::shape_bounds(&e.editor.doc, shape).unwrap();
+        assert!(
+            (x + w / 2. - 420.).abs() < 1. && (y + h / 2. - 330.).abs() < 1.,
+            "Drop center must follow the pointer: {x},{y}"
+        );
+        window.click("project-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(view.read(cx).editor.doc.nodes.is_empty()));
+}
