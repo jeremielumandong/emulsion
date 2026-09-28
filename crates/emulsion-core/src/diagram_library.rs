@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 #[path = "diagram_library_samples.rs"]
 mod samples;
+#[path = "diagram_library_web.rs"]
+mod web;
 
 #[derive(Clone, Copy)]
 pub struct Template {
@@ -105,6 +107,26 @@ pub const TEMPLATES: &[Template] = &[
         name: "Cloud architecture",
         description: "Cloud network stencils, load balancer, services, queue and storage",
     },
+    Template {
+        id: "web-page-journey",
+        name: "Browser to first paint",
+        description: "Detailed browser request to server: DNS, HTTPS, CDN cache, origin processing and rendering",
+    },
+    Template {
+        id: "web-api-platform",
+        name: "Authenticated API platform",
+        description: "Colorful browser and server architecture: gateway, identity, authorization, database, cache and background jobs",
+    },
+    Template {
+        id: "web-async-checkout",
+        name: "Asynchronous checkout",
+        description: "Complex order workflow: browser request, server, transactional outbox, payment queue, retries and recovery",
+    },
+    Template {
+        id: "web-realtime-updates",
+        name: "Real-time browser updates",
+        description: "Browser and server WebSocket subscriptions, event fan-out, authorization, reconnect and durable catch-up",
+    },
 ];
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -202,6 +224,9 @@ impl Template {
     }
 
     pub fn build(self) -> Result<Document, String> {
+        if let Some(doc) = web::build(self.id) {
+            return doc;
+        }
         if let Some(doc) = samples::build(self.id) {
             return doc;
         }

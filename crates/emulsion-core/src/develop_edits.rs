@@ -78,6 +78,7 @@ pub enum Shape {
 pub enum SpotMode {
     Heal,
     Clone,
+    ContentAware,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

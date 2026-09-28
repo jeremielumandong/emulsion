@@ -47,6 +47,7 @@ pub(super) struct Develop {
     pub(super) auto_advance: bool,
     pub(super) canvas_tool: usize,
     pub(super) canvas_points: Vec<[f32; 2]>,
+    pub(super) perspective_guides: Option<(PathBuf, Vec<[[f32; 2]; 2]>)>,
     pub(super) clone_source: Option<[f32; 2]>,
     pub(super) brush_radius: f32,
     pub(super) active_mask: Option<u32>,
@@ -507,7 +508,9 @@ impl Workspace {
             self.batch.develop.detail_region = None;
             // Editing overlays render the unwarped source. Leave them so the
             // new angle is actually visible, including after drawing a horizon.
-            self.batch.develop.canvas_tool = 0;
+            if self.batch.develop.canvas_tool != 7 {
+                self.batch.develop.canvas_tool = 0;
+            }
             self.batch.develop.canvas_points.clear();
             self.batch.navigation.borrow_mut().fit();
         }

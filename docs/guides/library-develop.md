@@ -248,10 +248,18 @@ another tool's mutation queue reservation.
   the selected mask overlay. Range and adjustment values are editable from each mask.
 - Heal/Clone stores editable source/target pins and bounded freehand strokes. Alt-click chooses a source; drag pins
   to reposition them. Each spot has radius, feather and opacity controls. Visualize
-  spots is a preview-only high-pass view. Healing currently blends source texture with
-  a local color correction; it does not synthesize missing content.
-- R activates direct crop handles with a grid; straightening and a perspective guide
-  use dragged lines. Q selects healing, K brush, M linear and Shift+M radial masking.
+  spots is a preview-only high-pass view. Heal blends source texture with a local color
+  correction. Content-aware heal synthesizes texture from nearby unpainted pixels using
+  the existing deterministic fill engine; it needs no downloaded model. It stores the
+  spot/stroke in the same portable edit asset and supports undo and MCP `content_aware`
+  spot mode. Each full-resolution search region is limited to 1,048,576 pixels and all
+  search regions together to 4,194,304 pixels; use smaller strokes when a region exceeds
+  the limit. Preview-size synthesis can differ from full-resolution export.
+- R activates direct crop handles with a grid; straightening uses a dragged line.
+  Perspective guides fits 2–8 dragged horizontal/vertical edges together. Guides are
+  shown on the unwarped source; choose Done to inspect the correction, or Clear guides
+  to redraw them. The resulting straighten/perspective settings are saved and undoable;
+  guide overlays are session-only. Q selects healing, K brush, M linear and Shift+M radial masking.
 - A toggles auto advance; Shift+rating/flag advances once; 6–9 apply color labels.
   Compare photos links zoom/pan for two selected photos; Survey shows up to eight.
   These start with cached thumbnails and refine to developed fit previews.
@@ -275,9 +283,10 @@ creative IDs. The shared JSON catalog remains authoritative for writes. Thumbnai
 maintenance caps generated disk previews at 2 GiB / 20,000 files and leaves originals
 alone.
 
-Soft Proofing / Display accepts RGB ICC profiles, with gamut warnings. Default display
+Soft Proofing accepts RGB or CMYK printer ICC profiles, with gamut warnings. Display
+conversion accepts RGB ICC profiles. Default display
 handling remains with the system; manual display conversion is opt-in. Proofing affects
-viewing only. CMYK proofing is not provided in Library.
+viewing only. Printer profiles must support both forward and reverse transforms.
 
 Wide-gamut RAW working space is opt-in and saved in the recipe. Floating camera RGB
 converts to linear ProPhoto primaries before tonal processing and quantization. Library
@@ -291,7 +300,9 @@ sRGB input path. Choose 16-bit TIFF/PNG for wide output; JPEG/WebP remain 8-bit.
 
 `develop_library` and `develop_raw` share the expanded settings schema, including
 `process_version`, `wide_gamut`, `camera_profile`, tonal/detail families and local-edit
-asset identity. `develop_library` action `local_edits` accepts the complete bounded
+asset identity. `develop_library` action `guided_perspective` accepts `guides`, an array
+of 2–8 endpoint pairs in normalized, untransformed source coordinates, using the same
+solver as the canvas. Action `local_edits` accepts the complete bounded
 mask/spot object with stable IDs. All changes use the shared save and render path.
 
 `set_library_view` adds `loupe`, `photo_compare`, `survey`, panel/filmstrip visibility,

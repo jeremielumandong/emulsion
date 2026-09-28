@@ -53,14 +53,38 @@ impl Workspace {
                             files: true,
                             directories: false,
                             multiple: false,
-                            prompt: Some("Choose an RGB ICC profile".into()),
+                            prompt: Some(
+                                if id == 0 {
+                                    "Choose an RGB or CMYK soft-proof ICC profile"
+                                } else {
+                                    "Choose an RGB display ICC profile"
+                                }
+                                .into(),
+                            ),
                         });
                         cx.spawn(async move |this, cx| {
                             if let Ok(Ok(Some(paths))) = picker.await
                                 && let Some(path) = paths.first()
                             {
                                 let path = path.clone();
+                                let check_path = path.clone();
+                                let validation = cx
+                                    .background_spawn(async move {
+                                        let mut view = emulsion_io::icc::PhotoView::default();
+                                        if id == 0 {
+                                            view.proof = Some(check_path);
+                                        } else {
+                                            view.display = Some(check_path);
+                                        }
+                                        view.validate().map_err(|error| error.to_string())
+                                    })
+                                    .await;
                                 this.update(cx, |this, cx| {
+                                    if let Err(error) = validation {
+                                        this.batch.note = Some((error.into(), true));
+                                        cx.notify();
+                                        return;
+                                    }
                                     if id == 0 {
                                         this.batch.develop.color_view.proof = Some(path);
                                     } else {

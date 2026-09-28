@@ -150,6 +150,7 @@ pub fn weight(
     weight
 }
 pub fn apply(input: Raster, edits: &LocalEdits, cancel: &AtomicBool) -> Result<Raster> {
+    edits.validate().map_err(bad)?;
     let (w, h) = (input.width(), input.height());
     let mut pixels = input.to_pixels();
     let original = pixels.clone();
@@ -186,6 +187,55 @@ pub fn apply(input: Raster, edits: &LocalEdits, cancel: &AtomicBool) -> Result<R
             b
         })
         .collect();
+    let mut content_patches = Vec::with_capacity(edits.spots.len());
+    let mut patch_pixels = 0usize;
+    for (spot, bounds) in edits.spots.iter().zip(&spot_bounds) {
+        if spot.mode != SpotMode::ContentAware {
+            content_patches.push(None);
+            continue;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(bad("Development cancelled"));
+        }
+        let margin = (spot.radius * 2.).max(16. / w.min(h).max(1) as f32);
+        let x0 = ((bounds[0] - margin).max(0.) * w as f32).floor() as u32;
+        let y0 = ((bounds[1] - margin).max(0.) * h as f32).floor() as u32;
+        let x1 = ((bounds[2] + margin).min(1.) * w as f32).ceil() as u32;
+        let y1 = ((bounds[3] + margin).min(1.) * h as f32).ceil() as u32;
+        let (pw, ph) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        let count = pw * ph;
+        patch_pixels += count;
+        if count > 1024 * 1024 || patch_pixels > 4 * 1024 * 1024 {
+            return Err(bad(
+                "Content-aware healing region is too large; use smaller spots or strokes",
+            ));
+        }
+        let mut region = Vec::with_capacity(count);
+        let mut hole = Vec::with_capacity(count);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                region.push(original[(y * w + x) as usize].map(|v| v as f32 / 65535.));
+                let xy = [(x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32];
+                let distance = if spot.stroke.len() > 1 {
+                    spot.stroke
+                        .windows(2)
+                        .map(|p| segment(xy, p[0], p[1]))
+                        .fold(f32::INFINITY, f32::min)
+                } else {
+                    segment(xy, spot.target, spot.target)
+                };
+                hole.push(if distance < spot.radius { 1. } else { 0. });
+            }
+        }
+        if hole.iter().all(|v| *v > 0.) {
+            return Err(bad(
+                "Content-aware healing needs unpainted surrounding pixels",
+            ));
+        }
+        let filled =
+            emulsion_raster::fill::content_aware(&region, &hole, pw, ph, u64::from(spot.id));
+        content_patches.push(Some((x0, y0, pw, filled)));
+    }
     for y in 0..h {
         if cancel.load(Ordering::Relaxed) {
             return Err(bad("Development cancelled"));
@@ -194,7 +244,9 @@ pub fn apply(input: Raster, edits: &LocalEdits, cancel: &AtomicBool) -> Result<R
             let xy = [(x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32];
             let i = (y * w + x) as usize;
             let mut p = [pixels[i][0], pixels[i][1], pixels[i][2]].map(|v| v as f32 / 65535.);
-            for (spot, bounds) in edits.spots.iter().zip(&spot_bounds) {
+            for ((spot, bounds), patch) in
+                edits.spots.iter().zip(&spot_bounds).zip(&content_patches)
+            {
                 if xy[0] < bounds[0] || xy[1] < bounds[1] || xy[0] > bounds[2] || xy[1] > bounds[3]
                 {
                     continue;
@@ -209,6 +261,13 @@ pub fn apply(input: Raster, edits: &LocalEdits, cancel: &AtomicBool) -> Result<R
                 };
                 let alpha = feather(distance, spot.radius, spot.feather) * spot.opacity;
                 if alpha == 0. {
+                    continue;
+                }
+                if let Some((x0, y0, pw, filled)) = patch {
+                    let replacement = filled[(y - y0) as usize * pw + (x - x0) as usize];
+                    for c in 0..3 {
+                        p[c] = p[c] * (1. - alpha) + replacement[c] * alpha;
+                    }
                     continue;
                 }
                 let at = [
@@ -349,6 +408,42 @@ pub fn visualize_dust(bgra: &mut [u8], width: u32, height: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn content_aware_spot_repairs_a_defect_without_changing_surroundings() {
+        let mut pixels = vec![[20000, 30000, 40000, 65535]; 32 * 32];
+        for y in 14..18 {
+            for x in 14..18 {
+                pixels[y * 32 + x] = [0, 0, 0, 65535];
+            }
+        }
+        let input = Raster::from_pixels(32, 32, [0; 4], &pixels);
+        let edits = LocalEdits {
+            spots: vec![Spot {
+                id: 1,
+                source: [0.; 2],
+                target: [0.5; 2],
+                stroke: vec![],
+                radius: 0.15,
+                feather: 0.,
+                opacity: 1.,
+                mode: SpotMode::ContentAware,
+            }],
+            ..Default::default()
+        };
+        let serialized = serde_json::to_vec(&edits).unwrap();
+        let restored = serde_json::from_slice(&serialized).unwrap();
+        let output = apply(input.clone(), &restored, &AtomicBool::new(false)).unwrap();
+        assert_eq!(output.get(16, 16), [20000, 30000, 40000, 65535]);
+        assert_eq!(output.get(0, 0), input.get(0, 0));
+        assert_eq!(input.get(16, 16), [0, 0, 0, 65535]);
+        assert_eq!(
+            output.to_pixels(),
+            apply(input.clone(), &edits, &AtomicBool::new(false))
+                .unwrap()
+                .to_pixels()
+        );
+        assert!(apply(input, &edits, &AtomicBool::new(true)).is_err());
+    }
     fn mask() -> Mask {
         Mask {
             id: 1,

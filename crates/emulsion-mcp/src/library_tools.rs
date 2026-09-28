@@ -145,6 +145,7 @@ pub enum CollectionAction {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Develop {
+    pub guides: Option<Vec<[[f32; 2]; 2]>>,
     pub edits: Option<emulsion_core::develop_edits::LocalEdits>,
     pub action: DevelopAction,
     pub point: Option<[f32; 2]>,
@@ -157,6 +158,7 @@ pub struct Develop {
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum DevelopAction {
+    GuidedPerspective,
     LocalEdits,
     Adjust,
     Auto,
@@ -381,6 +383,19 @@ pub fn parse(name: &str, args: &Value) -> Result<Request, String> {
         }
         Request::Develop(d) => {
             use DevelopAction as A;
+            if (d.action == A::GuidedPerspective) != d.guides.is_some() {
+                return Err("guided_perspective requires guides".into());
+            }
+            if let Some(guides) = &d.guides
+                && (!(2..=8).contains(&guides.len())
+                    || guides
+                        .iter()
+                        .flatten()
+                        .flatten()
+                        .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)))
+            {
+                return Err("Supply two to eight guides in normalized source coordinates".into());
+            }
             if (d.action == A::LocalEdits) != d.edits.is_some() {
                 return Err("local_edits requires edits".into());
             }
@@ -500,7 +515,7 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "set_library_view",
             "Patch Library search, filters, sorting, view, inspector or optional film recipe. source=all clears the collection; collection selects a catalog collection. Empty recipe clears it. Changes are reflected in the desktop Library.",
-            json!({"canvas_tool":{"type":"string","enum":["none","brush","erase","heal","clone","crop","straighten","perspective","radial","linear"]},"color_view":{"type":"object","additionalProperties":false,"properties":{"display":{"type":["string","null"]},"proof":{"type":["string","null"]},"gamut_warning":{"type":"boolean"}}},"detail_region":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}},"fit_preview":{"type":"boolean"},"mask_overlay":{"type":"boolean"},"dust_visualization":{"type":"boolean"},"auto_advance":{"type":"boolean"},"panels_hidden":{"type":"boolean"},"filmstrip_hidden":{"type":"boolean"},"query":{"type":"string"},"collapse_stacks":{"type":"boolean"},"develop_section":{"type":"string","enum":["basic","crop","curve","mixer","grading","masks","kelvin","history","enhance","detail","calibration","parametric"]},"source":{"type":"string","enum":["all","folder"]},"collection":{"type":"integer","minimum":1},"minimum_rating":label,"flag":{"type":"string","enum":["all","picked","rejected"]},"color_label":label,"raw_only":{"type":"boolean"},"clipping":{"type":"boolean"},"unedited":{"type":"boolean"},"sort":{"type":"string","enum":["filename","capture_time"]},"reverse":{"type":"boolean"},"mode":{"type":"string","enum":["grid","list","loupe","develop","before","compare","photo_compare","survey"]},"inspector":{"type":"string","enum":["develop","info","keywords"]},"recipe":{"type":"string"}}),
+            json!({"canvas_tool":{"type":"string","enum":["none","brush","erase","heal","clone","crop","straighten","perspective","radial","linear","content_aware"]},"color_view":{"type":"object","additionalProperties":false,"properties":{"display":{"type":["string","null"]},"proof":{"type":["string","null"]},"gamut_warning":{"type":"boolean"}}},"detail_region":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}},"fit_preview":{"type":"boolean"},"mask_overlay":{"type":"boolean"},"dust_visualization":{"type":"boolean"},"auto_advance":{"type":"boolean"},"panels_hidden":{"type":"boolean"},"filmstrip_hidden":{"type":"boolean"},"query":{"type":"string"},"collapse_stacks":{"type":"boolean"},"develop_section":{"type":"string","enum":["basic","crop","curve","mixer","grading","masks","kelvin","history","enhance","detail","calibration","parametric"]},"source":{"type":"string","enum":["all","folder"]},"collection":{"type":"integer","minimum":1},"minimum_rating":label,"flag":{"type":"string","enum":["all","picked","rejected"]},"color_label":label,"raw_only":{"type":"boolean"},"clipping":{"type":"boolean"},"unedited":{"type":"boolean"},"sort":{"type":"string","enum":["filename","capture_time"]},"reverse":{"type":"boolean"},"mode":{"type":"string","enum":["grid","list","loupe","develop","before","compare","photo_compare","survey"]},"inspector":{"type":"string","enum":["develop","info","keywords"]},"recipe":{"type":"string"}}),
             &[],
         ),
         def(
@@ -530,7 +545,7 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "develop_library",
             "Operate on the active Library photo using the same drafts, undo and sidecars as the UI. adjust patches settings; auto/reset/as_shot/undo/preset/load_preset save immediately and report failures. sync copies group to selected photos. save flushes all drafts. reload explicitly discards active unsaved draft. Built-in preset names: neutral,warm,black_and_white,strong_contrast. Imports Emulsion JSON, Lightroom XMP and legacy lrtemplate presets with a compatibility report. snapshot/restore_snapshot use a name; match_lens resolves a measured Lensfun profile; subject_mask/sky_mask create local bitmap masks (sky_mask requires point); auto_sky uses local semantic sky segmentation; auto_perspective estimates level and perspective from image lines; denoise/super_resolution create new rendered derivatives. sensor_noise_reduction is a RAW-only pre-demosaic control in settings. point_curves contains composite/red/green/blue control points. Sampled camera WB cannot be synced across Library files. RAW highlights is recovery: positive darkens, negative brightens; UI slider uses the opposite sign.",
-            json!({"edits":local_edits_schema(),"action":{"type":"string","enum":["local_edits","adjust","auto","reset","as_shot","undo","reload","save","sync","preset","save_preset","load_preset","snapshot","restore_snapshot","subject_mask","sky_mask","auto_sky","auto_perspective","denoise","super_resolution","match_lens"]},"point":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1},"description":"Normalized point in the untransformed source sky"},"name":{"type":"string","minLength":1,"maxLength":200},"settings":settings,"preset":{"type":"string","enum":["neutral","warm","black_and_white","strong_contrast"]},"path":{"type":"string","minLength":1},"group":group}),
+            json!({"guides":{"type":"array","minItems":2,"maxItems":8,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}}}},"edits":local_edits_schema(),"action":{"type":"string","enum":["guided_perspective","local_edits","adjust","auto","reset","as_shot","undo","reload","save","sync","preset","save_preset","load_preset","snapshot","restore_snapshot","subject_mask","sky_mask","auto_sky","auto_perspective","denoise","super_resolution","match_lens"]},"point":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1},"description":"Normalized point in the untransformed source sky"},"name":{"type":"string","minLength":1,"maxLength":200},"settings":settings,"preset":{"type":"string","enum":["neutral","warm","black_and_white","strong_contrast"]},"path":{"type":"string","minLength":1},"group":group}),
             &["action"],
         ),
         def(
@@ -571,6 +586,21 @@ pub fn png_content(width: u32, height: u32, rgba: &[u8]) -> Result<Value, String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn guided_perspective_requires_bounded_source_guides() {
+        use serde_json::json;
+        assert!(super::parse("develop_library", &json!({
+            "action":"guided_perspective", "guides":[[[0.2,0.1],[0.3,0.9]],[[0.8,0.1],[0.7,0.9]]]
+        })).is_ok());
+        for args in [
+            json!({"action":"guided_perspective"}),
+            json!({"action":"guided_perspective","guides":[]}),
+            json!({"action":"guided_perspective","guides":[[[0.,0.],[2.,1.]],[[0.,0.],[1.,1.]]]}),
+            json!({"action":"auto","guides":[]}),
+        ] {
+            assert!(super::parse("develop_library", &args).is_err());
+        }
+    }
     use super::*;
     #[test]
     fn schemas_and_read_only_registration_cover_library_tools() {
@@ -705,7 +735,7 @@ fn local_edits_schema() -> Value {
     let point = json!({"type":"array","minItems":2,"maxItems":2,"items":unit});
     let shape = json!({"type":"object","description":"Brush: points/radius/feather; radial: center/radius(two axes)/feather; linear: start/end; luminance: range/feather; color: rgb/tolerance/feather; bitmap: digest/inverted. Coordinates refer to oriented source before crop.","required":["type"],"properties":{"type":{"type":"string","enum":["brush","radial","linear","luminance","color","bitmap"]},"points":{"type":"array","minItems":1,"maxItems":4096,"items":point},"center":point,"start":point,"end":point,"range":point,"radius":{"oneOf":[unit,point]},"feather":unit,"rgb":{"type":"array","minItems":3,"maxItems":3,"items":unit},"tolerance":unit,"digest":{"type":"array","minItems":32,"maxItems":32,"items":{"type":"integer","minimum":0,"maximum":255}},"inverted":{"type":"boolean"}}});
     let id = json!({"type":"integer","minimum":1});
-    json!({"type":"object","additionalProperties":false,"required":["version","masks","spots"],"properties":{"version":{"type":"integer","enum":[1]},"masks":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","name","enabled","components","exposure","contrast","saturation","temperature","tint"],"properties":{"id":id,"name":{"type":"string","minLength":1,"maxLength":200},"enabled":{"type":"boolean"},"components":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["operation","shape"],"properties":{"operation":{"type":"string","enum":["add","subtract","intersect"]},"shape":shape}}},"exposure":{"type":"number","minimum":-5,"maximum":5},"contrast":signed,"saturation":signed,"temperature":signed,"tint":signed}}},"spots":{"type":"array","maxItems":256,"items":{"type":"object","additionalProperties":false,"required":["id","source","target","radius","feather","opacity","mode"],"properties":{"id":id,"source":point,"target":point,"stroke":{"type":"array","maxItems":512,"items":point},"radius":unit,"feather":unit,"opacity":unit,"mode":{"type":"string","enum":["heal","clone"]}}}}}})
+    json!({"type":"object","additionalProperties":false,"required":["version","masks","spots"],"properties":{"version":{"type":"integer","enum":[1]},"masks":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","name","enabled","components","exposure","contrast","saturation","temperature","tint"],"properties":{"id":id,"name":{"type":"string","minLength":1,"maxLength":200},"enabled":{"type":"boolean"},"components":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["operation","shape"],"properties":{"operation":{"type":"string","enum":["add","subtract","intersect"]},"shape":shape}}},"exposure":{"type":"number","minimum":-5,"maximum":5},"contrast":signed,"saturation":signed,"temperature":signed,"tint":signed}}},"spots":{"type":"array","maxItems":256,"items":{"type":"object","additionalProperties":false,"required":["id","source","target","radius","feather","opacity","mode"],"properties":{"id":id,"source":point,"target":point,"stroke":{"type":"array","maxItems":512,"items":point},"radius":unit,"feather":unit,"opacity":unit,"mode":{"type":"string","enum":["heal","clone","content_aware"]}}}}}})
 }
 
 #[cfg(test)]

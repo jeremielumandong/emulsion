@@ -103,6 +103,14 @@ impl Workspace {
         };
         let tool = self.batch.develop.canvas_tool;
         let points = self.batch.develop.canvas_points.clone();
+        let guides = self
+            .batch
+            .develop
+            .perspective_guides
+            .as_ref()
+            .filter(|(owner, _)| owner == &path)
+            .map(|(_, guides)| guides.clone())
+            .unwrap_or_default();
         let rotation = self
             .batch
             .develop
@@ -275,9 +283,26 @@ impl Workspace {
                             point(px(x as f32), px(y as f32))
                         };
                         let color = gpui_kit::rgb(0xf2d37a);
+                        if tool == 7 {
+                            let mut path = PathBuilder::stroke(px(2.));
+                            for [start, end] in &guides {
+                                path.move_to(at(*start));
+                                path.line_to(at(*end));
+                            }
+                            if let Ok(path) = path.build() {
+                                window.paint_path(path, color);
+                            }
+                        }
                         if tool != 0 {
                             for spot in &spots {
-                                for position in [spot.source, spot.target] {
+                                let positions = if spot.mode
+                                    == emulsion_core::develop_edits::SpotMode::ContentAware
+                                {
+                                    vec![spot.target]
+                                } else {
+                                    vec![spot.source, spot.target]
+                                };
+                                for position in positions {
                                     window.paint_quad(outline(
                                         Bounds::new(
                                             at(position) - point(px(4.), px(4.)),

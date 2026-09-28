@@ -10,7 +10,7 @@ struct Line {
     vertical: bool,
     weight: f32,
 }
-pub fn automatic(image: &Raster, mut params: DevelopParams) -> Result<DevelopParams> {
+pub fn automatic(image: &Raster, params: DevelopParams) -> Result<DevelopParams> {
     let rgba = image::RgbaImage::from_raw(image.width(), image.height(), image.to_srgba8())
         .ok_or_else(|| IoError::Manifest("Invalid perspective input".into()))?;
     let small = image::DynamicImage::ImageRgba8(rgba)
@@ -107,6 +107,52 @@ pub fn automatic(image: &Raster, mut params: DevelopParams) -> Result<DevelopPar
                 .into(),
         ));
     }
+    fit_lines(&lines, params)
+}
+
+/// Fit two to eight guides in untransformed, normalized source coordinates.
+/// Each guide is classified against its nearest horizontal or vertical axis.
+pub fn guided(
+    guides: &[[[f32; 2]; 2]],
+    dimensions: (u32, u32),
+    params: DevelopParams,
+) -> Result<DevelopParams> {
+    if !(2..=8).contains(&guides.len()) || dimensions.0 == 0 || dimensions.1 == 0 {
+        return Err(IoError::Manifest(
+            "Draw two to eight perspective guides".into(),
+        ));
+    }
+    let (w, h) = (dimensions.0 as f32, dimensions.1 as f32);
+    let scale = w.min(h) * 0.5;
+    let mut lines = Vec::with_capacity(guides.len());
+    for [a, b] in guides {
+        if a.iter()
+            .chain(b)
+            .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+        {
+            return Err(IoError::Manifest(
+                "Perspective guides must lie inside the source".into(),
+            ));
+        }
+        let normalize = |p: [f32; 2]| [(p[0] - 0.5) * w / scale, (p[1] - 0.5) * h / scale];
+        let (a, b) = (normalize(*a), normalize(*b));
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        if dx.hypot(dy) < 0.1 {
+            return Err(IoError::Manifest(
+                "Perspective guides must span at least 5% of the short image side".into(),
+            ));
+        }
+        lines.push(Line {
+            a,
+            b,
+            vertical: dy.abs() > dx.abs(),
+            weight: 1.,
+        });
+    }
+    fit_lines(&lines, params)
+}
+
+fn fit_lines(lines: &[Line], mut params: DevelopParams) -> Result<DevelopParams> {
     let vertical = lines.iter().filter(|l| l.vertical).count();
     let horizontal = lines.len() - vertical;
     let score = |p: [f32; 3]| {
@@ -121,7 +167,7 @@ pub fn automatic(image: &Raster, mut params: DevelopParams) -> Result<DevelopPar
         };
         let mut error = 0.;
         let mut weight = 0.;
-        for l in &lines {
+        for l in lines {
             let (Some(a), Some(b)) = (transform(l.a), transform(l.b)) else {
                 return f32::INFINITY;
             };
@@ -165,4 +211,48 @@ pub fn automatic(image: &Raster, mut params: DevelopParams) -> Result<DevelopPar
     params.perspective = [fit[1], fit[2]];
     params.validate().map_err(|s| IoError::Manifest(s.into()))?;
     Ok(params)
+}
+
+#[cfg(test)]
+mod guided_tests {
+    use super::*;
+
+    #[test]
+    fn recovers_rotation_and_two_axis_perspective() {
+        let angle = 6f32.to_radians();
+        let (s, c) = angle.sin_cos();
+        let inverse = |[x, y]: [f32; 2]| {
+            let denominator = 1. + 0.12 * x - 0.10 * y;
+            [
+                0.5 + (c * x + s * y) / denominator / 2.,
+                0.5 + (-s * x + c * y) / denominator / 2.,
+            ]
+        };
+        let guides = [
+            [[-0.5, -0.5], [-0.5, 0.5]],
+            [[0.5, -0.5], [0.5, 0.5]],
+            [[-0.5, -0.5], [0.5, -0.5]],
+            [[-0.5, 0.5], [0.5, 0.5]],
+        ]
+        .map(|line| line.map(inverse));
+        let params = DevelopParams {
+            exposure: 1.,
+            rotation: 3,
+            ..Default::default()
+        };
+        let fitted = guided(&guides, (1000, 1000), params).unwrap();
+        assert!((fitted.straighten - 6.).abs() < 0.2, "{fitted:?}");
+        assert!((fitted.perspective[0] - 0.12).abs() < 0.02);
+        assert!((fitted.perspective[1] + 0.10).abs() < 0.02);
+        assert_eq!(fitted.exposure, params.exposure);
+        assert_eq!(fitted.rotation, params.rotation);
+    }
+
+    #[test]
+    fn rejects_invalid_and_degenerate_guides() {
+        let params = DevelopParams::default();
+        assert!(guided(&[], (100, 100), params).is_err());
+        assert!(guided(&[[[0.5; 2]; 2]; 2], (100, 100), params).is_err());
+        assert!(guided(&[[[f32::NAN; 2]; 2]; 2], (100, 100), params).is_err());
+    }
 }

@@ -71,6 +71,12 @@ No matching proprietary profile is bundled or silently substituted.
 
 ## Scope and remaining limits
 
+Follow-up implementation and validation are tracked in the
+[remaining-work ledger](../implementation/library-remaining-work.md). Its newer
+CMYK proofing, multi-guide geometry and content-aware healing entries supersede
+the corresponding original limitations below; the test counts above describe
+the original validation run.
+
 - DCP support covers bounded three-channel matrix, illuminant, tone-curve and HSV-table
   profiles. Unsupported structures are rejected. As-shot dual-profile interpolation
   currently uses D65 when no explicit Kelvin value is selected.

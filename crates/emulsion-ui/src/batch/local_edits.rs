@@ -51,6 +51,7 @@ impl Workspace {
             (2, "Erase"),
             (3, "Heal"),
             (4, "Clone"),
+            (10, "Content-aware heal"),
             (8, "Radial"),
             (9, "Linear"),
         ] {
@@ -676,11 +677,54 @@ impl Workspace {
                     p.straighten = ((p.straighten + 45.).rem_euclid(90.) - 45.).clamp(-45., 45.);
                 }
                 _ => {
-                    let d = [end[0] - start[0], end[1] - start[1]];
-                    if d[1].abs() > d[0].abs() {
-                        p.perspective[0] = (-d[0] / d[1]).clamp(-0.8, 0.8);
-                    } else if d[0].abs() > 0.001 {
-                        p.perspective[1] = (-d[1] / d[0]).clamp(-0.8, 0.8);
+                    let Some(path) = self
+                        .batch
+                        .current
+                        .and_then(|i| self.batch.items.get(i))
+                        .map(|i| i.path.clone())
+                    else {
+                        return;
+                    };
+                    let guides = &mut self.batch.develop.perspective_guides;
+                    if guides.as_ref().is_none_or(|(owner, _)| owner != &path) {
+                        *guides = Some((path, Vec::new()));
+                    }
+                    let guides = &mut guides.as_mut().unwrap().1;
+                    if guides.len() >= 8 {
+                        self.batch.note = Some((
+                            "Eight guides maximum; clear guides to start again.".into(),
+                            true,
+                        ));
+                        cx.notify();
+                        return;
+                    }
+                    if (end[0] - start[0]).hypot(end[1] - start[1]) < 0.05 {
+                        return;
+                    }
+                    guides.push([start, end]);
+                    if guides.len() < 2 {
+                        self.batch.note = Some((
+                            "Draw another perspective guide along a horizontal or vertical edge."
+                                .into(),
+                            false,
+                        ));
+                        cx.notify();
+                        return;
+                    }
+                    let nav = self.batch.navigation.borrow();
+                    let dimensions = if p.rotation % 2 == 1 {
+                        (nav.dimensions.1, nav.dimensions.0)
+                    } else {
+                        nav.dimensions
+                    };
+                    match emulsion_io::photo_geometry::guided(guides, dimensions, p) {
+                        Ok(next) => p = next,
+                        Err(error) => {
+                            guides.pop();
+                            self.batch.note = Some((error.to_string().into(), true));
+                            cx.notify();
+                            return;
+                        }
                     }
                 }
             }
@@ -692,14 +736,16 @@ impl Workspace {
         let Ok(mut edits) = self.library_edit_set() else {
             return;
         };
-        if tool == 3 || tool == 4 {
+        if matches!(tool, 3 | 4 | 10) {
             let source = self
                 .batch
                 .develop
                 .clone_source
                 .unwrap_or([(start[0] - 0.1).max(0.), start[1]]);
             if let Some(existing) = edits.spots.iter_mut().find(|s| {
-                ((s.source[0] - start[0]).powi(2) + (s.source[1] - start[1]).powi(2)).sqrt() < 0.02
+                s.mode != SpotMode::ContentAware
+                    && ((s.source[0] - start[0]).powi(2) + (s.source[1] - start[1]).powi(2)).sqrt()
+                        < 0.02
             }) {
                 existing.source = end;
             } else if let Some(existing) = edits.spots.iter_mut().find(|s| {
@@ -733,7 +779,9 @@ impl Workspace {
                     radius,
                     feather: 0.5,
                     opacity: 1.,
-                    mode: if tool == 3 {
+                    mode: if tool == 10 {
+                        SpotMode::ContentAware
+                    } else if tool == 3 {
                         SpotMode::Heal
                     } else {
                         SpotMode::Clone

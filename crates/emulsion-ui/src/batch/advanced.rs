@@ -165,7 +165,7 @@ impl Workspace {
                 for (tool, name) in [
                     (5, "Draw crop"),
                     (6, "Straighten line"),
-                    (7, "Perspective guide"),
+                    (7, "Perspective guides"),
                 ] {
                     panel = panel.child(
                         Button::new(("develop-geometry-tool", tool))
@@ -184,6 +184,24 @@ impl Workspace {
                                 cx.notify();
                             })),
                     );
+                }
+                if self.batch.develop.canvas_tool == 7 {
+                    panel = panel
+                        .child(label(
+                            "Draw 2–8 horizontal or vertical guides, then Done",
+                            &palette,
+                        ))
+                        .child(
+                            Button::new("develop-clear-guides")
+                                .label("Clear guides")
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.batch.develop.perspective_guides = None;
+                                    this.batch.develop.canvas_points.clear();
+                                    cx.notify();
+                                })),
+                        );
                 }
                 panel = panel.child(
                     Button::new("develop-geometry-done")

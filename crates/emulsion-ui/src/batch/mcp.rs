@@ -793,6 +793,7 @@ fn apply_view(
                 "perspective",
                 "radial",
                 "linear",
+                "content_aware",
             ]
             .iter()
             .position(|v| v == name)
@@ -1136,6 +1137,31 @@ async fn develop_request(
     }
     let verification_source = source.clone();
     let next = match request.action {
+        A::GuidedPerspective => {
+            let source = source.clone();
+            let guides = request.guides.unwrap();
+            cx.background_spawn(async move {
+                let raster = source.develop_preview(
+                    &emulsion_core::raw::DevelopParams {
+                        crop: [0., 0., 1., 1.],
+                        straighten: 0.,
+                        perspective: [0.; 2],
+                        distortion: 0.,
+                        lens_profile: None,
+                        aberration: [0.; 2],
+                        rotation: 0,
+                        ..params
+                    },
+                    &std::sync::atomic::AtomicBool::new(false),
+                )?;
+                emulsion_io::photo_geometry::guided(
+                    &guides,
+                    (raster.width(), raster.height()),
+                    params,
+                )
+            })
+            .await?
+        }
         A::MatchLens => {
             let file = path.clone();
             let profile = cx

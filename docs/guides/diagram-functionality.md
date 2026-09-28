@@ -13,7 +13,7 @@ pixel-for-pixel compatibility with another application.
 | Object controls | Right-click arrange/alignment, grouping, locking, copy/paste style, annotations and selection export; floating selection toolbar |
 | Selection | Mouse marquee, Ctrl/Shift selection, group/ungroup, graph-aware copy/paste/delete, connected movement, undo/redo |
 | Formatting | Fill/stroke/text color pickers, typography, thin dark default outlines, white/soft teal/soft blue palettes, line patterns, rounded elbows, filled/hollow connector markers, theme application |
-| Library | Shapes, Templates, Containers, Themes and Stencil packs drawers; search; 68 original default stencils, 18 editable templates, nine themes |
+| Library | Shapes, Templates, Containers, Themes and Stencil packs drawers; search; 68 original default stencils, 22 editable templates, nine themes |
 | Diagram objects as stencils | Imported and existing shapes automatically appear in the temporary Imported data group; cached background previews, search and pagination; click/drag reuses editable artwork with fresh IDs and one undo step, excluding connections and container contents |
 | Installed stencils | Per-entry vector-generated previews; click or drag an installed entry to the pointer position; a drop is one undo step |
 | Offline vendor packs | AWS, Azure, Google Cloud, Kubernetes, Cisco, network devices, BPMN, flowchart, floor plans, electrical, wireframes and office; all available entries in each family, paginated 96 at a time |
@@ -56,9 +56,28 @@ one million cells. If overlap or complexity prevents finding a corridor, the
 connector toolbar shows a warning and MCP returns `routing_warning`. Move the
 obstacles or add manual waypoints to resolve it.
 
+## Browser and server system templates
+
+Four detailed 1920 × 1240 boards are available in Templates and through the shared MCP template catalog. Search for `browser` or use these template IDs:
+
+| Template | ID | Contents |
+| --- | --- | --- |
+| Browser to first paint | `web-page-journey` | Navigation, DNS, HTTPS, cache shortcuts, origin processing and browser rendering |
+| Authenticated API platform | `web-api-platform` | Gateway, identity, authorization, database, cache, queue, background workers and error paths |
+| Asynchronous checkout | `web-async-checkout` | Idempotency, transactional outbox, payment processing, retries, dead letters and recovery |
+| Real-time browser updates | `web-realtime-updates` | Authorized subscriptions, event fan-out, heartbeats, reconnect and durable catch-up |
+
+The boards use seven semantic colors, native stencil icons, grouped containers, editable typography, labeled connectors, rounded bends and crossing bridges. Purple identifies clients, blue requests and application logic, cyan network components, green responses, amber asynchronous work, rose failures and slate storage. Titles, legends and notes explain how to read and adapt each sample. These are conceptual reference designs, not measurements or deployed infrastructure.
+
+Generate editable `.emu` pages, full vector SVGs, PNG previews and a combined project with:
+
+```sh
+cargo run -p emulsion-io --example diagram_template_preview -- /path/to/output web-
+```
+
 ## Sample-inspired templates
 
-The Templates drawer now contains 18 offline, editable starters. Ten additions
+The Templates drawer now contains 22 offline, editable starters. Ten additions
 use the layouts in the local `Downloads/Diagram` reference collection: Business
 process, Purchase approval, Family tree, Cause and effect, Team directory,
 Strategy tree, Improvement cycle, Project roadmap, Relationship map and Cloud

@@ -54,6 +54,7 @@ impl Workspace {
             .id("library-rotation-controls")
             .test_support()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_1()
             .children(
@@ -64,6 +65,7 @@ impl Workspace {
                 .into_iter()
                 .map(|(turns, title, icon)| {
                     Button::new(("library-rotate", turns))
+                        .label(title)
                         .small()
                         .ghost()
                         .disabled(disabled)
@@ -173,7 +175,7 @@ impl Workspace {
         let p = classic::palette(cx);
         Some(div().id("library-rotation-panel").test_support().flex().flex_wrap().items_center().gap_2()
             .px_3().py_2().bg(p.panel).border_b_1().border_color(p.line)
-            .child(label("Angle °", &p))
+            .child(label("Fine angle °", &p))
             .child(div().id("library-rotation-angle").test_support().w(px(200.)).child(Slider::new(&slider).disabled(disabled)))
             .child(self.library_numeric_control(1000, "Straighten angle (degrees)", advanced::Field::Straighten, params.straighten, -45., 45., 0.1, cx))
             .child(Button::new("library-rotation-reset").label("Reset rotation").small().ghost()

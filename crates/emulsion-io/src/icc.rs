@@ -284,7 +284,7 @@ pub struct PhotoView {
     pub proof: Option<std::path::PathBuf>,
     pub gamut_warning: bool,
 }
-fn view_profile(path: &std::path::Path) -> crate::Result<ColorProfile> {
+fn view_profile(path: &std::path::Path, proof: bool) -> crate::Result<ColorProfile> {
     use std::io::Read;
     let mut bytes = vec![];
     std::fs::File::open(path)?
@@ -297,18 +297,30 @@ fn view_profile(path: &std::path::Path) -> crate::Result<ColorProfile> {
     }
     let profile = ColorProfile::new_from_slice(&bytes)
         .map_err(|e| crate::IoError::Unsupported(format!("ICC profile: {e}")))?;
-    if profile.color_space != DataColorSpace::Rgb {
+    if profile.color_space != DataColorSpace::Rgb
+        && !(proof && profile.color_space == DataColorSpace::Cmyk)
+    {
         return Err(crate::IoError::Unsupported(
-            "Library viewing currently requires an RGB ICC profile".into(),
+            if proof {
+                "Soft proofing requires an RGB or CMYK ICC profile"
+            } else {
+                "Display conversion requires an RGB ICC profile"
+            }
+            .into(),
         ));
     }
     Ok(profile)
 }
 impl PhotoView {
     pub fn validate(&self) -> crate::Result<()> {
-        for path in self.display.iter().chain(self.proof.iter()) {
-            view_profile(path)?;
+        if let Some(path) = &self.display {
+            view_profile(path, false)?;
         }
+        if let Some(path) = &self.proof {
+            view_profile(path, true)?;
+        }
+        // Confirm both directions are usable before accepting a printer profile.
+        self.apply(&mut [0, 0, 0, 255])?;
         Ok(())
     }
     /// Input/output is BGRA8 display data. Export and histogram pixels are unchanged.
@@ -328,18 +340,18 @@ impl PhotoView {
             .collect::<Vec<_>>();
         let mut gamut = vec![false; pixels.len() / 3];
         if let Some(path) = &self.proof {
-            let proof = view_profile(path)?;
+            let proof = view_profile(path, true)?;
+            let (layout, channels) = if proof.color_space == DataColorSpace::Cmyk {
+                (Layout::Rgba, 4)
+            } else {
+                (Layout::Rgb, 3)
+            };
             let transform = srgb
-                .create_transform_f32(
-                    Layout::Rgb,
-                    &proof,
-                    Layout::Rgb,
-                    TransformOptions::default(),
-                )
+                .create_transform_f32(Layout::Rgb, &proof, layout, TransformOptions::default())
                 .map_err(bad)?;
-            let mut output = vec![0.; pixels.len()];
+            let mut output = vec![0.; pixels.len() / 3 * channels];
             transform.transform(&pixels, &mut output).map_err(bad)?;
-            for (index, p) in output.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            for (index, p) in output.chunks_exact_mut(channels).enumerate() {
                 gamut[index] = p.iter().any(|v| *v < -0.0001 || *v > 1.0001);
                 for v in p {
                     *v = v.clamp(0., 1.);
@@ -347,7 +359,7 @@ impl PhotoView {
             }
             let original = pixels.clone();
             let reverse = proof
-                .create_transform_f32(Layout::Rgb, &srgb, Layout::Rgb, TransformOptions::default())
+                .create_transform_f32(layout, &srgb, Layout::Rgb, TransformOptions::default())
                 .map_err(bad)?;
             reverse.transform(&output, &mut pixels).map_err(bad)?;
             for (i, (a, b)) in original
@@ -361,7 +373,7 @@ impl PhotoView {
             }
         }
         if let Some(path) = &self.display {
-            let display = view_profile(path)?;
+            let display = view_profile(path, false)?;
             let transform = srgb
                 .create_transform_f32(
                     Layout::Rgb,
@@ -396,6 +408,42 @@ impl PhotoView {
 #[cfg(test)]
 mod photo_view_tests {
     use super::*;
+    #[test]
+    #[ignore = "Requires EMULSION_TEST_CMYK_PROFILE pointing to a printer ICC profile"]
+    fn cmyk_soft_proof_preserves_alpha_and_rejects_printer_as_display() {
+        let path = std::path::PathBuf::from(
+            std::env::var_os("EMULSION_TEST_CMYK_PROFILE").expect("printer ICC fixture"),
+        );
+        let input = vec![20, 80, 160, 128, 190, 70, 25, 255, 255, 255, 255, 0];
+        let view = PhotoView {
+            proof: Some(path.clone()),
+            ..Default::default()
+        };
+        view.validate().unwrap();
+        let mut output = input.clone();
+        view.apply(&mut output).unwrap();
+        assert_ne!(input, output);
+        for (a, b) in input
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(output.as_chunks::<4>().0)
+        {
+            assert_eq!(a[3], b[3]);
+        }
+        let mut repeated = input.clone();
+        view.apply(&mut repeated).unwrap();
+        assert_eq!(output, repeated);
+        assert!(
+            PhotoView {
+                display: Some(path),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
     #[test]
     fn viewing_is_opt_in_and_preserves_alpha() {
         let input = vec![20, 80, 160, 128, 190, 70, 25, 255];

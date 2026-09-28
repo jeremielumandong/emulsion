@@ -292,6 +292,9 @@ fn icon_bytes(id: &str) -> &'static [u8] {
         "rotate-cw" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/rotate-cw.svg")
         }
+        "rotate-ccw" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/rotate-ccw.svg")
+        }
         "pencil" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/pencil.svg")
         }

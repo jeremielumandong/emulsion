@@ -1453,3 +1453,57 @@ fn library_hdr_preview_merge_and_dialog_controls(cx: &mut TestAppContext) {
     );
     assert!(overwrite.is_error);
 }
+
+#[gpui_kit::test]
+fn library_guided_perspective_saves_and_undoes_shared_settings(cx: &mut TestAppContext) {
+    use serde_json::json;
+    let fixture = Fixture::new();
+    let path = fixture.0.join("guides.png");
+    image::RgbaImage::from_pixel(32, 32, image::Rgba([80, 100, 120, 255]))
+        .save(&path)
+        .unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let root = fixture.0.join("catalog");
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "import_library",
+        json!({"folder":fixture.0}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "select_library_photos",
+        json!({"paths":[path],"active":path}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({
+            "action":"guided_perspective", "guides":[[[0.2,0.1],[0.3,0.9]],[[0.8,0.1],[0.7,0.9]]]
+        }),
+    ));
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert!(
+        state["develop"]["settings"]["perspective"][1]
+            .as_f64()
+            .unwrap()
+            .abs()
+            > 0.01
+    );
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"undo"}),
+    ));
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert_eq!(state["develop"]["settings"]["perspective"], json!([0., 0.]));
+    assert_eq!(std::fs::read(path).unwrap(), original);
+}
