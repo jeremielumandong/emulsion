@@ -183,6 +183,12 @@ impl Design {
                     .get(&link.component)
                     .is_some_and(|d| d.variants.contains_key(&link.variant))
         });
+        for link in self.component_links.values_mut() {
+            link.members
+                .retain(|source, instance| ids.contains(source) && ids.contains(instance));
+            link.overrides
+                .retain(|source, _| link.members.contains_key(source));
+        }
         self.media
             .retain(|id, video| ids.contains(id) && ids.contains(&video.boundary));
         self.charts.retain(|id, _| ids.contains(id));
@@ -224,7 +230,7 @@ impl Design {
             component_links: self
                 .component_links
                 .iter()
-                .map(|(key, value)| (id(*key), value.clone()))
+                .map(|(key, value)| (id(*key), value.remap(map)))
                 .collect(),
             media: self
                 .media

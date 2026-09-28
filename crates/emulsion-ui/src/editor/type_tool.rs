@@ -602,6 +602,8 @@ impl EditorView {
                 before.color = style.color;
                 before.bold = style.bold;
                 before.italic = style.italic;
+                before.underline = style.underline;
+                before.strikethrough = style.strikethrough;
                 before.letter_spacing = style.letter_spacing;
             }
             let mut next = before.clone();
@@ -613,6 +615,8 @@ impl EditorView {
                 updated.color = original.color;
                 updated.bold = original.bold;
                 updated.italic = original.italic;
+                updated.underline = original.underline;
+                updated.strikethrough = original.strikethrough;
                 updated.letter_spacing = original.letter_spacing;
             }
             let mut character = (*original).clone();
@@ -623,6 +627,8 @@ impl EditorView {
                     color: style.color,
                     bold: style.bold,
                     italic: style.italic,
+                    underline: style.underline,
+                    strikethrough: style.strikethrough,
                     letter_spacing: style.letter_spacing,
                     ..Default::default()
                 };
@@ -632,6 +638,8 @@ impl EditorView {
                 style.color = run.color;
                 style.bold = run.bold;
                 style.italic = run.italic;
+                style.underline = run.underline;
+                style.strikethrough = run.strikethrough;
                 style.letter_spacing = run.letter_spacing;
             });
             updated.runs = character.runs;
@@ -644,6 +652,32 @@ impl EditorView {
                     },
                     cx,
                 );
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn set_text_list(
+        &mut self,
+        list: emulsion_core::text::ListStyle,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_text_field(cx);
+        if let Some((id, spec)) = self.text_target() {
+            match emulsion_core::text::apply_list(&spec, list) {
+                Ok(next) if next != *spec => {
+                    self.type_tool.selection = None;
+                    self.execute(
+                        Command::SetText {
+                            id,
+                            spec: Box::new(next),
+                        },
+                        cx,
+                    );
+                    self.type_tool.error = None;
+                }
+                Ok(_) => self.type_tool.error = None,
+                Err(error) => self.type_tool.error = Some(error),
             }
         }
         cx.notify();
@@ -811,6 +845,8 @@ impl EditorView {
             cur.color = style.color;
             cur.bold = style.bold;
             cur.italic = style.italic;
+            cur.underline = style.underline;
+            cur.strikethrough = style.strikethrough;
         }
         if self.type_tool.field.is_some() {
             for (id, title, cancel) in [

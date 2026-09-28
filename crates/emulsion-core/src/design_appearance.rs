@@ -135,6 +135,8 @@ impl Appearance {
                     spec.size = style.size;
                     spec.bold = style.bold;
                     spec.italic = style.italic;
+                    spec.underline = style.underline;
+                    spec.strikethrough = style.strikethrough;
                     spec.letter_spacing = style.letter_spacing;
                     spec.line_height = *line_height;
                     spec.align = *align;

@@ -233,6 +233,7 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
             blending: Default::default(),
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Pixels {
                 raster: raster.clone().into(),
                 placement: *placement,

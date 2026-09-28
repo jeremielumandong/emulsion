@@ -24,7 +24,8 @@ pub const HEADER_WORDS: usize = 8;
 /// Clip-base alpha slots per pixel in the shader.
 pub const MAX_ALPHA_SLOTS: u32 = 16;
 /// Group nesting per pixel in the shader.
-pub const MAX_DEPTH: usize = 8;
+// Content clipping adds a render-only level without consuming authored group depth.
+pub const MAX_DEPTH: usize = 16;
 
 /// The composite shader's blend-mode numbering (from `emulsion-gpu`).
 pub fn mode(mode: BlendMode) -> u32 {
@@ -108,6 +109,7 @@ fn bake(
     alone.blend = BlendMode::Normal;
     alone.blending = Default::default();
     alone.clip_to = None;
+    alone.clip_rect = None;
     let tree = CompositeTree {
         width,
         height,
@@ -245,6 +247,7 @@ pub enum Op {
         source: usize,
         opacity: f32,
         clip: u32,
+        clip_rect: Option<[f64; 4]>,
         alpha: u32,
     },
     Fill {
@@ -252,6 +255,7 @@ pub enum Op {
         color: [f32; 4],
         opacity: f32,
         clip: u32,
+        clip_rect: Option<[f64; 4]>,
         alpha: u32,
     },
     Vector {
@@ -259,6 +263,7 @@ pub enum Op {
         run: usize,
         opacity: f32,
         clip: u32,
+        clip_rect: Option<[f64; 4]>,
         alpha: u32,
     },
     Push {
@@ -267,20 +272,39 @@ pub enum Op {
     /// Save an isolated styled appearance, then evaluate the same children
     /// against the real backdrop (non-Normal effects need both results).
     StyleBackdrop,
+    ClipPop {
+        clip_rect: Option<[f64; 4]>,
+    },
     /// Recover the styled source and apply the layer's blend/opacity once.
     StylePop {
         mode: u32,
         opacity: f32,
         clip: u32,
+        clip_rect: Option<[f64; 4]>,
     },
     Pop {
         isolated: bool,
         mode: u32,
         opacity: f32,
         clip: u32,
+        clip_rect: Option<[f64; 4]>,
         alpha: u32,
         mask: Option<usize>,
     },
+}
+
+impl Op {
+    fn clip_rect(&self) -> Option<[f64; 4]> {
+        match self {
+            Self::Source { clip_rect, .. }
+            | Self::Fill { clip_rect, .. }
+            | Self::Vector { clip_rect, .. }
+            | Self::Pop { clip_rect, .. }
+            | Self::StylePop { clip_rect, .. } => *clip_rect,
+            Self::ClipPop { clip_rect } => *clip_rect,
+            Self::Push { .. } | Self::StyleBackdrop => None,
+        }
+    }
 }
 
 pub struct Canvas {
@@ -473,6 +497,7 @@ impl Compiler<'_> {
             if node.blend == BlendMode::Dissolve {
                 self.note(format!("{name}: dissolve drawn as normal"));
             }
+            let clip_rect = node.clip_rect;
             let blend = mode(node.blend);
             let opacity = node.opacity.min(1.0);
             let alpha = slots[i];
@@ -483,7 +508,11 @@ impl Compiler<'_> {
                         node: node.id,
                         kind: vector.unwrap(),
                     };
-                    let mergeable = blend == 0 && opacity >= 1.0 && clip == NONE && alpha == NONE;
+                    let mergeable = blend == 0
+                        && opacity >= 1.0
+                        && clip == NONE
+                        && alpha == NONE
+                        && clip_rect.is_none();
                     if mergeable && let Some(op) = self.open_run {
                         let Op::Vector { run, .. } = self.ops[op] else {
                             unreachable!()
@@ -497,6 +526,7 @@ impl Compiler<'_> {
                         run: self.runs.len() - 1,
                         opacity,
                         clip,
+                        clip_rect,
                         alpha,
                     });
                     self.open_run = mergeable.then_some(self.ops.len() - 1);
@@ -533,6 +563,7 @@ impl Compiler<'_> {
                         source,
                         opacity,
                         clip,
+                        clip_rect,
                         alpha,
                     });
                 }
@@ -545,6 +576,7 @@ impl Compiler<'_> {
                             source,
                             opacity,
                             clip,
+                            clip_rect,
                             alpha,
                         });
                         self.open_run = None;
@@ -557,8 +589,19 @@ impl Compiler<'_> {
                         color,
                         opacity,
                         clip,
+                        clip_rect,
                         alpha,
                     });
+                }
+                NodeContent::ClippedGroup { children, baseline } => {
+                    self.ops.push(Op::Push { isolated: false });
+                    self.open_run = None;
+                    self.list(children, depth + 1);
+                    self.ops.push(Op::StyleBackdrop);
+                    self.open_run = None;
+                    self.list(baseline, depth + 1);
+                    self.ops.push(Op::ClipPop { clip_rect });
+                    self.open_run = None;
                 }
                 NodeContent::Group(children) => {
                     let isolated = node.blend != BlendMode::PassThrough;
@@ -576,6 +619,7 @@ impl Compiler<'_> {
                         mode: blend,
                         opacity,
                         clip,
+                        clip_rect,
                         alpha,
                         mask,
                     });
@@ -602,6 +646,7 @@ impl Compiler<'_> {
                             mode: 0,
                             opacity: 0.0,
                             clip: NONE,
+                            clip_rect,
                             alpha,
                             mask: None,
                         });
@@ -623,6 +668,7 @@ impl Compiler<'_> {
                             mode: blend,
                             opacity,
                             clip,
+                            clip_rect,
                         });
                     } else {
                         self.ops.push(Op::Pop {
@@ -630,6 +676,7 @@ impl Compiler<'_> {
                             mode: blend,
                             opacity,
                             clip,
+                            clip_rect,
                             alpha: NONE,
                             mask: None,
                         });
@@ -903,6 +950,7 @@ impl Canvas {
                     use std::hash::{Hash, Hasher};
                     std::mem::discriminant(&node.content).hash(&mut h);
                     node.visible.hash(&mut h);
+                    node.clip_rect.map(|r| r.map(f64::to_bits)).hash(&mut h);
                     format!("{:?}", node.blend).hash(&mut h);
                     format!("{:?}", node.blending).hash(&mut h);
                     if let NodeContent::Fill(c) = &node.content {
@@ -927,6 +975,10 @@ impl Canvas {
                 });
                 match &node.content {
                     NodeContent::Group(children) => walk(children, out),
+                    NodeContent::ClippedGroup { children, baseline } => {
+                        walk(children, out);
+                        walk(baseline, out);
+                    }
                     NodeContent::StyledGroup {
                         children,
                         clip_source,
@@ -998,7 +1050,8 @@ impl Canvas {
                 if node.id == id {
                     return Some(node);
                 }
-                if let NodeContent::Group(children) = &node.content
+                if let NodeContent::Group(children) | NodeContent::ClippedGroup { children, .. } =
+                    &node.content
                     && let Some(found) = find(children, id)
                 {
                     return Some(found);
@@ -1072,7 +1125,7 @@ impl Canvas {
         let first_vector = self
             .ops
             .iter()
-            .position(|op| matches!(op, Op::Vector { .. }))
+            .position(|op| matches!(op, Op::Vector { .. }) || op.clip_rect().is_some())
             .unwrap_or(self.ops.len());
         let clip_of = |op: &Op| match *op {
             Op::Source { clip, .. }
@@ -1080,14 +1133,14 @@ impl Canvas {
             | Op::Vector { clip, .. }
             | Op::Pop { clip, .. }
             | Op::StylePop { clip, .. } => clip,
-            Op::Push { .. } | Op::StyleBackdrop => NONE,
+            Op::Push { .. } | Op::StyleBackdrop | Op::ClipPop { .. } => NONE,
         };
         let alpha_of = |op: &Op| match *op {
             Op::Source { alpha, .. }
             | Op::Fill { alpha, .. }
             | Op::Vector { alpha, .. }
             | Op::Pop { alpha, .. } => alpha,
-            Op::Push { .. } | Op::StyleBackdrop | Op::StylePop { .. } => NONE,
+            Op::Push { .. } | Op::StyleBackdrop | Op::StylePop { .. } | Op::ClipPop { .. } => NONE,
         };
         let mut depth = 0i32;
         let mut best = 0;
@@ -1105,7 +1158,7 @@ impl Canvas {
             if let Some(op) = self.ops.get(end) {
                 match op {
                     Op::Push { .. } => depth += 1,
-                    Op::Pop { .. } | Op::StylePop { .. } => depth -= 1,
+                    Op::Pop { .. } | Op::StylePop { .. } | Op::ClipPop { .. } => depth -= 1,
                     _ => {}
                 }
             }
@@ -1137,6 +1190,7 @@ impl Canvas {
                     source: s,
                     opacity,
                     clip,
+                    clip_rect: _,
                     alpha,
                 } => {
                     w[..5].copy_from_slice(&[0, mode, alpha, clip, opacity.to_bits()]);
@@ -1147,6 +1201,7 @@ impl Canvas {
                     color,
                     opacity,
                     clip,
+                    clip_rect: _,
                     alpha,
                 } => {
                     w[..5].copy_from_slice(&[5, mode, alpha, clip, opacity.to_bits()]);
@@ -1159,6 +1214,7 @@ impl Canvas {
                     run,
                     opacity,
                     clip,
+                    clip_rect: _,
                     alpha,
                 } => {
                     w[..5].copy_from_slice(&[6, mode, alpha, clip, opacity.to_bits()]);
@@ -1166,10 +1222,12 @@ impl Canvas {
                 }
                 Op::Push { isolated } => w[0] = if isolated { 1 } else { 2 },
                 Op::StyleBackdrop => w[0] = 7,
+                Op::ClipPop { .. } => w[0] = 9,
                 Op::StylePop {
                     mode,
                     opacity,
                     clip,
+                    clip_rect: _,
                 } => {
                     w[..5].copy_from_slice(&[8, mode, NONE, clip, opacity.to_bits()]);
                 }
@@ -1178,6 +1236,7 @@ impl Canvas {
                     mode,
                     opacity,
                     clip,
+                    clip_rect: _,
                     alpha,
                     mask,
                 } => {
@@ -1193,6 +1252,11 @@ impl Canvas {
                         source(&mut w, &self.sources[m]);
                         w[8] = 1;
                     }
+                }
+            }
+            if let Some(rect) = op.clip_rect() {
+                for (word, value) in w[12..16].iter_mut().zip(rect) {
+                    *word = (value as f32).to_bits();
                 }
             }
             words.extend_from_slice(&w);

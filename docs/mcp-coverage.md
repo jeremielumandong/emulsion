@@ -34,6 +34,8 @@ These UI workflows do not yet have complete dedicated MCP interfaces. Generic ob
 
 - Creative catalog administration: saved brand kits/logos, asset collections and local template installation/catalog management. MCP can share/import package files and reuse document components/styles, but cannot manage the entire creative Home catalog.
 - Interactive editor state: guides/rulers/snapping preferences, saved channel/quick-mask UI, clipboard integration, panel layout, tool selection and gesture-specific controls.
+- Workspace lifecycle: creating new Design/Diagram projects and managing editor tabs. Page tools require an already open project; the relay remains bound to its originating editor.
+- Direct embedded-video play/pause/seek and presenter timer controls. Video authoring and presentation navigation are exposed; these interactions still use the player/presenter UI.
 - Advanced smart-source relinking/edit-in-place workflows beyond existing conversion/filter tools.
 - Specialized diagram formatting beyond the exposed shape metadata/conditional-fill fields.
 - Device printing, print-preview dialogs and printer setup. Exporting a PDF is covered; submitting a print job is not.
@@ -51,3 +53,5 @@ Ordinary photo edits retain the assistant's existing grouped history. Before the
 Project file IO and image decoding run off the UI thread. Import results are rejected if their target changed while loading. Saves acknowledge the actual written snapshot and mark only those saved revisions clean. All dependent relay calls remain ordered.
 
 For regression tests see `emulsion-mcp` module tests and `emulsion-ui`'s `project_mcp_`/`presentation_host_` relay and presentation tests. Platform runtime testing on macOS and Windows remains separate from Linux/headless tests.
+
+Audit verification on Linux: 154 MCP tests and six focused project/presentation UI tests passed. Clippy passed for MCP, assistant and UI with all targets and warnings denied. The release executable advertised 208 unique tools with valid required-argument declarations and read-only annotations; the 44 MB AppImage passed its version smoke check. These checks do not imply coverage of the remaining UI-only workflows above.

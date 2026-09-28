@@ -205,6 +205,7 @@ impl EditorView {
             );
             return false;
         }
+        self.exit_responsive_preview(cx);
         self.stop_motion(cx);
         self.finish_pointer_gesture(cx);
         self.close_text_field(cx);

@@ -33,6 +33,7 @@ Undo, persistence and applicable export work together.
 | Video, audio and animation | Editable YouTube link/poster objects and system web-player integration are implemented; Linux system-WebKit playback, audio, pause/resume and resize have been verified; Windows/macOS runtime verification is pending. The current Flatpak runtime lacks WebKitGTK, so that package supports video authoring but not playback. Basic object entry/exit and GIF export exist. Page transitions and an in-app system playback setup helper are implemented. Local video/audio tracks, trimming and property animation remain open. See [Design video](design-video.md). |
 | Export and print | Existing local image/vector/PDF/native output. Audit selected pages/objects, transparency, bleed, crop marks, sizing and diagnostics per format. |
 | AI-assisted design | Existing local assistant/provider integration remains available. Generation, extraction and editing actions require explicit capability checks; buttons alone do not establish parity. |
+| MCP authoring and automation | Native tools cover pages, templates, components, styles, charts, appearance, responsive layouts, image frames, diagrams and presentation controls. Project-aware save/Undo and ordered live-host operations preserve native editing behavior. Catalog administration and other UI-only gaps are listed in the [MCP coverage audit](mcp-coverage.md). |
 
 “Partial” means a foundation exists; it does not claim equivalent behavior or
 quality. Evidence paths below refer to Emulsion source.
@@ -42,9 +43,9 @@ quality. Evidence paths below refer to Emulsion source.
 | Editable vector authoring | Shared path, shape, text, transform, clipboard, layer and alignment tools | Audit their reachability in Design. Cover point/handle/segment editing, path continuation/join/split, object and node multiselection, precise transforms, compound operations and reversible stroke expansion. |
 | Object appearance | Direct selection controls for native fill/stroke, gradients, alpha, opacity, rectangle corners, typography, curve/background/effects, alignment and grouping; named reusable appearance styles | Extend direct multiple-stop gradient editing and matching-object selection; audit unsupported-layout/export fallbacks. See [appearance controls](design-appearance.md). |
 | Precision and reshaping | Rulers/guides, snapping, transforms and path operations | Add any missing object guides, ruler origins/units, spacing feedback, vector mesh/perspective/skew and bitmap tracing. Validate geometry at rotated/scaled views and one-step Undo. |
-| Responsive frames | Persistent nested row/column/grid layouts, wrapping, padding/gaps, alignment, shared row fill width, content-sized height, absolute children and text reflow | Add hug-width/height-fill sizing, min/max, automatic clipping, aspect locks and broader constraints. Measure large scenes. Diagram auto-layout is a separate capability. |
-| Breakpoints | Page resize with anchors and optional text reflow | Add authored width-based overrides, inheritance and non-destructive preview widths. Desktop → phone → desktop must recover base values. |
-| Components | Local native definitions, named variants, linked instances, explicit publish/reset, switching and detach; project library browsing with cross-page import; save, recovery, clipboard and Undo coverage | Updates propagate on the active page and replace child overrides. Nested linked components, per-property override merging and project-wide propagation remain open. Cross-size imports containing document-sized masks currently reject safely. See [components](design-components.md). |
+| Responsive frames | Persistent nested row/column/grid layouts, wrapping, padding/gaps, alignment, content sizing on both axes, fill width/height, frame and object min/max limits, object aspect ratios, absolute children, native text reflow and optional content clipping that preserves frame borders and editable sources. UI and MCP share validated, undoable sizing rules. | Add broader constraints. Measure large scenes. Diagram auto-layout is a separate capability. |
+| Breakpoints | Authored canvas-width presets select layout and clipping overrides with base-value inheritance; native editor and MCP support editing, inspection, persistence and Undo. See [breakpoints](design-layout-breakpoints.md). | Add non-mutating preview widths, container-specific rules and per-child/min/max breakpoint overrides. |
+| Components | Local native definitions, named variants, linked instances, explicit publish/reset, switching and detach; acyclic nested dependencies, stable member identities and explicit content/appearance/geometry/opacity/visibility overrides; project library browsing with cross-page import; UI, MCP, save, recovery, clipboard and Undo coverage | Updates propagate on the active page while retaining explicitly overridden groups. Automatic override inference, finer per-field overrides and project-wide propagation remain open. Cross-size imports containing document-sized masks currently reject safely. See [components](design-components.md). |
 | Design variables | Local brand colors/fonts in `creative_ui.rs` | Add named color/number variables and property bindings. Editing a variable updates consumers; unlink/delete retain resolved appearance; imported fragments remap IDs. |
 | Image fills | Embedded frame media, replacement, crop editing, Cover/Contain/Stretch and a nine-point crop-focus control | Manual fitting preserves source pixels, rotation, flips, clipping and Undo. Fitted placements persist in native projects. Automatic refitting during responsive frame layout remains part of semantic frames. |
 | Interactive presentation | Clean fullscreen audience, separate notes/timer presenter, slide transitions and native motion preview | Add object interactions for pointer triggers, navigation/back, overlays and instance variant changes, with supported transitions and a preview-only history. Returning to editing must preserve the authored document. |
@@ -61,11 +62,13 @@ quality. Evidence paths below refer to Emulsion source.
    Preserve these workflows throughout the remaining work.
 2. Audit Design's context tools and precision/appearance operations; expose
    existing working tools and fill gaps with original implementations.
-3. Build and validate semantic responsive frames and breakpoints in the core;
-   add native inspectors and manipulation controls only after the model works.
+3. Semantic responsive frames, optional content clipping and canvas-width
+   breakpoints now include native inspectors, MCP and round-trip coverage.
+   Extend preview widths and broader constraints separately.
 4. Local components, variants and named appearance styles now have persistent
    native data, validation, Undo/recovery/clipboard and consumer updates. Extend
-   variables, nested components and per-property overrides separately.
+   variables and finer per-field overrides separately; nested components and
+   five explicit override groups are implemented.
 5. Clean fullscreen, speaker notes, presenter display and slide transitions are
    implemented. Object interactions and responsive HTML/subtree export remain.
 6. Expand brand typography/palettes, original template breadth and motion
@@ -81,8 +84,8 @@ and their grouped tools, and keeps eligible styled text in Vello when adding a
 shadow. Effects retain their existing raster representation; advanced blending
 still requires the compatibility canvas. The new application artwork is used by
 Home and Linux/Windows packaging, with the full-resolution source used to build
-the macOS icon. These fixes do not complete the remaining responsive-frame, component-override or
-advanced motion milestones above. Windows and macOS runtime checks remain with
+the macOS icon. The capability table above tracks remaining layout, component and advanced
+motion work. Windows and macOS runtime checks remain with
 the separate platform machines.
 
 The Design drawer now follows the handoff's seven-item rail, 250 px library,
@@ -93,8 +96,8 @@ Elements. Instagram, Story, Poster and Presentation chips choose the size of
 new editable template pages. Font combinations insert grouped native text.
 Layout and interaction tests cover both chrome modes at narrow and wide widths,
 plus page creation, alignment, frame fitting, save/reopen and Undo/Redo.
-This layout pass does not close semantic responsive frames or breakpoints.
-The later local component implementation is tracked above.
+Subsequent semantic frame, breakpoint and nested component implementations
+are tracked above.
 
 The Home follow-up replaces the photographic hero and permanent inspector with
 project navigation, five workspace launch cards, local project previews and a
@@ -111,7 +114,7 @@ alignment and character/paragraph controls; shapes retain properties, duplicate
 and delete. The page strip includes thumbnails, page menus, Add, page count and
 zoom/fit controls. The native document model, clipboard and history are shared
 with the other editing workspaces. These changes do not add collaboration or
-complete the remaining responsive-layout and advanced component milestones.
+complete every remaining advanced Design capability listed above.
 
 The [template fidelity audit](template-fidelity.md) records the completed layout
 follow-up, including native icon delivery, project-editor chrome, narrow overlays,

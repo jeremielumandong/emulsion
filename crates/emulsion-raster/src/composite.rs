@@ -355,6 +355,8 @@ pub struct CompositeNode {
     pub mask: Option<Arc<Mask>>,
     /// Clip to the content alpha of a sibling below (index in the same list).
     pub clip_to: Option<usize>,
+    /// Derived document-space content clip [x, y, width, height]. Independent of authored masks.
+    pub clip_rect: Option<[f64; 4]>,
     pub content: NodeContent,
 }
 
@@ -367,6 +369,12 @@ pub enum NodeContent {
     /// Solid premultiplied linear colour over the whole document.
     Fill([f32; 4]),
     Group(Vec<CompositeNode>),
+    /// Shared rectangle coverage applied once to a complete content stack.
+    /// Baseline retains the unclipped boundary and transparent clipping sources.
+    ClippedGroup {
+        children: Vec<CompositeNode>,
+        baseline: Vec<CompositeNode>,
+    },
     /// Isolated layer appearance, with an independent unfilled shape for clipping.
     StyledGroup {
         children: Vec<CompositeNode>,
@@ -571,6 +579,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
             && n.opacity >= 1.0
             && n.blending == BlendingOptions::default()
             && n.mask.is_none()
+            && n.clip_rect.is_none()
             && n.clip_to.is_none()
             && matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)
             && !is_source[k]
@@ -618,9 +627,28 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
             _ => None,
         };
         let clip = clip.as_ref();
+        let rectangle = node.clip_rect.map(|r| sample_rect(r, ctx));
+        let with_rectangle = |mask: Option<Vec<f32>>| -> Option<Vec<f32>> {
+            match (mask, &rectangle) {
+                (Some(mut mask), Some(rectangle)) => {
+                    mask.iter_mut().zip(rectangle).for_each(|(a, b)| *a *= b);
+                    Some(mask)
+                }
+                (None, Some(rectangle)) => Some(rectangle.clone()),
+                (mask, None) => mask,
+            }
+        };
+        let clip_punch = |mut punch: Vec<f32>| {
+            if let Some(rectangle) = &rectangle {
+                punch.iter_mut().zip(rectangle).for_each(|(a, b)| *a *= b);
+            }
+            punch
+        };
         let mask_doc = |m: &Option<Arc<Mask>>| {
-            m.as_ref()
-                .map(|m| sample_mask(m, &Placement::default(), ctx))
+            with_rectangle(
+                m.as_ref()
+                    .map(|m| sample_mask(m, &Placement::default(), ctx)),
+            )
         };
 
         // Coverage = opacity × mask × clip, per pixel.
@@ -645,7 +673,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 let raster = raster.get();
                 let mut src = Scratch::zeroed();
                 let sampled = sample_raster(&mut src, raster, placement, ctx);
-                let knockout_shape = if node.blending.knockout != Knockout::None
+                let mut knockout_shape = if node.blending.knockout != Knockout::None
                     && !node.blending.transparency_shapes_layer
                 {
                     let bounds =
@@ -662,7 +690,8 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     }
                     continue;
                 }
-                let mask = node.mask.as_ref().map(|m| sample_mask(m, placement, ctx));
+                let mask =
+                    with_rectangle(node.mask.as_ref().map(|m| sample_mask(m, placement, ctx)));
                 if let Some(m) = &mask {
                     src.iter_mut()
                         .zip(m)
@@ -670,6 +699,9 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 }
                 if is_source[i] {
                     alphas[i] = Some(src.iter().map(|p| p[3]).collect());
+                }
+                if let (Some(shape), Some(rectangle)) = (&mut knockout_shape, &rectangle) {
+                    shape.iter_mut().zip(rectangle).for_each(|(a, b)| *a *= b);
                 }
                 let cov = coverage(None);
                 composite_into(
@@ -711,6 +743,26 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     &mut deep_punch,
                 );
             }
+            NodeContent::ClippedGroup { children, baseline } => {
+                let mut full = acc.clone();
+                let full_punch = render_list(children, &mut full, ctx);
+                let baseline_punch = render_list(baseline, acc, ctx);
+                let rect = rectangle.as_ref().expect("clipped content has a rectangle");
+                for ((a, b), c) in acc.iter_mut().zip(full.iter()).zip(rect) {
+                    for channel in 0..4 {
+                        a[channel] += (b[channel] - a[channel]) * c;
+                    }
+                }
+                if full_punch.is_some() || baseline_punch.is_some() {
+                    let punch = (0..TILE_PX)
+                        .map(|i| {
+                            let base = baseline_punch.as_ref().map_or(0., |p| p[i]);
+                            base + (full_punch.as_ref().map_or(0., |p| p[i]) - base) * rect[i]
+                        })
+                        .collect();
+                    merge_punch(&mut deep_punch, punch);
+                }
+            }
             NodeContent::Group(children) => {
                 let mask = mask_doc(&node.mask);
                 if node.blend == BlendMode::PassThrough
@@ -728,13 +780,13 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     match coverage(mask.as_ref()) {
                         None => {
                             if let Some(punch) = render_list(children, acc, ctx) {
-                                merge_punch(&mut deep_punch, punch);
+                                merge_punch(&mut deep_punch, clip_punch(punch));
                             }
                         }
                         Some(cov) => {
                             let before = acc.clone();
                             if let Some(punch) = render_list(children, acc, ctx) {
-                                merge_punch(&mut deep_punch, punch);
+                                merge_punch(&mut deep_punch, clip_punch(punch));
                             }
                             for ((a, b), k) in acc.iter_mut().zip(&before).zip(&cov) {
                                 for c in 0..4 {
@@ -746,6 +798,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 } else {
                     let mut sub = Scratch::zeroed();
                     if let Some(punch) = render_list(children, &mut sub, ctx) {
+                        let punch = clip_punch(punch);
                         apply_punch(acc, &punch);
                         merge_punch(&mut deep_punch, punch);
                     }
@@ -776,6 +829,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
             } => {
                 let mut sub = Scratch::zeroed();
                 if let Some(punch) = render_list(children, &mut sub, ctx) {
+                    let punch = clip_punch(punch);
                     apply_punch(acc, &punch);
                     merge_punch(&mut deep_punch, punch);
                 }
@@ -807,10 +861,15 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                         pixel.iter_mut().for_each(|v| *v *= mask[3]);
                     });
                 }
+                if let Some(rectangle) = &rectangle {
+                    sub.iter_mut()
+                        .zip(rectangle)
+                        .for_each(|(p, c)| p.iter_mut().for_each(|v| *v *= c));
+                }
                 if is_source[i] {
                     let mut shape = Scratch::zeroed();
                     render_list(std::slice::from_ref(clip_source.as_ref()), &mut shape, ctx);
-                    alphas[i] = Some(shape.iter().map(|p| p[3]).collect());
+                    alphas[i] = with_rectangle(Some(shape.iter().map(|p| p[3]).collect()));
                 }
                 let cov = coverage(None);
                 composite_into(
@@ -1362,6 +1421,19 @@ fn sample_raster(dst: &mut FTile, raster: &Raster, placement: &Placement, ctx: C
 }
 
 /// Sample a mask through `placement` as coverage in [0,1].
+/// Exact box/pixel intersection, including fractional edges at every mip level.
+fn sample_rect([x, y, w, h]: [f64; 4], ctx: Ctx) -> Vec<f32> {
+    (0..TILE_PX)
+        .map(|i| {
+            let px = (ctx.ox as f64 + (i % TILE as usize) as f64) * ctx.scale;
+            let py = (ctx.oy as f64 + (i / TILE as usize) as f64) * ctx.scale;
+            let cx = ((px + ctx.scale).min(x + w) - px.max(x)).clamp(0., ctx.scale);
+            let cy = ((py + ctx.scale).min(y + h) - py.max(y)).clamp(0., ctx.scale);
+            (cx * cy / (ctx.scale * ctx.scale)) as f32
+        })
+        .collect()
+}
+
 fn sample_mask(mask: &Mask, placement: &Placement, ctx: Ctx) -> Vec<f32> {
     let to_doc = placement.to_doc(mask.width(), mask.height());
     let g = grid(&to_doc, mask.max_level(), ctx);
@@ -1530,6 +1602,7 @@ fn prepare_pixels(nodes: &[CompositeNode]) {
                 raster.get();
             }
             NodeContent::Group(children) => prepare_pixels(children),
+            NodeContent::ClippedGroup { children, .. } => prepare_pixels(children),
             NodeContent::StyledGroup {
                 children,
                 clip_source,
@@ -1808,6 +1881,7 @@ mod tests {
             blending: n.blending,
             mask: n.mask.clone(),
             clip_to: n.clip_to,
+            clip_rect: n.clip_rect,
             content: match &n.content {
                 NodeContent::Pixels { raster, placement } => NodeContent::Pixels {
                     raster: raster.clone(),
@@ -1827,6 +1901,7 @@ mod tests {
             blending: Default::default(),
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Pixels {
                 raster: Arc::new(raster).into(),
                 placement: Placement::default(),
@@ -2037,6 +2112,7 @@ mod tests {
             blending: Default::default(),
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Adjust(Arc::new(
                 Adjustment::Exposure {
                     exposure: 1.0,
@@ -2094,6 +2170,7 @@ mod tests {
                             base.blending.blend_clipped_layers_as_group = grouped;
                             let adjustment = |id, clip_to| CompositeNode {
                                 clip_to: Some(clip_to),
+                                clip_rect: None,
                                 content: NodeContent::Adjust(Arc::new(
                                     Adjustment::Exposure {
                                         exposure: 1.0,
@@ -2152,6 +2229,7 @@ mod tests {
             blending: Default::default(),
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Group(vec![px(&mul)]),
         };
         let pass = render_tile(
@@ -2200,6 +2278,7 @@ mod blending_tests {
             blending,
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Fill(color),
         };
         render_tile_cpu(

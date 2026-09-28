@@ -22,6 +22,9 @@ pub(super) struct MotionUi {
     task: Option<Task<()>>,
 }
 impl EditorView {
+    pub(super) fn presentation_time_ms(&self) -> u32 {
+        self.motion.time_ms
+    }
     /// Return an isolated GPU scene identity for this evaluated presentation frame.
     /// Repeated paints of a paused frame reuse its compiled scene. A new run or
     /// evaluated time invalidates that scene even when the authored revision is unchanged.
@@ -32,12 +35,19 @@ impl EditorView {
             return None;
         }
         let doc = self.motion.preview.as_ref()?.clone();
-        let time = if doc.design.motion.is_empty() {
+        let time = if doc.design.motion.is_empty()
+            && doc.design.keyframes.is_empty()
+            && doc.design.interactions.is_empty()
+        {
             0
         } else {
             self.motion.time_ms
         };
-        let key = self.motion.run.wrapping_shl(32) ^ u64::from(time);
+        let key = self.motion.run.wrapping_shl(32)
+            ^ u64::from(time)
+            ^ self
+                .presentation_interaction_generation()
+                .wrapping_mul(0x9e3779b97f4a7c15);
         Some((doc, key, self.motion.preview_gpu.clone()))
     }
 
@@ -78,6 +88,7 @@ impl EditorView {
         self.start_motion_prepared(presenting, cx);
     }
     pub(super) fn start_motion_prepared(&mut self, presenting: bool, cx: &mut Context<Self>) {
+        self.exit_responsive_preview(cx);
         self.anim.open = false;
         self.anim.playing = false;
         self.stop_motion(cx);
@@ -130,7 +141,9 @@ impl EditorView {
                 }
             }
             let start = cx.background_executor().now();
-            let static_slide = doc.design.motion.is_empty();
+            let static_slide = doc.design.motion.is_empty()
+                && doc.design.keyframes.is_empty()
+                && doc.design.interactions.is_empty();
             let mut last_visual_time = None;
             loop {
                 let elapsed = cx
@@ -181,6 +194,15 @@ impl EditorView {
                         if transition_changed {
                             cx.notify();
                         }
+                        let result = result.map(|r| {
+                            r.and_then(|preview| {
+                                if presenting {
+                                    this.apply_presentation_interactions(preview)
+                                } else {
+                                    Ok(preview)
+                                }
+                            })
+                        });
                         match result {
                             Some(Ok(preview)) => {
                                 this.motion.preview = Some(preview);
@@ -258,6 +280,7 @@ impl EditorView {
         if id == self.editor.active_page() {
             return;
         }
+        self.record_presentation_navigation(id);
         let fullscreen = self.motion.fullscreen_window.take();
         let session = self.motion.session.take();
         self.stop_motion(cx);
@@ -677,6 +700,14 @@ impl EditorView {
                     .on_click(cx.listener(|this, _, _, cx| this.export_design_motion(cx))),
             );
         if let Some(id) = self.selected {
+            panel = panel.child(
+                Button::new("design-property-keyframes")
+                    .label("Property keyframes…")
+                    .outline()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.property_keyframes_dialog(window, cx)
+                    })),
+            );
             let rule = self
                 .editor
                 .doc
@@ -797,3 +828,6 @@ impl EditorView {
         panel.child(div().text_size(px(11.)).text_color(p.muted).child("Select an object for anchors and entrance/exit effects. Timing and resize rules are saved with the page.")).into_any_element()
     }
 }
+
+#[path = "design_keyframes_ui.rs"]
+mod keyframe_ui;

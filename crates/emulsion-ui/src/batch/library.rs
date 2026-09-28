@@ -16,7 +16,8 @@ pub(super) struct LibraryUi {
     pub(super) capture_sort: bool,
     pub(super) info_busy: bool,
     metadata_all_pending: bool,
-    pub(super) metadata: std::collections::HashMap<PathBuf, Option<emulsion_core::document::ImageInfo>>,
+    pub(super) metadata:
+        std::collections::HashMap<PathBuf, Option<emulsion_core::document::ImageInfo>>,
     pub(super) loaded: bool,
     pub(super) loading: bool,
     pub(super) search: Option<Entity<InputState>>,
@@ -543,6 +544,9 @@ impl Workspace {
                         owner
                             .update(cx, |this, cx| {
                                 this.batch.library.flagged = !this.batch.library.flagged;
+                                if this.batch.library.flagged {
+                                    this.batch.library.rejected = false;
+                                }
                                 this.library_show(cx);
                             })
                             .ok();
@@ -641,19 +645,22 @@ impl Workspace {
             ),
         ] {
             rows = rows.child(
-                Button::new(id)
-                    .label(format!("{} {title}", if on { "☑" } else { "☐" }))
+                Checkbox::new(id)
+                    .label(title)
+                    .checked(on)
                     .small()
-                    .ghost()
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .px_2()
+                    .py_1()
+                    .on_change(cx.listener(move |this, checked, _, cx| {
                         match id {
                             "library-filter-flagged" => {
-                                this.batch.library.flagged = !this.batch.library.flagged
+                                this.batch.library.flagged = *checked;
+                                if *checked {
+                                    this.batch.library.rejected = false;
+                                }
                             }
-                            "library-filter-raw" => {
-                                this.batch.library.raw_only = !this.batch.library.raw_only
-                            }
-                            _ => this.batch.library.unedited = !this.batch.library.unedited,
+                            "library-filter-raw" => this.batch.library.raw_only = *checked,
+                            _ => this.batch.library.unedited = *checked,
                         }
                         this.library_show(cx);
                     })),
@@ -690,16 +697,17 @@ impl Workspace {
             );
         }
         rows = rows.child(colors).child(
-            Button::new("library-filter-rejected")
-                .label(if self.batch.library.rejected {
-                    "☑ Rejected"
-                } else {
-                    "☐ Rejected"
-                })
+            Checkbox::new("library-filter-rejected")
+                .label("Rejected")
+                .checked(self.batch.library.rejected)
                 .small()
-                .ghost()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.batch.library.rejected = !this.batch.library.rejected;
+                .px_2()
+                .py_1()
+                .on_change(cx.listener(|this, checked, _, cx| {
+                    this.batch.library.rejected = *checked;
+                    if *checked {
+                        this.batch.library.flagged = false;
+                    }
                     this.library_show(cx);
                 })),
         );

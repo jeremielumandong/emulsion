@@ -67,9 +67,12 @@ fails with an unknown outcome, inspect the queue before retrying.
 
 The Linux adapter has been exercised against an HP ENVY Photo 7800 series for
 queue discovery, default selection, paper dimensions/margins and supported
-options. Automated checks cover geometry, page ranges, preview composition,
-grayscale and atomic/canceled PDF output. A 100 mm proof was generated and its
-PDF page bounds inspected. These checks do not constitute a physical print trial.
+options, including validation without job submission. Six printing tests and a
+native dialog test passed, covering geometry, page ranges, preview composition,
+grayscale, atomic/canceled PDF output and dialog validation. The native dialog
+test used an isolated source snapshot because unrelated work was changing in the
+shared checkout. A 100 mm proof was generated and its PDF page bounds inspected.
+These checks do not constitute a physical print trial.
 
 The Windows and macOS adapter sources have isolated Rust cross-target compilation
 checks. Native driver execution, physical measurements and packaging acceptance

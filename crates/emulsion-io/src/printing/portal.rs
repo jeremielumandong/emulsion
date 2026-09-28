@@ -21,6 +21,8 @@ pub fn prepare(s: &Settings) -> Result<Prepared> {
     pollster::block_on(async {
         let proxy = PrintProxy::new().await?;
         let setup = PageSetup::default()
+            .set_name(s.paper.id.as_str())
+            .set_display_name(s.paper.name.as_str())
             .set_width(s.paper.width)
             .set_height(s.paper.height);
         let options = PreparePrintOptions::default()

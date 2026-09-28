@@ -5,8 +5,6 @@ use serde_json::{Value, json};
 
 /// Tools that only read; the CLI may run them without asking.
 pub const READ_ONLY: &[&str] = &[
-    "list_diagram_stencils",
-    "describe_diagram",
     "get_library",
     "get_library_preview",
     "describe_raw",
@@ -970,6 +968,7 @@ pub fn definitions() -> Vec<ToolDef> {
     definitions.extend(crate::design_appearance_tools::definitions());
     definitions.extend(crate::design_layout_tools::definitions());
     definitions.extend(crate::design_motion_tools::definitions());
+    definitions.extend(crate::diagram_tools::definitions());
     definitions.extend(crate::diagram_project_tools::definitions());
     definitions.extend(crate::project_tools::definitions());
     definitions
@@ -977,12 +976,15 @@ pub fn definitions() -> Vec<ToolDef> {
 
 /// Include feature modules in the same approval policy as the original tools.
 pub fn read_only_names() -> impl Iterator<Item = &'static str> {
-    READ_ONLY.iter().chain(crate::design_asset_tools::READ_ONLY)
+    READ_ONLY
+        .iter()
+        .chain(crate::design_asset_tools::READ_ONLY)
         .chain(crate::design_appearance_tools::READ_ONLY)
         .chain(crate::design_layout_tools::READ_ONLY)
         .chain(crate::design_motion_tools::READ_ONLY)
         .chain(crate::diagram_tools::READ_ONLY)
-        .chain(crate::project_tools::READ_ONLY).copied()
+        .chain(crate::project_tools::READ_ONLY)
+        .copied()
 }
 
 pub fn is_read_only(name: &str) -> bool {
@@ -990,7 +992,8 @@ pub fn is_read_only(name: &str) -> bool {
 }
 
 pub fn is_destructive(name: &str) -> bool {
-    DESTRUCTIVE.contains(&name) || crate::design_asset_tools::DESTRUCTIVE.contains(&name)
+    DESTRUCTIVE.contains(&name)
+        || crate::design_asset_tools::DESTRUCTIVE.contains(&name)
         || crate::design_appearance_tools::DESTRUCTIVE.contains(&name)
         || crate::design_layout_tools::DESTRUCTIVE.contains(&name)
         || crate::design_motion_tools::DESTRUCTIVE.contains(&name)
@@ -1001,15 +1004,19 @@ pub fn is_destructive(name: &str) -> bool {
 /// These operations own atomic native transactions or change project pages.
 /// A live assistant must first finish its previous batch of ordinary edits.
 pub fn uses_native_history(name: &str) -> bool {
-    !is_read_only(name) && [
-        crate::design_asset_tools::definitions(),
-        crate::design_appearance_tools::definitions(),
-        crate::design_layout_tools::definitions(),
-        crate::design_motion_tools::definitions(),
-        crate::diagram_tools::definitions(),
-        crate::project_tools::definitions(),
-        crate::diagram_project_tools::definitions(),
-    ].iter().flatten().any(|tool| tool.name == name)
+    !is_read_only(name)
+        && [
+            crate::design_asset_tools::definitions(),
+            crate::design_appearance_tools::definitions(),
+            crate::design_layout_tools::definitions(),
+            crate::design_motion_tools::definitions(),
+            crate::diagram_tools::definitions(),
+            crate::project_tools::definitions(),
+            crate::diagram_project_tools::definitions(),
+        ]
+        .iter()
+        .flatten()
+        .any(|tool| tool.name == name)
 }
 
 /// Tool names as the CLI sees them.
@@ -1019,4 +1026,39 @@ pub fn qualified(name: &str) -> String {
 
 fn brush_samples_schema() -> Value {
     json!({"type":"array","minItems":1,"maxItems":2000,"items":{"type":"object","required":["x","y"],"additionalProperties":false,"properties":{"x":{"type":"number"},"y":{"type":"number"},"pressure":{"type":"number","minimum":0,"maximum":1},"tilt":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":-90,"maximum":90}},"time_ms":{"type":"number","minimum":0}}}})
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn catalog_names_and_approval_policy_stay_consistent() {
+        let catalog = definitions();
+        let mut names = HashSet::new();
+        for tool in &catalog {
+            assert!(
+                names.insert(tool.name.as_str()),
+                "Duplicate MCP tool {}",
+                tool.name
+            );
+            let properties = tool.input_schema["properties"].as_object().unwrap();
+            for required in tool.input_schema["required"].as_array().unwrap() {
+                assert!(
+                    properties.contains_key(required.as_str().unwrap()),
+                    "Invalid schema for {}",
+                    tool.name
+                );
+            }
+        }
+        for name in read_only_names() {
+            assert!(names.contains(name), "Unregistered read-only tool {name}");
+            assert!(
+                !is_destructive(name),
+                "Conflicting approval policy for {name}"
+            );
+        }
+        println!("{} registered MCP tools", catalog.len());
+    }
 }

@@ -161,10 +161,9 @@ fn appearance_commands(
     }
     Ok(commands)
 }
-fn backdrop_settings(
-    editor: &Editor,
-    node: NodeId,
-) -> Result<(NodeId, Option<(NodeId, NodeId)>, [u8; 4], [f32; 2], f32), String> {
+type BackdropSettings = (NodeId, Option<(NodeId, NodeId)>, [u8; 4], [f32; 2], f32);
+
+fn backdrop_settings(editor: &Editor, node: NodeId) -> Result<BackdropSettings, String> {
     let (text, pair) = formatting::text_backdrop(&editor.doc, node)
         .ok_or("Choose editable text or its native background group")?;
     let (mut color, mut padding, mut radius) = ([255, 235, 120, 255], [16., 12.], 8.);

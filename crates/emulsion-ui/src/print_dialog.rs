@@ -271,16 +271,19 @@ impl PrintDialog {
             5.
         };
         #[cfg(target_os = "linux")]
-        if self.destination == "portal" {
-            if let Some(p) = &self.portal {
-                settings.paper = p.paper.clone();
-                settings.landscape = p.landscape;
-                settings.copies = p.copies;
-                settings.grayscale |= p.grayscale;
-            }
+        if self.destination == "portal"
+            && let Some(p) = &self.portal
+        {
+            settings.paper = p.paper.clone();
+            settings.landscape = p.landscape;
+            settings.copies = p.copies;
+            settings.grayscale |= p.grayscale;
         }
         if self.destination == "pdf" {
             settings.copies = 1;
+        }
+        if self.scope == "range" && self.fields[4].read(cx).value().trim().is_empty() {
+            bail!("Enter a page range, for example 1-3, 5")
         }
         let selected = match self.scope.as_str() {
             "all" => (0..sources.len()).collect(),
@@ -540,6 +543,7 @@ impl PrintDialog {
 impl Render for PrintDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::palette(cx);
+        let narrow = window.viewport_size().width < px(820.);
         let draft = self.draft(cx);
         let portal = self.destination == "portal";
         let mut destinations = vec![("pdf".into(), "Save PDF…".into())];
@@ -557,7 +561,7 @@ impl Render for PrintDialog {
             )
         }));
         let caps = self.caps.clone().unwrap_or_else(Capabilities::pdf);
-        let mut controls=div().id("print-controls").w(px(310.)).flex_none().flex().flex_col().gap_3().pr_2()
+        let mut controls=div().id("print-controls").w(px(310.)).when(narrow, |d| d.w_full()).flex_none().flex().flex_col().gap_3().pr_2()
         .child(self.select("print-destination","Destination",self.destination.clone(),destinations,|s,v,cx|s.choose_destination(v,cx),cx))
         .child(div().flex().gap_2().child(Button::new("print-refresh").label(if self.loading{"Searching…"}else{"Refresh"}).small().ghost().disabled(self.busy||self.loading).on_click(cx.listener(|s,_,_,cx|s.refresh(cx))))
             .child(Button::new("print-system-setup").label("Printer setup…").small().ghost().on_click(|_,_,cx|{
@@ -615,7 +619,10 @@ impl Render for PrintDialog {
             vec![
                 ("Single".into(), "One image / page per sheet".into()),
                 ("Contact".into(), "Contact sheet · 2 × 3".into()),
-                ("Repeat".into(), "Repeat current image · 2 × 3".into()),
+                (
+                    "Repeat".into(),
+                    "Repeat first selected image · 2 × 3".into(),
+                ),
                 ("Poster".into(), "Tiled poster".into()),
             ],
             |s, v, cx| {
@@ -739,7 +746,12 @@ impl Render for PrintDialog {
         });
         let (pw, ph) = size
             .map(|(w, h, _)| {
-                let k = (420. / w).min(440. / h);
+                let max_width = if narrow {
+                    (f32::from(window.viewport_size().width) - 100.).max(120.) as f64
+                } else {
+                    420.
+                };
+                let k = (max_width / w).min(440. / h);
                 (w * k, h * k)
             })
             .unwrap_or((300., 420.));
@@ -782,7 +794,7 @@ impl Render for PrintDialog {
         div().id("print-dialog").test_support().flex().flex_col().gap_3().text_size(px(12.)).text_color(p.ink)
         .child(div().text_color(p.muted).child(format!("{} · current edited appearance",self.name)))
         .child(div().id("print-scroll").max_h((window.viewport_size().height-px(250.)).max(px(180.))).overflow_y_scroll()
-            .child(div().flex().gap_5().child(div().flex_1().min_w_0().flex().flex_col().items_center().gap_3()
+            .child(div().flex().gap_5().when(narrow, |d| d.flex_col()).child(div().flex_1().min_w_0().flex().flex_col().items_center().gap_3()
                 .child(div().w_full().min_h(px(460.)).bg(p.stage).flex().items_center().justify_center()
                     .child(div().w(px(pw as f32)).h(px(ph as f32)).bg(rgb(0xffffff)).when_some(image,|d,image|d.child(img(ImageSource::Render(image)).size_full().object_fit(ObjectFit::Contain)))))
                 .child(div().flex().gap_3().items_center().child(Button::new("print-previous-sheet").label("Previous").small().disabled(self.busy||self.sheet==0).on_click(cx.listener(|s,_,_,cx|{s.sheet=s.sheet.saturating_sub(1);s.changed(cx)})))

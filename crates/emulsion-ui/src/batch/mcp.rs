@@ -64,12 +64,12 @@ impl Workspace {
         let limit = page.limit.unwrap_or(100);
         let files:Vec<_>=b.items.iter().skip(page.offset).take(limit).map(|item|{
             let asset=l.catalog.assets.iter().find(|a|a.kind==AssetKind::Image&&a.path==item.path);
-            json!({"path":item.path,"selected":item.selected,"raw":emulsion_io::raw::is_raw(&item.path),"metadata":asset,"exif":l.metadata.get(&item.path)})
+            json!({"path":item.path,"selected":item.selected,"raw":emulsion_io::raw::is_raw(&item.path),"metadata":asset,"exif":l.metadata.get(&item.path),"thumbnail":{"status":if item.thumb.is_some(){"ready"}else if b.thumbs_failed.contains_key(&item.path){"error"}else if b.thumbs_requested.contains(&item.path){"loading"}else{"pending"},"error":b.thumbs_failed.get(&item.path)}})
         }).collect();
         json!({"total":b.items.len(),"offset":page.offset,"next_offset":(page.offset.saturating_add(limit)<b.items.len()).then(||page.offset+limit),"files":files,
             "active":active,"selected":b.items.iter().filter(|i|i.selected).map(|i|&i.path).collect::<Vec<_>>(),"collections":l.catalog.collections,"catalog_revision":l.catalog.revision,
             "filters":{"query":l.search.as_ref().map(|s|s.read(cx).value().to_string()).unwrap_or_default(),"source":if l.source_paths.is_some(){"folder"}else{"all"},"collection":l.collection,"minimum_rating":l.rating,"flag":if l.flagged{"picked"}else if l.rejected{"rejected"}else{"all"},"color_label":l.color_label,"raw_only":l.raw_only,"unedited":l.unedited,"sort":if l.capture_sort{"capture_time"}else{"filename"},"reverse":l.reverse},
-            "view":if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.loupe{"develop"}else if b.develop.list{"list"}else{"grid"},"inspector":((["develop","info","keywords"][b.develop.inspector.min(2)])),"recipe":b.recipe,
+            "view":if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.loupe{"develop"}else if b.develop.list{"list"}else{"grid"},"inspector":(["develop","info","keywords"][b.develop.inspector.min(2)]),"recipe":b.recipe,
             "develop":{"settings":active.and_then(|p|b.develop.current_params(p)),"histogram":b.develop.histogram,"histogram_kind":"32-bin display luminance","histogram_pending":b.develop.busy||b.preview.is_none(),"dirty":b.develop.dirty(),"dirty_paths":b.develop.drafts.iter().filter(|(p,v)|b.develop.saved.get(*p)!=Some(*v)).map(|(p,_)|p).collect::<Vec<_>>(),"saving":b.develop.saving,"busy":b.develop.busy,"undo_steps":active.and_then(|p|b.develop.history.get(p)).map_or(0,Vec::len)},
             "export":{"progress":b.running,"current":b.exporting,"out_dir":b.out_dir,"format":b.format},"mcp_busy":b.mcp_busy,"note":b.note.as_ref().map(|(text,error)|json!({"text":text,"error":error}))})
     }
@@ -212,7 +212,9 @@ async fn run(
                 })
                 .await?;
             this.update(cx, |ws, cx| {
-                ws.batch.library.catalog = catalog;
+                if catalog.revision >= ws.batch.library.catalog.revision {
+                    ws.batch.library.catalog = catalog;
+                }
                 ws.batch.library.loaded = true;
                 ws.batch.library.collection = None;
                 ws.load_batch(folder, paths, cx);
@@ -381,17 +383,16 @@ fn apply_view(
     cx: &mut Context<Workspace>,
 ) -> Result<()> {
     // Validate every fallible input before changing any view state.
-    if let Some(id) = view.collection {
-        if !ws
+    if let Some(id) = view.collection
+        && !ws
             .batch
             .library
             .catalog
             .collections
             .iter()
             .any(|c| c.id == id)
-        {
-            bail!("Unknown collection ID {id}")
-        }
+    {
+        bail!("Unknown collection ID {id}")
     }
     let folder = if matches!(view.source, Some(api::Source::Folder)) {
         Some(
@@ -403,18 +404,15 @@ fn apply_view(
     } else {
         None
     };
-    if let Some(recipe) = &view.recipe {
-        if !recipe.is_empty()
-            && !ws
-                .batch
-                .recipes
-                .as_ref()
-                .is_some_and(|r| r.iter().any(|r| &r.name == recipe))
-        {
-            bail!(
-                "Unknown/unloaded recipe; use list_recipes and wait for the Library recipe catalog"
-            )
-        }
+    if let Some(recipe) = &view.recipe
+        && !recipe.is_empty()
+        && !ws
+            .batch
+            .recipes
+            .as_ref()
+            .is_some_and(|r| r.iter().any(|r| &r.name == recipe))
+    {
+        bail!("Unknown/unloaded recipe; use list_recipes and wait for the Library recipe catalog")
     }
     if let Some(query) = view.query {
         if ws.batch.library.search.is_none() {

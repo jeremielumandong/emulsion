@@ -7,11 +7,17 @@ use emulsion_core::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
-pub(crate) const READ_ONLY: &[&str] = &["describe_diagram", "list_diagram_stencils"];
+pub(crate) const READ_ONLY: &[&str] = &[
+    "describe_diagram",
+    "list_diagram_stencils",
+    "list_diagram_library",
+    "list_diagram_stencil_packs",
+];
 pub(crate) const DESTRUCTIVE: &[&str] = &[
     "set_diagram_shape",
     "set_diagram_connector",
     "layout_diagram",
+    "apply_diagram_theme",
 ];
 fn node() -> Value {
     json!({"type":"integer","minimum":1})
@@ -42,6 +48,24 @@ fn def(name: &str, description: &str, properties: Value, required: &[&str]) -> T
 }
 pub(crate) fn definitions() -> Vec<ToolDef> {
     vec![
+        def(
+            "list_diagram_stencil_packs",
+            "List installed local stencil packs and their reusable entries.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "list_diagram_library",
+            "List offline diagram templates and themes with stable IDs.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "apply_diagram_theme",
+            "Apply a discovered theme to specific object IDs, or the entire active page when nodes is omitted. One undo step; locked content rejects the edit.",
+            json!({"theme":{"type":"string"},"nodes":{"type":"array","minItems":1,"items":node()}}),
+            &["theme"],
+        ),
         def(
             "describe_diagram",
             "Inspect shape/connector IDs, geometry, labels, ports, container memberships, conditional styles and data without changing the document.",
@@ -194,6 +218,21 @@ fn read(doc: &Document, name: &str, args: &Value) -> Result<Value, String> {
                 json!({"scope":"active_page","shapes":model.shapes.iter().map(|(id,s)|json!({"node":id,"shape":s,"bounds":diagram::shape_bounds(doc,s),"label":label(s.label)})).collect::<Vec<_>>(),"connectors":model.edges.iter().map(|(id,e)|json!({"node":id,"connector":e,"label":label(e.label)})).collect::<Vec<_>>()}),
             )
         }
+        "list_diagram_stencil_packs" => {
+            let catalog =
+                emulsion_io::creative_library::load(&emulsion_io::creative_library::root())
+                    .map_err(|e| e.to_string())?;
+            Ok(
+                json!({"packs":catalog.assets.iter().filter(|a|a.kind==emulsion_io::creative_library::AssetKind::Stencil).map(|a|json!({"id":a.id,"name":a.name,"entries":a.variants,"path":a.path})).collect::<Vec<_>>()}),
+            )
+        }
+        "list_diagram_library" => {
+            use emulsion_core::diagram_library::{TEMPLATES, THEMES};
+            Ok(
+                json!({"templates":TEMPLATES.iter().map(|t|json!({"id":t.id,"name":t.name,"description":t.description})).collect::<Vec<_>>(),
+                "themes":THEMES.iter().map(|t|json!({"id":t.id,"name":t.name,"fill":t.fill,"line":t.line,"text":t.text})).collect::<Vec<_>>()}),
+            )
+        }
         "list_diagram_stencils" => {
             let query = text(args, "query", Some(""))?;
             let category = if args.get("category").is_some() {
@@ -244,7 +283,35 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         return Err("Finish the current edit before changing the diagram".into());
     }
     match name {
-        "describe_diagram" | "list_diagram_stencils" => read(&editor.doc, name, args),
+        "describe_diagram"
+        | "list_diagram_stencils"
+        | "list_diagram_library"
+        | "list_diagram_stencil_packs" => read(&editor.doc, name, args),
+        "apply_diagram_theme" => {
+            let name = text(args, "theme", None)?;
+            let theme = *emulsion_core::diagram_library::THEMES
+                .iter()
+                .find(|t| t.id == name)
+                .ok_or("Unknown diagram theme")?;
+            let roots = match args.get("nodes") {
+                Some(v) => decode::<Vec<NodeId>>(v, "nodes")?,
+                None => editor.doc.children(None),
+            };
+            if roots.is_empty() {
+                return Err("Select at least one object".into());
+            }
+            let commands =
+                emulsion_core::diagram_library::theme_commands(&editor.doc, &roots, theme)?;
+            editor.begin("Diagram theme");
+            for command in commands {
+                if let Err(error) = editor.execute(command) {
+                    editor.cancel();
+                    return Err(error.to_string());
+                }
+            }
+            editor.end();
+            Ok(json!({"theme":theme.id,"nodes":roots}))
+        }
         "add_diagram_shape" => {
             let kind: ShapeKind = decode(&args["kind"], "kind")?;
             let bounds = decode(&args["bounds"], "bounds")?;
@@ -309,7 +376,24 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                     .ok_or("Node is not a diagram shape")?;
                 label_id = shape.label;
                 if let Some(data) = args.get("data") {
-                    shape.data = decode(data, "data")?;
+                    let mut data: std::collections::BTreeMap<String, String> =
+                        decode(data, "data")?;
+                    if data
+                        .keys()
+                        .any(|key| key.starts_with("emulsion_") || key.starts_with("drawio_"))
+                    {
+                        return Err("Internal stencil and interchange metadata is read-only".into());
+                    }
+                    data.extend(
+                        shape
+                            .data
+                            .iter()
+                            .filter(|(key, _)| {
+                                key.starts_with("emulsion_") || key.starts_with("drawio_")
+                            })
+                            .map(|(key, value)| (key.clone(), value.clone())),
+                    );
+                    shape.data = data;
                 }
                 if let Some(value) = args.get("layout_locked") {
                     shape.layout_locked = decode(value, "layout_locked")?;
@@ -626,5 +710,47 @@ mod tests {
         );
         assert!(e.in_transaction());
         e.cancel();
+    }
+    #[test]
+    fn stencil_metadata_survives_user_data_replacement() {
+        let mut e = editor();
+        let node = call(
+            &mut e,
+            "insert_diagram_stencil",
+            json!({"stencil":"server","bounds":[20,20,120,90]}),
+        )["node"]
+            .as_u64()
+            .unwrap();
+        call(
+            &mut e,
+            "set_diagram_shape",
+            json!({"node":node,"data":{"owner":"Operations"}}),
+        );
+        let data = &e.doc.diagram.as_ref().unwrap().shapes[&node].data;
+        assert_eq!(data["emulsion_stencil"], "server");
+        assert_eq!(data["owner"], "Operations");
+        rejected(
+            &mut e,
+            "set_diagram_shape",
+            json!({"node":node,"data":{"emulsion_stencil":"rectangle"}}),
+        );
+    }
+    #[test]
+    fn library_discovery_and_theme_share_core_and_undo() {
+        let doc = emulsion_core::diagram_library::TEMPLATES[0]
+            .build()
+            .unwrap();
+        let mut e = Editor::new(doc.clone(), None);
+        let library = call(&mut e, "list_diagram_library", json!({}));
+        assert_eq!(library["templates"].as_array().unwrap().len(), 8);
+        call(&mut e, "apply_diagram_theme", json!({"theme":"blue"}));
+        assert_ne!(e.doc, doc);
+        e.undo();
+        assert_eq!(e.doc, doc);
+        assert!(
+            execute(&mut e, "apply_diagram_theme", &json!({"theme":"missing"}))
+                .unwrap()
+                .is_error
+        );
     }
 }

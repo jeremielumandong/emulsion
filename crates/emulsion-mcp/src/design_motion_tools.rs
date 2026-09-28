@@ -5,11 +5,19 @@ use serde_json::{Value, json};
 
 pub(crate) const READ_ONLY: &[&str] = &[
     "get_design_presentation",
+    "list_design_media",
+    "get_design_keyframes",
+    "get_responsive_preview",
     "list_design_videos",
     "get_presentation_state",
 ];
 pub(crate) const DESTRUCTIVE: &[&str] = &[
     "set_design_presentation",
+    "update_design_media",
+    "detach_design_media",
+    "set_design_keyframe",
+    "remove_design_keyframe",
+    "clear_design_keyframes",
     "set_design_motion",
     "remove_design_motion",
     "update_design_video",
@@ -21,6 +29,10 @@ pub const HOST_TOOLS: &[&str] = &[
     "end_presentation",
     "navigate_presentation",
     "set_presentation_fullscreen",
+    "trigger_presentation_object",
+    "set_responsive_preview",
+    "end_responsive_preview",
+    "get_responsive_preview",
 ];
 
 fn def(name: &str, description: &str, properties: Value, required: &[&str]) -> ToolDef {
@@ -41,6 +53,78 @@ fn effect() -> Value {
 }
 pub(crate) fn definitions() -> Vec<ToolDef> {
     vec![
+        def(
+            "get_responsive_preview",
+            "Read live responsive preview state; requires the Emulsion UI host.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "set_responsive_preview",
+            "Preview responsive layout at a width without modifying the authored page. Requires the Emulsion UI host.",
+            json!({"width":{"type":"integer","minimum":1,"maximum":100000}}),
+            &["width"],
+        ),
+        def(
+            "end_responsive_preview",
+            "Restore the authored page and view after responsive preview. Requires the Emulsion UI host.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "list_design_media",
+            "List portable local audio/video metadata, omitting embedded bytes. No network requests.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "add_design_media",
+            "Import local video/audio bytes into an editable poster. Supports MP4/M4V/WebM/MOV, MP3/M4A/WAV/Ogg/Opus; maximum32 MiB per asset and64 MiB per page. Path is read once, never saved. System codec support varies.",
+            json!({"path":{"type":"string"},"origin":pair(),"size":pair()}),
+            &["path"],
+        ),
+        def(
+            "update_design_media",
+            "Patch local media trim milliseconds, volume 0–1 and looping in one Undo step. Null trim_end_ms means file end; omitted fields remain unchanged.",
+            json!({"node":node(),"trim_start_ms":{"type":"integer","minimum":0},"trim_end_ms":{"type":["integer","null"],"minimum":1},"volume":{"type":"number","minimum":0,"maximum":1},"looping":{"type":"boolean"}}),
+            &["node"],
+        ),
+        def(
+            "detach_design_media",
+            "Remove a local audio/video association while retaining editable poster artwork. One Undo.",
+            json!({"node":node()}),
+            &["node"],
+        ),
+        def(
+            "get_design_keyframes",
+            "Read deterministic property tracks for the active page. Values are offsets/multipliers relative to authored artwork.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "set_design_keyframe",
+            "Add or replace a property keyframe at a millisecond time in one Undo. Easing controls interpolation from this point to the next; first/last values hold outside their interval. Times must fit page duration. Geometry is relative; opacity multiplies authored opacity.",
+            json!({"node":node(),"property":{"type":"string","enum":["translation_x","translation_y","scale_x","scale_y","rotation","opacity"]},"time_ms":{"type":"integer","minimum":0},"value":{"type":"number"},"easing":{"type":"string","enum":["linear","ease_in","ease_out","ease_in_out","step"]}}),
+            &["node", "property", "time_ms", "value"],
+        ),
+        def(
+            "remove_design_keyframe",
+            "Delete one saved property keyframe. One Undo.",
+            json!({"node":node(),"property":{"type":"string","enum":["translation_x","translation_y","scale_x","scale_y","rotation","opacity"]},"time_ms":{"type":"integer","minimum":0}}),
+            &["node", "property", "time_ms"],
+        ),
+        def(
+            "clear_design_keyframes",
+            "Remove all property tracks from an object without changing authored artwork. One Undo.",
+            json!({"node":node()}),
+            &["node"],
+        ),
+        def(
+            "trigger_presentation_object",
+            "Trigger a saved interaction on a visible object during a live presentation. Requires the Emulsion UI host.",
+            json!({"node":node()}),
+            &["node"],
+        ),
         def(
             "get_design_presentation",
             "Read active-page speaker notes, slide transition, timing and object motion. Does not start playback.",
@@ -179,6 +263,8 @@ pub enum HostAction {
     End,
     Navigate(Direction),
     Fullscreen(bool),
+    Trigger(NodeId),
+    ResponsivePreview(Option<u32>),
 }
 pub fn parse_host_action(name: &str, args: &Value) -> Result<HostAction, String> {
     validate(name, args)?;
@@ -190,7 +276,15 @@ pub fn parse_host_action(name: &str, args: &Value) -> Result<HostAction, String>
         }
     };
     Ok(match name {
-        "get_presentation_state" => HostAction::State,
+        "get_presentation_state" | "get_responsive_preview" => HostAction::State,
+        "end_responsive_preview" => HostAction::ResponsivePreview(None),
+        "set_responsive_preview" => {
+            let width: u32 = read(args, "width")?;
+            if !(1..=100_000).contains(&width) {
+                return Err("Preview width must be 1–100000.".into());
+            }
+            HostAction::ResponsivePreview(Some(width))
+        }
         "start_presentation" => {
             let fullscreen = boolean("fullscreen", true)?;
             let presenter = boolean("presenter", false)?;
@@ -204,6 +298,7 @@ pub fn parse_host_action(name: &str, args: &Value) -> Result<HostAction, String>
             }
         }
         "end_presentation" => HostAction::End,
+        "trigger_presentation_object" => HostAction::Trigger(id(args)?),
         "navigate_presentation" => {
             HostAction::Navigate(match read::<String>(args, "direction")?.as_str() {
                 "next" => Direction::Next,
@@ -226,6 +321,89 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         return Err("Finish the current edit before changing presentation metadata".into());
     }
     match name {
+        "list_design_media" => {
+            return Ok(
+                json!({"media":editor.doc.design.local_media.iter().map(|(node,m)|json!({"node":node,"name":m.name,"kind":m.kind,"mime":m.mime,"byte_length":m.bytes.len(),"trim_start_ms":m.trim_start_ms,"trim_end_ms":m.trim_end_ms,"volume":m.volume,"looping":m.looping,"bounds":media::bounds(&editor.doc,*node)})).collect::<Vec<_>>()}),
+            );
+        }
+        "add_design_media" => {
+            let path: String = read(args, "path")?;
+            let media = emulsion_io::design_media::read_local(std::path::Path::new(&path))?;
+            let origin = if args.get("origin").is_some() {
+                read(args, "origin")?
+            } else {
+                (0., 0.)
+            };
+            let size = if args.get("size").is_some() {
+                read(args, "size")?
+            } else {
+                (640., 360.)
+            };
+            return Ok(json!({"node":media::insert_local(editor,media,origin,size)?}));
+        }
+        "update_design_media" => {
+            let id = id(args)?;
+            let mut item = editor
+                .doc
+                .design
+                .local_media
+                .get(&id)
+                .cloned()
+                .ok_or("Choose a local media object")?;
+            patch(&mut item.trim_start_ms, args, "trim_start_ms")?;
+            patch(&mut item.trim_end_ms, args, "trim_end_ms")?;
+            patch(&mut item.volume, args, "volume")?;
+            patch(&mut item.looping, args, "looping")?;
+            media::update_local(
+                editor,
+                id,
+                item.trim_start_ms,
+                item.trim_end_ms,
+                item.volume,
+                item.looping,
+            )?;
+            return Ok(json!({"updated":true}));
+        }
+        "detach_design_media" => {
+            media::detach_local(editor, id(args)?)?;
+            return Ok(json!({"detached":true}));
+        }
+        "get_design_keyframes" => {
+            return Ok(
+                json!({"duration_ms":editor.doc.design.duration_ms,"tracks":editor.doc.design.keyframes}),
+            );
+        }
+        "set_design_keyframe" => {
+            let easing = if args.get("easing").is_some() {
+                read(args, "easing")?
+            } else {
+                Default::default()
+            };
+            emulsion_core::design_keyframes::set_keyframe(
+                editor,
+                id(args)?,
+                read(args, "property")?,
+                emulsion_core::design_keyframes::Keyframe {
+                    time_ms: read(args, "time_ms")?,
+                    value: read(args, "value")?,
+                    easing,
+                },
+            )?;
+            return Ok(json!({"saved":true}));
+        }
+        "remove_design_keyframe" => {
+            emulsion_core::design_keyframes::remove_keyframe(
+                editor,
+                id(args)?,
+                read(args, "property")?,
+                read(args, "time_ms")?,
+            )?;
+            return Ok(json!({"removed":true}));
+        }
+        "clear_design_keyframes" => {
+            emulsion_core::design_keyframes::clear(editor, id(args)?)?;
+            return Ok(json!({"removed":true}));
+        }
         "get_design_presentation" => {
             let d = &editor.doc.design;
             return Ok(
@@ -435,6 +613,66 @@ mod tests {
                 &json!({"fullscreen":false,"presenter":true})
             )
             .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod local_keyframe_tests {
+    use super::*;
+    #[test]
+    fn design_media_and_keyframe_tools_share_native_history() {
+        let mut editor = Editor::new(emulsion_core::Document::new(800, 600), None);
+        let asset =
+            media::LocalMedia::from_bytes("tone.wav".into(), b"RIFF\0\0\0\0WAVEdata".to_vec())
+                .unwrap();
+        let id = media::insert_local(&mut editor, asset, (0., 0.), (400., 225.)).unwrap();
+        let listed = run(&mut editor, "list_design_media", &json!({})).unwrap();
+        assert_eq!(listed["media"][0]["byte_length"], 16);
+        assert!(listed["media"][0].get("bytes").is_none());
+        let original = editor.doc.design.clone();
+        assert!(!execute(&mut editor,"update_design_media",&json!({"node":id,"trim_start_ms":100,"trim_end_ms":500,"volume":0.2,"looping":true})).unwrap().is_error);
+        editor.undo();
+        assert_eq!(editor.doc.design, original);
+        assert!(
+            !execute(
+                &mut editor,
+                "set_design_keyframe",
+                &json!({"node":id,"property":"opacity","time_ms":0,"value":0.5,"easing":"ease_out"})
+            )
+            .unwrap()
+            .is_error
+        );
+        let changed = editor.doc.design.clone();
+        assert!(
+            execute(
+                &mut editor,
+                "set_design_keyframe",
+                &json!({"node":id,"property":"opacity","time_ms":90000,"value":0.5})
+            )
+            .unwrap()
+            .is_error
+        );
+        assert_eq!(editor.doc.design, changed);
+        assert!(
+            execute(
+                &mut editor,
+                "set_design_keyframe",
+                &json!({"node":id,"property":"opacity","time_ms":0,"value":0.5,"typo":true})
+            )
+            .unwrap()
+            .is_error
+        );
+        editor.undo();
+        assert_eq!(editor.doc.design, original);
+        assert!(
+            execute(
+                &mut editor,
+                "trigger_presentation_object",
+                &json!({"node":id})
+            )
+            .unwrap()
+            .is_error
         );
     }
 }

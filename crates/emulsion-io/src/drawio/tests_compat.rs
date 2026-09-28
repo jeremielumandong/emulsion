@@ -283,17 +283,145 @@ fn background_shapes_do_not_cover_connectors_and_stacking_roundtrips() {
 #[test]
 fn bundled_stencils_keep_custom_geometry_in_drawio() {
     for stencil in emulsion_core::diagram::stencils::STENCILS {
-        let mut editor=Editor::new(Document::new(800,600),None);
-        let id=stencil.insert(&mut editor,[100.,100.,150.,90.]).unwrap();
-        let project=emulsion_core::project::ProjectEditor::new_project(ProjectKind::Diagram,editor.doc.clone()).unwrap().snapshot().unwrap();
-        let xml=to_xml(&project).unwrap();
-        let imported=from_xml(&xml).unwrap_or_else(|e| panic!("{}: {e}",stencil.id));
-        let doc=&imported.project.pages[0].doc;
-        let shape=doc.diagram.as_ref().unwrap().shapes.values().next().unwrap();
-        let original=&editor.doc.diagram.as_ref().unwrap().shapes[&id];
-        let NodeKind::Path{path:a,..}=&editor.doc.node(original.body).unwrap().kind else {panic!()};
-        let NodeKind::Path{path:b,..}=&doc.node(shape.body).unwrap().kind else {panic!()};
-        assert_eq!(a.subpaths.len(),b.subpaths.len(),"{}",stencil.id);
-        assert_eq!(a.anchor_count(),b.anchor_count(),"{}",stencil.id);
+        let mut editor = Editor::new(Document::new(800, 600), None);
+        let id = stencil
+            .insert(&mut editor, [100., 100., 150., 90.])
+            .unwrap();
+        let project = emulsion_core::project::ProjectEditor::new_project(
+            ProjectKind::Diagram,
+            editor.doc.clone(),
+        )
+        .unwrap()
+        .snapshot()
+        .unwrap();
+        let xml = to_xml(&project).unwrap();
+        let imported = from_xml(&xml).unwrap_or_else(|e| panic!("{}: {e}", stencil.id));
+        let doc = &imported.project.pages[0].doc;
+        let shape = doc
+            .diagram
+            .as_ref()
+            .unwrap()
+            .shapes
+            .values()
+            .next()
+            .unwrap();
+        let original = &editor.doc.diagram.as_ref().unwrap().shapes[&id];
+        let NodeKind::Path { path: a, .. } = &editor.doc.node(original.body).unwrap().kind else {
+            panic!()
+        };
+        let NodeKind::Path { path: b, .. } = &doc.node(shape.body).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(a.subpaths.len(), b.subpaths.len(), "{}", stencil.id);
+        assert_eq!(a.anchor_count(), b.anchor_count(), "{}", stencil.id);
+        let NodeKind::Text { spec: a, .. } = &editor.doc.node(original.label).unwrap().kind else {
+            panic!()
+        };
+        let NodeKind::Text { spec: b, .. } = &doc.node(shape.label).unwrap().kind else {
+            panic!()
+        };
+        assert!(
+            (a.x - b.x).abs() < 0.001 && (a.y - b.y).abs() < 0.001,
+            "{}: label position",
+            stencil.id
+        );
     }
+}
+
+#[test]
+fn inline_stencil_arcs_ellipses_and_invalid_geometry_are_bounded() {
+    fn encoded(xml: &str) -> String {
+        let mut writer =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        writer.write_all(xml.as_bytes()).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(writer.finish().unwrap())
+    }
+    let xml = r#"<shape w="100" h="100"><foreground><ellipse x="10" y="10" w="20" h="30"/><path><move x="0" y="0"/><arc rx="100" ry="100" x="100" y="100" sweep-flag="1"/></path><stroke/></foreground></shape>"#;
+    let mut warnings = BTreeSet::new();
+    let path = stencils::decode(&encoded(xml), [20., 30., 100., 100.], &mut warnings).unwrap();
+    assert_eq!(path.subpaths.len(), 2);
+    assert!(path.anchor_count() > 4);
+    let error = stencils::decode(
+        &encoded("<shape w=\"0\"/>"),
+        [0., 0., 100., 100.],
+        &mut warnings,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("Invalid stencil dimensions"));
+    let error = stencils::decode(
+        &encoded("<!DOCTYPE shape [<!ENTITY x 'test'>]><shape/>"),
+        [0., 0., 100., 100.],
+        &mut warnings,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("entity declarations"));
+}
+
+#[test]
+fn invalid_inline_decoration_warns_without_losing_valid_graph() {
+    let mut writer = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    writer.write_all(br#"<shape w="-Infinity" h="-Infinity"><foreground><path><close/></path></foreground></shape>"#).unwrap();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(writer.finish().unwrap());
+    let xml = graph(&vertex(
+        "icon",
+        "1",
+        &format!("shape=stencil({encoded});"),
+        r#"x="20" y="20" width="100" height="50""#,
+    ));
+    let imported = from_xml(&xml).unwrap();
+    assert_eq!(
+        imported.project.pages[0]
+            .doc
+            .diagram
+            .as_ref()
+            .unwrap()
+            .shapes
+            .len(),
+        1
+    );
+    assert!(
+        imported
+            .warnings
+            .iter()
+            .any(|w| w.contains("rectangle placeholder"))
+    );
+    imported.project.validate().unwrap();
+}
+
+#[test]
+fn wrapped_labels_use_measured_height_and_connectors_use_drawio_defaults() {
+    let cells = vertex(
+        "A long paragraph that wraps over several lines inside this shape",
+        "1",
+        "whiteSpace=wrap;fontSize=16;spacingTop=4;spacingBottom=10;",
+        r#"x="40" y="80" width="130" height="150""#,
+    ) + &vertex(
+        "target",
+        "1",
+        "",
+        r#"x="300" y="80" width="100" height="60""#,
+    ) + r#"<mxCell id="edge" edge="1" parent="1" source="A long paragraph that wraps over several lines inside this shape" target="target"><mxGeometry relative="1"/></mxCell>"#;
+    let imported = from_xml(&graph(&cells)).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    let shape = named(
+        doc,
+        "A long paragraph that wraps over several lines inside this shape",
+    );
+    let NodeKind::Text { spec, .. } = &doc.node(shape.label).unwrap().kind else {
+        panic!()
+    };
+    let bounds = emulsion_core::text::layout(spec).bounds();
+    assert!(bounds.height > spec.size * 2.);
+    let expected = 80. + 6. + (150. - 6. - 12. - (bounds.y + bounds.height)) / 2.;
+    assert!(
+        (spec.y - expected).abs() < 0.01,
+        "Measured paragraph is vertically centered"
+    );
+    let edge = doc.diagram.as_ref().unwrap().edges.values().next().unwrap();
+    let NodeKind::Path { style, .. } = &doc.node(edge.path).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(style.stroke, Some([0, 0, 0, 255]));
+    assert_eq!(style.width, 1.);
+    assert!(crate::project_export::vector_svg(doc).is_ok());
 }

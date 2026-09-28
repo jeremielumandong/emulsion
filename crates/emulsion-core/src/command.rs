@@ -933,7 +933,7 @@ impl Command {
                             .component_links
                             .get(id)
                             .cloned()
-                            .map(|link| (map[id], link))
+                            .map(|link| (map[id], link.remap(&map)))
                     })
                     .collect();
                 doc.design.component_links.extend(links);

@@ -54,6 +54,9 @@ summarises what the tools cover.
 - [Brush Library and Brush Studio through MCP](brush-mcp.md): the brush
   catalog and asset tools with `tools/call` examples.
 
+- [MCP coverage audit](mcp-coverage.md): editing, Design, diagrams and presentation coverage, host behavior, and remaining gaps.
+- [MCP Design assets](mcp-design-assets.md), [appearance and layout](mcp-design-appearance.md), [presentation](mcp-design-presentation.md), and [diagrams](mcp-diagrams.md).
+
 ## Contributing
 
 - [CONTRIBUTING](../CONTRIBUTING.md): bug reports, pull requests and the local

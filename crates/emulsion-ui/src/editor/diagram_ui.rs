@@ -5,24 +5,86 @@ use emulsion_core::{
     project::ProjectKind,
 };
 use gpui_kit::component::{
-    Selectable, Sizable, WindowExt,
+    Disableable, Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
     input::InputEvent,
     menu::{DropdownMenu, PopupMenuItem},
 };
 
+type DiagramPalette = ([u8; 4], [u8; 4], [u8; 4]);
+const DIAGRAM_STYLES: [(&str, DiagramPalette); 4] = [
+    (
+        "Neutral",
+        (
+            [248, 250, 252, 255],
+            [100, 116, 139, 255],
+            [30, 41, 59, 255],
+        ),
+    ),
+    (
+        "Blue",
+        (
+            [239, 246, 255, 255],
+            [59, 130, 246, 255],
+            [30, 58, 138, 255],
+        ),
+    ),
+    (
+        "Green",
+        ([236, 253, 245, 255], [16, 185, 129, 255], [6, 78, 59, 255]),
+    ),
+    (
+        "Amber",
+        (
+            [255, 251, 235, 255],
+            [245, 158, 11, 255],
+            [120, 53, 15, 255],
+        ),
+    ),
+];
+
+#[derive(Clone)]
+pub(super) struct DraggedStencil(pub diagram::stencils::Stencil);
+impl Render for DraggedStencil {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = theme::palette(cx);
+        div()
+            .px_3()
+            .py_2()
+            .rounded(px(6.))
+            .bg(p.panel)
+            .border_1()
+            .border_color(p.accent)
+            .text_color(p.ink)
+            .child(self.0.label)
+    }
+}
+
 pub(super) struct DiagramUi {
     open: bool,
-    search: Option<Entity<InputState>>,
+    pub(super) search: Option<Entity<InputState>>,
     subscription: Option<Subscription>,
     connecting: bool,
     source: Option<Endpoint>,
+    pointer: Option<(f64, f64)>,
+    hover_shape: Option<NodeId>,
+    press: Option<(f64, f64)>,
+    dragged: bool,
+    marquee: Option<DiagramMarquee>,
     reconnect: Option<(NodeId, bool)>,
     pub(super) grid: bool,
     property_tab: usize,
+    pub(super) library_tab: usize,
+    pub(super) theme_selection: bool,
     import_notes: Vec<String>,
-    collapsed_categories: std::collections::HashSet<&'static str>,
+    pub(super) collapsed_categories: std::collections::HashSet<&'static str>,
 }
+struct DiagramMarquee {
+    start: (f64, f64),
+    end: (f64, f64),
+    base: Vec<NodeId>,
+}
+
 impl Default for DiagramUi {
     fn default() -> Self {
         Self {
@@ -31,9 +93,16 @@ impl Default for DiagramUi {
             subscription: None,
             connecting: false,
             source: None,
+            pointer: None,
+            hover_shape: None,
+            press: None,
+            dragged: false,
+            marquee: None,
             reconnect: None,
             grid: true,
             property_tab: 0,
+            library_tab: 0,
+            theme_selection: false,
             import_notes: Vec::new(),
             collapsed_categories: diagram::stencils::CATEGORIES
                 .iter()
@@ -44,6 +113,59 @@ impl Default for DiagramUi {
     }
 }
 impl EditorView {
+    pub(super) fn prepare_diagram_svg(&mut self, cx: &mut Context<Self>) {
+        if !self.is_diagram() {
+            return;
+        }
+        let key = (self.editor.active_page(), self.editor.revision);
+        {
+            let mut cache = self.svg_canvas.borrow_mut();
+            if cache.building || cache.requested == Some(key) {
+                return;
+            }
+            cache.requested = Some(key);
+            cache.building = true;
+        }
+        let doc = Arc::new(self.editor.doc.clone());
+        let previous = self
+            .svg_canvas
+            .borrow()
+            .document
+            .clone()
+            .filter(|(revision, _)| revision.0 == key.0);
+        let source = doc.clone();
+        cx.spawn(async move |this, cx| {
+            let (scene, damage) = cx
+                .background_spawn(async move {
+                    let damage = previous.and_then(|(revision, old)| {
+                        emulsion_io::svg_viewport::changed_bounds(&old, &source)
+                            .map(|bounds| (revision, bounds))
+                    });
+                    (
+                        emulsion_io::svg_viewport::SvgViewport::new(&source).map(Arc::new),
+                        damage,
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                {
+                    let mut cache = this.svg_canvas.borrow_mut();
+                    cache.building = false;
+                    if this.editor.active_page() == key.0 {
+                        // A completed intermediate frame is useful while dragging;
+                        // the next render schedules only the latest revision.
+                        cache.scene = scene.ok().map(|scene| (key, scene));
+                        cache.document = Some((key, doc));
+                        cache.damage = damage;
+                    }
+                }
+                this.notify_canvas(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
     pub(super) fn diagram_canvas_toolbar(
         &self,
         p: &Palette,
@@ -144,6 +266,22 @@ impl EditorView {
                         }
                         menu
                     }),
+            )
+            .child(
+                Button::new("diagram-canvas-group")
+                    .label("Group")
+                    .tooltip("Group selection (Ctrl+G)")
+                    .xsmall()
+                    .ghost()
+                    .disabled(self.selected_layer_roots().len() < 2)
+                    .on_click(cx.listener(|this, _, _, cx| this.group_selected(cx))),
+            )
+            .child(
+                Button::new("diagram-canvas-ungroup")
+                    .label("Ungroup")
+                    .xsmall()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| this.ungroup_selected(cx))),
             )
             .child(div().flex_1())
             .child(
@@ -275,9 +413,17 @@ impl EditorView {
         self.editor.kind() == Some(ProjectKind::Diagram)
     }
     pub(super) fn diagram_cancel_connection(&mut self) -> bool {
-        let active = self.diagram_ui.connecting || self.diagram_ui.reconnect.is_some();
+        let active = self.diagram_ui.connecting
+            || self.diagram_ui.reconnect.is_some()
+            || self.diagram_ui.marquee.is_some();
+        if let Some(marquee) = self.diagram_ui.marquee.take() {
+            let active = marquee.base.last().copied();
+            self.set_layer_selection(marquee.base, active);
+        }
         self.diagram_ui.connecting = false;
         self.diagram_ui.source = None;
+        self.diagram_ui.press = None;
+        self.diagram_ui.dragged = false;
         self.diagram_ui.reconnect = None;
         active
     }
@@ -389,7 +535,9 @@ impl EditorView {
         if !self.is_diagram() {
             return false;
         }
-        let hit = self.diagram_hit(point);
+        self.diagram_ui.pointer = Some(point);
+        let port = self.diagram_port_hit(point);
+        let hit = port.clone().or_else(|| self.diagram_hit(point));
         if let Some((id, source)) = self.diagram_ui.reconnect {
             if let Some(endpoint) = hit {
                 let mut model = self
@@ -425,6 +573,9 @@ impl EditorView {
                     self.diagram_ui.connecting = false;
                 } else {
                     self.diagram_ui.source = Some(endpoint);
+                    self.diagram_ui.press = Some(point);
+                    self.diagram_ui.dragged = false;
+                    self.notify_canvas(cx);
                     self.set_status(
                         "Click the destination shape or port. Escape cancels.",
                         false,
@@ -432,6 +583,18 @@ impl EditorView {
                     );
                 }
             }
+            return true;
+        }
+        if self.tool == Tool::Move
+            && !shift
+            && let Some(endpoint) = port
+        {
+            self.diagram_ui.connecting = true;
+            self.diagram_ui.source = Some(endpoint);
+            self.diagram_ui.press = Some(point);
+            self.diagram_ui.dragged = false;
+            self.notify_canvas(cx);
+            cx.notify();
             return true;
         }
         if self.tool == Tool::Move
@@ -455,12 +618,20 @@ impl EditorView {
         if self.tool == Tool::Move {
             let object = hit
                 .map(|e| e.shape)
-                .or_else(|| self.diagram_edge_hit(point));
+                .or_else(|| self.diagram_edge_hit(point))
+                .map(|id| self.diagram_selection_root(id));
             let Some(object) = object else {
+                let base = self.selected_layer_ids();
                 if !shift {
                     self.set_layer_selection(Vec::new(), None);
-                    cx.notify();
                 }
+                self.diagram_ui.marquee = Some(DiagramMarquee {
+                    start: point,
+                    end: point,
+                    base: if shift { base } else { Vec::new() },
+                });
+                self.notify_canvas(cx);
+                cx.notify();
                 return true;
             };
             if shift {
@@ -481,6 +652,262 @@ impl EditorView {
         }
         false
     }
+    fn diagram_selection_root(&self, mut id: NodeId) -> NodeId {
+        let Some(model) = &self.editor.doc.diagram else {
+            return id;
+        };
+        while let Some(parent) = self.editor.doc.node(id).and_then(|n| n.parent) {
+            if model.shapes.contains_key(&parent) || model.edges.contains_key(&parent) {
+                break;
+            }
+            id = parent;
+        }
+        id
+    }
+
+    pub(super) fn diagram_select_all(&mut self, cx: &mut Context<Self>) {
+        self.diagram_cancel_connection();
+        let mut ids = Vec::new();
+        if let Some(model) = &self.editor.doc.diagram {
+            for id in model.shapes.keys().chain(model.edges.keys()) {
+                let id = self.diagram_selection_root(*id);
+                if !ids.contains(&id)
+                    && self.diagram_shape_visible(id)
+                    && self.editor.doc.locked_ancestor(id).is_none()
+                {
+                    ids.push(id);
+                }
+            }
+        }
+        let active = ids.last().copied();
+        self.set_layer_selection(ids, active);
+        self.notify_canvas(cx);
+        cx.notify();
+    }
+
+    fn update_diagram_marquee(&mut self, point: (f64, f64)) {
+        let Some(m) = &mut self.diagram_ui.marquee else {
+            return;
+        };
+        m.end = point;
+        let (start, end, mut ids) = (m.start, m.end, m.base.clone());
+        if (end.0 - start.0).hypot(end.1 - start.1) * self.view.zoom > 3. {
+            let rect = [
+                start.0.min(end.0),
+                start.1.min(end.1),
+                start.0.max(end.0),
+                start.1.max(end.1),
+            ];
+            if let Some(model) = &self.editor.doc.diagram {
+                for id in model.shapes.keys().chain(model.edges.keys()) {
+                    let id = self.diagram_selection_root(*id);
+                    if ids.contains(&id)
+                        || !self.diagram_shape_visible(id)
+                        || self.editor.doc.locked_ancestor(id).is_some()
+                    {
+                        continue;
+                    }
+                    if let Some(b) = emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                        && b.x as f64 <= rect[2]
+                        && b.y as f64 <= rect[3]
+                        && b.right() as f64 >= rect[0]
+                        && b.bottom() as f64 >= rect[1]
+                    {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+        let active = ids.last().copied();
+        self.set_layer_selection(ids, active);
+    }
+
+    /// Ports sit outside the resize handles, at a constant screen-space distance.
+    fn diagram_ports(&self) -> Vec<(Endpoint, (f64, f64))> {
+        if !self.is_diagram() || self.tool != Tool::Move || self.space_held {
+            return Vec::new();
+        }
+        let Some(model) = self.editor.doc.diagram.as_ref() else {
+            return Vec::new();
+        };
+        let hover = self.diagram_ui.hover_shape;
+        let selected = self.diagram_object();
+        let mut ports = Vec::new();
+        for (id, shape) in &model.shapes {
+            if Some(*id) != hover
+                && Some(*id) != selected
+                && self
+                    .diagram_ui
+                    .source
+                    .as_ref()
+                    .is_none_or(|source| source.shape != *id)
+            {
+                continue;
+            }
+            if !self.diagram_shape_visible(*id) || self.editor.doc.locked_ancestor(*id).is_some() {
+                continue;
+            }
+            let Some(bounds) = diagram::shape_bounds(&self.editor.doc, shape) else {
+                continue;
+            };
+            for port in [Port::North, Port::East, Port::South, Port::West] {
+                let (point, normal) = port.anchor(bounds, (0., 0.));
+                ports.push((
+                    Endpoint { shape: *id, port },
+                    (
+                        point.0 + normal.0 * 12. / self.view.zoom,
+                        point.1 + normal.1 * 12. / self.view.zoom,
+                    ),
+                ));
+            }
+        }
+        ports
+    }
+    fn diagram_shape_visible(&self, id: NodeId) -> bool {
+        let mut current = Some(id);
+        while let Some(id) = current {
+            let Some(node) = self.editor.doc.node(id) else {
+                return false;
+            };
+            if !node.visible {
+                return false;
+            }
+            current = node.parent;
+        }
+        true
+    }
+    fn diagram_port_hit(&self, point: (f64, f64)) -> Option<Endpoint> {
+        self.diagram_ports()
+            .into_iter()
+            .rev()
+            .find(|(_, p)| (p.0 - point.0).hypot(p.1 - point.1) <= 7. / self.view.zoom)
+            .map(|(endpoint, _)| endpoint)
+    }
+    pub(super) fn diagram_pointer_move(
+        &mut self,
+        point: Option<(f64, f64)>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.is_diagram() {
+            return false;
+        }
+        if self.diagram_ui.marquee.is_some() {
+            if let Some(point) = point {
+                self.update_diagram_marquee(point);
+                self.notify_canvas(cx);
+                cx.notify();
+            }
+            return true;
+        }
+        let previous = self.diagram_ui.pointer;
+        self.diagram_ui.pointer = point;
+        self.diagram_ui.hover_shape = point.and_then(|point| {
+            self.diagram_hit(point).map(|e| e.shape).or_else(|| {
+                let id = self.diagram_ui.hover_shape?;
+                let shape = self.editor.doc.diagram.as_ref()?.shapes.get(&id)?;
+                let [x, y, w, h] = diagram::shape_bounds(&self.editor.doc, shape)?;
+                let margin = 22. / self.view.zoom;
+                (point.0 >= x - margin
+                    && point.0 <= x + w + margin
+                    && point.1 >= y - margin
+                    && point.1 <= y + h + margin)
+                    .then_some(id)
+            })
+        });
+        if let (Some(start), Some(point)) = (self.diagram_ui.press, point) {
+            self.diagram_ui.dragged |=
+                (start.0 - point.0).hypot(start.1 - point.1) * self.view.zoom > 3.;
+        }
+        if previous != point && (self.tool == Tool::Move || self.diagram_ui.connecting) {
+            self.notify_canvas(cx);
+        }
+        self.diagram_ui.press.is_some()
+    }
+    pub(super) fn diagram_pointer_up(
+        &mut self,
+        point: Option<(f64, f64)>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.diagram_ui.marquee.is_some() {
+            if let Some(point) = point {
+                self.update_diagram_marquee(point);
+            }
+            self.diagram_ui.marquee = None;
+            self.notify_canvas(cx);
+            cx.notify();
+            return true;
+        }
+        let Some(start) = self.diagram_ui.press.take() else {
+            return false;
+        };
+        let dragged = std::mem::take(&mut self.diagram_ui.dragged)
+            || point.is_none_or(|p| (p.0 - start.0).hypot(p.1 - start.1) * self.view.zoom > 3.);
+        if dragged {
+            let target =
+                point.and_then(|p| self.diagram_port_hit(p).or_else(|| self.diagram_hit(p)));
+            let source = self.diagram_ui.source.take();
+            self.diagram_cancel_connection();
+            if let (Some(source), Some(target)) = (source, target)
+                && source.shape != target.shape
+            {
+                self.diagram_connect(source, target, cx);
+            }
+        }
+        self.notify_canvas(cx);
+        cx.notify();
+        true
+    }
+    pub(super) fn diagram_connection_overlay(&self) -> DiagramOverlay {
+        let mut overlay = DiagramOverlay {
+            ports: self.diagram_ports().into_iter().map(|(_, p)| p).collect(),
+            ..Default::default()
+        };
+        if self.is_diagram() && self.tool == Tool::Move {
+            overlay.selected = self
+                .selected_layer_roots()
+                .into_iter()
+                .filter_map(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, id))
+                .map(|b| [b.x as f64, b.y as f64, b.w as f64, b.h as f64])
+                .collect();
+            overlay.marquee = self.diagram_ui.marquee.as_ref().map(|m| {
+                [
+                    m.start.0.min(m.end.0),
+                    m.start.1.min(m.end.1),
+                    (m.end.0 - m.start.0).abs(),
+                    (m.end.1 - m.start.1).abs(),
+                ]
+            });
+        }
+        if let (Some(source), Some(pointer), Some(model)) = (
+            &self.diagram_ui.source,
+            self.diagram_ui.pointer,
+            &self.editor.doc.diagram,
+        ) && let Some(bounds) = model
+            .shapes
+            .get(&source.shape)
+            .and_then(|s| diagram::shape_bounds(&self.editor.doc, s))
+        {
+            let start = source.port.anchor(bounds, pointer).0;
+            let hit = self
+                .diagram_port_hit(pointer)
+                .or_else(|| self.diagram_hit(pointer));
+            let end = hit
+                .as_ref()
+                .and_then(|hit| {
+                    model
+                        .shapes
+                        .get(&hit.shape)
+                        .and_then(|s| diagram::shape_bounds(&self.editor.doc, s))
+                        .map(|b| hit.port.anchor(b, start).0)
+                })
+                .unwrap_or(pointer);
+            let mid = (start.0 + end.0) / 2.;
+            overlay.preview = vec![start, (mid, start.1), (mid, end.1), end];
+            overlay.target = hit.map(|_| end);
+        }
+        overlay
+    }
+
     pub(crate) fn diagram_connect(
         &mut self,
         source: Endpoint,
@@ -503,6 +930,36 @@ impl EditorView {
             Err(e) => self.set_status(e, true, cx),
         }
     }
+    pub(super) fn drop_diagram_stencil(
+        &mut self,
+        stencil: diagram::stencils::Stencil,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_diagram()
+            || !self.canvas_bounds().is_some_and(|b| b.contains(&position))
+            || !self.prepare_page_action(cx)
+        {
+            return;
+        }
+        let Some((x, y)) = self.doc_point(position) else {
+            return;
+        };
+        let (w, h) = if stencil.kind.is_container() {
+            (420., 280.)
+        } else {
+            (140., 80.)
+        };
+        match stencil.insert(&mut self.editor, [x - w / 2., y - h / 2., w, h]) {
+            Ok(id) => {
+                self.set_layer_selection(vec![id], Some(id));
+                self.after_change(cx);
+                self.set_tool(Tool::Move, cx);
+            }
+            Err(error) => self.set_status(error, true, cx),
+        }
+    }
+
     pub(crate) fn insert_diagram_stencil(
         &mut self,
         stencil: diagram::stencils::Stencil,
@@ -634,8 +1091,11 @@ impl EditorView {
                                 return false;
                             }
                             let result: Result<Vec<Command>, String> = (|| {
-                                if text.chars().count() > 2000 {
-                                    return Err("Labels can contain up to 2,000 characters.".into());
+                                if text.chars().count() > emulsion_core::text::MAX_CHARS {
+                                    return Err(format!(
+                                        "Labels can contain up to {} characters.",
+                                        emulsion_core::text::MAX_CHARS
+                                    ));
                                 }
                                 let mut model = this
                                     .editor
@@ -960,39 +1420,172 @@ impl EditorView {
     }
 
     pub(crate) fn diagram_fill(&mut self, color: [u8; 4], cx: &mut Context<Self>) {
+        self.diagram_color("fill", color, cx);
+    }
+
+    fn diagram_color_nodes(&self) -> Vec<NodeId> {
+        let roots = self.selected_layer_roots();
+        self.editor
+            .doc
+            .nodes
+            .iter()
+            .filter(|node| {
+                let mut current = Some(node.id);
+                while let Some(id) = current {
+                    if roots.contains(&id) {
+                        return true;
+                    }
+                    current = self.editor.doc.node(id).and_then(|n| n.parent);
+                }
+                false
+            })
+            .map(|n| n.id)
+            .collect()
+    }
+
+    pub(crate) fn diagram_color(&mut self, key: &str, color: [u8; 4], cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
             return;
         }
-        let Some(model) = self.editor.doc.diagram.as_ref() else {
-            return;
-        };
         let commands = self
-            .selected_layer_roots()
-            .iter()
+            .diagram_color_nodes()
+            .into_iter()
             .filter_map(|id| {
-                let shape = model.shapes.get(id).or_else(|| {
-                    model
-                        .shapes
-                        .values()
-                        .find(|s| s.body == *id || s.label == *id)
-                })?;
-                let NodeKind::Path { path, style, .. } = &self.editor.doc.node(shape.body)?.kind
-                else {
-                    return None;
-                };
-                let mut style = *style;
-                style.fill = Some(color);
-                style.fill_paint = emulsion_raster::vector::PathPaint::Solid;
-                Some(Command::SetPath {
-                    id: shape.body,
-                    path: path.clone(),
-                    style,
-                })
+                match &self.editor.doc.node(id)?.kind {
+                    NodeKind::Path { path, style, .. } if key != "text" => {
+                        let mut style = *style;
+                        if key == "fill" {
+                            // Open connector paths and arrow geometry are controlled by stroke.
+                            if self
+                                .editor
+                                .doc
+                                .diagram
+                                .as_ref()
+                                .is_some_and(|d| d.edges.values().any(|e| e.path == id))
+                            {
+                                return None;
+                            }
+                            style.fill = Some(color);
+                            style.fill_paint = emulsion_raster::vector::PathPaint::Solid;
+                        } else {
+                            style.stroke = Some(color);
+                            style.stroke_paint = emulsion_raster::vector::PathPaint::Solid;
+                        }
+                        Some(Command::SetPath {
+                            id,
+                            path: path.clone(),
+                            style,
+                        })
+                    }
+                    NodeKind::Text { spec, .. } if key == "text" => {
+                        let mut spec = (**spec).clone();
+                        spec.color = color;
+                        spec.apply_style(0..spec.text.len(), |s| s.color = color);
+                        Some(Command::SetText {
+                            id,
+                            spec: Box::new(spec),
+                        })
+                    }
+                    _ => None,
+                }
             })
             .collect::<Vec<_>>();
         if !commands.is_empty() {
-            self.execute_layer_commands("Diagram fill", commands, cx);
+            self.execute_layer_commands("Diagram color", commands, cx);
         }
+    }
+
+    fn diagram_style_preset(&mut self, index: usize, cx: &mut Context<Self>) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        match emulsion_core::diagram_library::theme_commands(
+            &self.editor.doc,
+            &self.selected_layer_roots(),
+            emulsion_core::diagram_library::THEMES[index],
+        ) {
+            Ok(commands) => {
+                self.execute_layer_commands("Diagram style", commands, cx);
+            }
+            Err(error) => self.set_status(error, true, cx),
+        }
+    }
+
+    fn diagram_color_dialog(
+        &mut self,
+        key: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use super::styles_ui::color_picker::StyleColorPicker;
+        use gpui_kit::component::color_picker::ColorPickerState;
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let color = self
+            .diagram_color_nodes()
+            .into_iter()
+            .find_map(|id| match &self.editor.doc.node(id)?.kind {
+                NodeKind::Path { style, .. } if key == "fill" => style.fill,
+                NodeKind::Path { style, .. } if key == "stroke" => style.stroke,
+                NodeKind::Text { spec, .. } if key == "text" => Some(spec.color),
+                _ => None,
+            })
+            .unwrap_or([0, 0, 0, 255]);
+        let [r, g, b, a] = color.map(|v| v as f32 / 255.);
+        let state =
+            cx.new(|cx| ColorPickerState::new(window, cx).default_value(Rgba { r, g, b, a }));
+        let picker = cx.new(|cx| StyleColorPicker::new(state.clone(), window, cx));
+        let body = picker.clone();
+        let owner = cx.weak_entity();
+        let ticket = self.edit_ticket();
+        let selection = self.selected_layer_ids();
+        window.focus(&self.canvas_focus, cx);
+        let confirm = Rc::new(move |window: &mut Window, cx: &mut App| {
+            if !picker.update(cx, |p, cx| p.commit_pending(window, cx)) {
+                return false;
+            }
+            if let Some(color) = state.read(cx).value() {
+                let c = color.to_rgb();
+                let color = [c.r, c.g, c.b, c.a].map(|v| (v * 255.).round().clamp(0., 255.) as u8);
+                let _ = owner.update(cx, |this, cx| {
+                    if this.edit_ticket() == ticket && this.selected_layer_ids() == selection {
+                        this.diagram_color(key, color, cx);
+                    } else {
+                        this.set_status("Selection changed; choose the color again.", false, cx);
+                    }
+                });
+            }
+            true
+        });
+        window.open_dialog(cx, move |dialog, _, _| {
+            let ok = confirm.clone();
+            let button_ok = confirm.clone();
+            dialog
+                .title(format!("Diagram {key} color"))
+                .width(px(590.))
+                .child(body.clone())
+                .on_ok(move |_, window, cx| ok(window, cx))
+                .footer(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("diagram-color-cancel")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(Button::new("diagram-color-ok").label("Apply").on_click(
+                            move |_, window, cx| {
+                                if button_ok(window, cx) {
+                                    window.close_dialog(cx);
+                                }
+                            },
+                        )),
+                )
+        });
+        cx.notify();
     }
 
     pub(super) fn diagram_selection_panel(
@@ -1009,6 +1602,54 @@ impl EditorView {
             .p(px(12.))
             .text_size(px(11.5))
             .child(div().font_weight(FontWeight::MEDIUM).child("Selection"));
+        if !self.selected_layer_ids().is_empty() {
+            let count = self.selected_layer_roots().len();
+            if count > 1 {
+                content = content.child(format!("{count} objects selected"));
+            }
+            content = content.child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .children(DIAGRAM_STYLES.iter().enumerate().map(
+                        |(index, (name, (fill, line, _)))| {
+                            Button::new(("diagram-style", index))
+                                .tooltip(*name)
+                                .accessibility_label(*name)
+                                .xsmall()
+                                .outline()
+                                .size(px(28.))
+                                .p_0()
+                                .child(
+                                    div()
+                                        .size(px(18.))
+                                        .rounded(px(4.))
+                                        .bg(gpui::rgba(u32::from_be_bytes(*fill)))
+                                        .border_1()
+                                        .border_color(gpui::rgba(u32::from_be_bytes(*line))),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.diagram_style_preset(index, cx)
+                                }))
+                        },
+                    )),
+            );
+            content = content.child(
+                div().flex().gap_1().children(
+                    [("fill", "Fill…"), ("stroke", "Line…"), ("text", "Text…")]
+                        .into_iter()
+                        .map(|(key, label)| {
+                            Button::new(SharedString::from(format!("diagram-color-{key}")))
+                                .label(label)
+                                .xsmall()
+                                .outline()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.diagram_color_dialog(key, window, cx)
+                                }))
+                        }),
+                ),
+            );
+        }
         if let Some(id) = self.diagram_object() {
             if self
                 .editor
@@ -1324,7 +1965,7 @@ impl EditorView {
         }
         self.load_creative_library(cx);
         if self.diagram_ui.search.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search shapes"));
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search library"));
             self.diagram_ui.subscription = Some(cx.subscribe(&input, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
@@ -1344,7 +1985,15 @@ impl EditorView {
             .text_size(px(12.))
             .border_b_1()
             .border_color(p.line)
-            .child("Shapes")
+            .child(
+                [
+                    "Shapes",
+                    "Templates",
+                    "Containers",
+                    "Themes",
+                    "Stencil packs",
+                ][self.diagram_ui.library_tab],
+            )
             .child(
                 Button::new("diagram-toggle-drawer")
                     .label(if self.diagram_ui.open { "‹" } else { "›" })
@@ -1376,6 +2025,42 @@ impl EditorView {
             .px(px(10.))
             .py(px(8.))
             .child(Styled::h(Input::new(&search).small(), px(26.)));
+        content = content.child(
+            div().grid().grid_cols(2).gap_1().children(
+                [
+                    "Shapes",
+                    "Templates",
+                    "Containers",
+                    "Themes",
+                    "Stencil packs",
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, label)| {
+                    Button::new(("diagram-library-tab", index))
+                        .label(label)
+                        .small()
+                        .ghost()
+                        .selected(self.diagram_ui.library_tab == index)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.diagram_ui.library_tab = index;
+                            if let Some(search) = &this.diagram_ui.search {
+                                search.update(cx, |s, cx| s.set_value("", window, cx));
+                            }
+                            cx.notify();
+                        }))
+                }),
+            ),
+        );
+        if self.diagram_ui.library_tab == 1 {
+            content = content.child(self.diagram_template_cards(&query, p, cx));
+        }
+        if self.diagram_ui.library_tab == 3 {
+            content = content.child(self.diagram_theme_cards(&query, p, cx));
+        }
+        if self.diagram_ui.library_tab == 4 {
+            content = content.child(self.diagram_pack_cards(&query, p, cx));
+        }
         if !self.diagram_ui.import_notes.is_empty() {
             content = content.child(
                 Button::new("diagram-import-notes")
@@ -1390,85 +2075,92 @@ impl EditorView {
                     })),
             );
         }
-        for (category_index, &label) in diagram::stencils::CATEGORIES.iter().enumerate() {
-            let stencils = diagram::stencils::STENCILS
-                .iter()
-                .copied()
-                .enumerate()
-                .filter(|(_, stencil)| stencil.category == label && stencil.matches(&query))
-                .collect::<Vec<_>>();
-            if stencils.is_empty() {
-                continue;
-            }
-            let collapsed =
-                query.is_empty() && self.diagram_ui.collapsed_categories.contains(label);
-            content = content.child(
-                Button::new(("diagram-stencil-category", category_index))
-                    .label(format!(
-                        "{} {label} ({})",
-                        if collapsed { "›" } else { "⌄" },
-                        stencils.len()
-                    ))
-                    .small()
-                    .ghost()
-                    .w_full()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.diagram_ui.collapsed_categories.remove(label) {
-                            this.diagram_ui.collapsed_categories.insert(label);
-                        }
-                        cx.notify();
-                    })),
-            );
-            if collapsed {
-                continue;
-            }
-            let mut grid = div().id(label).grid().grid_cols(4).gap(px(4.));
-            for (i, stencil) in stencils {
-                let ink = p.ink;
-                let glyph = canvas(
-                    |_, _, _| (),
-                    move |bounds, _, window, _| {
-                        let x = f32::from(bounds.left()) + 5.;
-                        let y = f32::from(bounds.top()) + 8.;
-                        let path = stencil.path([
-                            x as f64,
-                            y as f64,
-                            (f32::from(bounds.size.width) - 10.) as f64,
-                            (f32::from(bounds.size.height) - 16.) as f64,
-                        ]);
-                        let mut drawing = PathBuilder::stroke(px(1.));
-                        for (points, closed) in path.flatten(0.3) {
-                            if let Some(first) = points.first() {
-                                drawing.move_to(point(px(first.0 as f32), px(first.1 as f32)));
-                            }
-                            for p in points.iter().skip(1) {
-                                drawing.line_to(point(px(p.0 as f32), px(p.1 as f32)));
-                            }
-                            if closed {
-                                drawing.close();
-                            }
-                        }
-                        if let Ok(path) = drawing.build() {
-                            window.paint_path(path, ink);
-                        }
-                    },
-                )
-                .size_full();
-                grid = grid.child(
-                    Button::new(("diagram-shape", i))
-                        .accessibility_label(stencil.label)
-                        .tooltip(format!("{} · {}", stencil.label, stencil.category))
-                        .outline()
-                        .p_0()
+        if matches!(self.diagram_ui.library_tab, 0 | 2) {
+            for (category_index, &label) in diagram::stencils::CATEGORIES.iter().enumerate() {
+                let stencils = diagram::stencils::STENCILS
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter(|(_, stencil)| {
+                        stencil.category == label
+                            && stencil.matches(&query)
+                            && (self.diagram_ui.library_tab == 0 || stencil.kind.is_container())
+                    })
+                    .collect::<Vec<_>>();
+                if stencils.is_empty() {
+                    continue;
+                }
+                let collapsed = self.diagram_ui.library_tab == 0
+                    && query.is_empty()
+                    && self.diagram_ui.collapsed_categories.contains(label);
+                content = content.child(
+                    Button::new(("diagram-stencil-category", category_index))
+                        .label(format!(
+                            "{} {label} ({})",
+                            if collapsed { "›" } else { "⌄" },
+                            stencils.len()
+                        ))
+                        .small()
+                        .ghost()
                         .w_full()
-                        .h(px(50.))
-                        .child(glyph)
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.insert_diagram_stencil(stencil, cx)
+                            if !this.diagram_ui.collapsed_categories.remove(label) {
+                                this.diagram_ui.collapsed_categories.insert(label);
+                            }
+                            cx.notify();
                         })),
                 );
+                if collapsed {
+                    continue;
+                }
+                let mut grid = div().id(label).grid().grid_cols(4).gap(px(4.));
+                for (i, stencil) in stencils {
+                    let ink = p.ink;
+                    let glyph = canvas(
+                        |_, _, _| (),
+                        move |bounds, _, window, _| {
+                            let x = f32::from(bounds.left()) + 5.;
+                            let y = f32::from(bounds.top()) + 8.;
+                            let path = stencil.path([
+                                x as f64,
+                                y as f64,
+                                (f32::from(bounds.size.width) - 10.) as f64,
+                                (f32::from(bounds.size.height) - 16.) as f64,
+                            ]);
+                            let mut drawing = PathBuilder::stroke(px(1.));
+                            for (points, closed) in path.flatten(0.3) {
+                                if let Some(first) = points.first() {
+                                    drawing.move_to(point(px(first.0 as f32), px(first.1 as f32)));
+                                }
+                                for p in points.iter().skip(1) {
+                                    drawing.line_to(point(px(p.0 as f32), px(p.1 as f32)));
+                                }
+                                if closed {
+                                    drawing.close();
+                                }
+                            }
+                            if let Ok(path) = drawing.build() {
+                                window.paint_path(path, ink);
+                            }
+                        },
+                    )
+                    .size_full();
+                    grid = grid.child(
+                        Button::new(("diagram-shape", i))
+                            .accessibility_label(stencil.label)
+                            .tooltip(format!("{} · {}", stencil.label, stencil.category))
+                            .outline()
+                            .p_0()
+                            .w_full()
+                            .h(px(50.))
+                            .child(glyph)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.insert_diagram_stencil(stencil, cx)
+                            })),
+                    );
+                }
+                content = content.child(grid);
             }
-            content = content.child(grid);
         }
         content=content.child(Button::new("diagram-connect").label(if self.diagram_ui.connecting{"Cancel connection"}else{"Connect shapes"}).selected(self.diagram_ui.connecting).outline().on_click(cx.listener(|this,_,_,cx|{let active=this.diagram_ui.connecting;this.set_tool(Tool::Move,cx);this.diagram_cancel_connection();this.diagram_ui.connecting= !active;this.set_status(if active{"Connection cancelled."}else{"Click a source shape, then a destination. Click near an edge midpoint for a fixed port."},false,cx);})));
         let owner = cx.weak_entity();
@@ -1601,7 +2293,7 @@ impl EditorView {
         content = content
             .child(self.creative_pack_controls(cx))
             .child(self.stencil_pack_list(&query, p, cx));
-        content=content.child(div().text_size(px(11.)).text_color(p.muted).child("Shift-click to select several shapes. Double-click text to edit it. Connectors follow moved shapes."));
+        content=content.child(div().text_size(px(11.)).text_color(p.muted).child("Drag on empty canvas to select. Ctrl/Shift-click adds or removes objects. Ctrl+G groups the selection. Double-click text to edit it. Connectors follow moved shapes."));
         let narrow = window.viewport_size().width < px(1100.);
         let drawer = div()
             .id("diagram-drawer")
@@ -1628,5 +2320,86 @@ impl EditorView {
         } else {
             drawer.into_any_element()
         })
+    }
+}
+
+#[derive(Clone, Default)]
+pub(super) struct DiagramOverlay {
+    selected: Vec<[f64; 4]>,
+    marquee: Option<[f64; 4]>,
+    ports: Vec<(f64, f64)>,
+    preview: Vec<(f64, f64)>,
+    target: Option<(f64, f64)>,
+}
+pub(super) fn paint_connections(
+    overlay: &DiagramOverlay,
+    view: &View,
+    bounds: Bounds<Pixels>,
+    accent: Hsla,
+    window: &mut Window,
+) {
+    let screen = |p| {
+        let p = view.doc_to_screen(p, &bounds);
+        point(px(p.0 as f32), px(p.1 as f32))
+    };
+    for ([x, y, w, h], marquee) in overlay
+        .selected
+        .iter()
+        .copied()
+        .map(|b| (b, false))
+        .chain(overlay.marquee.map(|b| (b, true)))
+    {
+        let corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)];
+        if marquee {
+            let mut path = PathBuilder::fill();
+            path.move_to(screen(corners[0]));
+            for p in &corners[1..] {
+                path.line_to(screen(*p));
+            }
+            path.close();
+            if let Ok(path) = path.build() {
+                let mut tint = accent;
+                tint.a = 0.12;
+                window.paint_path(path, tint);
+            }
+        }
+        let mut path = PathBuilder::stroke(px(1.));
+        path.move_to(screen(corners[0]));
+        for p in &corners[1..] {
+            path.line_to(screen(*p));
+        }
+        path.close();
+        if let Ok(path) = path.build() {
+            window.paint_path(path, accent);
+        }
+    }
+    if let Some(first) = overlay.preview.first() {
+        let mut path = PathBuilder::stroke(px(2.));
+        path.move_to(screen(*first));
+        for p in &overlay.preview[1..] {
+            path.line_to(screen(*p));
+        }
+        if let Ok(path) = path.build() {
+            window.paint_path(path, accent);
+        }
+    }
+    for p in &overlay.ports {
+        let c = screen(*p);
+        let b = Bounds::new(c - point(px(4.), px(4.)), size(px(8.), px(8.)));
+        window.paint_quad(fill(b, white()).corner_radii(px(4.)));
+        window.paint_quad(
+            outline(b, accent, BorderStyle::Solid)
+                .border_widths(px(1.5))
+                .corner_radii(px(4.)),
+        );
+    }
+    if let Some(p) = overlay.target {
+        let c = screen(p);
+        let b = Bounds::new(c - point(px(6.), px(6.)), size(px(12.), px(12.)));
+        window.paint_quad(
+            outline(b, accent, BorderStyle::Solid)
+                .border_widths(px(2.))
+                .corner_radii(px(6.)),
+        );
     }
 }

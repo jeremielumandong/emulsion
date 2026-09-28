@@ -865,10 +865,23 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 None
             };
             let node = doc.node(*id).unwrap();
-            let label_position = if let NodeKind::Text { spec, .. } = &doc.node(shape.label).unwrap().kind {
-                let [bx, by, _, bh] = diagram::shape_bounds(doc, shape).unwrap();
-                format!("emulsionLabelX={};emulsionLabelY={};emulsionLabelWidth={};{}", spec.x as f64-bx, spec.y as f64-by, spec.width.unwrap_or(w as f32), if spec.y as f64 >= by+bh { "verticalLabelPosition=bottom;verticalAlign=top;" } else { "" })
-            } else { String::new() };
+            let label_position =
+                if let NodeKind::Text { spec, .. } = &doc.node(shape.label).unwrap().kind {
+                    let [bx, by, _, bh] = diagram::shape_bounds(doc, shape).unwrap();
+                    format!(
+                        "emulsionLabelX={};emulsionLabelY={};emulsionLabelWidth={};{}",
+                        spec.x as f64 - bx,
+                        spec.y as f64 - by,
+                        spec.width.unwrap_or(w as f32),
+                        if spec.y as f64 >= by + bh {
+                            "verticalLabelPosition=bottom;verticalAlign=top;"
+                        } else {
+                            ""
+                        }
+                    )
+                } else {
+                    String::new()
+                };
             let style = escape(&format!(
                 "{}{}{}opacity={};html=0;whiteSpace=wrap;{label_position}",
                 custom.as_deref().unwrap_or_else(|| shape

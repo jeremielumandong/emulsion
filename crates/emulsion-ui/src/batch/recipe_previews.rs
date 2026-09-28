@@ -20,6 +20,17 @@ pub(super) struct RecipePreviews {
 }
 
 impl RecipePreviews {
+    pub(super) fn invalidate_source(&mut self, path: &Path) {
+        if self.path.as_deref() == Some(path) {
+            self.generation = self.generation.wrapping_add(1);
+            self.images.clear();
+            self.attempted.clear();
+            self.cached.clear();
+            self.source = None;
+            self.failed_source = false;
+        }
+    }
+
     fn sync(&mut self, path: Option<PathBuf>, catalog: Option<Arc<Vec<Recipe>>>, folder: u64) {
         let same_catalog = match (&self.catalog, &catalog) {
             (Some(old), Some(new)) => Arc::ptr_eq(old, new),

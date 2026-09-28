@@ -17,6 +17,7 @@ pub(crate) const DESTRUCTIVE: &[&str] = &[
     "reset_design_component",
     "switch_design_component",
     "detach_design_component",
+    "set_design_component_overrides",
     "update_design_style",
     "reset_design_style",
     "detach_design_style",
@@ -56,7 +57,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "create_design_component",
-            "Create a Default component from selected node IDs and link the resulting group. Nested linked components must be detached first.",
+            "Create a Default component from selected node IDs and link the resulting group. Nested instances retain their links; dependency cycles are rejected.",
             json!({"nodes":nodes(),"name":name()}),
             &["nodes", "name"],
         ),
@@ -68,7 +69,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "update_design_component",
-            "Publish an edited instance to its variant and all linked instances on this page. Replaces child edits/IDs while retaining instance group IDs and placement.",
+            "Publish an edited instance to its variant and all linked instances on this page. Preserves stable member IDs, placement and explicit property overrides. Refreshes nested dependent components on this page.",
             json!({"node":node()}),
             &["node"],
         ),
@@ -80,7 +81,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "reset_design_component",
-            "Reset selected instance artwork from its saved variant, replacing child overrides.",
+            "Reset selected instance artwork from its saved variant and clear its explicit property overrides.",
             json!({"node":node()}),
             &["node"],
         ),
@@ -95,6 +96,12 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
             "Remove the instance link and keep its editable artwork.",
             json!({"node":node()}),
             &["node"],
+        ),
+        def(
+            "set_design_component_overrides",
+            "Choose which current member properties survive component publishing. Omitted booleans are false; {} clears all flags. Appearance groups paint, typography, blend and effects; opacity/visibility are separate. Content supports text and raster images; geometry supports text, paths and images. Reset instance restores source values and clears flags. instance defaults to the innermost owning linked group.",
+            json!({"node":node(),"instance":node(),"overrides":{"type":"object","properties":{"content":{"type":"boolean"},"appearance":{"type":"boolean"},"geometry":{"type":"boolean"},"opacity":{"type":"boolean"},"visibility":{"type":"boolean"}},"additionalProperties":false}}),
+            &["node", "overrides"],
         ),
         def(
             "list_design_styles",
@@ -242,7 +249,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
     }
     match name {
         "list_design_components" => Ok(
-            json!({"scope":"active_page","definitions":editor.doc.design.components,"instances":editor.doc.design.component_links,"nested_components":false}),
+            json!({"scope":"active_page","definitions":editor.doc.design.components,"instances":editor.doc.design.component_links,"nested_components":true}),
         ),
         "list_design_styles" => Ok(
             json!({"scope":"active_page","styles":editor.doc.design.saved_styles,"links":editor.doc.design.style_links}),
@@ -250,6 +257,22 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         "list_design_charts" => Ok(
             json!({"scope":"active_page","charts":editor.doc.design.charts.iter().map(|(id,chart)|json!({"node":id,"chart":chart,"bounds":emulsion_core::geometry::node_bounds(&editor.doc,*id).map(|b|[b.x,b.y,b.w,b.h])})).collect::<Vec<_>>()}),
         ),
+        "set_design_component_overrides" => {
+            let node = id(args)?;
+            let instance = if let Some(value) = args.get("instance") {
+                value
+                    .as_u64()
+                    .filter(|id| *id > 0)
+                    .ok_or("instance must be a positive native group ID")?
+            } else {
+                components::owner(&editor.doc, node)
+                    .ok_or("Select a member of a linked component")?
+            };
+            let flags: components::Overrides = serde_json::from_value(args["overrides"].clone())
+                .map_err(|e| format!("Invalid overrides: {e}"))?;
+            components::set_overrides(editor, instance, node, flags)?;
+            Ok(json!({"instance":instance,"node":node,"overrides":flags}))
+        }
         "create_design_component" => {
             let root = components::create(editor, &ids(args)?, string(args, "name")?)?;
             Ok(json!({"node":root,"instance":editor.doc.design.component_links[&root]}))
@@ -286,7 +309,9 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                     .design
                     .component_links
                     .iter()
-                    .filter(|(_, other)| *other == link)
+                    .filter(|(_, other)| {
+                        other.component == link.component && other.variant == link.variant
+                    })
                     .map(|(id, _)| *id)
                     .collect::<Vec<_>>()
             } else {
@@ -570,7 +595,7 @@ mod tests {
         call(&mut e, "detach_design_component", json!({"node":second}));
         assert!(e.doc.node(second).is_some());
         assert!(!e.doc.design.component_links.contains_key(&second));
-        rejected(
+        call(
             &mut e,
             "create_design_component",
             json!({"nodes":[root],"name":"Nested"}),
@@ -721,5 +746,93 @@ mod tests {
         assert!(e.in_transaction());
         call(&mut e, "list_design_charts", json!({}));
         e.cancel();
+    }
+}
+
+#[cfg(test)]
+mod component_override_tests {
+    use super::*;
+    use emulsion_core::{Command, Document, Node, NodeKind, command::Slot, text::TextSpec};
+    fn call(e: &mut Editor, name: &str, args: Value) -> Value {
+        let result = execute(e, name, &args).unwrap();
+        assert!(!result.is_error, "{:?}", result.content);
+        serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap()
+    }
+    #[test]
+    fn nested_component_override_tool_uses_native_history_and_strict_flags() {
+        let mut e = Editor::new(Document::new(800, 600), None);
+        let text = e
+            .execute(Command::AddNode {
+                node: Box::new(Node::text(
+                    0,
+                    "Title",
+                    TextSpec {
+                        text: "Original".into(),
+                        ..Default::default()
+                    },
+                    800,
+                    600,
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        let first = call(
+            &mut e,
+            "create_design_component",
+            json!({"nodes":[text],"name":"Badge"}),
+        )["node"]
+            .as_u64()
+            .unwrap();
+        let outer = call(
+            &mut e,
+            "create_design_component",
+            json!({"nodes":[first],"name":"Panel"}),
+        )["node"]
+            .as_u64()
+            .unwrap();
+        let before = e.doc.clone();
+        let history = e.history.len();
+        call(
+            &mut e,
+            "set_design_component_overrides",
+            json!({"node":text,"overrides":{"content":true,"opacity":true}}),
+        );
+        assert_eq!(e.history.len(), history + 1);
+        assert!(components::overrides_for(&e.doc, first, text).content);
+        e.undo();
+        assert_eq!(e.doc, before);
+        e.redo();
+        let listing = call(&mut e, "list_design_components", json!({}));
+        assert_eq!(listing["nested_components"], true);
+        assert!(
+            listing["instances"][first.to_string()]["members"]
+                .as_object()
+                .is_some()
+        );
+        let before = e.doc.clone();
+        assert!(
+            execute(
+                &mut e,
+                "set_design_component_overrides",
+                &json!({"node":text,"overrides":{"unknown":true}})
+            )
+            .unwrap()
+            .is_error
+        );
+        assert!(
+            execute(
+                &mut e,
+                "set_design_component_overrides",
+                &json!({"node":outer,"overrides":{"content":true}})
+            )
+            .unwrap()
+            .is_error
+        );
+        assert_eq!(e.doc, before);
+        assert!(matches!(
+            e.doc.node(text).unwrap().kind,
+            NodeKind::Text { .. }
+        ));
     }
 }

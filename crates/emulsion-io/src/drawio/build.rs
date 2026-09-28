@@ -130,7 +130,16 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
         if !cell.attrs.get("edge").is_some_and(|v| v == "1") {
             continue;
         }
-        let style = style(cell);
+        let mut style = style(cell);
+        for (key, value) in [
+            ("strokeColor", "#000000"),
+            ("fillColor", "#000000"),
+            ("strokeWidth", "1"),
+            ("fontColor", "#000000"),
+            ("fontSize", "11"),
+        ] {
+            style.entry(key.into()).or_insert_with(|| value.into());
+        }
         let offset = origin(cell.attrs.get("parent"), &bounds);
         let mut endpoint = |name: &str,
                             point: Option<(f64, f64)>,
@@ -274,7 +283,13 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             .and_then(|s| s.strip_suffix(')'))
         {
             shape.data.insert("drawio_custom_path".into(), "1".into());
-            Some(super::stencils::decode(encoded, b, warnings)?)
+            match super::stencils::decode(encoded, b, warnings) {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    warnings.insert(format!("An invalid or unsupported inline stencil uses a rectangle placeholder: {error}"));
+                    Some(ShapeKind::Process.path(b))
+                }
+            }
         } else {
             super::shapes::path(style, b)?
         };
@@ -304,11 +319,16 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                     - number(style, "spacingRight", 0.)?)
                 .max(1.) as f32,
             );
-            let height = text.size as f64 * 1.2 * text.text.lines().count().max(1) as f64;
+            // Measure wrapped lines with the same shaping engine as the canvas.
+            // Counting source newlines places wrapped paragraphs too low.
+            let measured = emulsion_core::text::layout(&text).bounds();
+            let height = (measured.y + measured.height) as f64;
+            let top = spacing + number(style, "spacingTop", 0.)?;
+            let bottom = spacing + number(style, "spacingBottom", 0.)?;
             text.y = match style.get("verticalAlign").map(String::as_str) {
-                Some("top") => b[1] + spacing,
-                Some("bottom") => b[1] + b[3] - height - spacing,
-                _ => b[1] + (b[3] - height) / 2.,
+                Some("top") => b[1] + top,
+                Some("bottom") => b[1] + b[3] - height - bottom,
+                _ => b[1] + top + (b[3] - top - bottom - height) / 2.,
             } as f32;
             match style.get("verticalLabelPosition").map(String::as_str) {
                 Some("bottom") => text.y = (b[1] + b[3] + spacing) as f32,
@@ -320,9 +340,15 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 Some("right") => text.x += b[2] as f32,
                 _ => {}
             }
-            if style.contains_key("emulsionLabelX") { text.x = (b[0] + number(style,"emulsionLabelX",0.)?) as f32; }
-            if style.contains_key("emulsionLabelY") { text.y = (b[1] + number(style,"emulsionLabelY",0.)?) as f32; }
-            if style.contains_key("emulsionLabelWidth") { text.width = Some(number(style,"emulsionLabelWidth",b[2])?.max(1.) as f32); }
+            if style.contains_key("emulsionLabelX") {
+                text.x = (b[0] + number(style, "emulsionLabelX", 0.)?) as f32;
+            }
+            if style.contains_key("emulsionLabelY") {
+                text.y = (b[1] + number(style, "emulsionLabelY", 0.)?) as f32;
+            }
+            if style.contains_key("emulsionLabelWidth") {
+                text.width = Some(number(style, "emulsionLabelWidth", b[2])?.max(1.) as f32);
+            }
             *spec = Arc::new(text);
             *cache = VectorRaster::text(spec.clone(), page.width, page.height);
         }

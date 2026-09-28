@@ -16,6 +16,7 @@ pub struct PlayerServer {
     url: String,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    finished: Arc<AtomicBool>,
 }
 impl PlayerServer {
     pub fn start(video: &YouTube) -> io::Result<Self> {
@@ -63,7 +64,11 @@ impl PlayerServer {
             url,
             stop,
             worker: Some(worker),
+            finished: Arc::new(AtomicBool::new(false)),
         })
+    }
+    pub fn finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
     }
     pub fn url(&self) -> &str {
         &self.url
@@ -222,3 +227,7 @@ mod tests {
         assert_eq!(media::bounds(&loaded, id), Some((20., 30., 400., 225.)));
     }
 }
+
+#[path = "design_local_media.rs"]
+mod local;
+pub use local::read_local;

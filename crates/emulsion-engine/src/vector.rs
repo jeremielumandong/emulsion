@@ -526,15 +526,25 @@ impl VectorLayer {
                         .brush(space.color(run.color))
                         .draw(Fill::NonZero, run.glyphs.iter().copied());
                 }
+                let mut decorated_bounds = Rect::new(
+                    shaped.bounds[0] as f64,
+                    shaped.bounds[1] as f64,
+                    shaped.bounds[2] as f64,
+                    shaped.bounds[3] as f64,
+                );
+                for ([x, y, w, h], color) in emulsion_core::text::decoration_rects(spec) {
+                    let rect = Rect::new(x, y, x + w, y + h);
+                    decorated_bounds = decorated_bounds.union(rect);
+                    object
+                        .fragment
+                        .fill(Fill::NonZero, transform, space.color(color), None, &rect);
+                }
                 if frame.is_some() {
                     object.fragment.pop_layer();
                 }
-                let b = shaped.bounds;
                 // A frame is a conservative bound even when clipped glyph ink
                 // overhangs its font's advance bounds (italic and raised text).
-                let rect = transform.transform_rect_bbox(frame.unwrap_or_else(|| {
-                    Rect::new(b[0] as f64, b[1] as f64, b[2] as f64, b[3] as f64)
-                }));
+                let rect = transform.transform_rect_bbox(frame.unwrap_or(decorated_bounds));
                 object.bounds = [rect.x0 - 2.0, rect.y0 - 2.0, rect.x1 + 2.0, rect.y1 + 2.0];
             }
         }
@@ -983,6 +993,8 @@ mod font_tests {
         let gpu = Gpu::new(wgpu::Instance::default(), None, None).unwrap();
         let spec = TextSpec {
             text: "Chart label\nOutside the cell".into(),
+            underline: true,
+            strikethrough: true,
             font: "Geist".into(),
             size: 24.,
             x: 45.25,

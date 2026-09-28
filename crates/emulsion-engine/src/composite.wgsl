@@ -66,10 +66,10 @@ fn sample_vector(run: u32, screen: vec2<i32>) -> vec4<f32> {
 
 // Run ops [first, last) over `start`. The range never splits a group or a
 // clipping base from its clipped layers (see `Canvas::cacheable_prefix`).
-fn composite_range(px: vec2<i32>, screen: vec2<i32>, level: u32, first: u32, last: u32, start: vec4<f32>) -> vec4<f32> {
+fn composite_range(px: vec2<i32>, screen: vec2<i32>, level: u32, first: u32, last: u32, start: vec4<f32>, doc_center: vec2<f32>, pixel_span: f32) -> vec4<f32> {
     var acc = start;
-    var stack: array<vec4<f32>, 8>;
-    var styled: array<vec4<f32>, 8>;
+    var stack: array<vec4<f32>, 16>;
+    var styled: array<vec4<f32>, 16>;
     var alpha: array<f32, 16>;
     for (var s = 0u; s < 16u; s++) { alpha[s] = 1.0; }
     var depth = 0u;
@@ -87,6 +87,20 @@ fn composite_range(px: vec2<i32>, screen: vec2<i32>, level: u32, first: u32, las
             acc = stack[depth - 1u];
             continue;
         }
+        var rectangle = 1.0;
+        let rect_size = vec2(bitcast<f32>(program[o + 14u]), bitcast<f32>(program[o + 15u]));
+        if rect_size.x > 0.0 && rect_size.y > 0.0 {
+            let rect_origin = vec2(bitcast<f32>(program[o + 12u]), bitcast<f32>(program[o + 13u]));
+            let lo = max(doc_center - vec2(pixel_span * 0.5), rect_origin);
+            let hi = min(doc_center + vec2(pixel_span * 0.5), rect_origin + rect_size);
+            let coverage = clamp((hi - lo) / pixel_span, vec2(0.0), vec2(1.0));
+            rectangle = coverage.x * coverage.y;
+        }
+        if op == 9u {
+            depth--;
+            acc = mix(acc, styled[depth], rectangle);
+            continue;
+        }
         let mode = program[o + 1u];
         let slot = program[o + 2u];
         let clip = program[o + 3u];
@@ -98,15 +112,15 @@ fn composite_range(px: vec2<i32>, screen: vec2<i32>, level: u32, first: u32, las
             // Match StyledGroup in the CPU compositor, including effects
             // such as Multiply shadows over a partially transparent backdrop.
             let rgb = clamp(acc.rgb - stack[depth].rgb * (1.0 - a), vec3(0.0), vec3(a));
-            let src = vec4(rgb, a);
+            let src = vec4(rgb, a) * rectangle;
             acc = stack[depth];
             if coverage > 0.0 { acc = blend(mode, acc, src * coverage); }
             continue;
         }
         if op == 3u || op == 4u {
             depth--;
-            var mask = 1.0;
-            if program[o + 8u] != NONE { mask = sample_source(o, px, level).a; }
+            var mask = rectangle;
+            if program[o + 8u] != NONE { mask *= sample_source(o, px, level).a; }
             if op == 4u {
                 acc = stack[depth] + (acc - stack[depth]) * (coverage * mask);
             } else {
@@ -125,6 +139,7 @@ fn composite_range(px: vec2<i32>, screen: vec2<i32>, level: u32, first: u32, las
         } else {
             src = sample_vector(program[o + 5u], screen);
         }
+        src *= rectangle;
         if slot != NONE { alpha[slot] = src.a; }
         if coverage > 0.0 { acc = blend(mode, acc, src * coverage); }
     }
@@ -154,7 +169,7 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                 start = textureLoad(cache, slot_texel(slot, 256) + (lp - ct * 256), i32(slot / 64u), 0);
             }
         }
-        acc = composite_range(px, vec2<i32>(screen), view.level, view.cached_ops, program[0], start);
+        acc = composite_range(px, vec2<i32>(screen), view.level, view.cached_ops, program[0], start, d, view.scale);
     }
     if view.output == 1u { return acc; }
     var background = 0.05;
@@ -194,5 +209,5 @@ fn fs_fill(in: Fill) -> @location(0) vec4<f32> {
     let lp = vec2<i32>(i32(f.z), i32(f.w)) * 256 + local;
     let px = lp << vec2(f.y);
     if any(vec2<f32>(px) >= view.doc) { return vec4(0.0); }
-    return composite_range(px, vec2(0), f.y, 0u, view.cached_ops, vec4(0.0));
+    return composite_range(px, vec2(0), f.y, 0u, view.cached_ops, vec4(0.0), vec2<f32>(px) + vec2(f32(1u << f.y) * 0.5), f32(1u << f.y));
 }

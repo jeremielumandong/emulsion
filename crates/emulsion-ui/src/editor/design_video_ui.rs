@@ -63,6 +63,45 @@ impl EditorView {
                     })),
             )
             .child(
+                Button::new("design-local-media-add")
+                    .label("Import video or audio…")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| this.import_design_media(cx))),
+            )
+            .when(
+                self.selected
+                    .is_some_and(|id| self.editor.doc.design.local_media.contains_key(&id)),
+                |d| {
+                    d.child(
+                        Button::new("design-local-media-edit")
+                            .label("Trim and playback…")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.local_media_dialog(window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("design-local-media-detach")
+                            .label("Keep poster only")
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if !this.prepare_page_action(cx) {
+                                    return;
+                                }
+                                if let Some(id) = this.selected {
+                                    match media::detach_local(&mut this.editor, id) {
+                                        Ok(()) => this.after_change(cx),
+                                        Err(e) => this.set_status(e, true, cx),
+                                    }
+                                }
+                            })),
+                    )
+                },
+            )
+            .child(
                 Button::new("design-playback-setup")
                     .label("Video playback setup…")
                     .small()
@@ -163,9 +202,13 @@ impl EditorView {
     }
     fn play_design_video(&mut self, id: NodeId, window: &mut Window, cx: &mut Context<Self>) {
         self.stop_design_video(cx);
-        let Some(video) = self.editor.doc.design.media.get(&id) else {
+        if !self.presentation_media_visible(id) {
             return;
-        };
+        }
+        let doc = self.motion.preview.as_ref().unwrap_or(&self.editor.doc);
+        if !doc.design.media.contains_key(&id) && !doc.design.local_media.contains_key(&id) {
+            return;
+        }
         let Some(bounds) = self.video_screen_bounds(id) else {
             return;
         };
@@ -186,7 +229,11 @@ impl EditorView {
             return;
         }
         let result = (|| {
-            let server = emulsion_io::design_media::PlayerServer::start(video)?;
+            let server = if let Some(video) = doc.design.media.get(&id) {
+                emulsion_io::design_media::PlayerServer::start(video)?
+            } else {
+                emulsion_io::design_media::PlayerServer::start_local(&doc.design.local_media[&id])?
+            };
             let player = crate::web_player::Player::new(server.url(), bounds, window, cx)?;
             Ok::<_, anyhow::Error>(ActiveVideo {
                 player,
@@ -236,6 +283,15 @@ impl EditorView {
         let Some(active) = self.video.active.as_ref() else {
             return false;
         };
+        if active._server.finished() {
+            self.stop_design_video(cx);
+            self.resume_presentation_advance(cx);
+            return false;
+        }
+        if !self.presentation_media_visible(active.id) {
+            self.stop_design_video(cx);
+            return false;
+        }
         if let Some(error) = active.player.error() {
             self.stop_design_video(cx);
             self.set_status(format!("Video player unavailable: {error}"), true, cx);
@@ -277,12 +333,13 @@ impl EditorView {
             return None;
         }
         let canvas = self.canvas_bounds()?;
-        let videos: Vec<_> = self
-            .editor
-            .doc
+        let doc = self.motion.preview.as_ref().unwrap_or(&self.editor.doc);
+        let videos: Vec<_> = doc
             .design
             .media
             .keys()
+            .chain(doc.design.local_media.keys())
+            .filter(|id| self.presentation_media_visible(**id))
             .filter_map(|id| self.video_screen_bounds(*id).map(|b| (*id, b)))
             .collect();
         let mut overlay = div().absolute().size_full();
@@ -388,7 +445,22 @@ impl EditorView {
             } else {
                 player = player.flex().items_center().justify_center().child(
                     Button::new(("design-video-play", id as usize))
-                        .label("Play YouTube video")
+                        .label(
+                            if self
+                                .editor
+                                .doc
+                                .design
+                                .local_media
+                                .get(&id)
+                                .is_some_and(|m| m.kind == media::LocalMediaKind::Audio)
+                            {
+                                "Play audio"
+                            } else if self.editor.doc.design.local_media.contains_key(&id) {
+                                "Play video"
+                            } else {
+                                "Play YouTube video"
+                            },
+                        )
                         .bg(p.panel)
                         .text_color(p.ink)
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -401,3 +473,6 @@ impl EditorView {
         Some(overlay.into_any_element())
     }
 }
+
+#[path = "design_local_media_ui.rs"]
+mod local;

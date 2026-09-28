@@ -93,7 +93,7 @@ supported. Workspace changes never convert or flatten document contents.
 | Home/Library | 220 px navigation; Home content max 1240 px |
 | Design | 68 px rail, 250 px asset drawer, canvas, 88 px page strip |
 | Diagram | 250 px stencil drawer, grid canvas, properties, page tabs/minimap |
-| New document | 880 px dialog: types, presets, editable preview/settings |
+| New document | Design/Diagram open a template gallery; Blank canvas exposes size presets and settings |
 | Typography | Bundled Geist UI and Geist Mono values; system fallback |
 | Dark | backgrounds #141416 / #1b1b1e / #232327 / #2d2d32; stage #0e0e10 |
 | Light | backgrounds #f2f1ee / #fafaf9 / #eeede9 / #e2e1dc; stage #dedcd7 |
@@ -327,6 +327,12 @@ effect. Project imports retain all pages and their individual version histories.
 
 Home and the retained editor layouts now expose all six destinations. Routing
 activates a compatible open document or opens the correct New document type.
+Design and Diagram default to Templates in New document. Search and categories
+filter editable starters, with twelve previews per page. Selecting a starter
+creates its native size and content directly, without an intermediate blank
+page. My templates opens saved native projects as unsaved copies with all pages;
+the source remains unchanged. Naming and the Home project destination remain
+available before creation. Blank canvas retains custom dimensions and presets.
 The Library destination retains the existing batch/develop workspace. Its full
 collection/keyword management and the Home project-folder redesign remain open.
 

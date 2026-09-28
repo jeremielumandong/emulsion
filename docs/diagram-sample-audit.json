@@ -1,0 +1,47 @@
+{
+  "date": "2026-09-27",
+  "drawio_revision": "0e70e69107de5a663d35468cbca8e6bd870fe975",
+  "drawio": {
+    "candidates": 623,
+    "imported": 620,
+    "pages": 820,
+    "import_ms": 1409,
+    "failures_by_reason": {
+      "invalid manifest: Connector UNJGccIc8EjJBR6IzSFc-151 references missing source UNJGccIc8EjJBR6IzSFc-147": 1,
+      "invalid manifest: No mxGraphModel found.": 1,
+      "invalid manifest: Visio cell FillPattern has no finite evaluated value.": 1
+    }
+  },
+  "visio": {
+    "candidates": 4481,
+    "imported": 318,
+    "pages": 2029,
+    "import_ms": 26059,
+    "failures_by_reason": {
+      "invalid manifest: Legacy binary Visio files need conversion in Visio to .vsdx, .vssx, or .vstx before editable import.": 3506,
+      "invalid manifest: Visio cell LineWeight has no finite evaluated value.": 199,
+      "invalid manifest: Visio cell FillPattern has no finite evaluated value.": 26,
+      "invalid manifest: path data must start with M": 48,
+      "invalid manifest: Visio cell LinePattern has no finite evaluated value.": 4,
+      "invalid manifest: XML element or depth limit exceeded.": 27,
+      "invalid manifest: XML part exceeds 16 MiB.": 4,
+      "invalid manifest: This file contains legacy binary Visio data despite its extension. Convert it in Visio to a real .vsdx, .vssx, or .vstx package before import.": 3,
+      "invalid manifest: Visio cell Style has no finite evaluated value.": 3,
+      "invalid manifest: Visio cell LineColorTrans has no finite evaluated value.": 9,
+      "invalid manifest: Visio cell FillForegndTrans has no finite evaluated value.": 1,
+      "invalid manifest: Invalid Visio page dimensions.": 15,
+      "invalid manifest: A diagram must contain 1\u2013100 pages.": 33,
+      "invalid manifest: Diagram archive exceeds its decoded size limit.": 4,
+      "invalid manifest: Shape or graph size limit exceeded.": 21,
+      "invalid manifest: Visio connector source is missing.": 4,
+      "invalid manifest: Missing Visio master relationship.": 2,
+      "not a valid archive: invalid Zip archive: Could not find EOCD": 253,
+      "invalid manifest: Malformed XML document.": 1
+    }
+  },
+  "notes": [
+    "Drawio scan includes one additional .vsdx candidate which fails; the XML/drawio/SVG subset is 620/622.",
+    "Import success is not complete visual fidelity.",
+    "Visio source collection includes 701 empty files."
+  ]
+}

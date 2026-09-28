@@ -118,7 +118,9 @@ pub(super) fn decode(
         }
     }
     // usvg normalizes SVG arcs and quadratic segments to native cubic geometry.
-    let source = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><path d="{svg}" stroke="black"/></svg>"#);
+    let source = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><path d="{svg}" stroke="black"/></svg>"#
+    );
     let tree = resvg::usvg::Tree::from_str(&source, &resvg::usvg::Options::default())
         .map_err(|e| error(e.to_string()))?;
     let mut normalized = String::new();
@@ -129,10 +131,17 @@ pub(super) fn decode(
                 match segment {
                     PathSegment::MoveTo(p) => write!(normalized, "M {} {} ", p.x, p.y),
                     PathSegment::LineTo(p) => write!(normalized, "L {} {} ", p.x, p.y),
-                    PathSegment::QuadTo(a,b) => write!(normalized, "Q {} {} {} {} ", a.x,a.y,b.x,b.y),
-                    PathSegment::CubicTo(a,b,c) => write!(normalized, "C {} {} {} {} {} {} ", a.x,a.y,b.x,b.y,c.x,c.y),
+                    PathSegment::QuadTo(a, b) => {
+                        write!(normalized, "Q {} {} {} {} ", a.x, a.y, b.x, b.y)
+                    }
+                    PathSegment::CubicTo(a, b, c) => write!(
+                        normalized,
+                        "C {} {} {} {} {} {} ",
+                        a.x, a.y, b.x, b.y, c.x, c.y
+                    ),
                     PathSegment::Close => write!(normalized, "Z "),
-                }.unwrap();
+                }
+                .unwrap();
             }
         }
     }

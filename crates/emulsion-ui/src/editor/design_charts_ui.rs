@@ -166,6 +166,7 @@ impl EditorView {
                                 Ok(rgba.to_be_bytes())
                             }).collect::<Result<_, String>>()?;
                             chart.rows = rows?;
+                            data.read(cx).apply_options(&mut chart,cx)?;
                             design_charts::apply(&mut this.editor, existing, chart, origin)
                         })();
                         match result {

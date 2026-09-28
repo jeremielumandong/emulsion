@@ -228,3 +228,31 @@ fn text_path_handle_drag_changes_offset_and_flip_in_one_undo(cx: &mut TestAppCon
     cx.simulate_keystrokes("ctrl-z");
     assert_eq!(spec(&editor, cx), before);
 }
+
+#[gpui_kit::test]
+fn native_text_decoration_and_list_controls_preserve_content_and_undo(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, Some("First\n日本語"));
+    cx.update(|_, cx| {
+        editor.update(cx, |e, cx| {
+            e.selected = Some(e.editor.doc.nodes[0].id);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    control(cx, "text-underline");
+    assert!(spec(&editor, cx).underline);
+    control(cx, "text-strikethrough");
+    assert!(spec(&editor, cx).strikethrough);
+    control(cx, "text-list-bullet");
+    assert_eq!(spec(&editor, cx).text, "• First\n• 日本語");
+    let bullets = spec(&editor, cx);
+    control(cx, "text-list-numbered");
+    assert_eq!(spec(&editor, cx).text, "1. First\n2. 日本語");
+    cx.update(|w, cx| w.focus(&editor.read(cx).canvas_focus.clone(), cx));
+    cx.simulate_keystrokes("ctrl-z");
+    assert_eq!(spec(&editor, cx), bullets);
+    control(cx, "text-list-none");
+    let plain = spec(&editor, cx);
+    assert_eq!(plain.text, "First\n日本語");
+    assert!(plain.underline && plain.strikethrough);
+}

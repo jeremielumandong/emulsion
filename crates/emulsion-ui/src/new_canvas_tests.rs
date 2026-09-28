@@ -101,6 +101,8 @@ fn new_design_dialog_creates_all_pages_and_bleed(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|window, cx| window.click(("new-canvas-kind", CanvasKind::Design as usize), cx));
     cx.run_until_parked();
+    cx.update(|window, cx| window.click("new-canvas-blank", cx));
+    cx.run_until_parked();
     type_field(cx, "Name", "Local campaign");
     type_field(cx, "Width", "80");
     type_field(cx, "Height", "60");
@@ -185,4 +187,160 @@ fn new_document_keeps_home_project_on_first_save_and_later_saves(cx: &mut TestAp
             .folder,
         Some(folder)
     );
+}
+
+#[gpui_kit::test]
+fn new_design_template_starts_at_native_size_without_a_blank_page(cx: &mut TestAppContext) {
+    let original = doc(&["Existing photo"], None);
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1000.)));
+    let (catalog, folder) =
+        emulsion_io::creative_library::update(&emulsion_io::creative_library::root(), |c| {
+            c.add_project_folder("Template campaign".into())
+        })
+        .unwrap();
+    cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.home_state.projects.catalog = catalog;
+            ws.home_state.projects.folder = Some(folder);
+            ws.open_new_canvas_kind(CanvasKind::Design, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("new-template-grid").visible());
+        assert!(window.try_find("new-canvas-field-Width").is_none());
+        assert!(window.try_find("new-template-design-12").is_none());
+        window.click("new-canvas-create", cx);
+        assert_eq!(ws.read(cx).tabs.len(), 1);
+        window.click("new-template-design-0", cx);
+    });
+    cx.run_until_parked();
+    type_field(cx, "Name", "Campaign cover");
+    cx.update(|window, cx| window.click("new-canvas-create", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("new-canvas-form").is_none());
+        let w = ws.read(cx);
+        assert_eq!(w.tabs.len(), 2);
+        assert_eq!(w.tabs[0].read(cx).editor.doc, original);
+        let e = w.editor.as_ref().unwrap().read(cx);
+        assert_eq!(
+            e.editor.kind(),
+            Some(emulsion_core::project::ProjectKind::Design)
+        );
+        assert_eq!(e.editor.page_list().len(), 1);
+        assert_eq!(
+            (e.editor.doc.width, e.editor.doc.height),
+            emulsion_core::design::Template::catalog()
+                .next()
+                .unwrap()
+                .native_size()
+        );
+        assert!(e.editor.doc.nodes.len() > 1);
+        assert_eq!(e.name, "Campaign cover");
+        assert_eq!(e.home_folder_on_save, Some(Some(folder)));
+        assert!(e.editor.path.is_none());
+        assert!(e.has_unsaved_changes());
+    });
+}
+
+#[gpui_kit::test]
+fn new_diagram_template_is_editable_and_cancel_leaves_tabs_unchanged(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(32, 32));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1000.)));
+    cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.open_new_canvas_kind(CanvasKind::Diagram, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("new-canvas-field-Width").is_none());
+        window.click("new-template-diagram-0", cx);
+        window.click("new-canvas-create", cx);
+        window.click("new-canvas-cancel", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(ws.read(cx).tabs.len(), 1);
+        ws.update(cx, |ws, cx| {
+            ws.open_new_canvas_kind(CanvasKind::Diagram, window, cx)
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click("new-template-diagram-0", cx);
+        window.click("new-canvas-create", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = ws.read(cx).editor.as_ref().unwrap().read(cx);
+        assert_eq!(
+            e.editor.kind(),
+            Some(emulsion_core::project::ProjectKind::Diagram)
+        );
+        assert_eq!(e.editor.page_list().len(), 1);
+        assert!(!e.editor.doc.diagram.as_ref().unwrap().edges.is_empty());
+        assert_eq!((e.editor.doc.width, e.editor.doc.height), (960, 640));
+        assert_eq!(ws.read(cx).tabs.len(), 2);
+    });
+}
+
+#[gpui_kit::test]
+fn new_saved_template_copies_every_page_without_overwriting_source(cx: &mut TestAppContext) {
+    use emulsion_io::creative_library as library;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Two page template.emu");
+    let template = emulsion_core::creation::CanvasSpec {
+        kind: CanvasKind::Design,
+        width: 80.,
+        height: 60.,
+        pages: 2,
+        ..Default::default()
+    }
+    .create_project()
+    .unwrap();
+    emulsion_io::project::write(&template.snapshot().unwrap(), &path).unwrap();
+    let source_bytes = std::fs::read(&path).unwrap();
+    let (catalog, id) = library::update(&library::root(), |c| {
+        c.add_asset(path.clone(), library::AssetKind::Template)
+    })
+    .unwrap();
+    let (ws, cx) = open(cx, Document::new(32, 32));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1000.)));
+    cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.home_state.projects.catalog = catalog;
+            ws.open_new_canvas_kind(CanvasKind::Design, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click(
+            (
+                "new-template-category",
+                emulsion_core::design::Template::CATEGORIES.len() + 1,
+            ),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click(
+            gpui_kit::SharedString::from(format!("new-template-local-{id}")),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("new-canvas-create", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = ws.read(cx).editor.as_ref().unwrap().read(cx);
+        assert_eq!(e.editor.page_list().len(), 2);
+        assert_eq!((e.editor.doc.width, e.editor.doc.height), (80, 60));
+        assert!(e.editor.path.is_none());
+        assert!(e.has_unsaved_changes());
+    });
+    assert_eq!(std::fs::read(path).unwrap(), source_bytes);
 }

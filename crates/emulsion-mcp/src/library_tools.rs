@@ -414,6 +414,15 @@ pub fn definitions() -> Vec<ToolDef> {
     ]
 }
 
+/// Encode a rendered Library snapshot using MCP's standard image content shape.
+pub fn png_content(width: u32, height: u32, rgba: &[u8]) -> Result<Value, String> {
+    use base64::Engine as _;
+    let png = emulsion_io::export::png8(width, height, rgba).map_err(|e| e.to_string())?;
+    Ok(
+        json!({"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(png)}),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,13 +506,4 @@ mod tests {
         assert_eq!(next.temperature, old.temperature);
         assert!(patch(old, &json!({"exposure":6})).is_err());
     }
-}
-
-/// Encode a rendered Library snapshot using MCP's standard image content shape.
-pub fn png_content(width: u32, height: u32, rgba: &[u8]) -> Result<Value, String> {
-    use base64::Engine as _;
-    let png = emulsion_io::export::png8(width, height, rgba).map_err(|e| e.to_string())?;
-    Ok(
-        json!({"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(png)}),
-    )
 }

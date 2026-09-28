@@ -12,7 +12,11 @@ fn hits(doc: &Document, id: NodeId, point: (f64, f64), tolerance: f64) -> bool {
     let Some(node) = doc.node(id) else {
         return false;
     };
-    if !node.visible || node.opacity <= 0. || doc.locked_ancestor(id).is_some() {
+    if !node.visible
+        || node.opacity <= 0.
+        || doc.locked_ancestor(id).is_some()
+        || !emulsion_core::design_clipping::point_visible(doc, id, point)
+    {
         return false;
     }
     if let Some(base) = node.clip_to

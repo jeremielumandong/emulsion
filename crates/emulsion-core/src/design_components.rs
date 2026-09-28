@@ -1,6 +1,8 @@
 //! Reusable native object groups. Definitions live in hidden source groups;
 //! instances remain ordinary editable layers and publish only on explicit update.
-use crate::{Command, Document, Editor, NodeId, command::Slot, design_metadata::Design};
+#[cfg(test)]
+use crate::command::Slot;
+use crate::{Command, Document, Editor, NodeId, design_metadata::Design};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -12,7 +14,29 @@ pub struct Definition {
 pub struct Instance {
     pub component: String,
     pub variant: String,
+    /// Source member IDs map to stable native IDs in this instance.
+    #[serde(default)]
+    pub members: BTreeMap<NodeId, NodeId>,
+    #[serde(default)]
+    pub overrides: BTreeMap<NodeId, Overrides>,
 }
+#[path = "design_component_overrides.rs"]
+mod overrides;
+pub use overrides::Overrides;
+#[path = "design_component_nested.rs"]
+mod nested;
+impl Instance {
+    pub fn remap(&self, map: &HashMap<NodeId, NodeId>) -> Self {
+        let id = |id| map.get(&id).copied().unwrap_or(id);
+        Self {
+            component: self.component.clone(),
+            variant: self.variant.clone(),
+            members: self.members.iter().map(|(a, b)| (id(*a), id(*b))).collect(),
+            overrides: self.overrides.iter().map(|(a, b)| (id(*a), *b)).collect(),
+        }
+    }
+}
+
 fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.chars().count() <= 80 && !name.chars().any(char::is_control)
 }
@@ -41,16 +65,6 @@ pub fn validate(design: &Design, doc: &Document) -> Result<(), String> {
             {
                 return Err("Component sources must be separate hidden top-level groups.".into());
             }
-            if doc
-                .subtree(*root)
-                .iter()
-                .any(|id| design.component_links.contains_key(id))
-            {
-                return Err(
-                    "Nested linked components are not supported. Detach nested instances first."
-                        .into(),
-                );
-            }
         }
     }
     for (id, link) in &design.component_links {
@@ -62,14 +76,9 @@ pub fn validate(design: &Design, doc: &Document) -> Result<(), String> {
         {
             return Err("Component instance refers to a missing source or variant.".into());
         }
-        if doc
-            .subtree(*id)
-            .iter()
-            .any(|child| child != id && design.component_links.contains_key(child))
-        {
-            return Err("Nested linked components are not supported.".into());
-        }
+        nested::validate_members(design, doc, *id, link)?;
     }
+    nested::dependency_order(design, doc)?;
     Ok(())
 }
 /// Merge remapped clipboard libraries, preserving conflicting names independently.
@@ -102,7 +111,6 @@ pub fn merge_into(target: &mut Design, incoming: &Design) {
 }
 struct Plan {
     doc: Document,
-    commands: Vec<Command>,
 }
 impl Plan {
     fn new(editor: &Editor) -> Result<Self, String> {
@@ -111,12 +119,10 @@ impl Plan {
         }
         Ok(Self {
             doc: editor.doc.clone(),
-            commands: Vec::new(),
         })
     }
     fn run(&mut self, command: Command) -> Result<Option<NodeId>, String> {
         let id = command.apply(&mut self.doc).map_err(|e| e.to_string())?;
-        self.commands.push(command);
         Ok(id)
     }
     fn design(&mut self, design: Design) -> Result<(), String> {
@@ -126,16 +132,7 @@ impl Plan {
         Ok(())
     }
     fn commit(self, editor: &mut Editor, label: &str) -> Result<(), String> {
-        editor.begin(label);
-        for command in self.commands {
-            if let Err(e) = editor.execute(command) {
-                editor.cancel();
-                return Err(e.to_string());
-            }
-        }
-        editor.doc.retain_raw_originals(&self.doc);
-        editor.end();
-        Ok(())
+        editor.commit_design_document(self.doc, label)
     }
 }
 fn editable(doc: &Document, root: NodeId) -> Result<(), String> {
@@ -158,17 +155,10 @@ fn standalone(doc: &Document, ids: &[NodeId]) -> Result<(), String> {
     let sources = source_roots(&doc.design);
     for id in ids {
         editable(doc, *id)?;
-        if doc
-            .subtree(*id)
-            .iter()
-            .any(|n| doc.design.component_links.contains_key(n) || sources.contains(n))
-            || doc
-                .design
-                .component_links
-                .keys()
-                .any(|n| doc.is_ancestor(*n, *id))
+        if doc.subtree(*id).iter().any(|n| sources.contains(n))
+            || sources.iter().any(|n| doc.is_ancestor(*n, *id))
         {
-            return Err("Detach existing instances before creating a component from them.".into());
+            return Err("Create components from visible artwork, not hidden source groups.".into());
         }
     }
     Ok(())
@@ -179,154 +169,12 @@ fn copy_group(
     root: NodeId,
     target: Option<NodeId>,
     hidden: bool,
-) -> Result<NodeId, String> {
-    if !source.node(root).is_some_and(|node| node.is_group()) {
-        return Err("Component source group is missing.".into());
-    }
-    plan.doc.retain_raw_originals(source);
-    let ids: HashSet<_> = source.subtree(root).into_iter().collect();
-    let mut additions = source.design.fragment(&ids);
-    additions.components.clear();
-    additions.component_links.clear();
-    let mut map = HashMap::new();
-    if let Some(target) = target {
-        editable(&plan.doc, target)?;
-        let children = plan.doc.children(Some(target));
-        for child in children {
-            plan.run(Command::RemoveNode { id: child })?;
-        }
-        map.insert(root, target);
-        for command in crate::design_appearance::Appearance::capture(
-            source.node(root).ok_or("Missing source")?,
-        )
-        .commands(plan.doc.node(target).unwrap())
-        {
-            plan.run(command)?;
-        }
-        let node = source.node(root).unwrap();
-        plan.run(Command::SetMask {
-            id: target,
-            mask: node.mask.clone(),
-        })?;
-        if node.mask.is_some() {
-            plan.run(Command::SetMaskEnabled {
-                id: target,
-                enabled: node.mask_enabled,
-            })?;
-            plan.run(Command::SetMaskLinked {
-                id: target,
-                linked: node.mask_linked,
-            })?;
-            plan.run(Command::SetMaskTransform {
-                id: target,
-                transform: node.mask_transform,
-            })?;
-        }
-    }
-    let mut waiting: Vec<_> = source
-        .nodes
-        .iter()
-        .filter(|n| ids.contains(&n.id) && !map.contains_key(&n.id))
-        .cloned()
-        .collect();
-    while !waiting.is_empty() {
-        let before = waiting.len();
-        let mut next = Vec::new();
-        for original in waiting {
-            if original.id != root && original.parent.is_some_and(|id| !map.contains_key(&id)) {
-                next.push(original);
-                continue;
-            }
-            let mut node = original.clone();
-            node.link_group = None;
-            node.locked = false;
-            node.locks = Default::default();
-            let slot = if original.id == root {
-                node.visible = !hidden;
-                node.name = if hidden {
-                    format!("Component source · {}", node.name)
-                } else {
-                    node.name
-                };
-                Slot::TOP
-            } else {
-                Slot::top_of(original.parent.map(|id| map[&id]))
-            };
-            // Native vector caches follow the destination canvas size.
-            match &mut node.kind {
-                crate::NodeKind::Text { spec, cache } => {
-                    *cache = crate::vector_cache::VectorRaster::text(
-                        spec.clone(),
-                        plan.doc.width,
-                        plan.doc.height,
-                    )
-                }
-                crate::NodeKind::Path { path, style, cache } => {
-                    *cache = crate::vector_cache::VectorRaster::path(
-                        path.clone(),
-                        *style,
-                        plan.doc.width,
-                        plan.doc.height,
-                    )
-                }
-                _ => {}
-            }
-            let id = plan
-                .run(Command::AddNode {
-                    node: Box::new(node),
-                    slot,
-                })?
-                .ok_or("Could not clone component")?;
-            map.insert(original.id, id);
-        }
-        if next.len() == before {
-            return Err("Invalid component hierarchy.".into());
-        }
-        waiting = next;
-    }
-    for node in source
-        .nodes
-        .iter()
-        .filter(|n| ids.contains(&n.id) && n.id != root)
-    {
-        if let Some(base) = node.clip_to.and_then(|id| map.get(&id)) {
-            plan.run(Command::SetClip {
-                id: map[&node.id],
-                clip_to: Some(*base),
-            })?;
-        }
-    }
-    let additions = additions.remap(&map);
-    let mut design = plan.doc.design.clone();
-    // A reset must remove root semantics that no longer exist in the variant.
-    let dest = map[&root];
-    design.charts.remove(&dest);
-    design.frames.remove(&dest);
-    design.media.remove(&dest);
-    design.constraints.remove(&dest);
-    design.motion.remove(&dest);
-    design.style_links.remove(&dest);
-    crate::design_styles::merge_into(&mut design, &additions);
-    design.charts.extend(additions.charts);
-    design.frames.extend(additions.frames);
-    design.media.extend(additions.media);
-    design.constraints.extend(additions.constraints);
-    for (id, motion) in additions.motion {
-        design.duration_ms = design.duration_ms.max(motion.end_ms);
-        design.motion.insert(id, motion);
-    }
-    plan.design(design)?;
-    if let Some(diagram) = &source.diagram {
-        let additions = diagram.fragment(&ids).remap(&map);
-        let mut model = plan.doc.diagram.as_deref().cloned().unwrap_or_default();
-        model.shapes.extend(additions.shapes);
-        model.edges.extend(additions.edges);
-        plan.run(Command::SetDiagram {
-            diagram: Some(std::sync::Arc::new(model)),
-        })?;
-    }
-    Ok(dest)
+    matches: &BTreeMap<NodeId, NodeId>,
+    preserve: bool,
+) -> Result<(NodeId, BTreeMap<NodeId, NodeId>), String> {
+    nested::copy_group(plan, source, root, target, hidden, matches, preserve)
 }
+
 pub fn create(editor: &mut Editor, ids: &[NodeId], name: &str) -> Result<NodeId, String> {
     let name = name.trim();
     if !valid_name(name) || editor.doc.design.components.contains_key(name) {
@@ -334,7 +182,10 @@ pub fn create(editor: &mut Editor, ids: &[NodeId], name: &str) -> Result<NodeId,
     }
     standalone(&editor.doc, ids)?;
     let mut plan = Plan::new(editor)?;
-    let root = if ids.len() == 1 && plan.doc.node(ids[0]).is_some_and(|n| n.is_group()) {
+    let root = if ids.len() == 1
+        && plan.doc.node(ids[0]).is_some_and(|n| n.is_group())
+        && !plan.doc.design.component_links.contains_key(&ids[0])
+    {
         ids[0]
     } else {
         plan.run(Command::Group {
@@ -344,7 +195,15 @@ pub fn create(editor: &mut Editor, ids: &[NodeId], name: &str) -> Result<NodeId,
         .ok_or("Could not group selection")?
     };
     let snapshot = plan.doc.clone();
-    let source = copy_group(&mut plan, &snapshot, root, None, true)?;
+    let (source, members) = copy_group(
+        &mut plan,
+        &snapshot,
+        root,
+        None,
+        true,
+        &BTreeMap::new(),
+        false,
+    )?;
     let mut design = plan.doc.design.clone();
     design.components.insert(
         name.into(),
@@ -357,6 +216,11 @@ pub fn create(editor: &mut Editor, ids: &[NodeId], name: &str) -> Result<NodeId,
         Instance {
             component: name.into(),
             variant: "Default".into(),
+            members: members
+                .into_iter()
+                .map(|(instance, source)| (source, instance))
+                .collect(),
+            overrides: BTreeMap::new(),
         },
     );
     plan.design(design)?;
@@ -377,7 +241,15 @@ fn insert_into(
         .and_then(|d| d.variants.get(variant))
         .ok_or("Component variant is missing")?;
     let snapshot = plan.doc.clone();
-    let id = copy_group(plan, &snapshot, source, None, false)?;
+    let (id, members) = copy_group(
+        plan,
+        &snapshot,
+        source,
+        None,
+        false,
+        &BTreeMap::new(),
+        false,
+    )?;
     plan.run(Command::Rename {
         id,
         name: name.into(),
@@ -393,6 +265,8 @@ fn insert_into(
         Instance {
             component: name.into(),
             variant: variant.into(),
+            members,
+            overrides: BTreeMap::new(),
         },
     );
     plan.design(design)?;
@@ -411,27 +285,44 @@ pub fn insert(
 }
 fn replace_instance(
     plan: &mut Plan,
-    snapshot: &Document,
     source: NodeId,
     target: NodeId,
+    preserve: bool,
 ) -> Result<(), String> {
-    if plan
-        .doc
-        .node(target)
-        .is_some_and(|node| node.link_group.is_some())
-    {
-        return Err("Unlink the instance's movement links before resetting or updating it.".into());
-    }
-    let old = crate::geometry::node_bounds(&plan.doc, target)
-        .ok_or("Component has no visible geometry")?;
-    copy_group(plan, snapshot, source, Some(target), false)?;
+    let snapshot = plan.doc.clone();
+    let old = crate::geometry::node_bounds(&snapshot, target).ok_or("Component has no geometry")?;
+    let mut link = snapshot
+        .design
+        .component_links
+        .get(&target)
+        .cloned()
+        .ok_or("Missing component link")?;
+    let mapping = nested::members(&snapshot, target, &link)?;
+    let (_, map) = copy_group(
+        plan,
+        &snapshot,
+        source,
+        Some(target),
+        false,
+        &mapping,
+        preserve,
+    )?;
+    nested::prune_members(&mut plan.doc);
     let new = crate::geometry::node_bounds(&plan.doc, target)
         .ok_or("Component variant has no geometry")?;
     plan.run(Command::TranslateNodes {
         ids: vec![target],
-        dx: (old.x - new.x) as f64,
-        dy: (old.y - new.y) as f64,
+        dx: f64::from(old.x - new.x),
+        dy: f64::from(old.y - new.y),
     })?;
+    if preserve {
+        nested::restore_geometry(plan, &snapshot, target, &map, &link)?;
+    } else {
+        link.overrides.clear();
+    }
+    link.members = map;
+    link.overrides.retain(|id, _| link.members.contains_key(id));
+    plan.doc.design.component_links.insert(target, link);
     Ok(())
 }
 pub fn reset(editor: &mut Editor, id: NodeId, variant: Option<&str>) -> Result<(), String> {
@@ -443,19 +334,84 @@ pub fn reset(editor: &mut Editor, id: NodeId, variant: Option<&str>) -> Result<(
         .get(&id)
         .cloned()
         .ok_or("Select a linked component group")?;
-    if let Some(v) = variant {
-        link.variant = v.into();
+    if let Some(variant) = variant {
+        link.variant = variant.into();
     }
     let source = *plan.doc.design.components[&link.component]
         .variants
         .get(&link.variant)
         .ok_or("Unknown variant")?;
-    let snapshot = plan.doc.clone();
-    replace_instance(&mut plan, &snapshot, source, id)?;
-    let mut design = plan.doc.design.clone();
-    design.component_links.insert(id, link);
-    plan.design(design)?;
+    // Variants may have distinct source IDs; switch uses the selected variant's
+    // member identities, while explicit Reset clears this instance's overrides.
+    let changing = plan.doc.design.component_links[&id].variant != link.variant;
+    if changing {
+        link.members.clear();
+        link.overrides.clear();
+    }
+    plan.doc.design.component_links.insert(id, link);
+    replace_instance(&mut plan, source, id, false)?;
     plan.commit(editor, "Reset component variant")
+}
+
+/// Select the innermost owning linked group for an editable member.
+pub fn owner(doc: &Document, node: NodeId) -> Option<NodeId> {
+    let mut current = Some(node);
+    for _ in 0..=doc.nodes.len() {
+        let id = current?;
+        if doc.design.component_links.contains_key(&id) {
+            return Some(id);
+        }
+        current = doc.node(id)?.parent;
+    }
+    None
+}
+/// Replace the explicit retained-property set for one native member. Turning
+/// flags off permits future updates; Reset immediately restores source values.
+pub fn set_overrides(
+    editor: &mut Editor,
+    instance: NodeId,
+    node: NodeId,
+    flags: Overrides,
+) -> Result<(), String> {
+    let mut plan = Plan::new(editor)?;
+    editable(&plan.doc, instance)?;
+    let mut link = plan
+        .doc
+        .design
+        .component_links
+        .get(&instance)
+        .cloned()
+        .ok_or("Select a linked component")?;
+    link.members = nested::members(&plan.doc, instance, &link)?;
+    let source = *link
+        .members
+        .iter()
+        .find(|(_, id)| **id == node)
+        .map(|(source, _)| source)
+        .ok_or(
+            "The selected object is not a mapped component member. Publish new objects first.",
+        )?;
+    flags.validate(plan.doc.node(node).ok_or("Missing component member")?)?;
+    if flags.is_empty() {
+        link.overrides.remove(&source);
+    } else {
+        link.overrides.insert(source, flags);
+    }
+    plan.doc.design.component_links.insert(instance, link);
+    plan.commit(editor, "Set component property overrides")
+}
+pub fn overrides_for(doc: &Document, instance: NodeId, node: NodeId) -> Overrides {
+    doc.design
+        .component_links
+        .get(&instance)
+        .and_then(|link| {
+            link.members
+                .iter()
+                .find(|(_, id)| **id == node)
+                .and_then(|(source, _)| link.overrides.get(source))
+        })
+        .copied()
+        .unwrap_or_default()
 }
 pub fn detach(editor: &mut Editor, id: NodeId) -> Result<(), String> {
     let mut plan = Plan::new(editor)?;
@@ -479,6 +435,7 @@ pub fn update(editor: &mut Editor, id: NodeId, new_variant: Option<&str>) -> Res
         .get(&id)
         .cloned()
         .ok_or("Select a linked component group")?;
+    let old_members = nested::members(&plan.doc, id, &link)?;
     if let Some(name) = new_variant {
         let name = name.trim();
         if !valid_name(name)
@@ -490,37 +447,74 @@ pub fn update(editor: &mut Editor, id: NodeId, new_variant: Option<&str>) -> Res
         }
         link.variant = name.into();
     }
-    let targets: Vec<_> = plan
-        .doc
-        .design
-        .component_links
-        .iter()
-        .filter(|(_, l)| **l == link)
-        .map(|(id, _)| *id)
-        .collect();
-    for target in &targets {
-        editable(&plan.doc, *target)?;
-    }
-    let snapshot = plan.doc.clone();
     let previous = plan.doc.design.components[&link.component]
         .variants
         .get(&link.variant)
         .copied();
-    let source = copy_group(&mut plan, &snapshot, id, previous, true)?;
-    let mut design = plan.doc.design.clone();
-    design
+    let matches = if previous.is_some() {
+        old_members
+            .iter()
+            .map(|(source, instance)| (*instance, *source))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
+    let snapshot = plan.doc.clone();
+    let (source, mapping) = copy_group(&mut plan, &snapshot, id, previous, true, &matches, false)?;
+    plan.doc
+        .design
         .components
         .get_mut(&link.component)
         .unwrap()
         .variants
         .insert(link.variant.clone(), source);
-    design.component_links.insert(id, link.clone());
-    plan.design(design)?;
-    for target in targets {
-        if target != id {
-            replace_instance(&mut plan, &snapshot, id, target)?;
+    let rekey: BTreeMap<_, _> = old_members
+        .iter()
+        .filter_map(|(old, instance)| mapping.get(instance).map(|new| (*old, *new)))
+        .collect();
+    link.overrides = link
+        .overrides
+        .into_iter()
+        .filter_map(|(key, value)| rekey.get(&key).map(|key| (*key, value)))
+        .collect();
+    link.members = mapping
+        .into_iter()
+        .map(|(instance, source)| (source, instance))
+        .collect();
+    plan.doc.design.component_links.insert(id, link.clone());
+    nested::prune_members(&mut plan.doc);
+    let order = nested::dependency_order(&plan.doc.design, &plan.doc)?;
+    let mut affected = HashSet::from([(link.component.clone(), link.variant.clone())]);
+    for component in order {
+        let variants = plan.doc.design.components[&component].variants.clone();
+        for (variant, source) in variants {
+            let key = (component.clone(), variant.clone());
+            let depends = plan
+                .doc
+                .subtree(source)
+                .iter()
+                .filter_map(|id| plan.doc.design.component_links.get(id))
+                .any(|link| affected.contains(&(link.component.clone(), link.variant.clone())));
+            if !affected.contains(&key) && !depends {
+                continue;
+            }
+            affected.insert(key);
+            let targets: Vec<_> = plan
+                .doc
+                .design
+                .component_links
+                .iter()
+                .filter(|(_, l)| l.component == component && l.variant == variant)
+                .map(|(id, _)| *id)
+                .collect();
+            for target in targets {
+                if target != id {
+                    replace_instance(&mut plan, source, target, true)?;
+                }
+            }
         }
     }
+
     plan.commit(
         editor,
         if new_variant.is_some() {
@@ -532,32 +526,9 @@ pub fn update(editor: &mut Editor, id: NodeId, new_variant: Option<&str>) -> Res
 }
 /// Import a page's complete variant library as an independent local definition.
 fn import_into(plan: &mut Plan, source: &Document, name: &str) -> Result<String, String> {
-    let definition = source
-        .design
-        .components
-        .get(name)
-        .ok_or("Component no longer exists on that page")?;
-    let stem: String = name.chars().take(64).collect();
-    let mut chosen = name.to_string();
-    let mut i = 2;
-    while plan.doc.design.components.contains_key(&chosen) {
-        chosen = format!("{stem} ({i})");
-        i += 1;
-    }
-    let mut variants = BTreeMap::new();
-    for (variant, root) in &definition.variants {
-        variants.insert(
-            variant.clone(),
-            copy_group(plan, source, *root, None, true)?,
-        );
-    }
-    let mut design = plan.doc.design.clone();
-    design
-        .components
-        .insert(chosen.clone(), Definition { variants });
-    plan.design(design)?;
-    Ok(chosen)
+    nested::import_into(plan, source, name)
 }
+
 pub fn import(editor: &mut Editor, source: &Document, name: &str) -> Result<String, String> {
     let mut plan = Plan::new(editor)?;
     let name = import_into(&mut plan, source, name)?;
@@ -654,7 +625,7 @@ mod tests {
         e.doc.validate().unwrap();
     }
     #[test]
-    fn protected_publish_is_atomic_and_nesting_is_rejected() {
+    fn protected_publish_is_atomic_and_nesting_is_allowed() {
         let (mut e, a) = setup();
         let b = insert(&mut e, "Card", "Default", (200., 0.)).unwrap();
         let child = e.doc.children(Some(b))[0];
@@ -669,7 +640,7 @@ mod tests {
         assert!(update(&mut e, a, None).is_err());
         assert_eq!(e.doc, before);
         assert_eq!(e.history.len(), history);
-        assert!(create(&mut e, &[a], "Cycle").is_err());
+        assert!(create(&mut e, &[a], "Wrapper").is_ok());
     }
     #[test]
     fn clipboard_keeps_hidden_library_editability_and_cross_page_import() {
@@ -731,8 +702,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            e.doc.design.component_links.get(&a),
-            e.doc.design.component_links.get(&b)
+            e.doc.design.component_links[&a].component,
+            e.doc.design.component_links[&b].component
         );
         e.execute(Command::RemoveNode { id: a }).unwrap();
         e.execute(Command::RemoveNode { id: b }).unwrap();
@@ -741,3 +712,7 @@ mod tests {
         insert(&mut e, "Card", "Default", (0., 0.)).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "design_component_nested_tests.rs"]
+mod nested_tests;

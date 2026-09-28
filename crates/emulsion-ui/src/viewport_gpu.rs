@@ -97,7 +97,13 @@ impl Status {
                 retry_at,
                 ..
             } => {
-                *old != revision || *previous != generation || retry_at.is_some_and(|at| now >= at)
+                *previous != generation
+                    || match retry_at {
+                        // A drag changes revision every frame. Respect the backoff
+                        // across those revisions instead of rebuilding GPU targets.
+                        Some(at) => now >= *at,
+                        None => *old != revision,
+                    }
             }
             _ => true,
         }
@@ -553,6 +559,8 @@ mod tests {
             retry_at: Some(now + Duration::from_secs(2)),
         };
         assert!(!status.retry_due(7, None, now));
+        assert!(!status.retry_due(8, None, now));
+        assert!(status.retry_due(8, Some(1), now));
         assert!(status.retry_due(7, None, now + Duration::from_secs(2)));
     }
 }

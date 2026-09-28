@@ -378,14 +378,75 @@ impl EditorView {
             .text_target()
             .map(|(_, s)| (*s).clone())
             .unwrap_or_else(|| self.type_tool.spec.clone());
+        let style = spec.style_at(self.text_style_range().map_or(0, |r| r.start));
+        let decorations = div()
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .child(
+                Button::new("text-underline")
+                    .small()
+                    .label(if style.underline {
+                        "Underline ✓"
+                    } else {
+                        "Underline"
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_text_field(cx);
+                        this.restyle_text(|s| s.underline = !s.underline, cx);
+                    })),
+            )
+            .child(
+                Button::new("text-strikethrough")
+                    .small()
+                    .label(if style.strikethrough {
+                        "Strikethrough ✓"
+                    } else {
+                        "Strikethrough"
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_text_field(cx);
+                        this.restyle_text(|s| s.strikethrough = !s.strikethrough, cx);
+                    })),
+            );
+        let lists = div()
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .child(
+                Button::new("text-list-bullet")
+                    .small()
+                    .label("Bullets")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_text_list(emulsion_core::text::ListStyle::Bullet, cx)
+                    })),
+            )
+            .child(
+                Button::new("text-list-numbered")
+                    .small()
+                    .label("Numbered")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_text_list(emulsion_core::text::ListStyle::Numbered, cx)
+                    })),
+            )
+            .child(
+                Button::new("text-list-none")
+                    .small()
+                    .label("Remove list")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_text_list(emulsion_core::text::ListStyle::None, cx)
+                    })),
+            );
         let mut panel=div().id("text-properties").flex().flex_col().gap_2().p_3().border_b_1().border_color(cx.theme().border)
             .child(div().text_sm().child("Character"))
             .child(div().text_xs().text_color(cx.theme().muted_foreground).child(if self.text_style_range().is_some(){"Selected characters"}else{"Entire text layer"}))
+            .child(decorations)
             .child(self.text_field("size","Size (px)"))
             .child(self.text_field("tracking","Letter spacing (px)"))
             .child(self.text_field("baseline","Baseline shift (px)"))
             .child(self.text_choice("antialias","Anti-alias",match spec.anti_alias{AntiAliasMode::Smooth=>0,AntiAliasMode::Crisp=>1,AntiAliasMode::Strong=>2,AntiAliasMode::None=>3},&["Smooth","Crisp","Strong","None"],cx))
             .child(div().mt_2().text_sm().child("Paragraph"))
+            .child(lists)
             .child(self.text_choice("orientation","Orientation",usize::from(spec.vertical),&["Horizontal","Vertical"],cx))
             .child(self.text_choice("align","Alignment",match spec.align{Align::Left=>0,Align::Center=>1,Align::Right=>2,Align::Justify=>3},&["Left","Center","Right","Justify"],cx))
             .child(self.text_field("leading","Line height (multiple)"))

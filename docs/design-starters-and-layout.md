@@ -60,16 +60,26 @@ existing 100-page project limit and refuses to overwrite an existing directory.
 
 Select objects or a group, open **Position**, and choose **Row**, **Column**, or
 **Grid** under Responsive layout. Set frame width/height, individual padding,
-gap, columns, row wrapping, and alignment. Children can retain their width or
-fill the available width. Text reflows without changing its font size.
-Flexible children in a row share the space left after fixed children and gaps.
-Choose **Height: fit content** to resize a frame around its content and padding;
-nested frames update their parents in the same edit.
+gap, columns, row wrapping, and alignment. Choose **Width: fit content** or
+**Height: fit content** to size a frame around its content and padding. Optional
+minimum and maximum width/height constrain the frame; blank limits are unset.
+Dimensions retain decimal values when reopening the dialog.
+
+Select a child and open **Object sizing & limits** to choose fixed or fill sizing
+on either axis, set minimum/maximum dimensions, or **Keep aspect ratio**. The
+aspect ratio starts from the selected object's current bounds and can be edited.
+Flexible children in a row share the remaining width; in a column they share
+the remaining height. Space left by a child reaching its maximum goes to the
+other flexible children. Grid children fill their cells. Text reflows without
+changing its font size, and native paths and image sources remain editable.
+In a wrapped row, height fill uses the frame's available height for each row;
+additional rows can overflow. It does not divide the frame height among wrapped rows.
 
 The resulting group has an editable rectangular boundary. Reflow runs as part of
 the originating command when text, objects, or the boundary changes. Nested frames
-lay out from parent to child. Selecting a child exposes fixed/fill width and
-absolute/in-layout placement. Media frames remain replaceable inside layouts.
+lay out from parent to child. Child controls also expose absolute/in-layout
+placement. Absolute children keep their positions and do not contribute to
+content sizing or receive flow sizing. Media frames remain replaceable inside layouts.
 Removing automatic layout preserves the current artwork and boundary.
 
 Settings persist with the document and participate in Undo/Redo, duplication,
@@ -78,10 +88,36 @@ move protected content fail atomically. Rotating or reshaping the layout boundar
 requires removing automatic layout first. Layout cells snap to document pixels to
 avoid cumulative drift; authored text remains text.
 
-This is the first responsive-layout workflow. Hug width, height fill, min/max
-constraints, automatic clipping, aspect locks, authored breakpoints, variables,
-components/variants, interactive prototypes, and responsive HTML export remain
-separate milestones. Large-scene layout performance still needs measurement.
+Content sizing and child fill cannot depend on one another on the same axis.
+A nested frame cannot both fit its content and fill its parent's corresponding
+axis; aspect-ratio sizing is unavailable for nested content-sized frames.
+Conflicting rules or impossible aspect-ratio limits reject the whole edit.
+With both fill axes enabled, an aspect-locked object fits inside its allocated
+cell. With only height fill enabled, height drives the ratio; otherwise width
+drives it. Minimum sizes can make content overflow a frame. Enable **Clip content
+to frame** in the layout dialog to hide overflow while retaining editable artwork
+and authored masks; the default permits overflow.
+
+The same controls are available through `set_responsive_layout` and
+`set_layout_child`; optional limits and ratios accept `null` to clear.
+See the [MCP layout reference](mcp-design-appearance.md) for exact parameters.
+
+Select a responsive frame and open **Canvas width breakpoints…** to add, edit or
+remove up to 16 width thresholds. These respond to the page canvas width, not the
+window, zoom or frame's content width. The highest matching threshold inherits
+directly from base settings. Each entry can override flow, spacing, padding,
+columns, wrapping, alignment, content sizing and clipping; blank numeric fields
+and controls marked **inherit** use the base. Child sizing and frame dimension
+limits stay shared across widths. Apply validates inactive entries too and creates
+one Undo step. See [breakpoint authoring and MCP examples](design-layout-breakpoints.md).
+
+Variables, interactive prototypes, and responsive HTML export remain separate milestones.
+Large-scene layout performance still needs measurement.
+
+Regression coverage includes bounded nested reflow, repeated-layout stability,
+native text wrapping, protected-object rollback, dialog Cancel/Apply and Undo,
+and project/template/clipboard round trips. The UI and MCP use the same core
+sizing implementation.
 
 ## Reuse formatting and generate designs
 

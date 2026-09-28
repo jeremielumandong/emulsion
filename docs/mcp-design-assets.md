@@ -4,11 +4,13 @@ MCP exposes the same native Design component, saved-style, chart and table opera
 
 | Feature | Tools |
 | --- | --- |
-| Components | `list_design_components`, `create_design_component`, `insert_design_component`, `update_design_component`, `save_design_component_variant`, `reset_design_component`, `switch_design_component`, `detach_design_component` |
+| Components | `list_design_components`, `create_design_component`, `insert_design_component`, `update_design_component`, `save_design_component_variant`, `reset_design_component`, `switch_design_component`, `detach_design_component`, `set_design_component_overrides` |
 | Saved styles | `list_design_styles`, `create_design_style`, `apply_design_style`, `update_design_style`, `reset_design_style`, `detach_design_style`, `rename_design_style`, `remove_design_style` |
 | Charts and tables | `list_design_charts`, `add_design_chart`, `update_design_chart`, `detach_design_chart` |
 
-For example, `create_design_component` accepts `{"nodes":[12,13],"name":"Card"}` and returns its native group ID. Insert it with `{"name":"Card","variant":"Default","offset":[200,0]}`. Component publishing propagates within the page and replaces child overrides while retaining instance group IDs. Nested linked components are unavailable; detach an inner instance first.
+For example, `create_design_component` accepts `{"nodes":[12,13],"name":"Card"}` and returns its native group ID. Insert it with `{"name":"Card","variant":"Default","offset":[200,0]}`. Component publishing propagates within the page through an acyclic nested dependency graph. Matched member IDs and explicit property overrides survive updates. Unrelated variants remain unchanged.
+
+`set_design_component_overrides` accepts `{"node":13,"overrides":{"content":true,"opacity":true}}`. It targets the innermost owning instance by default; supply `instance` to name an enclosing linked group. Flags replace the previous set; omitted booleans are false and `{}` clears all flags. Available groups are `content`, `appearance`, `geometry`, `opacity`, and `visibility`. Appearance groups paint, typography, blend and effects; content supports text/raster objects, and geometry supports text/path/image objects. Reset or variant switching restores the saved source and clears flags. See [component behavior and limits](design-components.md).
 
 Save appearance with `create_design_style` using `{"node":12,"name":"Heading"}`, then apply it using `{"nodes":[19,24],"name":"Heading"}`. Updates publish to linked consumers. Content and geometry remain independent. Text styles sample the source's first character and apply uniform typography to consumers; publishing does not flatten the source's rich-text runs.
 

@@ -87,6 +87,7 @@ impl EditorView {
             .iter()
             .any(|id| self.editor.doc.design.style_links.contains_key(id));
         let mut panel = div().flex().flex_col().gap_2()
+            .child(self.design_variable_controls(query,p,cx))
             .child("Saved styles")
             .child(Button::new("design-style-create").label("Save selection as style…").small().outline()
                 .disabled(roots.len() != 1)

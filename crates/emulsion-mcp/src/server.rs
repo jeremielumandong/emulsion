@@ -398,7 +398,22 @@ mod tests {
         };
         let listed = rpc(&mut host, "tools/list", json!({}));
         let definitions = crate::tools::definitions();
-        assert_eq!(listed["tools"], serde_json::to_value(&definitions).unwrap());
+        let listed_tools = listed["tools"].as_array().unwrap();
+        assert_eq!(listed_tools.len(), definitions.len());
+        for (tool, definition) in listed_tools.iter().zip(&definitions) {
+            let mut bare = tool.clone();
+            bare.as_object_mut().unwrap().remove("annotations");
+            assert_eq!(
+                bare,
+                serde_json::to_value(definition).unwrap(),
+                "{}",
+                definition.name
+            );
+            assert_eq!(
+                tool["annotations"]["readOnlyHint"],
+                crate::tools::is_read_only(&definition.name)
+            );
+        }
         for name in [
             "list_brushes",
             "describe_brush_library",

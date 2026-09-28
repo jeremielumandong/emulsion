@@ -449,9 +449,18 @@ fn library_mcp_raw_develop_preview_sync_presets_undo_and_export(cx: &mut TestApp
     assert!(out.join("a.png").is_file());
     assert!(out.join("b.png").is_file());
     let doc = emulsion_io::raw::open(&first).unwrap();
+    // Compare the native 16-bit export paths; an 8-bit preview conversion rounds
+    // at a different boundary and may differ by one channel level.
+    let photo_export = fixture.0.join("photo-reference.png");
+    emulsion_io::export::export(
+        &doc,
+        &photo_export,
+        emulsion_io::export::ExportOptions::for_doc(&doc),
+    )
+    .unwrap();
     assert_eq!(
-        image::open(out.join("a.png")).unwrap().to_rgba8().as_raw(),
-        &emulsion_raster::composite::flatten(&doc.composite_tree(), 0).to_srgba8()
+        image::open(out.join("a.png")).unwrap().to_rgba16(),
+        image::open(photo_export).unwrap().to_rgba16(),
     );
     assert_eq!(std::fs::read(&first).unwrap(), original);
     // External sidecar replacement must be reported, never silently overwritten.
@@ -507,4 +516,315 @@ fn library_mcp_raw_develop_preview_sync_presets_undo_and_export(cx: &mut TestApp
     ));
     assert_eq!(opened["opened"], true);
     assert!(opened["document_id"].is_u64());
+}
+
+#[gpui_kit::test]
+fn library_raw_thumbnails_load_without_selecting_a_photo(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("sensor.dng");
+    crate::raw_test_fixture::write_dng(&path);
+    // This fixture has no embedded JPEG: the Library must develop a thumbnail.
+    assert!(emulsion_io::thumb::batch_thumbnail(&path, 300).is_err());
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1500.), gpui_kit::px(1000.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(fixture.0.clone(), vec![path], cx);
+            ws.screen = Screen::Batch;
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find(("batch-item", 0usize)).visible());
+        let b = &ws.read(cx).batch;
+        assert!(b.items[0].thumb.is_some(), "RAW thumbnail never loaded");
+        let bounds = window.find(("batch-thumbnail", 0usize)).bounds();
+        assert!(
+            bounds.size.width > gpui_kit::px(100.) && bounds.size.height > gpui_kit::px(80.),
+            "RAW thumbnail has no display area: {bounds:?}"
+        );
+        assert!(b.current.is_none(), "browsing must not select a photo");
+    });
+}
+
+#[gpui_kit::test]
+fn library_checkbox_keeps_multiselection_and_supports_keyboard(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1500.), gpui_kit::px(1000.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(fixture.0.clone(), fixture.pngs(), cx);
+            ws.screen = Screen::Batch;
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("batch-item", 0usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("batch-tick", 1usize), cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let b = &ws.read(cx).batch;
+        assert_eq!(
+            b.items.iter().map(|i| i.selected).collect::<Vec<_>>(),
+            vec![true, true, false, false]
+        );
+        assert_eq!(b.current, Some(0));
+    });
+    // Kit checkboxes preserve focus on pointer clicks; Tab reaches the control.
+    let mut focused = false;
+    for _ in 0..100 {
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.run_until_parked();
+        focused =
+            cx.update(|window, _| window.find(("batch-tick", 1usize)).focused() == Some(true));
+        if focused {
+            break;
+        }
+    }
+    assert!(focused, "checkbox must be in the Tab order");
+    let keystroke = gpui_kit::Keystroke::parse("space").unwrap();
+    cx.simulate_event(gpui_kit::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui_kit::KeyUpEvent { keystroke });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let b = &ws.read(cx).batch;
+        assert_eq!(
+            b.items.iter().map(|i| i.selected).collect::<Vec<_>>(),
+            vec![true, false, false, false]
+        );
+        assert_eq!(b.current, Some(0));
+    });
+}
+
+#[gpui_kit::test]
+fn library_failed_thumbnail_can_retry_after_file_is_repaired(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("sensor.dng");
+    std::fs::write(&path, b"incomplete RAW").unwrap();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1500.), gpui_kit::px(1000.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(fixture.0.clone(), vec![path.clone()], cx);
+            ws.screen = Screen::Batch;
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(ws.read(cx).batch.items[0].thumb.is_none());
+        assert!(window.find(("batch-thumb-retry", 0usize)).visible());
+    });
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &fixture.0.join("catalog"),
+        "get_library",
+        serde_json::json!({}),
+    ));
+    assert_eq!(state["files"][0]["thumbnail"]["status"], "error");
+    assert!(
+        state["files"][0]["thumbnail"]["error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty())
+    );
+    crate::raw_test_fixture::write_dng(&path);
+    cx.update(|window, cx| window.click(("batch-thumb-retry", 0usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(ws.read(cx).batch.items[0].thumb.is_some());
+        assert!(window.try_find(("batch-thumb-retry", 0usize)).is_none());
+        assert!(ws.read(cx).batch.current.is_none());
+    });
+}
+
+/// Run manually with EMULSION_LIBRARY_RAW_SAMPLES pointing at a local photo folder.
+#[gpui_kit::test]
+#[ignore = "requires local camera RAW samples"]
+fn library_real_camera_thumbnails(cx: &mut TestAppContext) {
+    let folder = std::path::PathBuf::from(
+        std::env::var_os("EMULSION_LIBRARY_RAW_SAMPLES").expect("sample folder"),
+    );
+    let paths = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| emulsion_io::raw::is_raw(p))
+        .collect::<Vec<_>>();
+    assert!(!paths.is_empty());
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(2000.), gpui_kit::px(1500.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(folder, paths, cx);
+            ws.screen = Screen::Batch;
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        for item in &ws.read(cx).batch.items {
+            assert!(item.thumb.is_some(), "{} did not load", item.path.display());
+        }
+    });
+    let fixture = Fixture::new();
+    let count = cx.update(|_, cx| ws.read(cx).batch.items.len());
+    for index in 0..count {
+        cx.update(|window, cx| window.click(("batch-item", index), cx));
+        cx.run_until_parked();
+        let state = tool_json(library_tool(
+            &ws,
+            cx,
+            &fixture.0.join("catalog"),
+            "get_library",
+            serde_json::json!({}),
+        ));
+        assert!(
+            !state["develop"]["settings"].is_null(),
+            "RAW selection failed: {state}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn library_import_primes_bounded_thumbnails_before_grid_layout(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let paths = (0..4)
+        .map(|i| {
+            let path = fixture.0.join(format!("sensor-{i}.dng"));
+            crate::raw_test_fixture::write_dng(&path);
+            path
+        })
+        .collect();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    // Stay in Photo: no Library layout callback can seed the preview queue.
+    cx.update(|_, cx| ws.update(cx, |ws, cx| ws.load_batch(fixture.0.clone(), paths, cx)));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let b = &ws.read(cx).batch;
+        assert!(b.items[0].thumb.is_some() && b.items[1].thumb.is_some());
+        assert!(b.items[2].thumb.is_none() && b.items[3].thumb.is_none());
+        assert!(b.current.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn library_preserves_unchanged_thumbnails_on_sort_reentry_and_external_edit(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    let paths = fixture.pngs();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1500.), gpui_kit::px(1000.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(fixture.0.clone(), paths.clone(), cx);
+            ws.screen = Screen::Batch;
+        })
+    });
+    cx.run_until_parked();
+    let thumbs = cx.update(|_, cx| {
+        ws.read(cx)
+            .batch
+            .items
+            .iter()
+            .map(|i| (i.path.clone(), i.thumb.clone().unwrap()))
+            .collect::<std::collections::HashMap<_, _>>()
+    });
+    cx.update(|window, cx| window.click("library-sort", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| ws.update(cx, |ws, cx| ws.refresh_batch_recipes(cx)));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        for item in &ws.read(cx).batch.items {
+            assert!(std::sync::Arc::ptr_eq(
+                item.thumb.as_ref().unwrap(),
+                &thumbs[&item.path]
+            ));
+        }
+    });
+    image::RgbaImage::from_pixel(20, 20, image::Rgba([90, 10, 60, 255]))
+        .save(&paths[0])
+        .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&paths[0])
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(123))
+        .unwrap();
+    cx.update(|_, cx| ws.update(cx, |ws, cx| ws.refresh_batch_recipes(cx)));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        for item in &ws.read(cx).batch.items {
+            assert_eq!(
+                std::sync::Arc::ptr_eq(item.thumb.as_ref().unwrap(), &thumbs[&item.path]),
+                item.path != paths[0]
+            );
+        }
+    });
+}
+
+#[gpui_kit::test]
+fn library_autosave_keeps_unedited_thumbnails(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let mut paths = fixture.pngs();
+    let raw = fixture.0.join("raw.dng");
+    crate::raw_test_fixture::write_dng(&raw);
+    paths.push(raw);
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1500.), gpui_kit::px(1500.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(fixture.0.clone(), paths, cx);
+            ws.screen = Screen::Batch;
+        })
+    });
+    cx.run_until_parked();
+    let thumbs = cx.update(|_, cx| {
+        ws.read(cx).batch.items[..4]
+            .iter()
+            .map(|i| i.thumb.clone().unwrap())
+            .collect::<Vec<_>>()
+    });
+    cx.update(|window, cx| window.click(("batch-item", 4usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("library-raw-bw", cx));
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(500));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        for (item, thumb) in ws.read(cx).batch.items[..4].iter().zip(&thumbs) {
+            assert!(
+                std::sync::Arc::ptr_eq(item.thumb.as_ref().unwrap(), thumb),
+                "autosave reloaded an unrelated photo"
+            );
+        }
+    });
+}
+
+#[gpui_kit::test]
+fn library_kit_filter_checkboxes_apply_requested_values(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let mut paths = fixture.pngs();
+    let raw = fixture.0.join("raw.dng");
+    crate::raw_test_fixture::write_dng(&raw);
+    paths.push(raw);
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1500.), gpui_kit::px(1000.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(fixture.0.clone(), paths, cx);
+            ws.screen = Screen::Batch;
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("library-filter-raw", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(ws.read(cx).batch.items.len(), 1));
+    cx.update(|window, cx| window.click("library-filter-raw", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(ws.read(cx).batch.items.len(), 5));
 }

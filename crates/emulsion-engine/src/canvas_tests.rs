@@ -12,6 +12,7 @@ fn pixel_node(raster: Arc<Raster>, placement: Placement) -> CompositeNode {
             (x % 256) as u8
         }))),
         clip_to: None,
+        clip_rect: None,
         content: NodeContent::Pixels {
             raster: raster.into(),
             placement,
@@ -351,4 +352,109 @@ fn gpu_reload_preserves_tables_and_matches_pixels_after_baked_edits() {
             assert!(Arc::ptr_eq(&refreshed, &engine.canvas.sources[0].raster));
         }
     }
+}
+
+#[test]
+fn responsive_clips_keep_native_text_and_invalidate_canvas_signature() {
+    use emulsion_core::{
+        Command, Node,
+        command::Slot,
+        design_layout::{Child, Frame},
+    };
+    use emulsion_raster::{vector::PathStyle, vector_geometry};
+    let mut doc = Document::new(96, 64);
+    let mut add = |node: Node, parent| {
+        Command::AddNode {
+            node: Box::new(node),
+            slot: Slot::top_of(parent),
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap()
+    };
+    let group = add(Node::group(0, "Frame"), None);
+    let border = add(
+        Node::path(
+            0,
+            "Border",
+            Arc::new(vector_geometry::rectangle(20.25, 10., 40., 30.)),
+            PathStyle {
+                fill: None,
+                stroke: None,
+                ..Default::default()
+            },
+            96,
+            64,
+        ),
+        Some(group),
+    );
+    let text = add(
+        Node::text(
+            0,
+            "Text",
+            emulsion_core::text::TextSpec {
+                text: "Sharp glyphs".into(),
+                x: 5.,
+                y: 10.,
+                size: 20.,
+                ..Default::default()
+            },
+            96,
+            64,
+        ),
+        Some(group),
+    );
+    doc.design.frames.insert(
+        group,
+        Frame {
+            boundary: border,
+            clip_content: true,
+            children: std::collections::BTreeMap::from([(
+                text,
+                Child {
+                    absolute: true,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    );
+    let before = Canvas::signature(&doc);
+    let mut compiler = Compiler {
+        vectors: vector_nodes(&doc),
+        names: HashMap::new(),
+        width: 96,
+        height: 64,
+        space: doc.blend_space,
+        sources: Vec::new(),
+        ops: Vec::new(),
+        runs: Vec::new(),
+        open_run: None,
+        unsupported: Vec::new(),
+        rasterized: Vec::new(),
+        alpha_slots: 0,
+        paint: None,
+        paint_node: None,
+        baked_prev: Vec::new(),
+        baked_new: Vec::new(),
+        _doc: &doc,
+    };
+    compiler.list(&doc.composite_tree().nodes, 0);
+    assert!(compiler.rasterized.is_empty());
+    assert!(compiler.runs.iter().flatten().any(|item| item.node == text));
+    assert!(compiler.ops.iter().any(|op| matches!(
+        op,
+        Op::ClipPop {
+            clip_rect: Some([20.25, 10., 40., 30.]),
+            ..
+        }
+    )));
+    assert!(
+        matches!(&doc.node(text).unwrap().kind,NodeKind::Text{cache,..} if !cache.is_rendered())
+    );
+    doc.design.frames.get_mut(&group).unwrap().clip_content = false;
+    assert!(
+        Canvas::pixels_only_change(&before, &Canvas::signature(&doc)).is_none(),
+        "clip changes rebuild GPU program instead of reusing stale pixels"
+    );
 }

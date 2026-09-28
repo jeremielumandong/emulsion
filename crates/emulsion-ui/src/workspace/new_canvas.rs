@@ -1,5 +1,7 @@
 //! Native, preset-driven document creation. Nothing edits the current tab until
 //! the complete specification validates and the user chooses Create.
+#[path = "new_canvas_templates.rs"]
+mod templates;
 use super::*;
 use emulsion_core::creation::{Background, CanvasKind, CanvasSpec, Unit, presets};
 use gpui_kit::component::Disableable;
@@ -14,6 +16,8 @@ struct NewCanvas {
     folder: Option<u64>,
     notice: Option<String>,
     submitted: bool,
+    cancelled: bool,
+    templates: templates::Gallery,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -34,9 +38,11 @@ impl NewCanvas {
             spec.bleed_mm.to_string(),
         ]
         .map(|value| cx.new(|cx| InputState::new(window, cx).default_value(value)));
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search presets"));
-        let mut subscriptions = vec![cx.subscribe(&search, |_, _, event, cx| {
+        let search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search sizes or templates"));
+        let mut subscriptions = vec![cx.subscribe(&search, |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
+                this.templates.page = 0;
                 cx.notify();
             }
         })];
@@ -66,6 +72,8 @@ impl NewCanvas {
             category: "Screen".into(),
             notice: None,
             submitted: false,
+            cancelled: false,
+            templates: templates::Gallery::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -94,6 +102,7 @@ impl NewCanvas {
                     .dropdown_caret(true)
                     .small()
                     .outline()
+                    .disabled(self.submitted)
                     .dropdown_menu(move |mut menu, _, _| {
                         let owner_none = owner.clone();
                         menu = menu.item(
@@ -183,6 +192,12 @@ impl NewCanvas {
     }
 
     fn pick_kind(&mut self, kind: CanvasKind, window: &mut Window, cx: &mut Context<Self>) {
+        self.templates.enabled = matches!(kind, CanvasKind::Design | CanvasKind::Diagram);
+        self.templates.selected = None;
+        self.templates.category = None;
+        self.templates.page = 0;
+        self.search
+            .update(cx, |search, cx| search.set_value("", window, cx));
         let mut spec = self.draft(cx).unwrap_or_else(|_| self.spec.clone());
         if spec.name == "Untitled photo"
             || spec.name == "Untitled paint"
@@ -208,6 +223,10 @@ impl NewCanvas {
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.templates.enabled {
+            self.submit_template(window, cx);
+            return false;
+        }
         if self.submitted {
             return true;
         }
@@ -227,6 +246,17 @@ impl NewCanvas {
                 return false;
             }
         };
+        self.install_created(spec, doc, project, window, cx)
+    }
+
+    fn install_created(
+        &mut self,
+        spec: CanvasSpec,
+        doc: Document,
+        project: Option<emulsion_core::project::ProjectEditor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(workspace) = self.workspace.upgrade() else {
             return false;
         };
@@ -286,6 +316,13 @@ impl NewCanvas {
 }
 
 fn field(label: &'static str, input: &Entity<InputState>) -> impl IntoElement {
+    editable_field(label, input, false)
+}
+fn editable_field(
+    label: &'static str,
+    input: &Entity<InputState>,
+    disabled: bool,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -297,12 +334,15 @@ fn field(label: &'static str, input: &Entity<InputState>) -> impl IntoElement {
             div()
                 .id(SharedString::from(format!("new-canvas-field-{label}")))
                 .test_support()
-                .child(Input::new(input).small()),
+                .child(Input::new(input).small().disabled(disabled)),
         )
 }
 
 impl Render for NewCanvas {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.templates.enabled {
+            return self.template_gallery(window, cx);
+        }
         let p = theme::palette(cx);
         let draft = self.draft(cx);
         let valid = draft.is_ok();
@@ -354,6 +394,7 @@ impl Render for NewCanvas {
             .gap_4()
             .text_size(px(12.))
             .text_color(p.ink)
+            .when(matches!(self.spec.kind, CanvasKind::Design | CanvasKind::Diagram), |d| d.child(self.creation_mode(cx)))
             .child(
                 div()
                     .id("new-canvas-scroll")
@@ -674,7 +715,7 @@ impl Render for NewCanvas {
                                 }
                             })),
                     ),
-            )
+            ).into_any_element()
     }
 }
 
@@ -705,12 +746,19 @@ impl Workspace {
         });
         window.open_dialog(cx, move |dialog, window, _| {
             let submit = view.clone();
+            let cancel = view.clone();
+            let close = view.clone();
             dialog
                 .title("New document")
                 .width(px(880.).min(window.viewport_size().width - px(32.)))
                 .overlay_closable(false)
                 .footer(div())
                 .child(view.clone())
+                .on_cancel(move |_, _, cx| {
+                    cancel.update(cx, |view, _| view.cancelled = true);
+                    true
+                })
+                .on_close(move |_, _, cx| close.update(cx, |view, _| view.cancelled = true))
                 .on_ok(move |_, window, cx| submit.update(cx, |view, cx| view.submit(window, cx)))
         });
     }

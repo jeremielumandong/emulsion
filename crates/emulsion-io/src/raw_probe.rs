@@ -51,6 +51,7 @@ pub(crate) fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
 #[derive(Default)]
 struct TiffProbe {
     raw: bool,
+    raw_dimensions: Option<(u32, u32)>,
     previews: Vec<(u32, u32)>,
     orientation: Option<u8>,
     compression: Option<u32>,
@@ -101,8 +102,22 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
         let mut compression = None;
         let mut strip_offset = None;
         let mut bits_per_sample = None;
+        let mut width = None;
+        let mut height = None;
         for entry in entries[..count * 12].as_chunks::<12>().0 {
             let tag = u16v(entry);
+            if matches!(tag, 256 | 257) && u32v(&entry[4..]) == 1 {
+                let value = match u16v(&entry[2..]) {
+                    3 => Some(u32::from(u16v(&entry[8..]))),
+                    4 => Some(u32v(&entry[8..])),
+                    _ => None,
+                };
+                if tag == 256 {
+                    width = value;
+                } else {
+                    height = value;
+                }
+            }
             if tag == 258 && u32v(&entry[4..]) == 1 {
                 bits_per_sample = match u16v(&entry[2..]) {
                     3 => Some(u32::from(u16v(&entry[8..]))),
@@ -168,6 +183,14 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
             result.previews.push((offset, length));
         }
         if raw_ifd {
+            if let (Some(w), Some(h)) = (width, height)
+                && w > 0
+                && h > 0
+            {
+                // Use sensor directories only; root TIFF dimensions often
+                // describe a small camera JPEG, not the RAW allocation.
+                result.raw_dimensions = Some((w, h));
+            }
             result.compression = compression;
             if compression == Some(34713)
                 && let Some(offset) = strip_offset
@@ -283,13 +306,19 @@ pub fn metadata(path: &Path) -> Result<emulsion_core::raw::RawMetadata> {
                 result.sensor = "linear RGB".into();
             }
         }
-        if result.compression == "unknown" {
+        if result.compression == "unknown" || result.width == 0 || result.height == 0 {
             let mut file = std::fs::File::open(path)?;
             let mut header = [0; 8];
             if file.read_exact(&mut header).is_ok()
                 && (header.starts_with(b"II*\0") || header.starts_with(b"MM\0*"))
             {
                 let probe = tiff_probe(&mut file, &header)?;
+                if (result.width == 0 || result.height == 0)
+                    && let Some((width, height)) = probe.raw_dimensions
+                {
+                    result.width = width;
+                    result.height = height;
+                }
                 if result.bits_per_sample == 0 {
                     result.bits_per_sample = probe.bits_per_sample.unwrap_or(0);
                 }
@@ -432,6 +461,37 @@ mod tests {
         data.extend(0u32.to_le_bytes());
         data
     }
+    #[test]
+    fn sensor_dimensions_ignore_the_root_camera_preview() {
+        let mut bytes = b"II*\0\x08\0\0\0".to_vec();
+        for entries in [
+            vec![(256u16, 640u32), (257, 480), (330, 50)],
+            vec![(256, 4352), (257, 2868), (259, 34713)],
+        ] {
+            bytes.extend((entries.len() as u16).to_le_bytes());
+            for (tag, value) in entries {
+                bytes.extend(tag.to_le_bytes());
+                bytes.extend(4u16.to_le_bytes());
+                bytes.extend(1u32.to_le_bytes());
+                bytes.extend(value.to_le_bytes());
+            }
+            bytes.extend(0u32.to_le_bytes());
+        }
+        let fixture = Fixture::new("nef", &bytes);
+        let mut file = std::fs::File::open(&fixture.0).unwrap();
+        let probe = tiff_probe(&mut file, &bytes[..8]).unwrap();
+        assert_eq!(probe.raw_dimensions, Some((4352, 2868)));
+        let ordinary = tiff(256, 640);
+        let fixture = Fixture::new("tif", &ordinary);
+        let mut file = std::fs::File::open(&fixture.0).unwrap();
+        assert!(
+            tiff_probe(&mut file, &ordinary[..8])
+                .unwrap()
+                .raw_dimensions
+                .is_none()
+        );
+    }
+
     #[test]
     fn renamed_dng_and_cfa_tiff_are_raw() {
         for tag in [50706, 33422] {

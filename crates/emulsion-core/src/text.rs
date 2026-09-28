@@ -639,6 +639,12 @@ fn warped_vector_path(
     Some(result)
 }
 
+static FONT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Changes when installed font faces are reloaded; vector caches key on this.
+pub fn font_generation() -> u64 {
+    FONT_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Reload installed system fonts and clear cached glyph images.
 pub fn refresh_fonts() {
     let mut f = fonts().lock().unwrap_or_else(|e| e.into_inner());
@@ -646,6 +652,7 @@ pub fn refresh_fonts() {
         system: font_system(),
         swash: cosmic_text::SwashCache::new(),
     };
+    FONT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn attrs_for<'a>(style: &'a TextStyle, tag: usize, line_height: f32) -> cosmic_text::Attrs<'a> {

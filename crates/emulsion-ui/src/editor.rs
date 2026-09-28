@@ -37,6 +37,7 @@ mod design_styles_ui;
 mod design_ui;
 mod diagram_data_ui;
 mod diagram_ui;
+mod diagram_library_ui;
 mod draw_workspace;
 pub(crate) mod export_ui;
 mod filters;
@@ -423,6 +424,7 @@ pub struct EditorView {
     pub(crate) cache: Rc<RefCell<TileCache>>,
     /// Experimental GPU canvas; `Refused` (or off) means the tile path.
     pub(crate) gpu_canvas: Rc<RefCell<crate::viewport_gpu::Status>>,
+    pub(crate) svg_canvas: Rc<RefCell<crate::viewport_svg::Cache>>,
     /// Whether the selected layer's dashed boundary is shown. Armed by
     /// clicking a layer row, cleared by any other selection change, so the
     /// marquee never appears for a selection the user did not make.
@@ -581,6 +583,7 @@ impl EditorView {
             canvas_bounds: Default::default(),
             cache: Default::default(),
             gpu_canvas: Default::default(),
+            svg_canvas: Default::default(),
             layer_outline_shown: false,
             seen_rev: rev,
             tree_building: None,
@@ -777,6 +780,7 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
+        self.diagram_cancel_connection();
         self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
         self.tools.transform_lift = None;
@@ -789,6 +793,7 @@ impl EditorView {
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
+        self.diagram_cancel_connection();
         self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
         self.tools.transform_lift = None;
@@ -1057,15 +1062,14 @@ impl EditorView {
                             let origin = (r.key.x as i64 * 256, r.key.y as i64 * 256);
                             // One float accumulator per render thread, reused
                             // across tiles instead of a 1 MiB allocation each.
-                            let mut bytes = TILE_SCRATCH.with(|scratch| {
-                                let mut t = scratch.borrow_mut();
+                            let mut bytes = with_tile_scratch(|t| {
                                 render_tile_into(
                                     tree,
                                     r.key.level,
                                     TileCoord::new(r.key.x, r.key.y),
-                                    &mut t,
+                                    t,
                                 );
-                                tile_to_bgra8(&t, origin, lsz, 8, light, dark)
+                                tile_to_bgra8(t, origin, lsz, 8, light, dark)
                             });
                             channel.apply(&mut bytes);
                             Some((r, bytes))
@@ -1251,7 +1255,15 @@ impl EditorView {
         let groups: Vec<_> = self
             .selected_layer_roots()
             .into_iter()
-            .filter(|id| self.editor.doc.node(*id).is_some_and(|n| n.is_group()))
+            .filter(|id| {
+                self.editor.doc.node(*id).is_some_and(|n| n.is_group())
+                    && self
+                        .editor
+                        .doc
+                        .diagram
+                        .as_ref()
+                        .is_none_or(|d| !d.shapes.contains_key(id) && !d.edges.contains_key(id))
+            })
             .collect();
         let children: Vec<_> = groups
             .iter()
@@ -1543,7 +1555,11 @@ impl EditorView {
             return;
         }
         if let Some(point) = self.doc_point(e.position)
-            && self.diagram_pointer_down(point, e.modifiers.shift, cx)
+            && self.diagram_pointer_down(
+                point,
+                e.modifiers.shift || e.modifiers.control || e.modifiers.platform,
+                cx,
+            )
         {
             return;
         }
@@ -1579,6 +1595,13 @@ impl EditorView {
     }
 
     fn drag_move(&mut self, pos: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        let point = self
+            .canvas_bounds()
+            .filter(|b| b.contains(&pos))
+            .and_then(|_| self.doc_point(pos));
+        if self.diagram_pointer_move(point, cx) {
+            return;
+        }
         if self.text_pointer_move(pos, cx) {
             return;
         }
@@ -2231,6 +2254,35 @@ thread_local! {
     static TILE_SCRATCH: RefCell<Vec<[f32; 4]>> = const { RefCell::new(Vec::new()) };
 }
 
+// Rasterization can enter nested Rayon work, which may run another tile on the
+// same thread. Never hold a RefCell borrow across the renderer or its callbacks.
+fn with_tile_scratch<R>(render: impl FnOnce(&mut Vec<[f32; 4]>) -> R) -> R {
+    let mut tile = TILE_SCRATCH.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+    let result = render(&mut tile);
+    TILE_SCRATCH.with(|slot| {
+        let mut cached = slot.borrow_mut();
+        if tile.capacity() > cached.capacity() {
+            *cached = tile;
+        }
+    });
+    result
+}
+
+#[cfg(test)]
+mod tile_scratch_tests {
+    #[test]
+    fn nested_rendering_can_reenter_the_same_thread() {
+        super::with_tile_scratch(|outer| {
+            outer.resize(16, [1.; 4]);
+            super::with_tile_scratch(|inner| {
+                inner.resize(8, [2.; 4]);
+                assert_eq!(inner[0], [2.; 4]);
+            });
+            assert_eq!(outer[0], [1.; 4]);
+        });
+    }
+}
+
 // ── Render ──────────────────────────────────────────────────────────────
 
 impl EditorView {
@@ -2375,6 +2427,11 @@ impl EditorView {
     ) -> impl IntoElement + use<> {
         let previewing = self.previewing();
         let presenting = self.motion.presenting;
+        self.prepare_diagram_svg(cx);
+        let svg_key = (self.editor.active_page(), self.editor.revision);
+        let svg_enabled = self.is_diagram() && !previewing && !presenting && !self.before_active();
+        let svg_canvas = self.svg_canvas.clone();
+        let svg_canvas2 = svg_canvas.clone();
         let overlay = self.overlay(window.scale_factor());
         let zoom_cursor = (!presenting).then(|| self.zoom_cursor(p, window)).flatten();
         let replay = (!presenting).then(|| self.replay_overlay(p, cx)).flatten();
@@ -2620,6 +2677,9 @@ impl EditorView {
                     this.scroll(e, window, cx);
                 }
             }))
+            .on_drop(cx.listener(|this, d: &diagram_ui::DraggedStencil, window, cx| {
+                this.drop_diagram_stencil(d.0,window.mouse_position(),cx);
+            }))
             .on_drop(cx.listener(|this, d: &DraggedColor, window, cx| {
                 if this.motion.presenting {
                     return;
@@ -2665,6 +2725,7 @@ impl EditorView {
                     }
                 }
                 if e.keystroke.key == "escape" && this.diagram_cancel_connection() {
+                    this.notify_canvas(cx);
                     cx.notify();
                     cx.stop_propagation();
                     return;
@@ -2733,8 +2794,10 @@ impl EditorView {
                         // carries only the chrome -- stage, plate, grid, wipe,
                         // rulers -- which the engine does not draw. A refusal
                         // is sticky, so this yields for one frame at most.
-                        let images = (previewing && !native_presentation)
-                            || !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev);
+                        let svg_ready = svg_enabled && svg_canvas.borrow().displayable(svg_key);
+                        let images = !svg_ready
+                            && ((previewing && !native_presentation)
+                                || !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
                         let plan = viewport::prepaint(
                             &scene,
                             &mut cache.borrow_mut(),
@@ -2789,7 +2852,25 @@ impl EditorView {
                     },
                     move |bounds, plan, window, cx| {
                         if let Some(plan) = plan {
-                            if !plan.composes_images() && crate::viewport_gpu::enabled() {
+                            if !plan.composes_images()
+                                && svg_enabled
+                                && svg_canvas2.borrow().displayable(svg_key)
+                            {
+                                viewport::paint_under(&plan, &scene2, window);
+                                if !svg_canvas2.borrow_mut().paint(
+                                    svg_key,
+                                    &view_for_overlay,
+                                    bounds,
+                                    window,
+                                ) {
+                                    svg_canvas2.borrow_mut().scene = None;
+                                    let again = w2.clone();
+                                    cx.defer(move |cx| {
+                                        again.update(cx, |_, cx| cx.notify()).ok();
+                                    });
+                                }
+                                viewport::paint_over(&plan, &scene2, window, cx);
+                            } else if !plan.composes_images() && crate::viewport_gpu::enabled() {
                                 // The engine draws the document, between the
                                 // chrome that sits under it and the chrome
                                 // that sits over it.
@@ -2871,6 +2952,13 @@ impl EditorView {
                             if phase == DispatchPhase::Bubble {
                                 w3.update(cx, |this, cx| {
                                     this.drag_shift = e.modifiers.shift;
+                                    if e.button == MouseButton::Left {
+                                        let point = this
+                                            .canvas_bounds()
+                                            .filter(|b| b.contains(&e.position))
+                                            .and_then(|_| this.doc_point(e.position));
+                                        this.diagram_pointer_up(point, cx);
+                                    }
                                     this.drag_end(cx);
                                 })
                                 .ok();

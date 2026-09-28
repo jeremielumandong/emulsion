@@ -16,6 +16,10 @@ pub mod cloud;
 pub mod creative_library;
 pub mod design_bulk;
 pub mod design_charts;
+#[cfg(test)]
+mod design_layout_tests;
+#[cfg(test)]
+mod design_responsive_tests;
 pub mod design_media;
 #[cfg(test)]
 mod design_styles_tests;
@@ -43,6 +47,7 @@ pub mod raw_settings;
 pub mod recent;
 pub mod settings;
 pub mod svg;
+pub mod svg_viewport;
 pub mod template_pack;
 pub mod thumb;
 pub mod xcf;
@@ -76,6 +81,8 @@ pub enum IoError {
     Unsupported(String),
     #[error("unsupported RAW camera or encoding: {0}")]
     UnsupportedRaw(String),
+    #[error("RAW memory budget is in use; wait for development/export to finish or close another RAW document")]
+    RawMemoryBudget,
     #[error("malformed RAW file: {0}")]
     MalformedRaw(String),
 }
@@ -95,6 +102,10 @@ pub const OPEN_EXTENSIONS: &[&str] = &[
     "vsdm",
     "vstx",
     "vssx",
+    "vssm",
+    "vstm",
+    "vss",
+    "vst",
     "vdx",
     "vsx",
     "lucid",

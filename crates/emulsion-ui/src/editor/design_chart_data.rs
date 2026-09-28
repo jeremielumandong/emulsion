@@ -1,6 +1,6 @@
 //! A dialog-local data grid. Only Apply commits its draft to the document.
 use super::*;
-use emulsion_core::design_charts::{Chart, Kind};
+use emulsion_core::design_charts::{Axis, Chart, Kind, Merge};
 use gpui_kit::component::{
     Disableable, Selectable, Sizable,
     button::{Button, ButtonVariants},
@@ -13,6 +13,10 @@ pub(super) struct ChartDataEditor {
     csv: Entity<TextareaState>,
     csv_mode: bool,
     pub error: Option<String>,
+    axes: [Entity<InputState>; 8],
+    show_labels: [bool; 2],
+    merges: Vec<Merge>,
+    merge_fields: [Entity<InputState>; 4],
 }
 
 impl ChartDataEditor {
@@ -23,6 +27,21 @@ impl ChartDataEditor {
             csv: cx.new(|cx| TextareaState::new(window, cx).rows(9)),
             csv_mode: false,
             error: None,
+            axes: [
+                chart.x_axis.min.map(|v| v.to_string()).unwrap_or_default(),
+                chart.x_axis.max.map(|v| v.to_string()).unwrap_or_default(),
+                chart.x_axis.ticks.to_string(),
+                chart.x_axis.label.clone(),
+                chart.y_axis.min.map(|v| v.to_string()).unwrap_or_default(),
+                chart.y_axis.max.map(|v| v.to_string()).unwrap_or_default(),
+                chart.y_axis.ticks.to_string(),
+                chart.y_axis.label.clone(),
+            ]
+            .map(|v| cx.new(|cx| InputState::new(window, cx).default_value(v))),
+            show_labels: [chart.x_axis.show_labels, chart.y_axis.show_labels],
+            merges: chart.merges.clone(),
+            merge_fields: ["1", "1", "1", "2"]
+                .map(|v| cx.new(|cx| InputState::new(window, cx).default_value(v))),
         }
     }
 
@@ -68,6 +87,89 @@ impl ChartDataEditor {
         Ok(table.rows)
     }
 
+    pub fn apply_options(&self, chart: &mut Chart, cx: &App) -> Result<(), String> {
+        let axis = |offset: usize| -> Result<Axis, String> {
+            let number = |index: usize| -> Result<Option<f64>, String> {
+                let s = self.axes[index].read(cx).value();
+                let s = s.trim();
+                if s.is_empty() {
+                    Ok(None)
+                } else {
+                    s.parse()
+                        .map(Some)
+                        .map_err(|_| "Axis bounds must be numbers or blank for automatic.".into())
+                }
+            };
+            Ok(Axis {
+                min: number(offset)?,
+                max: number(offset + 1)?,
+                ticks: self.axes[offset + 2]
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .parse()
+                    .map_err(|_| "Use 2–20 integer axis ticks.".to_string())?,
+                label: self.axes[offset + 3].read(cx).value().to_string(),
+                show_labels: self.show_labels[offset / 4],
+            })
+        };
+        chart.x_axis = axis(0)?;
+        chart.y_axis = axis(4)?;
+        chart.merges = self.merges.clone();
+        chart.validate()
+    }
+    fn merge_selection(&mut self, clear: bool, cx: &mut Context<Self>) {
+        let result =
+            (|| {
+                let values =
+                    self.merge_fields
+                        .iter()
+                        .map(|f| {
+                            f.read(cx).value().trim().parse::<usize>().map_err(|_| {
+                                "Merge coordinates must be positive integers.".to_string()
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                let row = values[0]
+                    .checked_sub(1)
+                    .ok_or("Rows start at1 (the header).")?;
+                let column = values[1].checked_sub(1).ok_or("Columns start at1 (A).")?;
+                let mut chart = Chart::example(Kind::Table);
+                chart.rows = self.rows(cx)?;
+                chart.merges = self.merges.clone();
+                if clear {
+                    chart.merges.retain(|m| !m.contains(row, column));
+                } else {
+                    chart.merges.push(Merge {
+                        row,
+                        column,
+                        rows: values[2],
+                        columns: values[3],
+                    });
+                }
+                chart.validate()?;
+                self.merges = chart.merges;
+                Ok::<_, String>(())
+            })();
+        self.error = result.err();
+        cx.notify();
+    }
+    fn remove_merge_index(&mut self, index: usize, row: bool) {
+        for m in &mut self.merges {
+            let (start, count) = if row {
+                (&mut m.row, &mut m.rows)
+            } else {
+                (&mut m.column, &mut m.columns)
+            };
+            if index < *start {
+                *start -= 1;
+            } else if index < *start + *count {
+                *count -= 1;
+            }
+        }
+        self.merges
+            .retain(|m| m.rows > 0 && m.columns > 0 && (m.rows > 1 || m.columns > 1));
+    }
     fn switch_mode(&mut self, csv: bool, window: &mut Window, cx: &mut Context<Self>) {
         if csv == self.csv_mode {
             return;
@@ -154,7 +256,23 @@ impl Render for ChartDataEditor {
                             })))
                     }),
             )
-            .child("The first row contains headings. Column A contains category labels; charts use numbers in the other columns. Pie charts require one value column. Tables accept text.")
+            .when(!matches!(self.kind,Kind::Table|Kind::Pie|Kind::Donut),|d| {
+                let fields=["X minimum · auto if blank","X maximum · auto if blank","X ticks · scatter","X axis label","Y minimum · auto if blank","Y maximum · auto if blank","Y ticks","Y axis label"];
+                d.child(div().grid().grid_cols(4).gap_1().children(fields.into_iter().enumerate().filter(|(i,_)| *i >= 3 || self.kind == Kind::Scatter).map(|(i,label)| {
+                    div().child(label).child(Input::new(&self.axes[i]).id(("design-chart-axis",i)))
+                }))).child(div().flex().gap_1().children((0..2).map(|i| {
+                    Button::new(("design-chart-axis-labels",i)).label(if i==0 {"X labels"}else{"Y labels"}).small().outline().selected(self.show_labels[i]).on_click(cx.listener(move|this,_,_,cx| {this.show_labels[i]=!this.show_labels[i];cx.notify();}))
+                })))
+            })
+            .when(self.kind==Kind::Table,|d| {
+                d.child(div().grid().grid_cols(4).gap_1().children(["Start row · 1 = header","Start column · 1 = A","Row span","Column span"].into_iter().enumerate().map(|(i,label)| {
+                    div().child(label).child(Input::new(&self.merge_fields[i]).id(("design-table-merge-input",i)))
+                }))).child(div().flex().flex_wrap().gap_1()
+                    .child(Button::new("design-table-merge").label("Merge range").small().outline().on_click(cx.listener(|this,_,_,cx|this.merge_selection(false,cx))))
+                    .child(Button::new("design-table-unmerge").label("Unmerge at cell").small().outline().on_click(cx.listener(|this,_,_,cx|this.merge_selection(true,cx))))
+                    .child(format!("{} merged regions · covered cell values are retained",self.merges.len())))
+            })
+            .child("The first row contains headings. Column A contains category labels; charts use numbers in the other columns. Pie/donut need one value column; scatter needs numeric X in column A. Tables accept text; merged cells display the top-left value without deleting covered data.")
             .when(self.csv_mode, |d| {
                 d.child(div().id("design-chart-data").test_support().child(Textarea::new(&self.csv)))
             })
@@ -171,6 +289,7 @@ impl Render for ChartDataEditor {
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if this.cells[0].len() > 2 {
                                                     for row in &mut this.cells { row.remove(column); }
+                                                    this.remove_merge_index(column,false);
                                                     cx.notify();
                                                 }
                                             })))
@@ -183,7 +302,7 @@ impl Render for ChartDataEditor {
                                             Button::new(("design-chart-remove-row", row_index))
                                                 .label("Remove").small().ghost().disabled(self.cells.len() <= 2)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                                    if this.cells.len() > 2 { this.cells.remove(row_index); cx.notify(); }
+                                                    if this.cells.len() > 2 { this.cells.remove(row_index); this.remove_merge_index(row_index,true); cx.notify(); }
                                                 })),
                                         ))
                                     )

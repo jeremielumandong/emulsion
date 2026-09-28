@@ -157,6 +157,15 @@ impl Resources {
     }
 }
 pub(super) fn package(path: &Path) -> Result<Imported> {
+    let mut signature = [0; 8];
+    let mut file = std::fs::File::open(path)?;
+    if file.read_exact(&mut signature).is_ok()
+        && signature == [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]
+    {
+        return Err(error(
+            "This file contains legacy binary Visio data despite its extension. Convert it in Visio to a real .vsdx, .vssx, or .vstx package before import.",
+        ));
+    }
     let package = Package::read(path)?;
     let document = xml::parse(package.text("visio/document.xml")?)?;
     let mut resources = Resources::from_document(&document)?;
@@ -189,7 +198,11 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
         }
     }
     let mut scenes = Vec::new();
-    let stencil_package = path.extension().and_then(|e| e.to_str()).is_some_and(|e| ["vssx", "vssm"].iter().any(|ext|e.eq_ignore_ascii_case(ext)));
+    let stencil_package = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        ["vssx", "vssm"]
+            .iter()
+            .any(|ext| e.eq_ignore_ascii_case(ext))
+    });
     if !stencil_package && package.entries.contains_key("visio/pages/pages.xml") {
         let pages = xml::parse(package.text("visio/pages/pages.xml")?)?;
         let rels = relationships(&package, "visio/pages/pages.xml")?;

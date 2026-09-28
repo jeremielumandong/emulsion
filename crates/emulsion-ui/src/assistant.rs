@@ -33,9 +33,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-mod raw_mcp;
-mod project_mcp;
 mod presentation_mcp;
+mod project_mcp;
+mod raw_mcp;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CardStatus {
@@ -995,8 +995,8 @@ impl EditorView {
             } => {
                 let tool = strip_prefix(&tool_name);
                 let settings = app_state::settings(cx);
-                let auto = settings.approve_all
-                    || (settings.auto_apply && !tools::is_destructive(&tool));
+                let auto =
+                    settings.approve_all || (settings.auto_apply && !tools::is_destructive(&tool));
                 if auto {
                     if let Some(s) = &mut self.assistant.session
                         && let Err(e) = s.allow(&request_id, &tool_use_id, &input)
@@ -1098,8 +1098,8 @@ impl EditorView {
             return;
         }
         let settings = app_state::settings(cx);
-        let auto = settings.approve_all
-            || (settings.auto_apply && !tools::is_destructive(&call.name));
+        let auto =
+            settings.approve_all || (settings.auto_apply && !tools::is_destructive(&call.name));
         let asks_itself = provider(cx).permission_prompts;
         if !asks_itself && !auto && !tools::is_read_only(&call.name) {
             let doc = self.editor.doc.clone();
@@ -1162,7 +1162,15 @@ impl EditorView {
         // Discovery of brushes, fonts and the attached reference is independent
         // of document edits. Other reads can depend on preceding operations,
         // including list_models after a download or list_recipes after import.
-        !matches!(name, "list_brushes" | "list_fonts" | "get_reference_image" | "get_library" | "get_library_preview" | "cancel_library_export")
+        !matches!(
+            name,
+            "list_brushes"
+                | "list_fonts"
+                | "get_reference_image"
+                | "get_library"
+                | "get_library_preview"
+                | "cancel_library_export"
+        )
     }
 
     fn complete_tool_work(&mut self, generation: u64, cx: &mut Context<Self>) {
@@ -1215,15 +1223,19 @@ impl EditorView {
     fn execute_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
         let tool_generation = self.assistant.tool_generation;
         let ordered = Self::ordered_tool(&call.name);
-        if self.presentation_active() && !tools::is_read_only(&call.name)
+        if self.presentation_active()
+            && !tools::is_read_only(&call.name)
             && !emulsion_mcp::design_motion_tools::HOST_TOOLS.contains(&call.name.as_str())
         {
-            call.reply(emulsion_mcp::ToolResult::error("End the presentation before editing the project."));
+            call.reply(emulsion_mcp::ToolResult::error(
+                "End the presentation before editing the project.",
+            ));
             self.complete_tool_work(tool_generation, cx);
             return;
         }
         let native_history = tools::uses_native_history(&call.name)
-            || (self.editor.kind().is_some() && matches!(call.name.as_str(), "undo" | "redo" | "save_document"));
+            || (self.editor.kind().is_some()
+                && matches!(call.name.as_str(), "undo" | "redo" | "save_document"));
         if native_history && self.assistant.running && !self.assistant.native_tool_steps {
             if self.editor.transaction_depth() > 1 {
                 call.reply(emulsion_mcp::ToolResult::error("Finish the active gesture before changing project structure or native Design assets."));
@@ -1236,16 +1248,24 @@ impl EditorView {
         if emulsion_mcp::library_tools::is_tool(&call.name) {
             let workspace = self.library_workspace.clone();
             cx.spawn(async move |this, cx| {
-                let task = workspace.and_then(|workspace| workspace.update(cx, |ws, cx| {
-                    ws.library_mcp(&call.name, &call.arguments, cx)
-                }).ok());
+                let task = workspace.and_then(|workspace| {
+                    workspace
+                        .update(cx, |ws, cx| ws.library_mcp(&call.name, &call.arguments, cx))
+                        .ok()
+                });
                 let result = match task {
                     Some(task) => task.await,
-                    None => emulsion_mcp::ToolResult::error("No live Library workspace is attached to this document"),
+                    None => emulsion_mcp::ToolResult::error(
+                        "No live Library workspace is attached to this document",
+                    ),
                 };
                 call.reply(result);
-                if ordered { this.update(cx, |this, cx| this.complete_tool_work(tool_generation, cx)).ok(); }
-            }).detach();
+                if ordered {
+                    this.update(cx, |this, cx| this.complete_tool_work(tool_generation, cx))
+                        .ok();
+                }
+            })
+            .detach();
             return;
         }
         if emulsion_mcp::design_motion_tools::HOST_TOOLS.contains(&call.name.as_str()) {
@@ -1253,7 +1273,8 @@ impl EditorView {
             return;
         }
         if emulsion_mcp::project_tools::is_tool(&call.name)
-            || (self.editor.kind().is_some() && matches!(call.name.as_str(), "undo" | "redo" | "save_document"))
+            || (self.editor.kind().is_some()
+                && matches!(call.name.as_str(), "undo" | "redo" | "save_document"))
         {
             self.execute_project_host_tool(call, cx);
             return;
@@ -1414,6 +1435,36 @@ impl EditorView {
                 .ok();
             })
             .detach();
+            return;
+        }
+        if call.name=="install_diagram_stencil_pack" {
+            let args=call.arguments.clone();
+            cx.spawn(async move |this,cx| {
+                let result=cx.background_spawn(async move {emulsion_mcp::diagram_project_tools::install_stencil_pack(&args)}).await;
+                this.update(cx,|this,cx| {
+                    if !result.is_error {this.refresh_creative_library(cx);}
+                    call.reply(result);
+                    if ordered {this.complete_tool_work(tool_generation,cx);}
+                }).ok();
+            }).detach();return;
+        }
+        if emulsion_mcp::diagram_project_tools::is_tool(&call.name) {
+            let before = self.editor.stamp();
+            let page = self.editor.active_page();
+            let result = emulsion_mcp::diagram_project_tools::execute(
+                &mut self.editor,
+                &call.name,
+                &call.arguments,
+            );
+            call.reply(result);
+            if self.editor.stamp() != before || self.editor.active_page() != page {
+                self.after_change(cx);
+            } else {
+                cx.notify();
+            }
+            if ordered {
+                self.complete_tool_work(tool_generation, cx);
+            }
             return;
         }
         let before = self.editor.revision;
@@ -2602,63 +2653,94 @@ mod mutation_queue_tests {
         let relay = Relay::start().unwrap();
         let view = painting(cx, false);
         view.update(cx, |view, _| {
-            view.editor = ProjectEditor::new_project(ProjectKind::Design, Document::new(64,64)).unwrap();
+            view.editor =
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(64, 64)).unwrap();
             view.editor.begin("Assistant project request");
         });
-        let (add, reply) = call(&relay, "add_project_page", json!({"name":"Second","width":96}));
-        view.update(cx, |view,cx|view.run_tool_now(add,cx));
+        let (add, reply) = call(
+            &relay,
+            "add_project_page",
+            json!({"name":"Second","width":96}),
+        );
+        view.update(cx, |view, cx| view.run_tool_now(add, cx));
         cx.run_until_parked();
-        assert_eq!(reply.join().unwrap()["isError"],false);
-        view.read_with(cx, |view,_| {
-            assert_eq!(view.editor.page_list().len(),2);
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.editor.page_list().len(), 2);
             assert!(view.assistant.native_tool_steps);
             assert!(!view.editor.in_transaction());
         });
-        let (add,reply)=call(&relay,"add_text",json!({"text":"Native style source","x":4,"y":4,"size":12}));
-        view.update(cx, |view,cx|view.run_tool_now(add,cx));
-        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
-        let node=view.read_with(cx, |view,_|view.editor.doc.nodes.last().unwrap().id);
-        let (style,reply)=call(&relay,"create_design_style",json!({"node":node,"name":"Heading"}));
-        view.update(cx, |view,cx|view.run_tool_now(style,cx));
-        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
-        view.read_with(cx, |view,_|assert!(view.editor.doc.design.saved_styles.contains_key("Heading")));
-        let path=std::env::temp_dir().join(format!("emulsion-live-mcp-project-{}.emu",std::process::id()));
-        let (save,reply)=call(&relay,"save_document",json!({"path":path}));
-        view.update(cx, |view,cx|view.run_tool_now(save,cx));
-        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
-        let restored=emulsion_io::project::read(&path).unwrap();
-        assert_eq!(restored.pages.len(),2);
-        assert!(restored.pages[1].doc.design.saved_styles.contains_key("Heading"));
+        let (add, reply) = call(
+            &relay,
+            "add_text",
+            json!({"text":"Native style source","x":4,"y":4,"size":12}),
+        );
+        view.update(cx, |view, cx| view.run_tool_now(add, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        let node = view.read_with(cx, |view, _| view.editor.doc.nodes.last().unwrap().id);
+        let (style, reply) = call(
+            &relay,
+            "create_design_style",
+            json!({"node":node,"name":"Heading"}),
+        );
+        view.update(cx, |view, cx| view.run_tool_now(style, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        view.read_with(cx, |view, _| {
+            assert!(view.editor.doc.design.saved_styles.contains_key("Heading"))
+        });
+        let path = std::env::temp_dir().join(format!(
+            "emulsion-live-mcp-project-{}.emu",
+            std::process::id()
+        ));
+        let (save, reply) = call(&relay, "save_document", json!({"path":path}));
+        view.update(cx, |view, cx| view.run_tool_now(save, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        let restored = emulsion_io::project::read(&path).unwrap();
+        assert_eq!(restored.pages.len(), 2);
+        assert!(
+            restored.pages[1]
+                .doc
+                .design
+                .saved_styles
+                .contains_key("Heading")
+        );
         std::fs::remove_file(path).unwrap();
         // Global Undo traverses the saved style, text insertion, then page creation.
         for _ in 0..3 {
-            let (undo,reply)=call(&relay,"undo",json!({}));
-            view.update(cx, |view,cx|view.run_tool_now(undo,cx));
-            cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
+            let (undo, reply) = call(&relay, "undo", json!({}));
+            view.update(cx, |view, cx| view.run_tool_now(undo, cx));
+            cx.run_until_parked();
+            assert_eq!(reply.join().unwrap()["isError"], false);
         }
-        view.read_with(cx, |view,_|assert_eq!(view.editor.page_list().len(),1));
-        let (redo,reply)=call(&relay,"redo",json!({}));
-        view.update(cx, |view,cx|view.run_tool_now(redo,cx));
-        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],false);
-        view.read_with(cx, |view,_|assert_eq!(view.editor.page_list().len(),2));
+        view.read_with(cx, |view, _| assert_eq!(view.editor.page_list().len(), 1));
+        let (redo, reply) = call(&relay, "redo", json!({}));
+        view.update(cx, |view, cx| view.run_tool_now(redo, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        view.read_with(cx, |view, _| assert_eq!(view.editor.page_list().len(), 2));
     }
 
     #[gpui_kit::test]
     fn project_mcp_does_not_close_nested_user_gesture(cx: &mut TestAppContext) {
         use emulsion_core::project::{ProjectEditor, ProjectKind};
-        let relay=Relay::start().unwrap();
-        let view=painting(cx,false);
-        view.update(cx, |view,_| {
-            view.editor=ProjectEditor::new_project(ProjectKind::Design,Document::new(64,64)).unwrap();
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        view.update(cx, |view, _| {
+            view.editor =
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(64, 64)).unwrap();
             view.editor.begin("Assistant");
             view.editor.begin("Pointer gesture");
         });
-        let (add,reply)=call(&relay,"add_project_page",serde_json::json!({"name":"No"}));
-        view.update(cx, |view,cx|view.run_tool_now(add,cx));
-        cx.run_until_parked(); assert_eq!(reply.join().unwrap()["isError"],true);
-        view.read_with(cx, |view,_| {
-            assert_eq!(view.editor.transaction_depth(),2);
-            assert_eq!(view.editor.page_list().len(),1);
+        let (add, reply) = call(&relay, "add_project_page", serde_json::json!({"name":"No"}));
+        view.update(cx, |view, cx| view.run_tool_now(add, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], true);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.editor.transaction_depth(), 2);
+            assert_eq!(view.editor.page_list().len(), 1);
             assert!(!view.assistant.native_tool_steps);
         });
     }
@@ -2750,6 +2832,54 @@ mod mutation_queue_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    #[gpui_kit::test]
+    fn library_mcp_relay_reaches_workspace_and_read_does_not_release_mutation_queue(
+        cx: &mut TestAppContext,
+    ) {
+        use serde_json::json;
+        let file = RawFixture::new();
+        let (workspace, cx) = crate::tests::open(cx, emulsion_core::Document::new(8, 8));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            workspace.update(cx, |ws, cx| {
+                ws.load_batch(
+                    file.0.parent().unwrap().to_path_buf(),
+                    vec![file.0.clone()],
+                    cx,
+                );
+            })
+        });
+        let editor = cx.update(|_, cx| workspace.read(cx).editor.clone().unwrap());
+        let relay = Relay::start().unwrap();
+        let (selection, reply) = call(&relay, "select_library_photos", json!({"paths":[file.0]}));
+        cx.update(|_, cx| editor.update(cx, |view, cx| view.run_tool_now(selection, cx)));
+        for _ in 0..100 {
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_millis(20));
+            if reply.is_finished() {
+                break;
+            }
+        }
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        // Progress reads bypass the ordered queue but must not clear its reservation.
+        cx.update(|_, cx| editor.update(cx, |view, _| view.assistant.tool_busy = true));
+        let (read, reply) = call(&relay, "get_library", json!({}));
+        cx.update(|_, cx| editor.update(cx, |view, cx| view.run_tool_now(read, cx)));
+        cx.run_until_parked();
+        let result = reply.join().unwrap();
+        assert_eq!(result["isError"], false);
+        let state: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(state["active"], json!(file.0));
+        cx.update(|_, cx| {
+            editor.update(cx, |view, _| {
+                assert!(view.assistant.tool_busy);
+                view.assistant.tool_busy = false;
+            })
+        });
     }
 
     #[gpui_kit::test]

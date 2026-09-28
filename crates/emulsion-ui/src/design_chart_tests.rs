@@ -284,3 +284,80 @@ fn chart_grid_csv_switching_preserves_quotes_unicode_and_rejects_bad_data(cx: &m
         assert_eq!(chart.rows, rows);
     });
 }
+
+#[gpui_kit::test]
+fn native_chart_axis_and_merge_controls_apply_without_losing_covered_cells(
+    cx: &mut TestAppContext,
+) {
+    let (ws, cx) = open(cx, Document::new(600, 400));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1100.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap(),
+                "Advanced charts".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click(("design-section", 1usize), cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click(("design-chart-add", 4usize), cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click(("design-chart-axis", 4usize), cx));
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("500");
+    cx.update(|w, cx| w.click(("design-chart-axis", 5usize), cx));
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("100");
+    cx.update(|w, cx| w.click("ok", cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| {
+        assert!(view.read(cx).editor.doc.design.charts.is_empty());
+        assert!(w.find("design-chart-error").visible());
+        w.click(("design-chart-axis", 4usize), cx);
+    });
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("0");
+    cx.update(|w, cx| w.click("ok", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        let c = &e.editor.doc.design.charts[&e.selected.unwrap()];
+        assert_eq!(c.kind, Kind::Area);
+        assert_eq!(c.y_axis.max, Some(100.));
+    });
+    cx.update(|w, cx| w.click(("design-chart-add", 3usize), cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click("design-table-merge", cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click("ok", cx));
+    cx.run_until_parked();
+    let merged = cx.update(|_, cx| {
+        let e = view.read(cx);
+        let c = &e.editor.doc.design.charts[&e.selected.unwrap()];
+        assert_eq!(c.merges.len(), 1);
+        e.editor.doc.clone()
+    });
+    cx.update(|w, cx| w.click("design-chart-edit", cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click("design-table-unmerge", cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click("ok", cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| {
+        let e = view.read(cx);
+        let id = e.selected.unwrap();
+        assert!(e.editor.doc.design.charts[&id].merges.is_empty());
+        assert_eq!(
+            e.editor.doc.design.charts[&id].rows,
+            merged.design.charts[&id].rows
+        );
+        w.click("design-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, merged));
+}

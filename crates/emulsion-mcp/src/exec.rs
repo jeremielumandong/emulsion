@@ -3978,11 +3978,8 @@ pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, T
         };
     }
     match name {
-        "list_diagram_stencils" | "describe_diagram" => {
-            let mut editor = Editor::new(doc.clone(), None);
-            let result = crate::diagram_tools::execute(&mut editor, name, args)
-                .unwrap_or_else(|| err(format!("not an inspection tool: {name}")));
-            if result.is_error { Err(result) } else { Ok(result) }
+        "list_diagram_stencils" | "describe_diagram" | "list_diagram_library" | "list_diagram_stencil_packs" => {
+            crate::diagram_tools::inspect(doc, name, args)
         }
         "get_raw_preview" => crate::raw_preview::preview(doc, args),
         "describe_raw" => crate::raw_tools::describe(doc, args),

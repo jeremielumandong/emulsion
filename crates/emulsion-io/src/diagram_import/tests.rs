@@ -200,3 +200,17 @@ fn visio_stencil_uses_masters_instead_of_placeholder_page() {
     );
     std::fs::remove_file(file).unwrap();
 }
+
+#[test]
+fn renamed_binary_visio_reports_conversion_requirement() {
+    let file = temp("renamed.vssx");
+    std::fs::write(&file, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).unwrap();
+    assert!(
+        read(&file)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("despite its extension")
+    );
+    std::fs::remove_file(file).unwrap();
+}

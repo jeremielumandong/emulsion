@@ -30,9 +30,12 @@ struct PixelReservation(u64);
 
 impl PixelReservation {
     fn acquire(pixels: u64) -> Result<Self> {
-        RESERVED_PIXELS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-            used.checked_add(pixels).filter(|total| *total <= MAX_RAW_PIXELS)
-        }).map_err(|_| IoError::UnsupportedRaw("RAW memory budget is in use; wait for development/export to finish or close another RAW document".into()))?;
+        RESERVED_PIXELS
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(pixels)
+                    .filter(|total| *total <= MAX_RAW_PIXELS)
+            })
+            .map_err(|_| IoError::RawMemoryBudget)?;
         Ok(Self(pixels))
     }
     fn shrink(&mut self, pixels: u64) {

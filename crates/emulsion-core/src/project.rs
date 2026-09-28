@@ -475,6 +475,20 @@ impl ProjectEditor {
         self.collect_pages();
         Ok(())
     }
+    /// Prepare all affected pages before committing any of them, as one Undo action.
+    pub(crate) fn commit_documents(&mut self, mut documents: BTreeMap<PageId, Document>, label: &str) -> Result<(), String> {
+        if self.kind.is_none() || self.in_transaction() {return Err("Finish the current edit in a project first.".into());}
+        for (id,doc) in &mut documents {
+            let editor=self.page(*id).ok_or("Project page no longer exists.")?;
+            if editor.in_transaction() {return Err("Finish edits on every affected page first.".into());}
+            let mut trial=Editor::new(editor.doc.clone(),None);
+            trial.commit_design_document(doc.clone(),label)?;
+            *doc=trial.doc;
+        }
+        let order=edit_order();
+        for (id,doc) in documents {self.pages.get_mut(&id).unwrap().commit_project_document(doc,label,order);}
+        Ok(())
+    }
     fn candidate(&self, redo: bool) -> (PageId, u64) {
         self.layout
             .iter()
@@ -547,8 +561,17 @@ impl ProjectEditor {
             true
         } else {
             self.active = id;
-            let editor = self.pages.get_mut(&id).unwrap();
-            if redo { editor.redo() } else { editor.undo() }
+            let affected:Vec<_>=self.layout.iter().filter_map(|page| {
+                let h=&self.pages[&page.id].history;
+                ((if redo {h.redo_order()} else {h.undo_order()})==order).then_some(page.id)
+            }).collect();
+            let grouped_order=edit_order();
+            for page in affected {
+                let editor=self.pages.get_mut(&page).unwrap();
+                if redo {editor.redo();} else {editor.undo();}
+                editor.group_history(!redo,grouped_order);
+            }
+            true
         }
     }
 }

@@ -1023,6 +1023,37 @@ mod tests {
                 this.presentation_host_action(HostAction::Navigate(Direction::Last), window, cx)
                     .unwrap();
                 assert_ne!(this.editor.active_page(), first);
+                let last = this.editor.active_page();
+                let state = this
+                    .presentation_host_action(HostAction::State, window, cx)
+                    .unwrap();
+                assert_eq!(state["page_index"], 2);
+                assert_eq!(state["page_count"], 2);
+                assert_eq!(state["fullscreen"], true);
+                this.presentation_host_action(HostAction::Navigate(Direction::Next), window, cx)
+                    .unwrap();
+                assert_eq!(this.editor.active_page(), last);
+                this.presentation_host_action(
+                    HostAction::Navigate(Direction::Previous),
+                    window,
+                    cx,
+                )
+                .unwrap();
+                assert_eq!(this.editor.active_page(), first);
+                this.presentation_host_action(HostAction::Navigate(Direction::Next), window, cx)
+                    .unwrap();
+                assert_eq!(this.editor.active_page(), last);
+                this.presentation_host_action(HostAction::Navigate(Direction::First), window, cx)
+                    .unwrap();
+                assert_eq!(this.editor.active_page(), first);
+                this.presentation_host_action(HostAction::Fullscreen(false), window, cx)
+                    .unwrap();
+                assert!(!window.is_fullscreen());
+                this.presentation_host_action(HostAction::Fullscreen(true), window, cx)
+                    .unwrap();
+                assert!(window.is_fullscreen());
+                this.presentation_host_action(HostAction::Navigate(Direction::Last), window, cx)
+                    .unwrap();
                 this.presentation_host_action(
                     HostAction::Start {
                         fullscreen: false,

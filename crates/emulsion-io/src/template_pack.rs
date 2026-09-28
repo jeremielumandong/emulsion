@@ -123,6 +123,93 @@ pub fn read(path: &Path) -> Result<Pack> {
     }
     read_archive(f, None)
 }
+/// Convert supported local stencil sources into the same reusable offline pack
+/// format as authored packages. No remote image or catalog URLs are fetched.
+pub fn read_stencil_source(path: &Path) -> Result<(Pack, Vec<String>)> {
+    if is_pack(path) {
+        return Ok((read(path)?, Vec::new()));
+    }
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Imported stencils")
+        .chars()
+        .take(200)
+        .collect::<String>();
+    let (project, warnings) = if path.is_dir()
+        || path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+    {
+        let mut paths = if path.is_dir() {
+            let mut paths = std::fs::read_dir(path)?
+                .map(|entry| entry.map(|e| e.path()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            paths.retain(|p| {
+                p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+            });
+            paths.sort();
+            paths
+        } else {
+            vec![path.to_path_buf()]
+        };
+        if paths.is_empty() || paths.len() > emulsion_core::project::MAX_PAGES {
+            return Err(error("Choose 1–100 SVG files in one folder."));
+        }
+        let mut pages = Vec::new();
+        for (index, path) in paths.drain(..).enumerate() {
+            let doc = crate::open(&path)?;
+            let id = index as u64 + 1;
+            let title = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Stencil")
+                .chars()
+                .take(200)
+                .collect();
+            pages.push(emulsion_core::project::ProjectPage {
+                meta: emulsion_core::project::PageMeta {
+                    id,
+                    name: title,
+                    bleed_mm: 0.,
+                },
+                graph: emulsion_core::graph::Graph::new(doc.clone(), "Imported stencil"),
+                doc,
+            });
+        }
+        let next_page_id = pages.len() as u64 + 1;
+        (
+            Project {
+                kind: ProjectKind::Diagram,
+                pages,
+                active: 1,
+                next_page_id,
+            },
+            Vec::new(),
+        )
+    } else {
+        let imported = crate::diagram_import::read(path)?;
+        (imported.project, imported.warnings)
+    };
+    project.validate().map_err(error)?;
+    let mut bytes = Cursor::new(Vec::new());
+    project::write_to(&project, &mut bytes)?;
+    if bytes.get_ref().len() as u64 > MAX_PACK {
+        return Err(error("Stencil content exceeds 256 MiB."));
+    }
+    let manifest = Manifest::new(Kind::Stencil, name);
+    manifest.validate()?;
+    Ok((
+        Pack {
+            manifest,
+            project,
+            preview: None,
+            project_bytes: bytes.into_inner(),
+        },
+        warnings,
+    ))
+}
+
 fn read_archive<R: Read + Seek>(reader: R, prefix: Option<&str>) -> Result<Pack> {
     let mut zip = zip::ZipArchive::new(reader)?;
     if zip.len() > 10_000 {

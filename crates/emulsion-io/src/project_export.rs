@@ -69,6 +69,88 @@ fn image(raster: &emulsion_raster::Raster, transform: &str) -> Result<String> {
     ))
 }
 
+// Cache text contours in local coordinates: dragging labels changes only the
+// SVG transform, not font shaping or glyph extraction. The cache is bounded by
+// bytes as well as entries; no raster text is stored.
+fn label_geometry(spec: &emulsion_core::text::TextSpec) -> Result<std::sync::Arc<str>> {
+    use std::{
+        collections::{HashMap, VecDeque},
+        sync::{Arc, Mutex, OnceLock},
+    };
+    #[derive(Default)]
+    struct Cache {
+        values: HashMap<String, Arc<str>>,
+        order: VecDeque<String>,
+        bytes: usize,
+    }
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let key = format!(
+        "{}:{}",
+        emulsion_core::text::font_generation(),
+        serde_json::to_string(spec).map_err(|e| error(e.to_string()))?
+    );
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values
+        .get(&key)
+        .cloned()
+    {
+        return Ok(hit);
+    }
+    let paths = emulsion_core::text::vector_paths(spec).ok_or_else(|| {
+        error("Advanced text effects or color glyphs require a rendered appearance.")
+    })?;
+    let mut out = String::new();
+    // Adjacent glyphs with the same paint share one SVG path, reducing scene
+    // nodes and parser work for long labels without losing vector outlines.
+    let mut pending = String::new();
+    let mut current = None;
+    let flush = |out: &mut String, path: &mut String, color: [u8; 4]| {
+        write!(
+            out,
+            "<path d=\"{}\" fill=\"{}\" fill-opacity=\"{}\"/>",
+            path,
+            rgba(color),
+            color[3] as f32 / 255.
+        )
+        .unwrap();
+        path.clear();
+    };
+    for (path, color) in paths {
+        if let Some(previous) = current
+            && previous != color
+        {
+            flush(&mut out, &mut pending, previous);
+        }
+        current = Some(color);
+        pending.push_str(&path.to_svg());
+        pending.push(' ');
+    }
+    if let Some(color) = current {
+        flush(&mut out, &mut pending, color);
+    }
+    let out: Arc<str> = out.into();
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let cost = key.len() + out.len();
+    const LIMIT: usize = 16 * 1024 * 1024;
+    if cost <= LIMIT && !cache.values.contains_key(&key) {
+        while cache.bytes + cost > LIMIT || cache.values.len() >= 2048 {
+            let Some(old) = cache.order.pop_front() else {
+                break;
+            };
+            if let Some(value) = cache.values.remove(&old) {
+                cache.bytes -= old.len() + value.len();
+            }
+        }
+        cache.bytes += cost;
+        cache.order.push_back(key.clone());
+        cache.values.insert(key, out.clone());
+    }
+    Ok(out)
+}
+
 fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
     let n = doc.node(id).ok_or_else(|| error("Missing export layer"))?;
     if !n.visible {
@@ -102,8 +184,19 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
     }
     match &n.kind {
         NodeKind::Group { .. } => {
-            for child in doc.children(Some(id)) {
-                node_svg(doc, child, out)?;
+            if let Some([x, y, w, h]) = emulsion_core::design_clipping::frame_rect(doc, id) {
+                let boundary = doc.design.frames[&id].boundary;
+                write!(out,"<defs><clipPath id=\"layout-clip-{id}\" clipPathUnits=\"userSpaceOnUse\"><rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\"/></clipPath><mask id=\"layout-outside-{id}\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" style=\"mask-type:luminance\"><rect width=\"{}\" height=\"{}\" fill=\"white\"/><rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"black\"/></mask></defs><g mask=\"url(#layout-outside-{id})\">",doc.width,doc.height,doc.width,doc.height).unwrap();
+                node_svg(doc, boundary, out)?;
+                write!(out, "</g><g clip-path=\"url(#layout-clip-{id})\">").unwrap();
+                for child in doc.children(Some(id)) {
+                    node_svg(doc, child, out)?;
+                }
+                out.push_str("</g>");
+            } else {
+                for child in doc.children(Some(id)) {
+                    node_svg(doc, child, out)?;
+                }
             }
         }
         NodeKind::Fill { rgba: color } => write!(
@@ -157,25 +250,21 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
             if frame.is_some() {
                 outlined.height = None;
             }
-            let paths = emulsion_core::text::vector_paths(&outlined).ok_or_else(|| {
-                error("Advanced text effects or color glyphs require a rendered appearance.")
-            })?;
+            // Outline at the origin so moving an object reuses its contours.
+            let transform = outlined.transform();
+            outlined.x = 0.;
+            outlined.y = 0.;
+            outlined.rotation = 0.;
+            outlined.scale_x = 1.;
+            outlined.scale_y = 1.;
+            let geometry = label_geometry(&outlined)?;
             if let Some((width, height)) = frame {
                 write!(out,
                     "<defs><clipPath id=\"text-frame-{id}\" clipPathUnits=\"userSpaceOnUse\"><rect width=\"{width}\" height=\"{height}\" transform=\"{}\"/></clipPath></defs><g clip-path=\"url(#text-frame-{id})\">",
                     matrix(spec.transform()),
                 ).unwrap();
             }
-            for (path, color) in paths {
-                write!(
-                    out,
-                    "<path d=\"{}\" fill=\"{}\" fill-opacity=\"{}\"/>",
-                    path.to_svg(),
-                    rgba(color),
-                    color[3] as f32 / 255.
-                )
-                .unwrap();
-            }
+            write!(out, "<g transform=\"{}\">{geometry}</g>", matrix(transform)).unwrap();
             if frame.is_some() {
                 out.push_str("</g>");
             }
@@ -195,6 +284,17 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
     }
     out.push_str("</g>");
     Ok(())
+}
+
+/// Strict scalable SVG for a viewport. Unsupported effects return an error;
+/// callers can use their normal compositor without flattening an entire page.
+pub fn vector_svg(doc: &Document) -> Result<Vec<u8>> {
+    doc.validate().map_err(|e| error(e.to_string()))?;
+    let mut content = String::new();
+    for id in doc.children(None) {
+        node_svg(doc, id, &mut content)?;
+    }
+    Ok(format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">{content}</svg>",doc.width,doc.height,doc.width,doc.height).into_bytes())
 }
 
 /// Glyphs are outlined using the editor's shaping and bundled fonts, so SVG

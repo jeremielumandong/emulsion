@@ -127,7 +127,23 @@ mod tests {
             let mut editor = Editor::new(Document::new(360, 260), None);
             let mut chart = Chart::example(kind);
             chart.size = (320., 220.);
-            chart.rows[1][0] = "Edited label".into();
+            chart.rows[1][0] = if kind == Kind::Scatter {
+                "42"
+            } else {
+                "Edited label"
+            }
+            .into();
+            chart.y_axis.min = Some(0.);
+            chart.y_axis.max = Some(120.);
+            chart.y_axis.label = "Measured value".into();
+            if kind == Kind::Table {
+                chart.merges.push(design_charts::Merge {
+                    row: 0,
+                    column: 0,
+                    rows: 1,
+                    columns: 2,
+                });
+            }
             let id = design_charts::apply(&mut editor, None, chart.clone(), (12., 15.)).unwrap();
             let project = ProjectEditor::new_project(ProjectKind::Design, editor.doc.clone())
                 .unwrap()
@@ -153,5 +169,89 @@ mod tests {
             design_charts::apply(&mut reopened, Some(id), chart.clone(), (12., 15.)).unwrap();
             assert_eq!(reopened.doc.design.charts[&id], chart);
         }
+    }
+}
+
+#[cfg(test)]
+mod text_formatting_tests {
+    use emulsion_core::{
+        Command, Document, Editor, Node,
+        command::Slot,
+        project::{ProjectEditor, ProjectKind},
+        text::{ListStyle, TextSpec, apply_list},
+    };
+    use std::io::Cursor;
+    #[test]
+    fn decorated_lists_roundtrip_and_export_vector_svg_and_pdf() {
+        let mut editor = Editor::new(Document::new(400, 300), None);
+        let mut spec = TextSpec {
+            text: "Native list\nSecond item".into(),
+            size: 24.,
+            x: 20.,
+            y: 20.,
+            width: Some(240.),
+            height: Some(120.),
+            underline: true,
+            ..Default::default()
+        };
+        spec = apply_list(&spec, ListStyle::Bullet).unwrap();
+        let start = spec.text.find("Second").unwrap();
+        spec.apply_style(start..start + 6, |s| {
+            s.strikethrough = true;
+            s.color = [220, 30, 60, 255];
+        });
+        editor
+            .execute(Command::AddNode {
+                node: Box::new(Node::text(0, "Decorated list", spec, 400, 300)),
+                slot: Slot::TOP,
+            })
+            .unwrap();
+        let project = ProjectEditor::new_project(ProjectKind::Design, editor.doc.clone())
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        let mut archive = Cursor::new(Vec::new());
+        crate::project::write_to(&project, &mut archive).unwrap();
+        let read = crate::project::read_from(Cursor::new(archive.into_inner())).unwrap();
+        assert_eq!(read.pages[0].doc, editor.doc);
+        let (svg, flat) = crate::project_export::svg(&editor.doc).unwrap();
+        assert!(!flat);
+        let source = String::from_utf8(svg).unwrap();
+        assert!(!source.contains("<image"));
+        assert!(source.contains("text-frame-"));
+        let mut plain = editor.doc.clone();
+        let emulsion_core::NodeKind::Text { spec, .. } = &plain.nodes[0].kind else {
+            panic!()
+        };
+        let mut spec = (**spec).clone();
+        spec.underline = false;
+        spec.strikethrough = false;
+        for run in &mut spec.runs {
+            run.style.underline = false;
+            run.style.strikethrough = false;
+        }
+        Command::SetText {
+            id: plain.nodes[0].id,
+            spec: Box::new(spec),
+        }
+        .apply(&mut plain)
+        .unwrap();
+        let plain_svg = String::from_utf8(crate::project_export::svg(&plain).unwrap().0).unwrap();
+        assert!(
+            source.matches("<path").count() > plain_svg.matches("<path").count(),
+            "decoration contours are exported"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native-list.pdf");
+        let report = crate::project_export::write(
+            &project,
+            &[project.pages[0].meta.id],
+            crate::project_export::Format::Pdf,
+            false,
+            &path,
+        )
+        .unwrap();
+        assert!(report.rasterized_pages.is_empty());
+        assert!(std::fs::read(path).unwrap().starts_with(b"%PDF-"));
     }
 }

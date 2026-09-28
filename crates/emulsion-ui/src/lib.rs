@@ -24,6 +24,7 @@ pub mod tablet;
 pub mod theme;
 pub mod viewport;
 pub mod viewport_gpu;
+mod viewport_svg;
 pub mod web_player;
 pub mod widgets;
 pub mod workspace;

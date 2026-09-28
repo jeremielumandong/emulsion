@@ -120,6 +120,15 @@ impl Workspace {
             self.batch.develop.anchor = Some(index);
         }
         self.batch.current = Some(index);
+        if self
+            .batch
+            .develop
+            .source
+            .as_ref()
+            .is_some_and(|source| source.source != self.batch.items[index].path)
+        {
+            self.batch.develop.source = None;
+        }
         self.batch.develop.before = false;
         self.invalidate_library_preview();
         cx.notify();
@@ -142,6 +151,16 @@ impl Workspace {
         }
         let generation = self.batch.preview_generation;
         let params = self.batch.develop.current_params(&path);
+        if self
+            .batch
+            .develop
+            .source
+            .as_ref()
+            .is_some_and(|s| s.source != path)
+        {
+            // Release the previous mosaic before reserving memory for its replacement.
+            self.batch.develop.source = None;
+        }
         let cached = self
             .batch
             .develop
@@ -339,7 +358,7 @@ impl Workspace {
                                 };
                                 // Validate existing settings before replacing them, including fingerprint.
                                 let current = raw_settings::adjacent_settings(&source.source, &source.source_sha256)?;
-                                if (expected.get(&path).is_some_and(|p| *p != current) || fingerprints.get(&path).is_some_and(|d| d != &source.source_sha256)) {
+                                if expected.get(&path).is_some_and(|p| *p != current) || fingerprints.get(&path).is_some_and(|d| d != &source.source_sha256) {
                                     return Err(emulsion_io::IoError::Manifest("The original or its saved settings changed outside Library; reload before saving.".into()));
                                 }
                                 if sync {let before=drafts.get(&path).copied().unwrap_or(current);previous=Some(before);params=raw_settings::merge_settings(before,params,group);}
@@ -354,6 +373,7 @@ impl Workspace {
                 this.batch.develop.saving = false;
                 let mut failed = Vec::new();
                 let mut saved = 0;
+                let mut refresh_active = false;
                 for (path, params, previous, result) in results {
                     match result {
                         Ok(()) => {
@@ -364,21 +384,19 @@ impl Workspace {
                                     history.push(previous);
                                     if history.len() > 100 { history.remove(0); }
                                 }
+                                refresh_active |= previous != Some(params) && this.batch.current.and_then(|i| this.batch.items.get(i)).is_some_and(|item| item.path == path);
                                 this.batch.develop.drafts.insert(path.clone(), params);
                             }
-                            this.batch.thumbs_requested.remove(&path);
-                            for item in &mut this.batch.items {
-                                if item.path == path {
-                                    item.thumb = None;
-                                }
-                            }
+                            this.batch.invalidate_thumb(&path);
                             saved += 1;
                         }
                         Err(e) => failed.push(format!("{}: {e}", path.display())),
                     }
                 }
-                this.batch.invalidate_thumbs();
-                this.invalidate_library_preview();
+                // Autosave persists an already rendered draft; it must not
+                // re-develop the active photo or clear unrelated thumbnails.
+                if refresh_active { this.invalidate_library_preview(); }
+                this.batch_thumbs(cx);
                 if failed.is_empty() && this.batch.develop.dirty() {this.library_schedule_save(cx);}
                 this.batch.note = Some((
                     if failed.is_empty() {

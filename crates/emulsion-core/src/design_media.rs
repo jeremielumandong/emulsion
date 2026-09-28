@@ -489,11 +489,16 @@ pub(crate) fn validate(
 
 /// Playback bounds in document coordinates. Hidden ancestors suppress playback.
 pub fn bounds(doc: &Document, id: NodeId) -> Option<(f64, f64, f64, f64)> {
-    let video = doc.design.media.get(&id)?;
-    let mut current = Some(video.boundary);
+    let boundary = doc
+        .design
+        .media
+        .get(&id)
+        .map(|video| video.boundary)
+        .or_else(|| doc.design.local_media.get(&id).map(|media| media.boundary))?;
+    let mut current = Some(boundary);
     for _ in 0..=doc.nodes.len() {
         let Some(id) = current else {
-            return rectangle(doc, video.boundary);
+            return rectangle(doc, boundary);
         };
         let node = doc.node(id)?;
         if !node.visible || node.opacity <= 0. {
@@ -806,3 +811,10 @@ mod youtube_tests {
         doc.validate().unwrap();
     }
 }
+
+#[path = "design_local_media.rs"]
+mod local;
+pub use local::{
+    LocalMedia, LocalMediaKind, MAX_LOCAL_ASSET_BYTES, MAX_LOCAL_PAGE_BYTES, detach_local,
+    insert_local, update_local, validate_local,
+};

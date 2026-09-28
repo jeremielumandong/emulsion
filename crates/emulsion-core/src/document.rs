@@ -518,7 +518,13 @@ impl Document {
                             raster: raster.clone().into(),
                             placement: *placement,
                         },
-                        NodeKind::Group { .. } => NodeContent::Group(build(doc, Some(n.id))),
+                        NodeKind::Group { .. } => {
+                            NodeContent::Group(crate::design_clipping::composite_children(
+                                doc,
+                                n.id,
+                                build(doc, Some(n.id)),
+                            ))
+                        }
                         NodeKind::Adjust(a) => NodeContent::Adjust(Arc::new(a.prepare())),
                         NodeKind::Fill { rgba } => {
                             NodeContent::Fill(color::srgba8_to_premul(*rgba))
@@ -563,6 +569,7 @@ impl Document {
                             blending: n.blending,
                             mask: Document::composite_mask(n),
                             clip_to: None,
+                            clip_rect: None,
                             content,
                         },
                     )
@@ -665,6 +672,7 @@ impl Document {
                             },
                             mask: None,
                             clip_to: None,
+                            clip_rect: None,
                             content: NodeContent::StyledGroup {
                                 children,
                                 clip_source: Box::new(clip_source),

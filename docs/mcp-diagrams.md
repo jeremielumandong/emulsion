@@ -27,6 +27,21 @@ A shape-data and conditional-fill update can use:
 {"node":12,"data":{"status":"complete"},"conditions":[{"field":"status","equals":"complete","color":[20,180,80,255]}],"layout_locked":true}
 ```
 
-`data` and `conditions` replace their corresponding collections; omitted properties are unchanged. Set `container` to a container shape ID, or `null` to remove containment. Cycles and non-container targets are rejected. Automatic layout respects layout/position locks and moves containers with their children.
+`data` replaces user fields while preserving read-only `emulsion_*`/`drawio_*` metadata; `conditions` replaces the rules; omitted properties are unchanged. Set `container` to a container shape ID, or `null` to remove containment. Cycles and non-container targets are rejected. Automatic layout respects layout/position locks and moves containers with their children.
 
 Each mutation uses one Undo step and rejects an in-progress interactive transaction. Property edits preflight protected descendants, labels and graph validation before committing; invalid arguments do not partially update the diagram. Mutating property/layout tools carry the host's destructive classification. The two discovery tools are read-only. Library package import/export, custom stencil authoring and page navigation are handled by the project/library host tools, rather than these bundled-stencil operations.
+
+
+## Page-aware diagram workflows
+
+| Tool | Purpose |
+| --- | --- |
+| `quick_create_diagram` | Add a connected neighbor in a cardinal direction. |
+| `generate_diagram` | Generate a new page from text, CSV, Mermaid or SQL; `refresh=true` updates linked data on the active page. |
+| `import_diagram` | Import every page from a supported local file or supplied draw.io XML, returning warnings. |
+| `export_diagram` | Export all pages as editable draw.io; omit `path` to return XML. Existing files require `overwrite=true`. |
+
+These tools require an open Diagram project. Existing project tools handle page
+selection, add/duplicate/delete/reorder/rename, native saving, PDF and image
+archives, and template/stencil packs. See the [functionality audit](diagram-functionality.md)
+for sample coverage, the default catalog and remaining compatibility limits.

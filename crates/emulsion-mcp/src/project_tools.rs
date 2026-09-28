@@ -30,7 +30,12 @@ pub fn definitions() -> Vec<ToolDef> {
     let size = json!({"type":"integer","minimum":1,"maximum":30000});
     let path = json!({"type":"string","minLength":1});
     vec![
-        def("generate_diagram_page", "Generate an editable diagram page from bounded text flow, CSV, Mermaid flowchart or SQL schema source. Parsers do not execute SQL or fetch resources. Keeps existing pages; one Undo step.", json!({"source":{"type":"string","minLength":1,"maxLength":1048576},"format":{"enum":["text","csv","mermaid","sql"]},"name":{"type":"string","minLength":1,"maxLength":200}}), &["source","format","name"]),
+        def(
+            "generate_diagram_page",
+            "Generate an editable diagram page from bounded text flow, CSV, Mermaid flowchart or SQL schema source. Parsers do not execute SQL or fetch resources. Keeps existing pages; one Undo step.",
+            json!({"source":{"type":"string","minLength":1,"maxLength":1048576},"format":{"enum":["text","csv","mermaid","sql"]},"name":{"type":"string","minLength":1,"maxLength":200}}),
+            &["source", "format", "name"],
+        ),
         def(
             "list_project_design_assets",
             "List reusable component variants and saved style names across every project page. Use stable page IDs to reuse assets on the active page.",
@@ -242,9 +247,16 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
     match name {
         "generate_diagram_page" => {
             use emulsion_io::diagram_data::{self, Format};
-            let format=match args["format"].as_str().unwrap() {"text"=>Format::Text,"csv"=>Format::Csv,"mermaid"=>Format::Mermaid,_=>Format::Sql};
-            let doc=diagram_data::parse(args["source"].as_str().unwrap(),format).and_then(|d|d.document()).map_err(|e|e.to_string())?;
-            editor.add_page(doc,args["name"].as_str().unwrap().into(),0.)?;
+            let format = match args["format"].as_str().unwrap() {
+                "text" => Format::Text,
+                "csv" => Format::Csv,
+                "mermaid" => Format::Mermaid,
+                _ => Format::Sql,
+            };
+            let doc = diagram_data::parse(args["source"].as_str().unwrap(), format)
+                .and_then(|d| d.document())
+                .map_err(|e| e.to_string())?;
+            editor.add_page(doc, args["name"].as_str().unwrap().into(), 0.)?;
         }
         "insert_component_from_page" => {
             let source = editor.page(page).ok_or("Unknown source page")?.doc.clone();
@@ -387,8 +399,12 @@ pub fn write_snapshot(
         }
         "export_project" => {
             if args["format"] == "drawio" {
-                if args.get("pages").is_some() || args["include_bleed"].as_bool().unwrap_or(false) {return Err("draw.io export uses all pages and does not support print bleed".into());}
-                emulsion_io::drawio::write(project,path).map_err(|e|e.to_string())?;
+                if args.get("pages").is_some() || args["include_bleed"].as_bool().unwrap_or(false) {
+                    return Err(
+                        "draw.io export uses all pages and does not support print bleed".into(),
+                    );
+                }
+                emulsion_io::drawio::write(project, path).map_err(|e| e.to_string())?;
                 return Ok(json!({"path":path,"pages":project.pages.len()}));
             }
             if args["format"] == "gif" {

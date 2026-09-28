@@ -45,6 +45,54 @@ impl EditorView {
             )
             .into_any_element()
     }
+    pub(super) fn install_diagram_stencils(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: true,
+            multiple: false,
+            prompt: Some(
+                "Choose a stencil pack, draw.io XML, Visio stencil, SVG file or SVG folder".into(),
+            ),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.set_status("Installing stencil library…", false, cx)
+            })
+            .ok();
+            let result = cx
+                .background_spawn(async move {
+                    let (pack, warnings) = template_pack::read_stencil_source(&path)?;
+                    let count = pack.project.pages.len();
+                    template_pack::install(&library::root(), pack)
+                        .map(|(catalog, _)| (catalog, count, warnings))
+                })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok((catalog, count, warnings)) => {
+                    this.install_catalog(catalog);
+                    this.diagram_import_notes(warnings.clone());
+                    this.set_status(
+                        format!(
+                            "Installed {count} reusable stencil entries. {} import notes.",
+                            warnings.len()
+                        ),
+                        false,
+                        cx,
+                    );
+                }
+                Err(error) => this.set_status(error.to_string(), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn install_creative_pack_file(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,

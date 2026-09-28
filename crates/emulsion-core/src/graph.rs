@@ -931,6 +931,13 @@ pub fn merge(
 
     let mut design_conflict = false;
     let side = choices.get(&ConflictKey::Design);
+    out.design.variables = merge_metadata(&base.design.variables, &ours.design.variables, &theirs.design.variables, side, &mut design_conflict);
+    out.design.variable_bindings = merge_metadata(&base.design.variable_bindings, &ours.design.variable_bindings, &theirs.design.variable_bindings, side, &mut design_conflict);
+    out.design.interactions = merge_metadata(&base.design.interactions, &ours.design.interactions, &theirs.design.interactions, side, &mut design_conflict);
+    out.design.local_media = merge_metadata(&base.design.local_media, &ours.design.local_media, &theirs.design.local_media, side, &mut design_conflict);
+    out.design.keyframes = merge_metadata(&base.design.keyframes, &ours.design.keyframes, &theirs.design.keyframes, side, &mut design_conflict);
+    let overlay_map = |d: &Document| d.design.overlays.iter().map(|id| (*id, ())).collect();
+    out.design.overlays = merge_metadata(&overlay_map(base), &overlay_map(ours), &overlay_map(&theirs), side, &mut design_conflict).into_keys().collect();
     out.design.saved_styles = merge_metadata(
         &base.design.saved_styles,
         &ours.design.saved_styles,
@@ -1131,6 +1138,19 @@ pub fn merge(
                 result.entry(node.id).or_insert_with(|| node.clone());
             }
             let settings = source.design.fragment(&ids);
+            for (key,value) in settings.variables { out.design.variables.entry(key).or_insert(value); }
+            for (key,value) in settings.variable_bindings { out.design.variable_bindings.entry(key).or_insert(value); }
+            for (key,value) in settings.interactions { out.design.interactions.entry(key).or_insert(value); }
+            for (key,value) in settings.local_media { out.design.local_media.entry(key).or_insert(value); }
+            for (key,value) in settings.keyframes {
+                for track in &value {
+                    if let Some(frame) = track.frames.last() {
+                        out.design.duration_ms = out.design.duration_ms.max(frame.time_ms);
+                    }
+                }
+                out.design.keyframes.entry(key).or_insert(value);
+            }
+            out.design.overlays.extend(settings.overlays);
             for (key, value) in settings.saved_styles {
                 out.design.saved_styles.entry(key).or_insert(value);
             }

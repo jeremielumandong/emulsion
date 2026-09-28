@@ -364,7 +364,7 @@ pub const SYSTEM_PROMPT: &str = concat!(
 /// Qualified names of the tools that never need confirmation.
 pub fn read_only_tools() -> Vec<String> {
     emulsion_mcp::tools::read_only_names()
-        .map(|t| emulsion_mcp::tools::qualified(t))
+        .map(emulsion_mcp::tools::qualified)
         .collect()
 }
 

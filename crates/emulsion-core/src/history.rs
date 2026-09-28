@@ -478,6 +478,75 @@ impl Editor {
         Ok(())
     }
 
+    /// Commit a component plan after the same native dependent-update checks.
+    /// Kept crate-private: callers must prepare the complete change on a clone.
+    pub(crate) fn commit_design_document(
+        &mut self,
+        mut next: Document,
+        label: &str,
+    ) -> Result<(), String> {
+        if self.in_transaction() {
+            return Err("Finish the current edit first.".into());
+        }
+        next.retain_raw_originals(&self.doc);
+        // A prepared snapshot may already contain different pixels. Compare
+        // against the original session, before SetDesign's postlude sees it.
+        if let Some(raw) = &self.doc.raw {
+            fn source(
+                doc: &Document,
+                id: NodeId,
+            ) -> Option<&std::sync::Arc<emulsion_raster::Raster>> {
+                match &doc.node(id)?.kind {
+                    crate::NodeKind::Raster { raster, .. } => Some(raster),
+                    crate::NodeKind::Smart {
+                        source,
+                        editable: None,
+                        ..
+                    } => Some(source),
+                    _ => None,
+                }
+            }
+            if !matches!((source(&self.doc,raw.node_id),source(&next,raw.node_id)),(Some(before),Some(after)) if std::sync::Arc::ptr_eq(before,after))
+            {
+                next.raw = None;
+            }
+        }
+        if next.diagram.is_some() {
+            crate::diagram::synchronize(&self.doc, &mut next).map_err(|e| e.to_string())?;
+        }
+        let snapshot = next.clone();
+        for node in &mut next.nodes {
+            if let Some(base) = node.clip_to {
+                let siblings = snapshot.children(node.parent);
+                if !matches!((siblings.iter().position(|id|*id==node.id), siblings.iter().position(|id|*id==base)), (Some(a),Some(b)) if b<a)
+                {
+                    node.clip_to = None;
+                }
+            }
+        }
+        // SetDesign runs the native pruning, layout reflow, normalization and
+        // document validation postlude without exposing an unchecked snapshot API.
+        Command::SetDesign {
+            design: Box::new(next.design.clone()),
+        }
+        .apply(&mut next)
+        .map_err(|e| e.to_string())?;
+        for before in &self.doc.nodes {
+            if next.node(before.id) != Some(before) {
+                let locks = self.doc.layer_locks(before.id);
+                if self.doc.locked_ancestor(before.id).is_some()
+                    || locks.pixels
+                    || locks.position
+                    || locks.transparency
+                {
+                    return Err("Unlock every affected component object before updating it.".into());
+                }
+            }
+        }
+        self.replace_document(next, label);
+        Ok(())
+    }
+
     /// Swap in a whole document as one undo step.
     fn replace_document(&mut self, mut doc: Document, label: &str) {
         self.end_all();

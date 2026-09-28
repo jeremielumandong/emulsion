@@ -158,6 +158,14 @@ from the feasibility plan remain future work.
 
 ## Verification — 2026-09-27
 
+Project organization follow-up: 14 cloud-crate tests, six cloud/portability IO
+tests, and six cloud UI tests passed. The cloud crate passes Clippy with warnings
+denied. Tests cover metadata-only revisions, legacy headers, project membership
+and assigned-name restoration across multiple real image files, same-name project
+isolation, Drive folder creation/moves via a simulated request handler, and search
+by project or assigned name. The new Drive hierarchy has not been exercised with
+a live upload by these tests.
+
 Home management follow-up: 16 Home-focused UI tests and six cloud UI tests
 passed (the filters overlap), plus two creative-library persistence tests.
 Synthetic collections cover 1,000 local files and 1,000 cloud files with 3,000

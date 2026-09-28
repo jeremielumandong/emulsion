@@ -52,6 +52,8 @@ struct StyleEdit {
     color: Option<[u8; 4]>,
     bold: Option<bool>,
     italic: Option<bool>,
+    underline: Option<bool>,
+    strikethrough: Option<bool>,
     letter_spacing: Option<f32>,
     baseline: Option<f32>,
 }
@@ -71,6 +73,8 @@ impl StyleEdit {
                 .transpose()?,
             bold: boolean(args, "bold")?,
             italic: boolean(args, "italic")?,
+            underline: boolean(args, "underline")?,
+            strikethrough: boolean(args, "strikethrough")?,
             letter_spacing: number(args, "letter_spacing", -50.0, 500.0)?,
             baseline: number(args, "baseline", -4000.0, 4000.0)?,
         })
@@ -82,6 +86,8 @@ impl StyleEdit {
             && self.color.is_none()
             && self.bold.is_none()
             && self.italic.is_none()
+            && self.underline.is_none()
+            && self.strikethrough.is_none()
             && self.letter_spacing.is_none()
             && self.baseline.is_none()
     }
@@ -101,6 +107,12 @@ impl StyleEdit {
         }
         if let Some(value) = self.italic {
             style.italic = value;
+        }
+        if let Some(value) = self.underline {
+            style.underline = value;
+        }
+        if let Some(value) = self.strikethrough {
+            style.strikethrough = value;
         }
         if let Some(value) = self.letter_spacing {
             style.letter_spacing = value;
@@ -126,6 +138,12 @@ impl StyleEdit {
         if let Some(value) = self.italic {
             spec.italic = value;
         }
+        if let Some(value) = self.underline {
+            spec.underline = value;
+        }
+        if let Some(value) = self.strikethrough {
+            spec.strikethrough = value;
+        }
         if let Some(value) = self.letter_spacing {
             spec.letter_spacing = value;
         }
@@ -143,6 +161,15 @@ pub(crate) fn parse_text_args(args: &Value, mut spec: TextSpec) -> Result<TextSp
             .ok_or_else(|| error("text must be a string"))?;
         let end = spec.text.len();
         spec.replace_range(0..end, value);
+    }
+    if let Some(value) = args.get("list") {
+        let list = match value.as_str() {
+            Some("none") => emulsion_core::text::ListStyle::None,
+            Some("bullet") => emulsion_core::text::ListStyle::Bullet,
+            Some("numbered") => emulsion_core::text::ListStyle::Numbered,
+            _ => return Err(error("list must be none, bullet or numbered")),
+        };
+        spec = emulsion_core::text::apply_list(&spec, list).map_err(error)?;
     }
     let style = StyleEdit::parse(args)?;
     style.update_base(&mut spec);
@@ -380,6 +407,7 @@ fn style_json(style: &TextStyle) -> Value {
     json!({
         "font": style.font, "size": style.size, "color": color_json(style.color),
         "bold": style.bold, "italic": style.italic,
+        "underline": style.underline, "strikethrough": style.strikethrough,
         "letter_spacing": style.letter_spacing, "baseline": style.baseline
     })
 }
@@ -538,5 +566,60 @@ mod tests {
         );
         assert!(result.is_error);
         assert_eq!(editor.doc, before);
+    }
+}
+
+#[cfg(test)]
+mod decoration_list_tests {
+    use super::*;
+    use emulsion_core::Document;
+    #[test]
+    fn text_lists_and_character_decorations_are_strict_and_undoable() {
+        let mut editor = Editor::new(Document::new(400, 300), None);
+        let result = crate::exec::execute(
+            &mut editor,
+            "add_text",
+            &json!({"text":"First\n日本語","list":"bullet","underline":true}),
+        );
+        assert!(!result.is_error, "{result:?}");
+        let id = editor.doc.nodes.last().unwrap().id;
+        let NodeKind::Text { spec, .. } = &editor.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(spec.text, "• First\n• 日本語");
+        assert!(spec.underline);
+        let before = editor.doc.clone();
+        let result = crate::exec::execute(
+            &mut editor,
+            "set_text",
+            &json!({"node":id,"list":"numbered","strikethrough":true}),
+        );
+        assert!(!result.is_error, "{result:?}");
+        let NodeKind::Text { spec, .. } = &editor.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(spec.text, "1. First\n2. 日本語");
+        assert!(spec.strikethrough && spec.underline);
+        editor.undo();
+        assert_eq!(editor.doc, before);
+        for args in [
+            json!({"node":id,"list":true}),
+            json!({"node":id,"underline":null}),
+            json!({"node":id,"strikethrough":"yes"}),
+        ] {
+            assert!(crate::exec::execute(&mut editor, "set_text", &args).is_error);
+            assert_eq!(editor.doc, before);
+        }
+        let result = crate::exec::execute(
+            &mut editor,
+            "format_text_range",
+            &json!({"node":id,"start":2,"end":7,"underline":false,"strikethrough":true}),
+        );
+        assert!(!result.is_error, "{result:?}");
+        let NodeKind::Text { spec, .. } = &editor.doc.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert!(!spec.style_at(4).underline && spec.style_at(4).strikethrough);
+        assert!(spec.style_at(spec.text.find("日本語").unwrap()).underline);
     }
 }

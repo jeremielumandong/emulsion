@@ -1,8 +1,7 @@
 //! Responsive layout, resize rules and image-frame controls for active pages.
 use crate::{ToolDef, ToolResult};
 use emulsion_core::{
-    Command, Editor, NodeId, NodeKind, design, design_layout as layout,
-    design_metadata::{Anchor, Constraint},
+    Command, Editor, NodeId, NodeKind, design, design_layout as layout, design_metadata::Anchor,
 };
 use serde_json::{Value, json};
 
@@ -30,24 +29,43 @@ fn nodes() -> Value {
 fn anchor() -> Value {
     json!({"type":"string","enum":["start","center","end","stretch","scale"]})
 }
+fn optional_size() -> Value {
+    json!({"type":["number","null"],"minimum":1,"maximum":100000,"description":"Dimension bound in pixels; null clears this bound. Omission preserves it."})
+}
+fn optional_ratio() -> Value {
+    json!({"type":["number","null"],"minimum":0.001,"maximum":1000,"description":"Width divided by height; null clears the ratio. Omission preserves it."})
+}
+fn breakpoint_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["min_width"],"properties":{
+        "min_width":{"type":"number","minimum":1,"maximum":100000},
+        "overrides":{"type":"object","additionalProperties":false,"properties":{
+            "flow":{"type":["string","null"],"enum":["row","column","grid",null]},
+            "padding":{"type":["array","null"],"items":{"type":"number","minimum":0,"maximum":10000},"minItems":4,"maxItems":4},
+            "gap":{"type":["number","null"],"minimum":0,"maximum":10000},
+            "columns":{"type":["integer","null"],"minimum":1,"maximum":64},
+            "wrap":{"type":["boolean","null"]},"align":{"type":["string","null"],"enum":["start","center","end",null]},
+            "hug_width":{"type":["boolean","null"]},"hug_height":{"type":["boolean","null"]},"clip_content":{"type":["boolean","null"]}
+        }}
+    }})
+}
 pub(crate) fn definitions() -> Vec<ToolDef> {
     vec![
         def(
             "describe_design_layout",
-            "Read persisted responsive group layouts, current frame bounds and per-object page-resize constraints. Child settings not present in a frame default to in-layout/fixed-width. Missing resize constraints default to scale on both axes without text reflow.",
+            "Read persisted responsive group layouts, current frame bounds, active canvas-width breakpoints, effective settings and per-object page-resize constraints. Child settings not present in a frame default to in-layout/fixed dimensions without explicit bounds or ratio. Missing resize constraints default to scale on both axes without text reflow.",
             json!({}),
             &[],
         ),
         def(
             "set_responsive_layout",
-            "Enable or patch automatic layout on an existing group. Use group_nodes first for ungrouped objects. Creates a native rectangle boundary when first enabled, then reflows children in layer order. Omitted fields preserve existing settings; new layouts default to column, padding 24, gap 16, columns 2, wrap true, align start, fixed height, and 80% of the canvas dimensions.",
-            json!({"group":node(),"size":{"type":"array","items":{"type":"number","minimum":1,"maximum":100000},"minItems":2,"maxItems":2},"flow":{"type":"string","enum":["row","column","grid"]},"padding":{"type":"array","items":{"type":"number","minimum":0,"maximum":10000},"minItems":4,"maxItems":4,"description":"Top,right,bottom,left in document pixels."},"gap":{"type":"number","minimum":0,"maximum":10000},"columns":{"type":"integer","minimum":1,"maximum":64},"wrap":{"type":"boolean"},"align":{"type":"string","enum":["start","center","end"]},"hug_height":{"type":"boolean"}}),
+            "Enable or patch automatic layout, native content clipping and canvas-width breakpoints on an existing group. Use group_nodes first for ungrouped objects. Creates a native rectangle boundary when first enabled, then reflows children in layer order. Omitted fields preserve existing settings; new layouts default to column, padding 24, gap 16, columns 2, wrap true, align start, fixed width/height without bounds, and 80% of the canvas dimensions.",
+            json!({"group":node(),"size":{"type":"array","items":{"type":"number","minimum":1,"maximum":100000},"minItems":2,"maxItems":2},"flow":{"type":"string","enum":["row","column","grid"]},"padding":{"type":"array","items":{"type":"number","minimum":0,"maximum":10000},"minItems":4,"maxItems":4,"description":"Top,right,bottom,left in document pixels."},"gap":{"type":"number","minimum":0,"maximum":10000},"columns":{"type":"integer","minimum":1,"maximum":64},"wrap":{"type":"boolean"},"align":{"type":"string","enum":["start","center","end"]},"hug_height":{"type":"boolean"},"hug_width":{"type":"boolean"},"min_width":optional_size(),"max_width":optional_size(),"min_height":optional_size(),"max_height":optional_size(),"clip_content":{"type":"boolean"},"breakpoints":{"type":"array","maxItems":16,"items":breakpoint_schema(),"description":"Replace all canvas-width breakpoints; [] clears. Highest matching min_width inherits directly from base. Missing/null override fields inherit base. Unique widths required."}}),
             &["group"],
         ),
         def(
             "set_layout_child",
-            "Patch an immediate content child's responsive settings. absolute=true excludes it from automatic positioning; fill_width=true uses the available cell width. Text reflows while retaining font size. At least one setting is required; frame boundaries are excluded.",
-            json!({"node":node(),"absolute":{"type":"boolean"},"fill_width":{"type":"boolean"}}),
+            "Patch an immediate content child's responsive settings. absolute=true excludes it from automatic positioning; fill_width/fill_height use available cell dimensions. Optional min/max dimensions and width-to-height aspect_ratio constrain sizing; null clears a bound or ratio. Text reflows while retaining font size. At least one setting is required; frame boundaries are excluded.",
+            json!({"node":node(),"absolute":{"type":"boolean"},"fill_width":{"type":"boolean"},"fill_height":{"type":"boolean"},"min_width":optional_size(),"max_width":optional_size(),"min_height":optional_size(),"max_height":optional_size(),"aspect_ratio":optional_ratio()}),
             &["node"],
         ),
         def(
@@ -167,7 +185,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
     }
     match name {
         "describe_design_layout" => Ok(
-            json!({"frames":editor.doc.design.frames,"constraints":editor.doc.design.constraints,"bounds":editor.doc.design.frames.keys().map(|id|json!({"group":id,"bounds":layout::bounds(&editor.doc,*id)})).collect::<Vec<_>>()}),
+            json!({"frames":editor.doc.design.frames,"constraints":editor.doc.design.constraints,"bounds":editor.doc.design.frames.keys().map(|id|json!({"group":id,"bounds":layout::bounds(&editor.doc,*id),"active_breakpoint":layout::active_breakpoint(&editor.doc,*id),"effective_frame":layout::effective_frame(&editor.doc,*id)})).collect::<Vec<_>>()}),
         ),
         "set_responsive_layout" => {
             let group = id(args, "group")?;
@@ -180,7 +198,22 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 .cloned()
                 .unwrap_or_default();
             macro_rules! patch{($($field:ident),*)=>{$(if let Some(value)=field(args,stringify!($field))?{frame.$field=value;})*};}
-            patch!(flow, padding, gap, columns, wrap, align, hug_height);
+            patch!(
+                flow,
+                padding,
+                gap,
+                columns,
+                wrap,
+                align,
+                hug_height,
+                hug_width,
+                min_width,
+                max_width,
+                min_height,
+                max_height,
+                clip_content,
+                breakpoints
+            );
             let default = layout::bounds(&editor.doc, group).map_or(
                 [
                     f64::from(editor.doc.width) * 0.8,
@@ -196,7 +229,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
             }
             editor.end();
             Ok(
-                json!({"group":group,"frame":editor.doc.design.frames[&group],"bounds":layout::bounds(&editor.doc,group)}),
+                json!({"group":group,"frame":editor.doc.design.frames[&group],"bounds":layout::bounds(&editor.doc,group),"active_breakpoint":layout::active_breakpoint(&editor.doc,group),"effective_frame":layout::effective_frame(&editor.doc,group)}),
             )
         }
         "set_layout_child" => {
@@ -208,10 +241,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 .and_then(|n| n.parent)
                 .ok_or("Choose an immediate child of a responsive frame")?;
             editable(editor, parent)?;
-            let absolute = field::<bool>(args, "absolute")?;
-            let fill = field::<bool>(args, "fill_width")?;
-            if absolute.is_none() && fill.is_none() {
-                return Err("Set absolute or fill_width".into());
+            if args.as_object().is_none_or(|fields| fields.len() <= 1) {
+                return Err("Set at least one child sizing option".into());
             }
             let mut design = editor.doc.design.clone();
             let frame = design
@@ -222,12 +253,17 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 return Err("The frame boundary is not a layout child".into());
             }
             let child = frame.children.entry(node).or_default();
-            if let Some(v) = absolute {
-                child.absolute = v;
-            }
-            if let Some(v) = fill {
-                child.fill_width = v;
-            }
+            macro_rules! patch{($($field:ident),*)=>{$(if let Some(value)=field(args,stringify!($field))?{child.$field=value;})*};}
+            patch!(
+                absolute,
+                fill_width,
+                fill_height,
+                min_width,
+                max_width,
+                min_height,
+                max_height,
+                aspect_ratio
+            );
             commit(
                 editor,
                 "Layout child",
@@ -271,10 +307,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 if clear {
                     design.constraints.remove(node);
                 } else {
-                    let rule = design
-                        .constraints
-                        .entry(*node)
-                        .or_insert(Constraint::default());
+                    let rule = design.constraints.entry(*node).or_default();
                     if let Some(v) = horizontal {
                         rule.horizontal = v;
                     }
@@ -352,3 +385,238 @@ pub(crate) fn execute(editor: &mut Editor, name: &str, args: &Value) -> Option<T
 #[cfg(test)]
 #[path = "design_layout_tools_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+    use emulsion_core::{Document, Node, command::Slot};
+    use emulsion_raster::{vector::PathStyle, vector_geometry};
+    use std::sync::Arc;
+
+    fn fixture() -> (Editor, NodeId, NodeId) {
+        let mut doc = Document::new(640, 480);
+        let child = Command::AddNode {
+            node: Box::new(Node::path(
+                0,
+                "Card",
+                Arc::new(vector_geometry::rectangle(20., 30., 80., 40.)),
+                PathStyle::default(),
+                640,
+                480,
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        let group = Command::Group {
+            ids: vec![child],
+            name: "Layout".into(),
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        (Editor::new(doc, None), group, child)
+    }
+    fn call(editor: &mut Editor, name: &str, args: Value) -> Value {
+        let result = crate::exec::execute(editor, name, &args);
+        assert!(!result.is_error, "{name} {args}: {:?}", result.content);
+        serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap()
+    }
+    fn reject(editor: &mut Editor, name: &str, args: Value) {
+        let before = editor.doc.clone();
+        let history = editor.history.len();
+        let revision = editor.revision;
+        assert!(
+            crate::exec::execute(editor, name, &args).is_error,
+            "Accepted {name}: {args}"
+        );
+        assert_eq!(editor.doc, before);
+        assert_eq!(editor.history.len(), history);
+        assert_eq!(editor.revision, revision);
+        assert!(!editor.in_transaction());
+    }
+    #[test]
+    fn responsive_sizing_mcp_patch_clear_inspect_and_undo() {
+        let (mut editor, group, child) = fixture();
+        let original = editor.doc.clone();
+        call(
+            &mut editor,
+            "set_responsive_layout",
+            json!({"group":group,"size":[320,240],"hug_width":true,"min_width":220,"max_width":500,"min_height":80,"max_height":300}),
+        );
+        let configured = editor.doc.clone();
+        assert!(configured.design.frames[&group].hug_width);
+        assert!(editor.undo());
+        assert_eq!(editor.doc, original);
+        assert!(editor.redo());
+        call(
+            &mut editor,
+            "set_layout_child",
+            json!({"node":child,"fill_height":true,"min_width":60,"max_width":140,"min_height":30,"max_height":70,"aspect_ratio":2}),
+        );
+        let sized = editor.doc.clone();
+        let settings = sized.design.frames[&group].children[&child];
+        assert!(settings.fill_height);
+        assert_eq!(settings.aspect_ratio, Some(2.));
+        let (width, height) = layout::item_dimensions(&editor.doc, child).unwrap();
+        assert!((width / height - 2.).abs() < 0.001);
+        assert!(editor.undo());
+        assert_eq!(editor.doc, configured);
+        assert!(editor.redo());
+        call(
+            &mut editor,
+            "set_layout_child",
+            json!({"node":child,"min_width":null,"max_width":null,"min_height":null,"max_height":null,"aspect_ratio":null}),
+        );
+        let cleared = editor.doc.design.frames[&group].children[&child];
+        assert!(cleared.fill_height, "omitted boolean must stay unchanged");
+        assert_eq!(
+            (
+                cleared.min_width,
+                cleared.max_width,
+                cleared.min_height,
+                cleared.max_height,
+                cleared.aspect_ratio
+            ),
+            (None, None, None, None, None)
+        );
+        assert!(editor.undo());
+        assert_eq!(editor.doc, sized);
+        call(
+            &mut editor,
+            "set_responsive_layout",
+            json!({"group":group,"min_width":null,"max_width":null,"min_height":null,"max_height":null}),
+        );
+        let frame = &editor.doc.design.frames[&group];
+        assert!(frame.hug_width);
+        assert_eq!(
+            (
+                frame.min_width,
+                frame.max_width,
+                frame.min_height,
+                frame.max_height
+            ),
+            (None, None, None, None)
+        );
+        let inspected = call(&mut editor, "describe_design_layout", json!({}));
+        let frame = &inspected["frames"][group.to_string()];
+        assert_eq!(frame["hug_width"], true);
+        assert_eq!(frame["children"][child.to_string()]["aspect_ratio"], 2.);
+        assert!(editor.undo());
+        assert_eq!(editor.doc, sized);
+    }
+    #[test]
+    fn responsive_sizing_mcp_rejects_invalid_types_bounds_and_conflicts_atomically() {
+        let (mut editor, group, child) = fixture();
+        for patch in [
+            json!({"min_width":0}),
+            json!({"max_height":100001}),
+            json!({"min_width":200,"max_width":100}),
+            json!({"min_height":"40"}),
+            json!({"hug_width":null}),
+            json!({"hug_width":1}),
+        ] {
+            let mut args = patch;
+            args["group"] = json!(group);
+            reject(&mut editor, "set_responsive_layout", args);
+            assert!(
+                editor.doc.design.frames.is_empty(),
+                "failed enable must not leave metadata or boundary"
+            );
+        }
+        call(
+            &mut editor,
+            "set_responsive_layout",
+            json!({"group":group,"size":[320,240],"hug_width":true}),
+        );
+        for patch in [
+            json!({"fill_height":null}),
+            json!({"fill_height":"true"}),
+            json!({"min_width":false}),
+            json!({"min_height":0}),
+            json!({"max_width":100001}),
+            json!({"min_height":90,"max_height":40}),
+            json!({"aspect_ratio":0}),
+            json!({"aspect_ratio":0.0001}),
+            json!({"aspect_ratio":1001}),
+            json!({"aspect_ratio":"2"}),
+            json!({"aspect_ratio":2,"min_width":100,"max_width":100,"min_height":100,"max_height":100}),
+            json!({"fill_width":true}),
+            json!({}),
+        ] {
+            let mut args = patch;
+            args["node"] = json!(child);
+            reject(&mut editor, "set_layout_child", args);
+        }
+        call(
+            &mut editor,
+            "set_layout_child",
+            json!({"node":child,"min_width":70,"max_width":100}),
+        );
+        reject(
+            &mut editor,
+            "set_layout_child",
+            json!({"node":child,"min_width":101}),
+        );
+        editor
+            .execute(Command::SetLocked {
+                id: child,
+                locked: true,
+            })
+            .unwrap();
+        reject(
+            &mut editor,
+            "set_layout_child",
+            json!({"node":child,"fill_height":true}),
+        );
+        reject(
+            &mut editor,
+            "set_responsive_layout",
+            json!({"group":group,"padding":[40,24,24,24]}),
+        );
+    }
+    #[test]
+    fn responsive_breakpoints_mcp_roundtrip_clear_inherit_and_atomic_errors() {
+        let (mut editor, group, _) = fixture();
+        let before = editor.doc.clone();
+        let result = call(
+            &mut editor,
+            "set_responsive_layout",
+            json!({"group":group,"flow":"column","gap":7,"clip_content":false,"breakpoints":[{"min_width":500,"overrides":{"flow":"row","gap":20,"clip_content":true}},{"min_width":900,"overrides":{"flow":"grid"}}]}),
+        );
+        assert_eq!(result["active_breakpoint"], 500.);
+        assert_eq!(result["effective_frame"]["flow"], "row");
+        assert_eq!(result["effective_frame"]["clip_content"], true);
+        let described = call(&mut editor, "describe_design_layout", json!({}));
+        assert_eq!(described["bounds"][0]["active_breakpoint"], 500.);
+        let installed = editor.doc.clone();
+        for invalid in [
+            json!([{"min_width":500},{"min_width":500}]),
+            json!([{"min_width":-1}]),
+            json!([{"min_width":2000,"overrides":{"gap":-1}}]),
+            json!([{"min_width":500,"overrides":{"unknown":true}}]),
+        ] {
+            reject(
+                &mut editor,
+                "set_responsive_layout",
+                json!({"group":group,"breakpoints":invalid}),
+            );
+        }
+        call(
+            &mut editor,
+            "set_responsive_layout",
+            json!({"group":group,"breakpoints":[]}),
+        );
+        assert!(editor.doc.design.frames[&group].breakpoints.is_empty());
+        assert!(
+            !layout::effective_frame(&editor.doc, group)
+                .unwrap()
+                .clip_content
+        );
+        assert!(editor.undo());
+        assert_eq!(editor.doc, installed);
+        assert!(editor.undo());
+        assert_eq!(editor.doc, before);
+    }
+}

@@ -6,6 +6,8 @@ use emulsion_raster::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+#[path = "design_chart_plot.rs"]
+mod plot;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -15,16 +17,102 @@ pub enum Kind {
     Line,
     Pie,
     Table,
+    Area,
+    Scatter,
+    StackedBar,
+    Donut,
 }
 impl Kind {
-    pub const ALL: [Self; 4] = [Self::Bar, Self::Line, Self::Pie, Self::Table];
+    pub const ALL: [Self; 8] = [
+        Self::Bar,
+        Self::Line,
+        Self::Pie,
+        Self::Table,
+        Self::Area,
+        Self::Scatter,
+        Self::StackedBar,
+        Self::Donut,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Bar => "Bar chart",
             Self::Line => "Line chart",
             Self::Pie => "Pie chart",
             Self::Table => "Table",
+            Self::Area => "Area chart",
+            Self::Scatter => "Scatter plot",
+            Self::StackedBar => "Stacked bar",
+            Self::Donut => "Donut chart",
         }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Axis {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    /// Number of evenly-spaced labelled ticks, including both endpoints.
+    pub ticks: u32,
+    pub label: String,
+    pub show_labels: bool,
+}
+impl Default for Axis {
+    fn default() -> Self {
+        Self {
+            min: None,
+            max: None,
+            ticks: 5,
+            label: String::new(),
+            show_labels: true,
+        }
+    }
+}
+impl Axis {
+    fn validate(&self) -> Result<(), String> {
+        if [self.min, self.max]
+            .into_iter()
+            .flatten()
+            .any(|v| !v.is_finite() || v.abs() > 1e12)
+            || self.min.zip(self.max).is_some_and(|(a, b)| a >= b)
+            || !(2..=20).contains(&self.ticks)
+            || self.label.chars().count() > 100
+        {
+            return Err("Axis bounds must be finite within ±1e12, minimum below maximum, 2–20 ticks, and labels up to 100 characters.".into());
+        }
+        Ok(())
+    }
+    fn range(&self, natural: (f64, f64)) -> Result<(f64, f64), String> {
+        let a = self.min.unwrap_or(natural.0);
+        let mut b = self.max.unwrap_or(natural.1);
+        if self.max.is_none() && b <= a {
+            b = a + a.abs().max(1.) * 0.1;
+        }
+        let a = if self.min.is_none() && a >= b {
+            b - b.abs().max(1.) * 0.1
+        } else {
+            a
+        };
+        if a >= b {
+            return Err("Axis minimum must be below maximum.".into());
+        }
+        Ok((a, b))
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Merge {
+    /// Zero-based coordinates; row 0 is the header. Covered data remains stored.
+    pub row: usize,
+    pub column: usize,
+    pub rows: usize,
+    pub columns: usize,
+}
+impl Merge {
+    pub fn contains(&self, row: usize, column: usize) -> bool {
+        row >= self.row
+            && row < self.row.saturating_add(self.rows)
+            && column >= self.column
+            && column < self.column.saturating_add(self.columns)
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,10 +123,16 @@ pub struct Chart {
     pub rows: Vec<Vec<String>>,
     pub colors: Vec<[u8; 4]>,
     pub size: (f64, f64),
+    #[serde(default)]
+    pub x_axis: Axis,
+    #[serde(default)]
+    pub y_axis: Axis,
+    #[serde(default)]
+    pub merges: Vec<Merge>,
 }
 impl Chart {
     pub fn example(kind: Kind) -> Self {
-        Self {
+        let mut chart = Self {
             kind,
             title: kind.label().into(),
             rows: vec![
@@ -56,7 +150,19 @@ impl Chart {
                 [70, 180, 205, 255],
             ],
             size: (600., 400.),
+            x_axis: Axis::default(),
+            y_axis: Axis::default(),
+            merges: Vec::new(),
+        };
+        if kind == Kind::Scatter {
+            chart.rows = vec![
+                vec!["X".into(), "Y".into()],
+                vec!["10".into(), "30".into()],
+                vec!["25".into(), "50".into()],
+                vec!["45".into(), "20".into()],
+            ];
         }
+        chart
     }
     pub fn validate(&self) -> Result<(), String> {
         if !(2..=51).contains(&self.rows.len())
@@ -80,9 +186,34 @@ impl Chart {
                     .into(),
             );
         }
+        self.x_axis.validate()?;
+        self.y_axis.validate()?;
+        if self.merges.len() > self.rows.len() * self.rows[0].len() {
+            return Err("Too many merged cells.".into());
+        }
+        let mut occupied = std::collections::HashSet::new();
+        for m in &self.merges {
+            if m.rows == 0
+                || m.columns == 0
+                || (m.rows == 1 && m.columns == 1)
+                || m.row.saturating_add(m.rows) > self.rows.len()
+                || m.column.saturating_add(m.columns) > self.rows[0].len()
+            {
+                return Err(
+                    "Merge a rectangular range of at least two cells inside the table.".into(),
+                );
+            }
+            for row in m.row..m.row + m.rows {
+                for col in m.column..m.column + m.columns {
+                    if !occupied.insert((row, col)) {
+                        return Err("Merged cell regions cannot overlap.".into());
+                    }
+                }
+            }
+        }
         if self.kind != Kind::Table {
             for row in &self.rows[1..] {
-                for value in &row[1..] {
+                for value in &row[usize::from(self.kind != Kind::Scatter)..] {
                     let number = value
                         .trim()
                         .parse::<f64>()
@@ -92,12 +223,12 @@ impl Chart {
                             "Chart values must be finite and between -1e12 and 1e12.".into()
                         );
                     }
-                    if self.kind == Kind::Pie && number < 0. {
+                    if matches!(self.kind, Kind::Pie | Kind::Donut) && number < 0. {
                         return Err("Pie values must be nonnegative.".into());
                     }
                 }
             }
-            if self.kind == Kind::Pie
+            if matches!(self.kind, Kind::Pie | Kind::Donut)
                 && (self.rows[0].len() != 2
                     || self.rows[1..]
                         .iter()
@@ -105,7 +236,9 @@ impl Chart {
                         .sum::<f64>()
                         <= 0.)
             {
-                return Err("Pie charts need one value column with a positive total.".into());
+                return Err(
+                    "Pie and donut charts need one value column with a positive total.".into(),
+                );
             }
         }
         Ok(())
@@ -174,6 +307,12 @@ impl Chart {
             let font = (rh / 2.6).clamp(6., 18.) as f32;
             for (row, values) in self.rows.iter().enumerate() {
                 for (col, value) in values.iter().enumerate() {
+                    let merge = self.merges.iter().find(|m| m.contains(row, col));
+                    if merge.is_some_and(|m| m.row != row || m.column != col) {
+                        continue;
+                    }
+                    let cell_width = cw * merge.map_or(1, |m| m.columns) as f64;
+                    let cell_height = rh * merge.map_or(1, |m| m.rows) as f64;
                     let px = x + 16. + col as f64 * cw;
                     let py = y + 48. + row as f64 * rh;
                     let color = if row == 0 {
@@ -185,7 +324,7 @@ impl Chart {
                     };
                     nodes.push(shape(
                         "Table cell",
-                        rectangle(px, py, cw - 1., rh - 1.),
+                        rectangle(px, py, cell_width - 1., cell_height - 1.),
                         color,
                     ));
                     let mut label = text(
@@ -193,20 +332,20 @@ impl Chart {
                         value.clone(),
                         px + 4.,
                         py + 3.,
-                        (cw - 8.).max(1.),
+                        (cell_width - 8.).max(1.),
                         font,
                         if row == 0 { [255; 4] } else { ink },
                         row == 0,
                     );
                     if let crate::NodeKind::Text { spec, .. } = &mut label.kind {
                         let mut s = (**spec).clone();
-                        s.height = Some((rh - 6.).max(1.) as f32);
+                        s.height = Some((cell_height - 6.).max(1.) as f32);
                         label = Node::text(0, "Cell text", s, canvas.0, canvas.1);
                     }
                     nodes.push(label);
                 }
             }
-        } else if self.kind == Kind::Pie {
+        } else if matches!(self.kind, Kind::Pie | Kind::Donut) {
             let total: f64 = self.rows[1..]
                 .iter()
                 .map(|r| r[1].trim().parse::<f64>().unwrap())
@@ -220,11 +359,24 @@ impl Chart {
                 let color = self.colors[i % self.colors.len()];
                 if angle > 0. {
                     let steps = (angle * 32.).ceil().max(1.) as usize;
-                    let mut anchors = vec![Anchor::corner(center)];
+                    let mut anchors = if self.kind == Kind::Donut {
+                        Vec::new()
+                    } else {
+                        vec![Anchor::corner(center)]
+                    };
                     anchors.extend((0..=steps).map(|step| {
                         let a = start + angle * step as f64 / steps as f64;
                         Anchor::corner((center.0 + radius * a.cos(), center.1 + radius * a.sin()))
                     }));
+                    if self.kind == Kind::Donut {
+                        anchors.extend((0..=steps).rev().map(|step| {
+                            let a = start + angle * step as f64 / steps as f64;
+                            Anchor::corner((
+                                center.0 + radius * 0.55 * a.cos(),
+                                center.1 + radius * 0.55 * a.sin(),
+                            ))
+                        }));
+                    }
                     nodes.push(shape(
                         &row[0],
                         Path {
@@ -250,118 +402,7 @@ impl Chart {
                 start += angle;
             }
         } else {
-            let values: Vec<Vec<f64>> = self.rows[1..]
-                .iter()
-                .map(|r| r[1..].iter().map(|v| v.trim().parse().unwrap()).collect())
-                .collect();
-            let min = values.iter().flatten().copied().fold(0., f64::min);
-            let max = values.iter().flatten().copied().fold(0., f64::max);
-            let span = if max > min { max - min } else { 1. };
-            let left = x + 54.;
-            let top = y + 66.;
-            let pw = w - 74.;
-            let ph = h - 125.;
-            let py = |v: f64| top + (max - v) / span * ph;
-            let zero = py(0.);
-            nodes.push(shape(
-                "Zero axis",
-                rectangle(left, zero, pw, 1.),
-                [175, 183, 194, 255],
-            ));
-            nodes.push(text(
-                "Maximum",
-                format!("{max}"),
-                x + 2.,
-                top,
-                50.,
-                10.,
-                ink,
-                false,
-            ));
-            nodes.push(text(
-                "Minimum",
-                format!("{min}"),
-                x + 2.,
-                top + ph - 12.,
-                50.,
-                10.,
-                ink,
-                false,
-            ));
-            let step = pw / values.len() as f64;
-            let series = self.rows[0].len() - 1;
-            for s in 0..series {
-                let color = self.colors[s % self.colors.len()];
-                nodes.push(text(
-                    "Series",
-                    self.rows[0][s + 1].clone(),
-                    left + s as f64 * pw / series as f64,
-                    y + h - 26.,
-                    pw / series as f64,
-                    11.,
-                    color,
-                    true,
-                ));
-                let mut line = Vec::new();
-                for (i, row) in values.iter().enumerate() {
-                    let cx = left + (i as f64 + 0.5) * step;
-                    let vy = py(row[s]);
-                    if self.kind == Kind::Bar {
-                        let bw = step * 0.8 / series as f64;
-                        if row[s] != 0. {
-                            nodes.push(shape(
-                                "Bar",
-                                rectangle(
-                                    left + i as f64 * step + step * 0.1 + s as f64 * bw,
-                                    vy.min(zero),
-                                    bw * 0.9,
-                                    (vy - zero).abs(),
-                                ),
-                                color,
-                            ));
-                        }
-                    } else {
-                        line.push(Anchor::corner((cx, vy)));
-                        nodes.push(shape(
-                            "Data point",
-                            emulsion_raster::vector_geometry::ellipse(cx - 3., vy - 3., 6., 6.),
-                            color,
-                        ));
-                    }
-                    if s == 0 {
-                        nodes.push(text(
-                            "Category",
-                            self.rows[i + 1][0].clone(),
-                            left + i as f64 * step,
-                            top + ph + 5.,
-                            step,
-                            10.,
-                            ink,
-                            false,
-                        ));
-                    }
-                }
-                if self.kind == Kind::Line && line.len() > 1 {
-                    nodes.push(Node::path(
-                        0,
-                        "Series line",
-                        Arc::new(Path {
-                            subpaths: vec![SubPath {
-                                anchors: line,
-                                closed: false,
-                            }],
-                        }),
-                        PathStyle {
-                            fill: None,
-                            stroke: Some(color),
-                            width: 2.,
-                            ..Default::default()
-                        },
-                        canvas.0,
-                        canvas.1,
-                    ));
-                }
-            }
+            nodes.extend(plot::draw(self, origin, canvas)?);
         }
         Ok(nodes)
     }
@@ -555,7 +596,7 @@ mod tests {
             .find(|node| node.name == "Bar")
             .unwrap();
         let bounds = crate::geometry::node_bounds(&editor.doc, bar.id).unwrap();
-        assert!((f64::from(bounds.h) - (chart.size.1 - 125.)).abs() <= 2.);
+        assert!((f64::from(bounds.h) - (chart.size.1 - 150.)).abs() <= 2.);
         let before = editor.doc.clone();
         for origin in [(f64::NAN, 0.), (0., f64::INFINITY), (1e12, 0.)] {
             assert!(apply(&mut editor, Some(group), chart.clone(), origin).is_err());
@@ -621,5 +662,150 @@ mod tests {
             );
             assert_eq!(editor.doc, before);
         }
+    }
+}
+
+#[cfg(test)]
+mod advanced_tests {
+    use super::*;
+    use crate::NodeKind;
+    #[test]
+    fn native_advanced_chart_types_and_axes_validate_and_undo() {
+        for kind in [Kind::Area, Kind::Scatter, Kind::StackedBar, Kind::Donut] {
+            let mut editor = Editor::new(Document::new(800, 600), None);
+            let mut chart = Chart::example(kind);
+            chart.y_axis = Axis {
+                min: Some(10.),
+                max: Some(40.),
+                ticks: 4,
+                label: "Units".into(),
+                ..Default::default()
+            };
+            let id = apply(&mut editor, None, chart.clone(), (10., 20.)).unwrap();
+            assert_eq!(editor.doc.design.charts[&id], chart);
+            assert!(editor.doc.nodes.iter().all(|n| matches!(
+                n.kind,
+                NodeKind::Group { .. } | NodeKind::Path { .. } | NodeKind::Text { .. }
+            )));
+            let before = editor.doc.clone();
+            chart.y_axis.max = Some(5.);
+            assert!(apply(&mut editor, Some(id), chart, (10., 20.)).is_err());
+            assert_eq!(editor.doc, before);
+            editor.undo();
+            assert!(editor.doc.nodes.is_empty());
+        }
+        let mut scatter = Chart::example(Kind::Scatter);
+        scatter.rows[1][0] = "Category".into();
+        assert!(scatter.validate().is_err());
+        let mut json = serde_json::to_value(Chart::example(Kind::Bar)).unwrap();
+        for key in ["x_axis", "y_axis", "merges"] {
+            json.as_object_mut().unwrap().remove(key);
+        }
+        let old: Chart = serde_json::from_value(json).unwrap();
+        assert_eq!(old.x_axis, Axis::default());
+        assert!(old.merges.is_empty());
+    }
+    #[test]
+    fn advanced_plot_geometry_has_real_holes_stacks_and_clipped_scatter_data() {
+        let mut donut = Chart::example(Kind::Donut);
+        donut.rows = vec![
+            vec!["Category".into(), "Value".into()],
+            vec!["Only".into(), "1".into()],
+        ];
+        let nodes = donut.nodes((0., 0.), (600, 400)).unwrap();
+        let NodeKind::Path { path, style, .. } =
+            &nodes.iter().find(|n| n.name == "Only").unwrap().kind
+        else {
+            panic!()
+        };
+        let raster = path.rasterize(style, 600, 400);
+        assert_eq!(
+            raster.get(180, 211)[3],
+            0,
+            "donut center must be transparent, not a white overlay"
+        );
+        assert!(raster.get(180, 80)[3] > 60000);
+        let mut stacked = Chart::example(Kind::StackedBar);
+        stacked.rows = vec![
+            vec![
+                "Category".into(),
+                "One".into(),
+                "Two".into(),
+                "Three".into(),
+            ],
+            vec!["A".into(), "10".into(), "-20".into(), "30".into()],
+        ];
+        let bars = stacked
+            .nodes((0., 0.), (600, 400))
+            .unwrap()
+            .into_iter()
+            .filter(|n| n.name == "Bar")
+            .map(|n| {
+                let NodeKind::Path { path, .. } = n.kind else {
+                    panic!()
+                };
+                emulsion_raster::vector_geometry::bounds(&path).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bars.len(), 3);
+        assert!(
+            bars.iter()
+                .all(|b| (b.0 - bars[0].0).abs() < 1e-8 && (b.2 - bars[0].2).abs() < 1e-8)
+        );
+        assert!(
+            (bars.iter().map(|b| b.3).sum::<f64>() - 250.).abs() < 1e-8,
+            "positive and negative stacks share a -20..40 domain"
+        );
+        assert!(
+            (bars[0].1 - bars[2].1 - bars[2].3).abs() < 1e-8,
+            "positive segments meet without overlapping"
+        );
+        let mut scatter = Chart::example(Kind::Scatter);
+        scatter.rows = vec![
+            vec!["X".into(), "Y".into()],
+            vec!["-10".into(), "25".into()],
+            vec!["50".into(), "25".into()],
+            vec!["200".into(), "25".into()],
+        ];
+        scatter.x_axis.min = Some(0.);
+        scatter.x_axis.max = Some(100.);
+        let nodes = scatter.nodes((0., 0.), (600, 400)).unwrap();
+        assert_eq!(
+            nodes.iter().filter(|n| n.name == "Scatter point").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn table_merges_preserve_cells_and_invalid_overlaps_are_atomic() {
+        let mut editor = Editor::new(Document::new(800, 600), None);
+        let table = Chart::example(Kind::Table);
+        let id = apply(&mut editor, None, table.clone(), (0., 0.)).unwrap();
+        let before = editor.doc.clone();
+        let mut merged = table.clone();
+        merged.merges.push(Merge {
+            row: 0,
+            column: 0,
+            rows: 1,
+            columns: 2,
+        });
+        apply(&mut editor, Some(id), merged.clone(), (0., 0.)).unwrap();
+        assert_eq!(editor.doc.design.charts[&id].rows, table.rows);
+        assert_eq!(editor.doc.nodes.len() + 2, before.nodes.len());
+        let after = editor.doc.clone();
+        merged.merges.push(Merge {
+            row: 0,
+            column: 1,
+            rows: 2,
+            columns: 1,
+        });
+        assert!(apply(&mut editor, Some(id), merged, (0., 0.)).is_err());
+        assert_eq!(editor.doc, after);
+        editor.undo();
+        assert_eq!(editor.doc, before);
+        editor.redo();
+        assert_eq!(editor.doc, after);
+        apply(&mut editor, Some(id), table, (0., 0.)).unwrap();
+        assert_eq!(editor.doc.nodes.len(), before.nodes.len());
     }
 }

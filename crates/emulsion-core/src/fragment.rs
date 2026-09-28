@@ -39,16 +39,28 @@ impl Fragment {
             .map(|node| node.id)
             .collect();
         let mut included: HashSet<_> = roots.iter().flat_map(|id| doc.subtree(*id)).collect();
-        let components: Vec<_> = doc
-            .design
-            .component_links
-            .iter()
-            .filter(|(id, _)| included.contains(id))
-            .map(|(_, link)| link.component.clone())
-            .collect();
-        for name in components {
-            for root in doc.design.components[&name].variants.values() {
-                included.extend(doc.subtree(*root));
+        // Nested instances carry the transitive dependency library as well.
+        let mut components = HashSet::new();
+        for _ in 0..=128 {
+            let pending: Vec<_> = doc
+                .design
+                .component_links
+                .iter()
+                .filter(|(id, link)| included.contains(id) && !components.contains(&link.component))
+                .map(|(_, link)| link.component.clone())
+                .collect();
+            if pending.is_empty() {
+                break;
+            }
+            for name in pending {
+                if !components.insert(name.clone()) {
+                    continue;
+                }
+                if let Some(definition) = doc.design.components.get(&name) {
+                    for root in definition.variants.values() {
+                        included.extend(doc.subtree(*root));
+                    }
+                }
             }
         }
         let sources = crate::design_components::source_roots(&doc.design);

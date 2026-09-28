@@ -10,6 +10,7 @@ impl EditorView {
     pub(super) fn design_component_controls(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
         let linked = self
             .selected
+            .and_then(|id| components::owner(&self.editor.doc, id))
             .and_then(|id| self.editor.doc.design.component_links.get(&id));
         let variants = linked
             .and_then(|link| self.editor.doc.design.components.get(&link.component))
@@ -20,12 +21,13 @@ impl EditorView {
             .child(Button::new("design-component-create").label("Create from selection…").small().outline().disabled(self.selected_layer_roots().is_empty()).on_click(cx.listener(|this,_,window,cx|this.design_component_name(false,window,cx))))
             .child(Button::new("design-component-library").label("Browse project components…").small().outline().on_click(cx.listener(|this,_,window,cx|this.design_component_library(window,cx))))
             .when_some(linked,|d,link|d.child(div().text_size(px(11.)).child(format!("{} · {} · linked on this page",link.component,link.variant)))
+                .child(Button::new("design-component-overrides").label("Preserve object properties…").small().outline().on_click(cx.listener(|this,_,window,cx|this.design_component_overrides(window,cx))))
                 .child(Button::new("design-component-update").label("Update linked instances").small().outline().on_click(cx.listener(|this,_,_,cx|this.design_component_action("update",None,cx))))
                 .child(Button::new("design-component-reset").label("Reset selected instance").small().outline().on_click(cx.listener(|this,_,_,cx|this.design_component_action("reset",None,cx))))
                 .child(Button::new("design-component-variant").label("Save as new variant…").small().outline().on_click(cx.listener(|this,_,window,cx|this.design_component_name(true,window,cx))))
                 .children(variants.into_iter().enumerate().map(|(index,variant)|Button::new(("design-component-switch",index)).label(format!("Switch to {variant}")).small().ghost().on_click(cx.listener(move|this,_,_,cx|this.design_component_action("reset",Some(&variant),cx)))))
                 .child(Button::new("design-component-detach").label("Detach instance").small().ghost().on_click(cx.listener(|this,_,_,cx|this.design_component_action("detach",None,cx)))))
-            .child(div().text_size(px(10.)).text_color(p.muted).child("Update and Reset replace child edits. Other pages keep independent copies. Detach before nesting components."))
+            .child(div().text_size(px(10.)).text_color(p.muted).child("Nested components stay linked. Explicit property overrides survive updates; Reset restores the source. Other pages keep independent copies."))
             .into_any_element()
     }
     fn design_component_action(
@@ -37,7 +39,10 @@ impl EditorView {
         if !self.prepare_page_action(cx) {
             return;
         }
-        let Some(id) = self.selected else {
+        let Some(id) = self
+            .selected
+            .and_then(|id| components::owner(&self.editor.doc, id))
+        else {
             return;
         };
         let result = match action {
@@ -57,6 +62,56 @@ impl EditorView {
             Err(e) => self.set_status(e, true, cx),
         }
     }
+    pub(crate) fn design_component_overrides(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let Some(node) = self.selected else {
+            return;
+        };
+        let Some(instance) = components::owner(&self.editor.doc, node) else {
+            return;
+        };
+        let Some(target) = self.editor.doc.node(node) else {
+            return;
+        };
+        let content = matches!(target.kind, NodeKind::Text { .. } | NodeKind::Raster { .. });
+        let geometry = matches!(
+            target.kind,
+            NodeKind::Text { .. }
+                | NodeKind::Path { .. }
+                | NodeKind::Raster { .. }
+                | NodeKind::Smart { .. }
+        );
+        let state = cx.new(|_| components::overrides_for(&self.editor.doc, instance, node));
+        let error = cx.new(|_| String::new());
+        let ticket = self.edit_ticket();
+        let owner = cx.weak_entity();
+        window.open_dialog(cx,move|dialog,window,cx|{
+            let current=*state.read(cx);let apply=state.clone();let owner=owner.clone();let error_apply=error.clone();
+            dialog.title("Preserve object properties").width(px(460.))
+                .child(div().id("design-component-override-body").test_support().max_h(px((f32::from(window.viewport_size().height)-220.).clamp(100.,500.))).overflow_y_scroll().flex().flex_col().gap_2()
+                    .child("Choose which local edits survive updates from other instances. Edit the object with the normal canvas tools.")
+                    .children([(0usize,"Text / image content",current.content,content),(1,"Paint, typography & effects",current.appearance,true),(2,"Position, size & shape",current.geometry,geometry),(3,"Opacity",current.opacity,true),(4,"Visibility",current.visibility,true)].into_iter().map(|(i,label,checked,enabled)|{
+                        let state=state.clone();Button::new(("design-component-override",i)).label(format!("{} {label}",if checked{"✓"}else{"○"})).small().outline().disabled(!enabled).on_click(move|_,window,cx|{state.update(cx,|state,cx|{let value=match i{0=>&mut state.content,1=>&mut state.appearance,2=>&mut state.geometry,3=>&mut state.opacity,_=>&mut state.visibility};*value= !*value;cx.notify();});window.refresh();})
+                    }))
+                    .child("Unchecked properties follow the source on the next update. Reset instance clears overrides and restores the saved source."))
+                .footer(div().id("design-component-override-footer").test_support().flex().flex_col().gap_2().when(!error.read(cx).is_empty(),|d|d.child(error.read(cx).clone())).child(crate::widgets::form_dialog_footer("Save overrides")))
+                .on_ok(move|_,window,cx|{
+                    let flags=*apply.read(cx);
+                    let result=owner.update(cx,|this,cx|{
+                        if this.edit_ticket()!=ticket{return Err("The page changed. Reopen property overrides.".into());}
+                        components::set_overrides(&mut this.editor,instance,node,flags)?;
+                        this.after_change(cx);Ok::<_,String>(())
+                    }).unwrap_or_else(|_|Err("The editor closed.".into()));
+                    match result{Ok(())=>true,Err(message)=>{error_apply.update(cx,|error,cx|{*error=message;cx.notify();});window.refresh();false}}
+                })
+        });
+    }
     pub(crate) fn design_component_name(
         &mut self,
         variant: bool,
@@ -67,7 +122,9 @@ impl EditorView {
             return;
         }
         let ids = self.selected_layer_roots();
-        let selected = self.selected;
+        let selected = self
+            .selected
+            .and_then(|id| components::owner(&self.editor.doc, id));
         let ticket = self.edit_ticket();
         let owner = cx.weak_entity();
         let input = cx.new(|cx| {

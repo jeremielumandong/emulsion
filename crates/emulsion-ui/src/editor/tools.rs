@@ -910,6 +910,10 @@ impl EditorView {
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        if self.is_diagram() {
+            self.diagram_select_all(cx);
+            return;
+        }
         // Restore an active layer after clicking empty space, so Select All
         // followed by Copy works just as it does when a document first opens.
         if self.selected.is_none() {
@@ -926,6 +930,13 @@ impl EditorView {
     }
 
     pub fn deselect(&mut self, cx: &mut Context<Self>) {
+        if self.is_diagram() {
+            self.diagram_cancel_connection();
+            self.set_layer_selection(Vec::new(), None);
+            self.notify_canvas(cx);
+            cx.notify();
+            return;
+        }
         if let Some(selection) = self.editor.doc.selection.clone() {
             self.tools.last_selection = Some(selection);
         }
@@ -2965,6 +2976,7 @@ impl EditorView {
 /// What the canvas draws over the image this frame.
 #[derive(Clone, Default)]
 pub struct Overlay {
+    pub(super) diagram: super::diagram_ui::DiagramOverlay,
     pub removal: Option<(Mask, std::rc::Rc<super::quick_mask::QuickMaskCache>)>,
     pub ants: Option<Segments>,
     pub phase: bool,
@@ -2999,6 +3011,7 @@ impl EditorView {
         assist.extend(wl);
         vanishing.extend(wp);
         let mut o = Overlay {
+            diagram: self.diagram_connection_overlay(),
             // Quick Mask shows the selection in red instead of as ants.
             ants: if self.tools.quick_mask {
                 None
@@ -3152,6 +3165,7 @@ pub(crate) fn paint_overlay(
         point(px(s.0 as f32), px(s.1 as f32))
     };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        super::diagram_ui::paint_connections(&o.diagram, view, bounds, accent, window);
         if let Some((mask, cache)) = &o.removal {
             super::quick_mask::paint_coverage(mask, view, bounds, cache, window);
         }

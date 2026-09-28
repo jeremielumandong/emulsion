@@ -13,7 +13,8 @@ Adobe's proprietary rendering.
   Develop/loupe, and RAW before/after comparison; bounded filmstrip navigation.
 - Import local folders into the persistent catalog, create collections, and add
   selected photos to collections. Imported files remain at their original paths.
-- Click selects a photo; Shift extends a range; Ctrl/Cmd toggles individual photos.
+- GPUI Kit checkboxes select photos and control sidebar filters using pointer or keyboard.
+  Click selects a photo; Shift extends a range; Ctrl/Cmd toggles individual photos.
   Ratings 0–5, pick/unflag/reject, five color labels, keywords, and matching filters.
 - Keyboard culling while the grid has focus: 0–5 for ratings, P/U/X for flags,
   arrows to navigate, Shift+arrows for ranges, G for grid, D/E for Develop, Enter
@@ -45,6 +46,20 @@ unknown camera models; tone/curve groups remain available.
 A single active RAW development worker and bounded thumbnail workers avoid
 unlimited decode queues. Stale results cannot replace the active photo. Only the
 active source mosaic is cached; per-photo drafts and undo store settings.
+
+Import immediately starts a bounded pair of thumbnails before grid layout;
+subsequent work follows the visible rows. Grid cards show loading feedback and a
+Retry preview button when thumbnail
+decoding fails; hovering the button explains the error. `get_library` includes
+each photo’s thumbnail status and error. Sorting and returning from Photo retain
+unchanged thumbnails; background file/sidecar checks refresh only changed files.
+Autosave refreshes only saved photos and does not rerender an already current
+Develop preview. Per-photo revisions reject older in-flight thumbnail results.
+Setting the view through `set_library_view` retries previously failed previews.
+
+Nikon files whose decoder omits sensor dimensions use the RAW TIFF directory
+dimensions for memory accounting, never the camera JPEG size. The memory limit
+remains unchanged, and selecting a different RAW releases the prior cached mosaic.
 
 ## Remaining Lightroom Classic parity work
 
@@ -107,3 +122,11 @@ controls and `smooth_curve` are exposed in both Photo and Library tool schemas.
 This coverage describes implemented features, not the outstanding Classic parity
 items above. Starting a relay from Library without any open document remains a
 separate assistant-host integration task.
+
+Coverage tests check that both RAW schemas expose every persisted parameter,
+reject malformed requests, and preserve omitted settings. Headless workspace
+tests exercise catalog import/culling/filter/collection persistence and RAW
+adjust/save/sync/preset/undo/comparison/export, including pixel agreement with
+Photo, original-byte preservation and external-sidecar conflicts. A loopback
+relay test checks workspace routing and ensures progress reads do not release
+another tool's mutation queue reservation.

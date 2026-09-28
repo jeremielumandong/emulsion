@@ -38,6 +38,8 @@ mod design_chart_tests;
 mod design_component_tests;
 #[path = "design_styles_tests.rs"]
 mod design_styles_tests;
+#[path = "design_layout_workflow_tests.rs"]
+mod design_layout_workflow_tests;
 #[path = "design_video_tests.rs"]
 mod design_video_tests;
 

@@ -14,6 +14,7 @@ fn node(id: u64, content: NodeContent) -> CompositeNode {
         blending: Default::default(),
         mask: None,
         clip_to: None,
+        clip_rect: None,
         content,
     }
 }

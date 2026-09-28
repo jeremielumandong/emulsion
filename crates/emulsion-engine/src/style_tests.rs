@@ -43,6 +43,7 @@ fn render(engine: &mut Engine, zoom: f64) -> Vec<[f32; 4]> {
         (f64::from(engine.canvas.width) * zoom) as u32,
         (f64::from(engine.canvas.height) * zoom) as u32,
     );
+    engine.screen = size;
     engine.camera = Camera {
         center: [
             f64::from(engine.canvas.width) / 2.,
@@ -290,4 +291,108 @@ fn shadow_keeps_text_foreground_identical_at_fractional_and_high_zoom() {
             "incremental edits must update the clipping shape too"
         );
     }
+}
+
+#[test]
+fn responsive_content_clip_is_analytic_at_zoom_and_keeps_native_text() {
+    use emulsion_core::{
+        NodeKind,
+        design_layout::{Child, Frame},
+    };
+    use emulsion_raster::{vector::PathStyle, vector_geometry};
+    let Some(gpu) = gpu() else { return };
+    let mut doc = Document::new(96, 64);
+    let group = add(&mut doc, Node::group(0, "Frame"));
+    let mut append = |node: Node| {
+        Command::AddNode {
+            node: Box::new(node),
+            slot: Slot::top_of(Some(group)),
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap()
+    };
+    let border = append(Node::path(
+        0,
+        "Border",
+        Arc::new(vector_geometry::rectangle(20.25, 10., 40., 30.)),
+        PathStyle {
+            fill: None,
+            stroke: None,
+            ..Default::default()
+        },
+        96,
+        64,
+    ));
+    let fill = append(Node::new(
+        0,
+        "Fill",
+        NodeKind::Fill {
+            rgba: [255, 0, 0, 255],
+        },
+    ));
+    let mut overlay = Node::new(
+        0,
+        "Overlay",
+        NodeKind::Fill {
+            rgba: [0, 0, 255, 255],
+        },
+    );
+    overlay.clip_to = Some(fill);
+    let overlay = append(overlay);
+    let text = append(Node::text(
+        0,
+        "Text",
+        emulsion_core::text::TextSpec {
+            text: "Sharp glyphs".into(),
+            x: 5.,
+            y: 15.,
+            size: 18.,
+            color: [0, 0, 0, 255],
+            ..Default::default()
+        },
+        96,
+        64,
+    ));
+    doc.design.frames.insert(
+        group,
+        Frame {
+            boundary: border,
+            clip_content: true,
+            children: [fill, overlay, text]
+                .into_iter()
+                .map(|id| {
+                    (
+                        id,
+                        Child {
+                            absolute: true,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        },
+    );
+    let mut engine = Engine::new(gpu, &doc, None, VectorSpace::Srgb, true, true, (96, 64)).unwrap();
+    assert!(engine.canvas.rasterized.is_empty());
+    for zoom in [1., 2., 4.] {
+        let actual = render(&mut engine, zoom);
+        let width = (96. * zoom) as usize;
+        let row = (12. * zoom) as usize;
+        for x in 0..width {
+            let lo = (x as f64 / zoom).max(20.25);
+            let hi = ((x + 1) as f64 / zoom).min(60.25);
+            let expected = ((hi - lo) * zoom).clamp(0., 1.) as f32;
+            assert!(
+                (actual[row * width + x][3] - expected).abs() < 0.002,
+                "zoom{zoom} x{x}: expected alpha{expected}, got{}",
+                actual[row * width + x][3]
+            );
+        }
+    }
+    assert!(
+        matches!(&doc.node(text).unwrap().kind,NodeKind::Text{cache,..} if !cache.is_rendered()),
+        "content clipping cannot force glyphs through document-resolution rasterization"
+    );
 }

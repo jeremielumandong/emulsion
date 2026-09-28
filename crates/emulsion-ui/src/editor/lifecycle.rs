@@ -3,6 +3,7 @@ use super::*;
 
 impl EditorView {
     pub(crate) fn finish_pointer_gesture(&mut self, cx: &mut Context<Self>) {
+        self.diagram_cancel_connection();
         self.drag_end(cx);
     }
 
@@ -36,6 +37,7 @@ impl EditorView {
         self.tile_task = None;
         self.suspend_playback(window, cx);
         self.cache.borrow_mut().release(window);
+        self.svg_canvas.borrow_mut().release(window);
         for (_, image) in self.thumbs.drain() {
             let _ = window.drop_image(image);
         }
