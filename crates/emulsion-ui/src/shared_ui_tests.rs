@@ -31,7 +31,9 @@ fn photo_shortcuts_open_switch_close_and_dock_without_editing_the_photo(cx: &mut
             cx.run_until_parked();
             cx.update(|window, cx| {
                 assert!(window.find("photo-shortcut-panel").visible());
-                assert!(editor.read(cx).sidebar_tab == tab);
+                assert!(editor.read(cx).sidebar_layout.flyout_tab == tab);
+                assert!(editor.read(cx).sidebar_tab != tab);
+                assert!(window.try_find("sidebar-return-from-flyout").is_none());
                 let strip = window.find("photo-shortcut-strip").bounds();
                 let panel = window.find("photo-shortcut-panel").bounds();
                 assert!(panel.right() <= strip.left());
@@ -431,4 +433,67 @@ fn project_header_export_keeps_page_formats_inside_common_dialog(cx: &mut TestAp
         assert!(!editor.read(cx).export_prefs.open);
         assert_eq!(editor.read(cx).editor.doc, original);
     });
+}
+
+#[gpui_kit::test]
+fn photo_brush_fields_are_live_bounded_and_do_not_edit_the_document(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(size(px(1280.), px(1000.)));
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| window.click(("photo-shortcut", 1usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("photo-brush-spacing", cx));
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("35");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!((editor.read(cx).tools.brush.spacing - 0.35).abs() < 0.001);
+        assert!(window.find("PhotoBrushSize").visible());
+        assert!(window.find("PhotoBrushFlow").visible());
+        window.click("photo-brush-roundness", cx);
+    });
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("35");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).tools.brush.roundness, 0.35);
+        window.click("photo-brush-spacing", cx);
+    });
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("NaN");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert!((editor.read(cx).tools.brush.spacing - 0.35).abs() < 0.001);
+        assert_eq!(editor.read(cx).editor.doc, original);
+        assert!(editor.read(cx).editor.history.is_empty());
+    });
+}
+
+#[gpui_kit::test]
+fn photo_properties_fill_uses_its_own_track_and_one_undo_step(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let id = original.nodes[0].id;
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(size(px(1440.), px(1100.)));
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| window.click(("photo-shortcut", 0usize), cx));
+    cx.run_until_parked();
+    let track = gpui_kit::SharedString::from(format!("PhotoFillOpacity({id})"));
+    let at = cx.update(|window, _| window.find(track.clone()).bounds().center());
+    cx.simulate_mouse_down(at, gpui_kit::MouseButton::Left, Default::default());
+    cx.simulate_mouse_up(at, gpui_kit::MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let editor = editor.read(cx);
+        assert!((editor.editor.doc.node(id).unwrap().blending.fill_opacity - 0.5).abs() < 0.03);
+        assert_eq!(editor.editor.history.len(), 1);
+        assert_eq!(editor.editor.doc.node(id).unwrap().opacity, 1.);
+    });
+    cx.update(|_, cx| editor.update(cx, |editor, cx| editor.undo(cx)));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).editor.doc, original));
 }

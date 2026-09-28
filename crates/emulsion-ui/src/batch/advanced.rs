@@ -153,9 +153,9 @@ impl Workspace {
         params: DevelopParams,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = theme::palette(cx);
+        let palette = classic::palette(cx);
         let section = self.batch.develop.section;
-        let mut panel = div().flex().flex_col().gap_3();
+        let mut panel = div().flex().flex_col().gap_1();
         let mut fields: Vec<(&str, Field, f32, f32, f32, f32)> = Vec::new();
         match section {
             1 => {
@@ -689,21 +689,28 @@ impl Workspace {
         for (index, (name, field, value, min, max, step)) in fields.into_iter().enumerate() {
             panel = panel.child(
                 div()
+                    .id(("library-advanced-row", index))
+                    .test_support()
                     .flex()
-                    .flex_col()
+                    .items_center()
                     .gap_1()
+                    .h(px(27.))
                     .child(
                         div()
-                            .flex()
-                            .justify_between()
-                            .child(self.library_control_label(index, name, field, cx))
-                            .child(self.library_numeric_control(
-                                index, name, field, value, min, max, step, cx,
-                            )),
+                            .w(px(86.))
+                            .flex_none()
+                            .child(self.library_control_label(index, name, field, cx)),
                     )
                     .child(
-                        Slider::new(&self.batch.develop.sliders[index].0)
-                            .disabled(self.batch.develop.saving),
+                        div().flex_1().min_w_0().child(
+                            Slider::new(&self.batch.develop.sliders[index].0)
+                                .bg(rgb(0xa0a0a0))
+                                .text_color(rgb(0xd2d2d2))
+                                .disabled(self.batch.develop.saving),
+                        ),
+                    )
+                    .child(
+                        self.library_numeric_control(index, name, field, value, min, max, step, cx),
                     ),
             );
         }
@@ -753,7 +760,10 @@ impl Workspace {
             }))
             .child(
                 Button::new(("develop-number", index))
-                    .label(format!("{value:.3}"))
+                    .label(format!("{value:.2}"))
+                    .w(px(48.))
+                    .px_0()
+                    .text_size(px(10.))
                     .small()
                     .ghost()
                     .tooltip("Enter an exact value")
@@ -821,6 +831,8 @@ impl Workspace {
             .child(
                 Button::new(("develop-reset-control", index))
                     .label("↺")
+                    .w(px(18.))
+                    .px_0()
                     .small()
                     .ghost()
                     .tooltip("Reset this control")
@@ -878,7 +890,12 @@ impl Workspace {
     ) -> AnyElement {
         div()
             .id(("develop-control-label", index))
-            .child(mono(name.to_owned(), 11., theme::palette(cx).muted))
+            .text_size(px(10.))
+            .text_color(classic::palette(cx).muted)
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .child(name.to_owned())
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if event.click_count() == 2 {
                     this.library_reset_field(field, cx);
@@ -887,7 +904,7 @@ impl Workspace {
             .into_any_element()
     }
     fn library_curve_graph(&self, params: DevelopParams, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let channel = self.batch.develop.channel.min(3);
         let mut params = params;
         materialize_curve(&mut params, channel);
@@ -895,12 +912,14 @@ impl Workspace {
         let paint = track.clone();
         let line = p.line;
         let ink = p.ink;
+        let histogram = self.batch.develop.histogram;
+        let peak = histogram.iter().copied().max().unwrap_or(1).max(1) as f32;
         div()
             .id("library-curve-graph")
             .test_support()
             .w_full()
-            .h(px(160.))
-            .bg(p.stage)
+            .h(px(220.))
+            .bg(rgb(0x3c3c3c))
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -1024,6 +1043,16 @@ impl Workspace {
                         let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
                         let at =
                             |x: f32, y: f32| bounds.origin + point(px(x * w), px((1. - y) * h));
+                        let mut distribution = PathBuilder::fill();
+                        distribution.move_to(at(0., 0.));
+                        for (bin, count) in histogram.into_iter().enumerate() {
+                            distribution.line_to(at(bin as f32 / 31., count as f32 / peak * 0.9));
+                        }
+                        distribution.line_to(at(1., 0.));
+                        distribution.close();
+                        if let Ok(path) = distribution.build() {
+                            window.paint_path(path, rgb(0x858585).opacity(0.4));
+                        }
                         for i in 1..4 {
                             let f = i as f32 / 4.;
                             window.paint_quad(fill(
@@ -1070,7 +1099,7 @@ impl Workspace {
         params: DevelopParams,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let snapshot_path = path.clone();
         let mut panel = div()
             .flex()
@@ -1213,7 +1242,7 @@ impl Workspace {
 
 impl Workspace {
     pub(super) fn library_output_controls(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let settings = &self.batch.output_settings;
         let mut panel =
             div()
@@ -1799,7 +1828,7 @@ impl Workspace {
         cx.notify();
     }
     pub(super) fn library_assistant_surface(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         self.batch.assistant_host.as_ref().map(|host| {
             host.update(cx, |host, cx| {
                 div()
@@ -1824,7 +1853,7 @@ impl Workspace {
         params: emulsion_core::raw::DevelopParams,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let mut panel = div().flex().flex_col().gap_1();
         panel = panel.child(
             Button::new("library-preset-pack")

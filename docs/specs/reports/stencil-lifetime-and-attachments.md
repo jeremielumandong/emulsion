@@ -35,4 +35,9 @@ continues to use the nearest path position.
 22 diagram UI/project tests, five diagram project MCP tests and the persistent
 stencil deduplication/round-trip test passed. Regressions exercise custom
 attachment movement/resize/undo and clearing/restoring temporary stencils
-without modifying the document. Optimized packaging is in progress.
+without modifying the document. The explicit pack export/install/place/undo UI
+test also passed. Release build, AppImage packaging and version smoke check passed.
+
+Installed `/home/arkane/Applications/Emulsion.AppImage`; restart to use the update.
+The previous AppImage was backed up as `/home/arkane/Applications/Emulsion.AppImage.bak-stencil-attachment-20260928T164701858952Z`.
+Delivery checksum and source snapshots are in `target/stencil-attachment-review/`.

@@ -106,9 +106,9 @@ impl EditorView {
         if range {
             self.layer_selection.anchor = anchor.or(Some(id));
         }
-        if !matches!(
+        if !self.sidebar_layout.flyout_open && !matches!(
             self.sidebar_tab,
-            SidebarTab::Reference
+            SidebarTab::Develop | SidebarTab::Reference
                 | SidebarTab::History
                 | SidebarTab::BrushSettings
                 | SidebarTab::BrushPresets

@@ -4,6 +4,7 @@
 //! picture at a time off the UI thread.
 
 mod advanced;
+mod classic;
 mod culling;
 mod develop;
 mod enhance;
@@ -935,16 +936,27 @@ impl Workspace {
                 .id("library-settings-panel")
                 .test_support()
                 .w_full()
-                .flex_none()
                 .h_full()
+                .flex()
+                .flex_col()
                 .min_h_0()
-                .overflow_y_scroll()
-                .bg(theme::palette(cx).panel)
-                .child(develop)
+                .bg(classic::palette(cx).panel)
+                .child(self.library_histogram_panel(cx))
+                .child(self.library_editing_toolstrip(cx))
+                .child(
+                    div()
+                        .id("library-adjustment-scroll")
+                        .test_support()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(develop),
+                )
+                .child(self.library_develop_footer(cx))
                 .into_any_element();
         }
         self.prepare_batch_recipe_previews(cx);
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         if self.batch.recipe_browser && self.batch.search.is_none() {
             let input =
                 cx.new(|cx| InputState::new(window, cx).placeholder("Search recipes or tags…"));
@@ -1298,6 +1310,9 @@ impl Workspace {
             .overflow_y_scroll()
             .border_l_1()
             .border_color(p.line)
+            .when(!self.batch.recipe_browser, |d| {
+                d.child(self.library_histogram_panel(cx))
+            })
             .child(develop)
             .child(recipe)
             .child(export)
@@ -1312,7 +1327,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let narrow = window.viewport_size().width < window.rem_size() * 64.;
         if self.batch.develop.culling_mode == 0 {
             self.batch_preview(cx);
@@ -1342,9 +1357,9 @@ impl Workspace {
             .flex_wrap()
             .flex_none()
             .items_center()
-            .gap(px(12.))
-            .px(px(16.))
-            .py(px(10.))
+            .gap(px(8.))
+            .px(px(8.))
+            .py(px(4.))
             .border_b_1()
             .border_color(p.line)
             .child(
@@ -1461,6 +1476,7 @@ impl Workspace {
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.develop.module_develop = false;
                         this.batch.develop.loupe = false;
                         this.batch.develop.list = false;
                         this.batch.develop.compare = false;
@@ -1476,7 +1492,8 @@ impl Workspace {
             .flex_none()
             .items_center()
             .gap(px(6.))
-            .p(px(12.))
+            .px_2()
+            .py_1()
             .border_b_1()
             .border_color(p.line)
             .child(label(format!("Photos · {}", self.batch.items.len()), &p))
@@ -1605,7 +1622,7 @@ impl Workspace {
                         }
                     });
                     rows.map(|row_index| {
-                        let mut row = div().flex().gap_2().px_3().pt_2().h(px(if list_mode {
+                        let mut row = div().flex().gap_1().px_1().pt_1().h(px(if list_mode {
                             70.
                         } else {
                             151.
@@ -1630,7 +1647,7 @@ impl Workspace {
                             let image: AnyElement = match developed.or(item.thumb.as_ref()) {
                                 Some(t) => img(ImageSource::Render(t.clone()))
                                     .id(("batch-thumbnail", i))
-                                    .object_fit(ObjectFit::Cover)
+                                    .object_fit(ObjectFit::Contain)
                                     .size_full()
                                     .test_support()
                                     .into_any_element(),
@@ -1677,6 +1694,15 @@ impl Workspace {
                                     .when(!list_mode, |d| d.flex_col())
                                     .when(list_mode, |d| d.items_center())
                                     .gap(px(3.))
+                                    .bg(if is_cur {
+                                        rgb(0xb3b3b3)
+                                    } else if item.selected {
+                                        rgb(0x999999)
+                                    } else {
+                                        rgb(0x858585)
+                                    })
+                                    .border_1()
+                                    .border_color(rgb(0x686868))
                                     .cursor_pointer()
                                     .on_click(cx.listener(
                                         move |this, e: &ClickEvent, _window, cx| {
@@ -1707,7 +1733,7 @@ impl Workspace {
                                             } else {
                                                 p.line
                                             })
-                                            .rounded(px(5.))
+                                            .p_2()
                                             .child(image)
                                             .child(
                                                 Checkbox::new(("batch-tick", i))
@@ -1716,7 +1742,7 @@ impl Workspace {
                                                     .left(px(4.))
                                                     .p(px(4.))
                                                     .bg(p.panel)
-                                                    .rounded(px(4.))
+                                                    .rounded_none()
                                                     .checked(item.selected)
                                                     .accessibility_label(format!("Select {name}"))
                                                     .tooltip("Select photo")
@@ -1742,7 +1768,7 @@ impl Workspace {
                                         div()
                                             .w(px(if list_mode { 450. } else { 156. }))
                                             .text_size(px(10.))
-                                            .text_color(p.muted)
+                                            .text_color(rgb(0x292929))
                                             .overflow_hidden()
                                             .whitespace_nowrap()
                                             .text_ellipsis()
@@ -1836,6 +1862,9 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .when(!self.batch.develop.module_develop, |d| {
+                        d.child(self.library_navigator(cx))
+                    })
                     .child(library_controls),
             );
         let center = div()
@@ -1847,7 +1876,7 @@ impl Workspace {
             .min_h_0()
             .border_r_1()
             .border_color(p.line)
-            .when(overview, |d| d.child(grid_tools).child(photo_header))
+            .when(overview, |d| d.child(grid_tools))
             .child(
                 div()
                     .id("batch-grid")
@@ -1872,22 +1901,24 @@ impl Workspace {
                     })
                     .test_support(),
             )
+            .when(overview, |d| d.child(photo_header))
             .child(self.library_workflow_toolbar(cx))
-            .child(selection_controls)
+            .when(overview, |d| d.child(selection_controls))
             .children(self.library_assistant_surface(cx))
-            .child(mono(caption, 10., p.muted))
-            .child(mono(
-                "⇧ range · Ctrl toggle · 0–5 rate · P/U/X flag · G grid · D develop",
-                9.,
-                p.muted,
-            ));
+            .child(
+                div()
+                    .px_2()
+                    .text_size(px(10.))
+                    .text_color(p.muted)
+                    .child(caption),
+            );
         let body = if self.batch.develop.panels_hidden {
             center.into_any_element()
         } else {
             let mut split = h_resizable("library-panel-split")
                 .child(
                     resizable_panel()
-                        .size(window.rem_size() * 15.)
+                        .size(px(220.))
                         .size_range(px(180.)..px(420.))
                         .child(left),
                 )
@@ -1899,7 +1930,7 @@ impl Workspace {
             if let Some(settings) = settings {
                 split = split.child(
                     resizable_panel()
-                        .size(window.rem_size() * 20.)
+                        .size(px(310.))
                         .size_range(px(260.)..px(480.))
                         .child(settings),
                 );
@@ -1917,8 +1948,9 @@ impl Workspace {
             .flex_1()
             .min_w_0()
             .min_h_0()
+            .bg(p.paper)
+            .text_color(p.ink)
             .child(navigation)
-            .child(bar.test_support())
             .children(self.batch.running.map(|(done, count)| {
                 let percent = if count == 0 {
                     0.
@@ -1990,6 +2022,7 @@ impl Workspace {
                     ))
             }))
             .child(body)
+            .child(bar.test_support())
             .when(!self.batch.develop.filmstrip_hidden, |d| d.child(filmstrip))
     }
 }

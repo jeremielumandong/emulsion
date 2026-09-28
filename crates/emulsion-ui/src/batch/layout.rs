@@ -268,20 +268,26 @@ impl Workspace {
             .into_any_element()
     }
     pub(super) fn library_module_picker(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         div()
             .id("library-module-picker")
             .test_support()
             .flex()
             .items_center()
             .flex_none()
-            .h(px(46.))
+            .h(px(48.))
             .px_4()
             .gap_3()
-            .bg(p.panel)
+            .bg(rgb(0x121212))
             .border_b_1()
             .border_color(p.line)
-            .child(mono("EMULSION", 14., p.ink))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(div().text_size(px(16.)).text_color(p.ink).child("Emulsion"))
+                    .child(mono("PHOTO LIBRARY", 9., p.muted)),
+            )
             .child(div().flex_1())
             .children(
                 [(false, "Library"), (true, "Develop")]
@@ -290,6 +296,8 @@ impl Workspace {
                     .map(|(i, (develop, title))| {
                         Button::new(("library-module", i))
                             .label(title)
+                            .text_size(px(15.))
+                            .rounded_none()
                             .ghost()
                             .selected(self.batch.develop.module_develop == develop)
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -298,6 +306,10 @@ impl Workspace {
                                 this.batch.develop.loupe = develop;
                                 this.batch.develop.list = false;
                                 this.batch.develop.inspector = 0;
+                                this.batch.develop.canvas_tool = 0;
+                                if develop {
+                                    this.invalidate_library_preview();
+                                }
                                 cx.notify();
                             }))
                     }),
@@ -328,6 +340,47 @@ impl Workspace {
             .into_any_element()
     }
     pub(super) fn library_workflow_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.batch.develop.module_develop {
+            return div()
+                .id("library-workflow-toolbar")
+                .test_support()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .bg(rgb(0x363636))
+                .child(
+                    Button::new("library-before-after")
+                        .label("Before / After")
+                        .small()
+                        .ghost()
+                        .selected(self.batch.develop.compare)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.batch.develop.compare = !this.batch.develop.compare;
+                            this.batch.develop.before = false;
+                            this.invalidate_library_preview();
+                            cx.notify();
+                        })),
+                )
+                .child(self.library_color_view_panel(cx))
+                .child(div().flex_1())
+                .when(self.batch.develop.canvas_tool != 0, |d| {
+                    d.child(
+                        Button::new("library-tool-done")
+                            .label("Done")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.batch.develop.canvas_tool = 0;
+                                this.invalidate_library_preview();
+                                cx.notify();
+                            })),
+                    )
+                })
+                .into_any_element();
+        }
         div().id("library-workflow-toolbar").flex().flex_wrap().items_center().gap_1().px_2()
             .when(self.batch.develop.module_develop,|d|d.child(Button::new("library-before-after").label("Before / After").small().ghost().selected(self.batch.develop.compare).on_click(cx.listener(|this,_,_,cx|{this.batch.develop.compare=!this.batch.develop.compare;this.batch.develop.before=false;this.invalidate_library_preview();cx.notify();}))))
             .child(Checkbox::new("library-auto-advance").label("Auto advance").checked(self.batch.develop.auto_advance)
@@ -336,8 +389,8 @@ impl Workspace {
             .child(Button::new("library-create-proxy").label("Build proxies").small().ghost().on_click(cx.listener(|this,_,_,cx|{let paths=this.library_paths();cx.spawn(async move|this,cx|{let result=cx.background_spawn(async move{for path in paths{emulsion_io::photo_proxy::create(&path)?;}Ok::<_,emulsion_io::IoError>(())}).await;this.update(cx,|this,cx|{this.batch.note=Some(match result{Ok(())=>("Offline edit proxies ready. Originals are required for export.".into(),false),Err(e)=>(e.to_string().into(),true)});cx.notify();}).ok();}).detach();})))
             .into_any_element()
     }
-    pub(super) fn library_develop_left(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+    pub(super) fn library_navigator(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let p = classic::palette(cx);
         let active = self.batch.current.and_then(|i| self.batch.items.get(i));
         let path = active.map(|i| i.path.clone());
         let image = self
@@ -349,8 +402,8 @@ impl Workspace {
             .map(|(_, image)| image.clone())
             .or_else(|| active.and_then(|i| i.thumb.clone()));
         let nav_bounds = self.batch.develop.navigator_bounds.clone();
-        let mut panel = div()
-            .id("library-develop-left")
+        let panel = div()
+            .id("library-navigator")
             .test_support()
             .flex()
             .flex_col()
@@ -379,7 +432,7 @@ impl Workspace {
                 div()
                     .id("library-navigator-image")
                     .test_support()
-                    .h(px(148.))
+                    .h(px(156.))
                     .bg(p.stage)
                     .overflow_hidden()
                     .on_mouse_down(
@@ -435,6 +488,20 @@ impl Workspace {
                         .size_full(),
                     ),
             );
+        panel.into_any_element()
+    }
+    pub(super) fn library_develop_left(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let path = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone());
+        let mut panel = div()
+            .id("library-develop-left")
+            .test_support()
+            .flex()
+            .flex_col()
+            .child(self.library_navigator(cx));
         for (index, title) in ["Presets", "Snapshots / History", "Collections"]
             .into_iter()
             .enumerate()
@@ -442,6 +509,11 @@ impl Workspace {
             panel = panel.child(
                 Button::new(("library-left-section", index))
                     .label(title)
+                    .w_full()
+                    .h(px(29.))
+                    .rounded_none()
+                    .justify_start()
+                    .bg(rgb(0x282828))
                     .ghost()
                     .selected(self.batch.develop.left_section == index)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -483,22 +555,27 @@ impl Workspace {
         title: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         div()
             .w_full()
+            .bg(rgb(0x292929))
             .border_t_1()
             .border_color(p.line)
-            .py_1()
             .child(
                 Button::new(("library-develop-section", index))
                     .label(format!(
-                        "{}  {title}",
+                        "{title}  {}",
                         if self.batch.develop.section == index {
                             "▾"
                         } else {
                             "▸"
                         }
                     ))
+                    .w_full()
+                    .h(px(29.))
+                    .rounded_none()
+                    .justify_end()
+                    .small()
                     .ghost()
                     .selected(self.batch.develop.section == index)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -512,7 +589,7 @@ impl Workspace {
     pub(super) fn library_develop_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let content = self.library_develop_content(cx);
         let mut panel = div().flex().flex_col().child(content);
-        if self.batch.develop.inspector == 0 {
+        if self.batch.develop.module_develop && self.batch.develop.inspector == 0 {
             let current = SECTIONS
                 .iter()
                 .position(|(id, _)| *id == self.batch.develop.section)

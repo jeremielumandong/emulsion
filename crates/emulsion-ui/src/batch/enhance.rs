@@ -3,7 +3,7 @@ use super::*;
 use gpui_kit::component::Disableable;
 impl Workspace {
     pub(super) fn library_enhance_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let mut panel = div().flex().flex_col().gap_2();
         for (action, title) in [
             (0, "AI subject mask"),

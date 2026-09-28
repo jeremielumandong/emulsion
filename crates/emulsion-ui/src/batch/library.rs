@@ -9,6 +9,7 @@ use gpui_kit::component::{
 #[derive(Default)]
 pub(super) struct LibraryUi {
     pub(super) catalog: Catalog,
+    pub(super) folder_rows: Option<(u64, Arc<Vec<(PathBuf, usize)>>)>,
     pub(super) photo_index: Option<emulsion_io::photo_index::Index>,
     pub(super) metadata_undo: Vec<Vec<(catalog::Asset, catalog::Asset)>>,
     pub(super) advance_to: Option<PathBuf>,
@@ -643,27 +644,22 @@ impl Workspace {
                     }),
                 )
             });
-        let p = theme::palette(cx);
-        let mut rows = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .child(label("Library", &p))
-                    .child(
-                        Button::new("library-new-collection")
-                            .label("+")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.library_metadata(true, window, cx)
-                            })),
-                    ),
-            )
-            .child(label("Collections", &p));
+        let p = classic::palette(cx);
+        let mut rows = div().flex().flex_col().gap_1().child(
+            div()
+                .flex()
+                .justify_between()
+                .child(classic::heading("Catalog"))
+                .child(
+                    Button::new("library-new-collection")
+                        .label("+")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.library_metadata(true, window, cx)
+                        })),
+                ),
+        );
         rows = rows.child(
             Button::new("library-all-photos")
                 .label(format!(
@@ -684,6 +680,8 @@ impl Workspace {
                     this.library_show(cx);
                 })),
         );
+        rows = rows.child(self.library_folder_panel(cx));
+        rows = rows.child(classic::heading("Collections"));
         for collection in &self.batch.library.catalog.collections {
             let id = collection.id;
             rows = rows.child(
@@ -715,7 +713,7 @@ impl Workspace {
                     })),
             );
         }
-        rows = rows.child(label("Filter", &p));
+        rows = rows.child(classic::heading("Attribute filters"));
         let mut stars = div().flex().flex_wrap().gap_1();
         for rating in 0..=5u8 {
             stars = stars.child(
@@ -936,7 +934,7 @@ impl Workspace {
         }
     }
     pub(super) fn library_filmstrip(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let current = self.batch.current.unwrap_or(0);
         let start = current.saturating_sub(12);
         let end = (start + 25).min(self.batch.items.len());
@@ -950,7 +948,8 @@ impl Workspace {
         let mut strip = div()
             .id("library-filmstrip")
             .test_support()
-            .h(px(74.))
+            .h(px(82.))
+            .bg(rgb(0x242424))
             .flex_none()
             .flex()
             .items_center()
@@ -1003,22 +1002,23 @@ impl Workspace {
                 .id(("library-filmstrip-photo", i))
                 .test_support()
                 .flex_none()
-                .w(px(64.))
-                .h(px(50.))
+                .w(px(80.))
+                .h(px(62.))
                 .border_2()
                 .border_color(if self.batch.current == Some(i) {
                     p.accent
                 } else {
                     p.line
                 })
-                .rounded(px(3.))
+                .bg(rgb(0x777777))
+                .p_1()
                 .overflow_hidden()
                 .cursor_pointer();
             if let Some(thumb) = &item.thumb {
                 tile = tile.child(
                     img(ImageSource::Render(thumb.clone()))
                         .size_full()
-                        .object_fit(ObjectFit::Cover),
+                        .object_fit(ObjectFit::Contain),
                 );
             } else {
                 tile = tile.child(mono(
@@ -1063,7 +1063,7 @@ impl Workspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let count = self.batch.items.iter().filter(|i| i.selected).count();
         if count == 0 {
             return div().into_any_element();
@@ -1179,7 +1179,7 @@ impl Workspace {
 
 impl Workspace {
     pub(super) fn library_grid_tools(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let title = self
             .batch
             .library
@@ -1208,10 +1208,12 @@ impl Workspace {
             .items_center()
             .gap_2()
             .px_3()
-            .py_2()
+            .py_1()
+            .bg(p.soft_bg)
             .border_b_1()
             .border_color(p.line)
-            .child(label(title, &p))
+            .child(label("Library Filter", &p))
+            .child(mono(title, 10., p.muted))
             .child(div().flex_1())
             .children(
                 self.batch
@@ -1274,7 +1276,7 @@ impl Workspace {
             .into_any_element()
     }
     pub(super) fn library_info_panel(&self, keywords: bool, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let mut panel = div().flex().flex_col().gap_3();
         let Some(item) = self.batch.current.and_then(|i| self.batch.items.get(i)) else {
             return panel

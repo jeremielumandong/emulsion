@@ -14,7 +14,7 @@ impl EditorView {
     ) -> AnyElement {
         let tabs = [
             (SidebarTab::Properties, "Properties", "sliders-horizontal"),
-            (SidebarTab::BrushSettings, "Brush settings", "brush"),
+            (SidebarTab::BrushSettings, "Brushes", "brush"),
             (SidebarTab::History, "History", "history"),
             (SidebarTab::Character, "Character", "type"),
             (SidebarTab::Assistant, "Assistant", "sparkles"),
@@ -27,10 +27,10 @@ impl EditorView {
         if self.sidebar_layout.flyout_open {
             let (title, icon) = tabs
                 .iter()
-                .find(|(tab, _, _)| *tab == self.sidebar_tab)
+                .find(|(tab, _, _)| *tab == self.sidebar_layout.flyout_tab)
                 .map(|(_, title, icon)| (*title, *icon))
                 .unwrap_or(("Panel", "sliders-horizontal"));
-            let content = self.sidebar_content(p, window, cx);
+            let content = self.sidebar_content_for(self.sidebar_layout.flyout_tab, p, window, cx);
             overlay = overlay.child(
                 div()
                     .id("photo-shortcut-panel")
@@ -39,20 +39,20 @@ impl EditorView {
                     .top(px(18.))
                     .bottom(px(12.))
                     .right(px(52.))
-                    .w(px(300.))
+                    .w(rems(18.75))
                     .max_w(relative(0.78))
                     .flex()
                     .flex_col()
                     .bg(p.panel)
                     .border_1()
                     .border_color(p.line)
-                    .rounded(px(10.))
+                    .rounded(px(crate::app_state::settings(cx).corners.radius() + 4.))
                     .shadow_lg()
                     .occlude()
                     .overflow_hidden()
                     .child(
                         div()
-                            .h(px(40.))
+                            .h(rems(2.5))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -62,6 +62,16 @@ impl EditorView {
                             .border_color(p.line)
                             .child(rail::tool_icon(icon).text_color(p.ink).size(px(13.)))
                             .child(div().flex_1().text_size(px(12.)).child(title))
+                            .when(
+                                self.sidebar_layout.flyout_tab == SidebarTab::History,
+                                |header| {
+                                    header.child(mono(
+                                        format!("{} states", self.editor.history.len() + 1),
+                                        10.,
+                                        p.muted,
+                                    ))
+                                },
+                            )
                             .child(
                                 Button::new("photo-shortcut-dock")
                                     .accessibility_label("Move to dock")
@@ -75,7 +85,7 @@ impl EditorView {
                                             .size(px(13.)),
                                     )
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.sidebar_layout.flyout_open = false;
+                                        this.select_sidebar(this.sidebar_layout.flyout_tab, cx);
                                         this.sidebar_layout.collapsed = false;
                                         this.sidebar_layout.overlay_open = true;
                                         this.sidebar_layout.upper_collapsed = false;
@@ -142,7 +152,8 @@ impl EditorView {
                 )
                 .child(div().w(px(22.)).h(px(1.)).my(px(2.)).bg(p.line))
                 .children(tabs.into_iter().enumerate().map(|(i, (tab, title, icon))| {
-                    let selected = self.sidebar_layout.flyout_open && self.sidebar_tab == tab;
+                    let selected =
+                        self.sidebar_layout.flyout_open && self.sidebar_layout.flyout_tab == tab;
                     Button::new(("photo-shortcut", i))
                         .accessibility_label(title)
                         .tooltip(title)
@@ -163,14 +174,45 @@ impl EditorView {
                                 .size(px(14.)),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            let open =
-                                !(this.sidebar_layout.flyout_open && this.sidebar_tab == tab);
-                            // Selecting a shortcut must not expand/collapse the dock.
-                            let collapsed = this.sidebar_layout.collapsed;
-                            let overlay = this.sidebar_layout.overlay_open;
-                            this.select_sidebar(tab, cx);
-                            this.sidebar_layout.collapsed = collapsed;
-                            this.sidebar_layout.overlay_open = overlay;
+                            let open = !(this.sidebar_layout.flyout_open
+                                && this.sidebar_layout.flyout_tab == tab);
+                            if this.photo_panel_mode() {
+                                // Keep each input/slider mounted once, while the dock stays useful.
+                                if open
+                                    && (this.sidebar_tab == tab
+                                        || (matches!(
+                                            tab,
+                                            SidebarTab::Properties | SidebarTab::Character
+                                        ) && matches!(
+                                            this.sidebar_tab,
+                                            SidebarTab::Properties | SidebarTab::Character
+                                        ) && this.text_target().is_some()))
+                                {
+                                    let fallback = if this.editor.doc.raw.is_some() {
+                                        SidebarTab::Develop
+                                    } else {
+                                        SidebarTab::Adjustments
+                                    };
+                                    let collapsed = this.sidebar_layout.collapsed;
+                                    let overlay = this.sidebar_layout.overlay_open;
+                                    this.select_sidebar(fallback, cx);
+                                    this.sidebar_layout.collapsed = collapsed;
+                                    this.sidebar_layout.overlay_open = overlay;
+                                }
+                                if tab == SidebarTab::BrushSettings {
+                                    this.prepare_presets(cx);
+                                }
+                                if tab == SidebarTab::Assistant {
+                                    this.assistant.dock_open = true;
+                                }
+                            } else {
+                                let collapsed = this.sidebar_layout.collapsed;
+                                let overlay = this.sidebar_layout.overlay_open;
+                                this.select_sidebar(tab, cx);
+                                this.sidebar_layout.collapsed = collapsed;
+                                this.sidebar_layout.overlay_open = overlay;
+                            }
+                            this.sidebar_layout.flyout_tab = tab;
                             this.sidebar_layout.flyout_open = open;
                             cx.notify();
                         }))

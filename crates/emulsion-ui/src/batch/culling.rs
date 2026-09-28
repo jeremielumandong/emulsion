@@ -80,7 +80,7 @@ impl Workspace {
     }
     pub(super) fn library_culling_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.library_prepare_culling(cx);
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let survey = self.batch.develop.culling_mode == 2;
         let selected: Vec<_> = self
             .batch

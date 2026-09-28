@@ -124,6 +124,13 @@ fn opening_raw_shows_histogram_alongside_develop_controls(cx: &mut TestAppContex
     cx.update(|window, cx| {
         assert!(window.find("raw-histogram").visible());
         assert!(window.find("raw-adjust").visible());
+        window.click(("photo-shortcut", 0usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("photo-shortcut-panel").visible());
+        assert!(window.find("raw-adjust").visible());
+        assert!(ed.read(cx).sidebar_tab == crate::editor::SidebarTab::Develop);
         window.click("raw-curve", cx);
     });
     cx.run_until_parked();
@@ -357,7 +364,7 @@ fn raw_before_after_handle_drags_without_edits_and_escape_restores_view(cx: &mut
     cx.update(|_, cx| {
         ed.update(cx, |e, cx| {
             e.selected = Some(raw.node_id);
-            e.select_sidebar(crate::editor::SidebarTab::Properties, cx);
+            e.select_sidebar(crate::editor::SidebarTab::Develop, cx);
         })
     });
     cx.run_until_parked();
@@ -647,7 +654,7 @@ fn raw_real_dng_preview_and_clipping_buttons_leave_history_unchanged_and_escape_
     cx.update(|_, cx| {
         ed.update(cx, |e, cx| {
             e.selected = Some(raw.node_id);
-            e.select_sidebar(crate::editor::SidebarTab::Properties, cx);
+            e.select_sidebar(crate::editor::SidebarTab::Develop, cx);
         })
     });
     cx.run_until_parked();

@@ -1119,7 +1119,7 @@ impl EditorView {
             .when(!self.is_design(), |column| {
                 column.children(self.project_page_strip(p, cx))
             })
-            .children(if self.sidebar_tab == SidebarTab::Assistant {
+            .children(if self.assistant_in_panel() {
                 None
             } else {
                 self.assistant_dock(p, cx)

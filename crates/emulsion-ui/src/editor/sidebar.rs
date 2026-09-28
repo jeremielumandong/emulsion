@@ -11,6 +11,8 @@ pub(crate) struct SidebarState {
     pub collapsed: bool,
     pub overlay_open: bool,
     pub flyout_open: bool,
+    pub flyout_tab: SidebarTab,
+    pub photo: super::photo_panels::PhotoPanelState,
     pub upper_collapsed: bool,
     pub layers_collapsed: bool,
     pub colors_collapsed: bool,
@@ -24,6 +26,8 @@ impl Default for SidebarState {
             collapsed: false,
             overlay_open: false,
             flyout_open: false,
+            flyout_tab: SidebarTab::Properties,
+            photo: Default::default(),
             upper_collapsed: false,
             layers_collapsed: false,
             colors_collapsed: false,
@@ -110,6 +114,7 @@ pub(crate) enum SidebarTab {
     BlendingOptions,
     Assistant,
     Character,
+    Develop,
 }
 
 impl SidebarTab {
@@ -129,6 +134,7 @@ impl SidebarTab {
             Self::BlendingOptions => "blending-options",
             Self::Assistant => "assistant",
             Self::Character => "character",
+            Self::Develop => "develop",
         }
     }
     pub(super) fn from_key(key: &str) -> Self {
@@ -147,6 +153,7 @@ impl SidebarTab {
             Self::BlendingOptions,
             Self::Assistant,
             Self::Character,
+            Self::Develop,
         ]
         .into_iter()
         .find(|t| t.key() == key)
@@ -261,7 +268,27 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        match self.sidebar_tab {
+        self.sidebar_content_for(self.sidebar_tab, p, window, cx)
+    }
+
+    pub(super) fn sidebar_content_for(
+        &mut self, tab: SidebarTab, p: &Palette, window: &mut Window, cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.photo_panel_mode() {
+            match tab {
+                SidebarTab::Properties => return self.photo_properties(p, window, cx),
+                SidebarTab::BrushSettings => return self.photo_brushes(p, window, cx),
+                SidebarTab::Assistant => return self.photo_assistant(p, window, cx),
+                SidebarTab::History => return self.photo_history(p,cx),
+                _ => {}
+            }
+        }
+        match tab {
+            SidebarTab::Develop => {
+                if let Some(id) = self.editor.doc.raw.as_ref().map(|raw|raw.node_id) {
+                    div().p_3().children(self.raw_panel(id,p,cx)).into_any_element()
+                } else { self.quick_adjust_view(p,cx).into_any_element() }
+            },
             SidebarTab::Character => {
                 if let Some(properties) = self.text_properties(window, cx) {
                     div().id("sidebar-character-content").test_support().child(properties).into_any_element()
@@ -446,6 +473,11 @@ impl EditorView {
             .items_center()
             .border_b_1()
             .border_color(p.line)
+            .when(self.photo_panel_mode() && self.editor.doc.raw.is_some(), |tabs| tabs.child(
+                Button::new("sidebar-develop").label("Develop").xsmall().ghost()
+                    .when(self.sidebar_tab == SidebarTab::Develop, |b| b.bg(p.soft_bg).text_color(p.accent))
+                    .on_click(cx.listener(|this, _, _, cx| this.select_sidebar(SidebarTab::Develop, cx)))
+            ))
             .children(
                 [
                     (SidebarTab::Properties, "sidebar-properties", "Properties"),
@@ -526,26 +558,9 @@ impl EditorView {
                         cx.notify();
                     })),
             );
-        let content = if self.sidebar_layout.flyout_open {
-            div()
-                .p_3()
-                .text_size(px(11.))
-                .text_color(p.muted)
-                .child("Panel is open beside the canvas.")
-                .child(
-                    Button::new("sidebar-return-from-flyout")
-                        .label("Move to dock")
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.sidebar_layout.flyout_open = false;
-                            cx.notify();
-                        })),
-                )
-                .into_any_element()
-        } else {
-            self.sidebar_content(p, window, cx)
-        };
+        let content = if self.sidebar_layout.flyout_open && !self.photo_panel_mode() {
+            div().p_3().child("Panel open beside canvas").into_any_element()
+        } else { self.sidebar_content(p, window, cx) };
         let swatches = (compact && !self.compact.bars[super::compact::Bar::Color as usize].open)
             .then(|| {
                 let color_content = if self.sidebar_layout.color_tab {

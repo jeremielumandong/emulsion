@@ -10,6 +10,10 @@ Reference layout: `Emulsion Editor v2.dc.html`, Library screen.
   Tab toggles side panels; Filmstrip toggles the bottom strip.
 - Library keeps Auto, B&W and Reset in compact Quick Develop so recipe browsing
   remains accessible. Switch to Develop for the complete adjustment panels.
+- The Classic-style photographic workspace uses a neutral gray stage and contained
+  thumbnails. Navigator appears in both modules; the Library folder list navigates
+  imported catalog folders. Develop keeps its histogram, editing tools and Sync/Reset
+  visible while adjustment panels scroll. Import/export sits above the filmstrip.
 - Search names and keywords; sort by filename or EXIF capture time; grid, list,
   Develop/loupe, and RAW before/after comparison; bounded filmstrip navigation.
 - Import local folders into the persistent catalog, create collections, and add

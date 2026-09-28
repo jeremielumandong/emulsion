@@ -1109,6 +1109,42 @@ impl EditorView {
     }
 
     /// The fields for the Move tool's context bar.
+    pub(super) fn photo_transform_fields(&self, p: &Palette, cx: &App) -> Vec<AnyElement> {
+        let Some(fields) = &self.transform_fields else {
+            return Vec::new();
+        };
+        [
+            ("W", &fields.w),
+            ("H", &fields.h),
+            ("X", &fields.x),
+            ("Y", &fields.y),
+            ("Angle", &fields.angle),
+        ]
+        .into_iter()
+        .map(|(label, input)| {
+            let focus = input.read(cx).focus_handle(cx);
+            div()
+                .id(SharedString::from(format!("photo-transform-{label}")))
+                .test_support()
+                .min_w_0()
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    window.focus(&focus, cx)
+                })
+                .child(
+                    Input::new(input)
+                        .aria_label(label)
+                        .small()
+                        .h(px(26.))
+                        .prefix(div().text_size(px(11.)).text_color(p.muted).child(label))
+                        .font_family(MONO_FONT)
+                        .text_size(px(11.))
+                        .text_align(TextAlign::Right),
+                )
+                .into_any_element()
+        })
+        .collect()
+    }
+
     pub(crate) fn transform_field_views(&self, p: &Palette) -> Vec<AnyElement> {
         let Some(f) = &self.transform_fields else {
             return Vec::new();

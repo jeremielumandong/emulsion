@@ -191,7 +191,7 @@ fn library_raw_bw_save_and_export_use_same_settings(cx: &mut TestAppContext) {
         window.click("batch-all", cx);
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.click("library-selection-sync", cx));
+    cx.update(|window, cx| window.click("library-footer-sync", cx));
     cx.run_until_parked();
     assert_eq!(
         emulsion_io::raw::open(&second)
@@ -1059,4 +1059,119 @@ fn library_desktop_layout_and_local_edits_share_mcp(cx: &mut TestAppContext) {
         source.develop_with(&params).unwrap().get(2, 2),
         source.develop_with(&Default::default()).unwrap().get(2, 2)
     );
+}
+
+#[gpui_kit::test]
+fn library_classic_chrome_keeps_tools_and_footer_visible(cx: &mut TestAppContext) {
+    use gpui_kit::{ScrollDelta, point, px, size};
+    let fixture = Fixture::new();
+    let paths = fixture.pngs();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(fixture.0.clone(), paths, cx);
+            ws.screen = Screen::Batch;
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("library-navigator").visible());
+        window.click(("batch-item", 0usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("library-module", 1usize), cx));
+    cx.run_until_parked();
+    for (w, h) in [(1440., 900.), (1280., 720.)] {
+        cx.simulate_resize(size(px(w), px(h)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let histogram = window.find("library-histogram-panel").bounds();
+            let tools = window.find("library-editing-toolstrip").bounds();
+            let footer = window.find("library-develop-footer").bounds();
+            let strip = window.find("library-filmstrip").bounds();
+            assert!(histogram.bottom() <= tools.top());
+            assert!(tools.bottom() < footer.top());
+            assert!(footer.bottom() <= strip.top());
+            assert!(window.find("library-footer-reset").visible());
+            let row = window.find(("library-basic-row", 0usize)).bounds();
+            assert!(row.size.height <= px(28.));
+            window.scroll(
+                "library-adjustment-scroll",
+                ScrollDelta::Pixels(point(px(0.), px(-2000.))),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("library-rgb-histogram").visible());
+            assert!(window.find("library-footer-sync").visible());
+            window.click(("library-editing-tool", 5usize), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find(("develop-geometry-tool", 5usize)).is_some());
+            assert_eq!(ws.read(cx).batch.current, Some(0));
+            window.click(("library-module", 0usize), cx);
+        });
+        cx.run_until_parked();
+        let state = tool_json(library_tool(
+            &ws,
+            cx,
+            &fixture.0.join("catalog"),
+            "get_library",
+            serde_json::json!({}),
+        ));
+        assert_eq!(state["layout"]["canvas_tool"], 0);
+
+        cx.update(|window, cx| {
+            assert!(window.find(("batch-item", 0usize)).visible());
+            window.click(("library-module", 1usize), cx);
+        });
+        cx.run_until_parked();
+        tool_json(library_tool(
+            &ws,
+            cx,
+            &fixture.0.join("catalog"),
+            "set_library_view",
+            serde_json::json!({"mode":"develop","develop_section":"basic"}),
+        ));
+    }
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &fixture.0.join("catalog"),
+        "set_library_view",
+        serde_json::json!({"mode":"develop","canvas_tool":"radial"}),
+    ));
+    assert_eq!(state["layout"]["canvas_tool"], 8);
+    assert_eq!(state["layout"]["develop_section"], 5);
+    let bad = library_tool(
+        &ws,
+        cx,
+        &fixture.0.join("catalog"),
+        "set_library_view",
+        serde_json::json!({"mode":"grid","canvas_tool":"unknown","panels_hidden":true}),
+    );
+    assert!(bad.is_error);
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &fixture.0.join("catalog"),
+        "get_library",
+        serde_json::json!({}),
+    ));
+    assert_eq!(state["view"], "develop");
+    assert_eq!(state["layout"]["canvas_tool"], 8);
+    assert_eq!(state["layout"]["panels_hidden"], false);
+    cx.update(|window, cx| window.click("library-tool-done", cx));
+    cx.run_until_parked();
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &fixture.0.join("catalog"),
+        "get_library",
+        serde_json::json!({}),
+    ));
+    assert_eq!(state["layout"]["canvas_tool"], 0);
 }

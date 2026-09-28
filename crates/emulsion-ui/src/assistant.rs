@@ -34,6 +34,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod presentation_mcp;
+mod photo_panel;
 mod workspace_mcp;
 mod editor_host_mcp;
 mod smart_source_mcp;

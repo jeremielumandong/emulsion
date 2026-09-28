@@ -93,6 +93,7 @@ mod design_layout_ui;
 mod design_responsive_preview_ui;
 mod design_video_ui;
 mod photo_shortcuts;
+mod photo_panels;
 pub(crate) mod rail;
 mod raw_panel;
 mod raw_settings_ui;
@@ -186,6 +187,8 @@ pub(crate) enum SliderKey {
     FillOpacity(NodeId),
     LayerOpacity(NodeId),
     LayerFillOpacity(NodeId),
+    PhotoOpacity(NodeId),
+    PhotoFillOpacity(NodeId),
     BlendRange(NodeId, bool, usize),
     Param(NodeId, &'static str),
     Scale(NodeId),
@@ -205,6 +208,10 @@ pub(crate) enum SliderKey {
     QuickBrushHardness,
     QuickBrushOpacity,
     QuickBrushFlow,
+    PhotoBrushSize,
+    PhotoBrushHardness,
+    PhotoBrushOpacity,
+    PhotoBrushFlow,
     ToolSpacing,
     ToolRoundness,
     ToolAngle,
@@ -264,6 +271,8 @@ impl SliderKey {
                 | SliderKey::FillOpacity(_)
                 | SliderKey::LayerOpacity(_)
                 | SliderKey::LayerFillOpacity(_)
+                | SliderKey::PhotoOpacity(_)
+                | SliderKey::PhotoFillOpacity(_)
                 | SliderKey::BlendRange(..)
                 | SliderKey::Param(..)
                 | SliderKey::Scale(_)
@@ -429,7 +438,7 @@ pub struct EditorView {
     compact: compact::CompactLayout,
     workspace_customizer: Option<Entity<gpui_kit::component::input::InputState>>,
     workspace_customizer_focus: FocusHandle,
-    sidebar_layout: sidebar::SidebarState,
+    pub(crate) sidebar_layout: sidebar::SidebarState,
     /// Paint mode: painter's tools within the shared editor shell.
     pub(crate) draw_mode: bool,
     pub(crate) home_folder_on_save: Option<Option<u64>>,
@@ -706,7 +715,7 @@ impl EditorView {
             view.apply_workspace_layout(&layout, cx);
         }
         if view.editor.doc.raw.is_some() {
-            view.sidebar_tab = SidebarTab::Properties;
+            view.sidebar_tab = SidebarTab::Develop;
             view.sidebar_layout.collapsed = false;
         }
         view
@@ -1872,8 +1881,8 @@ impl EditorView {
         if key.edits_document() {
             self.close_text_field(cx);
             let name = match key {
-                SliderKey::Opacity(_) | SliderKey::LayerOpacity(_) => "Opacity".to_string(),
-                SliderKey::FillOpacity(_) | SliderKey::LayerFillOpacity(_) => "Fill opacity".into(),
+                SliderKey::Opacity(_) | SliderKey::LayerOpacity(_) | SliderKey::PhotoOpacity(_) => "Opacity".to_string(),
+                SliderKey::FillOpacity(_) | SliderKey::LayerFillOpacity(_) | SliderKey::PhotoFillOpacity(_) => "Fill opacity".into(),
                 SliderKey::BlendRange(..) => "Blend If".into(),
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
@@ -1991,21 +2000,21 @@ impl EditorView {
 
     fn apply_slider(&mut self, key: SliderKey, v: f32, cx: &mut Context<Self>) {
         match key {
-            SliderKey::ToolSize | SliderKey::QuickBrushSize => {
+            SliderKey::ToolSize | SliderKey::QuickBrushSize | SliderKey::PhotoBrushSize => {
                 // The track is square-root scaled so small sizes get room.
                 let f = ((v - 1.0) / 499.0).clamp(0.0, 1.0);
                 self.tools.brush.size = (1.0 + f * f * 499.0).round().max(1.0);
                 cx.notify();
             }
-            SliderKey::ToolHardness | SliderKey::QuickBrushHardness => {
+            SliderKey::ToolHardness | SliderKey::QuickBrushHardness | SliderKey::PhotoBrushHardness => {
                 self.tools.brush.hardness = v / 100.0;
                 cx.notify();
             }
-            SliderKey::ToolOpacity | SliderKey::QuickBrushOpacity => {
+            SliderKey::ToolOpacity | SliderKey::QuickBrushOpacity | SliderKey::PhotoBrushOpacity => {
                 self.tools.brush.opacity = v / 100.0;
                 cx.notify();
             }
-            SliderKey::ToolFlow | SliderKey::QuickBrushFlow => {
+            SliderKey::ToolFlow | SliderKey::QuickBrushFlow | SliderKey::PhotoBrushFlow => {
                 self.tools.brush.flow = v / 100.0;
                 cx.notify();
             }
@@ -2110,7 +2119,7 @@ impl EditorView {
                 self.set_style_contour_param(id, idx, point, y, v, cx)
             }
             SliderKey::StyleGlobalLight(altitude) => self.set_style_global_light(altitude, v, cx),
-            SliderKey::FillOpacity(id) | SliderKey::LayerFillOpacity(id) => {
+            SliderKey::FillOpacity(id) | SliderKey::LayerFillOpacity(id) | SliderKey::PhotoFillOpacity(id) => {
                 let ids = if self.layer_is_selected(id) {
                     self.selected_layer_ids()
                 } else {
@@ -2152,7 +2161,7 @@ impl EditorView {
                 self.compare = v / 100.0;
                 cx.notify();
             }
-            SliderKey::Opacity(id) | SliderKey::LayerOpacity(id) => {
+            SliderKey::Opacity(id) | SliderKey::LayerOpacity(id) | SliderKey::PhotoOpacity(id) => {
                 let ids = if self.layer_is_selected(id) {
                     self.selected_layer_ids()
                 } else {
@@ -4472,7 +4481,7 @@ impl EditorView {
         let strip = self.status_strip(&p, cx);
         let ask = self.ask_area(&p, cx);
         let size_panel = self.size_panel_view(&p, cx);
-        let dock = if self.sidebar_tab == SidebarTab::Assistant {
+        let dock = if self.assistant_in_panel() {
             None
         } else {
             self.assistant_dock(&p, cx)

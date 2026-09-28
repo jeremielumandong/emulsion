@@ -705,7 +705,7 @@ impl Workspace {
     }
 
     pub(super) fn library_develop_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let path = self
             .batch
             .current
@@ -720,8 +720,8 @@ impl Workspace {
             .test_support()
             .flex()
             .flex_col()
-            .gap_3()
-            .p_3()
+            .gap_1()
+            .p_2()
             .border_b_1()
             .border_color(p.line)
             .child(
@@ -732,7 +732,11 @@ impl Workspace {
                         if self.batch.develop.module_develop {
                             "Develop"
                         } else {
-                            "Quick Develop"
+                            match self.batch.develop.inspector {
+                                1 => "Metadata",
+                                2 => "Keywording",
+                                _ => "Quick Develop",
+                            }
                         },
                         &p,
                     ))
@@ -752,7 +756,10 @@ impl Workspace {
             return panel.into_any_element();
         }
         let mut tabs = div().flex().gap_1();
-        for (index, title) in ["Develop", "Info", "Keywords"].into_iter().enumerate() {
+        for (index, title) in ["Quick Develop", "Metadata", "Keywording"]
+            .into_iter()
+            .enumerate()
+        {
             tabs = tabs.child(
                 Button::new(("library-inspector-tab", index))
                     .label(title)
@@ -835,40 +842,6 @@ impl Workspace {
             );
         }
 
-        if self.batch.develop.module_develop {
-            let rgb = self.batch.develop.rgb_histogram;
-            let rgb_peak = rgb.iter().flatten().copied().max().unwrap_or(1).max(1) as f32;
-            panel = panel
-                .child(self.library_color_view_panel(cx))
-                .child(
-                    div()
-                        .h(px(48.))
-                        .flex()
-                        .items_end()
-                        .children((0..32).map(|bin| {
-                            div()
-                                .flex_1()
-                                .flex()
-                                .items_end()
-                                .children((0..3).map(move |c| {
-                                    div()
-                                        .flex_1()
-                                        .h(px(45. * rgb[c][bin] as f32 / rgb_peak))
-                                        .bg(gpui_kit::rgb([0xdd6666, 0x66bb77, 0x6688dd][c]))
-                                }))
-                        })),
-                )
-                .child(
-                    Checkbox::new("library-clipping")
-                        .label("Show clipping")
-                        .checked(self.batch.develop.clipping)
-                        .on_change(cx.listener(|this, value, _, cx| {
-                            this.batch.develop.clipping = *value;
-                            this.invalidate_library_preview();
-                            cx.notify();
-                        })),
-                );
-        }
         panel = panel.child(
             div()
                 .flex()
@@ -1058,47 +1031,59 @@ impl Workspace {
             }
             self.batch.develop.slider_key = Some((path.clone(), params));
         }
-        for (index, (name, value, min, max, step)) in fields.into_iter().enumerate() {
-            if [0, 6, 10, 14].contains(&index) {
+        for index in [6usize, 7, 0, 1, 2, 3, 5, 4, 10, 11, 12, 9, 8, 13] {
+            let (name, value, min, max, step) = fields[index];
+            if [0, 6, 10, 13].contains(&index) {
                 panel = panel.child(label(
                     match index {
-                        0 => "Light",
-                        6 => "Color · relative to as shot",
-                        10 => "Effects",
-                        _ => "Detail",
+                        0 => "Tone",
+                        6 => "White balance",
+                        10 => "Presence",
+                        _ => "Effects",
                     },
                     &p,
                 ));
             }
             panel = panel.child(
                 div()
+                    .id(("library-basic-row", index))
+                    .test_support()
                     .flex()
-                    .flex_col()
+                    .items_center()
                     .gap_1()
+                    .h(px(27.))
                     .child(
                         div()
-                            .flex()
-                            .justify_between()
+                            .w(px(78.))
+                            .flex_none()
                             .child(self.library_control_label(
                                 index,
                                 name,
                                 super::advanced::Field::Basic(index),
                                 cx,
-                            ))
-                            .child(self.library_numeric_control(
-                                index,
-                                name,
-                                super::advanced::Field::Basic(index),
-                                value,
-                                min,
-                                max,
-                                step,
-                                cx,
                             )),
                     )
-                    .child(Slider::new(&self.batch.develop.sliders[index].0).disabled(
-                        self.batch.develop.saving
-                            || (index == 16 && !emulsion_io::photo_develop::is_raw_photo(&path)),
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Slider::new(&self.batch.develop.sliders[index].0)
+                                .bg(rgb(0xa0a0a0))
+                                .text_color(rgb(0xd2d2d2))
+                                .disabled(
+                                    self.batch.develop.saving
+                                        || (index == 16
+                                            && !emulsion_io::photo_develop::is_raw_photo(&path)),
+                                ),
+                        ),
+                    )
+                    .child(self.library_numeric_control(
+                        index,
+                        name,
+                        super::advanced::Field::Basic(index),
+                        value,
+                        min,
+                        max,
+                        step,
+                        cx,
                     )),
             );
         }
@@ -1331,7 +1316,7 @@ impl Workspace {
 
 impl Workspace {
     pub(super) fn library_comparison_view(&self, after: AnyElement, cx: &App) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let path = self
             .batch
             .current
@@ -1563,7 +1548,7 @@ impl Workspace {
         bank: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let expanded = if bank {
             self.batch.develop.preset_import_expanded
         } else {

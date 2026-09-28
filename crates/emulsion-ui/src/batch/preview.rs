@@ -78,7 +78,7 @@ impl Workspace {
         image: Arc<RenderImage>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let dimensions = image.size(0);
         let navigation = self.batch.navigation.clone();
         navigation.borrow_mut().sync(

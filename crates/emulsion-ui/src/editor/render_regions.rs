@@ -92,6 +92,7 @@ impl EditorView {
         let view_dependent_panel = match self.sidebar_tab {
             SidebarTab::Info => self.panels.info,
             SidebarTab::Navigator => self.panels.navigator,
+            SidebarTab::Properties => self.photo_panel_mode(),
             _ => false,
         };
         if view_dependent_panel && self.sidebar_content_visible(window, cx) {

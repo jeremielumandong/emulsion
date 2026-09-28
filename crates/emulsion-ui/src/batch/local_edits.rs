@@ -35,7 +35,7 @@ impl Workspace {
         }
     }
     pub(super) fn library_local_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         let edits = match self.library_edit_set() {
             Ok(v) => v,
             Err(e) => return mono(e, 11., p.accent).into_any_element(),

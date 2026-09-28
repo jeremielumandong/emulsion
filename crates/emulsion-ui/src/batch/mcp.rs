@@ -72,7 +72,7 @@ impl Workspace {
         json!({"total":b.items.len(),"offset":page.offset,"next_offset":(page.offset.saturating_add(limit)<b.items.len()).then(||page.offset+limit),"files":files,
             "active":active,"selected":b.items.iter().filter(|i|i.selected).map(|i|&i.path).collect::<Vec<_>>(),"collections":l.catalog.collections,"photo_catalog":l.catalog.photos,"catalog_revision":l.catalog.revision,
             "filters":{"collapse_stacks":l.collapse_stacks,"query":l.search.as_ref().map(|s|s.read(cx).value().to_string()).unwrap_or_default(),"source":if l.source_paths.is_some(){"folder"}else{"all"},"collection":l.collection,"minimum_rating":l.rating,"flag":if l.flagged{"picked"}else if l.rejected{"rejected"}else{"all"},"color_label":l.color_label,"raw_only":l.raw_only,"unedited":l.unedited,"sort":if l.capture_sort{"capture_time"}else{"filename"},"reverse":l.reverse},
-            "layout":{"color_view":b.develop.color_view,"detail_region":b.develop.detail_region,"mask_overlay":b.develop.mask_overlay,"dust_visualization":b.develop.dust_visualization,"auto_advance":b.develop.auto_advance,"panels_hidden":b.develop.panels_hidden,"filmstrip_hidden":b.develop.filmstrip_hidden},"metadata_undo_steps":l.metadata_undo.len(),"view":if b.develop.culling_mode==1{"photo_compare"}else if b.develop.culling_mode==2{"survey"}else if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.module_develop{"develop"}else if b.develop.loupe{"loupe"}else if b.develop.list{"list"}else{"grid"},"inspector":(["develop","info","keywords"][b.develop.inspector.min(2)]),"recipe":b.recipe,
+            "layout":{"canvas_tool":b.develop.canvas_tool,"develop_section":b.develop.section,"color_view":b.develop.color_view,"detail_region":b.develop.detail_region,"mask_overlay":b.develop.mask_overlay,"dust_visualization":b.develop.dust_visualization,"auto_advance":b.develop.auto_advance,"panels_hidden":b.develop.panels_hidden,"filmstrip_hidden":b.develop.filmstrip_hidden},"metadata_undo_steps":l.metadata_undo.len(),"view":if b.develop.culling_mode==1{"photo_compare"}else if b.develop.culling_mode==2{"survey"}else if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.module_develop{"develop"}else if b.develop.loupe{"loupe"}else if b.develop.list{"list"}else{"grid"},"inspector":(["develop","info","keywords"][b.develop.inspector.min(2)]),"recipe":b.recipe,
             "camera_profiles":emulsion_io::camera_profiles::installed().iter().map(|p|json!({"name":p.name,"camera":p.camera,"digest":p.digest})).collect::<Vec<_>>(),"preset_files":b.develop.preset_files,"preset_import":b.develop.preset_report,"preset_import_notes":b.develop.preset_import_notes,"snapshots":active.and_then(|p|b.develop.snapshots.get(p)),"develop":{"local_edits":active.and_then(|p|b.develop.current_params(p)).and_then(|p|p.local_edits).and_then(|d|emulsion_io::develop_edits::load(&d).ok()),"history":active.and_then(|p|b.develop.history.get(p)),"settings":active.and_then(|p|b.develop.current_params(p)),"histogram":b.develop.histogram,"rgb_histogram":b.develop.rgb_histogram,"clipping_overlay":b.develop.clipping,"enhancement":b.develop.ai_job.as_ref().map(|j|j.summary()),"histogram_kind":"32-bin display luminance","histogram_pending":b.develop.busy||b.preview.is_none(),"dirty":b.develop.dirty(),"dirty_paths":b.develop.drafts.iter().filter(|(p,v)|b.develop.saved.get(*p)!=Some(*v)).map(|(p,_)|p).collect::<Vec<_>>(),"saving":b.develop.saving,"busy":b.develop.busy,"undo_steps":active.and_then(|p|b.develop.history.get(p)).map_or(0,Vec::len)},
             "export":{"settings":b.output_settings,"progress":b.running,"current":b.exporting,"out_dir":b.out_dir,"format":b.format},"mcp_busy":b.mcp_busy,"note":b.note.as_ref().map(|(text,error)|json!({"text":text,"error":error}))})
     }
@@ -666,6 +666,27 @@ fn apply_view(
         bail!("Invalid detail region");
     }
     // Validate every fallible input before changing any view state.
+    let canvas_tool = view
+        .canvas_tool
+        .as_ref()
+        .map(|name| {
+            [
+                "none",
+                "brush",
+                "erase",
+                "heal",
+                "clone",
+                "crop",
+                "straighten",
+                "perspective",
+                "radial",
+                "linear",
+            ]
+            .iter()
+            .position(|v| v == name)
+            .ok_or_else(|| anyhow!("Unknown canvas tool"))
+        })
+        .transpose()?;
     let develop_section = match &view.develop_section {
         Some(name) => Some(
             [
@@ -774,6 +795,14 @@ fn apply_view(
     if let Some(section) = develop_section {
         ws.batch.develop.section = section;
         ws.batch.develop.slider_key = None;
+    }
+    if let Some(tool) = canvas_tool {
+        ws.batch.develop.canvas_tool = tool;
+        if tool != 0 {
+            ws.batch.develop.section = if (5..=7).contains(&tool) { 1 } else { 5 };
+            ws.batch.develop.slider_key = None;
+        }
+        ws.invalidate_library_preview();
     }
     let l = &mut ws.batch.library;
     if let Some(collapse) = view.collapse_stacks {
