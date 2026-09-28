@@ -119,6 +119,7 @@ pub struct ProjectEditor {
     undo_pages: Vec<PageStep>,
     redo_pages: Vec<PageStep>,
     last_page_edit: u64,
+    history_groups: BTreeMap<u64, Vec<PageId>>,
 }
 
 impl From<Editor> for ProjectEditor {
@@ -138,6 +139,7 @@ impl From<Editor> for ProjectEditor {
             undo_pages: Vec::new(),
             redo_pages: Vec::new(),
             last_page_edit: 0,
+            history_groups: BTreeMap::new(),
         }
     }
 }
@@ -198,6 +200,7 @@ impl ProjectEditor {
             undo_pages: Vec::new(),
             redo_pages: Vec::new(),
             last_page_edit: 0,
+            history_groups: BTreeMap::new(),
         })
     }
 
@@ -354,7 +357,7 @@ impl ProjectEditor {
         Ok(id)
     }
     /// Import every page as one undoable layout change, retaining page histories.
-    pub fn import_pages(&mut self, project: Project) -> Result<Vec<PageId>, String> {
+    pub fn import_pages(&mut self, mut project: Project) -> Result<Vec<PageId>, String> {
         project.validate()?;
         if self.layout.len() + project.pages.len() > MAX_PAGES {
             return Err(format!("A project supports at most {MAX_PAGES} pages."));
@@ -382,6 +385,11 @@ impl ProjectEditor {
             .is_none_or(|id| id >= u64::MAX - 1)
         {
             return Err("Page ID limit reached.".into());
+        }
+        let page_ids = project.pages.iter().enumerate().map(|(offset,page)|(page.meta.id,self.next_page_id+offset as u64)).collect();
+        for page in &mut project.pages {
+            page.doc.design.remap_pages(&page_ids);
+            page.graph.remap_pages(&page_ids);
         }
         self.record_pages()?;
         let index = self
@@ -476,18 +484,66 @@ impl ProjectEditor {
         Ok(())
     }
     /// Prepare all affected pages before committing any of them, as one Undo action.
-    pub(crate) fn commit_documents(&mut self, mut documents: BTreeMap<PageId, Document>, label: &str) -> Result<(), String> {
-        if self.kind.is_none() || self.in_transaction() {return Err("Finish the current edit in a project first.".into());}
-        for (id,doc) in &mut documents {
-            let editor=self.page(*id).ok_or("Project page no longer exists.")?;
-            if editor.in_transaction() {return Err("Finish edits on every affected page first.".into());}
-            let mut trial=Editor::new(editor.doc.clone(),None);
-            trial.commit_design_document(doc.clone(),label)?;
-            *doc=trial.doc;
+    pub(crate) fn commit_documents(
+        &mut self,
+        mut documents: BTreeMap<PageId, Document>,
+        label: &str,
+    ) -> Result<(), String> {
+        if self.kind.is_none() || self.in_transaction() {
+            return Err("Finish the current edit in a project first.".into());
         }
-        let order=edit_order();
-        for (id,doc) in documents {self.pages.get_mut(&id).unwrap().commit_project_document(doc,label,order);}
+        for (id, doc) in &mut documents {
+            let editor = self.page(*id).ok_or("Project page no longer exists.")?;
+            if editor.in_transaction() {
+                return Err("Finish edits on every affected page first.".into());
+            }
+            let mut trial = Editor::new(editor.doc.clone(), None);
+            trial.commit_design_document(doc.clone(), label)?;
+            *doc = trial.doc;
+        }
+        let order = edit_order();
+        let affected: Vec<_> = documents
+            .iter()
+            .filter_map(|(id, doc)| (self.pages[id].doc != *doc).then_some(*id))
+            .collect();
+        for (id, doc) in documents {
+            self.pages
+                .get_mut(&id)
+                .unwrap()
+                .commit_project_document(doc, label, order);
+        }
+        if affected.len() > 1 {
+            self.history_groups.insert(order, affected);
+        }
+        self.expire_incomplete_groups();
         Ok(())
+    }
+    fn expire_incomplete_groups(&mut self) {
+        loop {
+            let expired: Vec<_> = self
+                .history_groups
+                .iter()
+                .filter_map(|(order, pages)| {
+                    let complete = [false, true].into_iter().any(|redo| {
+                        pages.iter().all(|id| {
+                            self.pages
+                                .get(id)
+                                .is_some_and(|editor| editor.history.contains_order(redo, *order))
+                        })
+                    });
+                    (!complete).then_some(*order)
+                })
+                .collect();
+            if expired.is_empty() {
+                break;
+            }
+            for order in expired {
+                self.history_groups.remove(&order);
+                for editor in self.pages.values_mut() {
+                    editor.expire_group_history(order);
+                }
+            }
+        }
     }
     fn candidate(&self, redo: bool) -> (PageId, u64) {
         self.layout
@@ -533,6 +589,7 @@ impl ProjectEditor {
         while self.in_transaction() {
             self.end();
         }
+        self.expire_incomplete_groups();
         let (id, order) = self.candidate(redo);
         let page_order = if redo {
             &self.redo_pages
@@ -561,15 +618,34 @@ impl ProjectEditor {
             true
         } else {
             self.active = id;
-            let affected:Vec<_>=self.layout.iter().filter_map(|page| {
-                let h=&self.pages[&page.id].history;
-                ((if redo {h.redo_order()} else {h.undo_order()})==order).then_some(page.id)
-            }).collect();
-            let grouped_order=edit_order();
+            let affected: Vec<_> = self
+                .layout
+                .iter()
+                .filter_map(|page| {
+                    let h = &self.pages[&page.id].history;
+                    ((if redo { h.redo_order() } else { h.undo_order() }) == order)
+                        .then_some(page.id)
+                })
+                .collect();
+            // A removed page must be restored by page history before a shared
+            // content step can travel. Never apply a surviving subset.
+            if self.history_groups.get(&order).is_some_and(|expected| {
+                expected.len() != affected.len() || expected.iter().any(|id| !affected.contains(id))
+            }) {
+                return false;
+            }
+            let grouped_order = edit_order();
+            if let Some(pages) = self.history_groups.remove(&order) {
+                self.history_groups.insert(grouped_order, pages);
+            }
             for page in affected {
-                let editor=self.pages.get_mut(&page).unwrap();
-                if redo {editor.redo();} else {editor.undo();}
-                editor.group_history(!redo,grouped_order);
+                let editor = self.pages.get_mut(&page).unwrap();
+                if redo {
+                    editor.redo();
+                } else {
+                    editor.undo();
+                }
+                editor.group_history(!redo, grouped_order);
             }
             true
         }
@@ -661,5 +737,96 @@ mod tests {
         assert!(p.add_page(Document::new(0, 0), "Bad".into(), 0.).is_err());
         assert_eq!(p.stamp(), stamp);
         assert!(!p.can_undo());
+    }
+}
+
+#[cfg(test)]
+mod grouped_history_tests {
+    use super::*;
+    use crate::{Command, Node, NodeKind, command::Slot};
+    fn fixture() -> ProjectEditor {
+        let mut doc = Document::new(100, 100);
+        Command::AddNode {
+            node: Box::new(Node::new(0, "Before", NodeKind::Fill { rgba: [255; 4] })),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        ProjectEditor::open(
+            Project {
+                kind: ProjectKind::Design,
+                pages: (1..=2)
+                    .map(|id| ProjectPage {
+                        meta: PageMeta {
+                            id,
+                            name: format!("Page {id}"),
+                            bleed_mm: 0.,
+                        },
+                        doc: doc.clone(),
+                        graph: Graph::new(doc.clone(), "Opened"),
+                    })
+                    .collect(),
+                active: 1,
+                next_page_id: 3,
+            },
+            None,
+        )
+        .unwrap()
+    }
+    fn group(p: &mut ProjectEditor) {
+        let documents = (1..=2)
+            .map(|id| {
+                let mut doc = p.page(id).unwrap().doc.clone();
+                doc.nodes[0].name = "Published".into();
+                (id, doc)
+            })
+            .collect();
+        p.commit_documents(documents, "Publish").unwrap();
+    }
+    #[test]
+    fn grouped_history_eviction_expires_whole_group_but_retains_newer_edits() {
+        let mut p = fixture();
+        group(&mut p);
+        let id = p.doc.nodes[0].id;
+        for i in 0..101 {
+            p.execute(Command::Rename {
+                id,
+                name: format!("Later {i}"),
+            })
+            .unwrap();
+        }
+        // The first page has evicted the group; the second still has it.
+        assert_eq!(p.page(2).unwrap().history.len(), 1);
+        assert!(p.undo());
+        assert_eq!(p.doc.node(id).unwrap().name, "Later 99");
+        assert!(!p.page(2).unwrap().history.can_undo());
+        for _ in 0..99 {
+            assert!(p.undo());
+        }
+        assert!(!p.undo());
+        assert_eq!(p.page(2).unwrap().doc.nodes[0].name, "Published");
+        // Redo newer work remains available; expired publication stays applied.
+        assert!(p.redo());
+        assert_eq!(p.page(2).unwrap().doc.nodes[0].name, "Published");
+    }
+    #[test]
+    fn grouped_history_new_branch_cannot_redo_only_one_page() {
+        let mut p = fixture();
+        group(&mut p);
+        assert!(p.undo());
+        p.set_active_page(1).unwrap();
+        let id = p.doc.nodes[0].id;
+        p.execute(Command::Rename {
+            id,
+            name: "Branch".into(),
+        })
+        .unwrap();
+        assert!(!p.redo());
+        assert_eq!(p.page(2).unwrap().doc.nodes[0].name, "Before");
+        assert!(!p.page(2).unwrap().history.can_redo());
+        assert!(p.undo());
+        assert!(p.redo());
+        assert_eq!(p.page(1).unwrap().doc.nodes[0].name, "Branch");
+        assert_eq!(p.page(2).unwrap().doc.nodes[0].name, "Before");
     }
 }

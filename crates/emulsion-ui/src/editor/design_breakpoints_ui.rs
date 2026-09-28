@@ -1,10 +1,10 @@
 //! Native breakpoint authoring; drafts are applied together in one transaction.
 use super::*;
-use emulsion_core::design_layout::{Breakpoint, FrameOverrides};
+use emulsion_core::design_layout::{Breakpoint, BreakpointReference, FrameLimits, FrameOverrides};
 
 #[derive(Clone)]
 struct Draft {
-    fields: [Entity<InputState>; 7],
+    fields: [Entity<InputState>; 11],
     overrides: Entity<FrameOverrides>,
 }
 fn draft(value: Breakpoint, window: &mut Window, cx: &mut App) -> Draft {
@@ -21,6 +21,10 @@ fn draft(value: Breakpoint, window: &mut Window, cx: &mut App) -> Draft {
         padding[2],
         padding[3],
         value.overrides.columns.map(f64::from),
+        value.overrides.limits.and_then(|l| l.min_width),
+        value.overrides.limits.and_then(|l| l.max_width),
+        value.overrides.limits.and_then(|l| l.min_height),
+        value.overrides.limits.and_then(|l| l.max_height),
     ];
     Draft {
         fields: values.map(|v| {
@@ -59,8 +63,16 @@ fn parse(draft: &Draft, cx: &App) -> Result<Breakpoint, String> {
         Some(_) => return Err("Grid columns must be an integer from 1 to 64.".into()),
         None => None,
     };
+    if overrides.limits.is_some() {
+        overrides.limits = Some(FrameLimits {
+            min_width: values[7],
+            max_width: values[8],
+            min_height: values[9],
+            max_height: values[10],
+        });
+    }
     Ok(Breakpoint {
-        min_width: values[0].ok_or("Enter a minimum canvas width for every breakpoint.")?,
+        min_width: values[0].ok_or("Enter a minimum reference width for every breakpoint.")?,
         overrides,
     })
 }
@@ -100,6 +112,7 @@ impl EditorView {
         let Some(frame) = self.editor.doc.design.frames.get(&group) else {
             return;
         };
+        let reference = cx.new(|_| frame.breakpoint_reference);
         let drafts = frame
             .breakpoints
             .iter()
@@ -108,7 +121,8 @@ impl EditorView {
             .collect::<Vec<_>>();
         let drafts = cx.new(|_| drafts);
         let error = cx.new(|_| String::new());
-        let page_width = f64::from(self.editor.doc.width);
+        let page_width = layout::reference_width(&self.editor.doc, group)
+            .unwrap_or(f64::from(self.editor.doc.width));
         let active = layout::active_breakpoint(&self.editor.doc, group);
         let ticket = self.edit_ticket();
         let owner = cx.weak_entity();
@@ -117,10 +131,12 @@ impl EditorView {
             let apply = drafts.clone();
             let owner = owner.clone();
             let error_apply = error.clone();
-            dialog.title("Canvas width breakpoints").width(px(510.))
+            let change_reference=reference.clone();let apply_reference=reference.clone();
+            dialog.title("Responsive breakpoints").width(px(510.))
                 .child(div().id("design-breakpoints-body").test_support().max_h(px((f32::from(window.viewport_size().height)-220.).clamp(100.,680.))).overflow_y_scroll().flex().flex_col().gap_3()
-                    .child(div().text_size(px(12.)).child(format!("Canvas: {page_width}px · Active: {}",active.map(|v|format!("{v}px and wider")).unwrap_or_else(||"base settings".into()))))
-                    .child(div().text_size(px(11.)).child("The highest matching minimum width inherits directly from base settings. Blank numeric fields inherit. Frame resizing and content sizing do not change the canvas width."))
+                    .child(Button::new("design-breakpoint-reference").label(if *reference.read(cx)==BreakpointReference::Canvas {"Width reference: canvas"}else{"Width reference: parent container"}).small().outline().on_click(move|_,window,cx|{change_reference.update(cx,|v,cx|{*v=if *v==BreakpointReference::Canvas {BreakpointReference::Container}else{BreakpointReference::Canvas};cx.notify();});window.refresh();}))
+                    .child(div().text_size(px(12.)).child(format!("Current reference: {page_width}px · Active: {}",active.map(|v|format!("{v}px and wider")).unwrap_or_else(||"base settings".into()))))
+                    .child(div().text_size(px(11.)).child("The highest matching width inherits directly from base settings. Container rules use the responsive parent’s inner width, or canvas at the top level. Content-sized query ancestors are not allowed."))
                     .child(Button::new("design-breakpoint-add").label("Add breakpoint").small().outline().disabled(drafts.read(cx).len()>=16)
                         .on_click(move|_,window,cx|{
                             let mut width=page_width.clamp(1.,100000.);
@@ -131,10 +147,12 @@ impl EditorView {
                         }))
                     .children(drafts.read(cx).iter().cloned().enumerate().map(|(index,value)|{
                         let remove=drafts.clone();let state=value.overrides.clone();let settings=state.read(cx).clone();
-                        let flow=state.clone();let align=state.clone();
+                        let flow=state.clone();let align=state.clone();let limits=state.clone();
                         div().id(("design-breakpoint-row",index)).test_support().flex().flex_col().gap_2()
                             .child(div().flex().justify_between().child(format!("Breakpoint {}",index+1)).child(Button::new(("design-breakpoint-remove",index)).label("Remove").small().ghost().on_click(move|_,window,cx|{remove.update(cx,|values,cx|{values.remove(index);cx.notify();});window.refresh();})))
-                            .child(div().grid().grid_cols(2).gap_2().children(["Minimum canvas width · px","Gap · px","Padding top","Padding right","Padding bottom","Padding left","Grid columns"].into_iter().enumerate().map(|(field,label)|div().child(label).child(Input::new(&value.fields[field]).id(("design-breakpoint-input",index*7+field))))))
+                            .child(div().grid().grid_cols(2).gap_2().children(["Minimum reference width · px","Gap · px","Padding top","Padding right","Padding bottom","Padding left","Grid columns"].into_iter().enumerate().map(|(field,label)|div().child(label).child(Input::new(&value.fields[field]).id(("design-breakpoint-input",index*7+field))))))
+                            .child(Button::new(("design-breakpoint-limits",index)).label(if settings.limits.is_some(){"Size limits: override"}else{"Size limits: inherit"}).small().outline().on_click(move|_,window,cx|{limits.update(cx,|v,cx|{v.limits=if v.limits.is_some(){None}else{Some(FrameLimits::default())};cx.notify();});window.refresh();}))
+                            .when(settings.limits.is_some(),|d|d.child(div().grid().grid_cols(2).gap_2().children(["Minimum width","Maximum width","Minimum height","Maximum height"].into_iter().enumerate().map(|(field,label)|div().child(label).child(Input::new(&value.fields[7+field]).id(("design-breakpoint-limit",index*4+field)))))))
                             .child(Button::new(("design-breakpoint-flow",index)).label(format!("Flow: {}",match settings.flow{None=>"inherit",Some(Flow::Row)=>"row",Some(Flow::Column)=>"column",Some(Flow::Grid)=>"grid"})).small().outline()
                                 .on_click(move|_,window,cx|{flow.update(cx,|v,cx|{v.flow=match v.flow{None=>Some(Flow::Row),Some(Flow::Row)=>Some(Flow::Column),Some(Flow::Column)=>Some(Flow::Grid),Some(Flow::Grid)=>None};cx.notify();});window.refresh();}))
                             .child(Button::new(("design-breakpoint-align",index)).label(format!("Alignment: {}",match settings.align{None=>"inherit",Some(Align::Start)=>"start",Some(Align::Center)=>"center",Some(Align::End)=>"end"})).small().outline()
@@ -154,7 +172,7 @@ impl EditorView {
                         let values=match values{Ok(v)=>v,Err(e)=>{this.set_status(e,true,cx);return false;}};
                         let mut design=this.editor.doc.design.clone();
                         let Some(frame)=design.frames.get_mut(&group) else{return false;};
-                        frame.breakpoints=values;
+                        frame.breakpoints=values;frame.breakpoint_reference= *apply_reference.read(cx);
                         match this.editor.execute(Command::SetDesign{design:Box::new(design)}){
                             Ok(_)=>{this.after_change(cx);true},Err(e)=>{this.set_status(e.to_string(),true,cx);false}
                         }

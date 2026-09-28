@@ -16,6 +16,9 @@ pub struct Definition {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
+    /// New instances track native edits; absent in legacy files means manual.
+    #[serde(default)]
+    pub auto_overrides: bool,
     pub component: String,
     pub variant: String,
     /// Source member IDs map to stable native IDs in this instance.
@@ -33,6 +36,7 @@ impl Instance {
     pub fn remap(&self, map: &HashMap<NodeId, NodeId>) -> Self {
         let id = |id| map.get(&id).copied().unwrap_or(id);
         Self {
+            auto_overrides: self.auto_overrides,
             component: self.component.clone(),
             variant: self.variant.clone(),
             members: self.members.iter().map(|(a, b)| (id(*a), id(*b))).collect(),
@@ -220,6 +224,7 @@ pub fn create(editor: &mut Editor, ids: &[NodeId], name: &str) -> Result<NodeId,
     design.component_links.insert(
         root,
         Instance {
+            auto_overrides: true,
             component: name.into(),
             variant: "Default".into(),
             members: members
@@ -269,6 +274,7 @@ fn insert_into(
     design.component_links.insert(
         id,
         Instance {
+            auto_overrides: true,
             component: name.into(),
             variant: variant.into(),
             members,
@@ -379,6 +385,16 @@ pub fn set_overrides(
     node: NodeId,
     flags: Overrides,
 ) -> Result<(), String> {
+    configure_overrides(editor, instance, node, flags, None)
+}
+/// Atomically configure member properties and optional instance tracking policy.
+pub fn configure_overrides(
+    editor: &mut Editor,
+    instance: NodeId,
+    node: NodeId,
+    flags: Overrides,
+    auto: Option<bool>,
+) -> Result<(), String> {
     let mut plan = Plan::new(editor)?;
     editable(&plan.doc, instance)?;
     let mut link = plan
@@ -388,6 +404,9 @@ pub fn set_overrides(
         .get(&instance)
         .cloned()
         .ok_or("Select a linked component")?;
+    if let Some(enabled) = auto {
+        link.auto_overrides = enabled;
+    }
     link.members = nested::members(&plan.doc, instance, &link)?;
     let source = *link
         .members
@@ -726,3 +745,21 @@ mod nested_tests;
 #[path = "design_component_project.rs"]
 mod project;
 pub use project::{insert_project, publish_project};
+
+/// Change tracking policy without changing existing appearance overrides.
+pub fn set_auto_overrides(
+    editor: &mut Editor,
+    instance: NodeId,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut plan = Plan::new(editor)?;
+    editable(&plan.doc, instance)?;
+    let link = plan
+        .doc
+        .design
+        .component_links
+        .get_mut(&instance)
+        .ok_or("Select a linked component instance.")?;
+    link.auto_overrides = enabled;
+    plan.commit(editor, "Set automatic component overrides")
+}

@@ -100,7 +100,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         def(
             "set_design_component_overrides",
             "Choose which current member properties survive component publishing. Omitted booleans are false; {} clears all flags. Appearance groups paint, typography, blend and effects; opacity/visibility are separate. Content supports text and raster images; geometry supports text, paths and images. Reset instance restores source values and clears flags. instance defaults to the innermost owning linked group.",
-            json!({"node":node(),"instance":node(),"overrides":{"type":"object","properties":{"content":{"type":"boolean"},"appearance":{"type":"boolean"},"geometry":{"type":"boolean"},"opacity":{"type":"boolean"},"visibility":{"type":"boolean"},"fill":{"type":"boolean"},"stroke":{"type":"boolean"},"stroke_width":{"type":"boolean"},"font_family":{"type":"boolean"},"font_size":{"type":"boolean"},"text_color":{"type":"boolean"},"position":{"type":"boolean"},"size":{"type":"boolean"},"effects":{"type":"boolean"}},"additionalProperties":false}}),
+            json!({"node":node(),"instance":node(),"auto_overrides":{"type":"boolean","description":"Automatically preserve subsequent native edits; new instances default true, legacy instances false. Omission preserves policy."},"overrides":{"type":"object","properties":{"content":{"type":"boolean"},"appearance":{"type":"boolean"},"geometry":{"type":"boolean"},"opacity":{"type":"boolean"},"visibility":{"type":"boolean"},"fill":{"type":"boolean"},"stroke":{"type":"boolean"},"stroke_width":{"type":"boolean"},"font_family":{"type":"boolean"},"font_size":{"type":"boolean"},"text_color":{"type":"boolean"},"position":{"type":"boolean"},"size":{"type":"boolean"},"effects":{"type":"boolean"}},"additionalProperties":false}}),
             &["node", "overrides"],
         ),
         def(
@@ -172,6 +172,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         "size":{"type":"array","items":{"type":"number","minimum":160,"maximum":10000},"minItems":2,"maxItems":2,"description":"[width,height] in document pixels."},
         "origin":pair(),
         "x_axis":chart_axis_schema(),"y_axis":chart_axis_schema(),
+        "formulas":{"type":"boolean","description":"Evaluate = expressions with A1 references, arithmetic, SUM/AVERAGE/MIN/MAX/COUNT/ABS/ROUND. Source formulas remain editable. Default false preserves literal cells."},
         "merges":{"type":"array","maxItems":459,"description":"Table merged ranges. Zero-based row/column; row0 is the header. Covered data is retained; [] unmerges all. Regions may not overlap.","items":{"type":"object","additionalProperties":false,"required":["row","column","rows","columns"],"properties":{"row":{"type":"integer","minimum":0,"maximum":50},"column":{"type":"integer","minimum":0,"maximum":8},"rows":{"type":"integer","minimum":1,"maximum":51},"columns":{"type":"integer","minimum":1,"maximum":9}}}}
     });
     defs.push(def("add_design_chart","Create a native editable chart or table. Omitted fields use the chosen kind's example data; default kind bar, size[600,400], origin[0,0].",properties.clone(),&[]));
@@ -262,6 +263,7 @@ fn patch_chart(chart: &mut Chart, args: &Value) -> Result<(), String> {
     field!(colors);
     field!(size);
     field!(merges);
+    field!(formulas);
     if let Some(value) = args.get("x_axis") {
         patch_chart_axis(&mut chart.x_axis, value)?;
     }
@@ -297,7 +299,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
             };
             let flags: components::Overrides = serde_json::from_value(args["overrides"].clone())
                 .map_err(|e| format!("Invalid overrides: {e}"))?;
-            components::set_overrides(editor, instance, node, flags)?;
+            let auto=args.get("auto_overrides").map(|v|v.as_bool().ok_or("auto_overrides must be boolean")).transpose()?;
+            components::configure_overrides(editor, instance, node, flags,auto)?;
             Ok(json!({"instance":instance,"node":node,"overrides":flags}))
         }
         "create_design_component" => {
@@ -944,5 +947,19 @@ mod advanced_chart_tests {
             .is_error
         );
         assert_eq!(e.doc, before);
+    }
+}
+
+#[cfg(test)]
+mod formula_tests {
+    use super::*;
+    #[test]
+    fn design_chart_formulas_mcp_retains_sources_recalculates_and_rejects_cycles() {
+        let mut e=Editor::new(emulsion_core::Document::new(600,400),None);
+        let result=crate::exec::execute(&mut e,"add_design_chart",&json!({"kind":"bar","formulas":true,"rows":[["Item","Value"],["A","10"],["B","=B2*2"]]}));
+        assert!(!result.is_error,"{result:?}");let id=*e.doc.design.charts.keys().next().unwrap();let before=e.doc.clone();
+        assert_eq!(e.doc.design.charts[&id].resolved_rows().unwrap()[2][1],"20");
+        for args in [json!({"node":id,"formulas":"yes"}),json!({"node":id,"rows":[["A","B"],["A","=B2"]]})] {assert!(crate::exec::execute(&mut e,"update_design_chart",&args).is_error);assert_eq!(e.doc,before);}
+        let result=crate::exec::execute(&mut e,"update_design_chart",&json!({"node":id,"rows":[["Item","Value"],["A","15"],["B","=B2*2"]]}));assert!(!result.is_error,"{result:?}");assert_eq!(e.doc.design.charts[&id].resolved_rows().unwrap()[2][1],"30");e.undo();assert_eq!(e.doc,before);
     }
 }

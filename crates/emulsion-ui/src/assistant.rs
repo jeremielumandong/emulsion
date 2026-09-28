@@ -34,6 +34,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod presentation_mcp;
+mod workspace_mcp;
+mod editor_host_mcp;
 mod project_mcp;
 mod raw_mcp;
 
@@ -1245,6 +1247,9 @@ impl EditorView {
             self.editor.end();
             self.assistant.native_tool_steps = true;
         }
+        if emulsion_mcp::design_brand_tools::NAMES.contains(&call.name.as_str()) { self.execute_design_brand_tool(call,cx); return; }
+        if emulsion_mcp::workspace_tools::NAMES.contains(&call.name.as_str()) { self.execute_workspace_host_tool(call,cx); return; }
+        if emulsion_mcp::creative_catalog_tools::NAMES.contains(&call.name.as_str()) { self.execute_creative_catalog_tool(call,cx); return; }
         if emulsion_mcp::library_tools::is_tool(&call.name) {
             let workspace = self.library_workspace.clone();
             cx.spawn(async move |this, cx| {
@@ -1271,6 +1276,14 @@ impl EditorView {
         if emulsion_mcp::design_motion_tools::HOST_TOOLS.contains(&call.name.as_str()) {
             self.execute_presentation_host_tool(call, cx);
             return;
+        }
+        if emulsion_mcp::photo_source_tools::is_tool(&call.name){self.execute_photo_source_host_tool(call,cx);return;}
+        if emulsion_mcp::print_tools::is_tool(&call.name){self.execute_print_host_tool(call,cx);return;}
+        if emulsion_mcp::editor_host_tools::is_tool(&call.name){self.execute_editor_host_tool(call,cx);return;}
+        if emulsion_mcp::project_variable_tools::is_tool(&call.name) {
+            let generation=self.assistant.tool_generation;
+            let result=if !emulsion_mcp::project_variable_tools::READ_ONLY.contains(&call.name.as_str()) && (self.raw.is_pending() || self.editor.in_transaction()) {emulsion_mcp::ToolResult::error("Finish the active edit first.")} else {let result=emulsion_mcp::project_variable_tools::execute(&mut self.editor,&call.name,&call.arguments).unwrap();if !result.is_error && !emulsion_mcp::project_variable_tools::READ_ONLY.contains(&call.name.as_str()){self.after_change(cx);} result};
+            call.reply(result);self.complete_tool_work(generation,cx);return;
         }
         if emulsion_mcp::project_tools::is_tool(&call.name)
             || (self.editor.kind().is_some()

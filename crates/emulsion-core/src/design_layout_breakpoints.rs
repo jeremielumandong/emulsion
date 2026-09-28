@@ -1,7 +1,23 @@
-//! Page width is the stable reference: content sizing cannot feed back into
-//! breakpoint selection. A matching override always inherits from base settings.
-use super::{Align, Document, Flow, Frame, NodeId};
+//! Width queries inherit directly from base settings and reject sizing cycles.
+use super::{Align, Child, Document, Flow, Frame, NodeId};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BreakpointReference {
+    #[default]
+    Canvas,
+    Container,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FrameLimits {
+    pub min_width: Option<f64>,
+    pub max_width: Option<f64>,
+    pub min_height: Option<f64>,
+    pub max_height: Option<f64>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -15,6 +31,10 @@ pub struct FrameOverrides {
     pub hug_width: Option<bool>,
     pub hug_height: Option<bool>,
     pub clip_content: Option<bool>,
+    /// Omission inherits all four bounds; an empty object removes all bounds.
+    pub limits: Option<FrameLimits>,
+    /// A named child replaces its complete base sizing; omitted children inherit.
+    pub children: BTreeMap<NodeId, Child>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -42,7 +62,23 @@ pub(super) fn validate(entries: &[Breakpoint]) -> Result<(), String> {
 }
 
 pub fn active_breakpoint(doc: &Document, id: NodeId) -> Option<f64> {
-    selected(doc.design.frames.get(&id)?, f64::from(doc.width)).map(|b| b.min_width)
+    selected(doc.design.frames.get(&id)?, reference_width(doc, id)?).map(|b| b.min_width)
+}
+/// Container rules use the immediate responsive parent's content width. Top-level
+/// frames use canvas width. Validation rejects content-sized query ancestors.
+pub fn reference_width(doc: &Document, id: NodeId) -> Option<f64> {
+    let frame = doc.design.frames.get(&id)?;
+    if frame.breakpoint_reference == BreakpointReference::Container
+        && let Some(parent) = doc
+            .node(id)?
+            .parent
+            .filter(|p| doc.design.frames.contains_key(p))
+    {
+        let width = super::bounds(doc, parent)?.2;
+        let parent = effective_frame(doc, parent)?;
+        return Some((width - parent.padding[1] - parent.padding[3]).max(1.));
+    }
+    Some(f64::from(doc.width))
 }
 fn selected(frame: &Frame, width: f64) -> Option<&Breakpoint> {
     frame
@@ -67,11 +103,21 @@ pub(super) fn resolve(base: &Frame, width: f64) -> Frame {
             hug_height,
             clip_content
         );
+        if let Some(limits) = entry.overrides.limits {
+            resolved.min_width = limits.min_width;
+            resolved.max_width = limits.max_width;
+            resolved.min_height = limits.min_height;
+            resolved.max_height = limits.max_height;
+        }
+        resolved.children.extend(entry.overrides.children.clone());
     }
     resolved
 }
 /// Current settings after applying the highest canvas-width threshold.
 /// The returned frame has no breakpoint entries; persisted base remains intact.
 pub fn effective_frame(doc: &Document, id: NodeId) -> Option<Frame> {
-    Some(resolve(doc.design.frames.get(&id)?, f64::from(doc.width)))
+    Some(resolve(
+        doc.design.frames.get(&id)?,
+        reference_width(doc, id)?,
+    ))
 }

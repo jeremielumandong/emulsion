@@ -128,6 +128,24 @@ impl EditorView {
                     self.toggle_presentation_fullscreen(window, cx);
                 }
             }
+            HostAction::MediaPlay(node) => self.design_media_host_play(node, window, cx)?,
+            HostAction::MediaPause => {
+                self.design_media_host_command(emulsion_io::design_media::PlaybackCommand::Pause)?
+            }
+            HostAction::MediaSeek(position_ms) => {
+                self.design_media_host_command(emulsion_io::design_media::PlaybackCommand::Seek {
+                    position_ms,
+                })?
+            }
+            HostAction::MediaStop => {
+                if !self.motion.presenting {
+                    return Err("Start a presentation before controlling media.".into());
+                }
+                self.stop_design_video(cx);
+                self.resume_presentation_advance(cx);
+            }
+            HostAction::TimerPaused(paused) => self.set_presenter_timer_paused(paused, cx)?,
+            HostAction::TimerReset => self.reset_presenter_timer(cx)?,
             HostAction::Trigger(node) => self.trigger_presentation_object(node, window, cx)?,
             HostAction::ResponsivePreview(width) => {
                 if let Some(width) = width {
@@ -141,6 +159,8 @@ impl EditorView {
         cx.notify();
         Ok(serde_json::json!({
             "responsive_preview": self.responsive_preview_state(),
+            "media":self.design_media_runtime_state(),
+            "presenter_timer":self.presenter_timer_state(cx),
             "presenting": self.motion.presenting,
             "page_id": self.editor.active_page(),
             "page_index": self.editor.page_list().iter().position(|p| p.id == self.editor.active_page()).map(|n|n+1),
@@ -154,6 +174,46 @@ impl EditorView {
             "open_overlays": self.motion.session.as_ref().map(|s|&s.interactions.open_overlays),
             "component_variants": self.motion.session.as_ref().map(|s|&s.interactions.variants),
         }))
+    }
+    fn presenter_timer_state(&self, cx: &Context<Self>) -> serde_json::Value {
+        self.motion.session.as_ref().map(|session|{
+            let elapsed=session.elapsed+session.timer_started.map(|start|cx.background_executor().now().saturating_duration_since(start)).unwrap_or_default();
+            serde_json::json!({"elapsed_ms":elapsed.as_millis() as u64,"paused":session.timer_started.is_none()})
+        }).unwrap_or(serde_json::Value::Null)
+    }
+    fn set_presenter_timer_paused(
+        &mut self,
+        paused: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let session = self
+            .motion
+            .session
+            .as_mut()
+            .filter(|_| self.motion.presenting)
+            .ok_or("Start a presentation before controlling the presenter timer.")?;
+        let now = cx.background_executor().now();
+        if paused {
+            if let Some(started) = session.timer_started.take() {
+                session.elapsed += now.saturating_duration_since(started);
+            }
+        } else if session.timer_started.is_none() {
+            session.timer_started = Some(now);
+        }
+        cx.notify();
+        Ok(())
+    }
+    fn reset_presenter_timer(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        let session = self
+            .motion
+            .session
+            .as_mut()
+            .filter(|_| self.motion.presenting)
+            .ok_or("Start a presentation before controlling the presenter timer.")?;
+        session.elapsed = std::time::Duration::ZERO;
+        session.timer_started = Some(cx.background_executor().now());
+        cx.notify();
+        Ok(())
     }
     pub(crate) fn is_clean_presentation(&self, window: &Window) -> bool {
         self.motion.presenting && window.is_fullscreen()
@@ -303,17 +363,28 @@ impl EditorView {
             .when_some(self.motion.transition.as_ref(), |d, transition| {
                 let t = transition.progress.clamp(0., 1.);
                 let t = t * t * (3. - 2. * t);
-                let scale = if transition.kind == PageTransition::Zoom {
-                    0.82 + 0.18 * t
-                } else {
-                    1.
+                let scale = match transition.kind {
+                    PageTransition::Zoom => 0.82 + 0.18 * t,
+                    PageTransition::ZoomOut => 1.18 - 0.18 * t,
+                    _ => 1.,
                 };
-                let left = if transition.kind == PageTransition::Slide {
-                    1. - t
-                } else {
-                    (1. - scale) / 2.
+                let left = match transition.kind {
+                    PageTransition::Slide => 1. - t,
+                    PageTransition::SlideLeft => t - 1.,
+                    _ => (1. - scale) / 2.,
                 };
-                let opacity = if transition.kind == PageTransition::Slide {
+                let top = match transition.kind {
+                    PageTransition::SlideUp => 1. - t,
+                    PageTransition::SlideDown => t - 1.,
+                    _ => (1. - scale) / 2.,
+                };
+                let opacity = if matches!(
+                    transition.kind,
+                    PageTransition::Slide
+                        | PageTransition::SlideLeft
+                        | PageTransition::SlideUp
+                        | PageTransition::SlideDown
+                ) {
                     1.
                 } else {
                     t
@@ -329,7 +400,7 @@ impl EditorView {
                                 div()
                                     .absolute()
                                     .left(relative(left))
-                                    .top(relative((1. - scale) / 2.))
+                                    .top(relative(top))
                                     .w(relative(scale))
                                     .h(relative(scale))
                                     .opacity(opacity)
@@ -349,7 +420,7 @@ impl EditorView {
             .gap_2()
             .child(
                 Button::new("design-interactions")
-                    .label("Object click action…")
+                    .label("Object interaction…")
                     .outline()
                     .disabled(self.selected.is_none())
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1049,6 +1120,26 @@ mod tests {
                     )
                     .unwrap();
                 assert_eq!(result["presenting"], true);
+                assert_eq!(result["presenter_timer"]["paused"], false);
+                let state = this
+                    .presentation_host_action(HostAction::TimerPaused(true), window, cx)
+                    .unwrap();
+                assert_eq!(state["presenter_timer"]["paused"], true);
+                let elapsed = state["presenter_timer"]["elapsed_ms"].clone();
+                assert_eq!(
+                    this.presentation_host_action(HostAction::TimerPaused(true), window, cx)
+                        .unwrap()["presenter_timer"]["elapsed_ms"],
+                    elapsed
+                );
+                let reset = this
+                    .presentation_host_action(HostAction::TimerReset, window, cx)
+                    .unwrap();
+                assert_eq!(reset["presenter_timer"]["elapsed_ms"], 0);
+                assert_eq!(reset["presenter_timer"]["paused"], false);
+                assert!(
+                    this.presentation_host_action(HostAction::MediaPause, window, cx)
+                        .is_err()
+                );
                 assert!(window.is_fullscreen());
                 original
             })

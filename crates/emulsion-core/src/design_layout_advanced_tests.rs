@@ -682,3 +682,153 @@ fn inactive_breakpoint_does_not_change_legacy_stroked_geometry() {
     assert_eq!(after, before);
     stable(&mut e);
 }
+
+#[test]
+fn container_breakpoints_use_parent_inner_width_and_preserve_overrides_on_copy() {
+    use crate::{
+        design_layout::{BreakpointReference, FrameLimits},
+        fragment::Fragment,
+    };
+    let (mut e, inner, items) = fixture(2);
+    install(&mut e, inner, frame(Flow::Column), (180., 120.));
+    let outer = e
+        .execute(Command::Group {
+            ids: vec![inner],
+            name: "Container".into(),
+        })
+        .unwrap()
+        .unwrap();
+    let mut parent = frame(Flow::Column);
+    parent.padding = [10.; 4];
+    parent.children.insert(
+        inner,
+        Child {
+            fill_width: true,
+            ..Default::default()
+        },
+    );
+    install(&mut e, outer, parent, (320., 300.));
+    let mut design = e.doc.design.clone();
+    let child = design.frames.get_mut(&inner).unwrap();
+    child.breakpoint_reference = BreakpointReference::Container;
+    child.breakpoints = vec![Breakpoint {
+        min_width: 250.,
+        overrides: FrameOverrides {
+            flow: Some(Flow::Row),
+            limits: Some(FrameLimits {
+                max_height: Some(100.),
+                ..Default::default()
+            }),
+            children: std::collections::BTreeMap::from([(
+                items[0],
+                Child {
+                    min_width: Some(75.),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    }];
+    e.execute(Command::SetDesign {
+        design: Box::new(design),
+    })
+    .unwrap();
+    assert_eq!(reference_width(&e.doc, inner), Some(300.));
+    assert_eq!(active_breakpoint(&e.doc, inner), Some(250.));
+    assert_eq!(effective_frame(&e.doc, inner).unwrap().flow, Flow::Row);
+    close(dimensions(&e, items[0]).0, 75.);
+    assert!(bounds(&e.doc, inner).unwrap().3 <= 100.01);
+    let wide = e.doc.clone();
+    let fragment = Fragment::capture(&e.doc, &[outer]).unwrap();
+    let mut target = Editor::new(Document::new(800, 600), None);
+    let pasted = fragment.paste(&mut target, Slot::TOP, (0., 0.)).unwrap();
+    let inner_copy = target
+        .doc
+        .children(Some(pasted[0]))
+        .into_iter()
+        .find(|id| target.doc.design.frames.contains_key(id))
+        .unwrap();
+    let bindings = &target.doc.design.frames[&inner_copy].breakpoints[0]
+        .overrides
+        .children;
+    assert_eq!(bindings.len(), 1);
+    assert!(
+        bindings
+            .keys()
+            .all(|id| target.doc.node(*id).unwrap().parent == Some(inner_copy))
+    );
+    let settings = e.doc.design.frames[&outer].clone();
+    install(&mut e, outer, settings, (200., 300.));
+    assert_eq!(active_breakpoint(&e.doc, inner), None);
+    assert_eq!(effective_frame(&e.doc, inner).unwrap().flow, Flow::Column);
+    e.undo();
+    assert_eq!(e.doc, wide);
+    let mut cyclic = e.doc.design.clone();
+    cyclic.frames.get_mut(&outer).unwrap().hug_width = true;
+    assert!(
+        e.execute(Command::SetDesign {
+            design: Box::new(cyclic)
+        })
+        .is_err()
+    );
+    assert_eq!(e.doc, wide);
+    stable(&mut e);
+}
+#[test]
+fn breakpoint_limits_and_child_rules_validate_inactive_entries_atomically() {
+    let (mut e, group, items) = fixture(1);
+    install(&mut e, group, frame(Flow::Row), (300., 200.));
+    let original = e.doc.clone();
+    let mut design = original.design.clone();
+    design
+        .frames
+        .get_mut(&group)
+        .unwrap()
+        .breakpoints
+        .push(Breakpoint {
+            min_width: 9000.,
+            overrides: FrameOverrides {
+                limits: Some(FrameLimits {
+                    min_width: Some(100.),
+                    max_width: Some(50.),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        });
+    assert!(
+        e.execute(Command::SetDesign {
+            design: Box::new(design.clone())
+        })
+        .is_err()
+    );
+    assert_eq!(e.doc, original);
+    let rule = &mut design.frames.get_mut(&group).unwrap().breakpoints[0].overrides;
+    rule.limits = Some(FrameLimits::default());
+    rule.children.insert(
+        items[0],
+        Child {
+            min_width: Some(100.),
+            max_width: Some(50.),
+            ..Default::default()
+        },
+    );
+    assert!(
+        e.execute(Command::SetDesign {
+            design: Box::new(design.clone())
+        })
+        .is_err()
+    );
+    assert_eq!(e.doc, original);
+    design.frames.get_mut(&group).unwrap().breakpoints[0]
+        .overrides
+        .children
+        .clear();
+    e.execute(Command::SetDesign {
+        design: Box::new(design),
+    })
+    .unwrap();
+    let json = serde_json::to_value(&e.doc.design).unwrap();
+    let decoded: crate::design_metadata::Design = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, e.doc.design);
+}

@@ -54,11 +54,23 @@ impl LayerColor {
 }
 
 /// Original editable content retained by a Smart Object.
+// Keep the bounded Copy paint inline to preserve the native PathStyle API and
+// serde representation; at most sixteen stops per channel require no heap graph.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum SmartEditable {
-    Text { spec: Arc<crate::text::TextSpec> },
-    Path { path: Arc<Path>, style: PathStyle },
+    /// Original SVG for resolution-independent placed artwork.
+    Svg {
+        xml: Arc<str>,
+    },
+    Text {
+        spec: Arc<crate::text::TextSpec>,
+    },
+    Path {
+        path: Arc<Path>,
+        style: PathStyle,
+    },
 }
 
 #[derive(Clone, Debug)]

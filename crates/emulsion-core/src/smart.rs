@@ -104,6 +104,7 @@ pub fn restore_source(
         return Err("remove the transformed Smart Object mask before restoring editable layers");
     }
     Ok(match editable {
+        Some(SmartEditable::Svg { .. }) => return Err("SVG source is retained as a scalable object; rasterize explicitly to edit pixels"),
         None => NodeKind::Raster {
             raster: source.clone(),
             placement: *placement,

@@ -109,6 +109,7 @@ fn project_component_locked_remote_consumer_rejects_every_page_and_import_is_one
 #[test]
 fn fine_component_font_override_keeps_size_while_source_color_updates() {
     let (mut p, instance, copy, source_page) = fixture();
+    set_auto_overrides(&mut p, copy, false).unwrap();
     let page = p.active_page();
     let child = label(&p.doc, copy);
     set_overrides(
@@ -358,4 +359,29 @@ fn project_appearance_override_preserves_base_text_decorations() {
     assert!(spec.underline && spec.strikethrough);
     assert_eq!(spec.size, 24.);
     assert!(spec.runs.is_empty());
+}
+
+#[test]
+fn project_publish_propagates_nested_variants_and_destination_only_wrappers() {
+    let (mut p, instance, copy, source_page) = fixture();
+    let target_page = p.active_page();
+    // A wrapper absent from the publishing page must still refresh its linked
+    // child, then refresh all instances of that particular wrapper variant.
+    let wrapper = create(&mut p, &[copy], "Local wrapper").unwrap();
+    let second = insert(&mut p, "Local wrapper", "Default", (0., 150.)).unwrap();
+    let stable = [label(&p.doc, wrapper), label(&p.doc, second)];
+    p.set_active_page(source_page).unwrap();
+    let original = label(&p.doc, instance);
+    edit(&mut p, original, "Nested publication", 33.);
+    publish_project(&mut p, instance).unwrap();
+    let target = &p.page(target_page).unwrap().doc;
+    assert_eq!([label(target, wrapper), label(target, second)], stable);
+    for child in stable {
+        let NodeKind::Text { spec, .. } = &target.node(child).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(spec.text, "Nested publication");
+    }
+    assert!(!p.doc.design.components.contains_key("Local wrapper"));
+    p.snapshot().unwrap().validate().unwrap();
 }

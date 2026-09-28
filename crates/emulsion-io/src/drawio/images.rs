@@ -2,7 +2,7 @@
 use super::*;
 use emulsion_raster::{Placement, Raster};
 
-pub(super) fn insert(
+pub(crate) fn insert(
     doc: &mut Document,
     parent: NodeId,
     bounds: [f64; 4],
@@ -39,8 +39,21 @@ pub(super) fn insert(
     if bytes.len() > MAX_BYTES {
         return Err(error("Embedded image exceeds 32 MiB"));
     }
+    let mut svg_source = None;
     let raster = if mime.starts_with("image/svg+xml") {
         let text = std::str::from_utf8(&bytes).map_err(|e| error(e.to_string()))?;
+        match crate::svg_vectors::append(doc, parent, text, bounds) {
+            Ok(notes) => {
+                warnings.extend(notes);
+                return Ok(());
+            }
+            Err(reason) => {
+                warnings.insert(format!(
+                    "SVG retained as scalable artwork rather than separate editable paths: {reason}"
+                ));
+                svg_source = Some(Arc::<str>::from(text));
+            }
+        }
         use resvg::{tiny_skia, usvg};
         static FONTS: std::sync::OnceLock<Arc<usvg::fontdb::Database>> = std::sync::OnceLock::new();
         let fonts = FONTS.get_or_init(|| {
@@ -106,6 +119,20 @@ pub(super) fn insert(
     };
     let id = doc.alloc_id();
     let mut node = Node::raster(id, "Embedded draw.io image", Arc::new(raster), placement);
+    if let Some(xml) = svg_source
+        && let NodeKind::Raster { raster, placement } = &node.kind
+    {
+        node.kind = NodeKind::Smart {
+            editable: Some(emulsion_core::node::SmartEditable::Svg { xml }),
+            source: raster.clone(),
+            filters: Vec::new(),
+            filter_styles: Vec::new(),
+            placement: *placement,
+            cache: raster.clone(),
+            offset: (0, 0),
+        };
+        node.name = "Scalable SVG artwork".into();
+    }
     node.parent = Some(parent);
     let label = doc
         .nodes
@@ -114,8 +141,7 @@ pub(super) fn insert(
         .unwrap_or(doc.nodes.len());
     doc.nodes.insert(label, node);
     warnings.insert(
-        "Embedded images are retained as image layers; save the native project to preserve them."
-            .into(),
+        "Embedded artwork is retained; save the native project to preserve its source.".into(),
     );
     Ok(())
 }

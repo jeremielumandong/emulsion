@@ -790,3 +790,18 @@ mod tests {
         assert_eq!(q.to_svg(), "M 5 5 L 15 5");
     }
 }
+
+/// Editable centered-stroke outline with the same dash/cap/join geometry as raster rendering.
+pub fn stroke_outline(path: &Path, style: &PathStyle) -> Result<Path, String> {
+    render::stroke_path(path, &style.sanitized())
+}
+
+/// Explicit alignment scaling keeps wide outside/inside outlines identical to raster strokes.
+pub fn stroke_outline_scaled(path: &Path, style: &PathStyle, scale: f32) -> Result<Path, String> {
+    if !scale.is_finite() || !(1. ..=2.).contains(&scale) {
+        return Err("Stroke outline scale must be 1–2.".into());
+    }
+    let mut style = style.sanitized();
+    style.width *= scale;
+    render::stroke_path(path, &style)
+}

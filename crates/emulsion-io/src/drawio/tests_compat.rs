@@ -169,14 +169,13 @@ fn embedded_svg_image_is_retained_and_drawio_export_does_not_discard_it() {
         r#"width="16" height="16""#,
     );
     let imported = from_xml(&graph(&cells)).unwrap();
-    assert!(
-        imported.project.pages[0]
-            .doc
-            .nodes
-            .iter()
-            .any(|n| matches!(n.kind, NodeKind::Raster { .. }))
-    );
-    assert!(to_xml(&imported.project).is_err());
+    assert!(imported.project.pages[0].doc.nodes.iter().any(
+        |n| matches!(&n.kind, NodeKind::Path { style, .. } if style.fill == Some([255,0,0,255]))
+    ));
+    let round = from_xml(&to_xml(&imported.project).unwrap()).unwrap();
+    assert!(round.project.pages[0].doc.nodes.iter().any(
+        |n| matches!(&n.kind, NodeKind::Path { style, .. } if style.fill == Some([255,0,0,255]))
+    ));
 }
 #[test]
 fn file_detection_distinguishes_editable_svg_from_artwork() {
@@ -248,9 +247,16 @@ fn drawio_svg_base64_without_marker_and_long_labels_load() {
         3000
     );
     assert!(
-        doc.nodes
+        !doc.nodes
             .iter()
             .any(|n| matches!(n.kind, NodeKind::Raster { .. }))
+    );
+    assert!(
+        doc.nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Path { .. }))
+            .count()
+            >= 2
     );
 }
 
@@ -424,4 +430,179 @@ fn wrapped_labels_use_measured_height_and_connectors_use_drawio_defaults() {
     assert_eq!(style.stroke, Some([0, 0, 0, 255]));
     assert_eq!(style.width, 1.);
     assert!(crate::project_export::vector_svg(doc).is_ok());
+}
+
+#[test]
+fn vendor_geometry_rich_labels_curves_and_markers_remain_editable() {
+    let xml = r##"<mxGraphModel pageWidth="640" pageHeight="480"><root><mxCell id="0"/><mxCell id="1" parent="0"/>
+    <mxCell id="a" vertex="1" parent="1" value="&lt;b&gt;Server&lt;/b&gt; &lt;span style='color:#ff0000;font-style:italic'&gt;hot&lt;/span&gt;" style="html=1;shape=mxgraph.networks.pc;"><mxGeometry x="20" y="20" width="140" height="100"/></mxCell>
+    <mxCell id="b" vertex="1" parent="1" value="Target"><mxGeometry x="380" y="260" width="120" height="80"/></mxCell>
+    <mxCell id="e" edge="1" parent="1" source="a" target="b" style="curved=1;startArrow=diamond;startFill=0;endArrow=ERzeroToMany;endSize=12;"><mxGeometry><Array as="points"><mxPoint x="240" y="60"/></Array></mxGeometry></mxCell>
+    </root></mxGraphModel>"##;
+    let imported = from_xml(xml).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    let shape = doc
+        .diagram
+        .as_ref()
+        .unwrap()
+        .shapes
+        .values()
+        .find(|s| s.data.contains_key("drawio_vendor_stencil"))
+        .unwrap();
+    assert!(
+        doc.nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Path { .. }))
+            .count()
+            > 8
+    );
+    let NodeKind::Text { spec, .. } = &doc.node(shape.label).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(spec.text, "Server hot");
+    assert!(spec.runs.iter().any(|r| r.style.bold));
+    assert!(
+        spec.runs
+            .iter()
+            .any(|r| r.style.italic && r.style.color == [255, 0, 0, 255])
+    );
+    let edge = doc.diagram.as_ref().unwrap().edges.values().next().unwrap();
+    assert_eq!(edge.routing, Routing::Curved);
+    assert_eq!(edge.end_marker.kind, diagram::MarkerKind::ZeroToMany);
+    assert!(!edge.start_marker.filled);
+    let NodeKind::Path { path, .. } = &doc.node(edge.path).unwrap().kind else {
+        panic!()
+    };
+    assert!(
+        path.subpaths[0]
+            .anchors
+            .iter()
+            .any(|a| a.h_in != a.p || a.h_out != a.p)
+    );
+    let group = *doc
+        .diagram
+        .as_ref()
+        .unwrap()
+        .shapes
+        .iter()
+        .find(|(_, s)| s.label == shape.label)
+        .unwrap()
+        .0;
+    let mut e = Editor::new(doc.clone(), None);
+    e.execute(emulsion_core::Command::TranslateNode {
+        id: group,
+        dx: 30.,
+        dy: 20.,
+    })
+    .unwrap();
+    e.doc.validate().unwrap();
+    e.undo();
+    assert_eq!(e.doc, *doc);
+}
+
+#[test]
+fn complex_svg_retains_vector_source_through_native_save_and_zoom() {
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><defs><linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><circle cx="50" cy="40" r="35" fill="url(#g)"/></svg>"##;
+    let doc = crate::svg_vectors::document(svg).unwrap();
+    assert!(doc.nodes.iter().any(|n|matches!(&n.kind,NodeKind::Smart{editable:Some(emulsion_core::node::SmartEditable::Svg{xml}),..} if xml.as_ref()==svg)));
+    let bytes = crate::project_export::vector_svg(&doc).unwrap();
+    assert!(
+        String::from_utf8(bytes)
+            .unwrap()
+            .contains("data:image/svg+xml;base64,")
+    );
+    let scene = crate::svg_viewport::SvgViewport::new(&doc).unwrap();
+    assert!(
+        scene
+            .render((1000, 800), [10., 0., 0., 10., 0., 0.])
+            .is_ok()
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.emu");
+    crate::ora::write(&doc, &path).unwrap();
+    let opened = crate::ora::read_full(&path).unwrap();
+    assert!(crate::project_export::vector_svg(&opened.doc).is_ok());
+}
+
+#[test]
+fn gradient_and_rich_text_survive_drawio_export() {
+    let cells = vertex(
+        "a",
+        "1",
+        "fillColor=#112233;gradientColor=#ddeeff;html=1;",
+        r#"x="20" y="20" width="180" height="90""#,
+    )
+    .replace(
+        "value=\"a\"",
+        "value=\"&lt;b&gt;Bold&lt;/b&gt; &lt;i&gt;Italic&lt;/i&gt;\"",
+    );
+    let first = from_xml(&graph(&cells)).unwrap();
+    let encoded = to_xml(&first.project).unwrap();
+    assert!(encoded.contains("data:image/svg+xml"));
+    let round = from_xml(&encoded).unwrap();
+    let svg =
+        String::from_utf8(crate::project_export::vector_svg(&round.project.pages[0].doc).unwrap())
+            .unwrap();
+    assert!(
+        svg.contains("data:image/svg+xml"),
+        "Gradient retains SVG source"
+    );
+}
+
+#[test]
+fn bent_connectors_do_not_fill_the_open_path() {
+    let imported=from_xml(&graph(&(vertex("a","1","",r#"x="20" y="20" width="80" height="40""#)+&vertex("b","1","",r#"x="200" y="200" width="80" height="40""#)+r#"<mxCell id="e" edge="1" parent="1" source="a" target="b" style="edgeStyle=orthogonalEdgeStyle;"><mxGeometry/></mxCell>"#))).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    for edge in doc.diagram.as_ref().unwrap().edges.values() {
+        let NodeKind::Path { style, .. } = &doc.node(edge.path).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(style.fill, None);
+    }
+}
+
+#[test]
+fn parameterized_wall_and_vertical_label_keep_orientation() {
+    let cells = vertex(
+        "wall",
+        "1",
+        "shape=mxgraph.floorplan.wall;direction=south;fillColor=#000000;",
+        r#"x="20" y="20" width="10" height="200""#,
+    ) + &vertex(
+        "text",
+        "1",
+        "text;horizontal=0;html=1;",
+        r#"x="100" y="20" width="30" height="180""#,
+    );
+    let imported = from_xml(&graph(&cells)).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    assert!(!imported.warnings.iter().any(|w| w.contains("rectangle")));
+    let wall = named(doc, "wall");
+    let artwork = doc
+        .nodes
+        .iter()
+        .find(|n| {
+            n.parent == doc.node(wall.body).unwrap().parent
+                && n.id != wall.body
+                && matches!(n.kind, NodeKind::Path { .. })
+        })
+        .unwrap();
+    let bounds = emulsion_core::geometry::node_bounds(doc, artwork.id).unwrap();
+    assert!(
+        bounds.h >= 200 && bounds.w <= 14,
+        "wall must remain vertical: {bounds:?}"
+    );
+    let label = named(doc, "text").label;
+    let NodeKind::Text { spec, .. } = &doc.node(label).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(spec.rotation, -90.);
+    assert!(spec.width.unwrap() > 170.);
+    let round = from_xml(&to_xml(&imported.project).unwrap()).unwrap();
+    let doc = &round.project.pages[0].doc;
+    let label = named(doc, "text").label;
+    let NodeKind::Text { spec, .. } = &doc.node(label).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(spec.rotation, -90.);
 }

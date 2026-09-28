@@ -31,11 +31,25 @@ fn endpoint_schema() -> Value {
 fn bounds() -> Value {
     json!({"type":"array","minItems":4,"maxItems":4,"items":{"type":"number"},"description":"[x,y,width,height] in document pixels; positive dimensions and coordinates bounded to1e6."})
 }
+fn marker() -> Value {
+    json!({"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["none","block","classic","open","diamond","oval","circle_plus","many","one","mandatory_one","zero_to_one","zero_to_many","one_to_many"]},"filled":{"type":"boolean"},"size":{"type":"number","minimum":1,"maximum":100}}})
+}
+fn marker_patch(current: diagram::Marker, value: &Value) -> Result<diagram::Marker, String> {
+    let patch = value.as_object().ok_or("Marker must be an object")?;
+    let mut merged = serde_json::to_value(current).map_err(|e| e.to_string())?;
+    for (key, value) in patch {
+        merged
+            .as_object_mut()
+            .unwrap()
+            .insert(key.clone(), value.clone());
+    }
+    decode(&merged, "marker")
+}
 fn label() -> Value {
     json!({"type":"string","maxLength":emulsion_core::text::MAX_CHARS})
 }
 fn routing() -> Value {
-    json!({"type":"string","enum":["straight","orthogonal"]})
+    json!({"type":"string","enum":["straight","orthogonal","curved"]})
 }
 fn def(name: &str, description: &str, properties: Value, required: &[&str]) -> ToolDef {
     ToolDef {
@@ -99,7 +113,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         def(
             "set_diagram_connector",
             "Patch a native connector's attachments, routing, waypoints, label, label offset and arrowheads; omitted fields stay unchanged.",
-            json!({"node":node(),"source":endpoint_schema(),"target":endpoint_schema(),"routing":routing(),"waypoints":{"type":"array","maxItems":128,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}},"label":label(),"label_offset":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}},"arrow_start":{"type":"boolean"},"arrow_end":{"type":"boolean"}}),
+            json!({"node":node(),"source":endpoint_schema(),"target":endpoint_schema(),"routing":routing(),"waypoints":{"type":"array","maxItems":128,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}},"label":label(),"label_offset":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}},"arrow_start":{"type":"boolean"},"arrow_end":{"type":"boolean"},"start_marker":marker(),"end_marker":marker()}),
             &["node"],
         ),
         def(
@@ -223,7 +237,7 @@ fn read(doc: &Document, name: &str, args: &Value) -> Result<Value, String> {
                 emulsion_io::creative_library::load(&emulsion_io::creative_library::root())
                     .map_err(|e| e.to_string())?;
             Ok(
-                json!({"packs":catalog.assets.iter().filter(|a|a.kind==emulsion_io::creative_library::AssetKind::Stencil).map(|a|json!({"id":a.id,"name":a.name,"entries":a.variants,"path":a.path})).collect::<Vec<_>>()}),
+                json!({"available":emulsion_io::diagram_packs::PACKS.iter().map(|(id,name,category)|json!({"id":id,"name":name,"category":category,"entries":emulsion_io::diagram_packs::entries(id).len()})).collect::<Vec<_>>(),"packs":catalog.assets.iter().filter(|a|a.kind==emulsion_io::creative_library::AssetKind::Stencil).map(|a|json!({"id":a.id,"name":a.name,"entries":a.variants,"path":a.path})).collect::<Vec<_>>()}),
             )
         }
         "list_diagram_library" => {
@@ -446,6 +460,12 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 }
                 if let Some(value) = args.get("label_offset") {
                     edge.label_offset = decode(value, "label_offset")?;
+                }
+                if let Some(value) = args.get("start_marker") {
+                    edge.start_marker = marker_patch(edge.start_marker, value)?;
+                }
+                if let Some(value) = args.get("end_marker") {
+                    edge.end_marker = marker_patch(edge.end_marker, value)?;
                 }
                 if let Some(value) = args.get("arrow_start") {
                     edge.arrow_start = decode(value, "arrow_start")?;
@@ -743,6 +763,15 @@ mod tests {
         let mut e = Editor::new(doc.clone(), None);
         let library = call(&mut e, "list_diagram_library", json!({}));
         assert_eq!(library["templates"].as_array().unwrap().len(), 8);
+        let packs = call(&mut e, "list_diagram_stencil_packs", json!({}));
+        assert_eq!(packs["available"].as_array().unwrap().len(), 12);
+        assert!(
+            packs["available"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["entries"].as_u64().unwrap() > 0)
+        );
         call(&mut e, "apply_diagram_theme", json!({"theme":"blue"}));
         assert_ne!(e.doc, doc);
         e.undo();
@@ -752,5 +781,46 @@ mod tests {
                 .unwrap()
                 .is_error
         );
+    }
+    #[test]
+    fn curved_marker_patch_moves_and_rejects_invalid_values_atomically() {
+        let doc = emulsion_core::diagram_library::TEMPLATES[0]
+            .build()
+            .unwrap();
+        let mut e = Editor::new(doc, None);
+        let edge = *e.doc.diagram.as_ref().unwrap().edges.keys().next().unwrap();
+        call(
+            &mut e,
+            "set_diagram_connector",
+            json!({"node":edge,"routing":"curved","start_marker":{"kind":"diamond","filled":false,"size":16},"end_marker":{"kind":"zero_to_many","size":18},"arrow_start":true}),
+        );
+        call(
+            &mut e,
+            "set_diagram_connector",
+            json!({"node":edge,"start_marker":{"size":12}}),
+        );
+        let model = &e.doc.diagram.as_ref().unwrap().edges[&edge];
+        assert_eq!(model.routing, Routing::Curved);
+        assert_eq!(model.start_marker.kind, diagram::MarkerKind::Diamond);
+        let source = model.source.shape;
+        e.execute(Command::TranslateNode {
+            id: source,
+            dx: 27.,
+            dy: 11.,
+        })
+        .unwrap();
+        e.doc.validate().unwrap();
+        for marker in [
+            json!({"size":0}),
+            json!({"size":101}),
+            json!({"kind":"unknown"}),
+            json!({"unexpected":true}),
+        ] {
+            rejected(
+                &mut e,
+                "set_diagram_connector",
+                json!({"node":edge,"end_marker":marker}),
+            );
+        }
     }
 }

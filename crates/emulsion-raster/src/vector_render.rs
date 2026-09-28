@@ -42,10 +42,22 @@ fn outline(path: &Path, closed: Option<bool>, ox: f64, oy: f64) -> Option<tiny_s
     pb.finish()
 }
 fn coverage(path: Option<&tiny_skia::Path>, b: IRect) -> tiny_skia::Mask {
+    coverage_rule(path, b, false)
+}
+fn coverage_rule(path: Option<&tiny_skia::Path>, b: IRect, even_odd: bool) -> tiny_skia::Mask {
     let mut mask =
         tiny_skia::Mask::new(b.w as u32, b.h as u32).expect("non-empty bounded coverage");
     if let Some(path) = path {
-        mask.fill_path(path, FillRule::Winding, true, Transform::identity());
+        mask.fill_path(
+            path,
+            if even_odd {
+                FillRule::EvenOdd
+            } else {
+                FillRule::Winding
+            },
+            true,
+            Transform::identity(),
+        );
     }
     mask
 }
@@ -87,19 +99,30 @@ struct PaintSampler {
     secondary: [f32; 4],
     mode: PathPaint,
     direction: (f32, f32),
+    stops: [(f32, [f32; 4]); MAX_GRADIENT_STOPS],
+    count: usize,
 }
 impl PaintSampler {
     fn new(primary: [u8; 4], mode: PathPaint) -> Self {
         let secondary = match mode {
             PathPaint::LinearGradient { end, .. } | PathPaint::RadialGradient { end } => end,
             PathPaint::Pattern { secondary, .. } => secondary,
-            PathPaint::Solid => primary,
+            _ => primary,
         };
         let direction = match mode {
-            PathPaint::LinearGradient { angle, .. } => angle.to_radians().sin_cos(),
+            PathPaint::LinearGradient { angle, .. } | PathPaint::LinearStops { angle, .. } => {
+                angle.to_radians().sin_cos()
+            }
             _ => (0.0, 1.0),
         };
+        let values = mode.gradient_stops(primary).unwrap_or_default();
+        let mut stops = [(0., [0.; 4]); MAX_GRADIENT_STOPS];
+        for (i, stop) in values.iter().enumerate() {
+            stops[i] = (stop.offset, color::srgba8_to_premul(stop.color));
+        }
         Self {
+            stops,
+            count: values.len(),
             primary: color::srgba8_to_premul(primary),
             secondary: color::srgba8_to_premul(secondary),
             mode,
@@ -111,13 +134,15 @@ impl PaintSampler {
         let [left, top, w, h] = bounds;
         let t = match self.mode {
             PathPaint::Solid => return self.primary,
-            PathPaint::LinearGradient { .. } => {
+            PathPaint::LinearGradient { .. } | PathPaint::LinearStops { .. } => {
                 let (dy, dx) = self.direction;
                 let span = (dx.abs() * w + dy.abs() * h).max(0.001);
                 ((x - left - w / 2.0) * dx + (y - top - h / 2.0) * dy) / span + 0.5
             }
-            PathPaint::RadialGradient { .. } => ((x - left - w / 2.0) / (w / 2.0).max(0.001))
-                .hypot((y - top - h / 2.0) / (h / 2.0).max(0.001)),
+            PathPaint::RadialGradient { .. } | PathPaint::RadialStops { .. } => {
+                ((x - left - w / 2.0) / (w / 2.0).max(0.001))
+                    .hypot((y - top - h / 2.0) / (h / 2.0).max(0.001))
+            }
             PathPaint::Pattern { kind, size, .. } => {
                 let u = (x - left) / size;
                 let v = (y - top) / size;
@@ -138,7 +163,21 @@ impl PaintSampler {
             }
         }
         .clamp(0.0, 1.0);
-        std::array::from_fn(|i| self.primary[i] + (self.secondary[i] - self.primary[i]) * t)
+        if self.count > 0 {
+            if t < self.stops[0].0 {
+                return self.stops[0].1;
+            }
+            for pair in self.stops[..self.count].windows(2) {
+                if t < pair[1].0 {
+                    let mix = (t - pair[0].0) / (pair[1].0 - pair[0].0).max(f32::EPSILON);
+                    return std::array::from_fn(|i| {
+                        pair[0].1[i] + (pair[1].1[i] - pair[0].1[i]) * mix
+                    });
+                }
+            }
+            return self.stops[self.count - 1].1;
+        }
+        self.primary
     }
 }
 
@@ -162,7 +201,9 @@ pub(super) fn rasterize(path: &Path, style: &PathStyle, w: u32, h: u32) -> Raste
         return empty;
     };
     let paint_bounds = [x as f32, y as f32, width as f32, height as f32];
-    let fill = style.fill.map(|_| coverage(Some(&shape), b));
+    let fill = style
+        .fill
+        .map(|_| coverage_rule(Some(&shape), b, style.even_odd));
     let stroke_mask = if style.stroke.is_some() && style.width > 0.0 {
         if style.alignment == StrokeAlignment::Center {
             Some(coverage(
@@ -171,7 +212,7 @@ pub(super) fn rasterize(path: &Path, style: &PathStyle, w: u32, h: u32) -> Raste
             ))
         } else {
             let closed = outline(path, Some(true), b.x as f64, b.y as f64);
-            let interior = coverage(closed.as_ref(), b);
+            let interior = coverage_rule(closed.as_ref(), b, style.even_odd);
             let mut mask = coverage(stroke(closed, &style, style.width * 2.0).as_ref(), b);
             for (v, inside) in mask
                 .data_mut()
@@ -548,5 +589,60 @@ mod tests {
         p.translate(10.0, 10.0);
         let after = p.rasterize(&s, 100, 100);
         assert_eq!(before.get(35, 35), after.get(45, 45));
+    }
+}
+
+/// Convert the centered stroke, including dash/cap/join geometry, into editable contours.
+pub(super) fn stroke_path(path: &Path, style: &PathStyle) -> Result<Path, String> {
+    use std::fmt::Write;
+    let Some(outline) = stroke(outline(path, None, 0., 0.), style, style.width) else {
+        return Err("The stroke has no visible outline.".into());
+    };
+    let mut svg = String::new();
+    for segment in outline.segments() {
+        match segment {
+            tiny_skia::PathSegment::MoveTo(p) => write!(svg, "M{} {}", p.x, p.y),
+            tiny_skia::PathSegment::LineTo(p) => write!(svg, "L{} {}", p.x, p.y),
+            tiny_skia::PathSegment::QuadTo(a, b) => write!(svg, "Q{} {} {} {}", a.x, a.y, b.x, b.y),
+            tiny_skia::PathSegment::CubicTo(a, b, c) => {
+                write!(svg, "C{} {} {} {} {} {}", a.x, a.y, b.x, b.y, c.x, c.y)
+            }
+            tiny_skia::PathSegment::Close => write!(svg, "Z"),
+        }
+        .map_err(|e| e.to_string())?;
+    }
+    Path::from_svg(&svg)
+}
+
+#[cfg(test)]
+mod multistop_tests {
+    use super::*;
+    #[test]
+    fn multistop_interpolates_premultiplied_linear_colors_and_hard_boundaries() {
+        let stops = [
+            GradientStop {
+                offset: 0.,
+                color: [255, 0, 0, 255],
+            },
+            GradientStop {
+                offset: 0.5,
+                color: [0, 255, 0, 255],
+            },
+            GradientStop {
+                offset: 0.5,
+                color: [0, 0, 255, 255],
+            },
+            GradientStop {
+                offset: 1.,
+                color: [255, 255, 255, 0],
+            },
+        ];
+        let sampler = PaintSampler::new([0; 4], PathPaint::from_stops(&stops, false, 0.).unwrap());
+        assert_eq!(sampler.at(50., 50., [0., 0., 100., 100.]), [0., 0., 1., 1.]);
+        let quarter = sampler.at(25., 50., [0., 0., 100., 100.]);
+        assert!((quarter[0] - 0.5).abs() < 1e-6 && (quarter[1] - 0.5).abs() < 1e-6);
+        let tail = sampler.at(75., 50., [0., 0., 100., 100.]);
+        assert_eq!(tail, [0., 0., 0.5, 0.5]);
+        assert!(PathPaint::from_stops(&[stops[2], stops[0]], false, 0.).is_err());
     }
 }

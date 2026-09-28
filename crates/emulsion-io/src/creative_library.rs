@@ -8,7 +8,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-const MAX_BYTES: u64 = 8 << 20;
+const MAX_BYTES: u64 = 96 << 20;
 fn error(message: impl Into<String>) -> IoError {
     IoError::Manifest(message.into())
 }
@@ -43,9 +43,17 @@ pub struct Asset {
     pub color_label: u8,
     #[serde(default)]
     pub variants: Vec<String>,
+    #[serde(default)]
+    pub folder: Option<u64>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Brand {
+    #[serde(default)]
+    pub typography: std::collections::BTreeMap<String, emulsion_core::design_brand_assets::TypographyRole>,
+    #[serde(default)]
+    pub palettes: std::collections::BTreeMap<String, Vec<[u8;4]>>,
+    #[serde(default)]
+    pub fonts: std::collections::BTreeMap<String, emulsion_core::design_fonts::EmbeddedFont>,
     pub id: u64,
     pub name: String,
     pub font: String,
@@ -59,6 +67,8 @@ pub struct Collection {
     pub name: String,
     pub assets: Vec<u64>,
 }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AssetFolder {pub id:u64,pub name:String,#[serde(default)] pub parent:Option<u64>}
 /// Home organizes references to local files. Trashing a reference never deletes
 /// its source; restoring it preserves its name and folder.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -94,6 +104,7 @@ pub struct Catalog {
     pub collections: Vec<Collection>,
     pub projects: Vec<ProjectRecord>,
     pub folders: Vec<ProjectFolder>,
+    pub asset_folders: Vec<AssetFolder>,
 }
 impl Default for Catalog {
     fn default() -> Self {
@@ -106,6 +117,7 @@ impl Default for Catalog {
             collections: Vec::new(),
             projects: Vec::new(),
             folders: Vec::new(),
+            asset_folders: Vec::new(),
         }
     }
 }
@@ -120,6 +132,7 @@ impl Catalog {
             || self.collections.len() > 500
             || self.projects.len() > 20_000
             || self.folders.len() > 500
+            || self.asset_folders.len() > 500
         {
             return Err(error("Unsupported or oversized creative library."));
         }
@@ -132,6 +145,7 @@ impl Catalog {
             .chain(self.collections.iter().map(|c| c.id))
             .chain(self.projects.iter().map(|p| p.id))
             .chain(self.folders.iter().map(|f| f.id))
+            .chain(self.asset_folders.iter().map(|f| f.id))
         {
             if id == 0 || id >= self.next_id || !ids.insert(id) {
                 return Err(error("Invalid creative library IDs."));
@@ -140,6 +154,7 @@ impl Catalog {
         if self.next_id == u64::MAX {
             return Err(error("Library ID limit reached."));
         }
+        self.validate_asset_folders()?;
         let mut paths = HashSet::new();
         for folder in &self.folders {
             if !label(&folder.name) {
@@ -170,11 +185,17 @@ impl Catalog {
                 || asset.license.len() > 4000
                 || asset.variants.len() > 100
                 || asset.variants.iter().any(|v| !label(v))
+                || asset.folder.is_some_and(|id| !self.asset_folders.iter().any(|f|f.id==id))
             {
                 return Err(error("Invalid asset metadata."));
             }
         }
         for brand in &self.brands {
+            emulsion_core::design_fonts::validate(&brand.fonts).map_err(error)?;
+            if brand.typography.len()>64 || brand.palettes.len()>64 || brand.typography.keys().chain(brand.palettes.keys()).any(|name|!label(name)) || brand.palettes.values().any(|colors|colors.is_empty()||colors.len()>32) {return Err(error("Invalid named typography roles or palette collections."));}
+            for role in brand.typography.values(){role.validate().map_err(error)?;}
+            if std::iter::once(&brand.font).chain(brand.typography.values().map(|r|&r.font)).any(|font|font.starts_with("EmulsionFont-")&&!brand.fonts.contains_key(font)) {return Err(error("Brand typography references a missing embedded font."));}
+
             if !label(&brand.name)
                 || !label(&brand.font)
                 || brand.colors.is_empty()
@@ -337,6 +358,7 @@ impl Catalog {
             rejected: false,
             color_label: 0,
             variants: Vec::new(),
+            folder: None,
         });
         self.validate()?;
         Ok(id)
@@ -359,6 +381,9 @@ impl Catalog {
             .filter(|id| *id < u64::MAX)
             .ok_or_else(|| error("Library ID limit reached"))?;
         self.brands.push(Brand {
+            typography: Default::default(),
+            palettes: Default::default(),
+            fonts: Default::default(),
             id,
             name,
             font,
@@ -414,7 +439,7 @@ pub fn load(root: &Path) -> Result<Catalog> {
     let mut bytes = Vec::new();
     file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_BYTES {
-        return Err(error("Creative library exceeds 8 MiB."));
+        return Err(error("Creative library exceeds 96 MiB."));
     }
     let catalog: Catalog = serde_json::from_slice(&bytes)
         .map_err(|e| error(format!("Invalid creative library: {e}")))?;
@@ -444,7 +469,7 @@ pub fn update<T>(
         .ok_or_else(|| error("Library revision limit reached"))?;
     let bytes = serde_json::to_vec_pretty(&catalog).map_err(|e| error(e.to_string()))?;
     if bytes.len() as u64 > MAX_BYTES {
-        return Err(error("Creative library exceeds 8 MiB."));
+        return Err(error("Creative library exceeds 96 MiB."));
     }
     crate::write_atomic(&root.join("catalog.json"), |file| {
         file.write_all(&bytes)?;
@@ -454,6 +479,9 @@ pub fn update<T>(
 }
 #[derive(Serialize, Deserialize)]
 struct BrandFile {
+    #[serde(default)] typography: std::collections::BTreeMap<String,emulsion_core::design_brand_assets::TypographyRole>,
+    #[serde(default)] palettes: std::collections::BTreeMap<String,Vec<[u8;4]>>,
+    #[serde(default)] fonts: std::collections::BTreeMap<String,emulsion_core::design_fonts::EmbeddedFont>,
     version: u32,
     name: String,
     font: String,
@@ -461,7 +489,8 @@ struct BrandFile {
 }
 pub fn export_brand(brand: &Brand, path: &Path) -> Result<()> {
     let file = BrandFile {
-        version: 1,
+        typography: brand.typography.clone(), palettes: brand.palettes.clone(), fonts: brand.fonts.clone(),
+        version: if brand.fonts.is_empty()&&brand.typography.is_empty()&&brand.palettes.is_empty(){1}else{2},
         name: brand.name.clone(),
         font: brand.font.clone(),
         colors: brand.colors.clone(),
@@ -481,10 +510,10 @@ pub fn import_brand(root: &Path, path: &Path) -> Result<Catalog> {
         return Err(error("Brand kit is too large."));
     }
     let brand: BrandFile = serde_json::from_slice(&bytes).map_err(|e| error(e.to_string()))?;
-    if brand.version != 1 {
+    if !(1..=2).contains(&brand.version) {
         return Err(error("Unsupported brand kit version."));
     }
-    update(root, |c| c.add_brand(brand.name, brand.font, brand.colors)).map(|(c, _)| c)
+    update(root, |c| {let id=c.add_brand(brand.name,"Geist".into(),brand.colors)?;let b=c.brands.iter_mut().find(|b|b.id==id).unwrap();b.font=brand.font;b.typography=brand.typography;b.palettes=brand.palettes;b.fonts=brand.fonts;Ok(id)}).map(|(c, _)| c)
 }
 
 #[cfg(test)]

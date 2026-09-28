@@ -46,7 +46,8 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 // Version 6 preserves rich text runs, paragraph frames, warp and path text.
 // Older builds must reject these files instead of silently flattening those attributes.
 // Version 7 retains diagram graphs, conditional rules, design constraints and motion.
-pub const FORMAT_VERSION: u32 = 7;
+// Version 8 externalizes portable font and local-media resources by content digest.
+pub const FORMAT_VERSION: u32 = 8;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -56,6 +57,10 @@ const MAX_ENTRY_BYTES: u64 = 1 << 30;
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    media_resources: std::collections::BTreeMap<emulsion_core::NodeId, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fonts: Vec<String>,
     #[serde(
         default,
         skip_serializing_if = "emulsion_core::design_metadata::Design::is_default"
@@ -528,9 +533,17 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
     }
     entries.extend(merged?);
 
+    let mut fonts = crate::font_data::FontPool::default();
+    let (design, font_refs) = fonts.detach(&doc.design);
+    entries.extend(fonts.entries("fonts")?);
+    let mut media = crate::media_data::MediaPool::default();
+    let (design, media_resources) = media.detach(&design);
+    entries.extend(media.entries("media")?);
     let manifest = Manifest {
+        media_resources,
+        fonts: font_refs,
         diagram: doc.diagram.clone(),
-        design: doc.design.clone(),
+        design,
         format: "emulsion".into(),
         version: FORMAT_VERSION,
         width: doc.width,
@@ -1034,6 +1047,13 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     doc.global_light = m.global_light;
     doc.diagram = m.diagram.clone();
     doc.design = m.design.clone();
+    crate::font_data::FontPool::default().restore(&mut doc.design, &m.fonts, zip, "fonts")?;
+    crate::media_data::MediaPool::default().restore(
+        &mut doc.design,
+        &m.media_resources,
+        zip,
+        "media",
+    )?;
     doc.source_depth = if m.source_depth == 16 { 16 } else { 8 };
     doc.blend_space = m.blend_space;
     doc.guides = m.guides.clone();

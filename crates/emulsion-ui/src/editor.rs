@@ -21,26 +21,37 @@ pub mod canvas_benchmark;
 mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
+mod host_controls;
 mod compact;
 mod contextual_bar;
 mod contextual_tools;
 mod creative_pack_ui;
 mod creative_ui;
+mod design_brand_ui;
+mod design_asset_folders_ui;
 pub(crate) mod crop;
 mod design_appearance_ui;
 mod design_controls;
 mod design_editor;
+mod design_photo_ui;
 mod design_motion_ui;
 mod design_presentation_ui;
 mod design_selection;
 mod design_styles_ui;
 mod design_variables_ui;
+mod design_variable_library_ui;
 mod design_ui;
 mod diagram_data_ui;
 mod diagram_library_ui;
 mod diagram_ui;
 mod draw_workspace;
 pub(crate) mod export_ui;
+mod design_selection_export_ui;
+mod design_gradient_ui;
+mod design_vector_ui;
+mod design_trace_ui;
+mod design_precision_ui;
+mod design_paragraph_ui;
 mod filters;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
@@ -74,6 +85,7 @@ mod quick_mask;
 #[cfg(test)]
 pub(crate) use presets::shared_library;
 mod design_bulk_ui;
+mod design_data_ui;
 mod design_chart_data;
 mod design_charts_ui;
 mod design_components_ui;
@@ -2490,6 +2502,8 @@ impl EditorView {
             ink: p.ink,
             accent: p.accent,
             rulers: self.rulers && !presenting,
+            ruler_settings: self.editor.doc.design.precision,
+            resolution: self.editor.doc.resolution,
             diagram_grid: self.is_diagram() && self.diagram_ui.grid && !presenting,
         };
         let scene2 = scene.clone();
@@ -2666,7 +2680,8 @@ impl EditorView {
                 this.set_tool(Tool::Grade, cx)
             }))
             .cursor(cursor)
-            .on_hover(cx.listener(|this, _, _, cx| {
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !*hovered { this.motion.hovered_action = None; }
                 if this.tool == Tool::Zoom {
                     this.notify_canvas(cx);
                 }
@@ -2679,6 +2694,9 @@ impl EditorView {
                 MouseButton::Middle,
                 cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)),
             )
+            .on_mouse_move(cx.listener(|this,event:&MouseMoveEvent,window,cx|this.presentation_interaction_move(event,window,cx)))
+            .on_mouse_up(MouseButton::Left,cx.listener(|this,event:&MouseUpEvent,window,cx|this.presentation_interaction_release(event,window,cx)))
+            .on_mouse_up_out(MouseButton::Left,cx.listener(|this,event:&MouseUpEvent,window,cx|this.presentation_interaction_release(event,window,cx)))
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 if event.button == MouseButton::Right {
                     window.focus(&this.canvas_focus, cx);
@@ -2694,6 +2712,11 @@ impl EditorView {
                     this.drop_diagram_stencil(d.0, window.mouse_position(), cx);
                 }),
             )
+            .on_drop(cx.listener(|this,d:&creative_pack_ui::DraggedPackStencil,window,cx|{
+                if this.is_diagram() && let Some(center)=this.doc_point(window.mouse_position()) {
+                    this.use_local_stencil_at(d.path.clone(),d.index,Some(center),cx);
+                }
+            }))
             .on_drop(cx.listener(|this, d: &DraggedColor, window, cx| {
                 if this.motion.presenting || this.responsive_preview_active() {
                     return;
@@ -4651,3 +4674,5 @@ mod rendering_tests {
         });
     }
 }
+
+mod design_html_ui;

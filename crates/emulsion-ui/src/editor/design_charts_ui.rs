@@ -117,7 +117,7 @@ impl EditorView {
         let data = cx.new(|cx| ChartDataEditor::new(&chart, window, cx));
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, window, _| {
             let inputs = fields.clone();
             let data = data.clone();
             let owner = owner.clone();
@@ -126,7 +126,7 @@ impl EditorView {
                 .title("Chart and table data")
                 .width(px(720.))
                 .child(
-                    div().flex().flex_col().gap_2()
+                    div().id("design-chart-dialog-body").max_h(px((f32::from(window.viewport_size().height)-180.).max(100.))).overflow_y_scroll().flex().flex_col().gap_2()
                         .child(
                             div().grid().grid_cols(2).gap_2().children(
                                 ["Title", "Width · px", "Height · px", "Colors · #RRGGBB or #RRGGBBAA"]

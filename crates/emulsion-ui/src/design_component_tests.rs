@@ -107,6 +107,8 @@ fn design_component_property_dialog_cancel_save_publish_reset_and_undo(cx: &mut 
         .unwrap();
     let first = components::create(&mut source, &[text], "Badge").unwrap();
     let second = components::insert(&mut source, "Badge", "Default", (250., 0.)).unwrap();
+    // This workflow exercises explicit flags; automatic tracking has its own coverage.
+    components::set_auto_overrides(&mut source, second, false).unwrap();
     let local = source.doc.children(Some(second))[0];
     let NodeKind::Text { spec, .. } = &source.doc.node(local).unwrap().kind else {
         panic!()

@@ -24,3 +24,5 @@ cosmic-text = { workspace = true }
 emulsion-filters = { workspace = true }
 unicode-segmentation = "1"
 base64 = { workspace = true }
+
+sha2 = { workspace = true }

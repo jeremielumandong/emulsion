@@ -51,7 +51,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         definition(
             "set_presentation_actions",
             "Replace one object's click actions atomically with native Undo. [] removes actions. Supports next/previous/back/specific slide, show/hide/toggle overlay, close top overlay and component variant. A navigation action must be last. Mark overlay targets first with set_presentation_overlay. Slide page IDs resolve within the project at runtime.",
-            json!({"node":{"type":"integer","minimum":1},"actions":{"type":"array","maxItems":8,"items":action_schema()}}),
+            json!({"node":{"type":"integer","minimum":1},"actions":{"type":"array","maxItems":8,"items":action_schema()},"trigger":{"enum":["click","hover","drag_end"]}}),
             &["node", "actions"],
         ),
         definition(
@@ -74,7 +74,7 @@ pub(crate) fn execute(editor: &mut Editor, name: &str, args: &Value) -> Option<T
         }
         if name == "get_presentation_actions" {
             return Ok(
-                json!({"actions":editor.doc.design.interactions,"overlays":editor.doc.design.overlays}),
+                json!({"actions":editor.doc.design.interactions,"triggers":editor.doc.design.interaction_triggers,"overlays":editor.doc.design.overlays}),
             );
         }
         let node = args["node"]
@@ -98,7 +98,11 @@ pub(crate) fn execute(editor: &mut Editor, name: &str, args: &Value) -> Option<T
                 Some(args["enabled"].as_bool().ok_or("enabled must be boolean")?),
             )
         };
-        design_interactions::author(editor, node, actions, overlay)?;
+        let trigger = args
+            .get("trigger")
+            .map(|v| serde_json::from_value(v.clone()).map_err(|e| format!("Invalid trigger: {e}")))
+            .transpose()?;
+        design_interactions::author_with_trigger(editor, node, actions, overlay, trigger)?;
         Ok(
             json!({"node":node,"actions":editor.doc.design.interactions.get(&node),"overlay":editor.doc.design.overlays.contains(&node)}),
         )

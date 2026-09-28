@@ -42,3 +42,8 @@ vendor/gpui/gpui-pre-ztracing-macro/LICENSE-APACHE
 vendor/gpui/gpui-pre-ztracing/LICENSE-APACHE
 vendor/gpui/gpui-pre/LICENSE-APACHE
 vendor/gpui/licenses/MICROSOFT-TERMINAL-MIT.txt
+
+# Bundled draw.io stencil definitions and pinned provenance
+assets/diagram-stencils/LICENSE-APACHE
+assets/diagram-stencils/LICENSE-STENCILS
+assets/diagram-stencils/UPSTREAM.json

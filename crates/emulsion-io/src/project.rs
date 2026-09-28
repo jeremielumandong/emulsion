@@ -330,7 +330,10 @@ mod tests {
             }
         }
         projects.push(session.snapshot().unwrap());
-        assert_eq!(projects.iter().map(|p| p.pages.len()).sum::<usize>(), 110);
+        assert_eq!(
+            projects.iter().map(|p| p.pages.len()).sum::<usize>(),
+            Template::catalog().count()
+        );
         for (i, original) in projects.iter().enumerate() {
             let file = path("supplied-starters");
             write(original, &file).unwrap();

@@ -17,6 +17,7 @@ pub struct PlayerServer {
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     finished: Arc<AtomicBool>,
+    controls: control::SharedControls,
 }
 impl PlayerServer {
     pub fn start(video: &YouTube) -> io::Result<Self> {
@@ -38,9 +39,12 @@ impl PlayerServer {
         // Both values are validated ASCII; origin comes only from the bound socket.
         // Native view bounds enforce the YouTube minimum of 200 × 200 pixels.
         let html = format!(
-            r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YouTube video</title><style>html,body{{margin:0;width:100%;height:100%;background:#16181d;overflow:hidden}}iframe{{display:block;border:0;width:100%;height:100%;min-width:200px;min-height:200px}}</style></head><body><iframe title="YouTube video" src="https://www.youtube-nocookie.com/embed/{}?start={}&amp;controls=1&amp;playsinline=1&amp;origin={}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></body></html>"#,
+            r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YouTube video</title><style>html,body{{margin:0;width:100%;height:100%;background:#16181d;overflow:hidden}}iframe{{display:block;border:0;width:100%;height:100%;min-width:200px;min-height:200px}}</style></head><body><iframe id="youtube" title="YouTube video" src="https://www.youtube-nocookie.com/embed/{}?start={}&amp;controls=1&amp;playsinline=1&amp;enablejsapi=1&amp;origin={}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></body></html>"#,
             video.video_id, video.start_seconds, origin
         );
+        let html = format!("{html}{}", control::script(&path, true));
+        let controls: control::SharedControls = Default::default();
+        let worker_controls = controls.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let worker = thread::Builder::new()
@@ -51,7 +55,7 @@ impl PlayerServer {
                         Ok((mut stream, _)) => {
                             let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
                             let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
-                            let _ = serve(&mut stream, &path, &authority, &html);
+                            let _ = serve(&mut stream, &path, &authority, &html, &worker_controls);
                         }
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(20))
@@ -65,6 +69,7 @@ impl PlayerServer {
             stop,
             worker: Some(worker),
             finished: Arc::new(AtomicBool::new(false)),
+            controls,
         })
     }
     pub fn finished(&self) -> bool {
@@ -82,7 +87,13 @@ impl Drop for PlayerServer {
         }
     }
 }
-fn serve(stream: &mut TcpStream, path: &str, authority: &str, html: &str) -> io::Result<()> {
+fn serve(
+    stream: &mut TcpStream,
+    path: &str,
+    authority: &str,
+    html: &str,
+    controls: &control::SharedControls,
+) -> io::Result<()> {
     let mut bytes = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_millis(250);
     loop {
@@ -119,6 +130,11 @@ fn serve(stream: &mut TcpStream, path: &str, authority: &str, html: &str) -> io:
     if method != "GET" && method != "HEAD" {
         return response(stream, "405 Method Not Allowed", "", false);
     }
+    if let Some((status, body)) =
+        control::control_response(requested, path, method == "HEAD", controls)
+    {
+        return response(stream, &status, &body, method == "HEAD");
+    }
     if requested != path {
         return response(stream, "404 Not Found", "", false);
     }
@@ -127,7 +143,7 @@ fn serve(stream: &mut TcpStream, path: &str, authority: &str, html: &str) -> io:
 fn response(stream: &mut TcpStream, status: &str, body: &str, head: bool) -> io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-src https://www.youtube-nocookie.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://www.youtube.com; connect-src 'self'; frame-src https://www.youtube-nocookie.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n\r\n",
         body.len()
     )?;
     if !head {
@@ -231,3 +247,7 @@ mod tests {
 #[path = "design_local_media.rs"]
 mod local;
 pub use local::read_local;
+
+#[path = "design_media_control.rs"]
+mod control;
+pub use control::{PlaybackCommand, PlaybackState};

@@ -100,6 +100,16 @@ impl EditorView {
                             }),
                     )
                     .separator();
+                let selection_owner=owner.clone();
+                menu=menu.item(PopupMenuItem::new("Export selected objects…").on_click(move |_,window,cx| {
+                    selection_owner.update(cx,|this,cx|this.show_selection_export(window,cx)).ok();
+                }));
+                for all in [true, false] {
+                    let owner = owner.clone();
+                    menu = menu.item(PopupMenuItem::new(if all { "Interactive HTML · all pages" } else { "Interactive HTML · current page" }).on_click(move |_, window, cx| {
+                        owner.update(cx, |this, cx| this.export_design_html(all, window, cx)).ok();
+                    }));
+                }
                 for format in emulsion_io::project_export::Format::ALL {
                     for all in [true, false] {
                         let owner = owner.clone();

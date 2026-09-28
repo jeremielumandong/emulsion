@@ -12,6 +12,8 @@ pub(super) struct MotionUi {
     /// Preview scenes must never reuse the authored document's GPU cache.
     pub(super) preview_gpu: Rc<RefCell<crate::viewport_gpu::Status>>,
     pub(super) presenting: bool,
+    pub(super) hovered_action: Option<NodeId>,
+    pub(super) dragged_action: Option<(NodeId, Point<Pixels>)>,
     pub(super) auto_advance: bool,
     pub(super) fullscreen_window: Option<AnyWindowHandle>,
     pub(super) session: Option<super::design_presentation_ui::PresentationSession>,
@@ -67,6 +69,8 @@ impl EditorView {
             });
         }
         self.motion.preview = None;
+        self.motion.hovered_action = None;
+        self.motion.dragged_action = None;
         // Replace the cell rather than resetting it in place: a retained paint
         // closure can finish with its old scene without repopulating this run's cache.
         self.motion.preview_gpu = Default::default();
@@ -650,6 +654,60 @@ impl EditorView {
         })
         .detach();
     }
+    fn export_motion_interchange(
+        &mut self,
+        format: emulsion_io::design_motion_export::Format,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let doc = self.editor.doc.clone();
+        let extension = if format == emulsion_io::design_motion_export::Format::AnimatedSvg {
+            "svg"
+        } else {
+            "json"
+        };
+        let dir = self
+            .editor
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let rx = cx.prompt_for_new_path(&dir, Some(&format!("design-animation.{extension}")));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut path))) = rx.await else {
+                return;
+            };
+            path.set_extension(extension);
+            this.update(cx, |this, cx| {
+                this.set_status("Exporting sampled motion…", false, cx)
+            })
+            .ok();
+            let result = cx
+                .background_spawn(async move {
+                    emulsion_io::design_motion_export::write(&doc, &path, format)
+                })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok(report) => this.set_status(
+                    format!(
+                        "Exported {} frames ({} vector, {} rendered). {}",
+                        report.frames,
+                        report.vector_frames,
+                        report.raster_frames,
+                        report.diagnostics.join(" ")
+                    ),
+                    false,
+                    cx,
+                ),
+                Err(e) => this.set_status(e.to_string(), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
     pub(super) fn design_motion_controls(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let mut panel = div()
             .flex()
@@ -694,12 +752,80 @@ impl EditorView {
                     })),
             )
             .child(
+                Button::new("design-export-animated-svg")
+                    .label("Export animated SVG…")
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.export_motion_interchange(
+                            emulsion_io::design_motion_export::Format::AnimatedSvg,
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                Button::new("design-export-lottie")
+                    .label("Export Lottie · rendered frames…")
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.export_motion_interchange(
+                            emulsion_io::design_motion_export::Format::Lottie,
+                            cx,
+                        )
+                    })),
+            )
+            .child(
                 Button::new("design-export-motion")
                     .label("Export animation GIF…")
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.export_design_motion(cx))),
             );
         if let Some(id) = self.selected {
+            let owner = cx.weak_entity();
+            panel =
+                panel
+                    .child(
+                        Button::new("design-motion-presets")
+                            .label("Motion preset ▾")
+                            .outline()
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for preset in emulsion_core::design_keyframes::Preset::ALL {
+                                    let owner = owner.clone();
+                                    menu = menu.item(PopupMenuItem::new(preset.label()).on_click(
+                                        move |_, _, cx| {
+                                            owner
+                                            .update(cx, |this, cx| {
+                                                if !this.prepare_page_action(cx) {
+                                                    return;
+                                                }
+                                                let ids = this.selected_layer_ids();
+                                                let end =
+                                                    this.editor.doc.design.duration_ms.min(1000);
+                                                match emulsion_core::design_keyframes::apply_preset(
+                                                    &mut this.editor,
+                                                    &ids,
+                                                    preset,
+                                                    0,
+                                                    end,
+                                                ) {
+                                                    Ok(()) => this.after_change(cx),
+                                                    Err(e) => this.set_status(e, true, cx),
+                                                }
+                                            })
+                                            .ok();
+                                        },
+                                    ));
+                                }
+                                menu
+                            }),
+                    )
+                    .child(
+                        Button::new("design-retime-motion")
+                            .label("Retime selected objects…")
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.retime_motion_dialog(window, cx)
+                            })),
+                    );
             panel = panel.child(
                 Button::new("design-property-keyframes")
                     .label("Property keyframes…")

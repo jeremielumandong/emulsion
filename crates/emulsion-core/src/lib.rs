@@ -17,6 +17,9 @@ pub mod design_keyframes;
 pub mod design_metadata;
 pub mod design_styles;
 pub mod design_variables;
+pub mod design_variable_project;
+pub mod design_vectors;
+pub mod design_precision;
 pub mod diagram;
 pub mod diagram_library;
 pub mod document;
@@ -26,6 +29,7 @@ pub mod graph;
 pub mod history;
 pub mod layer_links;
 pub mod node;
+pub mod photo_source;
 pub mod project;
 pub mod raw;
 pub mod smart;
@@ -55,3 +59,11 @@ mod styles_advanced_tests;
 mod style_memory_tests;
 
 mod composite_mask_cache;
+
+pub mod design_fonts;
+
+pub mod design_brand_assets;
+
+pub mod design_data;
+
+mod design_component_inference;

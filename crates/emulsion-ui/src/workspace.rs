@@ -2717,3 +2717,6 @@ mod compact_tests {
         });
     }
 }
+
+#[path = "workspace/mcp_lifecycle.rs"]
+mod mcp_lifecycle;

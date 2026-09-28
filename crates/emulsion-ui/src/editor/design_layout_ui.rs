@@ -92,7 +92,7 @@ impl EditorView {
             .when(frame.is_some(), |d| {
                 d.child(
                     Button::new("design-layout-breakpoints")
-                        .label("Canvas width breakpoints…")
+                        .label("Responsive breakpoints…")
                         .small()
                         .outline()
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -148,6 +148,31 @@ impl EditorView {
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.design_layout_child_dialog(parent, id, window, cx)
                         })),
+                )
+                .children(
+                    self.editor
+                        .doc
+                        .design
+                        .frames
+                        .get(&parent)
+                        .into_iter()
+                        .flat_map(|f| f.breakpoints.iter())
+                        .enumerate()
+                        .map(|(index, entry)| {
+                            Button::new(("design-layout-child-breakpoint", index))
+                                .label(format!("Object sizing at {} px…", entry.min_width))
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.design_layout_child_at_dialog(
+                                        parent,
+                                        id,
+                                        Some(index),
+                                        window,
+                                        cx,
+                                    )
+                                }))
+                        }),
                 )
             })
             .child(
@@ -278,6 +303,16 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.design_layout_child_at_dialog(parent, id, None, window, cx);
+    }
+    pub(crate) fn design_layout_child_at_dialog(
+        &mut self,
+        parent: NodeId,
+        id: NodeId,
+        breakpoint: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.prepare_page_action(cx) || !self.layout_targets_editable(&[parent, id], cx) {
             return;
         }
@@ -287,7 +322,20 @@ impl EditorView {
         if frame.boundary == id || self.editor.doc.node(id).and_then(|n| n.parent) != Some(parent) {
             return;
         }
-        let settings = frame.children.get(&id).copied().unwrap_or_default();
+        let inherited = frame.children.get(&id).copied().unwrap_or_default();
+        let settings = breakpoint
+            .and_then(|i| frame.breakpoints.get(i))
+            .and_then(|b| b.overrides.children.get(&id))
+            .copied()
+            .unwrap_or(inherited);
+        let inherit = cx.new(|_| {
+            breakpoint.is_some_and(|i| {
+                frame
+                    .breakpoints
+                    .get(i)
+                    .is_none_or(|b| !b.overrides.children.contains_key(&id))
+            })
+        });
         let fields = [
             settings.min_width,
             settings.max_width,
@@ -314,9 +362,10 @@ impl EditorView {
             let buttons=[("design-layout-child-position",if settings.absolute {"Position: absolute"} else {"Position: in layout"}),
                 ("design-layout-child-width",if settings.fill_width {"Width: fill frame"} else {"Width: fixed"}),
                 ("design-layout-child-height",if settings.fill_height {"Height: fill frame"} else {"Height: fixed"})];
-            let error_apply=error.clone();
-            dialog.title("Object sizing & limits").width(px(440.))
+            let error_apply=error.clone();let inherit_apply=inherit.clone();let change_inherit=inherit.clone();
+            dialog.title(if breakpoint.is_some(){"Breakpoint object sizing"}else{"Object sizing & limits"}).width(px(440.))
                 .child(div().id("design-layout-child-dialog-body").test_support().max_h(px((f32::from(window.viewport_size().height)-220.).clamp(100.,680.))).overflow_y_scroll().flex().flex_col().gap_2()
+                    .when(breakpoint.is_some(),|d|d.child(Button::new("design-layout-child-inherit").label(if *inherit.read(cx){"Sizing: inherit base"}else{"Sizing: override at breakpoint"}).small().outline().on_click(move|_,window,cx|{change_inherit.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();})))
                     .children(buttons.into_iter().enumerate().map(|(i,(key,label))|{
                         let state=state.clone();Button::new(key).label(label).small().outline().on_click(move|_,window,cx|{
                             state.update(cx,|value,cx|{match i{0=>value.absolute= !value.absolute,1=>value.fill_width= !value.fill_width,_=>value.fill_height= !value.fill_height};cx.notify();});window.refresh();
@@ -338,7 +387,10 @@ impl EditorView {
                         let mut design=this.editor.doc.design.clone();
                         let Some(frame)=design.frames.get_mut(&parent) else{return false;};
                         if this.editor.doc.node(id).and_then(|n|n.parent)!=Some(parent) {return false;}
-                        frame.children.insert(id,settings);
+                        if let Some(index)=breakpoint {
+                            let Some(entry)=frame.breakpoints.get_mut(index) else {return false;};
+                            if *inherit_apply.read(cx){entry.overrides.children.remove(&id);}else{entry.overrides.children.insert(id,settings);}
+                        }else{frame.children.insert(id,settings);}
                         match this.editor.execute(Command::SetDesign{design:Box::new(design)}) {
                             Ok(_)=>{this.after_change(cx);true},Err(error)=>{this.set_status(error.to_string(),true,cx);false}
                         }

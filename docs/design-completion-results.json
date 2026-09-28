@@ -1,0 +1,141 @@
+{
+  "date": "2026-09-28",
+  "status": "linux_acceptance_complete",
+  "platform": "Linux x86_64",
+  "source_branch": "feat/vello-migration-ui",
+  "tests": {
+    "core": {
+      "passed": 311,
+      "ignored": 1
+    },
+    "io": {
+      "passed": 247
+    },
+    "mcp": {
+      "passed": 188
+    },
+    "native_ui": {
+      "passed": 64,
+      "note": "63 checks passed in the broad run; the sole failed inspector test was corrected to scroll the native viewport and passed on rerun."
+    },
+    "required_host_gpu": {
+      "passed": 2,
+      "cases": [
+        "shadow_keeps_text_foreground_identical_at_fractional_and_high_zoom",
+        "native_multistop_gradients_keep_vector_edges_at_zoom"
+      ]
+    }
+  },
+  "browser": {
+    "html": {
+      "overlays": true,
+      "component_state": true,
+      "navigation": true,
+      "escaped_metadata": true,
+      "native_paths": 5,
+      "hover": true,
+      "drag": true,
+      "phone_view": "0 0 375 400",
+      "fullscreen": true
+    },
+    "animated_svg": {
+      "samples": [
+        {
+          "time": 0,
+          "opacity": [
+            1,
+            0,
+            0
+          ],
+          "width": 120,
+          "height": 90,
+          "pathCounts": [
+            1,
+            2,
+            1
+          ]
+        },
+        {
+          "time": 0.1,
+          "opacity": [
+            0,
+            1,
+            0
+          ],
+          "width": 120,
+          "height": 90,
+          "pathCounts": [
+            1,
+            2,
+            1
+          ]
+        },
+        {
+          "time": 0.2,
+          "opacity": [
+            0,
+            0,
+            1
+          ],
+          "width": 120,
+          "height": 90,
+          "pathCounts": [
+            1,
+            2,
+            1
+          ]
+        }
+      ]
+    }
+  },
+  "layout_workload": {
+    "objects": 1000,
+    "frames": 10,
+    "samples": 20,
+    "baseline_median_ms": 40.472283,
+    "baseline_p95_ms": 61.921792,
+    "current_median_ms": 16.294099,
+    "current_p95_ms": 17.836065,
+    "idempotent": true
+  },
+  "runtime_limits": [
+    "Windows and macOS runtime acceptance remains on separate machines.",
+    "Editable PPTX import/export is not implemented.",
+    "Lottie output uses rendered image layers; general Lottie import is not implemented.",
+    "Cloud collaboration and executable plugin runtimes remain deferred."
+  ],
+  "clippy": {
+    "warnings_denied": true,
+    "packages": [
+      "emulsion-core",
+      "emulsion-io",
+      "emulsion-mcp",
+      "emulsion-ui",
+      "emulsion-engine"
+    ],
+    "targets": [
+      "lib",
+      "tests"
+    ]
+  },
+  "native_playback": {
+    "linux_system_helper": [
+      "WAV trim/loop",
+      "H.264/AAC trim/loop",
+      "pause",
+      "seek while paused",
+      "resume",
+      "observed state"
+    ],
+    "browser_bundled": false
+  },
+  "release": {
+    "artifact": "target/appimage/Emulsion-0.0.3-advanced-design-x86_64.AppImage",
+    "bytes": 53549560,
+    "sha256": "b3169b0f76a8dc998d285bb67598cc1b8f0015fcf582d720a45deb683e4724fd",
+    "version_smoke": "emulsion 0.0.3",
+    "mcp_unique_tools": 315,
+    "mcp_schemas_and_annotations_valid": true,
+    "bundled_browser": false
+  }
+}

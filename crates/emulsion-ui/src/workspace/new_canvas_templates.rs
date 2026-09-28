@@ -27,7 +27,7 @@ impl Starter {
         match &self.source {
             Source::Design(template) => {
                 let (mut w, mut h) = template.native_size();
-                if preview {
+                if preview && !matches!(template,Template::Responsive(_)) {
                     let scale = 480. / f64::from(w.max(h));
                     w = (f64::from(w) * scale).round().max(1.) as u32;
                     h = (f64::from(h) * scale).round().max(1.) as u32;

@@ -188,7 +188,9 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
         };
         let source = endpoint("source", cell.source_point, "exit")?;
         let target = endpoint("target", cell.target_point, "entry")?;
-        let routing = if style.get("edgeStyle").is_some_and(|s| {
+        let routing = if style.get("curved").is_some_and(|v| v == "1") {
+            Routing::Curved
+        } else if style.get("edgeStyle").is_some_and(|s| {
             matches!(
                 s.as_str(),
                 "orthogonalEdgeStyle" | "elbowEdgeStyle" | "entityRelationEdgeStyle"
@@ -253,6 +255,7 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 .insert("drawio_geometry_style".into(), geometry_style);
         }
         apply_style(&mut doc, shape.body, shape.label, style, warnings)?;
+        super::labels::apply(&mut doc, shape.label, cell, style, warnings);
         apply_cell(&mut doc, id, cell, style)?;
         // Layer and group visibility applies to all descendants, even when the layer is not a vertex.
         let mut ancestor = cell.attrs.get("parent");
@@ -267,6 +270,7 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             shape.container = Some(*parent);
         }
         let b = bounds[key];
+        let artwork_start = doc.next_id;
         if let Some(image) = style.get("image") {
             super::images::insert(
                 &mut doc,
@@ -277,12 +281,86 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 warnings,
             )?;
         }
+        let named = style
+            .get("resIcon")
+            .filter(|n| super::vendor::contains(n))
+            .or_else(|| style.get("shape").filter(|n| super::vendor::contains(n)));
+        if let Some(name) = named {
+            let resource = style
+                .get("shape")
+                .is_some_and(|s| s.ends_with(".resourceIcon"));
+            let mut icon_style = style.clone();
+            let mut icon_bounds = b;
+            if style
+                .get("direction")
+                .is_some_and(|v| v == "north" || v == "south")
+            {
+                icon_bounds = [
+                    b[0] + (b[2] - b[3]) / 2.,
+                    b[1] + (b[3] - b[2]) / 2.,
+                    b[3],
+                    b[2],
+                ];
+            }
+            if resource {
+                icon_style.insert(
+                    "fillColor".into(),
+                    style
+                        .get("strokeColor")
+                        .cloned()
+                        .unwrap_or("#ffffff".into()),
+                );
+                icon_style.insert("strokeColor".into(), "none".into());
+                icon_bounds = [
+                    icon_bounds[0] + icon_bounds[2] * 0.12,
+                    icon_bounds[1] + icon_bounds[3] * 0.12,
+                    icon_bounds[2] * 0.76,
+                    icon_bounds[3] * 0.76,
+                ];
+            }
+            let result =
+                super::vendor::svg_at(name, &icon_style, icon_bounds[2], icon_bounds[3], warnings)
+                    .and_then(|svg| crate::svg_vectors::append(&mut doc, id, &svg, icon_bounds));
+            if let Err(reason) = result {
+                warnings.insert(format!("Stencil {name} uses a placeholder: {reason}"));
+            } else {
+                shape
+                    .data
+                    .insert("drawio_vendor_stencil".into(), name.clone());
+                // The invisible native body retains stable attachment/resize bounds.
+                if let NodeKind::Path {
+                    style: paint,
+                    cache,
+                    path,
+                } = &mut doc.node_mut(shape.body).unwrap().kind
+                {
+                    if !resource {
+                        paint.fill = None;
+                    }
+                    paint.stroke = None;
+                    *cache = VectorRaster::path(path.clone(), *paint, page.width, page.height);
+                }
+            }
+        }
         let path = if let Some(encoded) = style
             .get("shape")
             .and_then(|s| s.strip_prefix("stencil("))
             .and_then(|s| s.strip_suffix(')'))
         {
             shape.data.insert("drawio_custom_path".into(), "1".into());
+            // Keep separate fill/stroke instructions instead of painting every
+            // contour with the cell's one default paint.
+            if let Ok(xml) = decompress(encoded) {
+                let result = super::vendor::inline_svg(&xml, style, warnings)
+                    .and_then(|svg| crate::svg_vectors::append(&mut doc, id, &svg, b));
+                if result.is_ok()
+                    && let NodeKind::Path { style: paint, .. } =
+                        &mut doc.node_mut(shape.body).unwrap().kind
+                {
+                    paint.fill = None;
+                    paint.stroke = None;
+                }
+            }
             match super::stencils::decode(encoded, b, warnings) {
                 Ok(path) => Some(path),
                 Err(error) => {
@@ -308,6 +386,73 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             )
             .kind;
         }
+        if shape.kind == ShapeKind::Swimlane {
+            let horizontal = style.get("horizontal").is_none_or(|v| v != "0");
+            let size =
+                number(style, "startSize", 40.)?.clamp(0., if horizontal { b[3] } else { b[2] });
+            let header = if horizontal {
+                [b[0], b[1], b[2], size]
+            } else {
+                [b[0], b[1], size, b[3]]
+            };
+            let paint = match doc.node(shape.body).unwrap().kind {
+                NodeKind::Path { style, .. } => style,
+                _ => unreachable!(),
+            };
+            let mut header_node = Node::path(
+                doc.alloc_id(),
+                "Swimlane header",
+                Arc::new(ShapeKind::Process.path(header)),
+                paint,
+                doc.width,
+                doc.height,
+            );
+            header_node.parent = Some(id);
+            let at = doc.nodes.iter().position(|n| n.id == shape.label).unwrap();
+            doc.nodes.insert(at, header_node);
+            if let Some(value) = style.get("swimlaneFillColor")
+                && let Ok(fill) = color(value)
+            {
+                let (w, h) = (doc.width, doc.height);
+                if let NodeKind::Path { path, style, cache } =
+                    &mut doc.node_mut(shape.body).unwrap().kind
+                {
+                    style.fill = fill;
+                    *cache = VectorRaster::path(path.clone(), *style, w, h);
+                }
+            }
+        }
+        let direction = match style.get("direction").map(String::as_str) {
+            Some("south") => 90.,
+            Some("west") => 180.,
+            Some("north") => 270.,
+            _ => 0.,
+        };
+        let angle = (number(style, "rotation", 0.)? + direction).to_radians();
+        let sx = if style.get("flipH").is_some_and(|v| v == "1") {
+            -1.
+        } else {
+            1.
+        };
+        let sy = if style.get("flipV").is_some_and(|v| v == "1") {
+            -1.
+        } else {
+            1.
+        };
+        if angle != 0. || sx != 1. || sy != 1. {
+            let center = glam::dvec2(b[0] + b[2] / 2., b[1] + b[3] / 2.);
+            let transform = glam::DAffine2::from_translation(center)
+                * glam::DAffine2::from_angle(angle)
+                * glam::DAffine2::from_scale(glam::dvec2(sx, sy))
+                * glam::DAffine2::from_translation(-center);
+            let (w, h) = (doc.width, doc.height);
+            for node in doc.nodes.iter_mut().filter(|n| n.id >= artwork_start) {
+                if let NodeKind::Path { path, style, cache } = &mut node.kind {
+                    Arc::make_mut(path).transform(transform);
+                    *cache = VectorRaster::path(path.clone(), *style, w, h);
+                }
+            }
+        }
         if let NodeKind::Text { spec, cache } = &mut doc.node_mut(shape.label).unwrap().kind {
             let mut text = spec.as_ref().clone();
             let spacing = number(style, "spacing", 2.)?;
@@ -325,10 +470,17 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             let height = (measured.y + measured.height) as f64;
             let top = spacing + number(style, "spacingTop", 0.)?;
             let bottom = spacing + number(style, "spacingBottom", 0.)?;
+            let label_height = if shape.kind == ShapeKind::Swimlane
+                && style.get("horizontal").is_none_or(|v| v != "0")
+            {
+                number(style, "startSize", 40.)?.min(b[3])
+            } else {
+                b[3]
+            };
             text.y = match style.get("verticalAlign").map(String::as_str) {
                 Some("top") => b[1] + top,
-                Some("bottom") => b[1] + b[3] - height - bottom,
-                _ => b[1] + top + (b[3] - top - bottom - height) / 2.,
+                Some("bottom") => b[1] + label_height - height - bottom,
+                _ => b[1] + top + (label_height - top - bottom - height) / 2.,
             } as f32;
             match style.get("verticalLabelPosition").map(String::as_str) {
                 Some("bottom") => text.y = (b[1] + b[3] + spacing) as f32,
@@ -339,6 +491,23 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 Some("left") => text.x -= b[2] as f32,
                 Some("right") => text.x += b[2] as f32,
                 _ => {}
+            }
+            if style.get("horizontal").is_some_and(|v| v == "0") {
+                let label_width = (b[3] - spacing * 2.).max(1.);
+                text.width = Some(label_width as f32);
+                text.rotation = -90.;
+                let measured = emulsion_core::text::layout(&text).bounds();
+                let height = (measured.y + measured.height) as f64;
+                let header = if shape.kind == ShapeKind::Swimlane {
+                    number(style, "startSize", 40.)?.min(b[2])
+                } else {
+                    b[2]
+                };
+                text.x = (b[0] + header / 2. - height / 2.) as f32;
+                text.y = (b[1] + b[3] / 2. + label_width / 2.) as f32;
+            }
+            if style.contains_key("emulsionLabelRotation") {
+                text.rotation = number(style, "emulsionLabelRotation", 0.)? as f32;
             }
             if style.contains_key("emulsionLabelX") {
                 text.x = (b[0] + number(style, "emulsionLabelX", 0.)?) as f32;
@@ -379,12 +548,32 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
         edge.label_offset = cell.offset;
         edge.arrow_end = style.get("endArrow").is_none_or(|v| v != "none");
         edge.arrow_start = style.get("startArrow").is_some_and(|v| v != "none");
+        for (prefix, marker) in [
+            ("start", &mut edge.start_marker),
+            ("end", &mut edge.end_marker),
+        ] {
+            let value = style.get(&format!("{prefix}Arrow")).map_or(
+                if prefix == "end" { "classic" } else { "none" },
+                String::as_str,
+            );
+            if let Some(kind) = diagram::MarkerKind::from_drawio(value) {
+                marker.kind = kind;
+            }
+            marker.filled = style.get(&format!("{prefix}Fill")).is_none_or(|v| v != "0");
+            marker.size = number(&style, &format!("{prefix}Size"), 6.)?.clamp(1., 100.);
+        }
         style
             .entry("strokeColor".into())
             .or_insert("#000000".into());
         style.entry("strokeWidth".into()).or_insert("1".into());
         style.entry("fontColor".into()).or_insert("#000000".into());
         apply_style(&mut doc, edge.path, edge.label, &style, warnings)?;
+        // mxGraph fillColor controls arrowheads; open connector paths never fill.
+        if let NodeKind::Path { path, style, cache } = &mut doc.node_mut(edge.path).unwrap().kind {
+            style.fill = None;
+            *cache = VectorRaster::path(path.clone(), *style, page.width, page.height);
+        };
+        super::labels::apply(&mut doc, edge.label, cell, &style, warnings);
         apply_cell(&mut doc, id, cell, &style)?;
         if let Some(parent) = cell.attrs.get("parent").and_then(|p| ids.get(p)) {
             doc.node_mut(id).unwrap().parent = Some(*parent);

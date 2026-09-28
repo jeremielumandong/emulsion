@@ -3,6 +3,8 @@
 pub mod brand;
 #[path = "design_media.rs"]
 pub mod media;
+#[path = "design_responsive_templates.rs"]
+mod responsive_templates;
 #[path = "design_templates.rs"]
 mod templates;
 use crate::{Command, Document, Node, NodeKind, command::Slot, text::TextSpec};
@@ -380,6 +382,7 @@ pub struct TemplateCategory {
 pub enum Template {
     /// Index in the bundled, data-driven starter catalog.
     Bundled(usize),
+    Responsive(usize),
     ProductLaunch,
     SeasonSale,
     Resume,
@@ -394,7 +397,7 @@ pub enum Template {
     BusinessCard,
 }
 impl Template {
-    pub const CATEGORIES: [TemplateCategory; 11] = [
+    pub const CATEGORIES: [TemplateCategory; 12] = [
         TemplateCategory {
             preset: "Square post",
             label: "Instagram Post",
@@ -472,12 +475,23 @@ impl Template {
             ink: 0x3a1f5e,
             back: 0xcba9ec,
         },
+        TemplateCategory {
+            preset: "Responsive",
+            label: "Responsive layouts",
+            tint: 0xd6e7fa,
+            ink: 0x203759,
+            back: 0xa6c7ef,
+        },
     ];
     pub fn catalog() -> impl Iterator<Item = Self> {
         (0..templates::starters().len())
             .map(|i| Self::ALL.get(i).copied().unwrap_or(Self::Bundled(i)))
+            .chain((0..responsive_templates::NAMES.len()).map(Self::Responsive))
     }
     pub fn category(self) -> Option<usize> {
+        if matches!(self, Self::Responsive(_)) {
+            return Some(11);
+        }
         let spec = templates::spec(self)?;
         Self::CATEGORIES
             .iter()
@@ -498,6 +512,10 @@ impl Template {
     pub const ADDITIONAL: [Self; 2] = [Self::Announcement, Self::Editorial];
     pub fn label(self) -> &'static str {
         match self {
+            Self::Responsive(index) => responsive_templates::NAMES
+                .get(index)
+                .copied()
+                .unwrap_or("Responsive template"),
             Self::Bundled(_) => {
                 templates::spec(self).map_or("Template", |spec| spec.label.as_str())
             }
@@ -516,9 +534,15 @@ impl Template {
         }
     }
     pub fn native_size(self) -> (u32, u32) {
+        if matches!(self, Self::Responsive(_)) {
+            return (1200, 1200);
+        }
         templates::spec(self).map_or((1080, 1080), |spec| (spec.w, spec.h))
     }
     pub fn create(self, w: u32, h: u32) -> Result<Document, String> {
+        if let Self::Responsive(index) = self {
+            return responsive_templates::create(index, w, h);
+        }
         if let Some(spec) = templates::spec(self) {
             return spec.create(w, h);
         }

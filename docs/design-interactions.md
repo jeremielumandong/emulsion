@@ -52,3 +52,5 @@ interactive presentation runtime.
 Live presentation state includes open overlay IDs and transient component variants.
 These controls implement native click interactions; they do not execute arbitrary
 scripts or embed a browser-based prototype runtime.
+
+The interaction dialog also selects **Click**, **Pointer enters**, or **Drag and release**. Older files and objects without an explicit trigger keep Click. Hover runs once each time the pointer enters the object. Drag and release requires at least four screen pixels of movement and never moves authored artwork. Hidden objects and background objects blocked by a modal overlay cannot trigger. The same actions, triggers and remapped object references travel through native projects, copies and reusable components. MCP `set_presentation_actions` accepts `trigger: "click" | "hover" | "drag_end"`.

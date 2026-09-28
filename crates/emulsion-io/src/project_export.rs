@@ -151,6 +151,99 @@ fn label_geometry(spec: &emulsion_core::text::TextSpec) -> Result<std::sync::Arc
     Ok(out)
 }
 
+// svg2pdf and resvg use different usvg versions; build options for the PDF parser.
+fn pdf_svg_options() -> svg2pdf::usvg::Options<'static> {
+    use svg2pdf::usvg;
+    usvg::Options {
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_string: Box::new(|_, _| None),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn svg_paint(
+    out: &mut String,
+    id: &str,
+    paint: PathPaint,
+    color: Option<[u8; 4]>,
+    bounds: (f64, f64, f64, f64),
+) -> String {
+    let Some(color) = color else {
+        return "none".into();
+    };
+    let Some(stops) = paint.gradient_stops(color) else {
+        return rgba(color);
+    };
+    let (x, y, w, h) = bounds;
+    let cx = x + w / 2.;
+    let cy = y + h / 2.;
+    let tag = if paint.is_radial() {
+        "radialGradient"
+    } else {
+        "linearGradient"
+    };
+    write!(out,"<defs><{tag} id=\"{id}\" gradientUnits=\"userSpaceOnUse\" color-interpolation=\"linearRGB\" ").unwrap();
+    if paint.is_radial() {
+        write!(
+            out,
+            "cx=\"0\" cy=\"0\" r=\"1\" gradientTransform=\"translate({cx} {cy}) scale({} {})\"",
+            (w / 2.).max(0.001),
+            (h / 2.).max(0.001)
+        )
+        .unwrap();
+    } else {
+        let (dy, dx) = f64::from(paint.gradient_angle()).to_radians().sin_cos();
+        let span = (dx.abs() * w + dy.abs() * h).max(0.001);
+        write!(
+            out,
+            "x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"",
+            cx - dx * span / 2.,
+            cy - dy * span / 2.,
+            cx + dx * span / 2.,
+            cy + dy * span / 2.
+        )
+        .unwrap();
+    }
+    out.push('>');
+    // Some SVG consumers ignore color-interpolation=linearRGB. Extra vector stops
+    // preserve our premultiplied linear ramp even in those consumers.
+    let mut sampled = Vec::new();
+    for pair in stops.windows(2) {
+        sampled.push(pair[0]);
+        if pair[1].offset > pair[0].offset {
+            let a = emulsion_raster::color::srgba8_to_premul(pair[0].color);
+            let b = emulsion_raster::color::srgba8_to_premul(pair[1].color);
+            for i in 1..32 {
+                let t = i as f32 / 32.;
+                let color = emulsion_raster::color::premul_to_srgba8(std::array::from_fn(|c| {
+                    a[c] + (b[c] - a[c]) * t
+                }));
+                sampled.push(emulsion_raster::vector::GradientStop {
+                    offset: pair[0].offset + (pair[1].offset - pair[0].offset) * t,
+                    color,
+                });
+            }
+        }
+    }
+    if let Some(last) = stops.last() {
+        sampled.push(*last);
+    }
+    for stop in sampled {
+        write!(
+            out,
+            "<stop offset=\"{}\" stop-color=\"{}\" stop-opacity=\"{}\"/>",
+            stop.offset,
+            rgba(stop.color),
+            stop.color[3] as f32 / 255.
+        )
+        .unwrap();
+    }
+    write!(out, "</{tag}></defs>").unwrap();
+    format!("url(#{id})")
+}
+
 fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
     let n = doc.node(id).ok_or_else(|| error("Missing export layer"))?;
     if !n.visible {
@@ -165,7 +258,7 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
             "Layer blending, masks, or effects require a rendered appearance.",
         ));
     }
-    write!(out, "<g opacity=\"{}\">", n.opacity).unwrap();
+    write!(out, "<g data-node=\"{id}\" opacity=\"{}\">", n.opacity).unwrap();
     if let Some(base) = n.clip_to {
         let base = doc
             .node(base)
@@ -209,21 +302,45 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
         )
         .unwrap(),
         NodeKind::Path { path, style, .. } => {
-            if style.fill_paint != PathPaint::Solid
-                || style.stroke_paint != PathPaint::Solid
+            if matches!(style.fill_paint, PathPaint::Pattern { .. })
+                || matches!(style.stroke_paint, PathPaint::Pattern { .. })
                 || style.alignment != StrokeAlignment::Center
             {
                 return Err(error(
                     "This shape paint or stroke requires a rendered appearance.",
                 ));
             }
-            write!(out,"<path d=\"{}\" fill=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{}\" stroke-linejoin=\"{}\" stroke-miterlimit=\"{}\"",path.to_svg(),style.fill.map(rgba).unwrap_or_else(||"none".into()),style.stroke.map(rgba).unwrap_or_else(||"none".into()),style.width,
+            let bounds = emulsion_raster::vector_geometry::bounds(path).unwrap_or((0., 0., 1., 1.));
+            let fill = svg_paint(
+                out,
+                &format!("fill-{id}"),
+                style.fill_paint,
+                style.fill,
+                bounds,
+            );
+            let stroke = svg_paint(
+                out,
+                &format!("stroke-{id}"),
+                style.stroke_paint,
+                style.stroke,
+                bounds,
+            );
+            write!(out,"<path d=\"{}\" fill=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{}\" stroke-linejoin=\"{}\" stroke-miterlimit=\"{}\"",path.to_svg(),fill,stroke,style.width,
                 match style.cap{emulsion_raster::vector::StrokeCap::Butt=>"butt",emulsion_raster::vector::StrokeCap::Round=>"round",emulsion_raster::vector::StrokeCap::Square=>"square"},
                 match style.join{emulsion_raster::vector::StrokeJoin::Miter=>"miter",emulsion_raster::vector::StrokeJoin::Round=>"round",emulsion_raster::vector::StrokeJoin::Bevel=>"bevel"},style.miter_limit).unwrap();
-            if let Some(c) = style.fill {
+            if style.even_odd {
+                out.push_str(" fill-rule=\"evenodd\"");
+            }
+            if let Some(c) = style
+                .fill
+                .filter(|_| matches!(style.fill_paint, PathPaint::Solid))
+            {
                 write!(out, " fill-opacity=\"{}\"", c[3] as f32 / 255.).unwrap();
             }
-            if let Some(c) = style.stroke {
+            if let Some(c) = style
+                .stroke
+                .filter(|_| matches!(style.stroke_paint, PathPaint::Solid))
+            {
                 write!(out, " stroke-opacity=\"{}\"", c[3] as f32 / 255.).unwrap();
             }
             if style.dash_count > 0 {
@@ -275,6 +392,20 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
                 out.push_str("</g>");
             }
         }
+        NodeKind::Smart {
+            editable: Some(emulsion_core::node::SmartEditable::Svg { xml }),
+            source,
+            placement,
+            filters,
+            filter_styles,
+            ..
+        } if filters.is_empty() && filter_styles.is_empty() => {
+            if xml.len() > 32 << 20 {
+                return Err(error("SVG source exceeds 32 MiB"));
+            }
+            let encoded = base64::engine::general_purpose::STANDARD.encode(xml.as_bytes());
+            write!(out,"<image width=\"{}\" height=\"{}\" transform=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/svg+xml;base64,{encoded}\"/>",source.width(),source.height(),matrix(placement.to_doc(source.width(),source.height()))).unwrap();
+        }
         NodeKind::Raster { raster, placement } => out.push_str(&image(
             raster,
             &matrix(placement.to_doc(raster.width(), raster.height())),
@@ -301,6 +432,27 @@ pub fn vector_svg(doc: &Document) -> Result<Vec<u8>> {
         node_svg(doc, id, &mut content)?;
     }
     Ok(format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">{content}</svg>",doc.width,doc.height,doc.width,doc.height).into_bytes())
+}
+
+/// Serialize one retained subtree; the caller validates the complete document.
+pub(crate) fn viewport_subtree(doc: &Document, root: NodeId) -> Result<Vec<u8>> {
+    let mut content = String::new();
+    node_svg(doc, root, &mut content)?;
+    Ok(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">{content}</svg>",
+        doc.width, doc.height
+    )
+    .into_bytes())
+}
+
+pub(crate) fn bounded_subtree(
+    doc: &Document,
+    root: NodeId,
+    [x, y, w, h]: [f64; 4],
+) -> Result<Vec<u8>> {
+    let mut content = String::new();
+    node_svg(doc, root, &mut content)?;
+    Ok(format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"{x} {y} {w} {h}\">{content}</svg>").into_bytes())
 }
 
 /// Glyphs are outlined using the editor's shaping and bundled fonts, so SVG
@@ -432,7 +584,13 @@ pub fn write(
                 ));
             }
             if format == Format::Pdf {
-                let svg = svg2pdf::usvg::Tree::from_data(&bytes, &Default::default())
+                // Normalize imported SVG text to paths using the shared font resolver;
+                // the lightweight PDF parser deliberately has no font runtime.
+                let normalized =
+                    resvg::usvg::Tree::from_data(&bytes, &crate::svg_vectors::options())
+                        .map_err(|e| error(e.to_string()))?
+                        .to_string(&Default::default());
+                let svg = svg2pdf::usvg::Tree::from_str(&normalized, &pdf_svg_options())
                     .map_err(|e| error(e.to_string()))?;
                 let (chunk, root) = svg2pdf::to_chunk(&svg, Default::default())
                     .map_err(|e| error(e.to_string()))?;

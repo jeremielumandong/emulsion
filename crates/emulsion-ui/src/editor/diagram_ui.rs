@@ -136,6 +136,13 @@ impl EditorView {
             .clone()
             .filter(|(revision, _)| revision.0 == key.0);
         let source = doc.clone();
+        let previous_scene = self
+            .svg_canvas
+            .borrow()
+            .scene
+            .as_ref()
+            .filter(|(r, _)| r.0 == key.0)
+            .map(|(_, s)| s.clone());
         cx.spawn(async move |this, cx| {
             let (scene, damage) = cx
                 .background_spawn(async move {
@@ -144,7 +151,11 @@ impl EditorView {
                             .map(|bounds| (revision, bounds))
                     });
                     (
-                        emulsion_io::svg_viewport::SvgViewport::new(&source).map(Arc::new),
+                        emulsion_io::svg_viewport::SvgViewport::updated(
+                            &source,
+                            previous_scene.as_deref(),
+                        )
+                        .map(Arc::new),
                         damage,
                     )
                 })
@@ -1720,10 +1731,10 @@ impl EditorView {
                 content = content
                     .child(
                         Button::new("diagram-routing")
-                            .label(if routing == Routing::Orthogonal {
-                                "Routing: orthogonal"
-                            } else {
-                                "Routing: straight"
+                            .label(match routing {
+                                Routing::Orthogonal => "Routing: orthogonal",
+                                Routing::Straight => "Routing: straight",
+                                Routing::Curved => "Routing: curved",
                             })
                             .small()
                             .outline()
@@ -1731,10 +1742,10 @@ impl EditorView {
                                 this.update_diagram_edge(
                                     id,
                                     |e| {
-                                        e.routing = if routing == Routing::Orthogonal {
-                                            Routing::Straight
-                                        } else {
-                                            Routing::Orthogonal
+                                        e.routing = match routing {
+                                            Routing::Orthogonal => Routing::Straight,
+                                            Routing::Straight => Routing::Curved,
+                                            Routing::Curved => Routing::Orthogonal,
                                         };
                                         e.waypoints.clear();
                                     },
@@ -1752,6 +1763,68 @@ impl EditorView {
                                 this.update_diagram_edge(id, |e| e.arrow_end = !arrow, cx)
                             })),
                     );
+                for (index, start, marker) in [
+                    (0usize, true, edge.start_marker),
+                    (1usize, false, edge.end_marker),
+                ] {
+                    content = content
+                        .child(
+                            Button::new(("diagram-marker-kind", index))
+                                .label(format!(
+                                    "{}: {}",
+                                    if start { "Start marker" } else { "End marker" },
+                                    marker.kind.drawio()
+                                ))
+                                .small()
+                                .outline()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.update_diagram_edge(
+                                        id,
+                                        |edge| {
+                                            let kinds = diagram::MarkerKind::ALL;
+                                            let next = kinds[(kinds
+                                                .iter()
+                                                .position(|k| *k == marker.kind)
+                                                .unwrap_or(0)
+                                                + 1)
+                                                % kinds.len()];
+                                            if start {
+                                                edge.start_marker.kind = next;
+                                                edge.arrow_start =
+                                                    next != diagram::MarkerKind::None;
+                                            } else {
+                                                edge.end_marker.kind = next;
+                                                edge.arrow_end = next != diagram::MarkerKind::None;
+                                            }
+                                        },
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(
+                            Button::new(("diagram-marker-fill", index))
+                                .label(if marker.filled {
+                                    "Filled marker"
+                                } else {
+                                    "Hollow marker"
+                                })
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.update_diagram_edge(
+                                        id,
+                                        |edge| {
+                                            if start {
+                                                edge.start_marker.filled = !marker.filled;
+                                            } else {
+                                                edge.end_marker.filled = !marker.filled;
+                                            }
+                                        },
+                                        cx,
+                                    )
+                                })),
+                        );
+                }
                 content = content
                     .child(
                         Button::new("diagram-arrow-start")
@@ -2026,7 +2099,7 @@ impl EditorView {
             .overflow_y_scroll()
             .px(px(10.))
             .py(px(8.))
-            .child(Styled::h(Input::new(&search).small(), px(26.)));
+            .child(div().id("diagram-stencil-search").test_support().child(Styled::h(Input::new(&search).small(), px(26.))));
         content = content.child(
             div().grid().grid_cols(2).gap_1().children(
                 [

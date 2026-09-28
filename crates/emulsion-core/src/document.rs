@@ -743,6 +743,7 @@ impl Document {
         planes: &mut std::collections::HashSet<usize>,
     ) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
+        for font in self.design.fonts.values() { let allocation=font.allocation(); if planes.insert(allocation.0) { out.push(allocation); } }
         let mut raster = |r: &emulsion_raster::Raster| {
             if planes.insert(r as *const _ as usize) {
                 out.extend(r.buffer_allocations());
@@ -764,6 +765,10 @@ impl Document {
             }
         }
         for n in &self.nodes {
+            if let NodeKind::Smart { editable: Some(crate::node::SmartEditable::Svg { xml }), .. } = &n.kind {
+                let allocation = (xml.as_ptr() as usize, xml.len());
+                if planes.insert(allocation.0) { out.push(allocation); }
+            }
             if let Some(mask) = &n.mask
                 && planes.insert(Arc::as_ptr(mask) as usize)
             {

@@ -3149,3 +3149,6 @@ mod tools {
 
 #[path = "design_variable_workflow_tests.rs"]
 mod design_variable_workflow_tests;
+
+#[path = "design_data_workflow_tests.rs"]
+mod design_data_workflow_tests;

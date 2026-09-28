@@ -20,9 +20,12 @@ pub mod stencils;
 
 #[path = "diagram_layout.rs"]
 mod layout;
+#[path = "diagram_markers.rs"]
+mod markers;
 #[path = "diagram_router.rs"]
 mod router;
 pub use layout::{Layout, arrange};
+pub use markers::{Marker, MarkerKind};
 
 pub type Bounds = [f64; 4];
 pub const MAX_SHAPES: usize = 1000;
@@ -210,6 +213,7 @@ pub struct Endpoint {
 #[serde(rename_all = "snake_case")]
 pub enum Routing {
     Straight,
+    Curved,
     #[default]
     Orthogonal,
 }
@@ -226,6 +230,10 @@ pub struct Edge {
     pub waypoints: Vec<(f64, f64)>,
     #[serde(default)]
     pub label_offset: (f64, f64),
+    #[serde(default)]
+    pub start_marker: Marker,
+    #[serde(default)]
+    pub end_marker: Marker,
     pub arrow_end: bool,
     #[serde(default)]
     pub arrow_start: bool,
@@ -340,6 +348,8 @@ impl Diagram {
                 || !self.shapes.contains_key(&edge.target.shape)
                 || !edge.source.port.valid()
                 || !edge.target.port.valid()
+                || !edge.start_marker.valid()
+                || !edge.end_marker.valid()
                 || edge.waypoints.len() > 128
                 || edge
                     .waypoints
@@ -622,10 +632,10 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
             .flatten();
         if let Some(node) = indices.get(&edge.arrow).map(|i| &mut doc.nodes[*i])
             && let NodeKind::Path { path, style, cache } = &mut node.kind
-            && (style.fill != line_color || style.stroke != line_color || style.dash_count != 0)
+            && (style.fill != line_color || style.stroke.is_some() || style.dash_count != 0)
         {
             style.fill = line_color;
-            style.stroke = line_color;
+            style.stroke = None;
             style.dash_count = 0;
             style.dash = [0.; 6];
             *cache = crate::vector_cache::VectorRaster::path(
@@ -716,7 +726,7 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                 .chain(edge.waypoints.iter().copied())
                 .chain(std::iter::once(end))
                 .collect()
-        } else if edge.routing == Routing::Straight {
+        } else if edge.routing != Routing::Orthogonal {
             vec![start, end]
         } else {
             router::orthogonal(start, sd, end, ed, &obstacles)
@@ -732,39 +742,66 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
             edge.label_offset = (b.x as f64 + 60. - middle.0, b.y as f64 + 22. - middle.1);
         }
 
-        set_path(
-            doc,
-            edge.path,
+        let mut route = if edge.routing == Routing::Curved {
+            markers::curved(&points)
+        } else {
             Path {
                 subpaths: vec![SubPath {
                     anchors: points.iter().copied().map(Anchor::corner).collect(),
                     closed: false,
                 }],
-            },
-        );
-        let mut arrow = Path::default();
-        if points.len() > 1 {
-            for (enabled, tip, prior) in [
-                (edge.arrow_end, end, points[points.len() - 2]),
-                (edge.arrow_start, start, points[1]),
-            ] {
-                if !enabled {
-                    continue;
+            }
+        };
+        let tangent = route.subpaths.first().unwrap();
+        let start_prior = if edge.routing == Routing::Curved {
+            tangent.anchors[0].h_out
+        } else {
+            points[1]
+        };
+        let end_prior = if edge.routing == Routing::Curved {
+            tangent.anchors.last().unwrap().h_in
+        } else {
+            points[points.len() - 2]
+        };
+        // Stop the connector beneath closed markers, keeping hollow interiors clear.
+        let anchors = &mut route.subpaths[0].anchors;
+        for (at, tip, prior, marker, enabled) in [
+            (0, start, start_prior, edge.start_marker, edge.arrow_start),
+            (
+                anchors.len() - 1,
+                end,
+                end_prior,
+                edge.end_marker,
+                edge.arrow_end,
+            ),
+        ] {
+            if enabled {
+                let (dx, dy) = (prior.0 - tip.0, prior.1 - tip.1);
+                let length = dx.hypot(dy);
+                if length > 1e-6 {
+                    let distance = marker.inset().min(length * 0.45);
+                    let delta = (dx / length * distance, dy / length * distance);
+                    anchors[at].p = (tip.0 + delta.0, tip.1 + delta.1);
+                    anchors[at].h_in = (anchors[at].h_in.0 + delta.0, anchors[at].h_in.1 + delta.1);
+                    anchors[at].h_out =
+                        (anchors[at].h_out.0 + delta.0, anchors[at].h_out.1 + delta.1);
                 }
-                let (dx, dy) = (tip.0 - prior.0, tip.1 - prior.1);
-                let len = dx.hypot(dy).max(0.001);
-                let (ux, uy) = (dx / len, dy / len);
-                arrow.subpaths.push(SubPath {
-                    anchors: [
-                        tip,
-                        (tip.0 - ux * 10. - uy * 4., tip.1 - uy * 10. + ux * 4.),
-                        (tip.0 - ux * 10. + uy * 4., tip.1 - uy * 10. - ux * 4.),
-                    ]
-                    .into_iter()
-                    .map(Anchor::corner)
-                    .collect(),
-                    closed: true,
-                });
+            }
+        }
+        set_path(doc, edge.path, route);
+        let width = match &doc.node(edge.path).unwrap().kind {
+            NodeKind::Path { style, .. } => style.width as f64,
+            _ => 1.,
+        };
+        let mut arrow = Path::default();
+        for (enabled, marker, tip, prior) in [
+            (edge.arrow_end, edge.end_marker, end, end_prior),
+            (edge.arrow_start, edge.start_marker, start, start_prior),
+        ] {
+            if enabled {
+                arrow
+                    .subpaths
+                    .extend(marker.path(tip, prior, width).subpaths);
             }
         }
         set_path(doc, edge.arrow, arrow);
@@ -1042,6 +1079,8 @@ fn connect_inner(
                 routing,
                 waypoints: Vec::new(),
                 label_offset: (0., 0.),
+                start_marker: Marker::default(),
+                end_marker: Marker::default(),
                 arrow_end: true,
                 arrow_start: false,
             },

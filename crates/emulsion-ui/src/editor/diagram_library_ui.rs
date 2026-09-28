@@ -112,9 +112,63 @@ impl EditorView {
                     ),
             );
         }
+        for (index, (id, name, category)) in emulsion_io::diagram_packs::PACKS.iter().enumerate() {
+            let matches = match self.diagram_ui.pack_filter {
+                1 => *category == "Cloud",
+                2 => *category == "UML",
+                3 => *category == "Network",
+                4 => *category == "UI",
+                5 => *category == "Business",
+                _ => true,
+            };
+            if !matches || !format!("{name} {category}").to_lowercase().contains(query) {
+                continue;
+            }
+            let installed = self
+                .creative
+                .catalog
+                .assets
+                .iter()
+                .any(|a| a.tags.contains(&format!("drawio:{id}")));
+            let count = emulsion_io::diagram_packs::entries(id).len();
+            let id = id.to_string();
+            panel = panel.child(
+                div()
+                    .p_2()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(p.line)
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div().flex_1().child(*name).child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(p.muted)
+                                .child(format!("draw.io · {count} curated shapes")),
+                        ),
+                    )
+                    .child(
+                        Button::new(("diagram-vendor-pack", index))
+                            .label(if installed { "Added" } else { "Add" })
+                            .xsmall()
+                            .outline()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if !installed {
+                                    this.install_bundled_diagram_pack(id.clone(), cx);
+                                } else {
+                                    this.diagram_ui.library_tab=0;
+                                    if let Some(search)=&this.diagram_ui.search {search.update(cx,|s,cx|s.set_value(*name,window,cx));}
+                                    cx.notify();
+                                }
+                            })),
+                    ),
+            );
+        }
         panel.child(Button::new("diagram-import-stencils").label("Import .vssx / .xml / SVG folder…")
             .small().outline().on_click(cx.listener(|this,_,_,cx|this.install_diagram_stencils(cx))))
-            .child(div().text_size(px(11.)).text_color(p.muted).child("Bundled packs are available offline. Import vendor libraries to add their artwork; imported entries appear below."))
+            .child(div().text_size(px(11.)).text_color(p.muted).child("Bundled packs are available offline. Add a pack or import a local library; drag an installed entry onto the canvas."))
             .into_any_element()
     }
 

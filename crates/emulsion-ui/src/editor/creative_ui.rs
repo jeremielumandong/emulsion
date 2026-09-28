@@ -10,6 +10,7 @@ use gpui_kit::component::{
 #[derive(Default)]
 pub(super) struct CreativeUi {
     pub(super) catalog: Catalog,
+    pub(super) folder: Option<u64>,
     loaded: bool,
     loading: bool,
 }
@@ -40,7 +41,7 @@ impl EditorView {
         })
         .detach();
     }
-    pub(super) fn install_catalog(&mut self, catalog: Catalog) {
+    pub(crate) fn install_catalog(&mut self, catalog: Catalog) {
         if catalog.revision >= self.creative.catalog.revision {
             self.creative.catalog = catalog;
         }
@@ -74,7 +75,7 @@ impl EditorView {
         })
         .detach();
     }
-    fn catalog_edit(
+    pub(super) fn catalog_edit(
         &mut self,
         edit: impl FnOnce(&mut Catalog) -> emulsion_io::Result<()> + Send + 'static,
         cx: &mut Context<Self>,
@@ -347,6 +348,7 @@ impl EditorView {
             .iter()
             .filter(|a| {
                 a.kind == kind
+                    && self.creative.folder.is_none_or(|id|a.folder==Some(id))
                     && (a.name.to_lowercase().contains(query)
                         || a.tags.iter().any(|t| t.to_lowercase().contains(query)))
             })
@@ -356,6 +358,7 @@ impl EditorView {
             .flex()
             .flex_col()
             .gap_1()
+            .child(self.creative_folder_controls(cx))
             .children(assets.into_iter().map(|asset| {
                 let id = asset.id;
                 let path = asset.path.clone();
@@ -395,8 +398,9 @@ impl EditorView {
                             .ghost()
                             .dropdown_menu(move |menu, _, _| {
                                 let props = owner.clone();
+                                let folders = owner.clone();
                                 let remove = owner.clone();
-                                menu.item(PopupMenuItem::new("Properties / relink…").on_click(
+                                menu.item(PopupMenuItem::new("Move to asset folder…").on_click(move|_,window,cx|{folders.update(cx,|this,cx|this.move_creative_asset_dialog(id,window,cx)).ok();})).item(PopupMenuItem::new("Properties / relink…").on_click(
                                     move |_, window, cx| {
                                         props
                                             .update(cx, |this, cx| {
@@ -438,19 +442,22 @@ impl EditorView {
             .and_then(|id| self.creative.catalog.brands.iter().find(|b| b.id == id))
             .cloned()
             .unwrap_or(Brand {
+                typography: Default::default(), palettes: Default::default(), fonts: Default::default(),
                 id: 0,
                 name: "My brand".into(),
                 font: "Geist".into(),
                 colors: vec![[28, 30, 36, 255], [230, 103, 69, 255]],
                 logos: Vec::new(),
             });
+        let embedded_fonts=brand.fonts.clone();
+        let font_label=brand.fonts.get(&brand.font).map(|f|f.family().to_owned()).unwrap_or(brand.font.clone());
         let fields = [
             brand.name,
-            brand.font,
+            font_label,
             brand
                 .colors
                 .iter()
-                .map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]))
+                .map(|c| format!("#{:02x}{:02x}{:02x}{:02x}", c[0], c[1], c[2], c[3]))
                 .collect::<Vec<_>>()
                 .join(", "),
         ]
@@ -460,12 +467,13 @@ impl EditorView {
             let fields = fields.clone();
             let inputs = fields.clone();
             let owner = owner.clone();
+            let embedded_fonts=embedded_fonts.clone();
             dialog
                 .title("Brand kit")
                 .width(px(460.))
                 .child(
                     div().flex().flex_col().gap_2().children(
-                        ["Name", "Font family", "Colors · #RRGGBB, text color first"]
+                        ["Name", "Font family", "Colors · #RRGGBB or #RRGGBBAA, text first"]
                             .into_iter()
                             .zip(&fields)
                             .map(|(label, input)| div().child(label).child(Input::new(input))),
@@ -473,25 +481,16 @@ impl EditorView {
                 )
                 .footer(crate::widgets::form_dialog_footer("Save brand"))
                 .on_ok(move |_, _, cx| {
-                    let values = inputs
+                    let mut values = inputs
                         .each_ref()
                         .map(|i| i.read(cx).value().trim().to_string());
-                    let colors = values[2]
-                        .split(',')
-                        .map(|s| {
-                            let s = s.trim().trim_start_matches('#');
-                            if s.len() != 6 {
-                                return None;
-                            }
-                            let value = u32::from_str_radix(s, 16).ok()?;
-                            Some([(value >> 16) as u8, (value >> 8) as u8, value as u8, 255])
-                        })
-                        .collect::<Option<Vec<_>>>();
+                    if let Some(font)=embedded_fonts.values().find(|f|f.family()==values[1]){values[1]=font.alias().into();}
+                    let colors=values[2].split(',').map(super::design_brand_ui::parse_rgba).collect::<Option<Vec<_>>>();
                     let Some(colors) = colors else {
                         owner
                             .update(cx, |this, cx| {
                                 this.set_status(
-                                    "Use comma-separated six-digit hex colors.",
+                                    "Use comma-separated six/eight-digit hex colors.",
                                     true,
                                     cx,
                                 )
@@ -538,12 +537,8 @@ impl EditorView {
         if ids.is_empty() {
             ids = self.editor.doc.children(None);
         }
-        match emulsion_core::design::brand::apply(
-            &mut self.editor,
-            &ids,
-            &brand.font,
-            &brand.colors,
-        ) {
+        let result=(||{let mut trial=emulsion_core::Editor::new(self.editor.doc.clone(),None);let mut design=trial.doc.design.clone();if let Some(font)=brand.fonts.get(&brand.font){design.fonts.insert(brand.font.clone(),font.clone());}trial.execute(Command::SetDesign{design:Box::new(design)}).map_err(|e|e.to_string())?;emulsion_core::design::brand::apply(&mut trial,&ids,&brand.font,&brand.colors)?;self.editor.commit_design_document(trial.doc,"Apply portable brand kit")})();
+        match result {
             Ok(()) => {
                 self.after_change(cx);
                 self.set_status(
@@ -663,6 +658,7 @@ impl EditorView {
                         this.load_creative_library(cx);
                     })),
             )
+            .child(Button::new("brand-embed-selection").label("Embed font in selected text…").small().outline().on_click(cx.listener(|this,_,_,cx|this.import_brand_font(None,cx))))
             .child(
                 Button::new("brand-new")
                     .label("New brand kit…")
@@ -706,6 +702,7 @@ impl EditorView {
                             .border_color(p.line)
                             .rounded(px(6.))
                             .child(title)
+                            .child(self.brand_extended_controls(&brand,cx))
                             .child(div().flex().gap_1().children(brand.colors.iter().map(|c| {
                                 div()
                                     .size(px(18.))

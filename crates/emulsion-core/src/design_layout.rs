@@ -5,7 +5,13 @@ use std::collections::BTreeMap;
 
 #[path = "design_layout_breakpoints.rs"]
 mod breakpoints;
-pub use breakpoints::{Breakpoint, FrameOverrides, active_breakpoint, effective_frame};
+#[path = "design_layout_incremental.rs"]
+mod incremental;
+pub use breakpoints::{
+    Breakpoint, BreakpointReference, FrameLimits, FrameOverrides, active_breakpoint,
+    effective_frame, reference_width,
+};
+pub(crate) use incremental::reflow_after;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -24,7 +30,7 @@ pub enum Align {
     End,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Child {
     pub absolute: bool,
     pub fill_width: bool,
@@ -59,6 +65,7 @@ pub struct Frame {
     pub clip_content: bool,
     /// Canvas-width thresholds; highest matching entry overrides the base.
     pub breakpoints: Vec<Breakpoint>,
+    pub breakpoint_reference: BreakpointReference,
 }
 impl Default for Frame {
     fn default() -> Self {
@@ -79,6 +86,7 @@ impl Default for Frame {
             children: BTreeMap::new(),
             clip_content: false,
             breakpoints: Vec::new(),
+            breakpoint_reference: BreakpointReference::Canvas,
         }
     }
 }
@@ -90,6 +98,23 @@ pub fn validate(frames: &BTreeMap<NodeId, Frame>, doc: &Document) -> Result<(), 
         breakpoints::validate(&frame.breakpoints)?;
     }
     for (id, base) in frames {
+        if base.breakpoint_reference == BreakpointReference::Container
+            && !base.breakpoints.is_empty()
+        {
+            let mut parent = doc.node(*id).and_then(|n| n.parent);
+            while let Some(id) = parent {
+                if let Some(frame) = frames.get(&id)
+                    && (frame.hug_width
+                        || frame
+                            .breakpoints
+                            .iter()
+                            .any(|b| b.overrides.hug_width == Some(true)))
+                {
+                    return Err("Container breakpoints cannot query inside content-sized width ancestors. Use fixed/fill width or canvas breakpoints.".into());
+                }
+                parent = doc.node(id).and_then(|n| n.parent);
+            }
+        }
         // Validate every reachable parent/child combination, including inactive
         // breakpoints. Only immediate child thresholds can affect this frame's
         // sizing constraints, keeping the work bounded for nested documents.
@@ -180,30 +205,43 @@ pub fn validate(frames: &BTreeMap<NodeId, Frame>, doc: &Document) -> Result<(), 
                         return Err("A content-sized frame cannot have children filling the same axis. Turn off content sizing or child fill.".into());
                     }
                     if let Some(base_nested) = frames.get(child) {
-                        let nested = breakpoints::resolve(base_nested, canvas_width);
-                        if (nested.hug_width && sizing.fill_width)
-                            || (nested.hug_height && sizing.fill_height)
-                        {
-                            return Err(
+                        let independent = base.breakpoint_reference
+                            == BreakpointReference::Container
+                            || base_nested.breakpoint_reference == BreakpointReference::Container;
+                        let queries = if independent {
+                            std::iter::once(0.)
+                                .chain(base_nested.breakpoints.iter().map(|b| b.min_width))
+                                .collect()
+                        } else {
+                            vec![canvas_width]
+                        };
+                        for query_width in queries {
+                            let nested = breakpoints::resolve(base_nested, query_width);
+                            if (nested.hug_width && sizing.fill_width)
+                                || (nested.hug_height && sizing.fill_height)
+                            {
+                                return Err(
                             "A nested frame cannot hug and receive parent fill on the same axis."
                                 .into(),
                         );
-                        }
-                        if sizing.aspect_ratio.is_some() && (nested.hug_width || nested.hug_height)
-                        {
-                            return Err("Turn off nested frame content sizing before assigning an aspect ratio.".into());
-                        }
-                        let combined = intersect_limits(
-                            own,
-                            limits(
-                                nested.min_width,
-                                nested.max_width,
-                                nested.min_height,
-                                nested.max_height,
-                            )?,
-                        )?;
-                        if let Some(ratio) = sizing.aspect_ratio {
-                            ratio_limits(combined, ratio)?;
+                            }
+                            if sizing.aspect_ratio.is_some()
+                                && (nested.hug_width || nested.hug_height)
+                            {
+                                return Err("Turn off nested frame content sizing before assigning an aspect ratio.".into());
+                            }
+                            let combined = intersect_limits(
+                                own,
+                                limits(
+                                    nested.min_width,
+                                    nested.max_width,
+                                    nested.min_height,
+                                    nested.max_height,
+                                )?,
+                            )?;
+                            if let Some(ratio) = sizing.aspect_ratio {
+                                ratio_limits(combined, ratio)?;
+                            }
                         }
                     }
                 }
@@ -230,6 +268,12 @@ pub(crate) fn prune(doc: &mut Document) {
         frame
             .children
             .retain(|child, _| parents.get(child) == Some(&Some(*id)));
+        for entry in &mut frame.breakpoints {
+            entry
+                .overrides
+                .children
+                .retain(|child, _| parents.get(child) == Some(&Some(*id)));
+        }
     }
 }
 
@@ -540,7 +584,7 @@ fn ratio_limits(l: SizeLimits, r: f64) -> Result<(f64, f64), String> {
 }
 fn child_limits(doc: &Document, id: NodeId, s: Child) -> Result<SizeLimits, String> {
     let own = limits(s.min_width, s.max_width, s.min_height, s.max_height)?;
-    if let Some(f) = doc.design.frames.get(&id) {
+    if let Some(f) = effective_frame(doc, id) {
         intersect_limits(
             own,
             limits(f.min_width, f.max_width, f.min_height, f.max_height)?,
@@ -568,9 +612,9 @@ fn advanced_frame(f: &Frame) -> bool {
         })
 }
 fn advanced_subtree(doc: &Document, id: NodeId) -> bool {
-    doc.design.frames.iter().any(|(child, f)| {
+    doc.design.frames.keys().any(|child| {
         (*child == id || doc.is_ancestor(id, *child))
-            && advanced_frame(&breakpoints::resolve(f, f64::from(doc.width)))
+            && effective_frame(doc, *child).is_some_and(|f| advanced_frame(&f))
     })
 }
 #[derive(Clone, Copy)]

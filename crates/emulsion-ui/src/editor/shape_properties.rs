@@ -15,6 +15,9 @@ pub(super) struct ShapeFields {
 fn secondary(paint: PathPaint) -> [u8; 4] {
     match paint {
         PathPaint::Solid => [255; 4],
+        PathPaint::LinearStops { stops, count, .. } | PathPaint::RadialStops { stops, count } => {
+            stops[usize::from(count.clamp(1, 16)) - 1].color
+        }
         PathPaint::LinearGradient { end, .. } | PathPaint::RadialGradient { end } => end,
         PathPaint::Pattern { secondary, .. } => secondary,
     }
@@ -22,6 +25,9 @@ fn secondary(paint: PathPaint) -> [u8; 4] {
 fn set_secondary(paint: &mut PathPaint, color: [u8; 4]) {
     match paint {
         PathPaint::Solid => {}
+        PathPaint::LinearStops { stops, count, .. } | PathPaint::RadialStops { stops, count } => {
+            stops[usize::from((*count).clamp(1, 16)) - 1].color = color
+        }
         PathPaint::LinearGradient { end, .. } | PathPaint::RadialGradient { end } => *end = color,
         PathPaint::Pattern { secondary, .. } => *secondary = color,
     }
@@ -45,8 +51,8 @@ fn paint_index(color: Option<[u8; 4]>, paint: PathPaint) -> usize {
     } else {
         match paint {
             PathPaint::Solid => 1,
-            PathPaint::LinearGradient { .. } => 2,
-            PathPaint::RadialGradient { .. } => 3,
+            PathPaint::LinearGradient { .. } | PathPaint::LinearStops { .. } => 2,
+            PathPaint::RadialGradient { .. } | PathPaint::RadialStops { .. } => 3,
             PathPaint::Pattern { .. } => 4,
         }
     }
@@ -144,7 +150,7 @@ impl EditorView {
         let (width, height) =
             bounds.map_or((self.shape_ui.width, self.shape_ui.height), |b| (b.2, b.3));
         let angle = |p| match p {
-            PathPaint::LinearGradient { angle, .. } => angle,
+            PathPaint::LinearGradient { angle, .. } | PathPaint::LinearStops { angle, .. } => angle,
             _ => 0.,
         };
         let size = |p| match p {
@@ -219,8 +225,24 @@ impl EditorView {
                             let mut style = this.current_shape_style();
                             let color = bytes(*color);
                             match key {
-                                "fill" => style.fill = Some(color),
-                                "stroke" => style.stroke = Some(color),
+                                "fill" => {
+                                    style.fill = Some(color);
+                                    if let PathPaint::LinearStops { stops, .. }
+                                    | PathPaint::RadialStops { stops, .. } =
+                                        &mut style.fill_paint
+                                    {
+                                        stops[0].color = color;
+                                    }
+                                }
+                                "stroke" => {
+                                    style.stroke = Some(color);
+                                    if let PathPaint::LinearStops { stops, .. }
+                                    | PathPaint::RadialStops { stops, .. } =
+                                        &mut style.stroke_paint
+                                    {
+                                        stops[0].color = color;
+                                    }
+                                }
                                 "fill-secondary" => set_secondary(&mut style.fill_paint, color),
                                 _ => set_secondary(&mut style.stroke_paint, color),
                             }
@@ -333,12 +355,16 @@ impl EditorView {
                 "miter" => style.miter_limit = value as f32,
                 "dash-offset" => style.dash_offset = value as f32,
                 "fill-angle" => {
-                    if let PathPaint::LinearGradient { angle, .. } = &mut style.fill_paint {
+                    if let PathPaint::LinearGradient { angle, .. }
+                    | PathPaint::LinearStops { angle, .. } = &mut style.fill_paint
+                    {
                         *angle = value as f32;
                     }
                 }
                 "stroke-angle" => {
-                    if let PathPaint::LinearGradient { angle, .. } = &mut style.stroke_paint {
+                    if let PathPaint::LinearGradient { angle, .. }
+                    | PathPaint::LinearStops { angle, .. } = &mut style.stroke_paint
+                    {
                         *angle = value as f32;
                     }
                 }
@@ -626,6 +652,16 @@ impl EditorView {
                     .into_any_element(),
             );
         }
+        if let Some(id) = target {
+            body = body.child(self.vector_actions(id, cx)).child(
+                Button::new("shape-precision")
+                    .small()
+                    .label("Rulers and precise placement…")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.show_design_precision(window, cx)),
+                    ),
+            );
+        }
         body = body
             .child(self.shape_field("width", "Width (px)"))
             .child(self.shape_field("height", "Height (px)"))
@@ -697,6 +733,24 @@ impl EditorView {
                 ],
                 cx,
             ));
+            if let Some(id) = target {
+                body = body.child(
+                    Button::new(if stroke {
+                        "shape-stroke-stops"
+                    } else {
+                        "shape-fill-stops"
+                    })
+                    .small()
+                    .label(if stroke {
+                        "Edit stroke gradient stops…"
+                    } else {
+                        "Edit fill gradient stops…"
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.show_gradient_editor(id, stroke, window, cx)
+                    })),
+                );
+            }
             if color.is_some() {
                 body = body.child(self.shape_color(
                     if stroke { "stroke" } else { "fill" },
@@ -716,7 +770,10 @@ impl EditorView {
                         "End / pattern color",
                     ));
                 }
-                if matches!(paint, PathPaint::LinearGradient { .. }) {
+                if matches!(
+                    paint,
+                    PathPaint::LinearGradient { .. } | PathPaint::LinearStops { .. }
+                ) {
                     body = body.child(self.shape_field(
                         if stroke { "stroke-angle" } else { "fill-angle" },
                         "Angle (°)",

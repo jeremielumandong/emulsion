@@ -15,6 +15,9 @@ use emulsion_raster::vector::{Path, PathStyle};
 use std::sync::{Arc, OnceLock};
 
 /// What a vector layer's pixels are rendered from.
+// Source is allocated once behind Arc; retaining the bounded Copy paint avoids
+// a second per-path allocation, while cloned caches share this immutable source.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 enum Source {
     Path {
@@ -37,7 +40,7 @@ enum Source {
 #[derive(Clone, Debug)]
 pub struct VectorRaster {
     ready: Arc<OnceLock<Arc<Raster>>>,
-    source: Source,
+    source: Arc<Source>,
 }
 
 impl VectorRaster {
@@ -45,7 +48,7 @@ impl VectorRaster {
     pub fn path(path: Arc<Path>, style: PathStyle, w: u32, h: u32) -> Self {
         Self {
             ready: Arc::new(OnceLock::new()),
-            source: Source::Path { path, style, w, h },
+            source: Arc::new(Source::Path { path, style, w, h }),
         }
     }
 
@@ -53,7 +56,7 @@ impl VectorRaster {
     pub fn text(spec: Arc<crate::text::TextSpec>, w: u32, h: u32) -> Self {
         Self {
             ready: Arc::new(OnceLock::new()),
-            source: Source::Text { spec, w, h },
+            source: Arc::new(Source::Text { spec, w, h }),
         }
     }
 
@@ -75,7 +78,7 @@ impl VectorRaster {
         // Rasterization can enter Rayon. A stolen task may ask for these same
         // pixels, so only publication (never rasterization) holds OnceLock's
         // initialization lock. Simultaneous cold requests can duplicate work.
-        let raster = match &self.source {
+        let raster = match self.source.as_ref() {
             Source::Path { path, style, w, h } => Arc::new(path.rasterize(style, *w, *h)),
             Source::Text { spec, w, h } => Arc::new(crate::text::rasterize(spec, *w, *h)),
         };
@@ -102,7 +105,7 @@ impl VectorRaster {
 
     /// The document size these pixels are rendered at.
     pub fn size(&self) -> (u32, u32) {
-        match &self.source {
+        match self.source.as_ref() {
             Source::Path { w, h, .. } | Source::Text { w, h, .. } => (*w, *h),
         }
     }

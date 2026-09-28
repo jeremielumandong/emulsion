@@ -1,4 +1,5 @@
 //! Run against an external draw.io sample checkout; emit one JSON record per file.
+use rayon::prelude::*;
 use std::path::Path;
 
 fn visit(path: &Path, files: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
@@ -40,10 +41,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut files = Vec::new();
     visit(root, &mut files)?;
     files.sort();
-    for path in files {
+    if let Ok(report) = std::env::var("EMULSION_AUDIT_RETRY_JSONL") {
+        let rows = std::fs::read_to_string(report)?;
+        let failed = rows
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|v| v.get("error").is_some())
+            .filter_map(|v| v["file"].as_str().map(|s| root.join(s)))
+            .collect::<std::collections::HashSet<_>>();
+        files.retain(|p| failed.contains(p));
+    }
+    let exercise = std::env::args().any(|a| a == "--exercise");
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
+    pool.install(|| files.par_iter().for_each(|path| {
         let start = std::time::Instant::now();
         let result = emulsion_io::diagram_import::read(&path);
-        let mut row = serde_json::json!({"file": path.strip_prefix(root)?, "ms": start.elapsed().as_millis()});
+        let mut row = serde_json::json!({"file": path.strip_prefix(root).unwrap(), "ms": start.elapsed().as_millis()});
         match result {
             Ok(imported) => {
                 row["pages"] = imported.project.pages.len().into();
@@ -68,11 +81,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|p| p.doc.diagram.as_ref().map_or(0, |d| d.edges.len()))
                     .sum::<usize>()
                     .into();
-                row["warnings"] = serde_json::to_value(imported.warnings)?;
+                row["warnings"] = serde_json::to_value(imported.warnings).unwrap();
+                if exercise {
+                    let result = (|| -> Result<(),String> {
+                        for page in &imported.project.pages {
+                            let Some(model) = &page.doc.diagram else { continue; };
+                            let selected = model.edges.values().next().map(|e|e.source.shape).or_else(||model.shapes.keys().next().copied());
+                            if let Some(id) = selected {
+                                let before = page.doc.clone();
+                                let mut editor = emulsion_core::Editor::new(before.clone(),None);
+                                editor.execute(emulsion_core::Command::TranslateNode{id,dx:13.,dy:7.}).map_err(|e|e.to_string())?;
+                                editor.doc.validate().map_err(|e|e.to_string())?;
+                                editor.undo();
+                                if editor.doc != before { return Err("Movement undo changed source document".into()); }
+                            }
+                        }
+                        Ok(())
+                    })();
+                    match result { Ok(())=>row["movement_undo"]="passed".into(), Err(e)=>row["exercise_error"]=e.into() }
+                }
             }
             Err(e) => row["error"] = e.to_string().into(),
         }
         println!("{row}");
-    }
+    }));
     Ok(())
 }

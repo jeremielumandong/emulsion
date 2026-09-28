@@ -55,6 +55,30 @@ impl EditorView {
             self.complete_tool_work(generation, cx);
             return;
         }
+        if name == "generate_design_pages" {
+            let Some(project) = self.editor.snapshot() else {
+                call.reply(ToolResult::error("Open a Design project first."));
+                self.complete_tool_work(generation, cx);
+                return;
+            };
+            let stamp = self.editor.stamp();
+            let ticket = self.edit_ticket();
+            cx.spawn(async move|this,cx| {
+                let generated=cx.background_spawn(async move {project_tools::generate_data_snapshot(&project,&args)}).await;
+                this.update(cx,|this,cx| {
+                    let result=if this.assistant.tool_generation!=generation || !this.edit_is_current(ticket) || this.editor.stamp()!=stamp || this.editor.in_transaction() {
+                        ToolResult::error("Project changed or request ended during generation; no pages were inserted.")
+                    } else {
+                        match generated.and_then(|project|this.editor.import_pages(project)) {
+                            Ok(pages)=>{this.after_change(cx);ToolResult::text(json!({"active_page":this.editor.active_page(),"result":{"pages":pages}}).to_string())},
+                            Err(error)=>ToolResult::error(error),
+                        }
+                    };
+                    call.reply(result);this.complete_tool_work(generation,cx);
+                }).ok();
+            }).detach();
+            return;
+        }
         if name == "import_project_pages" {
             if self.editor.kind().is_none() {
                 call.reply(ToolResult::error(

@@ -2,6 +2,31 @@
 use super::*;
 use emulsion_core::design_keyframes::{self as keyframes, Easing, Keyframe, Property};
 impl EditorView {
+    pub(super) fn retime_motion_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let ids = self.selected_layer_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let duration = self.editor.doc.design.duration_ms;
+        let inputs = ["1".to_owned(), "0".to_owned(), duration.to_string()]
+            .map(|v| cx.new(|cx| InputState::new(window, cx).default_value(v)));
+        let owner = cx.weak_entity();
+        let ticket = self.edit_ticket();
+        let error = Rc::new(RefCell::new(String::new()));
+        window.open_dialog(cx,move|dialog,_,_|{
+            let mut body=div().flex().flex_col().gap_2();for (index,label) in ["Time scale (0.5 faster, 2 slower)","Offset · milliseconds","Page duration · milliseconds"].into_iter().enumerate(){body=body.child(label).child(Input::new(&inputs[index]).id(("design-retime-field",index)));}
+            body=body.child("Retimes all saved property tracks and entrance/exit effects on the selected objects. Colliding or out-of-range times are rejected together.").child(error.borrow().clone());
+            let fields=inputs.clone();let owner=owner.clone();let ids=ids.clone();let error=error.clone();
+            dialog.title("Retime selected objects").width(px(460.)).child(body).footer(crate::widgets::form_dialog_footer("Apply timing")).on_ok(move|_,_,cx|{
+                let result=(||->Result<_,String>{Ok((fields[0].read(cx).value().parse::<f64>().map_err(|_|"Enter a numeric scale.")?,fields[1].read(cx).value().parse::<i64>().map_err(|_|"Enter a whole-number offset.")?,fields[2].read(cx).value().parse::<u32>().map_err(|_|"Enter a whole-number duration.")?))})();
+                let result=result.and_then(|(scale,offset,duration)|owner.update(cx,|this,cx|{if this.edit_ticket()!=ticket{return Err("The page changed. Open timing again.".into())}keyframes::retime(&mut this.editor,&ids,scale,offset,Some(duration))?;this.after_change(cx);Ok(())}).unwrap_or_else(|_|Err("The editor closed.".into())));
+                match result{Ok(())=>true,Err(e)=>{*error.borrow_mut()=e;cx.refresh_windows();false}}
+            })
+        });
+    }
     pub(super) fn property_keyframes_dialog(
         &mut self,
         window: &mut Window,
@@ -63,8 +88,8 @@ impl EditorView {
 mod tests {
     use super::*;
     use ::core::prelude::v1::test;
-    use gpui_kit::test::TestWindowExt;
     use gpui::TestAppContext;
+    use gpui_kit::test::TestWindowExt;
     #[gpui_kit::test]
     fn design_property_keyframe_authoring_cancel_save_and_undo(cx: &mut TestAppContext) {
         let mut editor = emulsion_core::Editor::new(Document::new(640, 480), None);
@@ -85,7 +110,7 @@ mod tests {
             })
         });
         cx.run_until_parked();
-        cx.update(|window, cx| window.click("close", cx));
+        cx.simulate_keystrokes("escape");
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(view.read(cx).editor.doc, original);
@@ -118,6 +143,71 @@ mod tests {
                 );
                 this.undo(cx);
                 assert_eq!(this.editor.doc, original);
+            })
+        });
+    }
+}
+
+#[cfg(test)]
+mod retime_tests {
+    use super::*;
+    use ::core::prelude::v1::test;
+    use gpui::TestAppContext;
+    use gpui_kit::test::TestWindowExt;
+    #[gpui_kit::test]
+    fn design_bulk_retime_form_rejects_overflow_and_undoes_as_one_step(cx: &mut TestAppContext) {
+        let mut editor = emulsion_core::Editor::new(Document::new(640, 480), None);
+        let id = emulsion_core::design::media::insert_youtube(
+            &mut editor,
+            "https://youtu.be/M7lc1UVf-VE",
+            (10., 20.),
+            (400., 225.),
+        )
+        .unwrap();
+        keyframes::apply_preset(&mut editor, &[id], keyframes::Preset::SlideUp, 0, 1000).unwrap();
+        let before = editor.doc.clone();
+        let (workspace, cx) = crate::tests::open(cx, editor.doc);
+        let view = cx.update(|_, cx| workspace.read(cx).editor.clone().unwrap());
+        cx.update(|window, cx| {
+            view.update(cx, |this, cx| {
+                this.set_layer_selection(vec![id], Some(id));
+                this.retime_motion_dialog(window, cx)
+            })
+        });
+        cx.run_until_parked();
+        for (index, value) in [(0usize, "2"), (1usize, "100"), (2usize, "2000")] {
+            cx.update(|window, cx| window.click(("design-retime-field", index), cx));
+            cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            });
+            cx.simulate_input(value);
+            cx.run_until_parked();
+        }
+        cx.update(|window, cx| window.click("ok", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(view.read(cx).editor.doc, before);
+            window.click(("design-retime-field", 2usize), cx);
+        });
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        });
+        cx.simulate_input("3000");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("ok", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            view.update(cx, |this, cx| {
+                assert_eq!(
+                    this.editor.doc.design.keyframes[&id][0].frames[1].time_ms,
+                    2100
+                );
+                this.undo(cx);
+                assert_eq!(this.editor.doc, before);
             })
         });
     }

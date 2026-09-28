@@ -20,6 +20,57 @@ struct ActiveVideo {
     window: AnyWindowHandle,
 }
 impl EditorView {
+    pub(super) fn design_media_runtime_state(&self) -> serde_json::Value {
+        self.video.active.as_ref().map(|active|serde_json::json!({"node":active.id,"playback":active._server.playback_state(),"runtime_error":active.player.error()})).unwrap_or(serde_json::Value::Null)
+    }
+    pub(super) fn design_media_host_play(
+        &mut self,
+        id: NodeId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.motion.presenting || !self.presentation_media_visible(id) {
+            return Err(
+                "Start presentation and choose visible media outside blocked overlays.".into(),
+            );
+        }
+        if let Some(active) = self.video.active.as_ref().filter(|a| a.id == id) {
+            return active
+                ._server
+                .command(emulsion_io::design_media::PlaybackCommand::Play);
+        }
+        self.play_design_video(id, window, cx);
+        let active=self.video.active.as_ref().filter(|a|a.id==id).ok_or("Could not start media. Check the playback runtime and ensure its whole frame is at least 200 × 200 screen pixels.")?;
+        active
+            ._server
+            .command(emulsion_io::design_media::PlaybackCommand::Play)
+    }
+    pub(super) fn design_media_host_command(
+        &mut self,
+        command: emulsion_io::design_media::PlaybackCommand,
+    ) -> Result<(), String> {
+        if !self.motion.presenting {
+            return Err("Start a presentation before controlling media.".into());
+        }
+        let active = self
+            .video
+            .active
+            .as_ref()
+            .ok_or("No active media player. Play an object first.")?;
+        if let emulsion_io::design_media::PlaybackCommand::Seek { position_ms } = command {
+            let doc = self.motion.preview.as_ref().unwrap_or(&self.editor.doc);
+            if let Some(media) = doc.design.local_media.get(&active.id)
+                && (position_ms < media.trim_start_ms
+                    || media.trim_end_ms.is_some_and(|end| position_ms > end))
+            {
+                return Err(
+                    "Seek position must remain inside the local media trim interval.".into(),
+                );
+            }
+        }
+        active._server.command(command)
+    }
+
     pub(super) fn design_video_playing(&self) -> bool {
         self.video.active.is_some()
     }
@@ -476,3 +527,55 @@ impl EditorView {
 
 #[path = "design_local_media_ui.rs"]
 mod local;
+
+#[cfg(all(test, target_os = "linux"))]
+mod host_control_tests {
+    use super::*;
+    use ::core::prelude::v1::test;
+    use emulsion_mcp::design_motion_tools::HostAction;
+    use gpui::TestAppContext;
+    #[gpui_kit::test]
+    fn presentation_host_media_commands_are_bounded_and_nonmutating(cx: &mut TestAppContext) {
+        use std::io::{Read, Write};
+        let _helper =
+            crate::web_player::test_helper(b"#!/bin/sh\nwhile read command; do :; done\n");
+        let mut editor = emulsion_core::Editor::new(Document::new(800, 600), None);
+        let media =
+            media::LocalMedia::from_bytes("tone.wav".into(), b"RIFF\0\0\0\0WAVEdata".to_vec())
+                .unwrap();
+        let id = media::insert_local(&mut editor, media, (80., 80.), (640., 360.)).unwrap();
+        media::update_local(&mut editor, id, 100, Some(1000), 1., false).unwrap();
+        let original = editor.doc.clone();
+        let (workspace, cx) = crate::tests::open(cx, editor.doc);
+        cx.simulate_resize(size(px(1440.), px(1000.)));
+        let view = cx.update(|window, cx| {
+            let view = workspace.read(cx).editor.clone().unwrap();
+            view.update(cx, |this, cx| {
+                this.presentation_host_action(
+                    HostAction::Start {
+                        fullscreen: true,
+                        presenter: false,
+                        auto_advance: false,
+                    },
+                    window,
+                    cx,
+                )
+                .unwrap()
+            });
+            view
+        });
+        cx.run_until_parked();
+        cx.update(|window,cx|view.update(cx,|this,cx|{
+            let state=this.presentation_host_action(HostAction::MediaPlay(id),window,cx).unwrap();assert_eq!(state["media"]["node"],id);
+            this.presentation_host_action(HostAction::MediaPause,window,cx).unwrap();
+            assert!(this.presentation_host_action(HostAction::MediaSeek(500),window,cx).is_err());
+            let url=this.video.active.as_ref().unwrap()._server.url();let (authority,path)=url.strip_prefix("http://").unwrap().split_once('/').unwrap();
+            let mut stream=std::net::TcpStream::connect(authority).unwrap();stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+            write!(stream,"GET /{path}/control?ready=1&paused=1&position_ms=100&duration_ms=2000&error=0 HTTP/1.1\r\nHost: {authority}\r\n\r\n").unwrap();let mut response=String::new();stream.read_to_string(&mut response).unwrap();assert!(response.contains("pause"));
+            let state=this.presentation_host_action(HostAction::MediaSeek(500),window,cx).unwrap();assert_eq!(state["media"]["playback"]["ready"],true);assert_eq!(state["media"]["playback"]["pending_commands"],1);
+            assert!(this.presentation_host_action(HostAction::MediaSeek(50),window,cx).is_err());assert!(this.presentation_host_action(HostAction::MediaSeek(1001),window,cx).is_err());
+            this.presentation_host_action(HostAction::MediaStop,window,cx).unwrap();assert!(!this.design_video_playing());
+            this.presentation_host_action(HostAction::End,window,cx).unwrap();assert_eq!(this.editor.doc,original);
+        }));
+    }
+}

@@ -35,12 +35,17 @@ pub fn execute(editor: &mut ProjectEditor, name: &str, args: &Value) -> ToolResu
 pub fn install_stencil_pack(args: &Value) -> ToolResult {
     let result = (|| -> Result<Value, String> {
         let map = args.as_object().ok_or("Arguments must be an object")?;
-        if map.keys().any(|k| k != "path") {
-            return Err("Only path is accepted".into());
+        if map.keys().any(|k| k != "path" && k != "pack") {
+            return Err("Only path or pack is accepted".into());
         }
-        let path = Path::new(text(args, "path")?);
-        let (pack, warnings) =
-            emulsion_io::template_pack::read_stencil_source(path).map_err(|e| e.to_string())?;
+        let (pack, warnings) = match (args.get("path"), args.get("pack")) {
+            (Some(_), None) => {
+                emulsion_io::template_pack::read_stencil_source(Path::new(text(args, "path")?))
+            }
+            (None, Some(_)) => emulsion_io::diagram_packs::build(text(args, "pack")?),
+            _ => return Err("Provide exactly one of path or pack".into()),
+        }
+        .map_err(|e| e.to_string())?;
         let count = pack.project.pages.len();
         let (_, id) =
             emulsion_io::template_pack::install(&emulsion_io::creative_library::root(), pack)
@@ -235,8 +240,8 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         def(
             "install_diagram_stencil_pack",
             "Install a local .emustencil, draw.io XML/library, supported Visio file or SVG folder into the reusable offline stencil catalog. Returns compatibility warnings.",
-            json!({"path":{"type":"string"}}),
-            &["path"],
+            json!({"path":{"type":"string"},"pack":{"type":"string","description":"Bundled pack ID from list_diagram_stencil_packs"}}),
+            &[],
         ),
         def(
             "insert_diagram_template",

@@ -38,6 +38,19 @@ pub struct History {
 }
 
 impl History {
+    pub(crate) fn contains_order(&self, redo: bool, order: u64) -> bool {
+        let stack = if redo { &self.redo } else { &self.undo };
+        stack.iter().any(|step| step.order == order)
+    }
+    /// An expired grouped snapshot is a history barrier: older snapshots could
+    /// also revert its edits, so retire them together and retain newer work.
+    pub(crate) fn expire_through(&mut self, order: u64) {
+        for stack in [&mut self.undo, &mut self.redo] {
+            if let Some(index) = stack.iter().position(|step| step.order == order) {
+                stack.drain(..=index);
+            }
+        }
+    }
     pub(crate) fn undo_order(&self) -> u64 {
         self.undo.last().map_or(0, |step| step.order)
     }
@@ -153,6 +166,7 @@ impl Editor {
         if self.txn.is_some() || cmd.is_view_only() {
             let before = self.doc.clone();
             let out = cmd.apply(&mut self.doc)?;
+            if !cmd.is_view_only() && !matches!(cmd,Command::SetDesign{..}) {crate::design_component_inference::infer(&before,&mut self.doc);}
             if self.doc != before {
                 self.bump();
             }
@@ -162,6 +176,7 @@ impl Editor {
         let before = self.doc.clone();
         let rev = self.revision;
         let out = cmd.apply(&mut self.doc)?;
+        if !matches!(cmd,Command::SetDesign{..}) {crate::design_component_inference::infer(&before,&mut self.doc);}
         if self.doc != before {
             self.bump();
             self.push(Step {
@@ -184,6 +199,7 @@ impl Editor {
         };
         let mut next = baseline.clone();
         let out = cmd.apply(&mut next)?;
+        if !cmd.is_view_only() && !matches!(cmd,Command::SetDesign{..}) {crate::design_component_inference::infer(baseline,&mut next);}
         next.retain_raw_originals(&self.doc);
         let restored_revision = (next == *baseline).then_some(*baseline_revision);
         if next != self.doc {
@@ -480,7 +496,7 @@ impl Editor {
 
     /// Commit a component plan after the same native dependent-update checks.
     /// Kept crate-private: callers must prepare the complete change on a clone.
-    pub(crate) fn commit_design_document(
+    pub fn commit_design_document(
         &mut self,
         mut next: Document,
         label: &str,
@@ -549,14 +565,29 @@ impl Editor {
 
     /// A validated project-wide edit shares one chronological history order.
     pub(crate) fn commit_project_document(&mut self, doc: Document, label: &str, order: u64) {
-        if self.doc == doc { return; }
+        if self.doc == doc {
+            return;
+        }
         self.replace_document(doc, label);
         self.group_history(false, order);
         self.last_edit_order = order;
     }
+    pub(crate) fn expire_group_history(&mut self, order: u64) {
+        self.history.expire_through(order);
+        // Switching branches must not resurrect half of an expired project edit.
+        for history in self.stashed.values_mut() {
+            history.expire_through(order);
+        }
+    }
     pub(crate) fn group_history(&mut self, redo: bool, order: u64) {
-        let stack=if redo {&mut self.history.redo} else {&mut self.history.undo};
-        if let Some(step)=stack.last_mut() {step.order=order;}
+        let stack = if redo {
+            &mut self.history.redo
+        } else {
+            &mut self.history.undo
+        };
+        if let Some(step) = stack.last_mut() {
+            step.order = order;
+        }
     }
 
     /// Swap in a whole document as one undo step.

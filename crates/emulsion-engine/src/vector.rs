@@ -16,14 +16,14 @@ use crate::gpu::Gpu;
 use emulsion_core::NodeId;
 use emulsion_core::text::TextSpec;
 use emulsion_raster::color;
-use emulsion_raster::vector::{Path, PathStyle, StrokeCap, StrokeJoin};
+use emulsion_raster::vector::{Path, PathPaint, PathStyle, StrokeCap, StrokeJoin};
 use rstar::primitives::{GeomWithData, Rectangle};
 use rstar::{AABB, RTree};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use vello::kurbo::{Affine, BezPath, Cap, Join, Rect, Shape, Stroke};
-use vello::peniko::{Blob, Color, Fill, FontData};
+use vello::peniko::{Blob, Brush, Color, Fill, FontData, Gradient};
 use vello::{AaConfig, Glyph, RenderParams, Renderer, RendererOptions, Scene};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +54,53 @@ impl VectorSpace {
     }
 }
 
+/// Native gradient coordinates use the same geometric bounds as the CPU sampler.
+fn path_brush(
+    space: VectorSpace,
+    paint: PathPaint,
+    primary: [u8; 4],
+    bounds: Rect,
+) -> (Brush, Option<Affine>) {
+    let Some(stops) = paint.gradient_stops(primary) else {
+        return (space.color(primary).into(), None);
+    };
+    let center = bounds.center();
+    let (gradient, transform) = if paint.is_radial() {
+        (
+            Gradient::new_radial((0., 0.), 1.),
+            Some(
+                Affine::translate((center.x, center.y))
+                    * Affine::scale_non_uniform(
+                        bounds.width().max(1e-6) / 2.,
+                        bounds.height().max(1e-6) / 2.,
+                    ),
+            ),
+        )
+    } else {
+        let angle = f64::from(paint.gradient_angle()).to_radians();
+        let (dy, dx) = angle.sin_cos();
+        let span = (dx.abs() * bounds.width() + dy.abs() * bounds.height()).max(1e-6);
+        (
+            Gradient::new_linear(
+                (center.x - dx * span / 2., center.y - dy * span / 2.),
+                (center.x + dx * span / 2., center.y + dy * span / 2.),
+            ),
+            None,
+        )
+    };
+    let colors = stops
+        .iter()
+        .map(|stop| (stop.offset, space.color(stop.color)))
+        .collect::<Vec<_>>();
+    let gradient = gradient
+        .with_stops(colors.as_slice())
+        .with_interpolation_cs(match space {
+            VectorSpace::Srgb => vello::peniko::color::ColorSpaceTag::LinearSrgb,
+            VectorSpace::Linear => vello::peniko::color::ColorSpaceTag::Srgb,
+        });
+    (gradient.into(), transform)
+}
+
 /// Glyphs of one font at one size, in layout coordinates.
 pub struct GlyphRun {
     pub font: FontData,
@@ -65,6 +112,7 @@ pub struct GlyphRun {
 }
 
 pub struct Fonts {
+    generation: u64,
     system: cosmic_text::FontSystem,
     data: HashMap<
         (cosmic_text::fontdb::ID, cosmic_text::Weight),
@@ -81,6 +129,7 @@ pub struct Shaped {
 impl Fonts {
     pub fn new() -> Self {
         Self {
+            generation: emulsion_core::text::font_generation(),
             system: emulsion_core::text::font_system(),
             data: HashMap::new(),
         }
@@ -117,6 +166,9 @@ impl Fonts {
 
     /// Use the same paragraph layout and character styles as the CPU renderer.
     pub fn shape(&mut self, spec: &TextSpec) -> Shaped {
+        if self.generation != emulsion_core::text::font_generation() {
+            *self = Self::new();
+        }
         let (buffer, styles) = emulsion_core::text::shaped_buffer(spec, &mut self.system);
         let fallback = spec.base_style();
         let mut runs: Vec<GlyphRun> = Vec::new();
@@ -443,22 +495,28 @@ impl VectorLayer {
                 let shape = bez_path(path);
                 let mut bounds = shape.bounding_box();
                 if let Some(fill) = style.fill {
+                    let (brush, transform) = path_brush(space, style.fill_paint, fill, bounds);
                     object.fragment.fill(
-                        Fill::NonZero,
+                        if style.even_odd {
+                            Fill::EvenOdd
+                        } else {
+                            Fill::NonZero
+                        },
                         Affine::IDENTITY,
-                        space.color(fill),
-                        None,
+                        &brush,
+                        transform,
                         &shape,
                     );
                 }
                 if let Some(stroke) = style.stroke
                     && style.width > 0.0
                 {
+                    let (brush, transform) = path_brush(space, style.stroke_paint, stroke, bounds);
                     object.fragment.stroke(
                         &stroke_style(style),
                         Affine::IDENTITY,
-                        space.color(stroke),
-                        None,
+                        &brush,
+                        transform,
                         &shape,
                     );
                     let pad = style.width as f64 / 2.0

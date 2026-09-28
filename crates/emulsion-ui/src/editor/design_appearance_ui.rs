@@ -79,14 +79,17 @@ fn paint_mode(color: Option<[u8; 4]>, paint: PathPaint) -> usize {
     } else {
         match paint {
             PathPaint::Solid => 1,
-            PathPaint::LinearGradient { .. } => 2,
-            PathPaint::RadialGradient { .. } => 3,
+            PathPaint::LinearGradient { .. } | PathPaint::LinearStops { .. } => 2,
+            PathPaint::RadialGradient { .. } | PathPaint::RadialStops { .. } => 3,
             PathPaint::Pattern { .. } => 1,
         }
     }
 }
 fn second_color(paint: PathPaint) -> [u8; 4] {
     match paint {
+        PathPaint::LinearStops { stops, count, .. } | PathPaint::RadialStops { stops, count } => {
+            stops[usize::from(count.clamp(1, 16)) - 1].color
+        }
         PathPaint::LinearGradient { end, .. } | PathPaint::RadialGradient { end } => end,
         PathPaint::Pattern { secondary, .. } => secondary,
         _ => [255; 4],
@@ -345,11 +348,7 @@ impl EditorView {
         let primary = if stroke { style.stroke } else { style.fill }.unwrap_or(self.tools.fg);
         let mut colors = vec![primary, second_color(paint)];
         let mut mode = paint_mode(if stroke { style.stroke } else { style.fill }, paint);
-        let angle = if let PathPaint::LinearGradient { angle, .. } = paint {
-            angle
-        } else {
-            0.
-        };
+        let angle = paint.gradient_angle();
         let mut options: Vec<(&'static str, f32)> = Vec::new();
         let mut alignment = match style.alignment {
             StrokeAlignment::Inside => 0,
@@ -520,6 +519,21 @@ impl EditorView {
                     3 => PathPaint::RadialGradient { end: colors[1] },
                     _ => PathPaint::Solid,
                 };
+                let preserve_stops = |previous: PathPaint| -> PathPaint {
+                    if matches!(
+                        previous,
+                        PathPaint::LinearStops { .. } | PathPaint::RadialStops { .. }
+                    ) && mode == if previous.is_radial() { 3 } else { 2 }
+                    {
+                        let mut stops = previous.gradient_stops(colors[0]).unwrap();
+                        stops[0].color = colors[0];
+                        stops.last_mut().unwrap().color = colors[1];
+                        PathPaint::from_stops(&stops, mode == 3, paint.gradient_angle())
+                            .unwrap_or(paint)
+                    } else {
+                        paint
+                    }
+                };
                 let rgba = (mode != 0).then_some(colors[0]);
                 if matches!(kind, Edit::Stroke) {
                     let width = number(0, 0., 1000.)?;
@@ -534,7 +548,7 @@ impl EditorView {
                             path: path.clone(),
                             style: PathStyle {
                                 stroke: rgba,
-                                stroke_paint: paint,
+                                stroke_paint: preserve_stops(style.stroke_paint),
                                 width,
                                 alignment: match align {
                                     0 => StrokeAlignment::Inside,
@@ -557,6 +571,14 @@ impl EditorView {
                     });
                 } else {
                     commands = ops::fill(doc, ids, rgba, paint)?;
+                    for command in &mut commands {
+                        if let Command::SetPath { id, style, .. } = command
+                            && let Some(NodeKind::Path { style: old, .. }) =
+                                doc.node(*id).map(|n| &n.kind)
+                        {
+                            style.fill_paint = preserve_stops(old.fill_paint);
+                        }
+                    }
                 }
             }
             Edit::Opacity => {

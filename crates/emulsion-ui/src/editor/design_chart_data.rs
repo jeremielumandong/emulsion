@@ -12,6 +12,7 @@ pub(super) struct ChartDataEditor {
     cells: Vec<Vec<Entity<TextareaState>>>,
     csv: Entity<TextareaState>,
     csv_mode: bool,
+    formulas: bool,
     pub error: Option<String>,
     axes: [Entity<InputState>; 8],
     show_labels: [bool; 2],
@@ -26,6 +27,7 @@ impl ChartDataEditor {
             cells: Self::cells(&chart.rows, window, cx),
             csv: cx.new(|cx| TextareaState::new(window, cx).rows(9)),
             csv_mode: false,
+            formulas: chart.formulas,
             error: None,
             axes: [
                 chart.x_axis.min.map(|v| v.to_string()).unwrap_or_default(),
@@ -116,6 +118,7 @@ impl ChartDataEditor {
         chart.x_axis = axis(0)?;
         chart.y_axis = axis(4)?;
         chart.merges = self.merges.clone();
+        chart.formulas = self.formulas;
         chart.validate()
     }
     fn merge_selection(&mut self, clear: bool, cx: &mut Context<Self>) {
@@ -201,7 +204,7 @@ impl ChartDataEditor {
 }
 
 impl Render for ChartDataEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let columns = self.cells[0].len();
         div()
             .flex()
@@ -221,6 +224,8 @@ impl Render for ChartDataEditor {
                         }))
                 }),
             ))
+            .child(Button::new("design-chart-formulas").label(if self.formulas { "Formulas enabled ✓" } else { "Enable formulas" }).small().outline().selected(self.formulas).on_click(cx.listener(|this,_,_,cx|{this.formulas= !this.formulas;this.error=None;cx.notify();})))
+            .when(self.formulas,|d| d.child("Use =SUM(B2:B4), A1 references, + − * / ^ and parentheses. Source formulas stay editable; circular or invalid formulas cannot be applied."))
             .child(
                 div().flex().flex_wrap().gap_1()
                     .child(Button::new("design-chart-grid-mode").label("Cells").small().outline()
@@ -261,7 +266,7 @@ impl Render for ChartDataEditor {
                 d.child(div().grid().grid_cols(4).gap_1().children(fields.into_iter().enumerate().filter(|(i,_)| *i >= 3 || self.kind == Kind::Scatter).map(|(i,label)| {
                     div().child(label).child(Input::new(&self.axes[i]).id(("design-chart-axis",i)))
                 }))).child(div().flex().gap_1().children((0..2).map(|i| {
-                    Button::new(("design-chart-axis-labels",i)).label(if i==0 {"X labels"}else{"Y labels"}).small().outline().selected(self.show_labels[i]).on_click(cx.listener(move|this,_,_,cx| {this.show_labels[i]=!this.show_labels[i];cx.notify();}))
+                    Button::new(("design-chart-axis-labels",i)).label(if i==0 {"X labels"}else{"Y labels"}).small().outline().selected(self.show_labels[i]).on_click(cx.listener(move|this,_,_,cx| {this.show_labels[i]= !this.show_labels[i];cx.notify();}))
                 })))
             })
             .when(self.kind==Kind::Table,|d| {
@@ -278,7 +283,7 @@ impl Render for ChartDataEditor {
             })
             .when(!self.csv_mode, |d| {
                 d.child(
-                    div().id("design-chart-grid").test_support().max_h(px(280.)).overflow_scroll()
+                    div().id("design-chart-grid").test_support().max_h(px((f32::from(window.viewport_size().height)-600.).clamp(80.,280.))).overflow_scroll()
                         .child(div().flex().flex_col().gap_1().w(px((columns * 144 + 156) as f32))
                             .child(div().flex().gap_1().child(div().w(px(148.)).flex_shrink_0().child("Row"))
                                 .children((0..columns).map(|column| {

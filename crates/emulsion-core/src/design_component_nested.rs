@@ -267,7 +267,9 @@ pub(super) fn copy_group(
         design.motion.remove(id);
         design.style_links.remove(id);
         design.variable_bindings.remove(id);
+        design.data_bindings.remove(id);
         design.interactions.remove(id);
+        design.interaction_triggers.remove(id);
         design.overlays.remove(id);
         design.local_media.remove(id);
         design.keyframes.remove(id);
@@ -276,21 +278,27 @@ pub(super) fn copy_group(
         design.component_links.insert(dest, link.clone());
     }
     for (id, mut link) in std::mem::take(&mut additions.component_links) {
-        if preserve
-            && let Some(old) = before.design.component_links.get(&id)
+        if let Some(old) = before.design.component_links.get(&id)
             && old.component == link.component
-            && old.variant == link.variant
         {
-            link.overrides = old.overrides.clone();
-            link.overrides.retain(|k, _| link.members.contains_key(k));
+            link.auto_overrides = old.auto_overrides;
+            if preserve && old.variant == link.variant {
+                link.overrides = old.overrides.clone();
+                link.overrides.retain(|k, _| link.members.contains_key(k));
+            }
         }
         design.component_links.insert(id, link);
     }
     crate::design_variables::merge_into(&mut design, &additions);
     design.interactions.extend(additions.interactions.clone());
+    design.interaction_triggers.extend(additions.interaction_triggers.clone());
     design.overlays.extend(additions.overlays.clone());
     design.local_media.extend(additions.local_media.clone());
-    if !additions.keyframes.is_empty() { design.duration_ms=design.duration_ms.max(additions.duration_ms); }
+    design.data_bindings.extend(additions.data_bindings.clone());
+    design.fonts.extend(additions.fonts.clone());
+    if !additions.keyframes.is_empty() {
+        design.duration_ms = design.duration_ms.max(additions.duration_ms);
+    }
     design.keyframes.extend(additions.keyframes.clone());
     crate::design_styles::merge_into(&mut design, &additions);
     design.charts.extend(additions.charts);
@@ -395,14 +403,18 @@ pub(super) fn import_into(
             variants.insert(variant, dest);
             sources.extend(map);
         }
-        plan.doc
-            .design
-            .components
-            .insert(chosen.clone(), Definition {
+        plan.doc.design.components.insert(
+            chosen.clone(),
+            Definition {
                 variants,
                 library_id: definition.library_id,
-                member_keys: definition.member_keys.into_iter().filter_map(|(id,key)|sources.get(&id).map(|to|(*to,key))).collect(),
-            });
+                member_keys: definition
+                    .member_keys
+                    .into_iter()
+                    .filter_map(|(id, key)| sources.get(&id).map(|to| (*to, key)))
+                    .collect(),
+            },
+        );
         renamed.insert(original.clone(), chosen.clone());
         definition_ids.extend(sources);
     }

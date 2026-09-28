@@ -1,7 +1,7 @@
 //! Shared, lossless native shape style schema and validation for MCP tools.
 use crate::server::ToolResult;
 use emulsion_raster::vector::{
-    PathPaint, PathStyle, PatternKind, StrokeAlignment, StrokeCap, StrokeJoin,
+    GradientStop, PathPaint, PathStyle, PatternKind, StrokeAlignment, StrokeCap, StrokeJoin,
 };
 use serde_json::{Value, json};
 
@@ -46,8 +46,8 @@ fn paint(value: &Value, name: &str) -> Result<PathPaint, ToolResult> {
         .ok_or_else(|| error(format!("{name}.kind is required")))?;
     let allowed: &[&str] = match kind {
         "solid" => &["kind"],
-        "linear_gradient" => &["kind", "end", "angle"],
-        "radial_gradient" => &["kind", "end"],
+        "linear_gradient" => &["kind", "end", "angle", "stops"],
+        "radial_gradient" => &["kind", "end", "stops"],
         "pattern" => &["kind", "end", "pattern", "size"],
         _ => {
             return Err(error(format!(
@@ -60,6 +60,41 @@ fn paint(value: &Value, name: &str) -> Result<PathPaint, ToolResult> {
     }
     if kind == "solid" {
         return Ok(PathPaint::Solid);
+    }
+    if let Some(stops) = value.get("stops") {
+        if value.get("end").is_some() {
+            return Err(error("Use stops or end, not both"));
+        }
+        let stops = stops
+            .as_array()
+            .ok_or_else(|| error("stops must be an array"))?;
+        if !(2..=16).contains(&stops.len()) {
+            return Err(error("Provide 2–16 gradient stops"));
+        }
+        let stops = stops
+            .iter()
+            .map(|stop| {
+                let fields = stop
+                    .as_object()
+                    .ok_or_else(|| error("Each stop must be an object"))?;
+                if fields
+                    .keys()
+                    .any(|key| !["offset", "color"].contains(&key.as_str()))
+                {
+                    return Err(error("Unknown gradient stop field"));
+                }
+                Ok(GradientStop {
+                    offset: number(&stop["offset"], "stop.offset", 0., 1.)?,
+                    color: color(&stop["color"], "stop.color")?,
+                })
+            })
+            .collect::<Result<Vec<_>, ToolResult>>()?;
+        let angle = value
+            .get("angle")
+            .map(|v| number(v, "angle", -360000., 360000.))
+            .transpose()?
+            .unwrap_or(0.);
+        return PathPaint::from_stops(&stops, kind == "radial_gradient", angle).map_err(error);
     }
     let end = color(
         value
@@ -111,6 +146,24 @@ pub(crate) fn parse_style(args: &Value, mut style: PathStyle) -> Result<PathStyl
             } else {
                 Some(color(v, name)?)
             };
+        }
+    }
+    for (name, paint_name, color, paint) in [
+        ("fill", "fill_paint", style.fill, &mut style.fill_paint),
+        (
+            "stroke",
+            "stroke_paint",
+            style.stroke,
+            &mut style.stroke_paint,
+        ),
+    ] {
+        if args.get(name).is_some()
+            && args.get(paint_name).is_none()
+            && let Some(color) = color
+            && let PathPaint::LinearStops { stops, .. } | PathPaint::RadialStops { stops, .. } =
+                paint
+        {
+            stops[0].color = color;
         }
     }
     for (name, destination) in [
@@ -190,6 +243,19 @@ fn color_json(color: Option<[u8; 4]>) -> Value {
 fn paint_json(paint: PathPaint) -> Value {
     match paint {
         PathPaint::Solid => json!({"kind":"solid"}),
+        PathPaint::LinearStops { .. } | PathPaint::RadialStops { .. } => {
+            let stops = paint
+                .gradient_stops([0; 4])
+                .unwrap()
+                .iter()
+                .map(|stop| json!({"offset":stop.offset,"color":color_json(Some(stop.color))}))
+                .collect::<Vec<_>>();
+            if paint.is_radial() {
+                json!({"kind":"radial_gradient","stops":stops})
+            } else {
+                json!({"kind":"linear_gradient","stops":stops,"angle":paint.gradient_angle()})
+            }
+        }
         PathPaint::LinearGradient { end, angle } => {
             json!({"kind":"linear_gradient","end":color_json(Some(end)),"angle":angle})
         }
@@ -219,7 +285,10 @@ pub(crate) fn style_json(style: &PathStyle) -> Value {
 
 pub(crate) fn style_properties() -> Value {
     let color = json!({"type":"string","pattern":"^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"});
+    let stops = json!({"type":"array","minItems":2,"maxItems":16,"items":{"type":"object","additionalProperties":false,"required":["offset","color"],"properties":{"offset":{"type":"number","minimum":0,"maximum":1},"color":color}}});
     let paint = json!({"oneOf":[
+        {"type":"object","additionalProperties":false,"required":["kind","stops"],"properties":{"kind":{"const":"linear_gradient"},"stops":stops,"angle":{"type":"number","minimum":-360000,"maximum":360000}}},
+        {"type":"object","additionalProperties":false,"required":["kind","stops"],"properties":{"kind":{"const":"radial_gradient"},"stops":stops}},
         {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"solid"}}},
         {"type":"object","additionalProperties":false,"required":["kind","end"],"properties":{"kind":{"const":"linear_gradient"},"end":color,"angle":{"type":"number","minimum":-360000,"maximum":360000,"default":0}}},
         {"type":"object","additionalProperties":false,"required":["kind","end"],"properties":{"kind":{"const":"radial_gradient"},"end":color}},
@@ -338,5 +407,27 @@ mod tests {
             panic!()
         };
         assert_eq!(style, before);
+    }
+}
+
+#[cfg(test)]
+mod multistop_tests {
+    use super::*;
+    #[test]
+    fn gradient_stop_schema_roundtrip_rejects_lossy_or_invalid_inputs() {
+        let paint = json!({"kind":"linear_gradient","angle":40,"stops":[{"offset":0,"color":"#ff0000"},{"offset":0.4,"color":"#00ff0080"},{"offset":1,"color":"#0000ff"}]});
+        let style = parse_style(&json!({"fill_paint":paint}), PathStyle::default()).unwrap();
+        assert_eq!(
+            parse_style(&style_json(&style), PathStyle::default()).unwrap(),
+            style
+        );
+        for bad in [
+            json!({"kind":"linear_gradient","stops":[]}),
+            json!({"kind":"linear_gradient","end":"#ffffff","stops":[{"offset":0,"color":"#000000"},{"offset":1,"color":"#ffffff"}]}),
+            json!({"kind":"radial_gradient","stops":[{"offset":1,"color":"#000000"},{"offset":0,"color":"#ffffff"}]}),
+            json!({"kind":"radial_gradient","stops":[{"offset":"0","color":"#000000"},{"offset":1,"color":"#ffffff"}]}),
+        ] {
+            assert!(parse_style(&json!({"fill_paint":bad}), style).is_err());
+        }
     }
 }

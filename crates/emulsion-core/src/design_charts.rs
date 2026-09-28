@@ -6,6 +6,8 @@ use emulsion_raster::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+#[path = "design_chart_formulas.rs"]
+mod formulas;
 #[path = "design_chart_plot.rs"]
 mod plot;
 
@@ -129,6 +131,8 @@ pub struct Chart {
     pub y_axis: Axis,
     #[serde(default)]
     pub merges: Vec<Merge>,
+    #[serde(default)]
+    pub formulas: bool,
 }
 impl Chart {
     pub fn example(kind: Kind) -> Self {
@@ -153,6 +157,7 @@ impl Chart {
             x_axis: Axis::default(),
             y_axis: Axis::default(),
             merges: Vec::new(),
+            formulas: false,
         };
         if kind == Kind::Scatter {
             chart.rows = vec![
@@ -211,8 +216,9 @@ impl Chart {
                 }
             }
         }
+        let rows = self.resolved_rows()?;
         if self.kind != Kind::Table {
-            for row in &self.rows[1..] {
+            for row in &rows[1..] {
                 for value in &row[usize::from(self.kind != Kind::Scatter)..] {
                     let number = value
                         .trim()
@@ -230,7 +236,7 @@ impl Chart {
             }
             if matches!(self.kind, Kind::Pie | Kind::Donut)
                 && (self.rows[0].len() != 2
-                    || self.rows[1..]
+                    || rows[1..]
                         .iter()
                         .map(|r| r[1].trim().parse::<f64>().unwrap())
                         .sum::<f64>()
@@ -243,8 +249,27 @@ impl Chart {
         }
         Ok(())
     }
+    pub fn resolved_rows(&self) -> Result<Vec<Vec<String>>, String> {
+        if self.rows.is_empty()
+            || self.rows[0].is_empty()
+            || self.rows.iter().any(|r| r.len() != self.rows[0].len())
+        {
+            return Err("Formula grid must be rectangular and nonempty.".into());
+        }
+        if self.formulas {
+            formulas::resolve(&self.rows)
+        } else {
+            Ok(self.rows.clone())
+        }
+    }
     fn nodes(&self, origin: (f64, f64), canvas: (u32, u32)) -> Result<Vec<Node>, String> {
         self.validate()?;
+        let mut resolved = self.clone();
+        resolved.rows = self.resolved_rows()?;
+        resolved.formulas = false;
+        resolved.resolved_nodes(origin, canvas)
+    }
+    fn resolved_nodes(&self, origin: (f64, f64), canvas: (u32, u32)) -> Result<Vec<Node>, String> {
         if ![origin.0, origin.1]
             .into_iter()
             .all(|v| v.is_finite() && v.abs() <= 1e9)
@@ -807,5 +832,51 @@ mod advanced_tests {
         assert_eq!(editor.doc, after);
         apply(&mut editor, Some(id), table, (0., 0.)).unwrap();
         assert_eq!(editor.doc.nodes.len(), before.nodes.len());
+    }
+}
+
+#[cfg(test)]
+mod formula_workflow_tests {
+    use super::*;
+    #[test]
+    fn design_chart_formula_updates_native_cells_atomically_and_undo_restores_source() {
+        let mut editor = Editor::new(Document::new(600, 400), None);
+        let mut chart = Chart::example(Kind::Table);
+        chart.formulas = true;
+        chart.rows = vec![
+            vec!["Item".into(), "Value".into()],
+            vec!["A".into(), "10".into()],
+            vec!["B".into(), "5".into()],
+            vec!["Total".into(), "=SUM(B2:B3)".into()],
+        ];
+        let id = apply(&mut editor, None, chart.clone(), (0., 0.)).unwrap();
+        let before = editor.doc.clone();
+        assert!(
+            editor
+                .doc
+                .nodes
+                .iter()
+                .any(|n| matches!(&n.kind,crate::NodeKind::Text{spec,..}if spec.text=="15"))
+        );
+        assert_eq!(editor.doc.design.charts[&id].rows[3][1], "=SUM(B2:B3)");
+        chart.rows[1][1] = "12".into();
+        apply(&mut editor, Some(id), chart.clone(), (0., 0.)).unwrap();
+        assert!(
+            editor
+                .doc
+                .nodes
+                .iter()
+                .any(|n| matches!(&n.kind,crate::NodeKind::Text{spec,..}if spec.text=="17"))
+        );
+        let changed = editor.doc.clone();
+        chart.rows[3][1] = "=B4".into();
+        assert!(apply(&mut editor, Some(id), chart, (0., 0.)).is_err());
+        assert_eq!(editor.doc, changed);
+        editor.undo();
+        assert_eq!(editor.doc, before);
+        let saved = serde_json::to_string(&editor.doc.design.charts[&id]).unwrap();
+        let restored: Chart = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.resolved_rows().unwrap()[3][1], "15");
+        assert!(restored.formulas);
     }
 }

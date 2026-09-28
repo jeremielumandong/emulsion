@@ -68,3 +68,13 @@ Corporation.
 `THIRD_PARTY_CRATES.md` lists every crate in the build with its declared licence; it is
 generated from `cargo metadata` by `scripts/gen-third-party.py`. The About screen in the
 application shows the same information.
+
+## draw.io stencil artwork
+
+`assets/diagram-stencils/drawio.json.gz` contains XML stencil definitions from
+[jgraph/drawio](https://github.com/jgraph/drawio), pinned to the commit and
+per-file SHA-256 checksums in `assets/diagram-stencils/UPSTREAM.json`. Definitions
+are interpreted locally as vector drawing instructions. The original Apache
+license and additional stencil asset terms are distributed as `LICENSE-APACHE`
+and `LICENSE-STENCILS` in that directory. Vendor names and trademarks remain
+the property of their respective owners.

@@ -62,3 +62,24 @@ Installed entries use the `insert_diagram_pack_entry` tool. The color picker use
 native path/text operations (`set_path`, `set_text`); grouping uses `group_nodes`
 and `ungroup`. Template/theme mutations share core commands with the gallery.
 Stencil installation changes the local library rather than document history.
+
+## Curves, marker styles and bundled vendor packs
+
+`set_diagram_connector` accepts `routing: "curved"` and partial `start_marker` /
+`end_marker` objects. Omitted marker fields retain their values. Supported kinds
+are `none`, `block`, `classic`, `open`, `diamond`, `oval`, `circle_plus`, `many`,
+`one`, `mandatory_one`, `zero_to_one`, `zero_to_many`, and `one_to_many`.
+`size` is 1–100 document pixels; `filled` is boolean. `arrow_start` and
+`arrow_end` enable each endpoint's marker independently. Invalid patches leave
+the document and undo history unchanged.
+
+```json
+{"node":42,"routing":"curved","arrow_start":true,"start_marker":{"kind":"diamond","filled":false,"size":16},"end_marker":{"kind":"zero_to_many","size":18}}
+```
+
+`list_diagram_stencil_packs` also returns the available offline vendor packs.
+Install one using `install_diagram_stencil_pack` with `{"pack":"aws4"}`. Supply
+exactly one of `pack` (bundled ID) or `path` (local stencil source). Installation
+returns compatibility notes. Native entries are then placed with
+`insert_diagram_pack_entry`, which preserves connections and supports undo.
+Visio conversion and vector-source preservation use the same importer as the UI.

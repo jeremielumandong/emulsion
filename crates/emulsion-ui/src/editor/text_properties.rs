@@ -410,6 +410,14 @@ impl EditorView {
                     })),
             );
         let lists = div()
+            .child(
+                Button::new("text-paragraph-format")
+                    .small()
+                    .label("Lists and paragraph spacing…")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.show_paragraph_format(window, cx)),
+                    ),
+            )
             .flex()
             .flex_wrap()
             .gap_2()

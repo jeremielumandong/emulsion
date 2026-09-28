@@ -352,3 +352,75 @@ fn design_layout_child_sizing_ratio_validation_stale_and_locked(cx: &mut TestApp
     cx.run_until_parked();
     cx.update(|window, _| assert!(window.try_find("design-layout-child-dialog-body").is_none()));
 }
+
+#[gpui_kit::test]
+fn design_container_breakpoint_limits_and_child_override_dialogs(cx: &mut TestAppContext) {
+    let (doc, group, child) = fixture();
+    let (ws, cx) = open(cx, doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1300.), gpui_kit::px(1200.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, doc.clone()).unwrap(),
+                "Container layout".into(),
+                window,
+                cx,
+            )
+        });
+        let view = ws.read(cx).editor.clone().unwrap();
+        view.update(cx, |v, cx| {
+            v.set_layer_selection(vec![group], Some(group));
+            v.design_breakpoints_dialog(window, cx);
+        });
+        view
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click("design-breakpoint-reference", cx);
+        window.click("design-breakpoint-add", cx);
+    });
+    cx.run_until_parked();
+    input(cx, "design-breakpoint-input", 0, "500");
+    cx.update(|window, cx| window.click(("design-breakpoint-limits", 0usize), cx));
+    cx.run_until_parked();
+    input(cx, "design-breakpoint-limit", 1, "300");
+    cx.update(|window, cx| window.click("ok", cx));
+    cx.run_until_parked();
+    let frame_state = cx.update(|window, cx| {
+        let e = &view.read(cx).editor;
+        assert_eq!(
+            e.doc.design.frames[&group].breakpoint_reference,
+            layout::BreakpointReference::Container
+        );
+        assert_eq!(
+            layout::effective_frame(&e.doc, group).unwrap().max_width,
+            Some(300.)
+        );
+        let doc = e.doc.clone();
+        view.update(cx, |v, cx| {
+            v.design_layout_child_at_dialog(group, child, Some(0), window, cx)
+        });
+        doc
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-layout-child-inherit", cx));
+    cx.run_until_parked();
+    input(cx, "design-layout-child-input", 0, "75");
+    cx.update(|window, cx| window.click("ok", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        view.update(cx, |v, _| {
+            assert_eq!(
+                v.editor.doc.design.frames[&group].breakpoints[0]
+                    .overrides
+                    .children[&child]
+                    .min_width,
+                Some(75.)
+            );
+            v.editor.undo();
+            assert_eq!(v.editor.doc, frame_state);
+            v.editor.undo();
+            assert_eq!(v.editor.doc, doc);
+        })
+    });
+}

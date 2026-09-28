@@ -27,7 +27,7 @@ pub(super) fn refresh_keys(doc: &mut Document) {
             definition
                 .member_keys
                 .entry(id)
-                .or_insert_with(|| identity());
+                .or_insert_with(identity);
         }
     }
 }

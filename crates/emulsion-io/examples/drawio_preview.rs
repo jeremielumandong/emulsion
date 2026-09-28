@@ -3,7 +3,7 @@
 fn main() -> anyhow::Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
     anyhow::ensure!(args.len() >= 3, "Pass an input file and output PNG path");
-    let imported = emulsion_io::drawio::read(std::path::Path::new(&args[1]))?;
+    let imported = emulsion_io::diagram_import::read(std::path::Path::new(&args[1]))?;
     let index = args
         .get(3)
         .map(|s| s.parse::<usize>())
@@ -15,13 +15,17 @@ fn main() -> anyhow::Result<()> {
         .get(index)
         .ok_or_else(|| anyhow::anyhow!("Page index out of range"))?;
     let (svg, fallback) = emulsion_io::project_export::svg(&page.doc)?;
-    let tree = resvg::usvg::Tree::from_data(&svg, &Default::default())?;
+    let mut options = resvg::usvg::Options::default();
+    options.fontdb_mut().load_system_fonts();
+    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    let tree = resvg::usvg::Tree::from_data(&svg, &options)?;
     let scale = (1600. / tree.size().width().max(tree.size().height())).min(1.);
     let mut pixels = resvg::tiny_skia::Pixmap::new(
         (tree.size().width() * scale).ceil() as u32,
         (tree.size().height() * scale).ceil() as u32,
     )
     .ok_or_else(|| anyhow::anyhow!("Cannot allocate preview"))?;
+    pixels.fill(resvg::tiny_skia::Color::WHITE);
     resvg::render(
         &tree,
         resvg::tiny_skia::Transform::from_scale(scale, scale),

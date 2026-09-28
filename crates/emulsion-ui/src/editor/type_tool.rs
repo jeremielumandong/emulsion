@@ -401,6 +401,38 @@ impl EditorView {
         let start = floor_byte(&spec.text, range.start);
         let end = floor_byte(&spec.text, range.end).max(start);
         let range = start..end;
+        if text == "\n" {
+            match emulsion_core::text::paragraph_enter(&spec, range.clone()) {
+                Ok(Some((next, cursor))) => {
+                    let Some(field) = &mut self.type_tool.field else {
+                        return;
+                    };
+                    let id = field.id;
+                    field.cursor = cursor;
+                    field.anchor = cursor;
+                    field.marked = None;
+                    if !self.editor.in_transaction() {
+                        self.editor.begin("Type");
+                    }
+                    self.execute(
+                        Command::SetText {
+                            id,
+                            spec: Box::new(next),
+                        },
+                        cx,
+                    );
+                    self.normalize_text_cursor();
+                    cx.notify();
+                    return;
+                }
+                Err(error) => {
+                    self.type_tool.error = Some(error);
+                    cx.notify();
+                    return;
+                }
+                Ok(None) => {}
+            }
+        }
         let Some(field) = &mut self.type_tool.field else {
             return;
         };
@@ -657,14 +689,49 @@ impl EditorView {
         cx.notify();
     }
 
+    pub(super) fn paragraph_edit_range(&self) -> Option<Range<usize>> {
+        if let Some(field) = &self.type_tool.field {
+            return (Some(field.id) == self.selected).then(|| field.range());
+        }
+        self.text_style_range()
+    }
+
     pub(super) fn set_text_list(
         &mut self,
         list: emulsion_core::text::ListStyle,
         cx: &mut Context<Self>,
     ) {
+        let range = self.paragraph_edit_range();
         self.close_text_field(cx);
         if let Some((id, spec)) = self.text_target() {
-            match emulsion_core::text::apply_list(&spec, list) {
+            let range = range.unwrap_or(0..spec.text.len());
+            let start = spec.text[..range.start.min(spec.text.len())]
+                .rfind('\n')
+                .map_or(0, |i| i + 1);
+            let mut format = spec
+                .paragraphs
+                .iter()
+                .find(|p| p.start == start)
+                .map(|p| p.format)
+                .unwrap_or_default();
+            format.list = match list {
+                emulsion_core::text::ListStyle::None => emulsion_core::text::ParagraphList::None,
+                emulsion_core::text::ListStyle::Bullet => {
+                    emulsion_core::text::ParagraphList::Bullet
+                }
+                emulsion_core::text::ListStyle::Numbered => {
+                    emulsion_core::text::ParagraphList::Numbered
+                }
+            };
+            if format.list == emulsion_core::text::ParagraphList::None {
+                format.indent = 0.;
+                format.hanging = 0.;
+                format.level = 0;
+            } else if format.indent == 0. {
+                format.indent = spec.size * 1.5;
+                format.hanging = spec.size * 1.2;
+            }
+            match emulsion_core::text::apply_paragraphs(&spec, range, format) {
                 Ok(next) if next != *spec => {
                     self.type_tool.selection = None;
                     self.execute(
@@ -931,7 +998,16 @@ impl EditorView {
         let label = if cur.font.is_empty() {
             "font: default ▾".to_string()
         } else {
-            format!("font: {} ▾", cur.font)
+            format!(
+                "font: {} ▾",
+                self.editor
+                    .doc
+                    .design
+                    .fonts
+                    .get(&cur.font)
+                    .map(|f| format!("{} (embedded)", f.family()))
+                    .unwrap_or(cur.font.clone())
+            )
         };
         let chip_bounds = self.type_tool.font_chip.clone();
         v.push(
@@ -968,13 +1044,23 @@ impl EditorView {
         let current = self.type_tool.spec.font.clone();
         let (accent, accent_fg, ink, paper) = (p.accent, p.accent_fg, p.ink, p.paper);
         let mut fonts = emulsion_core::text::font_families();
+        fonts.retain(|font| {
+            !font.starts_with("EmulsionFont-") || self.editor.doc.design.fonts.contains_key(font)
+        });
         fonts.insert(0, String::new());
         let rows = fonts.into_iter().enumerate().map(|(i, name)| {
             let on = name == current;
             let display: SharedString = if name.is_empty() {
                 "default".into()
             } else {
-                name.clone().into()
+                self.editor
+                    .doc
+                    .design
+                    .fonts
+                    .get(&name)
+                    .map(|f| format!("{} (embedded)", f.family()))
+                    .unwrap_or(name.clone())
+                    .into()
             };
             let choose = name.clone();
             div()

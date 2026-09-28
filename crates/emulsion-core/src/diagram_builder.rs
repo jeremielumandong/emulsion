@@ -175,6 +175,8 @@ impl Builder {
                 routing,
                 waypoints: Vec::new(),
                 label_offset: (0., 0.),
+                start_marker: Marker::default(),
+                end_marker: Marker::default(),
                 arrow_end: true,
                 arrow_start: false,
             },

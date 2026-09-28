@@ -88,7 +88,7 @@ fn design_charts_create_edit_validate_detach_and_undo(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|window, cx| {
         let e = view.read(cx);
-        assert_eq!(e.editor.doc.design.charts.len(), 3);
+        assert_eq!(e.editor.doc.design.charts.len(), Kind::ALL.len() - 1);
         assert_eq!(e.editor.doc.nodes, original.nodes);
         window.click("design-undo", cx);
     });
@@ -360,4 +360,64 @@ fn native_chart_axis_and_merge_controls_apply_without_losing_covered_cells(
     });
     cx.run_until_parked();
     cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, merged));
+}
+
+#[gpui_kit::test]
+fn design_chart_formula_toggle_preserves_editable_source_and_native_results(
+    cx: &mut TestAppContext,
+) {
+    let (ws, cx) = open(cx, Document::new(600, 400));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1100.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap(),
+                "Formulas".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click(("design-section", 1usize), cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click(("design-chart-add", 3usize), cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| {
+        w.click("design-chart-formulas", cx);
+        w.click("design-chart-csv-mode", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|w, cx| w.click("design-chart-data", cx));
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("Item,Value\nA,10\nB,=B3");
+    cx.update(|w, cx| w.click("ok", cx));
+    cx.run_until_parked();
+    cx.update(|w, cx| {
+        assert!(view.read(cx).editor.doc.design.charts.is_empty());
+        assert!(w.find("design-chart-error").visible());
+        w.click("design-chart-data", cx);
+    });
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("Item,Value\nA,10\nB,=B2*2");
+    cx.update(|w, cx| w.click("ok", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        view.update(cx, |v, _| {
+            let chart = &v.editor.doc.design.charts[&v.selected.unwrap()];
+            assert!(chart.formulas);
+            assert_eq!(chart.rows[2][1], "=B2*2");
+            assert_eq!(chart.resolved_rows().unwrap()[2][1], "20");
+            assert!(
+                v.editor
+                    .doc
+                    .nodes
+                    .iter()
+                    .any(|n| matches!(&n.kind,NodeKind::Text{spec,..}if spec.text=="20"))
+            );
+            v.editor.undo();
+            assert!(v.editor.doc.design.charts.is_empty());
+        })
+    });
 }

@@ -3,6 +3,24 @@ use crate::{Document, NodeId, NodeKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Trigger {
+    #[default]
+    Click,
+    Hover,
+    DragEnd,
+}
+impl Trigger {
+    pub const ALL: [Self; 3] = [Self::Click, Self::Hover, Self::DragEnd];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Click => "Click",
+            Self::Hover => "Pointer enters",
+            Self::DragEnd => "Drag and release",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverlayOperation {
@@ -121,6 +139,15 @@ pub fn author(
     actions: Vec<Action>,
     overlay: Option<bool>,
 ) -> Result<(), String> {
+    author_with_trigger(editor, node, actions, overlay, None)
+}
+pub fn author_with_trigger(
+    editor: &mut crate::Editor,
+    node: NodeId,
+    actions: Vec<Action>,
+    overlay: Option<bool>,
+    trigger: Option<Trigger>,
+) -> Result<(), String> {
     if editor.in_transaction() {
         return Err("Finish the current edit before changing interactions.".into());
     }
@@ -151,6 +178,16 @@ pub fn author(
             });
         }
     }
+    if let Some(trigger) = trigger {
+        if trigger == Trigger::Click {
+            design.interaction_triggers.remove(&node);
+        } else if design.interactions.contains_key(&node) {
+            design.interaction_triggers.insert(node, trigger);
+        }
+    }
+    design
+        .interaction_triggers
+        .retain(|id, _| design.interactions.contains_key(id));
     editor
         .execute(crate::Command::SetDesign {
             design: Box::new(design),
@@ -491,5 +528,69 @@ mod tests {
         assert_eq!(preview.node(member).unwrap().opacity, 1.);
         assert_eq!(e.doc, original);
         assert_eq!(e.history.len(), history);
+    }
+}
+
+#[cfg(test)]
+mod trigger_tests {
+    use super::*;
+    #[test]
+    fn design_interaction_triggers_persist_remap_clear_and_undo() {
+        let mut editor = crate::Editor::new(Document::new(640, 480), None);
+        let id = crate::design::media::insert_youtube(
+            &mut editor,
+            "https://youtu.be/M7lc1UVf-VE",
+            (0., 0.),
+            (400., 225.),
+        )
+        .unwrap();
+        author_with_trigger(
+            &mut editor,
+            id,
+            vec![Action::Next],
+            None,
+            Some(Trigger::Hover),
+        )
+        .unwrap();
+        let before = editor.doc.clone();
+        let duplicate = editor
+            .execute(crate::Command::DuplicateNode { id })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            editor.doc.design.interaction_triggers[&duplicate],
+            Trigger::Hover
+        );
+        editor.undo();
+        assert_eq!(editor.doc, before);
+        let fragment = crate::fragment::Fragment::capture(&editor.doc, &[id]).unwrap();
+        let pasted = fragment
+            .paste(&mut editor, crate::command::Slot::TOP, (20., 20.))
+            .unwrap()[0];
+        assert_eq!(
+            editor.doc.design.interaction_triggers[&pasted],
+            Trigger::Hover
+        );
+        editor.undo();
+        author_with_trigger(
+            &mut editor,
+            id,
+            vec![Action::Next],
+            None,
+            Some(Trigger::DragEnd),
+        )
+        .unwrap();
+        assert_eq!(
+            editor.doc.design.interaction_triggers[&id],
+            Trigger::DragEnd
+        );
+        editor.undo();
+        assert_eq!(editor.doc, before);
+        author(&mut editor, id, vec![], None).unwrap();
+        assert!(!editor.doc.design.interaction_triggers.contains_key(&id));
+        editor.undo();
+        assert_eq!(editor.doc, before);
+        let encoded = serde_json::to_value(&editor.doc.design).unwrap();
+        assert_eq!(encoded["interaction_triggers"][id.to_string()], "hover");
     }
 }

@@ -3,22 +3,148 @@
 use crate::{IoError, Result};
 use emulsion_core::Document;
 
+use std::{collections::HashMap, sync::Arc};
+struct Layer {
+    root: emulsion_core::NodeId,
+    nodes: Vec<emulsion_core::Node>,
+    tree: Arc<resvg::usvg::Tree>,
+}
 pub struct SvgViewport {
-    tree: resvg::usvg::Tree,
+    layers: Vec<Layer>,
+    size: (u32, u32),
+    design: emulsion_core::design_metadata::Design,
+    font_generation: u64,
+    /// Number of subtrees parsed for this revision, for diagnostics/benchmarks.
+    pub rebuilt_layers: usize,
 }
 impl SvgViewport {
     pub fn new(doc: &Document) -> Result<Self> {
-        let svg = crate::project_export::vector_svg(doc)?;
-        let options = resvg::usvg::Options {
-            image_href_resolver: resvg::usvg::ImageHrefResolver {
-                resolve_string: Box::new(|_, _| None),
-                ..Default::default()
-            },
-            ..Default::default()
+        Self::updated(doc, None)
+    }
+    /// Retain unchanged SVG subtrees, so moving one object does not reparse a page.
+    pub fn updated(doc: &Document, previous: Option<&Self>) -> Result<Self> {
+        doc.validate()
+            .map_err(|e| IoError::Manifest(e.to_string()))?;
+        let generation = emulsion_core::text::font_generation();
+        let previous = previous.filter(|p| {
+            p.size == (doc.width, doc.height)
+                && p.design == doc.design
+                && p.font_generation == generation
+        });
+        let old: HashMap<_, _> = previous
+            .into_iter()
+            .flat_map(|p| &p.layers)
+            .map(|l| (l.root, l))
+            .collect();
+        let parents: HashMap<_, _> = doc.nodes.iter().map(|n| (n.id, n.parent)).collect();
+        let mut groups: HashMap<_, Vec<emulsion_core::Node>> = HashMap::new();
+        // Cross-root clipping needs its referenced sibling in the same SVG tree.
+        let together = doc
+            .nodes
+            .iter()
+            .any(|n| n.parent.is_none() && n.clip_to.is_some());
+        // Plain containers and user groups do not form compositing boundaries.
+        // Retain their child objects independently, as for top-level diagrams.
+        let mut children: HashMap<Option<u64>, Vec<u64>> = HashMap::new();
+        let nodes_by_id: HashMap<_, _> = doc.nodes.iter().map(|n| (n.id, n)).collect();
+        for n in &doc.nodes {
+            children.entry(n.parent).or_default().push(n.id);
+        }
+        fn partition(
+            id: u64,
+            doc: &Document,
+            nodes: &HashMap<u64, &emulsion_core::Node>,
+            children: &HashMap<Option<u64>, Vec<u64>>,
+            roots: &mut Vec<u64>,
+        ) {
+            let n = nodes[&id];
+            let atomic = doc.diagram.as_ref().is_none_or(|d| {
+                d.edges.contains_key(&id)
+                    || d.shapes.get(&id).is_some_and(|s| !s.kind.is_container())
+            });
+            let kids = children
+                .get(&Some(id))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let simple = n.is_group()
+                && !atomic
+                && n.opacity == 1.
+                && n.mask.is_none()
+                && n.styles.is_empty()
+                && n.clip_to.is_none()
+                && n.blending == Default::default()
+                && matches!(
+                    n.blend,
+                    emulsion_raster::BlendMode::Normal | emulsion_raster::BlendMode::PassThrough
+                )
+                && kids.iter().all(|id| nodes[id].clip_to.is_none());
+            if simple {
+                if n.visible {
+                    for child in kids {
+                        partition(*child, doc, nodes, children, roots);
+                    }
+                }
+            } else {
+                roots.push(id);
+            }
+        }
+        let roots = if together {
+            vec![0]
+        } else {
+            let mut roots = Vec::new();
+            for id in doc.children(None) {
+                partition(id, doc, &nodes_by_id, &children, &mut roots);
+            }
+            roots
         };
-        let tree = resvg::usvg::Tree::from_data(&svg, &options)
-            .map_err(|e| IoError::Unsupported(e.to_string()))?;
-        Ok(Self { tree })
+        let root_set: std::collections::HashSet<_> = roots.iter().copied().collect();
+        for node in &doc.nodes {
+            let mut root = node.id;
+            while !root_set.contains(&root) {
+                let Some(Some(parent)) = parents.get(&root) else {
+                    break;
+                };
+                root = *parent;
+            }
+            if together || root_set.contains(&root) {
+                groups
+                    .entry(if together { 0 } else { root })
+                    .or_default()
+                    .push(node.clone());
+            }
+        }
+        let options = crate::svg_vectors::options();
+        let mut layers = Vec::with_capacity(roots.len());
+        let mut rebuilt_layers = 0;
+        for root in roots {
+            let nodes = groups.remove(&root).unwrap_or_default();
+            let tree = if let Some(layer) = old.get(&root).filter(|l| l.nodes == nodes) {
+                layer.tree.clone()
+            } else {
+                let svg = if together {
+                    crate::project_export::vector_svg(doc)?
+                } else {
+                    let mut subtree = Document::new(doc.width, doc.height);
+                    subtree.design = doc.design.clone();
+                    subtree.nodes = nodes.clone();
+                    subtree.diagram = None;
+                    crate::project_export::viewport_subtree(&subtree, root)?
+                };
+                rebuilt_layers += 1;
+                Arc::new(
+                    resvg::usvg::Tree::from_data(&svg, &options)
+                        .map_err(|e| IoError::Unsupported(e.to_string()))?,
+                )
+            };
+            layers.push(Layer { root, nodes, tree });
+        }
+        Ok(Self {
+            layers,
+            size: (doc.width, doc.height),
+            design: doc.design.clone(),
+            font_generation: generation,
+            rebuilt_layers,
+        })
     }
     /// Rerender only the affected screen rectangle when the view is unchanged.
     /// Existing pixels outside the region are retained at their native resolution.
@@ -111,11 +237,24 @@ impl SvgViewport {
         let mut pixels = resvg::tiny_skia::Pixmap::new(size.0, size.1)
             .ok_or_else(|| IoError::Unsupported("Cannot allocate SVG viewport".into()))?;
         let [a, b, c, d, e, f] = transform.map(|v| v as f32);
-        resvg::render(
-            &self.tree,
-            resvg::tiny_skia::Transform::from_row(a, b, c, d, e, f),
-            &mut pixels.as_mut(),
-        );
+        let transform = resvg::tiny_skia::Transform::from_row(a, b, c, d, e, f);
+        for layer in &self.layers {
+            // resvg also culls individual paths; skip entire offscreen groups here.
+            let bounds = layer
+                .tree
+                .root()
+                .abs_layer_bounding_box()
+                .transform(transform);
+            if bounds.is_some_and(|r| {
+                r.right() < 0.
+                    || r.bottom() < 0.
+                    || r.left() > size.0 as f32
+                    || r.top() > size.1 as f32
+            }) {
+                continue;
+            }
+            resvg::render(&layer.tree, transform, &mut pixels.as_mut());
+        }
         let mut bytes = pixels.take();
         for p in bytes.as_chunks_mut::<4>().0 {
             p.swap(0, 2);
@@ -284,5 +423,186 @@ mod tests {
                 "Patch must preserve background, old location, label and rerouted edges: {differences}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod retained_tests {
+    use super::*;
+    #[test]
+    fn movement_rebuilds_only_changed_objects_and_preserves_rendering() {
+        use emulsion_core::{
+            Command, Editor,
+            diagram::{Builder, ShapeKind},
+        };
+        let mut b = Builder::new(1200, 900).unwrap();
+        let mut ids = Vec::new();
+        for i in 0..100 {
+            ids.push(
+                b.add_shape(
+                    ShapeKind::Process,
+                    [
+                        10. + (i % 10) as f64 * 110.,
+                        10. + (i / 10) as f64 * 80.,
+                        100.,
+                        65.,
+                    ],
+                    "Service",
+                )
+                .unwrap(),
+            );
+        }
+        let mut e = Editor::new(b.finish().unwrap(), None);
+        let old = SvgViewport::new(&e.doc).unwrap();
+        e.execute(Command::TranslateNode {
+            id: ids[45],
+            dx: 7.,
+            dy: 3.,
+        })
+        .unwrap();
+        let next = SvgViewport::updated(&e.doc, Some(&old)).unwrap();
+        assert_eq!(next.rebuilt_layers, 1);
+        let matrix = [1., 0., 0., 1., 0., 0.];
+        assert_eq!(
+            next.render((1200, 900), matrix).unwrap(),
+            SvgViewport::new(&e.doc)
+                .unwrap()
+                .render((1200, 900), matrix)
+                .unwrap()
+        );
+        let same = SvgViewport::updated(&e.doc, Some(&next)).unwrap();
+        assert_eq!(same.rebuilt_layers, 0);
+    }
+}
+
+#[cfg(test)]
+mod compositing_tests {
+    use super::*;
+    #[test]
+    fn retained_roots_match_monolithic_svg_with_overlap_and_opacity() {
+        use emulsion_core::diagram::{Builder, ShapeKind};
+        let mut b = Builder::new(320, 240).unwrap();
+        let a = b
+            .add_shape(ShapeKind::Process, [20., 20., 180., 100.], "Under")
+            .unwrap();
+        let c = b
+            .add_shape(ShapeKind::Decision, [85., 50., 180., 100.], "Over")
+            .unwrap();
+        let mut doc = b.finish().unwrap();
+        doc.node_mut(a).unwrap().opacity = 0.7;
+        doc.node_mut(c).unwrap().opacity = 0.4;
+        let svg = crate::project_export::vector_svg(&doc).unwrap();
+        let tree = resvg::usvg::Tree::from_data(&svg, &Default::default()).unwrap();
+        let mut expected = resvg::tiny_skia::Pixmap::new(640, 480).unwrap();
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::from_scale(2., 2.),
+            &mut expected.as_mut(),
+        );
+        let mut bytes = expected.take();
+        for p in bytes.as_chunks_mut::<4>().0 {
+            p.swap(0, 2);
+        }
+        assert_eq!(
+            SvgViewport::new(&doc)
+                .unwrap()
+                .render((640, 480), [2., 0., 0., 2., 0., 0.])
+                .unwrap(),
+            bytes
+        );
+    }
+}
+
+#[cfg(test)]
+mod container_tests {
+    use super::*;
+    #[test]
+    fn moving_a_shape_inside_a_large_container_reuses_its_siblings() {
+        use emulsion_core::{
+            Command, Editor,
+            diagram::{Builder, ShapeKind},
+        };
+        let mut b = Builder::new(1200, 900).unwrap();
+        let container = b
+            .add_shape(ShapeKind::Container, [0., 0., 1200., 900.], "Services")
+            .unwrap();
+        let mut ids = Vec::new();
+        for i in 0..100 {
+            ids.push(
+                b.add_shape(
+                    ShapeKind::Process,
+                    [
+                        10. + (i % 10) as f64 * 110.,
+                        40. + (i / 10) as f64 * 80.,
+                        100.,
+                        65.,
+                    ],
+                    "Service",
+                )
+                .unwrap(),
+            );
+        }
+        let mut doc = b.finish().unwrap();
+        for id in &ids {
+            doc.node_mut(*id).unwrap().parent = Some(container);
+            Arc::make_mut(doc.diagram.as_mut().unwrap())
+                .shapes
+                .get_mut(id)
+                .unwrap()
+                .container = Some(container);
+        }
+        doc.normalize();
+        doc.validate().unwrap();
+        let before = SvgViewport::new(&doc).unwrap();
+        let mut editor = Editor::new(doc, None);
+        editor
+            .execute(Command::TranslateNode {
+                id: ids[45],
+                dx: 7.,
+                dy: 3.,
+            })
+            .unwrap();
+        let after = SvgViewport::updated(&editor.doc, Some(&before)).unwrap();
+        assert_eq!(after.rebuilt_layers, 1);
+        let svg = crate::project_export::vector_svg(&editor.doc).unwrap();
+        let tree = resvg::usvg::Tree::from_data(&svg, &Default::default()).unwrap();
+        let mut expected = resvg::tiny_skia::Pixmap::new(1200, 900).unwrap();
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::identity(),
+            &mut expected.as_mut(),
+        );
+        let mut bytes = expected.take();
+        for p in bytes.as_chunks_mut::<4>().0 {
+            p.swap(0, 2);
+        }
+        assert_eq!(
+            after.render((1200, 900), [1., 0., 0., 1., 0., 0.]).unwrap(),
+            bytes
+        );
+    }
+}
+
+#[cfg(test)]
+mod retained_source_tests {
+    use super::*;
+    #[test]
+    fn retained_complex_svg_keeps_its_text_when_rendered() {
+        let xml = r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="100"><defs><linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><rect width="240" height="100" fill="url(#g)"/><text x="20" y="70" font-family="DejaVu Sans" font-size="48" fill="#000">SVG</text></svg>"##;
+        let doc = crate::svg_vectors::document(xml).unwrap();
+        let pixels = SvgViewport::new(&doc)
+            .unwrap()
+            .render((240, 100), [1., 0., 0., 1., 0., 0.])
+            .unwrap();
+        let black = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] < 40 && p[1] < 40 && p[2] < 40 && p[3] > 240)
+            .count();
+        assert!(
+            black > 300,
+            "SVG source text must be shaped inside retained artwork: {black}"
+        );
     }
 }

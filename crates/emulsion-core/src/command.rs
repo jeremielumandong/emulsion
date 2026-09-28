@@ -662,7 +662,7 @@ impl Command {
         if !next.design.frames.is_empty() {
             crate::design_layout::prune(&mut next);
             if !self.is_view_only() {
-                crate::design_layout::reflow(&mut next).map_err(crate::DocumentError::BadDesign)?;
+                crate::design_layout::reflow_after(doc, &mut next).map_err(crate::DocumentError::BadDesign)?;
             }
         }
         next.normalize();
@@ -931,8 +931,10 @@ impl Command {
                 crate::design_variables::merge_into(&mut doc.design, &settings);
                 crate::design_styles::merge_into(&mut doc.design, &settings);
                 doc.design.interactions.extend(settings.interactions);
+                doc.design.interaction_triggers.extend(settings.interaction_triggers);
                 doc.design.overlays.extend(settings.overlays);
                 doc.design.local_media.extend(settings.local_media);
+                doc.design.data_bindings.extend(settings.data_bindings);
                 doc.design.keyframes.extend(settings.keyframes);
                 // Duplicating an instance shares its existing local definition.
                 let links: Vec<_> = ids

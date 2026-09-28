@@ -113,3 +113,13 @@ Each page records the state on its date and is not updated afterwards.
 
 The `.json` files beside the measurement pages hold the raw benchmark output
 those pages summarise.
+
+- [CSV data bindings and record sets](design-data-bindings.md)
+- [Standalone responsive HTML](design-html-export.md)
+- [Selection export](design-selection-export.md)
+- [Portable brands and fonts](design-portable-brands.md)
+- [Vector editing and precision](design-vector-editing.md)
+
+- [Design platform acceptance](design-platform-acceptance.md) — Windows/macOS runtime and file-exchange checklist.
+
+- [Design completion results](design-completion-results.json) — recorded Linux source, rendering, browser and package acceptance.

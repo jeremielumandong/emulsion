@@ -8,6 +8,8 @@ pub(crate) const READ_ONLY: &[&str] = &[
     "list_design_media",
     "get_design_keyframes",
     "get_responsive_preview",
+    "get_presentation_media_state",
+    "get_presenter_timer",
     "list_design_videos",
     "get_presentation_state",
 ];
@@ -16,6 +18,8 @@ pub(crate) const DESTRUCTIVE: &[&str] = &[
     "update_design_media",
     "detach_design_media",
     "set_design_keyframe",
+    "retime_design_motion",
+    "apply_design_motion_preset",
     "remove_design_keyframe",
     "clear_design_keyframes",
     "set_design_motion",
@@ -30,6 +34,14 @@ pub const HOST_TOOLS: &[&str] = &[
     "navigate_presentation",
     "set_presentation_fullscreen",
     "trigger_presentation_object",
+    "play_presentation_media",
+    "pause_presentation_media",
+    "seek_presentation_media",
+    "stop_presentation_media",
+    "get_presentation_media_state",
+    "set_presenter_timer",
+    "reset_presenter_timer",
+    "get_presenter_timer",
     "set_responsive_preview",
     "end_responsive_preview",
     "get_responsive_preview",
@@ -53,6 +65,72 @@ fn effect() -> Value {
 }
 pub(crate) fn definitions() -> Vec<ToolDef> {
     vec![
+        def(
+            "export_design_motion",
+            "Export active-page motion to sampled animated SVG or rendered-frame Lottie JSON. Up to 600 frames/64MiB; Lottie uses embeddedPNG frames up to 1024px, not editable vectors. Returns explicit raster/poster/interaction diagnostics; native source is unchanged.",
+            json!({"path":{"type":"string"},"format":{"enum":["animated_svg","lottie"]}}),
+            &["path", "format"],
+        ),
+        def(
+            "retime_design_motion",
+            "Scale and shift selected objects' property keyframes and enter/exit timing atomically. Rejects rounded time collisions or out-of-duration points. Optional duration_ms changes page duration. One Undo.",
+            json!({"nodes":{"type":"array","items":node(),"minItems":1,"maxItems":256},"scale":{"type":"number","minimum":0.01,"maximum":100},"offset_ms":{"type":"integer","minimum":-60000,"maximum":60000},"duration_ms":{"type":"integer","minimum":100,"maximum":60000}}),
+            &["nodes", "scale", "offset_ms"],
+        ),
+        def(
+            "apply_design_motion_preset",
+            "Apply original native keyframe presets in one Undo. Replaces affected property tracks only; other tracks and enter/exit effects remain. Typewriter requires text; spin rejects linked media.",
+            json!({"nodes":{"type":"array","items":node(),"minItems":1,"maxItems":256},"preset":{"enum":["fade_in","slide_up","pop","pulse","spin","typewriter"]},"start_ms":{"type":"integer","minimum":0},"end_ms":{"type":"integer","minimum":2}}),
+            &["nodes", "preset", "start_ms", "end_ms"],
+        ),
+        def(
+            "get_presentation_media_state",
+            "Read active player readiness, observed time/duration, pause/error state and pending commands. Requires UI host; commands are asynchronous until the player reports state.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "play_presentation_media",
+            "Start or resume visible local audio/video or an official YouTube embed during presentation. Requires valid fully visible frame and system playback runtime.",
+            json!({"node":node()}),
+            &["node"],
+        ),
+        def(
+            "pause_presentation_media",
+            "Pause the active native presentation media player. Requires UI host. Delivery is asynchronous; inspect get_presentation_media_state.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "seek_presentation_media",
+            "Seek the ready active media player in source-file milliseconds. Must fit duration and local trim interval. Official YouTube seeking follows its keyframe availability.",
+            json!({"position_ms":{"type":"integer","minimum":0,"maximum":86400000}}),
+            &["position_ms"],
+        ),
+        def(
+            "stop_presentation_media",
+            "Close the active player and show its editable poster. Requires UI host.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "get_presenter_timer",
+            "Read the live presenter elapsed time and paused state; does not change slide timing.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "set_presenter_timer",
+            "Pause or resume the separate presenter elapsed timer. Does not pause slide animation or media playback.",
+            json!({"paused":{"type":"boolean"}}),
+            &["paused"],
+        ),
+        def(
+            "reset_presenter_timer",
+            "Reset the presenter elapsed timer to zero and start it. Does not alter the document or slide timing.",
+            json!({}),
+            &[],
+        ),
         def(
             "get_responsive_preview",
             "Read live responsive preview state; requires the Emulsion UI host.",
@@ -79,7 +157,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "add_design_media",
-            "Import local video/audio bytes into an editable poster. Supports MP4/M4V/WebM/MOV, MP3/M4A/WAV/Ogg/Opus; maximum32 MiB per asset and64 MiB per page. Path is read once, never saved. System codec support varies.",
+            "Import local video/audio bytes into an editable poster. Supports MP4/M4V/WebM/MOV, MP3/M4A/WAV/Ogg/Opus; maximum32 MiB per asset and 64 MiB per page. Path is read once, never saved. System codec support varies.",
             json!({"path":{"type":"string"},"origin":pair(),"size":pair()}),
             &["path"],
         ),
@@ -104,13 +182,13 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         def(
             "set_design_keyframe",
             "Add or replace a property keyframe at a millisecond time in one Undo. Easing controls interpolation from this point to the next; first/last values hold outside their interval. Times must fit page duration. Geometry is relative; opacity multiplies authored opacity.",
-            json!({"node":node(),"property":{"type":"string","enum":["translation_x","translation_y","scale_x","scale_y","rotation","opacity"]},"time_ms":{"type":"integer","minimum":0},"value":{"type":"number"},"easing":{"type":"string","enum":["linear","ease_in","ease_out","ease_in_out","step"]}}),
+            json!({"node":node(),"property":{"type":"string","enum":["translation_x","translation_y","scale_x","scale_y","rotation","opacity","visibility","text_reveal"]},"time_ms":{"type":"integer","minimum":0},"value":{"type":"number"},"easing":{"type":"string","enum":["linear","ease_in","ease_out","ease_in_out","step"]}}),
             &["node", "property", "time_ms", "value"],
         ),
         def(
             "remove_design_keyframe",
             "Delete one saved property keyframe. One Undo.",
-            json!({"node":node(),"property":{"type":"string","enum":["translation_x","translation_y","scale_x","scale_y","rotation","opacity"]},"time_ms":{"type":"integer","minimum":0}}),
+            json!({"node":node(),"property":{"type":"string","enum":["translation_x","translation_y","scale_x","scale_y","rotation","opacity","visibility","text_reveal"]},"time_ms":{"type":"integer","minimum":0}}),
             &["node", "property", "time_ms"],
         ),
         def(
@@ -134,7 +212,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         def(
             "set_design_presentation",
             "Patch active-page notes, transition and timing in one Undo step. Existing animations must remain within duration; invalid combinations fail atomically. Omitted fields remain unchanged.",
-            json!({"speaker_notes":{"type":"string","maxLength":20000},"page_transition":effect(),"transition_ms":{"type":"integer","minimum":100,"maximum":3000},"duration_ms":{"type":"integer","minimum":100,"maximum":60000},"fps":{"type":"integer","minimum":1,"maximum":60}}),
+            json!({"speaker_notes":{"type":"string","maxLength":20000},"page_transition":{"enum":["none","fade","slide","slide_left","slide_up","slide_down","zoom","zoom_out"]},"transition_ms":{"type":"integer","minimum":100,"maximum":3000},"duration_ms":{"type":"integer","minimum":100,"maximum":60000},"fps":{"type":"integer","minimum":1,"maximum":60}}),
             &[],
         ),
         def(
@@ -265,6 +343,12 @@ pub enum HostAction {
     Fullscreen(bool),
     Trigger(NodeId),
     ResponsivePreview(Option<u32>),
+    MediaPlay(NodeId),
+    MediaPause,
+    MediaSeek(u32),
+    MediaStop,
+    TimerPaused(bool),
+    TimerReset,
 }
 pub fn parse_host_action(name: &str, args: &Value) -> Result<HostAction, String> {
     validate(name, args)?;
@@ -276,7 +360,22 @@ pub fn parse_host_action(name: &str, args: &Value) -> Result<HostAction, String>
         }
     };
     Ok(match name {
-        "get_presentation_state" | "get_responsive_preview" => HostAction::State,
+        "get_presentation_state"
+        | "get_responsive_preview"
+        | "get_presentation_media_state"
+        | "get_presenter_timer" => HostAction::State,
+        "play_presentation_media" => HostAction::MediaPlay(id(args)?),
+        "pause_presentation_media" => HostAction::MediaPause,
+        "stop_presentation_media" => HostAction::MediaStop,
+        "seek_presentation_media" => {
+            let position: u32 = read(args, "position_ms")?;
+            if position > 86_400_000 {
+                return Err("Seek position must be at most 24 hours.".into());
+            }
+            HostAction::MediaSeek(position)
+        }
+        "set_presenter_timer" => HostAction::TimerPaused(read(args, "paused")?),
+        "reset_presenter_timer" => HostAction::TimerReset,
         "end_responsive_preview" => HostAction::ResponsivePreview(None),
         "set_responsive_preview" => {
             let width: u32 = read(args, "width")?;
@@ -321,6 +420,40 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         return Err("Finish the current edit before changing presentation metadata".into());
     }
     match name {
+        "export_design_motion" => {
+            let path: String = read(args, "path")?;
+            let report = emulsion_io::design_motion_export::write(
+                &editor.doc,
+                std::path::Path::new(&path),
+                read(args, "format")?,
+            )
+            .map_err(|e| e.to_string())?;
+            return serde_json::to_value(report).map_err(|e| e.to_string());
+        }
+        "retime_design_motion" => {
+            let duration = args
+                .get("duration_ms")
+                .map(|_| read(args, "duration_ms"))
+                .transpose()?;
+            emulsion_core::design_keyframes::retime(
+                editor,
+                &read::<Vec<NodeId>>(args, "nodes")?,
+                read(args, "scale")?,
+                read(args, "offset_ms")?,
+                duration,
+            )?;
+            return Ok(json!({"retimed":true}));
+        }
+        "apply_design_motion_preset" => {
+            emulsion_core::design_keyframes::apply_preset(
+                editor,
+                &read::<Vec<NodeId>>(args, "nodes")?,
+                read(args, "preset")?,
+                read(args, "start_ms")?,
+                read(args, "end_ms")?,
+            )?;
+            return Ok(json!({"applied":true}));
+        }
         "list_design_media" => {
             return Ok(
                 json!({"media":editor.doc.design.local_media.iter().map(|(node,m)|json!({"node":node,"name":m.name,"kind":m.kind,"mime":m.mime,"byte_length":m.bytes.len(),"trim_start_ms":m.trim_start_ms,"trim_end_ms":m.trim_end_ms,"volume":m.volume,"looping":m.looping,"bounds":media::bounds(&editor.doc,*node)})).collect::<Vec<_>>()}),
@@ -674,5 +807,45 @@ mod local_keyframe_tests {
             .unwrap()
             .is_error
         );
+    }
+}
+
+#[cfg(test)]
+mod runtime_control_tests {
+    use super::*;
+    #[test]
+    fn design_live_media_and_timer_contract_is_strict_and_host_only() {
+        assert_eq!(
+            parse_host_action("play_presentation_media", &json!({"node":9})).unwrap(),
+            HostAction::MediaPlay(9)
+        );
+        assert_eq!(
+            parse_host_action("seek_presentation_media", &json!({"position_ms":500})).unwrap(),
+            HostAction::MediaSeek(500)
+        );
+        assert!(
+            parse_host_action("seek_presentation_media", &json!({"position_ms":86400001})).is_err()
+        );
+        assert!(parse_host_action("seek_presentation_media", &json!({"position_ms":-1})).is_err());
+        assert!(
+            parse_host_action(
+                "pause_presentation_media",
+                &json!({"arbitrary_script":"alert(1)"})
+            )
+            .is_err()
+        );
+        assert!(parse_host_action("set_presenter_timer", &json!({"paused":"true"})).is_err());
+        let mut editor = Editor::new(emulsion_core::Document::new(10, 10), None);
+        let before = editor.doc.clone();
+        for (name, args) in [
+            ("play_presentation_media", json!({"node":9})),
+            ("pause_presentation_media", json!({})),
+            ("seek_presentation_media", json!({"position_ms":500})),
+            ("get_presenter_timer", json!({})),
+            ("reset_presenter_timer", json!({})),
+        ] {
+            assert!(execute(&mut editor, name, &args).unwrap().is_error);
+            assert_eq!(editor.doc, before);
+        }
     }
 }

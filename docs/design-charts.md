@@ -28,3 +28,23 @@ Native project files retain chart data. SVG and PDF exports preserve the support
 - Dense charts and tables may need larger dimensions to make labels readable.
 
 Horizontal bars, radar charts, configurable gridline styling, spreadsheet formulas, live data connections, and animated chart playback remain future work. The cell grid is a data editor, not a full spreadsheet, and this is not a claim of full Canva chart parity.
+
+## Local formulas
+
+Enable **Formulas** in the chart/table data editor to interpret cells beginning
+with `=`. Existing documents default to literal cells. The grid keeps formula
+source text; Apply creates editable native text/path artwork from calculated
+values. Changing an input recalculates dependent cells in the same Undo step.
+MCP add/update chart tools accept `formulas:true` and the same source rows.
+
+References use A1–I51 (row 1 is the header), optional `$` address markers, numeric
+constants, arithmetic `+ - * / ^`, parentheses, and SUM/AVERAGE/MIN/MAX/COUNT/ABS/
+ROUND. Aggregates accept ranges such as `=SUM(B2:B4)` and ignore text in ranges.
+`ROUND(value, decimals)` accepts -12 through 12. Commas inside CSV formulas must
+follow normal CSV quoting. No expression can call scripts, URLs or external files.
+
+Invalid references, cycles, division by zero, excessive nesting/calculation cost,
+and nonfinite results reject Apply atomically with a cell diagnostic. Results are
+bounded to ±1e12. Addresses refer to current grid positions; adding/removing rows
+does not implement Excel-style reference rewriting. Native saves retain source
+formulas and calculated editable artwork.

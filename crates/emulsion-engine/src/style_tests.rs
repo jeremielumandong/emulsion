@@ -396,3 +396,66 @@ fn responsive_content_clip_is_analytic_at_zoom_and_keeps_native_text() {
         "content clipping cannot force glyphs through document-resolution rasterization"
     );
 }
+
+#[test]
+#[ignore = "Requires a real host GPU; run serial with EMULSION_REQUIRE_GPU_TESTS=1"]
+fn native_multistop_gradients_keep_vector_edges_at_zoom() {
+    use emulsion_raster::vector::{GradientStop, PathPaint, PathStyle};
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let mut doc = Document::new(64, 48);
+    let stops = [
+        GradientStop {
+            offset: 0.,
+            color: [255, 0, 0, 255],
+        },
+        GradientStop {
+            offset: 0.5,
+            color: [0, 255, 0, 255],
+        },
+        GradientStop {
+            offset: 1.,
+            color: [0, 0, 255, 255],
+        },
+    ];
+    let id = add(
+        &mut doc,
+        Node::path(
+            0,
+            "Native gradient",
+            Arc::new(emulsion_raster::vector_geometry::rectangle(
+                8.25, 8., 40., 30.,
+            )),
+            PathStyle {
+                fill: Some(stops[0].color),
+                fill_paint: PathPaint::from_stops(&stops, false, 0.).unwrap(),
+                stroke: None,
+                ..Default::default()
+            },
+            64,
+            48,
+        ),
+    );
+    let emulsion_core::NodeKind::Path { style, .. } = &doc.node(id).unwrap().kind else {
+        panic!()
+    };
+    assert!(crate::canvas::path_supported(style));
+    let mut engine = Engine::new(gpu, &doc, None, VectorSpace::Srgb, true, true, (64, 48)).unwrap();
+    for zoom in [1., 2., 4.] {
+        let output = render(&mut engine, zoom);
+        let width = (64. * zoom) as usize;
+        let y = (20. * zoom) as usize;
+        let edge = (8.25 * zoom).floor() as usize;
+        let expected = 1. - (8.25 * zoom).fract();
+        assert!(
+            (output[y * width + edge][3] - expected as f32).abs() < 0.04,
+            "zoom {zoom} edge"
+        );
+        let center = output[y * width + (28. * zoom) as usize];
+        assert!(
+            center[1] > 0.9,
+            "green middle stop remains native at zoom {zoom}: {center:?}"
+        );
+    }
+}

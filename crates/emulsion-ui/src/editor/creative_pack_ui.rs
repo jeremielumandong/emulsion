@@ -8,6 +8,26 @@ use gpui_kit::component::{
     Sizable, WindowExt,
     button::{Button, ButtonVariants},
 };
+#[derive(Clone)]
+pub(super) struct DraggedPackStencil {
+    pub path: PathBuf,
+    pub index: usize,
+    pub name: String,
+}
+impl Render for DraggedPackStencil {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = theme::palette(cx);
+        div()
+            .px_3()
+            .py_2()
+            .rounded(px(6.))
+            .bg(p.panel)
+            .border_1()
+            .border_color(p.accent)
+            .text_color(p.ink)
+            .child(self.name.clone())
+    }
+}
 impl EditorView {
     pub(super) fn creative_pack_controls(&self, cx: &Context<Self>) -> AnyElement {
         div()
@@ -44,6 +64,32 @@ impl EditorView {
                     ),
             )
             .into_any_element()
+    }
+    pub(super) fn install_bundled_diagram_pack(&mut self, pack: String, cx: &mut Context<Self>) {
+        self.set_status("Preparing stencil previews…", false, cx);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let (pack, notes) = emulsion_io::diagram_packs::build(&pack)?;
+                    let (catalog, _) = template_pack::install(&library::root(), pack)?;
+                    Ok::<_, emulsion_io::IoError>((catalog, notes))
+                })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok((catalog, notes)) => {
+                    this.install_catalog(catalog);
+                    this.diagram_import_notes(notes.clone());
+                    this.set_status(
+                        format!("Stencil pack installed · {} import notes", notes.len()),
+                        false,
+                        cx,
+                    );
+                }
+                Err(e) => this.set_status(e.to_string(), true, cx),
+            })
+            .ok();
+        })
+        .detach();
     }
     pub(super) fn install_diagram_stencils(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
@@ -186,6 +232,15 @@ impl EditorView {
         page_index: usize,
         cx: &mut Context<Self>,
     ) {
+        self.use_local_stencil_at(path, page_index, None, cx);
+    }
+    pub(super) fn use_local_stencil_at(
+        &mut self,
+        path: PathBuf,
+        page_index: usize,
+        center: Option<(f64, f64)>,
+        cx: &mut Context<Self>,
+    ) {
         if !self.prepare_page_action(cx) {
             return;
         }
@@ -225,10 +280,13 @@ impl EditorView {
                 match result
                     .map_err(|e| e.to_string())
                     .and_then(|(fragment, bounds)| {
+                        let center = center.unwrap_or((
+                            this.editor.doc.width as f64 / 2.,
+                            this.editor.doc.height as f64 / 2.,
+                        ));
                         let offset = (
-                            (this.editor.doc.width as f64 - bounds.w as f64) / 2. - bounds.x as f64,
-                            (this.editor.doc.height as f64 - bounds.h as f64) / 2.
-                                - bounds.y as f64,
+                            center.0 - bounds.w as f64 / 2. - bounds.x as f64,
+                            center.1 - bounds.h as f64 / 2. - bounds.y as f64,
                         );
                         fragment.paste(&mut this.editor, Slot::TOP, offset)
                     }) {
@@ -271,18 +329,42 @@ impl EditorView {
                     continue;
                 }
                 let path = asset.path.clone();
+                let preview = path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(format!("entry-{index}.png"));
+                let drag = DraggedPackStencil {
+                    path: path.clone(),
+                    index,
+                    name: name.clone(),
+                };
                 list = list.child(
-                    Button::new((
-                        ElementId::from("stencil-pack-item"),
-                        format!("{}-{index}", asset.id),
-                    ))
-                    .label(format!("{} · {name}", asset.name))
-                    .tooltip(format!("{}\n{}", asset.attribution, asset.license))
-                    .small()
-                    .outline()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.use_local_stencil(path.clone(), index, cx)
-                    })),
+                    div()
+                        .id((
+                            ElementId::from("stencil-pack-item"),
+                            format!("{}-{index}", asset.id),
+                        ))
+                        .test_support()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .p_1()
+                        .border_1()
+                        .border_color(p.line)
+                        .rounded(px(5.))
+                        .cursor_pointer()
+                        .hover(|d| d.border_color(p.accent).bg(p.accent.opacity(0.06)))
+                        .child(img(preview).size(px(42.)).object_fit(ObjectFit::Contain))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(11.))
+                                .child(format!("{} · {name}", asset.name)),
+                        )
+                        .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.use_local_stencil(path.clone(), index, cx)
+                        })),
                 );
             }
         }

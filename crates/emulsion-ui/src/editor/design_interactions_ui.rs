@@ -1,5 +1,7 @@
 use super::*;
-use emulsion_core::design_interactions::{self as interactions, Action, OverlayOperation, Runtime};
+use emulsion_core::design_interactions::{
+    self as interactions, Action, OverlayOperation, Runtime, Trigger,
+};
 
 impl EditorView {
     pub(crate) fn presentation_media_visible(&self, node: NodeId) -> bool {
@@ -60,6 +62,15 @@ impl EditorView {
                 .unwrap_or_default()
         });
         let overlay = cx.new(|_| self.editor.doc.design.overlays.contains(&node));
+        let trigger = cx.new(|_| {
+            self.editor
+                .doc
+                .design
+                .interaction_triggers
+                .get(&node)
+                .copied()
+                .unwrap_or_default()
+        });
         let overlays = self
             .editor
             .doc
@@ -101,12 +112,13 @@ impl EditorView {
         let ticket = self.edit_ticket();
         let error = cx.new(|_| String::new());
         window.open_dialog(cx,move|dialog,window,cx|{
-            let add=actions.clone();let apply=actions.clone();let overlay_toggle=overlay.clone();let overlay_apply=overlay.clone();let owner=owner.clone();let error_apply=error.clone();
-            dialog.title("Object click actions").width(px(500.))
+            let add=actions.clone();let apply=actions.clone();let overlay_toggle=overlay.clone();let overlay_apply=overlay.clone();let owner=owner.clone();let error_apply=error.clone();let trigger_pick=trigger.clone();let trigger_apply=trigger.clone();
+            dialog.title("Object interactions").width(px(500.))
                 .child(div().id("design-interactions-body").test_support().max_h(px((f32::from(window.viewport_size().height)-220.).clamp(100.,660.))).overflow_y_scroll().flex().flex_col().gap_2()
+                    .child(Button::new("design-interaction-trigger").label(format!("Trigger: {} ▾",trigger.read(cx).label())).small().outline().dropdown_menu(move|mut menu,_,_|{for value in Trigger::ALL{let trigger=trigger_pick.clone();menu=menu.item(PopupMenuItem::new(value.label()).on_click(move|_,window,cx|{trigger.update(cx,|state,cx|{*state=value;cx.notify();});window.refresh();}));}menu}))
                     .child("Actions run during presentation only. Overlays are hidden until opened; Escape closes the top overlay before exiting.")
                     .child(Button::new("design-interaction-overlay").label(if *overlay.read(cx){"✓ This group is a presentation overlay"}else{"Use this group as a presentation overlay"}).small().outline().disabled(!can_overlay).on_click(move|_,window,cx|{overlay_toggle.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
-                    .child(Button::new("design-interaction-add").label("Add click action").small().outline().disabled(actions.read(cx).len()>=8).on_click(move|_,window,cx|{add.update(cx,|v,cx|{v.push(Action::Next);cx.notify();});window.refresh();}))
+                    .child(Button::new("design-interaction-add").label("Add action").small().outline().disabled(actions.read(cx).len()>=8).on_click(move|_,window,cx|{add.update(cx,|v,cx|{v.push(Action::Next);cx.notify();});window.refresh();}))
                     .children(actions.read(cx).iter().cloned().enumerate().map(|(index,action)|{
                         let state=actions.clone();let remove=actions.clone();let overlay_targets=overlays.clone();let component_targets=variants.clone();let slide_targets=pages.clone();
                         let options=[("Next slide",Action::Next),("Previous slide",Action::Previous),("Back",Action::Back),("Specific slide",Action::Slide{page:current_page}),("Show overlay",Action::Overlay{target:overlays.first().map_or(0,|v|v.0),operation:OverlayOperation::Show}),("Toggle overlay",Action::Overlay{target:overlays.first().map_or(0,|v|v.0),operation:OverlayOperation::Toggle}),("Hide overlay",Action::Overlay{target:overlays.first().map_or(0,|v|v.0),operation:OverlayOperation::Hide}),("Close top overlay",Action::CloseOverlay),("Switch component variant",Action::Variant{target:variants.first().map_or(0,|v|v.0),variant:variants.first().and_then(|v|v.2.first()).cloned().unwrap_or_default()})];
@@ -132,7 +144,7 @@ impl EditorView {
                         // Include newly selected overlay targets atomically with the binding.
                         let mut probe=emulsion_core::Editor::new(this.editor.doc.clone(),None);
                         for action in &list{if let Action::Overlay{target,..}=action{probe.doc.design.overlays.insert(*target);}}
-                        match interactions::author(&mut probe,node,list,can_overlay.then_some(is_overlay)){
+                        match interactions::author_with_trigger(&mut probe,node,list,can_overlay.then_some(is_overlay),Some(*trigger_apply.read(cx))){
                             Ok(())=>match this.editor.execute(Command::SetDesign{design:Box::new(probe.doc.design)}){Ok(_)=>{this.after_change(cx);true},Err(e)=>{this.set_status(e.to_string(),true,cx);false}},Err(e)=>{this.set_status(e,true,cx);false}
                         }
                     }).unwrap_or(false);
@@ -254,9 +266,71 @@ impl EditorView {
         };
         let doc = self.motion.preview.as_ref().unwrap_or(&self.editor.doc);
         if let Some(id) = interactions::hit_action(doc, &session.interactions, point) {
-            if let Err(error) = self.trigger_presentation_object(id, window, cx) {
+            match doc
+                .design
+                .interaction_triggers
+                .get(&id)
+                .copied()
+                .unwrap_or_default()
+            {
+                Trigger::DragEnd => self.motion.dragged_action = Some((id, event.position)),
+                Trigger::Click => {
+                    if let Err(error) = self.trigger_presentation_object(id, window, cx) {
+                        self.set_status(error, true, cx);
+                    }
+                }
+                Trigger::Hover => (),
+            }
+        }
+    }
+    pub(crate) fn presentation_interaction_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.motion.presenting || self.motion.dragged_action.is_some() {
+            return;
+        }
+        let hit = self.doc_point(event.position).and_then(|point| {
+            self.motion.session.as_ref().and_then(|s| {
+                interactions::hit_action(
+                    self.motion.preview.as_ref().unwrap_or(&self.editor.doc),
+                    &s.interactions,
+                    point,
+                )
+            })
+        });
+        if hit == self.motion.hovered_action {
+            return;
+        }
+        self.motion.hovered_action = hit;
+        if let Some(id) = hit {
+            let doc = self.motion.preview.as_ref().unwrap_or(&self.editor.doc);
+            if doc.design.interaction_triggers.get(&id) == Some(&Trigger::Hover)
+                && let Err(error) = self.trigger_presentation_object(id, window, cx)
+            {
                 self.set_status(error, true, cx);
             }
+        }
+    }
+    pub(crate) fn presentation_interaction_release(
+        &mut self,
+        event: &MouseUpEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.motion.presenting || event.button != MouseButton::Left {
+            return;
+        }
+        let Some((node, start)) = self.motion.dragged_action.take() else {
+            return;
+        };
+        let delta = event.position - start;
+        if f32::from(delta.x).hypot(f32::from(delta.y)) >= 4.
+            && let Err(error) = self.trigger_presentation_object(node, window, cx)
+        {
+            self.set_status(error, true, cx);
         }
     }
     pub(crate) fn trigger_presentation_object(
@@ -274,7 +348,7 @@ impl EditorView {
             .interactions
             .get(&node)
             .cloned()
-            .ok_or("This object has no click actions.")?;
+            .ok_or("This object has no presentation actions.")?;
         let mut ancestor = Some(node);
         while let Some(id) = ancestor {
             let item = doc.node(id).ok_or("Interactive object is missing")?;

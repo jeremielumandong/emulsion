@@ -97,6 +97,16 @@ pub fn validate(design: &Design, doc: &Document) -> Result<(), String> {
     if design.variables.len() > 256 || design.variable_bindings.len() > crate::document::MAX_NODES {
         return Err("Use at most 256 design variables per page.".into());
     }
+    if design.variable_libraries.iter().any(|(name, id)| {
+        !design.variables.contains_key(name)
+            || id.is_empty()
+            || id.len() > 128
+            || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    }) {
+        return Err(
+            "Variable libraries need existing variables and valid stable identities.".into(),
+        );
+    }
     for (name, value) in &design.variables {
         validate_name(name)?;
         if matches!(value, Value::Number(n) if !n.is_finite() || n.abs() > 1e9) {
@@ -170,7 +180,11 @@ pub(crate) fn synchronize(before: &Document, doc: &mut Document) -> Result<(), S
                             style.width = n as f32;
                         }
                         (Property::TextColor, Value::Color(color), NodeKind::Text { spec, .. }) => {
-                            if spec.color == color && spec.runs.iter().all(|r| r.style.color == color) { continue; }
+                            if spec.color == color
+                                && spec.runs.iter().all(|r| r.style.color == color)
+                            {
+                                continue;
+                            }
                             let spec = Arc::make_mut(spec);
                             spec.color = color;
                             for run in &mut spec.runs {
@@ -178,7 +192,11 @@ pub(crate) fn synchronize(before: &Document, doc: &mut Document) -> Result<(), S
                             }
                         }
                         (Property::FontSize, Value::Number(n), NodeKind::Text { spec, .. }) => {
-                            if spec.size == n as f32 && spec.runs.iter().all(|r| r.style.size == n as f32) { continue; }
+                            if spec.size == n as f32
+                                && spec.runs.iter().all(|r| r.style.size == n as f32)
+                            {
+                                continue;
+                            }
                             let spec = Arc::make_mut(spec);
                             spec.size = n as f32;
                             for run in &mut spec.runs {
@@ -251,6 +269,9 @@ pub fn put(editor: &mut Editor, old: Option<&str>, name: &str, value: Value) -> 
                     return Err("That variable name already exists.".into());
                 }
                 d.variables.remove(old);
+                if let Some(identity) = d.variable_libraries.remove(old) {
+                    d.variable_libraries.insert(name.into(), identity);
+                }
                 for bindings in d.variable_bindings.values_mut() {
                     for v in bindings.values_mut() {
                         if v == old {
@@ -280,6 +301,9 @@ pub fn rename(editor: &mut Editor, name: &str, to: &str) -> Result<(), String> {
             .remove(name)
             .ok_or("Variable no longer exists.")?;
         d.variables.insert(to.into(), value);
+        if let Some(identity) = d.variable_libraries.remove(name) {
+            d.variable_libraries.insert(to.into(), identity);
+        }
         for bindings in d.variable_bindings.values_mut() {
             for value in bindings.values_mut() {
                 if value == name {
@@ -295,6 +319,7 @@ pub fn remove(editor: &mut Editor, name: &str) -> Result<(), String> {
         d.variables
             .remove(name)
             .ok_or("Variable no longer exists.")?;
+        d.variable_libraries.remove(name);
         for bindings in d.variable_bindings.values_mut() {
             bindings.retain(|_, value| value != name);
         }
@@ -309,8 +334,14 @@ pub fn bind(
     name: Option<&str>,
 ) -> Result<(), String> {
     if ids.is_empty()
-        || ids.iter().copied().collect::<std::collections::HashSet<_>>().len() != ids.len()
-        || ids.iter().any(|id| editor.doc.node(*id).is_none()) {
+        || ids
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != ids.len()
+        || ids.iter().any(|id| editor.doc.node(*id).is_none())
+    {
         return Err("Select existing objects to bind or unlink.".into());
     }
     for id in ids {
@@ -354,11 +385,19 @@ pub fn merge_into(target: &mut Design, source: &Design) {
         let stem: String = name.chars().take(64).collect();
         let mut candidate = name.clone();
         let mut index = 2;
-        while target.variables.get(&candidate).is_some_and(|v| v != value) {
+        while target.variables.get(&candidate).is_some_and(|v| {
+            v != value
+                || target.variable_libraries.get(&candidate) != source.variable_libraries.get(name)
+        }) {
             candidate = format!("{stem} ({index})");
             index += 1;
         }
         target.variables.insert(candidate.clone(), value.clone());
+        if let Some(identity) = source.variable_libraries.get(name) {
+            target
+                .variable_libraries
+                .insert(candidate.clone(), identity.clone());
+        }
         names.insert(name, candidate);
     }
     for (id, bindings) in &source.variable_bindings {

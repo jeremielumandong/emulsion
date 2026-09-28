@@ -40,6 +40,8 @@ pub mod printing;
 pub mod project;
 pub mod project_animation;
 pub mod project_export;
+pub mod selection_export;
+pub mod design_html;
 pub mod psd;
 pub mod raw;
 pub mod raw_probe;
@@ -258,39 +260,10 @@ fn import_any(path: &Path) -> Result<Document> {
     }
 }
 
-/// An SVG made only of plain paths and shapes opens as editable path
-/// layers; anything richer (gradients, filters, text, images, masks) is
-/// rendered whole into one pixel layer so it looks as drawn.
+/// Open SVG paths and outlined text as editable vectors. Richer appearances
+/// retain their original scalable SVG source alongside a preview.
 fn open_svg(path: &Path) -> Result<Document> {
-    let text = read_svg(path)?;
-    let paths = svg::import(&text);
-    if let Ok(imp) = &paths
-        && imp.skipped.is_empty()
-        && !imp.doc.nodes.is_empty()
-    {
-        return Ok(imp.doc.clone());
-    }
-    match svg::rasterize(&text) {
-        Ok(raster) => {
-            let mut doc = import::document_from(path, import::Decoded { raster, depth: 8 })?;
-            if let Ok(imp) = &paths
-                && !imp.skipped.is_empty()
-            {
-                tracing::info!(
-                    path = %path.display(),
-                    skipped = imp.skipped.len(),
-                    "SVG rendered to pixels: some elements have no editable path form"
-                );
-            }
-            doc.info = Default::default();
-            Ok(doc)
-        }
-        Err(render_err) => match paths {
-            Ok(imp) if !imp.doc.nodes.is_empty() => Ok(imp.doc),
-            Ok(_) => Err(render_err),
-            Err(e) => Err(e),
-        },
-    }
+    svg_vectors::document(&read_svg(path)?)
 }
 
 fn is_known(path: &Path) -> bool {
@@ -484,3 +457,20 @@ mod design_components_tests;
 
 #[cfg(test)]
 mod design_variable_tests;
+
+pub mod svg_vectors;
+
+pub mod diagram_packs;
+
+mod creative_brand;
+
+#[cfg(test)]
+mod design_font_tests;
+
+mod font_data;
+mod media_data;
+
+#[cfg(test)]
+mod design_vector_tests;
+
+pub mod design_motion_export;

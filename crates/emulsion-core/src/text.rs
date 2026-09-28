@@ -21,6 +21,15 @@ pub enum AntiAliasMode {
 #[path = "text_features.rs"]
 mod features;
 pub use features::{ListStyle, apply_list, decoration_rects};
+#[path = "text_paragraph_layout.rs"]
+mod paragraph_layout;
+#[path = "text_paragraphs.rs"]
+mod paragraphs;
+pub use paragraph_layout::ShapedBuffer;
+pub use paragraphs::{
+    ParagraphFormat, ParagraphList, ParagraphStyle, apply_paragraphs, paragraph_content,
+    paragraph_enter,
+};
 
 /// Character formatting stored on a UTF-8 byte range.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -142,6 +151,7 @@ pub struct TextSpec {
     pub letter_spacing: f32,
     /// Independently formatted character ranges, indexed by UTF-8 byte offset.
     pub runs: Vec<TextRun>,
+    pub paragraphs: Vec<ParagraphStyle>,
     /// Optional paragraph frame height. Ink outside it is clipped.
     pub height: Option<f32>,
     pub anti_alias: AntiAliasMode,
@@ -171,6 +181,7 @@ impl Default for TextSpec {
             width: None,
             letter_spacing: 0.0,
             runs: Vec::new(),
+            paragraphs: Vec::new(),
             height: None,
             anti_alias: AntiAliasMode::Smooth,
             warp: crate::text_effects::TextWarp::default(),
@@ -228,6 +239,7 @@ impl TextSpec {
         self.warp = self.warp.sanitized();
         self.text_path = self.text_path.map(crate::text_effects::TextPath::sanitized);
         self.normalize_runs();
+        paragraphs::normalize(&mut self);
         self
     }
 
@@ -313,6 +325,7 @@ impl TextSpec {
     /// Inserted text inherits the style at the insertion point.
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, replacement: &str) {
         let range = grapheme_range_allow_empty(&self.text, range);
+        let paragraph_styles = paragraphs::replacement(self, range.clone(), replacement);
         let inherited = self.style_at(range.start.saturating_sub(1));
         let removed = range.end - range.start;
         self.text.replace_range(range.clone(), replacement);
@@ -343,7 +356,9 @@ impl TextSpec {
             });
         }
         self.runs = next;
+        self.paragraphs = paragraph_styles;
         self.normalize_runs();
+        paragraphs::normalize(self);
     }
 
     pub fn normalize_runs(&mut self) {
@@ -438,6 +453,7 @@ pub fn font_system() -> cosmic_text::FontSystem {
     ] {
         system.db_mut().load_font_data(font.to_vec());
     }
+    crate::design_fonts::populate(&mut system);
     system
 }
 
@@ -730,6 +746,17 @@ fn style_spans(spec: &TextSpec) -> Vec<(std::ops::Range<usize>, TextStyle)> {
 /// `TextSpec::sanitized` and the text editing commands. Coordinates are local;
 /// consumers apply each style's baseline offset and the spec's transform.
 pub fn shaped_buffer(
+    spec: &TextSpec,
+    system: &mut cosmic_text::FontSystem,
+) -> (ShapedBuffer, Vec<TextStyle>) {
+    if spec.paragraphs.is_empty() || spec.vertical {
+        let (buffer, styles) = shaped_buffer_raw(spec, system);
+        return (ShapedBuffer::native(buffer), styles);
+    }
+    paragraph_layout::shape(spec, system)
+}
+
+fn shaped_buffer_raw(
     spec: &TextSpec,
     system: &mut cosmic_text::FontSystem,
 ) -> (cosmic_text::Buffer, Vec<TextStyle>) {

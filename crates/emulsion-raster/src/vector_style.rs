@@ -7,6 +7,14 @@ pub enum PatternKind {
     Stripes,
     Dots,
 }
+pub const MAX_GRADIENT_STOPS: usize = 16;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GradientStop {
+    pub offset: f32,
+    pub color: [u8; 4],
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum PathPaint {
     #[default]
@@ -17,6 +25,15 @@ pub enum PathPaint {
     },
     RadialGradient {
         end: [u8; 4],
+    },
+    LinearStops {
+        stops: [GradientStop; MAX_GRADIENT_STOPS],
+        count: u8,
+        angle: f32,
+    },
+    RadialStops {
+        stops: [GradientStop; MAX_GRADIENT_STOPS],
+        count: u8,
     },
     Pattern {
         kind: PatternKind,
@@ -50,6 +67,8 @@ pub enum StrokeJoin {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PathStyle {
+    /// SVG even-odd winding for compound paths.
+    pub even_odd: bool,
     pub stroke: Option<[u8; 4]>,
     pub width: f32,
     pub fill: Option<[u8; 4]>,
@@ -69,6 +88,7 @@ pub struct PathStyle {
 impl Default for PathStyle {
     fn default() -> Self {
         Self {
+            even_odd: false,
             stroke: Some([10, 10, 11, 255]),
             width: 3.0,
             fill: None,
@@ -92,12 +112,81 @@ fn finite(v: f32, fallback: f32, min: f32, max: f32) -> f32 {
     }
 }
 impl PathPaint {
+    pub fn from_stops(stops: &[GradientStop], radial: bool, angle: f32) -> Result<Self, String> {
+        if !(2..=MAX_GRADIENT_STOPS).contains(&stops.len())
+            || !angle.is_finite()
+            || angle.abs() > 360000.
+            || stops
+                .iter()
+                .any(|s| !s.offset.is_finite() || !(0. ..=1.).contains(&s.offset))
+            || stops.windows(2).any(|p| p[0].offset > p[1].offset)
+        {
+            return Err("Use 2–16 ordered gradient stops at 0–100%, with a finite angle.".into());
+        }
+        let mut data = [GradientStop::default(); MAX_GRADIENT_STOPS];
+        data[..stops.len()].copy_from_slice(stops);
+        Ok(if radial {
+            Self::RadialStops {
+                stops: data,
+                count: stops.len() as u8,
+            }
+        } else {
+            Self::LinearStops {
+                stops: data,
+                count: stops.len() as u8,
+                angle: angle.rem_euclid(360.),
+            }
+        })
+    }
+    pub fn gradient_stops(self, primary: [u8; 4]) -> Option<Vec<GradientStop>> {
+        match self {
+            Self::LinearGradient { end, .. } | Self::RadialGradient { end } => Some(vec![
+                GradientStop {
+                    offset: 0.,
+                    color: primary,
+                },
+                GradientStop {
+                    offset: 1.,
+                    color: end,
+                },
+            ]),
+            Self::LinearStops { stops, count, .. } | Self::RadialStops { stops, count } => {
+                Some(stops[..usize::from(count).min(MAX_GRADIENT_STOPS)].to_vec())
+            }
+            _ => None,
+        }
+    }
+    pub fn gradient_angle(self) -> f32 {
+        match self {
+            Self::LinearGradient { angle, .. } | Self::LinearStops { angle, .. } => angle,
+            _ => 0.,
+        }
+    }
+    pub fn is_radial(self) -> bool {
+        matches!(self, Self::RadialGradient { .. } | Self::RadialStops { .. })
+    }
     fn sanitized(self) -> Self {
         match self {
             Self::LinearGradient { end, angle } => Self::LinearGradient {
                 end,
                 angle: finite(angle, 0.0, -360000.0, 360000.0).rem_euclid(360.0),
             },
+            Self::LinearStops {
+                stops,
+                count,
+                angle,
+            } => Self::from_stops(
+                &stops[..usize::from(count).min(MAX_GRADIENT_STOPS)],
+                false,
+                angle,
+            )
+            .unwrap_or(Self::Solid),
+            Self::RadialStops { stops, count } => Self::from_stops(
+                &stops[..usize::from(count).min(MAX_GRADIENT_STOPS)],
+                true,
+                0.,
+            )
+            .unwrap_or(Self::Solid),
             Self::Pattern {
                 kind,
                 secondary,

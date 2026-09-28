@@ -81,7 +81,7 @@ impl EditorView {
         let Some(target) = self.editor.doc.node(node) else {
             return;
         };
-        let content = matches!(target.kind, NodeKind::Text { .. } | NodeKind::Raster { .. });
+        let content = matches!(target.kind, NodeKind::Text { .. } | NodeKind::Raster { .. } | NodeKind::Smart { .. });
         let geometry = matches!(
             target.kind,
             NodeKind::Text { .. }
@@ -93,14 +93,16 @@ impl EditorView {
         let path = matches!(target.kind, NodeKind::Path { .. });
         let fill = path || matches!(target.kind, NodeKind::Fill { .. });
         let state = cx.new(|_| components::overrides_for(&self.editor.doc, instance, node));
+        let tracking = cx.new(|_| self.editor.doc.design.component_links[&instance].auto_overrides);
         let error = cx.new(|_| String::new());
         let ticket = self.edit_ticket();
         let owner = cx.weak_entity();
         window.open_dialog(cx,move|dialog,window,cx|{
-            let current=*state.read(cx);let apply=state.clone();let owner=owner.clone();let error_apply=error.clone();
+            let current=*state.read(cx);let apply=state.clone();let tracking_apply=tracking.clone();let tracking_click=tracking.clone();let automatic=*tracking.read(cx);let owner=owner.clone();let error_apply=error.clone();
             dialog.title("Preserve object properties").width(px(460.))
                 .child(div().id("design-component-override-body").test_support().max_h(px((f32::from(window.viewport_size().height)-220.).clamp(100.,500.))).overflow_y_scroll().flex().flex_col().gap_2()
                     .child("Choose which local edits survive updates from other instances. Edit the object with the normal canvas tools.")
+                    .child(Button::new("design-component-auto-overrides").label(format!("{} Automatically preserve edits",if automatic {"✓"}else{"○"})).small().outline().on_click(move|_,window,cx|{tracking_click.update(cx,|value,cx|{*value= !*value;cx.notify();});window.refresh();}))
                     .children([(0usize,"Text / image content",current.content,content),(1,"Paint, typography & effects",current.appearance,true),(2,"Position, size & shape",current.geometry,geometry),(3,"Opacity",current.opacity,true),(4,"Visibility",current.visibility,true),(5,"Fill color",current.fill,fill),(6,"Stroke color",current.stroke,path),(7,"Stroke width",current.stroke_width,path),(8,"Font family",current.font_family,text),(9,"Font size",current.font_size,text),(10,"Text color",current.text_color,text),(11,"Position only",current.position,geometry),(12,"Size only",current.size,geometry),(13,"Effects only",current.effects,true)].into_iter().map(|(i,label,checked,enabled)|{
                         let state=state.clone();Button::new(("design-component-override",i)).label(format!("{} {label}",if checked{"✓"}else{"○"})).small().outline().disabled(!enabled).on_click(move|_,window,cx|{state.update(cx,|state,cx|{let value=match i{0=>&mut state.content,1=>&mut state.appearance,2=>&mut state.geometry,3=>&mut state.opacity,4=>&mut state.visibility,5=>&mut state.fill,6=>&mut state.stroke,7=>&mut state.stroke_width,8=>&mut state.font_family,9=>&mut state.font_size,10=>&mut state.text_color,11=>&mut state.position,12=>&mut state.size,_=>&mut state.effects};*value= !*value;cx.notify();});window.refresh();})
                     }))
@@ -110,7 +112,7 @@ impl EditorView {
                     let flags=*apply.read(cx);
                     let result=owner.update(cx,|this,cx|{
                         if this.edit_ticket()!=ticket{return Err("The page changed. Reopen property overrides.".into());}
-                        components::set_overrides(&mut this.editor,instance,node,flags)?;
+                        components::configure_overrides(&mut this.editor,instance,node,flags,Some(*tracking_apply.read(cx)))?;
                         this.after_change(cx);Ok::<_,String>(())
                     }).unwrap_or_else(|_|Err("The editor closed.".into()));
                     match result{Ok(())=>true,Err(message)=>{error_apply.update(cx,|error,cx|{*error=message;cx.notify();});window.refresh();false}}

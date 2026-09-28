@@ -53,6 +53,9 @@ impl PlayerServer {
             media.looping,
             media.volume
         );
+        let html = format!("{html}{}", control::script(&path, false));
+        let controls: control::SharedControls = Default::default();
+        let worker_controls = controls.clone();
         let media = media.clone();
         let finished = Arc::new(AtomicBool::new(false));
         let worker_finished = finished.clone();
@@ -68,12 +71,15 @@ impl PlayerServer {
                             let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
                             let _ = serve_local(
                                 &mut stream,
-                                &authority,
-                                &path,
-                                &asset,
-                                &html,
-                                &media,
-                                &worker_finished,
+                                LocalRequest {
+                                    authority: &authority,
+                                    path: &path,
+                                    asset: &asset,
+                                    html: &html,
+                                    media: &media,
+                                    finished: &worker_finished,
+                                    controls: &worker_controls,
+                                },
                             );
                         }
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -88,18 +94,29 @@ impl PlayerServer {
             stop,
             worker: Some(worker),
             finished,
+            controls,
         })
     }
 }
-fn serve_local(
-    stream: &mut TcpStream,
-    authority: &str,
-    path: &str,
-    asset: &str,
-    html: &str,
-    media: &LocalMedia,
-    finished: &AtomicBool,
-) -> io::Result<()> {
+struct LocalRequest<'a> {
+    authority: &'a str,
+    path: &'a str,
+    asset: &'a str,
+    html: &'a str,
+    media: &'a LocalMedia,
+    finished: &'a AtomicBool,
+    controls: &'a control::SharedControls,
+}
+fn serve_local(stream: &mut TcpStream, request: LocalRequest<'_>) -> io::Result<()> {
+    let LocalRequest {
+        authority,
+        path,
+        asset,
+        html,
+        media,
+        finished,
+        controls,
+    } = request;
     let mut bytes = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_millis(250);
     loop {
@@ -146,6 +163,16 @@ fn serve_local(
             "text/plain",
             &[],
             false,
+            None,
+        );
+    }
+    if let Some((status, body)) = control::control_response(first[1], path, head, controls) {
+        return local_response(
+            stream,
+            &status,
+            "application/json",
+            body.as_bytes(),
+            head,
             None,
         );
     }

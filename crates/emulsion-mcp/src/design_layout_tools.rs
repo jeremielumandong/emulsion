@@ -44,7 +44,9 @@ fn breakpoint_schema() -> Value {
             "gap":{"type":["number","null"],"minimum":0,"maximum":10000},
             "columns":{"type":["integer","null"],"minimum":1,"maximum":64},
             "wrap":{"type":["boolean","null"]},"align":{"type":["string","null"],"enum":["start","center","end",null]},
-            "hug_width":{"type":["boolean","null"]},"hug_height":{"type":["boolean","null"]},"clip_content":{"type":["boolean","null"]}
+            "hug_width":{"type":["boolean","null"]},"hug_height":{"type":["boolean","null"]},"clip_content":{"type":["boolean","null"]},
+            "limits":{"type":["object","null"],"additionalProperties":false,"properties":{"min_width":optional_size(),"max_width":optional_size(),"min_height":optional_size(),"max_height":optional_size()},"description":"Omit/null to inherit base limits; an object replaces all four bounds, with missing/null bounds unrestricted."},
+            "children":{"type":"object","patternProperties":{"^[1-9][0-9]*$":{"type":"object","additionalProperties":false,"properties":{"absolute":{"type":"boolean"},"fill_width":{"type":"boolean"},"fill_height":{"type":"boolean"},"min_width":optional_size(),"max_width":optional_size(),"min_height":optional_size(),"max_height":optional_size(),"aspect_ratio":optional_ratio()}}},"additionalProperties":false,"description":"Immediate child ID to complete sizing settings; omitted children inherit base sizing."}
         }}
     }})
 }
@@ -59,7 +61,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         def(
             "set_responsive_layout",
             "Enable or patch automatic layout, native content clipping and canvas-width breakpoints on an existing group. Use group_nodes first for ungrouped objects. Creates a native rectangle boundary when first enabled, then reflows children in layer order. Omitted fields preserve existing settings; new layouts default to column, padding 24, gap 16, columns 2, wrap true, align start, fixed width/height without bounds, and 80% of the canvas dimensions.",
-            json!({"group":node(),"size":{"type":"array","items":{"type":"number","minimum":1,"maximum":100000},"minItems":2,"maxItems":2},"flow":{"type":"string","enum":["row","column","grid"]},"padding":{"type":"array","items":{"type":"number","minimum":0,"maximum":10000},"minItems":4,"maxItems":4,"description":"Top,right,bottom,left in document pixels."},"gap":{"type":"number","minimum":0,"maximum":10000},"columns":{"type":"integer","minimum":1,"maximum":64},"wrap":{"type":"boolean"},"align":{"type":"string","enum":["start","center","end"]},"hug_height":{"type":"boolean"},"hug_width":{"type":"boolean"},"min_width":optional_size(),"max_width":optional_size(),"min_height":optional_size(),"max_height":optional_size(),"clip_content":{"type":"boolean"},"breakpoints":{"type":"array","maxItems":16,"items":breakpoint_schema(),"description":"Replace all canvas-width breakpoints; [] clears. Highest matching min_width inherits directly from base. Missing/null override fields inherit base. Unique widths required."}}),
+            json!({"group":node(),"size":{"type":"array","items":{"type":"number","minimum":1,"maximum":100000},"minItems":2,"maxItems":2},"flow":{"type":"string","enum":["row","column","grid"]},"padding":{"type":"array","items":{"type":"number","minimum":0,"maximum":10000},"minItems":4,"maxItems":4,"description":"Top,right,bottom,left in document pixels."},"gap":{"type":"number","minimum":0,"maximum":10000},"columns":{"type":"integer","minimum":1,"maximum":64},"wrap":{"type":"boolean"},"align":{"type":"string","enum":["start","center","end"]},"hug_height":{"type":"boolean"},"hug_width":{"type":"boolean"},"min_width":optional_size(),"max_width":optional_size(),"min_height":optional_size(),"max_height":optional_size(),"clip_content":{"type":"boolean"},"breakpoint_reference":{"enum":["canvas","container"],"description":"Container queries use immediate responsive parent content width; top-level frames use canvas. Content-sized query ancestors reject to avoid cycles."},"breakpoints":{"type":"array","maxItems":16,"items":breakpoint_schema(),"description":"Replace all canvas-width breakpoints; [] clears. Highest matching min_width inherits directly from base. Missing/null override fields inherit base. Unique widths required."}}),
             &["group"],
         ),
         def(
@@ -185,7 +187,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
     }
     match name {
         "describe_design_layout" => Ok(
-            json!({"frames":editor.doc.design.frames,"constraints":editor.doc.design.constraints,"bounds":editor.doc.design.frames.keys().map(|id|json!({"group":id,"bounds":layout::bounds(&editor.doc,*id),"active_breakpoint":layout::active_breakpoint(&editor.doc,*id),"effective_frame":layout::effective_frame(&editor.doc,*id)})).collect::<Vec<_>>()}),
+            json!({"frames":editor.doc.design.frames,"constraints":editor.doc.design.constraints,"bounds":editor.doc.design.frames.keys().map(|id|json!({"group":id,"bounds":layout::bounds(&editor.doc,*id),"active_breakpoint":layout::active_breakpoint(&editor.doc,*id),"reference_width":layout::reference_width(&editor.doc,*id),"effective_frame":layout::effective_frame(&editor.doc,*id)})).collect::<Vec<_>>()}),
         ),
         "set_responsive_layout" => {
             let group = id(args, "group")?;
@@ -212,6 +214,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 min_height,
                 max_height,
                 clip_content,
+                breakpoint_reference,
                 breakpoints
             );
             let default = layout::bounds(&editor.doc, group).map_or(
@@ -618,5 +621,41 @@ mod sizing_tests {
         assert_eq!(editor.doc, installed);
         assert!(editor.undo());
         assert_eq!(editor.doc, before);
+    }
+    #[test]
+    fn responsive_container_limits_child_overrides_mcp_are_native_and_atomic() {
+        let (mut e, group, child) = fixture();
+        let result = call(
+            &mut e,
+            "set_responsive_layout",
+            json!({"group":group,"size":[300,200],"breakpoint_reference":"container","breakpoints":[{"min_width":500,"overrides":{"limits":{"max_width":250},"children":{child.to_string():{"fill_width":true,"min_width":120,"max_width":180}}}}]}),
+        );
+        assert_eq!(result["frame"]["breakpoint_reference"], "container");
+        assert_eq!(result["effective_frame"]["max_width"], 250.);
+        assert!(layout::item_dimensions(&e.doc, child).unwrap().0 <= 180.01);
+        let original = e.doc.clone();
+        for overrides in [
+            json!({"limits":{"min_width":200,"max_width":100}}),
+            json!({"children":{child.to_string():{"unknown":true}}}),
+            json!({"children":{"99999":{"fill_width":true}}}),
+        ] {
+            reject(
+                &mut e,
+                "set_responsive_layout",
+                json!({"group":group,"breakpoints":[{"min_width":9999,"overrides":overrides}]}),
+            );
+        }
+        assert_eq!(e.doc, original);
+        call(
+            &mut e,
+            "set_responsive_layout",
+            json!({"group":group,"breakpoints":[{"min_width":500,"overrides":{"limits":{}}}]}),
+        );
+        assert_eq!(
+            layout::effective_frame(&e.doc, group).unwrap().max_width,
+            None
+        );
+        e.undo();
+        assert_eq!(e.doc, original);
     }
 }

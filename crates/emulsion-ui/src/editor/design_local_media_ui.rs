@@ -92,8 +92,8 @@ impl EditorView {
 mod tests {
     use super::*;
     use ::core::prelude::v1::test;
-    use gpui_kit::test::TestWindowExt;
     use gpui::TestAppContext;
+    use gpui_kit::test::TestWindowExt;
     #[gpui_kit::test]
     fn design_local_media_playback_form_cancel_invalid_and_undo(cx: &mut TestAppContext) {
         let mut editor = emulsion_core::Editor::new(Document::new(640, 480), None);
@@ -111,7 +111,7 @@ mod tests {
             })
         });
         cx.run_until_parked();
-        cx.update(|window, cx| window.click("close", cx));
+        cx.simulate_keystrokes("escape");
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(view.read(cx).editor.doc, original);

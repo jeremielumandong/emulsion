@@ -237,8 +237,16 @@ impl EditorView {
             )
     }
 
-    fn clipboard_ready(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.assistant.running
+    pub(crate) fn clipboard_host(&mut self,action:&str,cx:&mut Context<Self>)->Result<(),String>{
+        if !self.clipboard_ready_from(true,cx){return Err("Finish the active edit before clipboard operations.".into());}
+        self.status=None;
+        match action {"copy"=>self.copy_pixels_from(true,cx),"cut"=>self.cut_pixels_from(true,cx),"paste"=>self.paste_pixels_from(true,cx),_=>return Err("Unknown clipboard action.".into())}
+        if let Some((message,true))=&self.status {return Err(message.to_string());}
+        Ok(())
+    }
+    fn clipboard_ready(&mut self, cx: &mut Context<Self>) -> bool { self.clipboard_ready_from(false,cx) }
+    fn clipboard_ready_from(&mut self, host:bool,cx: &mut Context<Self>) -> bool {
+        if (self.assistant.running && !host)
             || self.drag.is_some()
             || self.editor.in_transaction()
             || self.warp.is_some()
@@ -391,8 +399,9 @@ impl EditorView {
         true
     }
 
-    pub fn copy_pixels(&mut self, cx: &mut Context<Self>) {
-        if !self.clipboard_ready(cx) {
+    pub fn copy_pixels(&mut self,cx:&mut Context<Self>) {self.copy_pixels_from(false,cx);}
+    fn copy_pixels_from(&mut self, host:bool,cx: &mut Context<Self>) {
+        if !self.clipboard_ready_from(host,cx) {
             return;
         }
         match self.selected_pixels() {
@@ -541,8 +550,9 @@ impl EditorView {
             .collect()
     }
 
-    pub fn cut_pixels(&mut self, cx: &mut Context<Self>) {
-        if !self.clipboard_ready(cx) {
+    pub fn cut_pixels(&mut self,cx:&mut Context<Self>) {self.cut_pixels_from(false,cx);}
+    fn cut_pixels_from(&mut self, host:bool,cx: &mut Context<Self>) {
+        if !self.clipboard_ready_from(host,cx) {
             return;
         }
         let roots = self.selected_layer_roots();
@@ -656,8 +666,9 @@ impl EditorView {
         Ok(slot)
     }
 
-    pub fn paste_pixels(&mut self, cx: &mut Context<Self>) {
-        if !self.clipboard_ready(cx) {
+    pub fn paste_pixels(&mut self,cx:&mut Context<Self>) {self.paste_pixels_from(false,cx);}
+    fn paste_pixels_from(&mut self, host:bool,cx: &mut Context<Self>) {
+        if !self.clipboard_ready_from(host,cx) {
             return;
         }
         let image = cx.read_from_clipboard().and_then(|item| {

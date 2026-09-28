@@ -11,15 +11,19 @@ pub enum Property {
     ScaleY,
     Rotation,
     Opacity,
+    Visibility,
+    TextReveal,
 }
 impl Property {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::TranslationX,
         Self::TranslationY,
         Self::ScaleX,
         Self::ScaleY,
         Self::Rotation,
         Self::Opacity,
+        Self::Visibility,
+        Self::TextReveal,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -29,10 +33,15 @@ impl Property {
             Self::ScaleY => "Vertical scale",
             Self::Rotation => "Rotation · degrees",
             Self::Opacity => "Opacity multiplier",
+            Self::Visibility => "Visible (0 hidden, 1 shown)",
+            Self::TextReveal => "Text revealed · fraction",
         }
     }
     pub fn initial(self) -> f64 {
-        if matches!(self, Self::ScaleX | Self::ScaleY | Self::Opacity) {
+        if matches!(
+            self,
+            Self::ScaleX | Self::ScaleY | Self::Opacity | Self::Visibility | Self::TextReveal
+        ) {
             1.
         } else {
             0.
@@ -44,7 +53,7 @@ impl Property {
                 Self::TranslationX | Self::TranslationY => (-100_000. ..=100_000.).contains(&value),
                 Self::ScaleX | Self::ScaleY => (0.01..=100.).contains(&value),
                 Self::Rotation => (-36_000. ..=36_000.).contains(&value),
-                Self::Opacity => (0. ..=1.).contains(&value),
+                Self::Opacity | Self::Visibility | Self::TextReveal => (0. ..=1.).contains(&value),
             }
     }
 }
@@ -158,9 +167,9 @@ pub(crate) fn validate_with_media(
         return Err("A page supports 256 animated objects and 4096 property keyframes.".into());
     }
     for (id, tracks) in tracks {
-        if doc.node(*id).is_none() || tracks.is_empty() || tracks.len() > 6 {
+        if doc.node(*id).is_none() || tracks.is_empty() || tracks.len() > Property::ALL.len() {
             return Err(
-                "Property tracks need an existing object and at most six properties.".into(),
+                "Property tracks need an existing object and at most eight properties.".into(),
             );
         }
         let mut seen = HashSet::new();
@@ -168,6 +177,14 @@ pub(crate) fn validate_with_media(
             .iter()
             .any(|boundary| *boundary == *id || doc.is_ancestor(*id, *boundary));
         for track in tracks {
+            if track.property == Property::TextReveal
+                && !matches!(
+                    doc.node(*id).map(|n| &n.kind),
+                    Some(crate::NodeKind::Text { .. })
+                )
+            {
+                return Err("Text reveal requires a native text object.".into());
+            }
             if !seen.insert(track.property as u8)
                 || track.frames.is_empty()
                 || track.frames.len() > 64
@@ -308,6 +325,7 @@ pub fn evaluate(source: &Document, time_ms: u32) -> Result<Document, String> {
         node.link_group = None;
     }
     for (id, tracks) in animated {
+        let original_bounds = crate::geometry::node_bounds(&doc, *id);
         let mut x = 0.;
         let mut y = 0.;
         let mut sx = 1.;
@@ -321,6 +339,29 @@ pub fn evaluate(source: &Document, time_ms: u32) -> Result<Document, String> {
                 Property::ScaleX => sx = value,
                 Property::ScaleY => sy = value,
                 Property::Rotation => angle = value,
+                Property::Visibility => {
+                    if let Some(node) = doc.node_mut(*id) {
+                        node.visible &= value >= 0.5;
+                    }
+                }
+                Property::TextReveal => {
+                    use unicode_segmentation::UnicodeSegmentation;
+                    let (width, height) = (doc.width, doc.height);
+                    if let Some(crate::NodeKind::Text { spec, cache }) =
+                        doc.node_mut(*id).map(|n| &mut n.kind)
+                    {
+                        let mut next = (**spec).clone();
+                        let indices: Vec<_> =
+                            next.text.grapheme_indices(true).map(|(i, _)| i).collect();
+                        let count = (indices.len() as f64 * value).floor() as usize;
+                        let end = indices.get(count).copied().unwrap_or(next.text.len());
+                        next.replace_range(end..next.text.len(), "");
+                        let next = std::sync::Arc::new(next);
+                        *cache =
+                            crate::vector_cache::VectorRaster::text(next.clone(), width, height);
+                        *spec = next;
+                    }
+                }
                 Property::Opacity => {
                     if let Some(node) = doc.node_mut(*id) {
                         node.opacity *= value as f32;
@@ -329,8 +370,7 @@ pub fn evaluate(source: &Document, time_ms: u32) -> Result<Document, String> {
             }
         }
         if x != 0. || y != 0. || sx != 1. || sy != 1. || angle != 0. {
-            let b =
-                crate::geometry::node_bounds(&doc, *id).ok_or("Animated object has no geometry")?;
+            let b = original_bounds.ok_or("Animated object has no geometry")?;
             let center = glam::dvec2(
                 f64::from(b.x) + f64::from(b.w) / 2.,
                 f64::from(b.y) + f64::from(b.h) / 2.,
@@ -356,7 +396,7 @@ pub fn evaluate(source: &Document, time_ms: u32) -> Result<Document, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture() -> (Editor, NodeId) {
+    pub(super) fn fixture() -> (Editor, NodeId) {
         let mut editor = Editor::new(Document::new(800, 600), None);
         let id = crate::design::media::insert_youtube(
             &mut editor,
@@ -550,5 +590,56 @@ mod tests {
         assert_eq!(track.sample(199), 0.2);
         assert_eq!(track.sample(200), 0.8);
         assert_eq!(track.sample(1000), 0.8);
+    }
+}
+
+#[path = "design_motion_authoring.rs"]
+mod authoring;
+pub use authoring::{Preset, apply_preset, retime};
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::*;
+    #[test]
+    fn design_text_reveal_preserves_graphemes_and_authored_visibility() {
+        let mut editor = Editor::new(Document::new(320, 200), None);
+        let id = editor
+            .execute(Command::AddNode {
+                node: Box::new(crate::Node::text(
+                    0,
+                    "Typewriter",
+                    crate::text::TextSpec {
+                        text: "A👩‍💻e\u{301}B".into(),
+                        ..Default::default()
+                    },
+                    320,
+                    200,
+                )),
+                slot: crate::command::Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        apply_preset(&mut editor, &[id], Preset::Typewriter, 0, 1000).unwrap();
+        let original = editor.doc.clone();
+        let preview = crate::design_metadata::at_time(&editor.doc, 500).unwrap();
+        let crate::NodeKind::Text { spec, .. } = &preview.node(id).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(spec.text, "A👩‍💻");
+        assert_eq!(editor.doc, original);
+        set_keyframe(
+            &mut editor,
+            id,
+            Property::Visibility,
+            Keyframe {
+                time_ms: 0,
+                value: 1.,
+                easing: Easing::Step,
+            },
+        )
+        .unwrap();
+        editor.doc.node_mut(id).unwrap().visible = false;
+        let preview = crate::design_metadata::at_time(&editor.doc, 500).unwrap();
+        assert!(!preview.node(id).unwrap().visible);
     }
 }

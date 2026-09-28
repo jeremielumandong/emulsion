@@ -43,3 +43,28 @@ size, active thresholds and effective frame settings. Offline servers report tha
 a running UI host is required; these tools do not create resized pages or exports.
 
 The standard frame dialog's **Clip content to frame** control maps to `clip_content`. A breakpoint can inherit, enable, or disable that control without changing authored layer masks.
+
+## Container rules and sizing overrides
+
+A frame's **Responsive breakpoints** dialog can use canvas width or the immediate
+responsive parent's inner width (its boundary minus horizontal padding). Top-level
+frames use the canvas. Container queries reject content-sized width ancestors to
+avoid a child deciding the size of the container that selects its own rule.
+
+Each breakpoint can replace all four frame size limits. Switch **Size limits** to
+Override; blank bounds are unrestricted. Inherit restores the base frame bounds.
+To override one object's sizing, select the child and use **Position → Object
+sizing at … px**. Its absolute/fill/min/max/aspect settings replace the complete
+base child rule at that breakpoint; **Sizing: inherit base** removes the override.
+Other children continue to use base settings. All inactive rules are validated too.
+Copy/paste, duplicate, component reuse, native projects and Undo preserve child IDs.
+
+MCP `set_responsive_layout` accepts `breakpoint_reference: canvas|container`.
+A breakpoint's `overrides.limits` object replaces its min/max width/height; omit it
+or use null to inherit. An empty limits object removes all bounds. `overrides.children`
+maps immediate child IDs to complete sizing objects. Missing children inherit.
+`describe_design_layout` returns the resolved query width and effective settings.
+
+Use `cargo run --release -p emulsion-io --example design_layout_bench -- 1000`
+for a reproducible native grid workload. It measures repeated edits, reports median
+and p95 latency, and checks that a repeated layout pass leaves geometry unchanged.

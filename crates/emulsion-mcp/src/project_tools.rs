@@ -122,14 +122,14 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "list_design_data_fields",
-            "List {{field}} placeholders in active page text for CSV bulk generation.",
-            json!({}),
+            "List saved CSV bindings and inline {{field}} placeholders across selected template pages (active page by default).",
+            json!({"template_pages":{"type":"array","items":id,"minItems":1,"maxItems":100,"uniqueItems":true}}),
             &[],
         ),
         def(
             "generate_design_pages",
-            "Generate editable pages from bounded CSV data and active page {{field}} placeholders. Imports the generated pages as one Undo step.",
-            json!({"csv":{"type":"string","maxLength":2097152}}),
+            "Generate one ordered set of template pages per CSV record using saved text/image bindings and inline placeholders. Image cells are local paths; relative paths use base_directory. Imports atomically as one Undo step.",
+            json!({"csv":{"type":"string","maxLength":2097152},"template_pages":{"type":"array","items":id,"minItems":1,"maxItems":100,"uniqueItems":true},"base_directory":{"type":"string","minLength":1}}),
             &["csv"],
         ),
         def(
@@ -140,8 +140,8 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "export_project",
-            "Export selected pages, or all when pages is omitted, to PDF, animated GIF, editable draw.io, or a PNG/JPEG/SVG page archive. Returns any rasterization warnings; source is unchanged.",
-            json!({"path":path,"format":{"enum":["pdf","png","jpeg","svg","gif","drawio"]},"pages":{"type":"array","items":id,"minItems":1,"uniqueItems":true},"include_bleed":{"type":"boolean"}}),
+            "Export selected pages, or all when pages is omitted, to PDF, animated GIF, editable draw.io, standalone interactive HTML, or a PNG/JPEG/SVG page archive. HTML supports optional responsive widths; other formats reject widths. Returns any rasterization warnings; source is unchanged.",
+            json!({"path":path,"format":{"enum":["pdf","png","jpeg","svg","gif","drawio","html"]},"pages":{"type":"array","items":id,"minItems":1,"uniqueItems":true},"include_bleed":{"type":"boolean"},"widths":{"type":"array","items":{"type":"integer","minimum":64,"maximum":8192},"maxItems":16,"uniqueItems":true}}),
             &["path", "format"],
         ),
         def(
@@ -241,8 +241,10 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
         return Err("Open a Design or Diagram project first".into());
     }
     if name == "list_design_data_fields" {
-        return emulsion_io::design_bulk::fields(&editor.doc)
-            .map(|fields| json!({"fields":fields}))
+        let snapshot = editor.snapshot().ok_or("Open a project first.")?;
+        let pages = data_pages(&snapshot, args)?;
+        return emulsion_io::design_bulk::project_fields(&snapshot, &pages)
+            .map(|fields| json!({"fields":fields,"template_pages":pages}))
             .map_err(|e| e.to_string());
     }
     if editor.in_transaction() {
@@ -265,8 +267,11 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             editor.add_page(doc, args["name"].as_str().unwrap().into(), 0.)?;
         }
         "publish_project_component" => {
-            let count=emulsion_core::design_components::publish_project(editor,args["node"].as_u64().unwrap())?;
-            extra=json!({"updated_pages":count});
+            let count = emulsion_core::design_components::publish_project(
+                editor,
+                args["node"].as_u64().unwrap(),
+            )?;
+            extra = json!({"updated_pages":count});
         }
         "insert_component_from_page" => {
             let id = emulsion_core::design_components::insert_project(
@@ -282,6 +287,13 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             extra = json!({"node":id});
         }
         "apply_style_from_page" => {
+            let fonts = editor
+                .page(page)
+                .ok_or("Unknown source page")?
+                .doc
+                .design
+                .fonts
+                .clone();
             let name = args["name"].as_str().unwrap();
             let style = editor
                 .page(page)
@@ -298,7 +310,7 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
                 .iter()
                 .map(|n| n.as_u64().unwrap())
                 .collect::<Vec<_>>();
-            extra = json!({"name":emulsion_core::design_styles::apply(editor,&ids,name,&style)?});
+            extra = json!({"name":emulsion_core::design_styles::apply_portable(editor,&ids,name,&style,&fonts)?});
         }
         "select_project_page" => editor.set_active_page(page)?,
         "add_project_page" | "add_template_page" => {
@@ -356,17 +368,38 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             editor.add_page(resized.doc, format!("{width} × {height} variant"), 0.)?;
         }
         "generate_design_pages" => {
-            let generated = emulsion_io::design_bulk::generate(
-                &editor.doc,
-                args["csv"].as_str().unwrap(),
-                emulsion_core::project::MAX_PAGES.saturating_sub(editor.page_list().len()),
-            )
-            .map_err(|e| e.to_string())?;
+            let snapshot = editor.snapshot().ok_or("Open a project first.")?;
+            let generated = generate_data_snapshot(&snapshot, args)?;
             extra = json!({"pages":editor.import_pages(generated)?});
         }
         _ => return Err("This project operation requires the asynchronous live host".into()),
     }
     Ok(json!({"active_page":editor.active_page(),"result":extra}))
+}
+
+fn data_pages(project: &emulsion_core::project::Project, args: &Value) -> Result<Vec<u64>, String> {
+    args.get("template_pages").map_or_else(
+        || Ok(vec![project.active]),
+        |value| serde_json::from_value(value.clone()).map_err(|e| e.to_string()),
+    )
+}
+/// Generate/decode outside the native UI thread, then validate the originating project stamp.
+pub fn generate_data_snapshot(
+    project: &emulsion_core::project::Project,
+    args: &Value,
+) -> Result<emulsion_core::project::Project, String> {
+    validate_args("generate_design_pages", args)?;
+    let pages = data_pages(project, args)?;
+    emulsion_io::design_bulk::generate_pages(
+        project,
+        &pages,
+        args["csv"].as_str().unwrap(),
+        emulsion_core::project::MAX_PAGES.saturating_sub(project.pages.len()),
+        args.get("base_directory")
+            .and_then(Value::as_str)
+            .map(std::path::Path::new),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Read and decode off the UI thread. The host revalidates the target before import.
@@ -407,6 +440,32 @@ pub fn write_snapshot(
             emulsion_io::project::write(project, path).map_err(|e| e.to_string())?;
         }
         "export_project" => {
+            if args["format"] == "html" {
+                if args["include_bleed"].as_bool().unwrap_or(false) {
+                    return Err("HTML export does not support print bleed".into());
+                }
+                let pages = args["pages"].as_array().map_or_else(
+                    || project.pages.iter().map(|p| p.meta.id).collect(),
+                    |a| a.iter().map(|v| v.as_u64().unwrap()).collect::<Vec<_>>(),
+                );
+                let widths = args["widths"].as_array().map_or_else(Vec::new, |a| {
+                    a.iter()
+                        .map(|v| v.as_u64().unwrap_or(u64::MAX))
+                        .collect::<Vec<_>>()
+                });
+                if widths.iter().any(|w| !(64..=8192).contains(w)) {
+                    return Err("HTML widths must be between 64 and 8192 pixels".into());
+                }
+                let widths = widths.into_iter().map(|w| w as u32).collect::<Vec<_>>();
+                let report = emulsion_io::design_html::write(project, &pages, &widths, path)
+                    .map_err(|e| e.to_string())?;
+                return Ok(
+                    json!({"path":path,"pages":report.pages,"views":report.views,"warnings":report.warnings}),
+                );
+            }
+            if args.get("widths").is_some() {
+                return Err("Responsive widths only apply to HTML export".into());
+            }
             if args["format"] == "drawio" {
                 if args.get("pages").is_some() || args["include_bleed"].as_bool().unwrap_or(false) {
                     return Err(
@@ -521,31 +580,96 @@ mod tests {
     #[test]
     fn design_project_publish_tool_validates_and_undoes_both_pages() {
         use emulsion_core::{Command, Node, command::Slot, design_components, text::TextSpec};
-        let mut editor = ProjectEditor::new_project(ProjectKind::Design, Document::new(400,300)).unwrap();
-        let id = editor.execute(Command::AddNode { node: Box::new(Node::text(0,"Title", TextSpec { text:"Reusable".into(), ..Default::default() },400,300)), slot:Slot::TOP }).unwrap().unwrap();
+        let mut editor =
+            ProjectEditor::new_project(ProjectKind::Design, Document::new(400, 300)).unwrap();
+        let id = editor
+            .execute(Command::AddNode {
+                node: Box::new(Node::text(
+                    0,
+                    "Title",
+                    TextSpec {
+                        text: "Reusable".into(),
+                        ..Default::default()
+                    },
+                    400,
+                    300,
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
         let instance = design_components::create(&mut editor, &[id], "Card").unwrap();
         let first = editor.active_page();
-        editor.add_page(Document::new(400,300), "Second".into(), 0.).unwrap();
+        editor
+            .add_page(Document::new(400, 300), "Second".into(), 0.)
+            .unwrap();
         let second = editor.active_page();
-        let result = execute(&mut editor,"insert_component_from_page", &json!({"page":first,"name":"Card"}));
+        let result = execute(
+            &mut editor,
+            "insert_component_from_page",
+            &json!({"page":first,"name":"Card"}),
+        );
         assert!(!result.is_error, "{result:?}");
         let second_before = editor.doc.clone();
         editor.set_active_page(first).unwrap();
-        editor.execute(Command::SetOpacity { id, opacity:0.5 }).unwrap();
+        editor
+            .execute(Command::SetOpacity { id, opacity: 0.5 })
+            .unwrap();
         let first_before = editor.doc.clone();
-        for args in [json!({"node":instance,"extra":true}), json!({"node":0}), json!({"node":999999})] {
-            assert!(execute(&mut editor,"publish_project_component", &args).is_error);
+        for args in [
+            json!({"node":instance,"extra":true}),
+            json!({"node":0}),
+            json!({"node":999999}),
+        ] {
+            assert!(execute(&mut editor, "publish_project_component", &args).is_error);
             assert_eq!(editor.doc, first_before);
-            assert_eq!(editor.page(second).unwrap().doc,second_before);
+            assert_eq!(editor.page(second).unwrap().doc, second_before);
         }
-        let result = execute(&mut editor,"publish_project_component",&json!({"node":instance}));
+        let result = execute(
+            &mut editor,
+            "publish_project_component",
+            &json!({"node":instance}),
+        );
         assert!(!result.is_error, "{result:?}");
-        assert_ne!(editor.page(second).unwrap().doc,second_before);
+        assert_ne!(editor.page(second).unwrap().doc, second_before);
         assert!(editor.undo());
-        assert_eq!(editor.page(first).unwrap().doc,first_before);
-        assert_eq!(editor.page(second).unwrap().doc,second_before);
+        assert_eq!(editor.page(first).unwrap().doc, first_before);
+        assert_eq!(editor.page(second).unwrap().doc, second_before);
         assert!(editor.redo());
         editor.snapshot().unwrap().validate().unwrap();
+    }
+    #[test]
+    fn design_html_export_tool_validates_widths_preserves_files_and_source() {
+        let editor =
+            ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap();
+        let project = editor.snapshot().unwrap();
+        let path =
+            std::env::temp_dir().join(format!("emulsion-mcp-html-{}.html", std::process::id()));
+        std::fs::write(&path, "original").unwrap();
+        for args in [
+            json!({"path":path,"format":"html","widths":[0]}),
+            json!({"path":path,"format":"html","widths":[768,768]}),
+            json!({"path":path,"format":"html","widths":[768],"include_bleed":true}),
+            json!({"path":path,"format":"svg","widths":[768]}),
+        ] {
+            assert!(write_snapshot(&project, "export_project", &args).is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+        }
+        let result = write_snapshot(
+            &project,
+            "export_project",
+            &json!({"path":path,"format":"html","widths":[768],"pages":[1]}),
+        )
+        .unwrap();
+        assert_eq!(result["pages"], 1);
+        assert_eq!(result["views"], 2);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("<!doctype html>")
+        );
+        assert_eq!(editor.doc, project.pages[0].doc);
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn save_roundtrip_keeps_every_page_and_rejects_flattening_extension() {

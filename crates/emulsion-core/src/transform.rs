@@ -138,12 +138,18 @@ pub fn transform_nodes(
     for id in &all {
         unlocked(doc, *id)?;
     }
-    let mut result = doc.clone();
+    // Prepare only the affected nodes. A layout may transform hundreds of
+    // children individually; cloning the entire document per child was quadratic.
+    // Nothing is published until every node (including masks) has transformed.
+    let mut result: Vec<_> = doc
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| all.contains(&node.id))
+        .map(|(index, node)| (index, node.clone()))
+        .collect();
     let (w, h) = (doc.width, doc.height);
-    for node in &mut result.nodes {
-        if !all.contains(&node.id) {
-            continue;
-        }
+    for (_, node) in &mut result {
         // A full-canvas Fill has no finite geometry until transformed. Give
         // it an opaque canvas-sized mask so scale/rotation move real bounds.
         if matches!(node.kind, NodeKind::Fill { .. }) && node.mask.is_none() {
@@ -202,7 +208,9 @@ pub fn transform_nodes(
             node.mask_transform = (local_to_document(node).inverse() * target).to_cols_array();
         }
     }
-    *doc = result;
+    for (index, node) in result {
+        doc.nodes[index] = node;
+    }
     Ok(None)
 }
 /// Sample stored mask data through an inverse source transform. Outside pixels

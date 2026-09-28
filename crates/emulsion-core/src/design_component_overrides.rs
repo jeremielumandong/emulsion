@@ -38,8 +38,13 @@ impl Overrides {
         if (self.stroke || self.stroke_width) && !matches!(node.kind, NodeKind::Path { .. }) {
             return Err("Stroke overrides need a path object.".into());
         }
-        if self.content && !matches!(node.kind, NodeKind::Text { .. } | NodeKind::Raster { .. }) {
-            return Err("Content overrides support text and raster images.".into());
+        if self.content
+            && !matches!(
+                node.kind,
+                NodeKind::Text { .. } | NodeKind::Raster { .. } | NodeKind::Smart { .. }
+            )
+        {
+            return Err("Content overrides support text, raster images and Smart Objects.".into());
         }
         if (self.geometry || self.position || self.size)
             && !matches!(
@@ -117,6 +122,7 @@ pub(super) fn restore(
             } else if !geometry {
                 if flags.content {
                     value.text = old.text.clone();
+                    value.paragraphs = old.paragraphs.clone();
                     value.runs.clear();
                 }
                 if flags.appearance {
@@ -139,6 +145,7 @@ pub(super) fn restore(
                     if value.text != old.text {
                         value.apply_style(0..value.text.len(), |style| *style = old.style_at(0));
                     }
+                    restore_paragraphs(old, value)?;
                 }
             }
         }
@@ -172,12 +179,30 @@ pub(super) fn restore(
             }
         }
         (
-            NodeKind::Smart { placement, .. },
             NodeKind::Smart {
-                placement: position,
+                placement,
+                source: old_source,
+                editable: old_editable,
                 ..
             },
+            NodeKind::Smart {
+                placement: position,
+                source,
+                editable,
+                filters,
+                filter_styles,
+                cache,
+                offset,
+            },
         ) => {
+            if !geometry && flags.content {
+                *source = old_source.clone();
+                *editable = old_editable.clone();
+                let (rendered, origin) =
+                    crate::smart::render_styled(source, filters, filter_styles);
+                *cache = rendered;
+                *offset = origin;
+            }
             if geometry && flags.geometry {
                 *position = *placement;
             }
@@ -259,9 +284,11 @@ pub(super) fn restore(
             if !geometry {
                 if flags.fill {
                     paint.fill = style.fill;
+                    paint.fill_paint = style.fill_paint;
                 }
                 if flags.stroke {
                     paint.stroke = style.stroke;
+                    paint.stroke_paint = style.stroke_paint;
                 }
                 if flags.stroke_width {
                     paint.width = style.width;
@@ -293,6 +320,36 @@ pub(super) fn restore(
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+fn restore_paragraphs(
+    old: &crate::text::TextSpec,
+    next: &mut crate::text::TextSpec,
+) -> Result<(), String> {
+    if next.text == old.text {
+        next.paragraphs = old.paragraphs.clone();
+        return Ok(());
+    }
+    if next.paragraphs.is_empty() && old.paragraphs.is_empty() {
+        return Ok(());
+    }
+    let starts = |text: &str| {
+        std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+            .collect::<Vec<_>>()
+    };
+    if !next.paragraphs.is_empty() {
+        *next = crate::text::apply_paragraphs(next, 0..next.text.len(), Default::default())?;
+        next.paragraphs.clear();
+    }
+    let original = starts(&old.text);
+    for paragraph in &old.paragraphs {
+        if let Ok(index) = original.binary_search(&paragraph.start)
+            && let Some(start) = starts(&next.text).get(index).copied()
+        {
+            *next = crate::text::apply_paragraphs(next, start..start, paragraph.format)?;
+        }
     }
     Ok(())
 }

@@ -79,17 +79,58 @@ impl Default for Motion {
         }
     }
 }
-pub type PageTransition = Effect;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageTransition {
+    #[default]
+    None,
+    Fade,
+    Slide,
+    Zoom,
+    SlideLeft,
+    SlideUp,
+    SlideDown,
+    ZoomOut,
+}
+impl PageTransition {
+    pub const ALL: [Self; 8] = [
+        Self::None,
+        Self::Fade,
+        Self::Slide,
+        Self::SlideLeft,
+        Self::SlideUp,
+        Self::SlideDown,
+        Self::Zoom,
+        Self::ZoomOut,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Fade => "Fade",
+            Self::Slide => "Slide from right",
+            Self::SlideLeft => "Slide from left",
+            Self::SlideUp => "Slide from below",
+            Self::SlideDown => "Slide from above",
+            Self::Zoom => "Zoom in",
+            Self::ZoomOut => "Zoom out",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Design {
+    pub data_bindings: BTreeMap<NodeId, crate::design_data::Binding>,
+    pub fonts: BTreeMap<String, crate::design_fonts::EmbeddedFont>,
+    pub variable_libraries: BTreeMap<String, String>,
     pub variables: BTreeMap<String, crate::design_variables::Value>,
     pub variable_bindings: BTreeMap<NodeId, BTreeMap<crate::design_variables::Property, String>>,
+    pub interaction_triggers: BTreeMap<NodeId, crate::design_interactions::Trigger>,
     pub interactions: BTreeMap<NodeId, Vec<crate::design_interactions::Action>>,
     pub overlays: std::collections::BTreeSet<NodeId>,
     pub local_media: BTreeMap<NodeId, crate::design::media::LocalMedia>,
     pub keyframes: BTreeMap<NodeId, Vec<crate::design_keyframes::Track>>,
+    pub precision: crate::design_precision::Settings,
     pub speaker_notes: String,
     pub page_transition: PageTransition,
     pub transition_ms: u32,
@@ -108,12 +149,17 @@ pub struct Design {
 impl Default for Design {
     fn default() -> Self {
         Self {
+            data_bindings: BTreeMap::new(),
+            fonts: BTreeMap::new(),
+            variable_libraries: BTreeMap::new(),
             variables: BTreeMap::new(),
             variable_bindings: BTreeMap::new(),
+            interaction_triggers: BTreeMap::new(),
             interactions: BTreeMap::new(),
             overlays: Default::default(),
             local_media: BTreeMap::new(),
             keyframes: BTreeMap::new(),
+            precision: Default::default(),
             speaker_notes: String::new(),
             page_transition: PageTransition::None,
             transition_ms: 400,
@@ -132,10 +178,23 @@ impl Default for Design {
     }
 }
 impl Design {
+    /// Preserve slide relationships when a project receives new page IDs.
+    pub fn remap_pages(&mut self, pages: &BTreeMap<u64, u64>) {
+        for actions in self.interactions.values_mut() {
+            for action in actions {
+                if let crate::design_interactions::Action::Slide { page } = action {
+                    *page = pages.get(page).copied().unwrap_or(u64::MAX);
+                }
+            }
+        }
+    }
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
     pub fn validate(&self, doc: &Document) -> Result<(), String> {
+        self.precision.validate()?;
+        crate::design_data::validate(&self.data_bindings, doc)?;
+        crate::design_fonts::validate(&self.fonts)?;
         if self.speaker_notes.chars().count() > 20_000
             || !(100..=3000).contains(&self.transition_ms)
         {
@@ -143,6 +202,13 @@ impl Design {
         }
         crate::design_variables::validate(self, doc)?;
         crate::design_interactions::validate(&self.interactions, &self.overlays, doc)?;
+        if self
+            .interaction_triggers
+            .keys()
+            .any(|id| !self.interactions.contains_key(id))
+        {
+            return Err("An interaction trigger needs saved actions on its object.".into());
+        }
         crate::design::media::validate_local(&self.local_media, doc)?;
         if self
             .local_media
@@ -202,6 +268,7 @@ impl Design {
         Ok(())
     }
     pub fn retain_nodes(&mut self, ids: &HashSet<NodeId>) {
+        self.data_bindings.retain(|id, _| ids.contains(id));
         self.variable_bindings.retain(|id, _| ids.contains(id));
         self.local_media
             .retain(|id, media| ids.contains(id) && ids.contains(&media.boundary));
@@ -211,6 +278,8 @@ impl Design {
             actions.retain(|action| action.retain_targets(ids));
             ids.contains(id) && !actions.is_empty()
         });
+        self.interaction_triggers
+            .retain(|id, _| self.interactions.contains_key(id));
         self.style_links.retain(|id, _| ids.contains(id));
         self.components.retain(|_, definition| {
             definition.variants.retain(|_, id| ids.contains(id));
@@ -237,6 +306,9 @@ impl Design {
             .retain(|id, frame| ids.contains(id) && ids.contains(&frame.boundary));
         for frame in self.frames.values_mut() {
             frame.children.retain(|id, _| ids.contains(id));
+            for entry in &mut frame.breakpoints {
+                entry.overrides.children.retain(|id, _| ids.contains(id));
+            }
         }
         self.constraints.retain(|id, _| ids.contains(id));
         self.motion.retain(|id, _| ids.contains(id));
@@ -249,6 +321,8 @@ impl Design {
                 .values()
                 .any(|b| b.values().any(|v| v == name))
         });
+        out.variable_libraries
+            .retain(|name, _| out.variables.contains_key(name));
         out.saved_styles
             .retain(|name, _| out.style_links.values().any(|link| link == name));
         out
@@ -256,10 +330,21 @@ impl Design {
     pub fn remap(&self, map: &HashMap<NodeId, NodeId>) -> Self {
         let id = |id| map.get(&id).copied().unwrap_or(id);
         Self {
+            fonts: self.fonts.clone(),
+            data_bindings: self
+                .data_bindings
+                .iter()
+                .map(|(key, value)| (id(*key), value.clone()))
+                .collect(),
             variable_bindings: self
                 .variable_bindings
                 .iter()
                 .map(|(k, v)| (id(*k), v.clone()))
+                .collect(),
+            interaction_triggers: self
+                .interaction_triggers
+                .iter()
+                .map(|(k, v)| (id(*k), *v))
                 .collect(),
             interactions: self
                 .interactions
@@ -328,6 +413,14 @@ impl Design {
                 .map(|(key, frame)| {
                     let mut frame = frame.clone();
                     frame.boundary = id(frame.boundary);
+                    for entry in &mut frame.breakpoints {
+                        entry.overrides.children = entry
+                            .overrides
+                            .children
+                            .iter()
+                            .map(|(key, value)| (id(*key), *value))
+                            .collect();
+                    }
                     frame.children = frame
                         .children
                         .iter()
@@ -415,12 +508,12 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
             .get(&id)
             .copied()
             .unwrap_or_default();
-        let mut frame = (
+        let mut frame = crate::design_layout::bounds(source, id).unwrap_or((
             bounds.x as f64,
             bounds.y as f64,
             bounds.w as f64,
             bounds.h as f64,
-        );
+        ));
         if rule.reflow_text
             && let NodeKind::Text { spec, .. } = &node.kind
         {
@@ -443,7 +536,46 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
             source.height as f64,
             height as f64,
         );
-        if rule.reflow_text
+        if rule.reflow_text && source.design.frames.contains_key(&id) {
+            // A responsive frame changes its available box; scaling its entire
+            // subtree first would permanently squeeze every descendant glyph.
+            let (cx, cy, cw, ch) = crate::design_layout::bounds(&editor.doc, id)
+                .ok_or("Missing responsive frame boundary")?;
+            editor
+                .execute(Command::TransformNodes {
+                    ids: vec![id],
+                    transform: [1., 0., 0., 1., x - cx, y - cy],
+                })
+                .map_err(|e| e.to_string())?;
+            let boundary = editor.doc.design.frames[&id].boundary;
+            let NodeKind::Path { style, .. } = &editor
+                .doc
+                .node(boundary)
+                .ok_or("Missing frame boundary")?
+                .kind
+            else {
+                return Err("Invalid frame boundary".into());
+            };
+            let style = *style;
+            // Transform the boundary alone to preserve linked mask placement,
+            // then restore its authored stroke instead of scaling that decoration.
+            editor
+                .execute(Command::TransformNodes {
+                    ids: vec![boundary],
+                    transform: [w / cw, 0., 0., h / ch, x * (1. - w / cw), y * (1. - h / ch)],
+                })
+                .map_err(|e| e.to_string())?;
+            let NodeKind::Path { path, .. } = &editor.doc.node(boundary).unwrap().kind else {
+                unreachable!()
+            };
+            editor
+                .execute(Command::SetPath {
+                    id: boundary,
+                    path: path.clone(),
+                    style,
+                })
+                .map_err(|e| e.to_string())?;
+        } else if rule.reflow_text
             && let NodeKind::Text { spec, .. } = &node.kind
         {
             let mut spec = (**spec).clone();
@@ -476,6 +608,36 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
                     ],
                 })
                 .map_err(|e| e.to_string())?;
+            if rule.reflow_text && matches!(node.kind, NodeKind::Group { .. }) {
+                for child in source.subtree(id) {
+                    let Some(NodeKind::Text { spec: original, .. }) =
+                        source.node(child).map(|n| &n.kind)
+                    else {
+                        continue;
+                    };
+                    let Some(NodeKind::Text { spec: current, .. }) =
+                        editor.doc.node(child).map(|n| &n.kind)
+                    else {
+                        continue;
+                    };
+                    let mut spec = (**original).clone();
+                    spec.x = current.x;
+                    spec.y = current.y;
+                    let local_width = original
+                        .width
+                        .unwrap_or_else(|| crate::text::layout(original).bounds().width);
+                    spec.width = Some((f64::from(local_width) * sx).max(1.) as f32);
+                    spec.height = original
+                        .height
+                        .map(|height| (f64::from(height) * sy).max(1.) as f32);
+                    editor
+                        .execute(Command::SetText {
+                            id: child,
+                            spec: Box::new(spec),
+                        })
+                        .map_err(|e| e.to_string())?;
+                }
+            }
         }
     }
     for (id, link) in links {
@@ -763,3 +925,7 @@ mod tests {
         assert_eq!(editor.doc, doc);
     }
 }
+
+#[cfg(test)]
+#[path = "design_resize_tests.rs"]
+mod resize_tests;

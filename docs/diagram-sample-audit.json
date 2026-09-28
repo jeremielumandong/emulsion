@@ -1,47 +1,231 @@
 {
-  "date": "2026-09-27",
+  "date": "2026-09-28",
   "drawio_revision": "0e70e69107de5a663d35468cbca8e6bd870fe975",
+  "vendor_stencil_revision": "0f419a92c769adb5fb20f2b18053a5ae8c7e4993",
+  "interpretation": "Import and per-page translation/undo validation, not pixel-perfect compatibility. Timings exclude compilation and use four audit workers.",
   "drawio": {
     "candidates": 623,
-    "imported": 620,
-    "pages": 820,
-    "import_ms": 1409,
+    "imported": 621,
+    "pages": 821,
+    "import_ms": 6534,
+    "movement_undo_passed_files": 621,
+    "movement_undo_failures": [],
     "failures_by_reason": {
       "invalid manifest: Connector UNJGccIc8EjJBR6IzSFc-151 references missing source UNJGccIc8EjJBR6IzSFc-147": 1,
-      "invalid manifest: No mxGraphModel found.": 1,
-      "invalid manifest: Visio cell FillPattern has no finite evaluated value.": 1
+      "invalid manifest: No mxGraphModel found.": 1
+    },
+    "notes_by_frequency": {
+      "Canvas expanded to include drawing content outside the original paper size.": 318,
+      "Style shadow requires manual review after import.": 137,
+      "Style rotation requires manual review after import.": 97,
+      "Additional connector labels remain editable text; their relative path positions need review.": 83,
+      "External image URLs are not embedded; replace the image from a local file.": 50,
+      "Unsupported color \"default\"; retained the default.": 31,
+      "Embedded artwork is retained; save the native project to preserve its source.": 31,
+      "Style sketch requires manual review after import.": 21,
+      "Shape \"waypoint\" imported as an editable rectangle.": 21,
+      "Connector line jumps are not rendered.": 19,
+      "Shape \"umlFrame\" imported as an editable rectangle.": 17,
+      "Unsupported color \"inherit\"; retained the default.": 17,
+      "SVG retained as scalable artwork rather than separate editable paths: unsupported file type: SVG clipping, masks or filters require a retained appearance": 16,
+      "Shape \"tableRow\" imported as an editable rectangle.": 11,
+      "Shape \"mxgraph.mockup.forms.searchBox\" imported as an editable rectangle.": 10,
+      "Shape \"cube\" imported as an editable rectangle.": 9,
+      "HTML table labels retain editable rows, columns and text formatting; browser table sizing is approximated.": 9,
+      "Shape \"trapezoid\" imported as an editable rectangle.": 8,
+      "Shape \"mxgraph.basic.partConcEllipse\" imported as an editable rectangle.": 8,
+      "Shape \"mxgraph.infographic.ribbonSimple\" imported as an editable rectangle.": 8
     }
   },
   "visio": {
     "candidates": 4481,
-    "imported": 318,
-    "pages": 2029,
-    "import_ms": 26059,
+    "imported": 3518,
+    "pages": 37475,
+    "import_ms": 1127490,
+    "movement_undo_passed_files": 3518,
+    "movement_undo_failures": [],
     "failures_by_reason": {
-      "invalid manifest: Legacy binary Visio files need conversion in Visio to .vsdx, .vssx, or .vstx before editable import.": 3506,
-      "invalid manifest: Visio cell LineWeight has no finite evaluated value.": 199,
-      "invalid manifest: Visio cell FillPattern has no finite evaluated value.": 26,
-      "invalid manifest: path data must start with M": 48,
-      "invalid manifest: Visio cell LinePattern has no finite evaluated value.": 4,
-      "invalid manifest: XML element or depth limit exceeded.": 27,
-      "invalid manifest: XML part exceeds 16 MiB.": 4,
+      "invalid manifest: No SVG drawings were produced by librevisio": 7,
+      "invalid manifest: Visio cell LinePattern has no finite evaluated value.": 2,
+      "invalid manifest: XML element or depth limit exceeded.": 9,
       "invalid manifest: This file contains legacy binary Visio data despite its extension. Convert it in Visio to a real .vsdx, .vssx, or .vstx package before import.": 3,
-      "invalid manifest: Visio cell Style has no finite evaluated value.": 3,
-      "invalid manifest: Visio cell LineColorTrans has no finite evaluated value.": 9,
-      "invalid manifest: Visio cell FillForegndTrans has no finite evaluated value.": 1,
-      "invalid manifest: Invalid Visio page dimensions.": 15,
+      "invalid manifest: Invalid Visio page dimensions.": 8,
+      "invalid manifest: Empty or oversized legacy Visio file": 448,
+      "invalid manifest: Converted Visio file exceeds 100 pages; split the source library": 88,
+      "invalid manifest: Librevisio could not convert this file, or output exceeded 64 MiB": 40,
+      "unsupported file type: SVG has an invalid size": 37,
       "invalid manifest: A diagram must contain 1\u2013100 pages.": 33,
       "invalid manifest: Diagram archive exceeds its decoded size limit.": 4,
-      "invalid manifest: Shape or graph size limit exceeded.": 21,
-      "invalid manifest: Visio connector source is missing.": 4,
+      "invalid manifest: Invalid shape size or label.": 8,
+      "unsupported file type: SVG data parsing failed cause a non-XML character '\\u{14}' found at 80:1": 1,
+      "invalid manifest: Visio cell LineWeight has no finite evaluated value.": 14,
+      "invalid manifest: Visio cell LineColorTrans has no finite evaluated value.": 2,
       "invalid manifest: Missing Visio master relationship.": 2,
+      "invalid manifest: Visio cell FillPattern has no finite evaluated value.": 2,
+      "invalid manifest: Embedded image exceeds 32 MiB": 1,
       "not a valid archive: invalid Zip archive: Could not find EOCD": 253,
       "invalid manifest: Malformed XML document.": 1
+    },
+    "notes_by_frequency": {
+      "Legacy Visio converted locally with librevisio. Vector artwork is retained; original connector bindings and Visio formulas are not available in SVG output.": 3200,
+      "Visio stencil masters are imported as separate editable pages.": 214,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: Visio cell LineWeight has no finite evaluated value.": 185,
+      "Unbound or partially bound Visio lines remain editable vectors; reconnect them to enable automatic routing.": 175,
+      "Some objects extend outside the page; enlarge the canvas to include them.": 110,
+      "Embedded Visio OLE/foreign objects use placeholders; their graphics need review.": 75,
+      "Visio geometry EllipticalArcTo uses its endpoint as a straight segment.": 60,
+      "Rotated outlines are preserved; review label alignment and ports.": 54,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: path data must start with M": 48,
+      "Visio geometry PolylineTo uses its endpoint as a straight segment.": 39,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: Visio cell FillPattern has no finite evaluated value.": 24,
+      "Visio geometry NURBSTo uses its endpoint as a straight segment.": 24,
+      "Shapes without supported geometry use editable outlines based on their bounds.": 22,
+      "Skipped 1 empty converter placeholder pages.": 21,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: Shape or graph size limit exceeded.": 21,
+      "Visio geometry RelEllipticalArcTo uses its endpoint as a straight segment.": 19,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: XML element or depth limit exceeded.": 18,
+      "Skipped 3 empty converter placeholder pages.": 17,
+      "Theme-dependent Visio colors without evaluated RGB values use a default color.": 14,
+      "Skipped 4 empty converter placeholder pages.": 11
     }
   },
-  "notes": [
-    "Drawio scan includes one additional .vsdx candidate which fails; the XML/drawio/SVG subset is 620/622.",
-    "Import success is not complete visual fidelity.",
-    "Visio source collection includes 701 empty files."
-  ]
+  "viewport_benchmark": {
+    "notes": "Local release CPU timings, 21 visible connected-object translations, rerun after the release link completed. Not end-to-end frame time. Only changed SVG roots rebuild; nested run puts all objects inside a plain group.",
+    "runs": [
+      {
+        "shapes": 500,
+        "nested": false,
+        "connectors": 499,
+        "cold_scene_ms": 435.45380700000004,
+        "edit_p50_p95_ms": [
+          5.607705,
+          7.090953
+        ],
+        "scene_p50_p95_ms": [
+          2.138833,
+          2.397956
+        ],
+        "patch_p50_p95_ms": [
+          0.8351609999999999,
+          0.854981
+        ],
+        "max_rebuilt_layers": 3,
+        "zoom": [
+          {
+            "scale": 0.5,
+            "ms": 16.305497
+          },
+          {
+            "scale": 1.0,
+            "ms": 9.655655000000001
+          },
+          {
+            "scale": 4.0,
+            "ms": 2.5088749999999997
+          },
+          {
+            "scale": 16.0,
+            "ms": 1.736791
+          },
+          {
+            "scale": 64.0,
+            "ms": 1.3091409999999999
+          }
+        ]
+      },
+      {
+        "shapes": 1000,
+        "nested": false,
+        "connectors": 999,
+        "cold_scene_ms": 874.544274,
+        "edit_p50_p95_ms": [
+          12.408934,
+          14.483787999999999
+        ],
+        "scene_p50_p95_ms": [
+          4.644446,
+          5.028948
+        ],
+        "patch_p50_p95_ms": [
+          1.411729,
+          1.468318
+        ],
+        "max_rebuilt_layers": 3,
+        "zoom": [
+          {
+            "scale": 0.5,
+            "ms": 22.700475
+          },
+          {
+            "scale": 1.0,
+            "ms": 10.742491
+          },
+          {
+            "scale": 4.0,
+            "ms": 2.927675
+          },
+          {
+            "scale": 16.0,
+            "ms": 1.77106
+          },
+          {
+            "scale": 64.0,
+            "ms": 1.326061
+          }
+        ]
+      },
+      {
+        "shapes": 1000,
+        "nested": true,
+        "connectors": 999,
+        "cold_scene_ms": 848.431144,
+        "edit_p50_p95_ms": [
+          13.306834,
+          15.696321
+        ],
+        "scene_p50_p95_ms": [
+          4.831043,
+          5.121126
+        ],
+        "patch_p50_p95_ms": [
+          1.31724,
+          1.3751099999999998
+        ],
+        "max_rebuilt_layers": 3,
+        "zoom": [
+          {
+            "scale": 0.5,
+            "ms": 23.547255999999997
+          },
+          {
+            "scale": 1.0,
+            "ms": 11.083244
+          },
+          {
+            "scale": 4.0,
+            "ms": 2.7278189999999998
+          },
+          {
+            "scale": 16.0,
+            "ms": 1.9494770000000001
+          },
+          {
+            "scale": 64.0,
+            "ms": 1.4154790000000002
+          }
+        ]
+      }
+    ]
+  },
+  "regressions": {
+    "core_diagram": 17,
+    "io_diagram": 18,
+    "mcp_diagram": 11,
+    "ui_diagram": 12,
+    "svg_viewport": 7,
+    "drawio": 29,
+    "project_export": 5,
+    "failed": 0,
+    "note": "Filtered suites overlap; counts are not unique tests. Executed against the current workspace, not a full-workspace certification."
+  }
 }

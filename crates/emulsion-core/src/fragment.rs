@@ -194,8 +194,11 @@ impl Fragment {
                 }
                 crate::design_variables::merge_into(&mut design, &additions);
                 design.interactions.extend(additions.interactions.clone());
+                design.interaction_triggers.extend(additions.interaction_triggers.clone());
                 design.overlays.extend(additions.overlays.clone());
                 design.local_media.extend(additions.local_media.clone());
+    design.data_bindings.extend(additions.data_bindings.clone());
+                design.fonts.extend(additions.fonts.clone());
                 design.keyframes.extend(additions.keyframes.clone());
                 crate::design_styles::merge_into(&mut design, &additions);
                 crate::design_components::merge_into(&mut design, &additions);

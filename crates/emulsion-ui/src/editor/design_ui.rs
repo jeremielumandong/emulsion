@@ -271,7 +271,8 @@ impl EditorView {
                                 (f64::from(size.0) * scale).round().max(1.) as u32,
                                 (f64::from(size.1) * scale).round().max(1.) as u32,
                             );
-                            let doc = template.create(preview_size.0, preview_size.1).ok()?;
+                            let build_size=if matches!(template,Template::Responsive(_)){size}else{preview_size};
+                            let doc = template.create(build_size.0, build_size.1).ok()?;
                             let (w, h, bytes) = super::history::doc_thumb(&doc, 216);
                             Some((i, Arc::new(viewport::bgra_image(w, h, bytes))))
                         })
@@ -570,7 +571,8 @@ impl EditorView {
                 content = content.child(Button::new("design-bulk-create").label("Bulk create from CSV…")
                     .tooltip("Use {{column}} fields in your text to create a design for each data row")
                     .small().outline().w_full()
-                    .on_click(cx.listener(|this,_,window,cx|this.design_bulk_dialog(None,window,cx))));
+                    .on_click(cx.listener(|this,_,window,cx|this.design_bulk_dialog(None,window,cx))))
+                    .child(Button::new("design-data-bind").label("Bind selected text/image…").small().outline().on_click(cx.listener(|this,_,window,cx|this.design_data_binding_dialog(window,cx))));
                 content = content.child(
                     Button::new("design-explore-templates")
                         .label("Explore templates")

@@ -355,7 +355,13 @@ fn shape_kind(style: &BTreeMap<String, String>, warnings: &mut BTreeSet<String>)
         | "doubleEllipse" | "cross" | "partialRectangle" | "actor" | "umlActor" => {
             ShapeKind::Process
         }
-        value if value.starts_with("stencil(") => ShapeKind::Process,
+        value
+            if value.starts_with("stencil(")
+                || vendor::contains(value)
+                || style.get("resIcon").is_some_and(|v| vendor::contains(v)) =>
+        {
+            ShapeKind::Process
+        }
         "parallelogram" => ShapeKind::Data,
         "cylinder" | "cylinder3" => ShapeKind::Database,
         "document" => ShapeKind::Document,
@@ -385,26 +391,7 @@ fn plain_label(text: &str, html: bool, warnings: &mut BTreeSet<String>) -> Strin
     if !html {
         return text.into();
     }
-    warnings.insert("HTML label formatting was converted to editable plain text.".into());
-    let text = text
-        .replace("<br>", "\n")
-        .replace("<br/>", "\n")
-        .replace("<br />", "\n")
-        .replace("</div>", "\n")
-        .replace("</p>", "\n");
-    let mut out = String::new();
-    let mut tag = false;
-    for c in text.chars() {
-        match c {
-            '<' => tag = true,
-            '>' => tag = false,
-            _ if !tag => out.push(c),
-            _ => {}
-        }
-    }
-    quick_xml::escape::unescape(&out.replace("&nbsp;", " "))
-        .map(|s| s.trim_end().replace("&nbsp;", " "))
-        .unwrap_or(out)
+    labels::parse(text, &emulsion_core::text::TextSpec::default(), warnings).text
 }
 fn port(
     style: &BTreeMap<String, String>,
@@ -465,6 +452,20 @@ fn apply_style(
             }
         }
         paint.width = number(style, "strokeWidth", paint.width as f64)?.clamp(0., 100.) as f32;
+        if let Some(end) = style
+            .get("gradientColor")
+            .and_then(|v| color(v).ok().flatten())
+        {
+            paint.fill_paint = emulsion_raster::vector::PathPaint::LinearGradient {
+                end,
+                angle: match style.get("gradientDirection").map(String::as_str) {
+                    Some("north") => 270.,
+                    Some("east") => 0.,
+                    Some("west") => 180.,
+                    _ => 90.,
+                },
+            };
+        }
         for (key, color) in [
             ("fillOpacity", &mut paint.fill),
             ("strokeOpacity", &mut paint.stroke),
@@ -516,9 +517,8 @@ fn apply_style(
             Some("right") => emulsion_core::text::Align::Right,
             _ => emulsion_core::text::Align::Center,
         };
-        if flags & !3 != 0 {
-            warnings.insert("Underline/strikethrough labels require manual review.".into());
-        }
+        spec.underline = flags & 4 != 0;
+        spec.strikethrough = flags & 8 != 0;
         if let Some(font) = style.get("fontFamily") {
             spec.font = font.clone();
         }
@@ -537,7 +537,7 @@ fn apply_style(
     for key in ["startArrow", "endArrow"] {
         if let Some(arrow) = style
             .get(key)
-            .filter(|v| !matches!(v.as_str(), "none" | "block" | "classic"))
+            .filter(|v| diagram::MarkerKind::from_drawio(v).is_none())
         {
             warnings.insert(format!(
                 "Arrow style {arrow:?} uses a triangle; specialized arrowheads need review."
@@ -547,7 +547,7 @@ fn apply_style(
     if style.get("jumpStyle").is_some_and(|v| v != "none") {
         warnings.insert("Connector line jumps are not rendered.".into());
     }
-    for key in ["rotation", "gradientColor", "shadow", "sketch", "curved"] {
+    for key in ["rotation", "shadow", "sketch"] {
         if style.get(key).is_some_and(|v| v != "0" && v != "none") {
             warnings.insert(format!("Style {key} requires manual review after import."));
         }
@@ -589,9 +589,12 @@ fn label_style(doc: &Document, id: NodeId) -> Result<String> {
     ))
 }
 mod build;
-mod images;
+mod dynamic;
+pub(crate) mod images;
+mod labels;
 mod shapes;
 mod stencils;
+pub mod vendor;
 use build::build;
 /// SVG exports may embed the complete editable mxfile in the root content attribute.
 fn embedded_xml(xml: &str) -> Result<Option<String>> {
@@ -717,6 +720,7 @@ pub fn read(path: &Path) -> Result<Imported> {
 fn escape(text: &str) -> String {
     quick_xml::escape::escape(text).into_owned()
 }
+#[cfg(test)]
 fn text(doc: &Document, id: NodeId) -> String {
     match doc.node(id).map(|n| &n.kind) {
         Some(NodeKind::Text { spec, .. }) => spec.text.clone(),
@@ -765,6 +769,55 @@ fn port_style(port: Port, prefix: &str) -> String {
     };
     format!("{prefix}X={};{prefix}Y={};", point.0, point.1)
 }
+fn label_html(doc: &Document, id: NodeId) -> String {
+    match doc.node(id).map(|n| &n.kind) {
+        Some(NodeKind::Text { spec, .. }) => labels::html(spec),
+        _ => String::new(),
+    }
+}
+// Keep compound vector artwork as a scalable image while labels, bounds and
+// graph connections remain independent editable draw.io objects.
+fn compound_artwork(
+    doc: &Document,
+    id: NodeId,
+    shape: &diagram::Shape,
+    model: &diagram::Diagram,
+) -> Result<Option<String>> {
+    let mut excluded = HashSet::from([shape.label]);
+    for child in model.shapes.keys().chain(model.edges.keys()) {
+        if *child != id && doc.is_ancestor(id, *child) {
+            excluded.extend(doc.subtree(*child));
+        }
+    }
+    let own: HashSet<_> = doc
+        .subtree(id)
+        .into_iter()
+        .filter(|n| !excluded.contains(n))
+        .collect();
+    let complex_paint = doc.node(shape.body).is_some_and(|n| matches!(&n.kind, NodeKind::Path { style, .. } if style.fill_paint != emulsion_raster::vector::PathPaint::Solid || style.stroke_paint != emulsion_raster::vector::PathPaint::Solid));
+    if own.len() <= 2 && !complex_paint {
+        return Ok(None);
+    }
+    let mut artwork = doc.clone();
+    artwork.nodes.retain(|n| own.contains(&n.id));
+    artwork.diagram = None;
+    let root = artwork.node_mut(id).unwrap();
+    root.parent = None;
+    root.opacity = 1.;
+    root.visible = true;
+    let bounds =
+        diagram::shape_bounds(doc, shape).ok_or_else(|| error("Missing artwork bounds"))?;
+    let svg = crate::project_export::bounded_subtree(&artwork, id, bounds)?;
+    Ok(Some(format!(
+        "shape=image;image=data:image/svg+xml;base64,{};{}",
+        base64::engine::general_purpose::STANDARD.encode(svg),
+        if shape.kind.is_container() {
+            "container=1;"
+        } else {
+            ""
+        }
+    )))
+}
 pub fn to_xml(project: &Project) -> Result<String> {
     project.validate().map_err(error)?;
     let mut xml =
@@ -773,25 +826,27 @@ pub fn to_xml(project: &Project) -> Result<String> {
         let doc = &page.doc;
         let empty = diagram::Diagram::default();
         let model = doc.diagram.as_deref().unwrap_or(&empty);
-        let expected: HashSet<_> = model
-            .shapes
-            .iter()
-            .flat_map(|(id, s)| [*id, s.body, s.label])
-            .chain(
-                model
-                    .edges
-                    .iter()
-                    .flat_map(|(id, e)| [*id, e.path, e.arrow, e.label]),
-            )
-            .collect();
-        if doc
-            .nodes
-            .iter()
-            .any(|n| !expected.contains(&n.id) && !matches!(n.kind, NodeKind::Fill { .. }))
-        {
-            return Err(error(
-                "This diagram contains additional artwork or labels. Save as a native project or export SVG/PDF to retain them.",
-            ));
+        // Additional edge labels have no mxGeometry mapping yet. Never drop
+        // them silently while allowing compound artwork owned by shapes.
+        for node in &doc.nodes {
+            if model.shapes.contains_key(&node.id) {
+                continue;
+            }
+            let mut parent = node.parent;
+            while let Some(id) = parent {
+                if model.shapes.contains_key(&id) {
+                    break;
+                }
+                if let Some(edge) = model.edges.get(&id) {
+                    if ![edge.path, edge.arrow, edge.label].contains(&node.id) {
+                        return Err(error(
+                            "Additional connector artwork requires native project or SVG export.",
+                        ));
+                    }
+                    break;
+                }
+                parent = doc.node(id).and_then(|n| n.parent);
+            }
         }
         let included: HashSet<_> = model
             .shapes
@@ -850,6 +905,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 ShapeKind::Swimlane => "swimlane;",
                 ShapeKind::Cloud => "shape=cloud;",
             };
+            let artwork = compound_artwork(doc, *id, shape, model)?;
             let custom = if shape.data.contains_key("emulsion_stencil")
                 || shape.data.contains_key("drawio_custom_path")
             {
@@ -865,52 +921,71 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 None
             };
             let node = doc.node(*id).unwrap();
-            let label_position =
-                if let NodeKind::Text { spec, .. } = &doc.node(shape.label).unwrap().kind {
-                    let [bx, by, _, bh] = diagram::shape_bounds(doc, shape).unwrap();
-                    format!(
-                        "emulsionLabelX={};emulsionLabelY={};emulsionLabelWidth={};{}",
-                        spec.x as f64 - bx,
-                        spec.y as f64 - by,
-                        spec.width.unwrap_or(w as f32),
-                        if spec.y as f64 >= by + bh {
-                            "verticalLabelPosition=bottom;verticalAlign=top;"
-                        } else {
-                            ""
-                        }
-                    )
-                } else {
-                    String::new()
-                };
+            let label_position = if let NodeKind::Text { spec, .. } =
+                &doc.node(shape.label).unwrap().kind
+            {
+                let [bx, by, _, bh] = diagram::shape_bounds(doc, shape).unwrap();
+                format!(
+                    "emulsionLabelX={};emulsionLabelY={};emulsionLabelWidth={};emulsionLabelRotation={};{}",
+                    spec.x as f64 - bx,
+                    spec.y as f64 - by,
+                    spec.width.unwrap_or(w as f32),
+                    spec.rotation,
+                    if spec.y as f64 >= by + bh {
+                        "verticalLabelPosition=bottom;verticalAlign=top;"
+                    } else {
+                        ""
+                    }
+                )
+            } else {
+                String::new()
+            };
             let style = escape(&format!(
-                "{}{}{}opacity={};html=0;whiteSpace=wrap;{label_position}",
-                custom.as_deref().unwrap_or_else(|| shape
-                    .data
-                    .get("drawio_geometry_style")
-                    .map_or(style, String::as_str)),
+                "{}{}{}opacity={};html=1;whiteSpace=wrap;{label_position}",
+                artwork
+                    .as_deref()
+                    .or(custom.as_deref())
+                    .unwrap_or_else(|| shape
+                        .data
+                        .get("drawio_geometry_style")
+                        .map_or(style, String::as_str)),
                 paint(doc, shape.body),
                 label_style(doc, shape.label)?,
                 node.opacity * 100.
             ));
-            cells.insert(*id, format!("<mxCell id=\"s{id}\" value=\"{}\" vertex=\"1\" visible=\"{}\" parent=\"{parent}\" style=\"{style}\" emulsionData=\"{}\"><mxGeometry x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" as=\"geometry\"/></mxCell>",escape(&text(doc,shape.label)),u8::from(node.visible),escape(&serde_json::to_string(&shape.data).map_err(|e|error(e.to_string()))?)));
+            cells.insert(*id, format!("<mxCell id=\"s{id}\" value=\"{}\" vertex=\"1\" visible=\"{}\" parent=\"{parent}\" style=\"{style}\" emulsionData=\"{}\"><mxGeometry x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" as=\"geometry\"/></mxCell>",escape(&label_html(doc,shape.label)),u8::from(node.visible),escape(&serde_json::to_string(&shape.data).map_err(|e|error(e.to_string()))?)));
         }
         for (id, edge) in &model.edges {
             let mut cell_xml = String::new();
             let routing = if edge.routing == Routing::Orthogonal {
                 "edgeStyle=orthogonalEdgeStyle;"
+            } else if edge.routing == Routing::Curved {
+                "edgeStyle=none;curved=1;"
             } else {
                 "edgeStyle=none;"
             };
             let node = doc.node(*id).unwrap();
             let style = escape(&format!(
-                "{routing}{}{}{}{}opacity={};endArrow={};startArrow={};html=0;",
+                "{routing}{}{}{}{}opacity={};endArrow={};startArrow={};html=1;endFill={};startFill={};endSize={};startSize={};",
                 port_style(edge.source.port, "exit"),
                 port_style(edge.target.port, "entry"),
                 paint(doc, edge.path),
                 label_style(doc, edge.label)?,
                 node.opacity * 100.,
-                if edge.arrow_end { "block" } else { "none" },
-                if edge.arrow_start { "block" } else { "none" }
+                if edge.arrow_end {
+                    edge.end_marker.kind.drawio()
+                } else {
+                    "none"
+                },
+                if edge.arrow_start {
+                    edge.start_marker.kind.drawio()
+                } else {
+                    "none"
+                },
+                u8::from(edge.end_marker.filled),
+                u8::from(edge.start_marker.filled),
+                edge.end_marker.size,
+                edge.start_marker.size
             ));
             let mut refs = String::new();
             let mut endpoints = String::new();
@@ -927,7 +1002,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
                     refs.push_str(&format!(" {name}=\"s{}\"", endpoint.shape));
                 }
             }
-            cell_xml.push_str(&format!("<mxCell id=\"e{id}\" value=\"{}\" visible=\"{}\" edge=\"1\" parent=\"1\"{refs} style=\"{style}\"><mxGeometry relative=\"1\" as=\"geometry\">{endpoints}<mxPoint x=\"{}\" y=\"{}\" as=\"offset\"/><Array as=\"points\">",escape(&text(doc,edge.label)),u8::from(node.visible),edge.label_offset.0,edge.label_offset.1));
+            cell_xml.push_str(&format!("<mxCell id=\"e{id}\" value=\"{}\" visible=\"{}\" edge=\"1\" parent=\"1\"{refs} style=\"{style}\"><mxGeometry relative=\"1\" as=\"geometry\">{endpoints}<mxPoint x=\"{}\" y=\"{}\" as=\"offset\"/><Array as=\"points\">",escape(&label_html(doc,edge.label)),u8::from(node.visible),edge.label_offset.0,edge.label_offset.1));
             for (x, y) in &edge.waypoints {
                 cell_xml.push_str(&format!("<mxPoint x=\"{x}\" y=\"{y}\"/>"));
             }

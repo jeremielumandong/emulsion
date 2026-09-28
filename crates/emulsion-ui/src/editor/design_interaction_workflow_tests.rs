@@ -301,3 +301,88 @@ fn component_variant_click_remains_preview_only_across_animation_ticks(cx: &mut 
         assert_eq!(v.editor.stamp(), stamp);
     });
 }
+
+#[gpui_kit::test]
+fn presentation_hover_and_drag_end_triggers_preserve_artwork(cx: &mut TestAppContext) {
+    use emulsion_core::design_interactions::{self, Trigger};
+    let (doc, button, overlay) = fixture();
+    let mut editor = emulsion_core::Editor::new(doc, None);
+    design_interactions::author(&mut editor, overlay, vec![], Some(true)).unwrap();
+    design_interactions::author_with_trigger(
+        &mut editor,
+        button,
+        vec![Action::Overlay {
+            target: overlay,
+            operation: OverlayOperation::Show,
+        }],
+        None,
+        Some(Trigger::Hover),
+    )
+    .unwrap();
+    let (workspace, cx) = crate::tests::open(cx, editor.doc);
+    cx.simulate_resize(size(px(1200.), px(1000.)));
+    let view = cx.update(|_, cx| workspace.read(cx).editor.clone().unwrap());
+    for trigger in [Trigger::Hover, Trigger::DragEnd] {
+        let original = cx.update(|_, cx| {
+            view.update(cx, |this, cx| {
+                this.stop_motion(cx);
+                design_interactions::author_with_trigger(
+                    &mut this.editor,
+                    button,
+                    vec![Action::Overlay {
+                        target: overlay,
+                        operation: OverlayOperation::Show,
+                    }],
+                    None,
+                    Some(trigger),
+                )
+                .unwrap();
+                let original = this.editor.doc.clone();
+                this.start_motion(true, cx);
+                original
+            })
+        });
+        cx.run_until_parked();
+        let position = cx.update(|_, cx| {
+            let v = view.read(cx);
+            let bounds = v.canvas_bounds().unwrap();
+            let p = v.view.doc_to_screen((40., 50.), &bounds);
+            point(px(p.0 as f32), px(p.1 as f32))
+        });
+        if trigger == Trigger::Hover {
+            cx.simulate_mouse_move(position, None, Modifiers::none());
+        } else {
+            cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::none());
+            cx.update(|_, cx| {
+                assert!(
+                    !view
+                        .read(cx)
+                        .motion
+                        .preview
+                        .as_ref()
+                        .unwrap()
+                        .node(overlay)
+                        .unwrap()
+                        .visible
+                )
+            });
+            let end = position + point(px(20.), px(0.));
+            cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+            cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        }
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let v = view.read(cx);
+            assert!(
+                v.motion
+                    .preview
+                    .as_ref()
+                    .unwrap()
+                    .node(overlay)
+                    .unwrap()
+                    .visible
+            );
+            assert_eq!(v.editor.doc, original);
+        });
+    }
+}

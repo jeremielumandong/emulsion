@@ -15,6 +15,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
+mod legacy_visio;
 mod lucid;
 mod visio;
 mod xml;
@@ -65,13 +66,13 @@ pub fn read(path: &Path) -> Result<Imported> {
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
-        "vsdx" | "vsdm" | "vstx" | "vssx" | "vssm" | "vstm" => visio::package(path),
+        "vsdx" | "vsdm" | "vstx" | "vssx" | "vssm" | "vstm" => visio::package(path).or_else(|original| {
+            legacy_visio::read(path).map(|mut imported|{imported.warnings.push(format!("Native Visio geometry could not be evaluated; converted vector appearance used: {original}"));imported}).map_err(|_|original)
+        }),
         "vdx" | "vsx" => visio::from_xml(&read_text(path)?),
         "lucid" => lucid::package(path),
         "lucidjson" | "json" => lucid::from_json(&read_text(path)?),
-        "vsd" | "vss" | "vst" => Err(error(
-            "Legacy binary Visio files need conversion in Visio to .vsdx, .vssx, or .vstx before editable import.",
-        )),
+        "vsd" | "vss" | "vst" => legacy_visio::read(path),
         "xml" => {
             let text = read_text(path)?;
             if text.contains("VisioDocument") {

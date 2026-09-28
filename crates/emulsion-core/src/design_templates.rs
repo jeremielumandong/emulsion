@@ -56,7 +56,7 @@ pub(super) fn spec(template: Template) -> Option<&'static Starter> {
         Template::VideoThumbnail => "thumbnail",
         Template::PhotoCollage => "collage",
         Template::Bundled(index) => return starters().get(index),
-        Template::Announcement | Template::Editorial => return None,
+        Template::Announcement | Template::Editorial | Template::Responsive(_) => return None,
     };
     starters().iter().find(|spec| spec.id == id)
 }
@@ -311,8 +311,9 @@ mod tests {
     }
     #[test]
     fn supplied_starters_preserve_artwork_geometry_text_and_editable_frames() {
-        for template in Template::catalog() {
-            let spec = spec(template).unwrap();
+        for (template, spec) in
+            Template::catalog().filter_map(|template| spec(template).map(|spec| (template, spec)))
+        {
             let doc = template.create(spec.w, spec.h).unwrap();
             assert_eq!(doc.children(None).len(), spec.els.len() + 1);
             assert_eq!(

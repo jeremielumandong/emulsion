@@ -124,6 +124,7 @@ impl EditorView {
                 let name = name.clone();
                 let apply_name = name.clone();
                 let style = style.clone();
+                let fonts=editor.doc.design.fonts.clone();
                 let owner = cx.weak_entity();
                 let can_update = roots.len() == 1;
                 let links = editor
@@ -141,7 +142,7 @@ impl EditorView {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.prepare_page_action(cx) { return; }
                                 let ids = this.selected_layer_roots();
-                                let result = design_styles::apply(&mut this.editor, &ids, &apply_name, &style).map(|_| ());
+                                let result = design_styles::apply_portable(&mut this.editor, &ids, &apply_name, &style,&fonts).map(|_| ());
                                 this.style_result(result, "Applied linked style. Undo restores the previous appearance.", cx);
                             })))
                         .when(current, |row| row.child(Button::new(("design-style-manage", index)).label("Manage").small().ghost()

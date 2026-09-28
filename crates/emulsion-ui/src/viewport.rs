@@ -424,6 +424,8 @@ pub struct Scene {
     pub ink: Hsla,
     pub accent: Hsla,
     pub rulers: bool,
+    pub ruler_settings: emulsion_core::design_precision::Settings,
+    pub resolution: f32,
     pub diagram_grid: bool,
 }
 
@@ -1027,13 +1029,16 @@ fn paint_rulers(
         bg,
     ));
     // Pick a labelled step at least ~60 px apart.
+    let factor = scene.ruler_settings.unit.factor(scene.resolution).max(1e-6);
+    let origin = scene.ruler_settings.origin;
     let steps = [
-        1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
+        0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0,
+        1000.0, 2000.0, 5000.0, 10000.0,
     ];
     let step = steps
         .iter()
         .copied()
-        .find(|s| s * r.view.zoom >= 60.0)
+        .find(|s| s * factor * r.view.zoom >= 60.0)
         .unwrap_or(20000.0);
     let minor = step / 10.0;
     let (bx0, by0) = (f32::from(b.origin.x) as f64, f32::from(b.origin.y) as f64);
@@ -1043,14 +1048,16 @@ fn paint_rulers(
     );
     let d0 = r.view.screen_to_doc((bx0, by0), &b);
     let d1 = r.view.screen_to_doc((bx1, by1), &b);
+    let d0 = ((d0.0 - origin[0]) / factor, (d0.1 - origin[1]) / factor);
+    let d1 = ((d1.0 - origin[0]) / factor, (d1.1 - origin[1]) / factor);
     let mut v = (d0.0 / minor).floor() * minor;
     while v <= d1.0 {
-        let (sx, _) = r.view.doc_to_screen((v, 0.0), &b);
+        let (sx, _) = r.view.doc_to_screen((v * factor + origin[0], 0.0), &b);
         if sx >= bx0 + RULER as f64 {
             let major = (v / step).round() * step == v || ((v / step).fract()).abs() < 1e-9;
             let h = if major {
                 RULER as f64
-            } else if minor * r.view.zoom >= 6.0 {
+            } else if minor * factor * r.view.zoom >= 6.0 {
                 5.0
             } else {
                 0.0
@@ -1059,7 +1066,14 @@ fn paint_rulers(
                 window.paint_quad(fill(bpx(sx.floor(), by0 + RULER as f64 - h, 1.0, h), tick));
             }
             if major {
-                let label = shaped(&format!("{}", v as i64), 8.5, text, window);
+                let label = shaped(
+                    format!("{v:.2}")
+                        .trim_end_matches('0')
+                        .trim_end_matches('.'),
+                    8.5,
+                    text,
+                    window,
+                );
                 let _ = label.paint(
                     point(px(sx as f32 + 3.), px(by0 as f32 + 1.)),
                     px(10.),
@@ -1074,12 +1088,12 @@ fn paint_rulers(
     }
     let mut v = (d0.1 / minor).floor() * minor;
     while v <= d1.1 {
-        let (_, sy) = r.view.doc_to_screen((0.0, v), &b);
+        let (_, sy) = r.view.doc_to_screen((0.0, v * factor + origin[1]), &b);
         if sy >= by0 + RULER as f64 {
             let major = ((v / step).fract()).abs() < 1e-9;
             let w = if major {
                 RULER as f64
-            } else if minor * r.view.zoom >= 6.0 {
+            } else if minor * factor * r.view.zoom >= 6.0 {
                 5.0
             } else {
                 0.0
@@ -1088,7 +1102,10 @@ fn paint_rulers(
                 window.paint_quad(fill(bpx(bx0 + RULER as f64 - w, sy.floor(), w, 1.0), tick));
             }
             if major {
-                let s = format!("{}", v as i64);
+                let s = format!("{v:.2}")
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string();
                 // Stack digits vertically in the narrow ruler.
                 for (i, ch) in s.chars().enumerate() {
                     let label = shaped(&ch.to_string(), 8.5, text, window);
@@ -1204,6 +1221,8 @@ mod tests {
             ink: Default::default(),
             accent: Default::default(),
             rulers: false,
+            ruler_settings: Default::default(),
+            resolution: 72.,
             diagram_grid: false,
         };
         let mut cache = TileCache::default();

@@ -419,6 +419,7 @@ pub(crate) fn text_json(spec: &TextSpec) -> Value {
         "scale_x": spec.scale_x, "scale_y": spec.scale_y,
         "align": spec.align.key(), "width": spec.width, "height": spec.height,
         "line_height": spec.line_height,
+        "paragraphs":spec.paragraphs,
         "anti_alias": match spec.anti_alias { AntiAliasMode::Smooth=>"smooth", AntiAliasMode::Crisp=>"crisp", AntiAliasMode::Strong=>"strong", AntiAliasMode::None=>"none" },
         "style": style_json(&spec.base_style()),
         "runs": spec.runs.iter().map(|run| json!({

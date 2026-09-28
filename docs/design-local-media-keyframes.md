@@ -17,3 +17,13 @@ MCP exposes `list_design_media`, `add_design_media`, `update_design_media`, `det
 ## Runtime verification
 
 Linux acceptance exercised the actual system WebKitGTK capture helper with the player HTML generated from this implementation, a generated PCM WAV and a tiny H.264/AAC MP4 fixture. Both decoded, sought to a 500 ms trim start, paused at the 1250 ms trim end, looped back to the start, and displayed a paused error for a start beyond duration. Captured native frames and completion callbacks were observed. The Linux check used the system runtime with test GStreamer codecs; it does not prove every codec is installed on other machines. Windows and macOS runtime playback remain separate-machine acceptance checks.
+
+## Live controls through MCP
+
+During a presentation, `play_presentation_media` starts or resumes a visible media object; `pause_presentation_media`, `seek_presentation_media` and `stop_presentation_media` control the active player. Source-file seek milliseconds must remain inside local trim limits and the reported duration. `get_presentation_media_state` returns observed readiness, paused state, position, duration, runtime error and queued-command count. Commands are delivered asynchronously, so a successful command receipt is not a claim that decoding or seeking has finished. YouTube control uses its [official IFrame Player API](https://developers.google.com/youtube/iframe_api_reference).
+
+`set_presenter_timer`, `reset_presenter_timer` and `get_presenter_timer` affect the separate elapsed speaker timer. They do not change animation duration or pause a video. These host-only controls never change saved artwork or Undo history.
+
+Native archive version 8 stores content-addressed media/font resources separately from editable JSON; unchanged media bytes are shared across saved history snapshots. Older applications reject this version explicitly; current readers continue to accept legacy inline payloads.
+
+Live-control acceptance on Linux additionally confirmed observed readiness/time/duration, pausing the H.264 player, seeking to 2500 ms while paused, and resuming playback through the bounded semantic command channel. The system helper captured 248 frames during that check. These are actual player observations, not just queued command receipts.

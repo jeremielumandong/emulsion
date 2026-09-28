@@ -223,6 +223,9 @@ impl Source {
     }
 }
 
+// Scene paints are bounded Copy values; keeping them inline avoids a heap
+// allocation for every native path on each scene preparation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum VectorKind {
     Path {
@@ -354,10 +357,14 @@ pub(crate) fn vector_nodes(doc: &Document) -> HashMap<NodeId, VectorKind> {
 pub fn path_supported(style: &PathStyle) -> bool {
     // Vello blends its RGBA8 target in sRGB. Translucent paint must use
     // the CPU vector rasterizer until Vello supports a linear high-precision target.
-    style.fill.is_none_or(|c| c[3] == 255)
-        && style.stroke.is_none_or(|c| c[3] == 255)
-        && matches!(style.fill_paint, PathPaint::Solid)
-        && matches!(style.stroke_paint, PathPaint::Solid)
+    fn opaque(paint: PathPaint, color: [u8; 4]) -> bool {
+        if let Some(stops) = paint.gradient_stops(color) {
+            return stops.len() >= 2 && stops.iter().all(|stop| stop.color[3] == 255);
+        }
+        matches!(paint, PathPaint::Solid) && color[3] == 255
+    }
+    style.fill.is_none_or(|c| opaque(style.fill_paint, c))
+        && style.stroke.is_none_or(|c| opaque(style.stroke_paint, c))
         && style.alignment == StrokeAlignment::Center
 }
 

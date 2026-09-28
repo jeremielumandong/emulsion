@@ -39,6 +39,7 @@ pub const DESTRUCTIVE: &[&str] = &[
 
 /// Tools that compute for a while; hosts run them off the UI thread.
 pub const HEAVY: &[&str] = &[
+    "export_design_selection",
     "import_image",
     "develop_raw",
     "auto_develop_raw",
@@ -961,6 +962,9 @@ pub fn definitions() -> Vec<ToolDef> {
             &[],
         ),
     ];
+    definitions.extend(crate::design_brand_tools::definitions());
+    definitions.extend(crate::creative_catalog_tools::definitions());
+    definitions.extend(crate::workspace_tools::definitions());
     definitions.extend(crate::image_import_tools::definitions());
     definitions.extend(crate::brush_catalog::definitions());
     definitions.extend(crate::brush_assets::definitions());
@@ -972,6 +976,15 @@ pub fn definitions() -> Vec<ToolDef> {
     definitions.extend(crate::design_layout_tools::definitions());
     definitions.extend(crate::design_interaction_tools::definitions());
     definitions.extend(crate::design_variable_tools::definitions());
+    definitions.extend(crate::project_variable_tools::definitions());
+    definitions.extend(crate::editor_host_tools::definitions());
+    definitions.extend(crate::print_tools::definitions());
+    definitions.extend(crate::photo_source_tools::definitions());
+    definitions.extend(crate::diagram_format_tools::definitions());
+        definitions.extend(crate::design_data_tools::definitions());
+    definitions.extend(crate::design_selection_export_tools::definitions());
+    definitions.extend(crate::design_vector_tools::definitions());
+    definitions.extend(crate::design_paragraph_tools::definitions());
     definitions.extend(crate::design_motion_tools::definitions());
     definitions.extend(crate::diagram_tools::definitions());
     definitions.extend(crate::diagram_project_tools::definitions());
@@ -983,11 +996,22 @@ pub fn definitions() -> Vec<ToolDef> {
 pub fn read_only_names() -> impl Iterator<Item = &'static str> {
     READ_ONLY
         .iter()
+        .chain(crate::design_brand_tools::READ_ONLY)
+        .chain(crate::creative_catalog_tools::READ_ONLY)
+        .chain(crate::workspace_tools::READ_ONLY)
         .chain(crate::design_asset_tools::READ_ONLY)
         .chain(crate::design_appearance_tools::READ_ONLY)
         .chain(crate::design_layout_tools::READ_ONLY)
+        .chain(crate::design_vector_tools::READ_ONLY)
+        .chain(crate::design_paragraph_tools::READ_ONLY)
         .chain(crate::design_interaction_tools::READ_ONLY)
         .chain(crate::design_variable_tools::READ_ONLY)
+        .chain(crate::project_variable_tools::READ_ONLY)
+        .chain(crate::editor_host_tools::READ_ONLY)
+        .chain(crate::print_tools::READ_ONLY)
+        .chain(crate::photo_source_tools::READ_ONLY)
+        .chain(crate::diagram_format_tools::READ_ONLY)
+        .chain(crate::design_data_tools::READ_ONLY)
         .chain(crate::design_motion_tools::READ_ONLY)
         .chain(crate::diagram_tools::READ_ONLY)
         .chain(crate::project_tools::READ_ONLY)
@@ -999,12 +1023,21 @@ pub fn is_read_only(name: &str) -> bool {
 }
 
 pub fn is_destructive(name: &str) -> bool {
-    DESTRUCTIVE.contains(&name)
+    if crate::design_brand_tools::DESTRUCTIVE.contains(&name) { return true; }
+    if crate::creative_catalog_tools::DESTRUCTIVE.contains(&name) || crate::workspace_tools::DESTRUCTIVE.contains(&name) { return true; }
+    name == crate::design_selection_export_tools::NAME || DESTRUCTIVE.contains(&name)
         || crate::design_asset_tools::DESTRUCTIVE.contains(&name)
         || crate::design_appearance_tools::DESTRUCTIVE.contains(&name)
         || crate::design_layout_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_vector_tools::DESTRUCTIVE.contains(&name)
         || crate::design_interaction_tools::DESTRUCTIVE.contains(&name)
         || crate::design_variable_tools::DESTRUCTIVE.contains(&name)
+        || crate::project_variable_tools::DESTRUCTIVE.contains(&name)
+        || crate::editor_host_tools::DESTRUCTIVE.contains(&name)
+        || crate::print_tools::DESTRUCTIVE.contains(&name)
+        || crate::photo_source_tools::DESTRUCTIVE.contains(&name)
+        || crate::diagram_format_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_data_tools::DESTRUCTIVE.contains(&name)
         || crate::design_motion_tools::DESTRUCTIVE.contains(&name)
         || crate::diagram_tools::DESTRUCTIVE.contains(&name)
         || crate::project_tools::DESTRUCTIVE.contains(&name)
@@ -1015,11 +1048,22 @@ pub fn is_destructive(name: &str) -> bool {
 pub fn uses_native_history(name: &str) -> bool {
     !is_read_only(name)
         && [
+            crate::design_brand_tools::definitions(),
+            crate::workspace_tools::definitions(),
             crate::design_asset_tools::definitions(),
             crate::design_appearance_tools::definitions(),
             crate::design_layout_tools::definitions(),
             crate::design_interaction_tools::definitions(),
             crate::design_variable_tools::definitions(),
+            crate::project_variable_tools::definitions(),
+            crate::editor_host_tools::definitions(),
+            crate::print_tools::definitions(),
+            crate::photo_source_tools::definitions(),
+            crate::diagram_format_tools::definitions(),
+        crate::design_data_tools::definitions(),
+            crate::design_selection_export_tools::definitions(),
+            crate::design_vector_tools::definitions(),
+            crate::design_paragraph_tools::definitions(),
             crate::design_motion_tools::definitions(),
             crate::diagram_tools::definitions(),
             crate::project_tools::definitions(),
