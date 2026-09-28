@@ -27,7 +27,7 @@ Native project files retain chart data. SVG and PDF exports preserve the support
 - Up to 256 chart/table groups per page, subject to the document's normal object limit.
 - Dense charts and tables may need larger dimensions to make labels readable.
 
-Horizontal bars, radar charts, configurable gridline styling, spreadsheet formulas, live data connections, and animated chart playback remain future work. The cell grid is a data editor, not a full spreadsheet, and this is not a claim of full Canva chart parity.
+Horizontal bars, radar charts, configurable gridline styling, spreadsheet formulas, live data connections, and animated chart playback remain future work. The cell grid is a data editor, not a full spreadsheet.
 
 ## Local formulas
 
@@ -45,6 +45,6 @@ follow normal CSV quoting. No expression can call scripts, URLs or external file
 
 Invalid references, cycles, division by zero, excessive nesting/calculation cost,
 and nonfinite results reject Apply atomically with a cell diagnostic. Results are
-bounded to ±1e12. Addresses refer to current grid positions; adding/removing rows
-does not implement Excel-style reference rewriting. Native saves retain source
+bounded to ±1e12. Addresses refer to current grid positions; Emulsion
+does not rewrite cell references when rows or columns move. Native saves retain source
 formulas and calculated editable artwork.

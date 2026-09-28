@@ -3,8 +3,8 @@
 Emulsion's cloud integration is experimental. The implementation has local
 storage tests; live provider testing and production verification require
 developer registrations. No personal client IDs or tokens ship in this source
-tree. [Implementation specification](cloud-sync-spec.md) ·
-[Feasibility and follow-on work](cloud-sync-plan.md).
+tree. [Implementation specification](../specs/cloud-sync-spec.md) ·
+[Feasibility and follow-on work](../specs/cloud-sync-plan.md).
 
 ## Open-source distribution
 

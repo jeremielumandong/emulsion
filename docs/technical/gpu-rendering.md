@@ -76,7 +76,7 @@ Set before starting Emulsion:
 Overrides never bypass correctness checks or device/memory limits. Unsupported
 jobs use their complete CPU reference operation. A failed shader is disabled for
 the session; a lost device disables compute until restart. CPU document data
-remains available. See [VM rendering](rendering.md) for GPUI's independent
+remains available. See [VM rendering](../guides/rendering.md) for GPUI's independent
 `GPUI_FORCE_SOFTWARE_RENDERING` diagnostic.
 
 The wgpu compute code is portable across Linux, macOS, and Windows. Local hardware
@@ -85,12 +85,12 @@ macOS/Windows runtime performance and pixel parity
 still require testing on those platforms. The native macOS GPUI renderer remains
 unchanged; this does not add a macOS software interface renderer.
 
-## Experimental GPU canvas on Windows
+## GPU canvas
 
 The editor enables the new wgpu/Vello canvas engine by default on Windows,
 Linux and macOS. Only `EMULSION_GPU_CANVAS=0` disables it; leaving the variable
 unset or setting it to `1` enables it. No additional Cargo feature is needed.
-Build and launch from PowerShell:
+On Windows, build and launch from PowerShell:
 
 ```powershell
 .\scripts\build-windows.ps1
@@ -126,7 +126,7 @@ These checks cover compositing, brush readback, atlas reuse, and visibility of
 pixel, layer, and vector changes after reload. Also check the editor itself:
 paint and undo/redo, add and move layers and text, pan/zoom, resize the window,
 and rotate the view to exercise the existing canvas fallback. See the
-[canvas spike results](../spikes/vello-canvas/RESULTS.md) for measurements and
+[canvas spike results](../../spikes/vello-canvas/RESULTS.md) for measurements and
 remaining limitations.
 
 ## Verification

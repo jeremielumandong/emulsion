@@ -11,7 +11,7 @@ Emulsion stores its catalog in `brush-library.json` in its application data dire
 
 Procreate's handbook documents the library/set/brush hierarchy and accepted file extensions, but does not specify its binary archive layout. [Brush libraries](https://help.procreate.com/procreate/handbook/brushes/brush-library)
 
-The ABR field layout was cross-checked against the published Krita reader; Emulsion's parser uses bounded slices and rejects invalid dimensions and scanlines. [Krita ABR reader](https://github.com/KDE/krita/blob/master/libs/brush/kis_abr_brush_collection.cpp)
+Emulsion's ABR parser uses bounded slices and rejects invalid dimensions and scanlines.
 
 Imported source PNGs use SHA-256 filenames under `brushes/assets`. Runtime texture IDs are resolved separately, including legacy IDs. Original external archives are retained under `brushes/sources`, with their content hash in brush provenance. Missing textures are reported on load and their references are retained for recovery. Portable export fails if a required source is missing, including sources used only by original or reset-point snapshots.
 

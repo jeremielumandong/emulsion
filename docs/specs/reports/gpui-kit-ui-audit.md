@@ -37,7 +37,7 @@ The Base Toolbar implementation and its upstream tests come from the
 checksum-verified gpui-base 0.7.0 crate (Apache-2.0). Application-owned layout
 keeps Emulsion's appearance rather than importing the styled toolbar's fixed
 height. Package version 0.6.4 remains truthful; the patch is documented in
-[gpui-base changes](../vendor/gpui/gpui-base/EMULSION_CHANGES.md) and shipped in
+[gpui-base changes](../../../vendor/gpui/gpui-base/EMULSION_CHANGES.md) and shipped in
 the license notices.
 
 ## Next improvements, in priority order

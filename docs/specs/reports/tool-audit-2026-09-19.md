@@ -1,16 +1,16 @@
 # Common-tool audit — 2026-09-19
 
-*Snapshot from 2026-09-19. For current behavior see [tool-testing.md](tool-testing.md).*
+*Snapshot from 2026-09-19. For current behavior see [tool-testing.md](../../technical/tool-testing.md).*
 
-Audited revision: `750271a`. Scope: all 12 editor toolbar tools and their modes, painting input, selections/transforms, layers/masks, adjustments/filters, text, persistence/export, batch, and common keyboard workflows. This is a source and automated-behavior audit on macOS, not a hands-on comparison with installed Photoshop or Procreate.
+Audited revision: `750271a`. Scope: all 12 editor toolbar tools and their modes, painting input, selections/transforms, layers/masks, adjustments/filters, text, persistence/export, batch, and common keyboard workflows. This is a source and automated-behavior audit on macOS.
 
-> Follow-up: the audit below records the original baseline. See [the repair plan and implementation results](tool-repair-plan.md) for the subsequent fixes and remaining manual checks, [moving artwork](artwork-movement.md) for group dragging and keyboard nudging, and [aligning artwork](artwork-alignment.md) for canvas and selection alignment added afterward.
+> Follow-up: the audit below records the original baseline. See [the repair plan and implementation results](../tool-repair-plan.md) for the subsequent fixes and remaining manual checks, [moving artwork](../../guides/artwork-movement.md) for group dragging and keyboard nudging, and [aligning artwork](../../guides/artwork-alignment.md) for canvas and selection alignment added afterward.
 
 ## Verdict
 
-**Emulsion is not yet at parity with Procreate or Photoshop for dependable everyday tools.** It has substantial feature coverage, including real brush dynamics, editable paths, adjustment layers, masks, and raster transforms. However, basic workflows contain correctness defects, some operations can discard newer work, and important Mac input and clipboard workflows are missing. All 12 toolbar entries being enabled does not establish that each workflow is complete.
+**Emulsion's everyday tools are not yet dependable.** It has substantial feature coverage, including real brush dynamics, editable paths, adjustment layers, masks, and raster transforms. However, basic workflows contain correctness defects, some operations can discard newer work, and important Mac input and clipboard workflows are missing. All 12 toolbar entries being enabled does not establish that each workflow is complete.
 
-The largest painting gap is native Mac pen input. The largest editing gaps are selection/lock consistency, asynchronous operation ownership, and file round-trip fidelity. Fixing these takes priority over increasing the tool count. No numerical parity percentage is justified by this audit.
+The largest painting gap is native Mac pen input. The largest editing gaps are selection/lock consistency, asynchronous operation ownership, and file round-trip fidelity. Fixing these takes priority over increasing the tool count. No numerical completeness score is justified by this audit.
 
 ## Evidence and validation
 
@@ -32,37 +32,37 @@ P1: potential lost work, unreadable files, crashes, or edits outside protected r
 
 `ConvertToSmart` preserves a raster-sized mask, while the native reader requires Smart masks to have canvas dimensions. Create an 8×8 document, add a masked 4×4 raster, convert it to Smart, save ORA, then reopen. The writer accepts a document that the reader rejects. Fix the mask coordinate/dimension contract across conversion, rendering, editing, and loading, including compatibility with existing files.
 
-Evidence: [command.rs](../crates/emulsion-core/src/command.rs), line 669; [ora.rs](../crates/emulsion-io/src/ora.rs), line 841. Related: Smart masks are edited in document coordinates (`editor/tools.rs:1130`) but lowered to placed pixel layers (`document.rs:382`), causing inconsistent mask placement on transformed/filtered Smart layers.
+Evidence: [command.rs](../../../crates/emulsion-core/src/command.rs), line 669; [ora.rs](../../../crates/emulsion-io/src/ora.rs), line 841. Related: Smart masks are edited in document coordinates (`editor/tools.rs:1130`) but lowered to placed pixel layers (`document.rs:382`), causing inconsistent mask placement on transformed/filtered Smart layers.
 
 ### P1 — Background edits can overwrite newer work
 
 Heal, bucket fill, warp, and distort capture a raster and later replace the full layer without checking that the source content is still current. Start a slow operation, then paint elsewhere or undo before it finishes: its callback can install the older snapshot over newer work. Heal can also close a transaction belonging to a later gesture. Use operation ownership and source identity/revision checks; define cancellation and undo behavior before committing results.
 
-Evidence: [tools.rs](../crates/emulsion-ui/src/editor/tools.rs), lines 1813, 1852, 1908–1952; [transform.rs](../crates/emulsion-ui/src/editor/transform.rs), lines 210 and 397. **Source-confirmed; interactive race reproduction pending.** Smart filters have another lifecycle problem: their generation counter is global across layers (`editor/smart.rs:104`), so a newer request for layer B can discard layer A's pending request. Undo does not invalidate all pending filter callbacks.
+Evidence: [tools.rs](../../../crates/emulsion-ui/src/editor/tools.rs), lines 1813, 1852, 1908–1952; [transform.rs](../../../crates/emulsion-ui/src/editor/transform.rs), lines 210 and 397. **Source-confirmed; interactive race reproduction pending.** Smart filters have another lifecycle problem: their generation counter is global across layers (`editor/smart.rs:104`), so a newer request for layer B can discard layer A's pending request. Undo does not invalidate all pending filter callbacks.
 
 ### P1 — Heal ignores selection boundaries when committing
 
 The preview applies the selection clip, but the final content-aware solve uses raw stroke coverage. Select the left half of an image and heal a speck in the right half: pixels outside the selection can change. Brush opacity and alpha clipping are also absent from the final coverage mask. Build the healing mask from effective clipped coverage and preserve pixels outside it.
 
-Evidence: [tools.rs](../crates/emulsion-ui/src/editor/tools.rs), line 1908; [paint.rs](../crates/emulsion-raster/src/paint.rs), line 1206.
+Evidence: [tools.rs](../../../crates/emulsion-ui/src/editor/tools.rs), line 1908; [paint.rs](../../../crates/emulsion-raster/src/paint.rs), line 1206.
 
 ### P1 — Locked groups do not consistently protect their children
 
 Move/painting check the selected node's lock, not all ancestor locks. Core `SetPlacement`, `ReplacePixels`, and `SetPath` also lack that protection. Lock a group and select its unlocked child: common edits remain possible. `RotateNode` already rejects this case. Centralize the editable-target check and use it consistently across direct and asynchronous commands.
 
-Evidence: [editor.rs](../crates/emulsion-ui/src/editor.rs), line 945; [command.rs](../crates/emulsion-core/src/command.rs), mutation handlers and `RotateNode`.
+Evidence: [editor.rs](../../../crates/emulsion-ui/src/editor.rs), line 945; [command.rs](../../../crates/emulsion-core/src/command.rs), mutation handlers and `RotateNode`.
 
 ### P1 — Magnetic lasso can use an obsolete edge-map allocation
 
 After canvas enlargement, `magnetic_track` can pass the old edge vector together with the new width/height to `live_wire`, which indexes it directly. Build a magnetic cache, enlarge the canvas, then trace in the added area before recalculation finishes. This creates an out-of-bounds panic path. Validate cache revision, dimensions, and allocation length; reject obsolete worker completions.
 
-Evidence: [tools.rs](../crates/emulsion-ui/src/editor/tools.rs), lines 1646 and 1703; [select.rs](../crates/emulsion-raster/src/select.rs), line 388. **Source-confirmed; resize/timing scenario not executed.**
+Evidence: [tools.rs](../../../crates/emulsion-ui/src/editor/tools.rs), lines 1646 and 1703; [select.rs](../../../crates/emulsion-raster/src/select.rs), line 388. **Source-confirmed; resize/timing scenario not executed.**
 
 ### P1 — Layered PSD round trips lose visible content
 
 Adjustment layers are rendered with their underlying layers hidden and therefore export transparent results. Clipping relationships and group masks are omitted. The stored merged image can look correct while reconstruction from editable layers is wrong. Exporting a gray raster with Exposure, or clipped pixels inside a masked group, demonstrates separate losses. Preserve supported PSD constructs and explicitly handle unsupported ones with an appearance-preserving export strategy.
 
-Evidence: [psd.rs](../crates/emulsion-io/src/psd.rs), lines 256, 344, 399. Ordinary raster layer export also bypasses Emulsion styles. Editable text, native adjustment definitions, and Smart objects are not preserved as their corresponding Photoshop objects.
+Evidence: [psd.rs](../../../crates/emulsion-io/src/psd.rs), lines 256, 344, 399. Ordinary raster layer export also bypasses Emulsion styles. Editable text, native adjustment definitions, and Smart objects are not preserved as their corresponding Photoshop objects.
 
 ### Other defects and gaps
 
@@ -114,22 +114,9 @@ Except where the validation section records execution, these additional findings
 | Save / export | Native ORA, PNG/JPEG/WebP/TIFF/PSD; 16-bit PNG/TIFF; RAW import/development | Native Smart-mask failure and PSD/standard-ORA fidelity gaps are material. PSD output is 8-bit RGB; CMYK PSD import rejected. |
 | Batch | Folder selection, recipes, preview, selected-file export | Output collisions need fixing; large real-folder workflow not manually tested. |
 | Image generation / Ctrl-K | Local SD, OpenAI, Google routing, selection-aware insertion, undo/cancel paths | Implementation and tests exist. Live services, account quotas, output quality, and provider mask fidelity not certified by this audit. |
-| Assistant drawing | Tool calls, live stroke playback, reference workflows, style guidance | Engineering tests do not establish artistic parity. See the existing [artist evaluation protocol](artist-evaluation.md). |
+| Assistant drawing | Tool calls, live stroke playback, reference workflows, style guidance | Engineering tests do not establish artistic quality. See the existing [artist evaluation protocol](../artist-evaluation.md). |
 
-The `emulsion-tools`, `emulsion-color`, and `emulsion-gpu` crates are stubs, but their names are not a reliable feature inventory: tools are implemented in UI/raster and ICC conversion in IO. No dedicated GPU brush/filter/compositor backend is implemented in the GPU crate. GPUI's hardware-rendered UI does not establish GPU image-processing or latency parity.
-
-## Comparison with common Procreate / Photoshop workflows
-
-Comparison targets documented behavior, not a claim that the other products are bug-free. Procreate is an iPad drawing app; Photoshop is a desktop editor. Platform-specific interactions need equivalent usable behavior, not identical gestures.
-
-| Common expectation | Emulsion assessment | Official comparison reference |
-| --- | --- | --- |
-| Pressure/tilt-sensitive drawing | Brush math exists; Mac hardware ingestion does not. Speed fallback is not pen-pressure parity. | [Procreate Apple Pencil](https://help.procreate.com/procreate/handbook/interface-gestures/pencil) documents native pressure/tilt response. |
-| Customizable paint, erase, smudge | Strong starting coverage, but preset persistence, alpha behavior, and physical input need repair and drawing trials. | [Procreate Brush Studio](https://help.procreate.com/procreate/handbook/brushes/brush-studio-settings); [Photoshop painting tools](https://helpx.adobe.com/photoshop/desktop/apply-painting-techniques/fill-objects-selections-layers/painting-tools-overview.html). |
-| Select, copy/cut, paste, edit selected pixels | Selection tools exist; pixel clipboard workflow is absent. | [Procreate Copy/Paste](https://help.procreate.com/procreate/handbook/interface-gestures/copypaste); [Photoshop copy/paste selections](https://helpx.adobe.com/sg/photoshop/desktop/make-selections/refine-modify-selections/copy-and-paste-selections.html). |
-| Reliable locks, alpha lock, masks | Implemented concepts with ancestor-lock, alpha, and Smart-mask defects. | [Procreate masks and locks](https://help.procreate.com/procreate/handbook/layers/layers-mask) includes group protection and alpha/layer/clipping masks. |
-| Scale, rotate, distort, warp | Raster path is comparatively broad; selected-pixel and cross-layer-type behavior incomplete. | [Procreate Transform](https://help.procreate.com/procreate/handbook/transform) covers freeform, uniform, distort, warp, snapping, interpolation. |
-| Selection refinement | Several controls exist; async lifecycle and magnetic-cache defects need repair. No equivalent quality comparison has been run on hair/fur/soft edges. | [Photoshop Select and Mask](https://helpx.adobe.com/photoshop/desktop/make-selections/refine-modify-selections/refine-your-selection-and-mask.html). |
+The `emulsion-tools`, `emulsion-color`, and `emulsion-gpu` crates are stubs, but their names are not a reliable feature inventory: tools are implemented in UI/raster and ICC conversion in IO. No dedicated GPU brush/filter/compositor backend is implemented in the GPU crate. GPUI's hardware-rendered UI does not establish GPU image processing or meet latency targets.
 
 ## Recommended implementation order
 
@@ -137,7 +124,7 @@ Comparison targets documented behavior, not a claim that the other products are 
 2. **Make everyday painting predictable:** Clone first dab, Liquify Restore, exact alpha preservation, transformed symmetry, complete preset save/switching, native Mac tablet pressure/tilt.
 3. **Complete common editing workflows:** pixel cut/copy/paste, selected-pixel clear/transform, Mac Command shortcut defaults, consistent transforms for supported layer types, explicit unsupported-tool states.
 4. **Preserve exchanged documents:** PSD adjustments/clipping/masks/styles and standard ORA appearance; add round-trip fixtures before expanding format claims.
-5. **Evaluate quality and performance:** real stylus tests, representative large drawings, image fixtures, long strokes, imported brushsets, and artist trials. Set measured latency/memory and visual acceptance criteria before claiming parity.
+5. **Evaluate quality and performance:** real stylus tests, representative large drawings, image fixtures, long strokes, imported brushsets, and artist trials. Set measured latency/memory and visual acceptance criteria before claiming completeness.
 
 ## Remaining manual checks
 

@@ -4,8 +4,7 @@ User scope: finish the full remaining Design roadmap, preserving the supplied
 native UI, existing editing functions, crisp editable text, local file exchange,
 cross-platform code and the small application footprint. Collaboration, accounts
 and remote publishing stay deferred. Windows/macOS runtime acceptance is performed
-on the user's separate machines. This checklist records delivery, not a claim of
-Canva/PowerPoint/Lucid parity.
+on the user's separate machines. This checklist records delivery status.
 
 ## Current implementation and validation
 
@@ -54,8 +53,8 @@ claiming fidelity.
 
 - Windows/macOS runtime acceptance remains on the user's separate machines; see
   [platform checklist](design-platform-acceptance.md).
-- Editable PowerPoint interchange supports the documented subset and reports unsupported objects/effects. Binary `.ppt` remains unsupported; see [PowerPoint support](design-pptx.md).
-- Editable Lottie import/export supports the documented 2D subset and reports unsupported operators; the separate rendered-frame option remains available. See [Lottie interchange](lottie-interchange.md).
+- Editable PowerPoint interchange supports the documented subset and reports unsupported objects/effects. Binary `.ppt` remains unsupported; see [PowerPoint support](../guides/design-pptx.md).
+- Editable Lottie import/export supports the documented 2D subset and reports unsupported operators; the separate rendered-frame option remains available. See [Lottie interchange](../guides/lottie-interchange.md).
 - Cloud collaboration, remote publishing and executable plugin runtimes remain
   outside this local-editing delivery.
 
@@ -74,9 +73,9 @@ claiming fidelity.
 
 Previous package: `target/appimage/Emulsion-0.0.3-advanced-design-x86_64.AppImage`.
 Exact size, checksum, test counts and benchmark results are recorded in
-[completion results](design-completion-results.json). The responsive 1,000-object
+[completion results](reports/design-completion-results.json). The responsive 1,000-object
 workload improved from 40.47 ms to 16.29 ms median; see
-[measurement boundaries](design-layout-performance.md).
+[measurement boundaries](../technical/design-layout-performance.md).
 
 ## Editable interchange and native host completion
 
@@ -89,7 +88,7 @@ workload improved from 40.47 ms to 16.29 ms median; see
 - [x] Final combined regression/lint results and branch publication.
 
 These changes are separate from the previous AppImage listed above. Current source
-validation is recorded in [interchange results](design-interchange-results.json); format boundaries are recorded in the associated feature documents.
+validation is recorded in [interchange results](reports/design-interchange-results.json); format boundaries are recorded in the associated feature documents.
 
 Current batch: 311 core, 260 IO, 194 MCP and 16 focused native UI tests passed (one core test intentionally ignored). Clippy passed with warnings denied for core/IO/MCP/UI library and test targets. Independent LibreOffice and official Lottie-player checks passed; the shared GNOME Flatpak runtime passed H.264 and YouTube playback checks.
 

@@ -1,10 +1,10 @@
 # Artist workflow evaluation
 
-*Snapshot from 2026-09-19. For current behavior see [brush-workflow.md](brush-workflow.md).*
+*Snapshot from 2026-09-19. For current behavior see [brush-workflow.md](../guides/brush-workflow.md).*
 
 Status: protocol, not results. Improved artwork remains **unproven** until the comparisons below are run. Passing tool regressions establishes tool behaviour, not artistic ability.
 
-Design reference: [Krita's brush-engine catalogue](https://docs.krita.org/en/reference_manual/brushes/brush_engines.html) separates brush behaviours into engines including bristle, colour smudge, hatching and pixel brushes (re-inspected 2026-09-19). Emulsion's playbooks distinguish technique and disclose its own procedural preset limits; they do not claim equivalence to those engines.
+Emulsion's playbooks distinguish technique and disclose their procedural preset limits.
 
 The expanded catalogue accepts custom styles and combines visual style with medium technique. This is broader guidance at the user's request, not evaluated coverage of every style. Use the original six briefs as a stable baseline and the extension panel below for the expanded workflow.
 

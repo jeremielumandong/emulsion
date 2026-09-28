@@ -2,7 +2,7 @@
 
 Where Emulsion keeps its settings, shortcuts, recovery copies and downloads,
 how to capture its logs, and which environment variables change its behaviour.
-Feature documentation lives in the [README](../README.md); this page only
+Feature documentation lives in the [README](../../README.md); this page only
 covers what is on disk and in the environment.
 
 ## Command line
@@ -109,7 +109,7 @@ Opening a RAW photo directly and saving writes its development settings beside
 the original as `<file>.emulsion-raw.json`; the RAW file itself is never
 changed. What the sidecar holds, how it is restored, and what happens when it
 is renamed or mismatched are described in the README under
-[Developing RAW photos](../README.md#developing-raw-photos). When you back up
+[Developing RAW photos](../../README.md#developing-raw-photos). When you back up
 or move a photo, keep its sidecar with it.
 
 ## Logs
@@ -154,7 +154,8 @@ Set these before starting Emulsion; they are read at launch.
 | --- | --- | --- | --- |
 | `RUST_LOG` | `EnvFilter` directive, e.g. `debug`, `info,emulsion_mcp=trace` | Log level and per-module filters; default `info`. The name is `tracing_subscriber`'s default and does not appear literally in Emulsion's source. | `crates/emulsion-app/src/main.rs` (`EnvFilter::try_from_default_env`) |
 | `XDG_DATA_HOME` | Absolute path | Data directory becomes `$XDG_DATA_HOME/emulsion` on every platform. | `crates/emulsion-io/src/recent.rs` |
-| `EMULSION_GPU` | `cpu`, `force`, `software`, unset | `cpu` disables GPU image compute; `force` prefers GPU for every supported operation regardless of measured cost; `software` does the same on a CPU adapter for shader validation. GPUI window rendering is unaffected. See [GPU image processing](gpu-rendering.md#controls). | `crates/emulsion-gpu/src/lib.rs`, `context.rs` |
+| `EMULSION_GPU` | `cpu`, `force`, `software`, unset | `cpu` disables GPU image compute; `force` prefers GPU for every supported operation regardless of measured cost; `software` does the same on a CPU adapter for shader validation. GPUI window rendering is unaffected. See [GPU image processing](../technical/gpu-rendering.md#controls). | `crates/emulsion-gpu/src/lib.rs`, `context.rs` |
+| `EMULSION_GPU_CANVAS` | `0`, unset | `0` draws the document canvas with the CPU tile path instead of the default wgpu/Vello GPU canvas; any other value, or unset, keeps the GPU canvas on (Linux, macOS and Windows). Read once per launch. Independent of `EMULSION_GPU`. See [GPU canvas](../technical/gpu-rendering.md#gpu-canvas). | `crates/emulsion-ui/src/viewport_gpu.rs` |
 | `EMULSION_GPU_BRUSHES` | `1`, `persistent` | Opt in to experimental GPU brush composition (`1`), or the persistent GPU brush backend (`persistent`). Ignored when GPU compute is unavailable. | `crates/emulsion-gpu/src/lib.rs` |
 | `EMULSION_MODELS_DIR` | Absolute path | Folder for AI model downloads instead of `<data dir>/models`. | `crates/emulsion-ai/src/models.rs` |
 | `EMULSION_RETAINED_LAYOUT` | `1`, `0` | Launch override for the Settings "Reuse interface layout" switch: `1` forces it on, `0` off, without changing the saved preference. Any other value is ignored. | `crates/emulsion-ui/src/app_state.rs` |
@@ -163,11 +164,19 @@ Set these before starting Emulsion; they are read at launch.
 | `TYPESAFE_API_KEY` | Key | Used for Jev in preference to `jev_api_key` in `settings.json`. | `crates/emulsion-io/src/settings.rs` |
 | `CODEX_HOME` | Path | Where your own Codex sign-in and config are read from when the assistant builds its scoped Codex home (default `~/.codex`). | `crates/emulsion-assistant/src/launch.rs` |
 | `XDG_CONFIG_HOME` | Path | Where your own OpenCode config is read from (default `~/.config`); also the fallback root for the Omarchy theme below. | `crates/emulsion-assistant/src/launch.rs`, `crates/emulsion-ui/src/theme/omarchy.rs` |
-| `XDG_STATE_HOME` | Absolute path | Linux: first root searched for `omarchy/current/theme/colors.toml` (default `~/.local/state`), then `XDG_CONFIG_HOME`. See [Appearance](../README.md#appearance). | `crates/emulsion-ui/src/theme/omarchy.rs`, `crates/emulsion-io/src/settings.rs` |
+| `XDG_STATE_HOME` | Absolute path | Linux: first root searched for `omarchy/current/theme/colors.toml` (default `~/.local/state`), then `XDG_CONFIG_HOME`. See [Appearance](../../README.md#appearance). | `crates/emulsion-ui/src/theme/omarchy.rs`, `crates/emulsion-io/src/settings.rs` |
 | `GPUI_FORCE_SOFTWARE_RENDERING` | `1` | Force the software window renderer (Linux/wgpu and Windows); fails rather than falling back to hardware. Independent of `EMULSION_GPU`. See [Rendering and virtual machines](rendering.md). | `vendor/gpui/gpui-pre-wgpu/src/wgpu_context.rs`, `vendor/gpui/gpui-pre-windows/src/directx_devices.rs` |
+| `EMULSION_VERSION` | Release tag, e.g. `v0.0.1` | Web installer (`curl -fsSL https://emulsion.pro/install \| sh`): install that release instead of the latest. Values that are not a `v`-prefixed release tag are rejected. | `site/public/install` |
 | `EMULSION_APPIMAGE` | Absolute path | Installer and launcher wrapper: where the AppImage is installed (default `~/Applications/Emulsion.AppImage`). | `scripts/install-appimage.sh` |
 | `EMULSION_KEEP_BACKUPS` | Integer | Installer: how many `.bak-*` copies of a previous AppImage to keep (default 2). | `scripts/install-appimage.sh` |
 | `EMULSION_TOOLS_DIR` | Path | AppImage build script: cache for appimagetool and the runtime (default `$XDG_CACHE_HOME/emulsion/tools`, or `~/.cache/emulsion/tools` when `XDG_CACHE_HOME` is unset). | `scripts/build-appimage.sh` |
+| `EMULSION_WEB_PLAYER_HELPER` | Path | Linux build: copy this prebuilt video/web player adapter into the build instead of compiling it with `pkg-config` (WebKitGTK 4.1, GTK3). Required when cross-compiling for Linux; without it a cross build embeds an empty adapter and warns. Read at compile time. | `crates/emulsion-app/build.rs` |
+
+Cloud storage client IDs (`EMULSION_GOOGLE_CLIENT_ID`, `EMULSION_DROPBOX_CLIENT_ID`,
+`EMULSION_ONEDRIVE_CLIENT_ID`, and `EMULSION_GOOGLE_DESKTOP_CLIENT_SECRET`) are
+compile-time values for builders, not launch settings; see
+[Cloud accounts and developer registrations](cloud-setup.md#open-source-distribution).
+Their source is `crates/emulsion-cloud/src/auth.rs`.
 
 `EMULSION_RELAY` and `EMULSION_TOKEN` are set by Emulsion itself in the
 environment of the `mcp-serve` child it launches (the relay address on
@@ -176,9 +185,20 @@ locate the `mcp-serve` executable instead of its own path and is set by the test
 harness. Do not set any of the three by hand.
 
 Test and benchmark variables, each documented where it is used:
-`EMULSION_REQUIRE_GPU_TESTS` in [GPU image processing](gpu-rendering.md#verification);
-`EMULSION_RAW_CORPUS` in the [RAW corpus notes](../crates/emulsion-io/tests/fixtures/RAW-CORPUS.md);
-`EMULSION_NIKON_HE_FILE` in [Nikon HE support](nikon-he.md). The remaining
+`EMULSION_REQUIRE_GPU_TESTS` in [GPU image processing](../technical/gpu-rendering.md#verification);
+`EMULSION_RAW_CORPUS` in the [RAW corpus notes](../../crates/emulsion-io/tests/fixtures/RAW-CORPUS.md);
+`EMULSION_NIKON_HE_FILE` in [Nikon HE support](nikon-he.md);
+`EMULSION_BENCH_DIAGRAM` in [diagram functionality](diagram-functionality.md)
+(the `editor_canvas_bench` example benchmarks a generated diagram of that many
+connected shapes, clamped to 2–10,000, instead of the default layered canvas).
+Opt-in ignored tests and tools read a local path:
+`EMULSION_LIBRARY_RAW_SAMPLES` (a folder of at least two local RAW files, such as Nikon D90 samples, for the
+shared RAW memory-budget regression in `crates/emulsion-io/tests/raw_development.rs`),
+`EMULSION_CHIC_PRESET` (a user-provided `Chic.xmp` for the Lightroom preset import
+regression in `crates/emulsion-io/src/lightroom_presets.rs`), and
+`EMULSION_AUDIT_RETRY_JSONL` (a previous `drawio_audit` JSONL report; the
+`crates/emulsion-io/examples/drawio_audit.rs` example then reruns only the files
+that reported an error). The remaining
 `EMULSION_*` names in the source (`EMULSION_DRAWING_WORKFLOW_ARTIFACT`,
 `EMULSION_COMPOSITOR_BENCH_CASES`, `EMULSION_LAYOUT_BENCH_RETAINED_FIRST`,
 `EMULSION_NAVIGATION_BENCH_TARGETED_FIRST`, `EMULSION_TEST_EXPECTED_DATA_DIR`,
@@ -226,7 +246,7 @@ crates/emulsion-ui/src/assistant.rs:640,655,663-666,676; crates/emulsion-ui/src/
 scripts/install-appimage.sh:14-16,26-28,35-38,50-60,66,113-126,134-147,150-153,176-179,187-190,196-203;
 scripts/build-appimage.sh:20-26; README.md:199-200,227-248,295,320-327 (working-tree copy);
 vendor/gpui/gpui-pre-wgpu/src/wgpu_context.rs:336-337; tracing-subscriber EnvFilter::DEFAULT_ENV = "RUST_LOG";
-docs/gpu-rendering.md:62-73,86-96; docs/rendering.md:36-67; docs/nikon-he.md:19-24;
+docs/technical/gpu-rendering.md:62-73,86-96; docs/guides/rendering.md:36-67; docs/guides/nikon-he.md:19-24;
 crates/emulsion-io/tests/raw_corpus.rs:10-13; crates/emulsion-io/tests/nikon_he.rs:5-8;
 .github/workflows/ci.yml:112-116,134.
 Review 2026-09-24 added: crates/emulsion-ui/src/settings_screen.rs:309,552-563; crates/emulsion-io/src/brush_library.rs:135;

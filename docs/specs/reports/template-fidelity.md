@@ -62,6 +62,6 @@ warnings denied, and the Linux AppImage build passed. Earlier native captures
 identified the fixes listed above. A fresh capture of the final build remains
 pending because the desktop was locked with its display asleep during review.
 
-The subsequent [starter/layout follow-up](design-starters-and-layout.md) adds the
+The subsequent [starter/layout follow-up](../../guides/design-starters-and-layout.md) adds the
 updated 110-template catalog in 11 categories, visible Design page removal and the handoff's
 Photo/Paint shortcut strip with dockable flyouts.

@@ -8,7 +8,7 @@ Software-only Linux device recovery now follows the same policy as startup.
 This renderer draws the GPUI interface and presents image tiles. A separate
 wgpu compute device now accelerates selected document compositing and filters,
 with the CPU engine retained for fallback, document storage, and undo. See
-[GPU image processing](gpu-rendering.md) for coverage, performance routing, and
+[GPU image processing](../technical/gpu-rendering.md) for coverage, performance routing, and
 experimental brush/viewport paths. GPUI software rendering and image-processing
 CPU fallback are independent.
 

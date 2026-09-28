@@ -62,8 +62,8 @@ selects that object; Ctrl/Cmd+Enter finishes text editing and returns to Select.
 Escape cancels the text edit and returns to Select. These interactions preserve
 native editable text and Undo.
 
-The catalog demonstrates currently supported authoring tools; template count is
-not a feature-parity claim. Future components, variables, richer layout and motion
+The catalog demonstrates currently supported authoring tools; template count
+does not indicate feature completeness. Future components, variables, richer layout and motion
 can introduce additional templates without removing or flattening existing ones.
 Bundled templates are compiled data; no imported JavaScript runs in the app.
 
@@ -125,7 +125,7 @@ and authored masks; the default permits overflow.
 
 The same controls are available through `set_responsive_layout` and
 `set_layout_child`; optional limits and ratios accept `null` to clear.
-See the [MCP layout reference](mcp-design-appearance.md) for exact parameters.
+See the [MCP layout reference](mcp/mcp-design-appearance.md) for exact parameters.
 
 Select a responsive frame and open **Canvas width breakpoints…** to add, edit or
 remove up to 16 width thresholds. These respond to the page canvas width, not the
@@ -162,8 +162,9 @@ rich formatting, source media and responsive layout. The source page stays intac
 one Undo removes the generated batch. CSV is data only, supports quoted commas
 and newlines, and never executes formulas or fetches URLs. Input is limited to
 2 MB, 64 columns and the remaining project capacity (100 total pages). Missing or
-duplicate columns, invalid rows and protected fields reject the batch. This first
-workflow binds text; image bindings and multi-page record sets remain pending.
+duplicate columns, invalid rows and protected fields reject the batch. Saved text
+and image bindings and multi-page record sets are described in
+[Local CSV design generation](design-data-bindings.md).
 
 ## Photo/Paint shortcuts
 
@@ -175,7 +176,7 @@ history. The strip and flyout fit narrow windows without resizing the document.
 
 ## Checks
 
-Regression coverage includes all 110 templates and category counts, source
+Regression coverage includes all 154 templates and category counts, source
 geometry/text, editable frame replacement, vector SVG export, category search,
 layout wrapping and text reflow, lock rejection, nested fractional layout stability,
 clipboard/duplicate/Undo, native multi-page save/reopen, page removal, and Photo

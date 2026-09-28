@@ -16,22 +16,14 @@ never requires them. Do not reproduce the prototype's fictional collaborators,
 storage quota, projects, images, AI responses, or save status. Share becomes local
 export/package until collaboration exists.
 
-The intended product combines Canva-style page composition with draw.io/Lucid-style
-structured diagrams. Canva's documented elements, frames, page settings, guides,
-and layers inform Design; draw.io's pages, shape libraries, connected objects, and
-editable exports inform Diagram. Lucid's page operations and data-driven diagrams
-inform the advanced graph workflow. These are workflow references, not a promise
-of compatibility with proprietary cloud services or access to their asset catalogs.
-References: [Canva editing](https://www.canva.com/help/editing-designing/),
-[Canva frames](https://www.canva.com/en_gb/help/using-frames-variantb/),
-[draw.io features](https://www.drawio.com/docs/features/),
-[Lucid pages](https://help.lucid.co/hc/en-us/articles/11970952773652-Welcome-to-Lucidchart),
-[Lucid CSV import](https://www.lucidchart.com/blog/introducing-process-diagrams-from-csv-import).
+Design covers page composition (elements, frames, page settings, guides, layers).
+Diagram covers structured diagrams (pages, shape libraries, connected objects,
+editable exports, data-driven layouts).
 
 ## September 27 implementation checkpoint and package plan
 
 The next deliverable is portable local templates and stencils, with file exchange
-and GitHub installation. See [the format and user workflow](template-pack-format.md).
+and GitHub installation. See [the format and user workflow](../guides/template-pack-format.md).
 
 - [x] Versioned `.emutemplate` / `.emustencil` ZIP manifest with name, author,
   license, tags, editable native project, and preview.
@@ -137,9 +129,12 @@ values, expose units, and participate in undo where they edit a document.
 | AI surfaces | Existing provider adapters, task preview, commands, generation | Context-specific actions, variants/prompts, design generation/rewrite/resize, diagram generation/tidy/explain/error-path proposals |
 | Save/history | ORA, atomic saves, recovery, branches/versions | Versioned multi-page package; page/graph metadata in snapshots; whole-project recovery and dirty checks |
 
-Existing feature-preservation references: `tool-audit-2026-09-19.md`,
-`tool-repair-plan.md`, `tool-testing.md`, `photography-workflow-plan.md`, and
-`raw-pipeline-backlog.md`. The new layout must provide a reachable location for
+Existing feature-preservation references:
+[tool audit](reports/tool-audit-2026-09-19.md),
+[tool repair plan](tool-repair-plan.md),
+[tool testing](../technical/tool-testing.md),
+[photography workflow plan](photography-workflow-plan.md), and
+[RAW pipeline backlog](raw-pipeline-backlog.md). The new layout must provide a reachable location for
 every existing action, including uncommon settings, plug-in/provider setup,
 branch history, custom toolbars, masks/channels, and advanced brush controls.
 
@@ -249,7 +244,7 @@ and synthetic italic settings now match shaping; Linux offscreen GPU coverage
 checks pass for regular/bold/italic/bold-italic. These checks do not settle the
 remaining native frame-pacing, opaque-edge parity, or other-platform validation.
 
-### 3. Canva-style Design
+### 3. Design workspace
 
 - [x] Native Design rail/drawer, contextual toolbar and page strip from handoff.
 - [x] Real text presets, editable shapes/elements, local uploads/photos, frames.
@@ -264,7 +259,7 @@ Gate: create a three-page social campaign from a template, replace a photo insid
 a frame, edit copied text, apply a brand, make another size, export and reopen
 without flattening source objects or modifying the original design.
 
-### 4. draw.io/Lucid-style Diagram
+### 4. Diagram workspace
 
 - [x] Graph model, node/port/connector commands and bounded orthogonal routing.
 - [x] Native shape library, connector gesture, labels, properties and page tabs.
@@ -404,7 +399,7 @@ Emulsion artwork with a version label from the app's build metadata.
 ## Design functionality plan
 
 The remaining capabilities and delivery order are in
-[Design functionality](design-feature-parity.md). The supplied handoff remains
+[Design functionality](design-functionality-plan.md). The supplied handoff remains
 the UI source. Local editing remains the scope; collaboration is deferred.
 
 
@@ -423,20 +418,20 @@ tests passed, and workspace all-target Clippy including the native benchmark
 feature passed with warnings denied. The benchmark comparison policy has three
 passing tests. Matched active-window Linux runs passed for synthetic and dense
 layered 4K documents, including GPU brush commit/undo/redo. See
-[the measured results](../spikes/vello-canvas/RESULTS.md#september-27-matched-active-window-follow-up).
+[the measured results](../../spikes/vello-canvas/RESULTS.md#september-27-matched-active-window-follow-up).
 macOS, updated Windows behavior, opaque-vector edge fidelity and the remaining
 Design/Diagram capabilities are still open.
 
 ## Template fidelity follow-up
 
-See [the native fidelity audit](template-fidelity.md) for the surface dimensions,
+See [the native fidelity audit](reports/template-fidelity.md) for the surface dimensions,
 responsive behavior, retained workflows and native adaptations. Advanced Design,
 Diagram and migration gates above remain separate from the layout work.
 
 
 ## September 27 follow-up: Diagram sample compatibility
 
-See [Diagram functionality and draw.io compatibility](diagram-functionality.md)
+See [Diagram functionality and draw.io compatibility](../guides/diagram-functionality.md)
 for the current inventory, corpus results, handoff inspector work, and remaining
 visual gaps. The importer now loads 620 sample drawings/libraries (820 pages),
 including loose connectors, relative geometry, embedded SVGs and XML libraries.

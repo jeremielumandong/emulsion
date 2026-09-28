@@ -22,4 +22,4 @@ These tools operate on the active page. Geometry edits use the same native core 
 
 The existing shape fill/stroke paint schema accepts gradients with either an `end` color or `stops` (not both). Stops contain numeric `offset` from 0 to 1 and `color` in #RRGGBB or #RRGGBBAA form. Provide 2–16 ordered stops; equal positions create hard boundaries. Linear gradients accept an angle; radial gradients do not. Shape inspection returns all stops losslessly.
 
-Warp tolerance is 0.05–10 document pixels; curves become sampled polylines. Stroke outline copies currently require solid paint and do not copy layer masks/effects. Bitmap trace uses bounded threshold contours, not multicolor vectorization. See [native UI behavior and limitations](design-vector-editing.md).
+Warp tolerance is 0.05–10 document pixels; curves become sampled polylines. Stroke outline copies currently require solid paint and do not copy layer masks/effects. Bitmap trace uses bounded threshold contours, not multicolor vectorization. See [native UI behavior and limitations](../design-vector-editing.md).

@@ -1,7 +1,7 @@
 # Print dialog design
 
 Status: design snapshot, 2026-09-27. The shared dialog and first native adapters
-are now implemented; see [Printing](printing.md) for current behavior and remaining
+are now implemented; see [Printing](../guides/printing.md) for current behavior and remaining
 platform acceptance. Open [the interactive concept](print-dialog-prototype.html) in a
 browser. Its printers and artwork are demonstration data; it cannot submit jobs.
 

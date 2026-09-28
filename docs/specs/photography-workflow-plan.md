@@ -1,6 +1,6 @@
 # Photographer workflow recipes
 
-*Snapshot from 2026-09-20. For current behavior see [README › Developing RAW photos](../README.md#developing-raw-photos).*
+*Snapshot from 2026-09-20. For current behavior see [README › Developing RAW photos](../../README.md#developing-raw-photos).*
 
 ## First release: capture and reuse current adjustments
 

@@ -1,6 +1,6 @@
 # Multi-vendor RAW pipeline audit and backlog
 
-*Snapshot from 2026-09-22. For current behavior see [README › Developing RAW photos](../README.md#developing-raw-photos).*
+*Snapshot from 2026-09-22. For current behavior see [README › Developing RAW photos](../../README.md#developing-raw-photos).*
 
 Status: original assessment with implementation update, 2026-09-22  
 Scope: import -> decode/develop -> edits -> preview -> save/reopen -> export
@@ -8,7 +8,7 @@ Scope: import -> decode/develop -> edits -> preview -> save/reopen -> export
 ## Implementation update
 
 2026-09-24: a pinned rawler branch now provides [experimental Nikon HE/HE★
-decoding](nikon-he.md), verified to open and develop one local Z9 HE★ file.
+decoding](../guides/nikon-he.md), verified to open and develop one local Z9 HE★ file.
 The baseline unsupported-format statements below describe released decoders;
 the experimental path is not a reference-validated support guarantee.
 
@@ -20,7 +20,7 @@ undo/reopen/relink, cancellation/stale-result guards, embedded thumbnails, and
 full-resolution source-verified export. PNG/JPEG/WebP/TIFF exports carry sRGB
 profiles. Protected source paths survive recipe detachment and history changes.
 
-The [measured support matrix](../crates/emulsion-io/tests/fixtures/RAW-CORPUS.md)
+The [measured support matrix](../../crates/emulsion-io/tests/fixtures/RAW-CORPUS.md)
 records successful real Nikon D50 NEF, Fujifilm X-Pro1 RAF, and Canon EOS M50 CRAW
 CR3 roundtrips, alongside exact CC0 fixture provenance. Synthetic Bayer/X-Trans
 DNG fixtures run in ordinary CI. This does not verify all listed vendors or modes.

@@ -1,9 +1,6 @@
 # Library and Develop
 
-Reference layout: `Emulsion Editor v2.dc.html`, Library screen. Workflow reference:
-Lightroom Classic desktop Library and Develop. This is an implementation and
-parity ledger, not a claim that Emulsion reproduces every Lightroom feature or
-Adobe's proprietary rendering.
+Reference layout: `Emulsion Editor v2.dc.html`, Library screen.
 
 ## Layout and implemented workflow
 
@@ -23,7 +20,7 @@ Adobe's proprietary rendering.
   Photo documents retain their separate black clipping and brightness settings.
 - Color: relative white balance/tint, as-shot restore, saturation, vibrance, B&W.
 - Effects: texture, clarity, dehaze, vignette. Detail: sharpening and conventional
-  edge-preserving noise reduction. These are Emulsion algorithms, not Adobe's.
+  edge-preserving noise reduction.
 - Histogram, Auto tone, reset, undo and saved history, built-in RAW presets, portable preset
   files, and synchronization of all settings, tone/effects, white balance, or curve.
 - Info and Keywords inspector tabs expose file and camera metadata and keyword editing.
@@ -113,7 +110,12 @@ Import preset pack accepts individual `.xmp`, `.lrtemplate`, Emulsion `.json`,
 and ZIP packs. ZIP members are validated as inert preset data; member paths are
 never extracted directly, and Lua code is never executed. Saved presets appear
 in the inspector and preserve parameters omitted by imported Adobe presets.
-A compatibility report lists translated adjustments and unsupported settings.
+A compatibility report lists translated adjustments and unsupported active settings.
+Known disabled controls and descriptive preset metadata do not generate warnings;
+unknown settings remain visible even when their value is zero. Related limitations
+are grouped in expandable, bounded compatibility notes. Import preset pack installs
+presets; choose a listed preset to apply it to the selected photo. The `get_library`
+MCP state retains the complete notes in its `preset_import` and `preset_import_notes` fields.
 
 Lightroom catalog import recognizes the common SQLite file-reference/rating/flag
 schema via the local `sqlite3` command in read-only mode. It reports missing files
@@ -121,14 +123,14 @@ and unsupported formats. Collections and recognized readable JSON/Lua Develop
 history records migrate into Emulsion history/snapshots. Private binary history
 formats are reported as unsupported; existing Emulsion sidecars are preserved.
 
-The companion [Lightroom plugin](../integrations/lightroom/README.md) runs inside
+The companion [Lightroom plugin](../../integrations/lightroom/README.md) runs inside
 Lightroom and exports originals, settings, collections and 16-bit TIFF references.
 Import its `handoff.emulr.json` through the Lightroom catalog importer. Rendered
 references retain the Lightroom/VSCO appearance; translated RAW settings remain
 approximations. The companion has syntax and mocked-SDK contract tests; live
 Lightroom host validation remains outstanding.
 
-**Remaining differences must not be represented as full Classic parity:**
+**Import and interoperability limits:**
 
 - Native `.lrplugin` execution requires the Adobe Lua SDK host; it is not provided.
 - DCP/LCP/Adobe Look profile payloads and proprietary VSCO camera rendering are
@@ -137,7 +139,7 @@ Lightroom host validation remains outstanding.
 - RGB curves preserve their control points; unsupported Adobe adjustments still
   produce compatibility warnings. Adobe DCP/Look color science is not reproduced.
 - Automatic sky, conventional sensor denoise and line-based perspective use
-  Emulsion's algorithms/models; they do not promise Adobe AI Denoise/Upright parity.
+  Emulsion's own algorithms and models.
 - WebDAV publishing is available; Adobe Publish Service plugins and vendor-specific
   cloud services are not hosted.
 
@@ -201,8 +203,7 @@ targets already inspected in Library.
 MCP RAW `highlights` is recovery: positive darkens highlights; the Library UI's
 slider uses the opposite sign. Temperature/tint remain relative offsets unless `kelvin` is set. New
 controls and `smooth_curve` are exposed in both Photo and Library tool schemas.
-This coverage describes implemented features, not the outstanding Classic parity
-items above. Ask Library can now start its own relay without an open document.
+This coverage describes implemented features, not the import limits above. Ask Library can now start its own relay without an open document.
 
 Coverage tests check that both RAW schemas expose every persisted parameter,
 reject malformed requests, and preserve omitted settings. Headless workspace

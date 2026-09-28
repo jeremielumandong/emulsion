@@ -1,8 +1,8 @@
 # Tool repair plan
 
-*Snapshot from 2026-09-19. For current behavior see [tool-testing.md](tool-testing.md).*
+*Snapshot from 2026-09-19. For current behavior see [tool-testing.md](../technical/tool-testing.md).*
 
-Baseline: `750271a`, findings in [the audit](tool-audit-2026-09-19.md).
+Baseline: `750271a`, findings in [the audit](reports/tool-audit-2026-09-19.md).
 
 ## Implementation
 
@@ -22,7 +22,7 @@ Baseline: `750271a`, findings in [the audit](tool-audit-2026-09-19.md).
 - Selection replacement, cancellation, resizing, and magnetic tracing are safe.
 - Batch output cannot replace inputs, existing files, or another item's output.
 - Clipboard operations preserve selection coverage and document placement and undo correctly; text-input shortcuts remain usable.
-- Mac pressure/tilt implementation compiles and has deterministic sample tests. Physical tablet feel, third-party application fidelity, and drawing-quality parity require hands-on evaluation and will not be claimed from unit tests.
+- Mac pressure/tilt implementation compiles and has deterministic sample tests. Physical tablet feel, third-party application fidelity, and drawing quality require hands-on evaluation and will not be claimed from unit tests.
 
 This repair pass addresses the defects and everyday workflow gaps identified in the audit. Advanced feature expansion (CMYK editing, rich text, vector Boolean operations, ABR/dual brushes, and a dedicated GPU image-processing engine) remains separate product development.
 
@@ -45,7 +45,7 @@ This repair pass addresses the defects and everyday workflow gaps identified in 
 - Native ORA manifest/history version is now 3. Current Emulsion reads older versions and migrates affected Smart masks; older Emulsion versions may reject newly saved documents.
 - PSD export retains supported layers and masks. Adjustments, layer styles, and arbitrary clipping relationships require a flattened appearance layer; export status explicitly reports that fallback. Save native ORA to retain Emulsion's editable structure. Text and Smart content are not exported as Photoshop-native text/Smart objects.
 - Free Transform lifts selected raster pixels to a new layer as one undoable edit; clipboard Copy includes the selected layer's visible appearance, mask, and opacity. Destructive Cut/Clear require a raster layer. Smart Warp/Distort asks for rasterization rather than offering an ineffective preview.
-- Physical tablet pressure/tilt feel, actual external-app imports, live AI model/provider calls, and large-canvas latency still need manual evaluation. Headless tests do not establish artistic or performance parity with Photoshop/Procreate.
+- Physical tablet pressure/tilt feel, actual external-app imports, live AI model/provider calls, and large-canvas latency still need manual evaluation. Headless tests do not establish artistic quality or real-world performance.
 
 ## Verification
 

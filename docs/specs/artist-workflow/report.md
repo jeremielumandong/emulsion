@@ -1,6 +1,6 @@
 # Adaptable artist workflow — style expansion report
 
-*Snapshot from 2026-09-19. For current behavior see [brush-workflow.md](../brush-workflow.md).*
+*Snapshot from 2026-09-19. For current behavior see [brush-workflow.md](../../guides/brush-workflow.md).*
 
 Feature engineering: **PASS in an isolated snapshot**. Shared-checkout integration attempt: **FAIL** on unrelated concurrent RAW/lens-import compilation errors. Live drawing and blind artistic comparison: **INCONCLUSIVE / unproven**. All changes made for this follow-up are uncommitted.
 
@@ -52,8 +52,8 @@ The user's explicit request supersedes the earlier restriction on adding guidanc
 - `crates/emulsion-ai/src/critique.rs`: optional free-text style and style-aware review policy.
 - `crates/emulsion-mcp/src/tools.rs`: backward-compatible critique style schema.
 - `crates/emulsion-mcp/src/review.rs`: style-aware visual instruction and real JSON-RPC regression.
-- `docs/artist-evaluation.md`: extended fixed briefs, style fidelity and prompt-cost measurement.
-- `docs/artist-workflow/shape.md`: updated scope and acceptance contract.
-- `docs/artist-workflow/report.md`: this report.
+- `docs/specs/artist-evaluation.md`: extended fixed briefs, style fidelity and prompt-cost measurement.
+- `docs/specs/artist-workflow/shape.md`: updated scope and acceptance contract.
+- `docs/specs/artist-workflow/report.md`: this report.
 
 The original three playbook files, paint/preview implementations and unrelated concurrent changes were not edited in this follow-up. No commits were made by this task.

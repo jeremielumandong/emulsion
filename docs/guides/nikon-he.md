@@ -8,9 +8,9 @@ The source remains LGPL-2.1 and is pinned in Cargo.toml and Cargo.lock.
 
 The RAW panel identifies Nikon JPEG XS compression as HE/HE★ and shows an
 experimental warning. The upstream implementation fits chroma gains and
-decompanding constants from a single scene; they are approximate. Do not claim
-pixel equivalence to Nikon or Adobe, or general camera compatibility based on
-this integration. The exact HE versus HE★ rate is not distinguished by the probe.
+decompanding constants from a single scene, so colour output is approximate. This
+integration does not establish general camera compatibility. The exact HE versus
+HE★ rate is not distinguished by the probe.
 
 Local validation on 2026-09-24: a Nikon Z9 HE★ `_DSC1914.NEF` successfully
 decoded and developed to 8256 × 5504 in Emulsion. The resulting image was visually

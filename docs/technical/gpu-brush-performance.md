@@ -142,11 +142,10 @@ injected through the backend contract; no physical GPU reset is required.
 The prior `EMULSION_GPU_BRUSHES=1` final-composition experiment remains a separate
 mode. Neither experimental mode is enabled by default.
 
-## ArmorPaint-inspired persistent brush experiment
+## Persistent GPU brush experiment
 
 `crates/emulsion-gpu/src/persistent_paint.rs` and its WGSL kernel implement a
-persistent paint engine. This is original MIT Emulsion code inspired by the
-persistent-paint architecture, not copied ArmorPaint code or an ArmorPaint port.
+persistent paint engine. This is original MIT Emulsion code.
 
 The session uploads its original base once and keeps accumulated premultiplied
 paint and final output on the GPU. Each update uploads only ordered, resolved
@@ -259,17 +258,3 @@ platforms and describes reusable staging as an alternative. Persistent buffers
 and batching address that overhead; they do not by themselves remove readback.
 GPU painting research also uses GPU tile copies to avoid frequent CPU transfers
 for undo: [Baxter's dissertation](https://www.billbaxter.com/dissertation/Baxter-dissertation.pdf).
-
-## Open-source references
-
-- GIMP's [3.2.6 release notes](https://www.gimp.org/news/2026/09/10/gimp-3-2-6-released/)
-  describe updated GEGL OpenCL support but say it remains disabled by default.
-- Krita documents GPU [canvas acceleration](https://docs.krita.org/en/reference_manual/preferences/display_settings.html)
-  separately from CPU multithreading and vector optimizations in its
-  [painting performance settings](https://docs.krita.org/en/reference_manual/preferences/performance_settings.html).
-- ArmorPaint's [manual](https://armorpaint.org/manual) states that painting runs on
-  GPU. Its [paint path](https://github.com/armory3d/armorpaint/blob/main/paint/sources/render/render_path_paint.c)
-  uses persistent render targets for paint and coverage and binds the layer
-  textures for display. Its [history implementation](https://github.com/armory3d/armorpaint/blob/main/paint/sources/history.c)
-  uses GPU copies into undo targets and layer swaps. These are useful references
-  for the later persistent-texture stage; no upstream code is copied here.

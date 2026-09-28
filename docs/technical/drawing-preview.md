@@ -13,19 +13,13 @@ tile seams. The polychrome fragment shader now clamps coordinates to that image'
 first and last texel centers. This protects all canvas media and backgrounds.
 It is edge replication, not interpolation using neighboring document tiles.
 
-## Open-source references
+## Further tile-boundary techniques
 
-- [Krita texture tiles](https://github.com/KDE/krita/blob/master/libs/ui/opengl/kis_texture_tile.cpp)
-  use texture borders, clamp-to-edge sampling and partial texture uploads.
-- [MyPaint canvas rendering](https://github.com/mypaint/mypaint/blob/master/gui/tileddrawwidget.py)
-  composites exposed tiles into a contiguous pixbuf and expands transformed
-  render regions for interpolation to avoid dark stripes.
-- [GIMP paint scheduling](https://github.com/GNOME/gimp/blob/master/app/tools/gimppainttool-paint.c)
-  queues paint work, schedules display flushes at 10 ms intervals and drains work
-  at stroke end.
-
-These are architectural references; no upstream implementation was copied.
-Future work can add document-neighbor gutters and reusable partial texture
+Other ways to avoid seams and redundant work include texture borders,
+clamp-to-edge sampling and partial texture uploads; compositing exposed tiles
+into a contiguous image and expanding transformed render regions for
+interpolation; and queuing paint work, flushing the display at a short fixed
+interval and draining the queue at stroke end. Future work can add document-neighbor gutters and reusable partial texture
 uploads. That requires changes beyond preventing unrelated atlas-image bleed.
 
 ## Regression coverage

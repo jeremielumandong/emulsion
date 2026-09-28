@@ -31,7 +31,7 @@ These replacement/restoration tools edit embedded sources. Nested source tabs an
 
 Printing tools discover installed queues and supported paper/media/tray/quality/
 duplex choices through the existing platform adapters. Preview and submission
-share the native physical sheet compositor (single, contact, repeat, poster;
+share the native physical sheet compositor (document-size PDF, single, contact, repeat, poster;
 fit, fill or actual placement). `preview_print_job` returns a bounded PNG and
 layout warnings without submitting. `open_print_dialog` opens the normal setup
 and print-preview UI. `submit_print_job` is an explicit print action and returns
@@ -43,10 +43,23 @@ existing Windows printing adapter and macOS/Linux CUPS backend remain responsibl
 for platform integration. Linux Flatpak access depends on its native print portal
 or available queue permissions; the tool does not escape the sandbox.
 
+Creative options include a physical artwork box (`artwork_width_mm` and
+`artwork_height_mm` together), `rows`, `columns`, `gutter_mm`, crop position
+(`crop_x_percent`, `crop_y_percent`), `bleed_mm`, and `crop_marks`. Bleed uses
+existing off-page artwork, not generated edge pixels. Marks reserve printable
+space and single-artwork PDF pages include trim/bleed boxes.
+
+`list_print_presets`, `save_print_preset` and `delete_print_preset` manage named
+local layout presets. Save/delete require `preset_name`. Preview/submission can
+use that name with explicit setting overrides. Presets exclude destination,
+copies, ranges and device-specific options; incompatible printer paper reports an
+error. Preset writes are atomic and serialized across processes. The normal UI
+also provides preset loading, saving/replacing and deletion.
+
 Tests cover strict parsing, device-free native print rendering, crop/replacement
 source preservation and Undo, actual crop dialog validation, and native editor
 state/guide/quick-mask history. No physical print job is submitted by tests.
 
 ## Live Smart Object sources
 
-Nested source-editor tabs and persistent local external links are now available through the native source controls and nine matching MCP tools. See [Smart Object source editing and links](smart-object-sources.md) for Apply/Undo, stale-source protection, bounded background refresh and explicit file-write semantics. Replacement/restoration tools remain available for their existing workflows.
+Nested source-editor tabs and persistent local external links are now available through the native source controls and nine matching MCP tools. See [Smart Object source editing and links](../smart-object-sources.md) for Apply/Undo, stale-source protection, bounded background refresh and explicit file-write semantics. Replacement/restoration tools remain available for their existing workflows.

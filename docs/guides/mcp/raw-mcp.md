@@ -105,4 +105,4 @@ camera-bound preset checks use the same IO implementation as the editor.
 
 The MCP exposes currently implemented RAW functionality; it does not add Adobe
 XMP interoperability, DNG writing, arbitrary curve knots, or new camera support.
-See the [Camera Raw gap report](camera-raw-3-gap.md) for those boundaries.
+See [RAW development controls and limits](../raw-development.md) for those boundaries.

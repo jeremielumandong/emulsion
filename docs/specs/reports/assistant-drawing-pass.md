@@ -1,8 +1,8 @@
 # Assistant drawing and MCP reliability pass
 
-*Snapshot from 2026-09-23. For current behavior see [raw-mcp.md](raw-mcp.md), [brush-mcp.md](brush-mcp.md) and [README › An assistant that works on your canvas](../README.md#an-assistant-that-works-on-your-canvas).*
+*Snapshot from 2026-09-23. For current behavior see [raw-mcp.md](../../guides/mcp/raw-mcp.md), [brush-mcp.md](../../guides/mcp/brush-mcp.md) and [README › An assistant that works on your canvas](../../../README.md#an-assistant-that-works-on-your-canvas).*
 
-This report describes a pass over the native drawing workflow used by the in-app assistant. The pass addresses concrete rendering and tool-use defects; it does not establish artistic parity with Photoshop, Procreate, or a human artist.
+This report describes a pass over the native drawing workflow used by the in-app assistant. The pass addresses concrete rendering and tool-use defects; it does not establish artistic quality.
 
 ## Changes
 

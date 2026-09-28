@@ -1,6 +1,6 @@
 # Adaptable artist workflow
 
-*Snapshot from 2026-09-19. For current behavior see [brush-workflow.md](../brush-workflow.md).*
+*Snapshot from 2026-09-19. For current behavior see [brush-workflow.md](../../guides/brush-workflow.md).*
 
 Feature implementation with focused paint bug reproduction. Preserve pre-existing assistant/provider edits and leave all work uncommitted.
 

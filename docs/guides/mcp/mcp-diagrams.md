@@ -9,7 +9,7 @@ These tools work against the active document's structured diagram graph. Shapes 
 | `add_diagram_shape` | Add a native shape using a kind, `[x,y,width,height]` bounds and optional label. |
 | `insert_diagram_stencil` | Insert a bundled stencil by its discovered ID and bounds. |
 | `add_diagram_connector` | Attach two existing shapes with ports, routing and optional label. |
-| `set_diagram_connector` | Patch endpoints, routing, waypoints, label offsets, arrowheads, width, RGBA color, dash pattern, corner radius, crossing bridges and direction reversal. |
+| `set_diagram_connector` | Patch endpoints, routing, waypoints, relative label position/offset, arrowheads, width, RGBA color, dash pattern, double lines, label backgrounds, corner radius, crossings and reversal. |
 | `set_diagram_object_details` | Set/clear a shape’s note, alt text and HTTP(S) link. |
 | `copy_diagram_style` | Copy appearance from a source shape/connector to target objects without changing geometry or captions. |
 | `list_document_stencils` | Discover reusable imported/current-page shapes and their source IDs. |
@@ -42,12 +42,13 @@ Each mutation uses one Undo step and rejects an in-progress interactive transact
 | --- | --- |
 | `quick_create_diagram` | Add a connected neighbor in a cardinal direction. |
 | `generate_diagram` | Generate a new page from text, CSV, Mermaid or SQL; `refresh=true` updates linked data on the active page. |
-| `import_diagram` | Import every page from a supported local file or supplied draw.io XML, returning warnings. |
+| `import_diagram` | Import every page from a supported local file or supplied draw.io XML, returning warnings and saved stencil pack IDs. `save_stencils` defaults to true. |
+| `save_document_stencils` | Save the open diagram’s reusable objects into deduplicated persistent packs; optional `name`. |
 | `export_diagram` | Export all pages as editable draw.io; omit `path` to return XML. Existing files require `overwrite=true`. |
 
 These tools require an open Diagram project. Existing project tools handle page
 selection, add/duplicate/delete/reorder/rename, native saving, PDF and image
-archives, and template/stencil packs. See the [functionality audit](diagram-functionality.md)
+archives, and template/stencil packs. See the [functionality audit](../diagram-functionality.md)
 for sample coverage, the default catalog and remaining compatibility limits.
 
 
@@ -92,7 +93,7 @@ Visio conversion and vector-source preservation use the same importer as the UI.
 
 `set_diagram_connector` accepts `jump_style: "none" | "arc" | "gap" | "sharp"`
 and `jump_size` from 1 to 100 document pixels. Bridges are recalculated when
-connected objects move; straight and orthogonal routes are supported. Imported
+connected objects move; straight, orthogonal, curved and cyclical routes are supported. Imported
 additional labels appear in each edge's `labels` metadata and remain editable
 through normal text commands. Invalid patches are atomic and undo restores the
 previous route and crossing style.
@@ -120,3 +121,25 @@ After importing a diagram, call `list_document_stencils`, then `insert_document_
 ```
 
 The inserted object has independent IDs, editable vector/text content and no copied external attachments. One Undo removes the insertion. Original embedded bitmap imagery remains bitmap imagery.
+
+## Connector attachments, label placement and persistent shapes
+
+An endpoint's `shape` may also identify a connector. For these attachments,
+`port: {"custom":{"x":0.25,"y":0}}` attaches at 25% of its route length;
+`auto` uses the midpoint. Connector dependencies follow rerouting; cycles fail
+atomically. Deleting a parent connector also removes dependent branches.
+
+`set_diagram_connector` accepts `double_line` (boolean), `label_background`
+(RGBA array or `null`), `label_position` (-1 source, 0 midpoint, 1 target), and
+`label_normal` (perpendicular displacement in document units). Decorations remain
+editable vector nodes and survive native persistence and SVG export.
+
+```json
+{"node":42,"double_line":true,"label":"Traffic","label_background":[238,244,255,255],"label_position":0.25,"label_normal":16}
+```
+
+Live-editor imports and stencil pack generation perform file parsing and library
+serialization in background work. The import checks that the target document has
+not changed before insertion. Library persistence does not add document undo steps;
+undoing an import leaves its reusable library packs installed. Set
+`save_stencils: false` to import pages without saving packs.

@@ -2,7 +2,7 @@
 
 *Feasibility and implementation proposal, 2026-09-27. This is planned behavior,
 not an implemented feature. Current file behavior is documented in the
-[product guide](../README.md). Provider documentation was checked on this date;
+[product guide](../../README.md). Provider documentation was checked on this date;
 authenticated API experiments have not been run.*
 
 Emulsion can support Google Drive, Dropbox, and OneDrive for project and image
@@ -75,13 +75,13 @@ not the basis for this editor integration.
 
 | Existing code | Consequence for integration |
 | --- | --- |
-| [`emulsion-io/src/project.rs`](../crates/emulsion-io/src/project.rs) | `.emu` atomically saves a package of complete page ORAs, including page histories. Sync the complete saved package initially. |
-| [`emulsion-io/src/ora.rs`](../crates/emulsion-io/src/ora.rs) | Single-document `.ora` retains editable state and history. Include it alongside `.emu`. |
-| [`emulsion-io/src/creative_library.rs`](../crates/emulsion-io/src/creative_library.rs) | Catalog records use local paths and incrementing IDs; they need stable cross-device identities. |
-| [`emulsion-ui/src/home_projects.rs`](../crates/emulsion-ui/src/home_projects.rs) | Home folders organize references. Removing/trashing a Home reference does not delete its source. Preserve that behavior. |
-| [`emulsion-ui/src/batch/library.rs`](../crates/emulsion-ui/src/batch/library.rs) | Library currently requires local files. Download remote assets before passing them into the existing editing pipeline. |
-| [`emulsion-core/src/raw.rs`](../crates/emulsion-core/src/raw.rs) | RAW documents retain a source path and SHA-256 fingerprint. Syncing the edit alone does not transfer the camera original. |
-| [`emulsion-ui/src/workspace.rs`](../crates/emulsion-ui/src/workspace.rs) | Successful background saves provide the integration point for queueing a cloud revision. |
+| [`emulsion-io/src/project.rs`](../../crates/emulsion-io/src/project.rs) | `.emu` atomically saves a package of complete page ORAs, including page histories. Sync the complete saved package initially. |
+| [`emulsion-io/src/ora.rs`](../../crates/emulsion-io/src/ora.rs) | Single-document `.ora` retains editable state and history. Include it alongside `.emu`. |
+| [`emulsion-io/src/creative_library.rs`](../../crates/emulsion-io/src/creative_library.rs) | Catalog records use local paths and incrementing IDs; they need stable cross-device identities. |
+| [`emulsion-ui/src/home_projects.rs`](../../crates/emulsion-ui/src/home_projects.rs) | Home folders organize references. Removing/trashing a Home reference does not delete its source. Preserve that behavior. |
+| [`emulsion-ui/src/batch/library.rs`](../../crates/emulsion-ui/src/batch/library.rs) | Library currently requires local files. Download remote assets before passing them into the existing editing pipeline. |
+| [`emulsion-core/src/raw.rs`](../../crates/emulsion-core/src/raw.rs) | RAW documents retain a source path and SHA-256 fingerprint. Syncing the edit alone does not transfer the camera original. |
+| [`emulsion-ui/src/workspace.rs`](../../crates/emulsion-ui/src/workspace.rs) | Successful background saves provide the integration point for queueing a cloud revision. |
 
 The catalog currently caps assets at 10,000 and projects at 20,000. The `.emu`
 reader/writer enforces a 2 GiB decoded archive budget. These are existing

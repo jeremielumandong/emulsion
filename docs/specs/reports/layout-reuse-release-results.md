@@ -1,9 +1,9 @@
 # Release layout reuse measurements - 2026-09-23
 
-*Snapshot from 2026-09-23. For current behavior see [layout-reuse-experiment.md](layout-reuse-experiment.md).*
+*Snapshot from 2026-09-23. For current behavior see [layout-reuse-experiment.md](../../technical/layout-reuse-experiment.md).*
 
 Measured on 2026-09-23 comparing cold and retained layout in the same binary;
-the setting is on by default, see [layout-reuse-experiment.md](layout-reuse-experiment.md).
+the setting is on by default, see [layout-reuse-experiment.md](../../technical/layout-reuse-experiment.md).
 The controlled release workloads show a substantial
 benefit for fixed geometry. The real-editor panning trial did not demonstrate a
 CPU saving. These results do not establish an application-wide improvement.
@@ -98,4 +98,4 @@ Next validation should restart both modes into identical saved documents/tabs,
 use the same viewport and a repeatable input trace, and record frame count and
 latency alongside CPU. At measurement time this evidence supported keeping reuse
 off while testing more representative layout workloads; the setting is on by
-default, see [layout-reuse-experiment.md](layout-reuse-experiment.md).
+default, see [layout-reuse-experiment.md](../../technical/layout-reuse-experiment.md).

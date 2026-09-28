@@ -1,6 +1,6 @@
 # Brush implementation validation — 2026-09-22
 
-*Snapshot from 2026-09-22. For current behavior see [brush-workflow.md](brush-workflow.md) and [brush-mcp.md](brush-mcp.md).*
+*Snapshot from 2026-09-22. For current behavior see [brush-workflow.md](../../guides/brush-workflow.md) and [brush-mcp.md](../../guides/mcp/brush-mcp.md).*
 
 4096 × 4096 canvas; 64 px brush; 65 timestamped pressure/tilt samples; three strokes per case. Update includes sampling and CPU compositing. No GPU or display/input latency measurement. Debug profile uses workspace optimization settings.
 
@@ -21,13 +21,13 @@
 cargo run -p emulsion-io --example brush_benchmark --offline -- target/brush-validation
 ```
 
-The example writes eight PNG swatches and a measurement report. The scatter, dual, and smudge images were visually inspected. The source image fixture is an original generated diamond; no Fabric repository images or code were copied. The new built-in Moving paper marker, Woven roller, Scattered pigment, and Turning petals presets exercise moving grain, staged smoothing, directional scatter, rotation variation and color dynamics.
+The example writes eight PNG swatches and a measurement report. The scatter, dual, and smudge images were visually inspected. The source image fixture is an original generated diamond. The new built-in Moving paper marker, Woven roller, Scattered pigment, and Turning petals presets exercise moving grain, staged smoothing, directional scatter, rotation variation and color dynamics.
 
 The benchmark samples one moderate brush size, path, and canvas size, with three strokes per case. It is a reference measurement, not a latency service-level guarantee. GPU parity/performance, memory under a large asset catalog, live display stalls, transformed 8K workloads, native tablet latency and physical pen cancellation still require hardware validation. Advanced and dual settings deliberately use the tested CPU path.
 
 ## Compatibility boundaries
 
-Native packages preserve selected brushes or a complete set/library hierarchy, including empty collections. External archive/ABR parsing is covered by synthetic fixtures; real packs across proprietary versions still need a compatibility corpus. See [format limits](brush-import-formats.md).
+Native packages preserve selected brushes or a complete set/library hierarchy, including empty collections. External archive/ABR parsing is covered by synthetic fixtures; real packs across proprietary versions still need a compatibility corpus. See [format limits](../../guides/brush-import-formats.md).
 
 The implementation retains the existing visible-layer sampling default for interactive wet painting and adds a current-layer alternative. MCP's opt-in merged sampling excludes upper layers. The UI and guide state the distinction rather than silently changing existing artwork behavior.
 
@@ -56,7 +56,7 @@ cargo clippy -p emulsion-raster -p emulsion-io -p emulsion-mcp -p emulsion-ui --
 
 ## MCP authoring extension
 
-The MCP now registers eight document-independent brush tools; see [Brush MCP guide](brush-mcp.md). Validation after the extension:
+The MCP now registers eight document-independent brush tools; see [Brush MCP guide](../../guides/mcp/brush-mcp.md). Validation after the extension:
 
 - MCP: 110 unit tests and 1 drawing integration test passed, including atomic/stale catalog writes, metadata/reset points, sources, package hierarchy/dry-run, memories, tool registration, rich samples, seeds, and dual-preview parity.
 - Assistant: 33 tests passed serially, including read-only permissions. An initial parallel run hit a Windows subprocess timing failure; its isolated rerun and the full serial run passed.

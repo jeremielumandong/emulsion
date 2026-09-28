@@ -1,14 +1,10 @@
 # Assistant composition workflow
 
-*Snapshot from 2026-09-23. For current behavior see [raw-mcp.md](raw-mcp.md), [brush-mcp.md](brush-mcp.md) and [README › An assistant that works on your canvas](../README.md#an-assistant-that-works-on-your-canvas).*
+*Snapshot from 2026-09-23. For current behavior see [raw-mcp.md](../../guides/mcp/raw-mcp.md), [brush-mcp.md](../../guides/mcp/brush-mcp.md) and [README › An assistant that works on your canvas](../../../README.md#an-assistant-that-works-on-your-canvas).*
 
-This report describes workflow ideas adapted from a supplied `photoshop-uxp`
-checkout (local reference, not included in the repository): inspect rendered pixels together
-with structured state, preserve editable sources, and plan typography and image
-placement deliberately. The source's `SKILL.md`,
-`references/reading-results.md`, `references/layers-and-composition.md` and
-`evals/evals.json` informed the work. Photoshop scripts and APIs are not runtime
-dependencies.
+This report describes the assistant's composition workflow: inspect rendered
+pixels together with structured state, preserve editable sources, and plan
+typography and image placement deliberately.
 
 The shared assistant prompt now includes a native composition guide for posters,
 covers, supplied-image layouts and photo grading. It explains proportional type

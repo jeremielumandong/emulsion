@@ -6,12 +6,12 @@ retain GPUI element objects or skip their `render` methods. Emulsion enables it
 standalone GPUI framework default remains cold layout.
 
 Measurements of the initial geometry-only prototype and a manual editor panning observation are available
-in [the release results](layout-reuse-release-results.md). Fixed geometry benefits;
+in [the release results](../specs/reports/layout-reuse-release-results.md). Fixed geometry benefits;
 the manual editor trial did not demonstrate a CPU saving. The subsequent
-[intrinsic-text release results](intrinsic-text-release-results.md) show about 44%
+[intrinsic-text release results](../specs/reports/intrinsic-text-release-results.md) show about 44%
 less CPU drawing time than geometry-only retention for stable non-wrapping labels,
 without establishing an editor-wide CPU saving. The later
-[actual-editor navigation benchmark](canvas-navigation-release-results.md) finds
+[actual-editor navigation benchmark](../specs/reports/canvas-navigation-release-results.md) finds
 a clear gain from narrower application notifications but mixed additional gains
 from layout reuse. Enabling it by default is a product choice, not a claim of
 universal CPU savings.

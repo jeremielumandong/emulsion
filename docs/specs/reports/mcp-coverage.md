@@ -31,7 +31,7 @@ Audit date: 2026-09-27. This is a workflow audit, not a claim that every UI cont
 | Live presentation | State/start/end/navigation/fullscreen, presenter timer, media play/pause/seek/stop/state, optional presenter window and automatic advance | Requires the originating visible workspace. Fullscreen audience hides controls; edits are blocked until End. |
 | Persistence and output | `save_project`; live project-aware `save_document`; `export_project` for PDF/PNG/JPEG/SVG/GIF/draw.io/HTML/PPTX; `export_template_pack` | Saves all pages/history to `.emu`. Static/GIF video exports use posters. Files are local; no automatic online publication. |
 | Project variable libraries | Share/import/publish, grouped rename/remove, detach and inspection | Stable identities preserve page aliases; publishing is explicit, atomic and undoable across pages. |
-| Creative catalog | Asset references/metadata/folders, brand kits/logos, typography roles, RGBA palettes, portable fonts, collections, native brand import/export and local template installation | Revision-checked native catalog writes; original files remain unchanged. See [creative catalog tools](mcp-creative-workspace.md). |
+| Creative catalog | Asset references/metadata/folders, brand kits/logos, typography roles, RGBA palettes, portable fonts, collections, native brand import/export and local template installation | Revision-checked native catalog writes; original files remain unchanged. See [creative catalog tools](../../guides/mcp/mcp-creative-workspace.md). |
 | Workspace lifecycle | List/select/close stable tab IDs; create Design/Diagram projects | Live host only; close rejects unsaved work. Replies retain originating relay identity. |
 | Version branches and history | Branch/list/compare/merge; project-aware Undo/Redo | Branch history remains page-local; page structure uses chronological project history. |
 
@@ -48,9 +48,9 @@ Diagram handles and connectors can be driven through `canvas_gesture`; semantic 
 - Cloud/account configuration, credentials and sync conflict UI remain explicit user-facing setup flows.
 - Desktop shell actions such as registering file associations and launching the lightweight image viewer. Presentation window control is exposed because it is an authoring workflow.
 
-The app does not currently promise full Canva, PowerPoint or Lucid feature parity; MCP cannot expose functionality the native app has not implemented.
+MCP exposes only functionality the native app implements.
 
-See [native workspace/canvas controls](mcp-native-controls.md) for layout, preset, gesture and playback setup semantics.
+See [native workspace/canvas controls](../../guides/mcp/mcp-native-controls.md) for layout, preset, gesture and playback setup semantics.
 
 ## Integration contract
 
@@ -66,6 +66,6 @@ Previous-batch audit verification on Linux, 2026-09-28: 188 MCP tests and 64 foc
 
 ### Live Smart source sessions
 
-`inspect_smart_source`, `open_smart_source`, `apply_smart_source`, `link_smart_source`, `refresh_smart_source`, `set_smart_source_auto_refresh`, `unlink_smart_source`, `save_smart_source_as`, and `write_linked_smart_source` cover native nested source editing and linked-file lifecycle. Filesystem work runs off the UI thread with source identity checks. Automatic refresh never writes files; explicit writes protect externally changed originals. See [source workflow and limits](smart-object-sources.md).
+`inspect_smart_source`, `open_smart_source`, `apply_smart_source`, `link_smart_source`, `refresh_smart_source`, `set_smart_source_auto_refresh`, `unlink_smart_source`, `save_smart_source_as`, and `write_linked_smart_source` cover native nested source editing and linked-file lifecycle. Filesystem work runs off the UI thread with source identity checks. Automatic refresh never writes files; explicit writes protect externally changed originals. See [source workflow and limits](../../guides/smart-object-sources.md).
 
 Current editable-interchange/native-host acceptance is recorded in [interchange results](design-interchange-results.json). The previous AppImage and its 315-tool inventory predate these additions.

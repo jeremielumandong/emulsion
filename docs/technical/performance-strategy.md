@@ -73,7 +73,7 @@ The `editor_navigation` benchmark exercises the actual editor pan handler with
 64 in-memory raster layers, both chrome layouts, bundled icons, native text, and
 warmed canvas tiles. It compares targeted notifications with the former owner
 notification in the same binary, with cold and retained layout. Rendering counts
-and the resulting view transform are asserted. GPU presentation is excluded. [Release measurements](canvas-navigation-release-results.md)
+and the resulting view transform are asserted. GPU presentation is excluded. [Release measurements](../specs/reports/canvas-navigation-release-results.md)
 show 41-42% less CPU-side pan-update time in roomy chrome and 22-28% less in compact
 from targeted notifications. Additional layout-reuse gains were mixed. Enabling
 layout reuse by default is a product choice, not evidence of a universal CPU saving.
@@ -158,7 +158,7 @@ its numeric intrinsic size, allowing unchanged label geometry to reuse layout.
 Wrapping, truncating, clamped, and custom measurements remain conservative. Differential
 tests and same-binary benchmarks compare it with cold layout. See the
 [experiment details and validation](layout-reuse-experiment.md) and the
-[intrinsic-text release measurements](intrinsic-text-release-results.md). Element rendering,
+[intrinsic-text release measurements](../specs/reports/intrinsic-text-release-results.md). Element rendering,
 paint damage tracking, and stable component identities remain future work.
 
 A retained element tree can use more memory even as it reduces CPU; it does not

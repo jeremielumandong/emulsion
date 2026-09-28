@@ -20,7 +20,7 @@ Studio has category navigation, numeric/slider settings, and a drawing pad. Drag
 
 Shape and Grain accept source images and can invert or rotate them. Grain can produce a seamless mirrored tile. Original generated diamond and paper sources are available; procedural grain options remain available too. Image work runs outside rendering, and stale requests cannot overwrite a subsequently selected component or reset source.
 
-Dual brushes have independent primary/secondary settings and sources. Choose their composition mode in Studio. Normal overlays the components, Multiply intersects their coverage, and Screen unions coverage while screening pigment. These are Emulsion's defined compositing modes, not a claim of identical Procreate brush physics.
+Dual brushes have independent primary/secondary settings and sources. Choose their composition mode in Studio. Normal overlays the components, Multiply intersects their coverage, and Screen unions coverage while screening pigment. These are Emulsion's defined compositing modes.
 
 The categories expose implemented stroke-path variation, staged smoothing, taper, shape count and orientation, grain coordinates, glazing/accumulation, wet pickup and reservoir behavior, color variation, speed/pressure/tilt dynamics, size/opacity bounds, metadata, original settings, and a custom reset point.
 
@@ -42,4 +42,4 @@ Run `cargo run -p emulsion-io --example brush_benchmark --offline -- target/brus
 
 ## MCP automation
 
-The brush workflow is also available through eight MCP tools for catalog management, Studio edits, source images, import/export, memories, and standalone previews. Painting accepts timed pressure/tilt samples, deterministic seeds, and primary/secondary overrides. See [Brush MCP guide](brush-mcp.md) for revision handling and examples.
+The brush workflow is also available through eight MCP tools for catalog management, Studio edits, source images, import/export, memories, and standalone previews. Painting accepts timed pressure/tilt samples, deterministic seeds, and primary/secondary overrides. See [Brush MCP guide](mcp/brush-mcp.md) for revision handling and examples.

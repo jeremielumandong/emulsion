@@ -153,7 +153,7 @@ cursors, conflicts offer separate version downloads instead of binary merge,
 and imports use ordinary local artwork files rather than an encrypted media
 vault. There is no automatic cross-device replacement of an existing local
 file. These constraints and the data-policy release gate are also surfaced in
-the [setup guide](cloud-setup.md). The wider library/metadata sync milestones
+the [setup guide](../guides/cloud-setup.md). The wider library/metadata sync milestones
 from the feasibility plan remain future work.
 
 ## Verification — 2026-09-27

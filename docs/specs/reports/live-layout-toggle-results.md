@@ -1,6 +1,6 @@
 # Live layout setting comparison - 2026-09-23
 
-*Snapshot from 2026-09-23. For current behavior see [layout-reuse-experiment.md](layout-reuse-experiment.md).*
+*Snapshot from 2026-09-23. For current behavior see [layout-reuse-experiment.md](../../technical/layout-reuse-experiment.md).*
 
 The same running release editor (PID 32040) was sampled while the user
 panned the canvas manually for about 30 seconds with layout reuse off, then on.

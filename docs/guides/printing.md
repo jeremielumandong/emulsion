@@ -36,12 +36,21 @@ for device submission. The Flatpak system dialog receives the selected orientati
 ## Layout controls
 
 - Current page/canvas, all document pages, or a range such as `1-3, 5`.
-- One page per sheet; a 2 × 3 contact sheet of selected document pages; six copies
-  of the first selected image; or a tiled poster of one selected source page.
+- One page per sheet; a contact sheet of selected document pages; a grid repeating
+  the first selected image; or a tiled poster of one selected source page. Contact
+  and repeat grids have 1–20 rows/columns and a 0–100 mm gutter (default 2 × 3, 5 mm).
 - Fit keeps the whole image. Fill crops it to the available area. Actual size uses
   the document's pixel dimensions and resolution; Scale changes that physical
   size. The screen's canvas zoom has no effect on print dimensions.
-- Poster uses actual size × Scale and a configurable overlap. Tiles are ordered
+- Custom artwork width/height define a finished box in millimeters, independently
+  of paper size. Fit adds paper around the image where proportions differ; Fill
+  crops to the box. Actual size retains the chosen source scale within the box.
+  Oversized boxes are rejected instead of silently reduced.
+- Horizontal/vertical position (0–100%) moves the image within its box, including
+  the crop in Fill mode. Zero aligns left/top, 100 aligns right/bottom; Center
+  artwork / crop restores both to 50%.
+- Poster uses actual size × Scale, or fits proportionally within custom artwork
+  dimensions, with a configurable overlap. Tiles are ordered
   left to right, then top to bottom. Each tile can be inspected in the preview.
 - Portrait/landscape, extra margins, copies, color/grayscale, and available device
   choices for media, source tray, quality and duplex.
@@ -59,6 +68,39 @@ where the existing document exporter supports them. Unsupported document effects
 use that exporter's rendered fallback. Grayscale output and the Windows print
 bridge render the composed sheet at 300 PPI. Sheets exceeding the render budget
 produce an error rather than silently lowering resolution.
+
+## Bleed, crop marks and presets
+
+Bleed adds up to 20 mm outside the finished trim. It reveals artwork already
+extending beyond the document edge; it does not stretch pixels or generate new
+artwork. Uncovered bleed remains paper white. Check the preview and extend
+backgrounds or images past the page edge in the editor when needed.
+
+Crop marks are 5 mm long, separated from the bleed edge by 2 mm. Sheet layouts
+reserve space for both bleed and marks inside each cell's printable area. Custom
+artwork must fit with that space. Document-size PDF preserves the original trim
+size and enlarges the PDF sheet to accommodate bleed/marks. Single-artwork PDFs
+include TrimBox and BleedBox; multi-up output draws marks for each item. Poster
+tiles use overlap instead of these design trim controls; a poster layout with
+bleed or crop marks is rejected with "Bleed and crop marks require a single-page,
+contact or repeat layout".
+
+**Saved layout presets** loads a named local layout. Enter a name and choose
+**Save preset** to create or replace it; **Delete preset** removes that name.
+Presets retain artwork sizing, layout, placement, margins, crop, grid, bleed,
+marks, orientation and grayscale preferences. They never save the destination,
+page range, copies, media, tray, duplex or quality. Loading revalidates paper
+against the current printer and keeps its actual hardware margins. Unavailable
+paper is reported rather than selected silently. Presets are stored atomically in
+`print-presets.json` in Emulsion's application data directory.
+
+MCP has the same creative controls through `artwork_width_mm` /
+`artwork_height_mm` (provide both), `rows`, `columns`, `gutter_mm`,
+`crop_x_percent`, `crop_y_percent`, `bleed_mm` and `crop_marks`.
+`list_print_presets`, `save_print_preset`, and `delete_print_preset` manage local
+presets. Preview/submission can load one using `preset_name`; explicit options
+override it. A preset incompatible with the selected destination reports an error
+so the caller can supply explicit settings. These tools do not install drivers.
 
 ## Platform connections
 
@@ -89,6 +131,27 @@ fails with an unknown outcome, inspect the queue before retrying.
 
 ## Validation and current scope
 
+The creative print-controls follow-up passed 17 layout/render/preset tests,
+5 MCP print tests, 3 native dialog tests and the MCP catalog registration check
+in an isolated checkout. Tests cover exact custom trim dimensions, crop pixels,
+grid ordering/pagination, preset replacement/deletion and device revalidation,
+authored vector bleed, PDF page boxes, and unchanged source snapshots. A separate
+PDF renderer and `pdfinfo -box` also checked the 100 × 60 mm proof. Clippy found
+no warnings in the print changes; strict package-wide lint remains blocked by
+existing warnings in other modules.
+
+Generate the same proof without sending a print job:
+
+```sh
+cargo run --locked -p emulsion-io --example print_layout_proof -- /tmp/emulsion-print-proof
+```
+
+This writes document-size and A4 repeat-sheet PDFs plus matching PNG previews.
+Print the A4 proof at **100% / actual size** and measure the trim rectangle:
+**100 × 60 mm**, with **3 mm** of authored bleed. Physical measurement and
+Windows/macOS printer execution remain separate acceptance checks.
+
+
 The September 2026 template/print update was checked in an isolated checkout:
 316 core tests, 265 I/O tests, 195 MCP tests and 13 native print/text UI tests.
 One unrelated media-server shutdown test failed during the broad run and passed
@@ -115,10 +178,9 @@ work machine requires a MinGW C toolchain for existing dependencies. The Flatpak
 portal path also requires runtime acceptance on a desktop with a Print backend.
 
 This implementation covers open document/project pages. Printing a photo-library
-selection directly, frame/storyboard picking, adjustable contact-sheet grids,
-custom artwork width/height fields, crop repositioning, saved presets, crop marks,
-bleed controls, app-managed ICC output and press-specific PDF standards remain
-follow-up work from the [design plan](print-dialog-plan.md). Linked video objects
+selection directly, frame/storyboard picking, contact-sheet labels,
+app-managed ICC output and press-specific PDF standards remain
+follow-up work from the [design plan](../specs/print-dialog-plan.md). Linked video objects
 print their stored poster artwork; video/audio playback is not printable.
 
 For a read-only printer probe, run:

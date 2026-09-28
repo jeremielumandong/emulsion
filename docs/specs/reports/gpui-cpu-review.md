@@ -1,6 +1,6 @@
 # GPUI CPU review
 
-*Snapshot from 2026-09-23. For current behavior see [performance-strategy.md](performance-strategy.md).*
+*Snapshot from 2026-09-23. For current behavior see [performance-strategy.md](../../technical/performance-strategy.md).*
 
 Reviewed 2026-09-23 against Emulsion's vendored GPUI Kit 0.6.4 and
 gpui-pre 0.3.5. This is a source audit and targeted redraw fix, not a measured
@@ -157,6 +157,6 @@ Inactive tabs now cancel presentation timers/playback and release canvas display
 images immediately, while preserving documents, undo, and background document
 jobs. This fixes `TileCache::clear` retaining images in its deferred disposal
 queue until an inactive tab next painted. Stale rendering completions cannot
-repopulate a suspended cache. See [Performance strategy](performance-strategy.md)
+repopulate a suspended cache. See [Performance strategy](../../technical/performance-strategy.md)
 for the implementation boundaries, benchmark workload matrix, and the separate
 upstream work required for persistent element/layout trees and damage tracking.
