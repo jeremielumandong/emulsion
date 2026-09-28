@@ -1,6 +1,8 @@
 //! Local project dashboard following the supplied Home handoff.
 #[path = "home_layout.rs"]
 mod layout;
+#[path = "home_recency.rs"]
+mod recency;
 
 use crate::theme::{self, Palette};
 use crate::viewport::bgra_image;
@@ -48,6 +50,8 @@ pub(crate) struct HomeState {
     pub(crate) details: bool,
     management: bool,
     sort_name: bool,
+    recent_expanded: [bool; 2],
+    recent_pages: [usize; 3],
     pub(crate) unfiled: bool,
     pub(crate) folder: Option<PathBuf>,
     filter: HomeFilter,
@@ -135,6 +139,7 @@ mod tests {
         let preview = Arc::new(bgra_image(1, 1, vec![0, 0, 0, 255]));
         cx.update(|_, cx| {
             workspace.update(cx, |ws, cx| {
+                ws.home_state.sort_name = true;
                 ws.recents = entries.clone();
                 ws.thumbs.clear();
                 ws.home_state.thumbnail_order.clear();
@@ -712,10 +717,129 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn recent_history_is_bounded_collapsible_and_searchable(cx: &mut TestAppContext) {
+        let (workspace, cx) = browser(cx);
+        cx.simulate_resize(size(px(1440.), px(1600.)));
+        let now = recent::now();
+        let mut entries: Vec<_> = (0..30)
+            .map(|i| recent::Recent {
+                path: format!("photos/new-{i:02}.png").into(),
+                opened: now.saturating_sub(i),
+                summary: String::new(),
+            })
+            .collect();
+        entries.extend([
+            recent::Recent {
+                path: "photos/fortnight.png".into(),
+                opened: now - 14 * 86_400,
+                summary: String::new(),
+            },
+            recent::Recent {
+                path: "photos/month.png".into(),
+                opened: now - 30 * 86_400,
+                summary: String::new(),
+            },
+        ]);
+        cx.update(|_, cx| {
+            workspace.update(cx, |this, cx| {
+                this.recents = entries.clone();
+                this.home_state.projects.catalog.projects.clear();
+                this.thumbs.clear();
+                this.home_state.thumbnail_order.clear();
+                // Reversed input proves Home orders by opened time before grouping.
+                this.recents.reverse();
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[0].path))
+                    .is_some()
+            );
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[11].path))
+                    .is_some()
+            );
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[12].path))
+                    .is_none()
+            );
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[30].path))
+                    .is_none()
+            );
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[31].path))
+                    .is_none()
+            );
+            assert!(!workspace.read(cx).thumbs.contains_key(&entries[30].path));
+            assert!(!workspace.read(cx).thumbs.contains_key(&entries[31].path));
+            window.click(("home-age-next", 0usize), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[0].path))
+                    .is_none()
+            );
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[12].path))
+                    .is_some()
+            );
+            window.click(("home-age-toggle", 1usize), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[30].path))
+                    .is_some()
+            );
+            window.click(("home-age-toggle", 1usize), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[30].path))
+                    .is_none()
+            );
+            // Search reaches old work even while its age section is collapsed.
+            let input = workspace
+                .read(cx)
+                .home_state
+                .search
+                .as_ref()
+                .unwrap()
+                .0
+                .clone();
+            input.update(cx, |input, cx| input.set_value("month", window, cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            assert!(window.try_find("home-recent-groups").is_none());
+            assert!(
+                window
+                    .try_find(path_id("home-file-card", &entries[31].path))
+                    .is_some()
+            );
+        });
+    }
+
+    #[gpui_kit::test]
     fn home_paginates_large_local_collections(cx: &mut TestAppContext) {
         let (workspace, cx) = browser(cx);
         cx.update(|_, cx| {
             workspace.update(cx, |this, cx| {
+                this.home_state.sort_name = true;
                 this.recents = (0..1000)
                     .map(|i| recent::Recent {
                         path: format!("/tmp/emulsion-large-library/photo-{i:04}.jpg").into(),
@@ -1040,6 +1164,7 @@ impl Workspace {
             (width - sidebar_width - if docked_inspector { 15.625 } else { 0. }).clamp(12., 77.5);
         let columns = ((center_width - 4.) / 13.25).floor().clamp(1., 6.) as u16;
         let visible = self.visible_recents(cx);
+        let grouped_recent = self.home_groups_recents(cx);
         self.home_state.page = self
             .home_state
             .page
@@ -1055,7 +1180,10 @@ impl Workspace {
                 - 12. * f32::from(columns - 1))
                 / f32::from(columns)
         };
-        self.load_thumbs(page, thumbnail_width(card_width, window.scale_factor()), cx);
+        let preview_width = thumbnail_width(card_width, window.scale_factor());
+        if !grouped_recent {
+            self.load_thumbs(page, preview_width, cx);
+        }
         let selected = visible
             .iter()
             .find(|entry| Some(&entry.path) == self.home_state.selected.as_ref())
@@ -1064,7 +1192,11 @@ impl Workspace {
         let cells = visible
             .iter()
             .skip(self.home_state.page * 48)
-            .take(if self.home_state.cloud_files { 0 } else { 48 })
+            .take(if self.home_state.cloud_files || grouped_recent {
+                0
+            } else {
+                48
+            })
             .map(|entry| {
                 self.home_recent(
                     entry,
@@ -1077,6 +1209,15 @@ impl Workspace {
             .collect::<Vec<_>>();
         let gallery = if self.home_state.cloud_files {
             self.cloud_home_browser(columns, cx)
+        } else if grouped_recent && !visible.is_empty() {
+            self.home_recent_groups(
+                &visible,
+                columns,
+                center_width >= 52.,
+                preview_width,
+                &p,
+                cx,
+            )
         } else if cells.is_empty() {
             self.home_empty(cx)
         } else if self.home_state.rows {
@@ -1164,7 +1305,9 @@ impl Workspace {
                             )
                             .child(gallery)
                             .when(
-                                !self.home_state.cloud_files && visible.len() > 48,
+                                !self.home_state.cloud_files
+                                    && !grouped_recent
+                                    && visible.len() > 48,
                                 |column| column.child(self.home_page_controls(visible.len(), cx)),
                             ),
                     ),
@@ -1643,7 +1786,7 @@ impl Workspace {
                         .gap(px(2.))
                         .px(px(12.))
                         .py(px(10.))
-                        .pr(px(42.))
+                        .pr(px(70.))
                         .child(
                             div()
                                 .text_size(px(12.5))
@@ -1692,7 +1835,7 @@ impl Workspace {
             .size(px(24.))
             .dropdown_menu(menu.clone());
         let card_id = path_id("home-file-card", &path);
-        let sync = self.cloud_file_control(&path, cx);
+        let sync = self.cloud_file_badge(&path, cx);
         let select = Button::new(path_id("home-recent", &path))
             .ghost()
             .rounded_none()
@@ -1742,16 +1885,19 @@ impl Workspace {
                 .border_1()
                 .border_color(if active { p.accent } else { p.line })
                 .child(
-                    div().relative().child(select).child(
-                        div()
-                            .absolute()
-                            .right(px(10.))
-                            .bottom(px(14.))
-                            .child(actions),
-                    ),
+                    div()
+                        .relative()
+                        .child(select)
+                        .child(div().absolute().right(px(38.)).bottom(px(14.)).child(sync))
+                        .child(
+                            div()
+                                .absolute()
+                                .right(px(10.))
+                                .bottom(px(14.))
+                                .child(actions),
+                        ),
                 )
                 .child(div().absolute().left(px(10.)).top(px(36.)).child(check))
-                .child(div().px(px(12.)).pb(px(10.)).child(sync))
                 .context_menu(menu)
                 .into_any_element()
         }
@@ -1838,6 +1984,7 @@ impl Workspace {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(file_name(&path)),
             )
+            .child(self.cloud_file_control(&path, cx))
             .children(details.into_iter().map(|(key, value)| {
                 div()
                     .flex()

@@ -7,6 +7,7 @@ use emulsion_io::{
 use gpui_kit::component::{
     Sizable, WindowExt,
     button::{Button, ButtonVariants},
+    menu::{DropdownMenu, PopupMenuItem},
 };
 #[derive(Clone)]
 pub(super) struct DraggedPackStencil {
@@ -314,8 +315,20 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut list = div().flex().flex_col().gap_1();
+        let collected = self.creative.catalog.assets.iter()
+            .filter(|a|a.kind==AssetKind::Stencil && a.tags.iter().any(|t|t=="Imported shapes"))
+            .map(|a|a.id).collect::<Vec<_>>();
+        if !collected.is_empty() {
+            list=list.child(div().text_size(px(11.)).child(format!("Previously collected imports · {} packs",collected.len())))
+                .child(Button::new("stencil-clear-collected").label("Clear collected imports").small().ghost()
+                    .tooltip("Remove previously collected packs from the library. Source files and canvas objects are kept.")
+                    .on_click(cx.listener(move |this,_,_,cx| {
+                        let ids=collected.clone();
+                        this.catalog_edit(move |catalog| {for id in ids {catalog.remove_asset(id);} Ok(())},cx);
+                    })));
+        }
         const PAGE:usize=96;
-        let total=self.creative.catalog.assets.iter().filter(|a|a.kind==AssetKind::Stencil).map(|a|a.variants.iter().filter(|name|format!("{} {name} {}",a.name,a.tags.join(" ")).to_lowercase().contains(query)).count()).sum::<usize>();
+        let total=self.creative.catalog.assets.iter().filter(|a|a.kind==AssetKind::Stencil && (self.diagram_ui.expanded_stencil_packs.contains(&a.id)||!query.is_empty())).map(|a|a.variants.iter().filter(|name|format!("{} {name} {}",a.name,a.tags.join(" ")).to_lowercase().contains(query)).count()).sum::<usize>();
         let page=self.diagram_ui.stencil_page.min(total.saturating_sub(1)/PAGE);
         let mut matched=0;
 
@@ -326,6 +339,25 @@ impl EditorView {
             .iter()
             .filter(|a| a.kind == AssetKind::Stencil)
         {
+            if !format!("{} {} {}",asset.name,asset.tags.join(" "),asset.variants.join(" ")).to_lowercase().contains(query) { continue; }
+            let id=asset.id;
+            let owner=cx.weak_entity();
+            let expanded=self.diagram_ui.expanded_stencil_packs.contains(&id) || !query.is_empty();
+            list=list.child(div().flex().items_center().gap_1()
+                .child(Button::new(("stencil-pack-toggle",id)).label(format!("{} {} ({})",if expanded{"▾"}else{"▸"},asset.name,asset.variants.len()))
+                    .small().ghost().flex_1().min_w_0().on_click(cx.listener(move |this,_,_,cx|{
+                        if !this.diagram_ui.expanded_stencil_packs.remove(&id){this.diagram_ui.expanded_stencil_packs.insert(id);}
+                        this.diagram_ui.stencil_page=0;cx.notify();
+                    })))
+                .child(Button::new(("stencil-pack-actions",id)).label("···").tooltip("Pack properties and folders").xsmall().ghost()
+                    .dropdown_menu(move |menu,_,_| {
+                        let props=owner.clone();let folders=owner.clone();
+                        menu.item(PopupMenuItem::new("Properties / relink…").on_click(move|_,window,cx|{props.update(cx,|v,cx|v.asset_properties(id,window,cx)).ok();}))
+                            .item(PopupMenuItem::new("Move to asset folder…").on_click(move|_,window,cx|{folders.update(cx,|v,cx|v.move_creative_asset_dialog(id,window,cx)).ok();}))
+                    }))
+                .child(Button::new(("stencil-pack-remove",id)).label("Remove").xsmall().ghost()
+                    .on_click(cx.listener(move |this,_,_,cx|this.catalog_edit(move|catalog|{catalog.remove_asset(id);Ok(())},cx)))));
+            if !expanded {continue;}
             for (index, name) in asset.variants.iter().enumerate() {
                 if !format!("{} {name} {}", asset.name, asset.tags.join(" "))
                     .to_lowercase()
@@ -381,7 +413,7 @@ impl EditorView {
                 .child(format!("{} / {}",page+1,total.div_ceil(PAGE)))
                 .child(Button::new("stencil-next").label("Next").small().on_click(cx.listener(move |this,_,_,cx|{this.diagram_ui.stencil_page=(page+1).min(total.saturating_sub(1)/PAGE);cx.notify();}))));
         }
-        list.child(self.creative_asset_list(AssetKind::Stencil, query, p, cx))
+        list.child(div().text_size(px(10.)).text_color(p.muted).child("Saved packs stay in your library. Removing a pack keeps its source and placed objects."))
             .into_any_element()
     }
 }

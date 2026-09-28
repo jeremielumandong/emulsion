@@ -78,14 +78,14 @@ impl EditorView {
         window.open_dialog(cx,move|dialog,_,cx|{
             let input=input.clone();let owner=owner.clone();let file_owner=owner.clone();
             let all_apply=all.clone();let change=all.clone();let directory=directory.clone();let stamp=stamp.clone();let all_pages=all_pages.clone();
-            dialog.title("Bulk create designs").width(px(640.))
+            dialog.title("Bulk create designs").width(px(880.))
                 .child(div().flex().flex_col().gap_2().child(help.clone())
                     .child(Button::new("design-bulk-scope").label(if *all.read(cx){"Template pages: all pages"}else{"Template pages: current page"}).small().outline().on_click(move|_,window,cx|{change.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
                     .child("Folder for relative image paths").child(Input::new(&directory).id("design-bulk-directory"))
                     .child(Button::new("design-bulk-import").label("Import CSV file…").small().outline().on_click(move|_,window,cx|{
                         file_owner.update(cx,|this,cx|this.design_bulk_import(window,cx)).ok();
                     }))
-                    .child(div().id("design-bulk-csv").test_support().child(Textarea::new(&input))))
+                    .child(div().id("design-bulk-csv").test_support().child(Textarea::new(&input).h(rems(18.)).flex_shrink_0())))
                 .footer(crate::widgets::form_dialog_footer("Create pages"))
                 .on_ok(move|_,_,cx|{
                     let csv=input.read(cx).value().to_string();

@@ -279,7 +279,7 @@ impl Render for ChartDataEditor {
             })
             .child("The first row contains headings. Column A contains category labels; charts use numbers in the other columns. Pie/donut need one value column; scatter needs numeric X in column A. Tables accept text; merged cells display the top-left value without deleting covered data.")
             .when(self.csv_mode, |d| {
-                d.child(div().id("design-chart-data").test_support().child(Textarea::new(&self.csv)))
+                d.child(div().id("design-chart-data").test_support().child(Textarea::new(&self.csv).h(rems(15.)).flex_shrink_0()))
             })
             .when(!self.csv_mode, |d| {
                 d.child(

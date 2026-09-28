@@ -882,6 +882,7 @@ fn creative_pack_export_form_open_install_and_stencil_placement(cx: &mut TestApp
         });
         ws.read(cx).editor.clone().unwrap()
     });
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1400.)));
     cx.run_until_parked();
     cx.update(|window, cx| window.click("creative-export-pack", cx));
     cx.run_until_parked();
@@ -910,6 +911,10 @@ fn creative_pack_export_form_open_install_and_stencil_placement(cx: &mut TestApp
         .unwrap();
     cx.update(|window, cx| {
         assert_eq!(placed.read(cx).editor.doc, stencil);
+        window.click(("stencil-pack-toggle", asset.id), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
         window.click(
             (
                 gpui_kit::ElementId::from("stencil-pack-item"),
@@ -1338,4 +1343,47 @@ fn project_chrome_keeps_canvas_actions_inside_narrow_and_wide_windows(cx: &mut T
             cx.update(|_, cx| assert!(view.read(cx).editor.doc.nodes.is_empty()));
         }
     }
+}
+
+#[gpui_kit::test]
+fn diagram_source_modal_shows_multiline_paste_and_fits_small_windows(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(800, 600));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| ws.install_project(
+            ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600)).unwrap(),
+            "Source".into(), window, cx,
+        ));
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("diagram-generate", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(2usize, cx));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| { window.render_frame(cx); window.render_frame(cx); });
+    let source = cx.update(|window, _| window.find("diagram-data-source").bounds());
+    assert!(source.size.height >= gpui_kit::px(400.), "{source:?}");
+    assert!(source.size.width >= gpui_kit::px(850.), "{source:?}");
+    cx.simulate_click(source.center(), Default::default());
+    cx.simulate_keystrokes("ctrl-a");
+    let text = format!("flowchart TD\n{}", (0..40).map(|i| format!("N{i}[Step {i}] --> N{}[Step {}]", i+1, i+1)).collect::<Vec<_>>().join("\n"));
+    cx.update(|_, cx| cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text)));
+    cx.simulate_keystrokes("ctrl-v");
+    cx.run_until_parked();
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(640.), gpui_kit::px(480.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| { window.render_frame(cx); window.render_frame(cx); });
+    let dialog = cx.debug_bounds("dialog-0").unwrap();
+    assert!(dialog.right() <= gpui_kit::px(640.) && dialog.bottom() <= gpui_kit::px(480.), "{dialog:?}");
+    cx.update(|window, cx| {
+        assert!(window.find("ok").visible());
+        window.click("ok", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let model = view.read(cx).editor.doc.diagram.as_ref().expect("pasted graph installed");
+        assert_eq!(model.shapes.len(), 41);
+        assert_eq!(model.edges.len(), 40);
+    });
 }

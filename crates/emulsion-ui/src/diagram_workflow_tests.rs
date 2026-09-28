@@ -914,6 +914,17 @@ fn diagram_imported_object_toolbox_drag_preserves_artwork_and_one_undo(cx: &mut 
         assert_eq!(bounds,[430.,310.,140.,80.]);
         view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
     });
+    cx.run_until_parked();
+    cx.update(|window,cx|window.click("diagram-imported-clear",cx));
+    cx.executor().advance_clock(std::time::Duration::from_millis(250));cx.run_until_parked();
+    cx.update(|window,cx| {
+        assert!(window.find("diagram-imported-restore").visible());
+        assert_eq!(view.read(cx).editor.doc,doc);
+        window.click("diagram-imported-restore",cx);
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(std::time::Duration::from_millis(250));cx.run_until_parked();
+    cx.update(|window,_|assert!(window.find(("diagram-used-shape",source)).visible()));
 }
 
 #[gpui_kit::test]
@@ -981,5 +992,39 @@ fn diagram_review_controls_and_saved_view_links_work(cx: &mut TestAppContext) {
         e.set_layer_selection(vec![],None);e.diagram_follow_link(&link,cx).unwrap();
         assert_eq!(e.selected,Some(id));assert_eq!(e.view.center,(123.,234.));assert_eq!(e.view.zoom,1.75);
         let settings=&e.editor.doc.diagram.as_ref().unwrap().settings;assert_eq!(settings.thumbnail,vec![id]);assert!(settings.shape_style.is_some());
+    }));
+}
+
+#[gpui_kit::test]
+fn diagram_custom_attachment_follows_picked_point_through_move_resize_and_undo(cx: &mut TestAppContext) {
+    use emulsion_core::diagram::{Port,endpoint_position};
+    let mut builder=Builder::new(800,600).unwrap();
+    let a=builder.add_shape(ShapeKind::Process,[80.,100.,160.,120.],"Source").unwrap();
+    let b=builder.add_shape(ShapeKind::Process,[480.,100.,160.,120.],"Target").unwrap();
+    let doc=builder.finish().unwrap();
+    let (ws,cx)=open(cx,doc.clone());
+    let view=cx.update(|window,cx| {
+        ws.update(cx,|ws,cx|ws.install_project(ProjectEditor::new_project(ProjectKind::Diagram,doc).unwrap(),"Custom attachments".into(),window,cx));
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window,cx|window.click("diagram-canvas-connect",cx));
+    let (start,end)=cx.update(|_,cx| {let e=view.read(cx);(e.doc_to_window((240.,130.)).unwrap(),e.doc_to_window((480.,190.)).unwrap())});
+    cx.simulate_click(start,Default::default());cx.simulate_click(end,Default::default());
+    cx.run_until_parked();
+    cx.update(|_,cx|view.update(cx,|v,cx| {
+        let edge=v.editor.doc.diagram.as_ref().unwrap().edges.values().next().unwrap().clone();
+        assert_eq!((edge.source.shape,edge.target.shape),(a,b));
+        let Port::Custom{x,y}=edge.source.port else {panic!("Expected picked position")};
+        assert!((x-1.).abs()<0.01 && (y-0.25).abs()<0.01);
+        let source_before=endpoint_position(&v.editor.doc,&edge.source,(480.,190.)).unwrap();
+        v.editor.execute(Command::TranslateNode{id:a,dx:30.,dy:20.}).unwrap();
+        let moved=endpoint_position(&v.editor.doc,&edge.source,(480.,190.)).unwrap();
+        assert!((moved.0-source_before.0-30.).abs()<0.01 && (moved.1-source_before.1-20.).abs()<0.01);
+        v.editor.execute(Command::TransformNodes{ids:vec![a],transform:[2.,0.,0.,1.5,0.,0.]}).unwrap();
+        let resized=endpoint_position(&v.editor.doc,&edge.source,(480.,190.)).unwrap();
+        assert!((resized.0-moved.0*2.).abs()<0.01 && (resized.1-moved.1*1.5).abs()<0.01);
+        v.undo(cx);v.undo(cx);
+        assert_eq!(endpoint_position(&v.editor.doc,&edge.source,(480.,190.)).unwrap(),source_before);
     }));
 }

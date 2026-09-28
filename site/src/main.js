@@ -17,19 +17,35 @@ document.querySelectorAll('.header nav a').forEach(link => link.addEventListener
 
 const workspaceViews = {
   editor: { image: 'editor.png', alt: 'Emulsion Photo workspace with a portrait, navigation tools, layer properties, and layers panel', copy: 'A dedicated photo workspace with the canvas at its centre. Navigate your image and keep layer properties, masks, opacity, and blend controls close at hand.', tag: 'PHOTO / LAYERS & PROPERTIES' },
-  drawing: { image: 'drawing.png', alt: 'Emulsion Draw workspace with a layered squirrel painting, photograph reference, brush presets, and assistant conversation', copy: 'Paint from a reference with brushes and editable layers. Keep your source image beside the canvas and continue working on an assistant-assisted drawing with the same tools.', tag: 'DRAW / REFERENCE / ASSISTANT' },
-  home: { image: 'home.png', alt: 'Emulsion home library showing recent photos, illustrations, and a selected squirrel project with layer and history details', copy: 'Browse recent photographs and illustrations, inspect a project’s layers and history count, or start with an open file, a new canvas, or a batch folder.', tag: 'HOME / YOUR PROJECT LIBRARY' },
+  drawing: { image: 'drawing.png', alt: 'Emulsion Paint workspace with a layered squirrel painting, photograph reference, brush presets, and assistant conversation', copy: 'Paint from a reference with brushes and editable layers. Keep your source image beside the canvas and continue working on an assistant-assisted drawing with the same tools.', tag: 'PAINT / REFERENCE / ASSISTANT' },
+  library: { image: 'batch-export.png', alt: 'Earlier Emulsion Batch interface showing selected photographs, a recipe preview, and export controls, now part of Library', copy: 'Library brings collections, ratings, flags, Develop, and batch export together. This earlier capture shows its recipe and export workflow; a current Library screenshot is coming soon.', tag: 'LIBRARY / EARLIER BATCH CAPTURE' },
+  design: { image: 'design.png', alt: 'Emulsion Design workspace with an editable product launch layout, template browser, page thumbnails, and presentation controls', copy: 'Start with an editable template or an empty document. Arrange text, shapes, and images across pages, then save your project, present it, or export your artwork.', tag: 'DESIGN / TEMPLATES, LAYOUTS & PAGES', guide: '#guide-design' },
+  diagram: { image: 'diagram.png', alt: 'Emulsion Diagram workspace showing a credit approval process with swimlanes, editable shapes, bound connectors, the shape library, and object properties', copy: 'Start empty or choose a diagram template. Build flowcharts and concept maps with editable shapes, labels, containers, and connectors that follow their objects.', tag: 'DIAGRAM / SHAPES & CONNECTIONS', guide: '#guide-diagram' },
 };
 function selectView(name) {
   const view = workspaceViews[name];
+  if (!view) return;
   document.querySelectorAll('[data-tab]').forEach(tab => {
     const active = tab.dataset.tab === name;
     tab.setAttribute('aria-selected', String(active));
     tab.tabIndex = active ? 0 : -1;
   });
   const img = document.querySelector('#workspace-image');
-  img.src = `/assets/${view.image}`;
-  img.alt = view.alt;
+  const pending = document.querySelector('#workspace-placeholder');
+  img.hidden = !view.image;
+  pending.hidden = Boolean(view.image);
+  document.querySelector('.expand-image').hidden = !view.image;
+  if (view.image) {
+    img.src = `/assets/${view.image}`;
+    img.alt = view.alt;
+  } else {
+    pending.querySelector('use').setAttribute('href', `/icons.svg#${view.icon}`);
+    document.querySelector('#workspace-pending-title').textContent = view.title;
+    document.querySelector('#workspace-pending-copy').textContent = 'Explore the available tools in the guide below. An application screenshot will be added here.';
+    const guide = document.querySelector('#workspace-pending-guide');
+    guide.href = view.guide;
+    guide.textContent = `Read the ${view.title} guide →`;
+  }
   document.querySelector('#workspace-copy').textContent = view.copy;
   document.querySelector('#workspace-tag').textContent = view.tag;
   document.querySelector('#workspace-panel').setAttribute('aria-labelledby', `tab-${name}`);
@@ -83,6 +99,7 @@ document.querySelectorAll('dialog').forEach(dialog => {
 });
 document.querySelector('.expand-image').addEventListener('click', () => {
   const source = document.querySelector('#workspace-image');
+  if (source.hidden) return;
   const image = document.querySelector('#image-dialog img');
   image.src = source.src; image.alt = source.alt;
   document.querySelector('#image-dialog').showModal();

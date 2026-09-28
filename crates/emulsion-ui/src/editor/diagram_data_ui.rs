@@ -49,7 +49,7 @@ impl EditorView {
                 }
             }
         };
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, window, _| {
             let input = input.clone();
             let owner = owner.clone();
             dialog
@@ -58,14 +58,18 @@ impl EditorView {
                 } else {
                     format!("Create page from {}", format.label())
                 })
-                .width(px(700.))
+                .width(px(960.))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_3()
                         .child(help)
-                        .child(Textarea::new(&input)),
+                        .child(div().id("diagram-data-source").test_support().flex_shrink_0().child(
+                            Textarea::new(&input)
+                                .h(px((f32::from(window.viewport_size().height) * 0.5).clamp(240., 520.)))
+                                .aria_label("Diagram source")
+                        )),
                 )
                 .footer(crate::widgets::form_dialog_footer("Apply"))
                 .on_ok(move |_, _, cx| {

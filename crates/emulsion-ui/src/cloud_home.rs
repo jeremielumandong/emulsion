@@ -482,8 +482,57 @@ impl Workspace {
             })
             .cloned();
         let owner = cx.weak_entity();
-        let busy = self.cloud.busy;
-        move |menu| {
+        let busy = self.cloud.busy || !self.cloud.loaded;
+        let destinations: Vec<_> = self
+            .cloud
+            .index
+            .as_ref()
+            .into_iter()
+            .flat_map(|i| &i.accounts)
+            .filter(|a| a.provider != Provider::GooglePhotos)
+            .filter(|a| {
+                binding
+                    .as_ref()
+                    .is_none_or(|b| b.provider == a.provider && b.account_id == a.id)
+            })
+            .map(|a| a.provider)
+            .collect();
+        move |mut menu| {
+            if destinations.is_empty() {
+                let connect = owner.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(if binding.is_some() {
+                        "Reconnect cloud…"
+                    } else {
+                        "Connect cloud…"
+                    })
+                    .disabled(busy)
+                    .on_click(move |_, window, cx| {
+                        connect
+                            .update(cx, |this, cx| {
+                                this.cloud.connections_open = true;
+                                this.open_cloud_home(window, cx);
+                            })
+                            .ok();
+                    }),
+                );
+            } else {
+                for provider in &destinations {
+                    let provider = *provider;
+                    let sync = owner.clone();
+                    let sync_path = path.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(format!("Sync to {}", provider.label()))
+                            .disabled(busy)
+                            .on_click(move |_, _, cx| {
+                                sync.update(cx, |this, cx| {
+                                    this.cloud_sync_file(sync_path.clone(), provider, cx)
+                                })
+                                .ok();
+                            }),
+                    );
+                }
+            }
             let Some(binding) = binding.clone() else {
                 return menu;
             };

@@ -14,7 +14,7 @@ use emulsion_cloud::{
 use gpui_kit::{
     component::{
         Disableable, Icon, Sizable,
-        button::Button,
+        button::{Button, ButtonVariants},
         menu::{DropdownMenu, PopupMenuItem},
     },
     *,
@@ -159,6 +159,19 @@ impl Workspace {
 
     /// Uses the cached index: rendering cards never reads files or contacts a provider.
     pub(crate) fn cloud_file_control(&self, path: &Path, cx: &Context<Self>) -> AnyElement {
+        self.cloud_file_control_view(path, false, cx)
+    }
+
+    pub(crate) fn cloud_file_badge(&self, path: &Path, cx: &Context<Self>) -> AnyElement {
+        self.cloud_file_control_view(path, true, cx)
+    }
+
+    fn cloud_file_control_view(
+        &self,
+        path: &Path,
+        compact: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let index = self.cloud.index.as_ref();
         let binding = index.and_then(|i| i.bindings.iter().find(|b| b.path == path));
         let accounts = index.map(|i| i.accounts.as_slice()).unwrap_or_default();
@@ -195,9 +208,39 @@ impl Workspace {
             FileSyncStatus::Syncing => palette.accent,
             _ => palette.muted,
         };
+        if compact {
+            let menu = self.cloud_file_menu(path.to_path_buf(), cx);
+            return Button::new((
+                ElementId::from("home-file-sync"),
+                path.to_string_lossy().into_owned(),
+            ))
+            .accessibility_label(format!("{status_label}; sync actions"))
+            .tooltip(format!("{status_label} · Click for sync actions"))
+            .xsmall()
+            .ghost()
+            .size(px(24.))
+            .text_color(color)
+            .child(
+                div()
+                    .id((
+                        ElementId::from("home-file-sync-status"),
+                        path.to_string_lossy().into_owned(),
+                    ))
+                    .test_support()
+                    .child(
+                        Icon::empty()
+                            .path(format!("icons/{}.svg", status.icon()))
+                            .size(px(14.)),
+                    ),
+            )
+            .dropdown_menu(move |popup, _, _| {
+                menu(popup.item(PopupMenuItem::new(status_label.clone()).disabled(true)))
+            })
+            .into_any_element();
+        }
         let status_row = div()
             .id((
-                ElementId::from("home-file-sync-status"),
+                ElementId::from("home-details-sync-status"),
                 path.to_string_lossy().into_owned(),
             ))
             .test_support()
@@ -228,7 +271,7 @@ impl Workspace {
             "Sync to cloud…".into()
         };
         let button = Button::new((
-            ElementId::from("home-file-sync"),
+            ElementId::from("home-details-sync"),
             path.to_string_lossy().into_owned(),
         ))
         .label(label)
@@ -966,6 +1009,8 @@ mod tests {
                 );
                 window.click(id, cx);
             });
+            cx.run_until_parked();
+            cx.update(|window, cx| window.within("popup-menu").click(1usize, cx));
             cx.run_until_parked();
             cx.update(|window, cx| {
                 let this = workspace.read(cx);

@@ -422,6 +422,9 @@ impl Workspace {
                         this.home_state.cloud_files = false;
                         this.home_state.page = 0;
                         this.home_state.filter = filter;
+                        if filter == HomeFilter::All && !trash {
+                            this.home_state.sort_name = false;
+                        }
                         this.home_state.projects.trash = trash;
                         cx.notify();
                     })),

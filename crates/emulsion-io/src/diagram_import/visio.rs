@@ -98,13 +98,15 @@ fn relationships(package: &Package, source: &str) -> Result<BTreeMap<String, Str
 #[derive(Default)]
 struct Resources {
     masters: BTreeMap<String, Xml>,
+    images: BTreeMap<String, Arc<emulsion_raster::Raster>>,
+    available_fonts: BTreeSet<String>,
     colors: BTreeMap<String, [u8; 4]>,
     fonts: BTreeMap<String, String>,
     styles: BTreeMap<String, Xml>,
 }
 impl Resources {
     fn from_document(document: &Xml) -> Result<Self> {
-        let mut out = Self::default();
+        let mut out = Self { available_fonts: emulsion_core::text::font_families().into_iter().collect(), ..Default::default() };
         for c in document.descendants("ColorEntry") {
             out.colors
                 .insert(c.attr("IX").into(), color(c.attr("RGB"))?);
@@ -190,7 +192,8 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
             let target = rels
                 .get(rel.attr("id"))
                 .ok_or_else(|| error("Missing Visio master part."))?;
-            let content = xml::parse(package.text(target)?)?;
+            let mut content = xml::parse(package.text(target)?)?;
+            load_images(&mut content, target, &package, &mut resources, &mut warnings)?;
             if resources
                 .masters
                 .insert(master.attr("ID").into(), content)
@@ -221,7 +224,8 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
             let target = rels
                 .get(rel.attr("id"))
                 .ok_or_else(|| error("Missing Visio page part."))?;
-            let content = xml::parse(package.text(target)?)?;
+            let mut content = xml::parse(package.text(target)?)?;
+            load_images(&mut content, target, &package, &mut resources, &mut warnings)?;
             scenes.push(scene(page, &content, &resources, &mut warnings)?);
         }
     } else if !resources.masters.is_empty() {
@@ -359,6 +363,21 @@ fn scene(
             s.name = "Unbound connector".into();
             s.style = line.style;
             s.parent = line.parent;
+            for (enabled, tip, next) in [
+                (line.start_arrow, points.first(), points.get(1)),
+                (line.end_arrow, points.last(), points.get(points.len().saturating_sub(2))),
+            ] {
+                if enabled && let (Some(tip),Some(next),Some(color))=(tip,next,line.style.stroke) {
+                    let tip=dvec2(tip.0,tip.1); let next=dvec2(next.0,next.1);
+                    let direction=(tip-next).normalize_or_zero();
+                    if direction.length_squared()>0. {
+                        let length=(6.+line.style.width as f64*1.5).max(6.);
+                        let base=tip-direction*length;
+                        let normal=dvec2(-direction.y,direction.x)*length*0.4;
+                        s.extra_paths.push((VectorPath{subpaths:vec![SubPath{anchors:[tip,base+normal,base-normal].into_iter().map(|p|Anchor::corner((p.x,p.y))).collect(),closed:true}]},PathStyle{fill:Some(color),stroke:None,..Default::default()}));
+                    }
+                }
+            }
             s.path = Some(VectorPath {
                 subpaths: vec![SubPath {
                     anchors: points.into_iter().map(Anchor::corner).collect(),
@@ -516,7 +535,12 @@ fn shape_into(
         stroke[3] = ((1. - number(node, line_style, "LineColorTrans", 0.)?.clamp(0., 1.)) * 255.)
             .round() as u8;
     }
-    let geometry = geometry(node, master, w, h, warnings)?;
+    let mut parts = geometry_parts(node, master, w, h, style, warnings)?;
+    let geometry = if parts.is_empty() { None } else {
+        let (path, first_style) = parts.remove(0);
+        style = first_style;
+        Some(path)
+    };
     let one_d = value(node, "BeginX").is_some()
         || node.attr("Type") == "1D"
         || master.is_some_and(|m| value(m, "BeginX").is_some());
@@ -599,14 +623,15 @@ fn shape_into(
     if let Some(mut path) = geometry {
         path.transform(transform);
         s.path = Some(path);
-    } else if children.is_some() {
+    } else {
         s.style.fill = None;
         s.style.stroke = None;
-    } else {
-        warnings.insert(
-            "Shapes without supported geometry use editable outlines based on their bounds.".into(),
-        );
     }
+    for (mut path, style) in parts {
+        path.transform(transform);
+        s.extra_paths.push((path, style));
+    }
+    s.label_above_children = children.is_some();
     fn character(n: &Xml) -> Option<&Xml> {
         n.children("Section")
             .find(|n| n.attr("N") == "Character")
@@ -626,6 +651,7 @@ fn shape_into(
             s.text.font = font.clone();
         }
     }
+    visio_text(node, master, style_sheet("TextStyle"), resources, transform, w, h, &mut s, warnings)?;
     for section in node
         .children("Section")
         .filter(|s| s.attr("N") == "Property")
@@ -645,11 +671,25 @@ fn shape_into(
                 .insert(key.into(), value(property, "Value").unwrap_or("").into());
         }
     }
-    if node.child("ForeignData").is_some() {
-        warnings.insert(
-            "Embedded Visio OLE/foreign objects use placeholders; their graphics need review."
-                .into(),
-        );
+    let image_source = if node.child("ForeignData").is_some() { Some(node) } else { master.filter(|m|m.child("ForeignData").is_some()) };
+    if let Some(source) = image_source {
+        if let Some(image) = source.image_part.as_ref().and_then(|part|resources.images.get(part)) {
+            let iw = number(node,master,"ImgWidth",w)?;
+            let ih = number(node,master,"ImgHeight",h)?;
+            let center = transform.transform_point2(dvec2(number(node,master,"ImgOffsetX",0.)?+iw/2.,number(node,master,"ImgOffsetY",0.)?+ih/2.));
+            let x_axis = transform.transform_vector2(dvec2(iw / image.width() as f64,0.));
+            let y_axis = transform.transform_vector2(dvec2(0.,-ih / image.height() as f64));
+            s.image_placement = Some(emulsion_raster::Placement {
+                x: center.x - image.width() as f64*x_axis.length()/2., y: center.y - image.height() as f64*y_axis.length()/2.,
+                scale_x: x_axis.length(), scale_y: y_axis.length(),
+                rotation: x_axis.y.atan2(x_axis.x).to_degrees(),
+                flip_y: x_axis.perp_dot(y_axis) < 0., ..Default::default()
+            });
+            s.image = Some(image.clone());
+            s.style.fill = Some([255; 4]);
+        } else {
+            warnings.insert("Unsupported embedded Visio foreign graphics need review.".into());
+        }
     }
     if angle != 0. {
         warnings.insert("Rotated outlines are preserved; review label alignment and ports.".into());
@@ -855,3 +895,5 @@ fn sections_fn(n: &Xml) -> Vec<Xml> {
         .cloned()
         .collect()
 }
+
+include!("visio_text.rs");

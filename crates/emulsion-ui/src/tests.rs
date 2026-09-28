@@ -1045,6 +1045,23 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
         cx.update(|_, cx| ws.read(cx).splash),
         "splash shows at launch"
     );
+    for (width, height) in [(1440., 900.), (3840., 2160.), (480., 360.)] {
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height)));
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            use gpui_kit::test::TestWindowExt;
+            let card = window.find("splash-card").bounds();
+            assert!(card.size.width <= gpui_kit::px(680.));
+            assert!(card.left() >= gpui_kit::px(24.));
+            assert!(card.top() >= gpui_kit::px(24.));
+            assert!((f32::from(card.left() + card.right()) - width).abs() < 2.);
+            assert!((f32::from(card.top() + card.bottom()) - height).abs() < 2.);
+            assert!(
+                (f32::from(card.size.width) / f32::from(card.size.height) - 1672. / 941.).abs()
+                    < 0.01
+            );
+        });
+    }
     cx.simulate_keystrokes("space");
     assert!(
         !cx.update(|_, cx| ws.read(cx).splash),

@@ -9,6 +9,8 @@ pub(super) struct UsedStencils {
     building: bool,
     pub(super) page: usize,
     total: usize,
+    cleared: std::collections::HashSet<u64>,
+    collapsed: std::collections::HashSet<u64>,
     entries: Vec<(diagram::DocumentStencil, Option<Arc<RenderImage>>)>,
     retired: Vec<Arc<RenderImage>>,
 }
@@ -85,6 +87,41 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.editor.doc.diagram.as_ref().is_none_or(|d|d.shapes.is_empty()) {
+            return div().into_any_element();
+        }
+        let active = self.editor.active_page();
+        let cleared = self.diagram_ui.used.cleared.contains(&active);
+        let collapsed = self.diagram_ui.used.collapsed.contains(&active);
+        let header = div().flex().items_center().gap_1()
+            .child(Button::new("diagram-imported-toggle")
+                .label(if collapsed { "▸ Imported data · temporary" } else { "▾ Imported data · temporary" })
+                .xsmall().ghost().flex_1().min_w_0()
+                .tooltip("Shapes from this page are temporary. Use Keep as stencil pack or Import stencils for a permanent library pack.")
+                .on_click(cx.listener(move |v,_,_,cx| {
+                    if !v.diagram_ui.used.collapsed.remove(&active) { v.diagram_ui.used.collapsed.insert(active); }
+                    cx.notify();
+                })))
+            .child(Button::new("diagram-imported-clear").label("Clear").xsmall().ghost().disabled(cleared)
+                .tooltip("Clear temporary toolbox shapes. Canvas objects and saved packs are kept.")
+                .on_click(cx.listener(move |v,_,window,cx| {
+                    v.diagram_ui.used.cleared.insert(active);
+                    v.release_document_stencil_previews(window);
+                    v.diagram_ui.used.page=0;
+                    cx.notify();
+                })));
+        if cleared || collapsed {
+            return div().id("diagram-used-stencils").test_support().flex().flex_col().gap_2()
+                .child(header)
+                .when(cleared && !collapsed,|d|d.child("Temporary shapes cleared for this page.")
+                    .child(Button::new("diagram-imported-restore").label("Show page shapes").xsmall().ghost()
+                        .on_click(cx.listener(move |v,_,_,cx| {
+                            v.diagram_ui.used.cleared.remove(&active);
+                            v.diagram_ui.used.requested=None;
+                            cx.notify();
+                        }))))
+                .into_any_element();
+        }
         if self
             .diagram_ui
             .used
@@ -183,6 +220,8 @@ impl EditorView {
                     let used = &mut v.diagram_ui.used;
                     used.building = false;
                     if v.visible
+                        && !used.cleared.contains(&request.0)
+                        && used.requested.as_ref() == Some(&request)
                         && current == (request.0, request.1)
                         && let Some((total, entries)) = result
                     {
@@ -212,16 +251,7 @@ impl EditorView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(p.ink)
-                    .child(if visible {
-                        format!("Shapes in this diagram ({})", used.total)
-                    } else {
-                        "Shapes in this diagram".into()
-                    }),
-            );
+            .child(header);
         if visible {
             let mut grid = div().grid().grid_cols(4).gap(px(4.));
             for (entry, preview) in &used.entries {
@@ -270,7 +300,7 @@ impl EditorView {
                 );
             }
             section = section.child(grid).child(
-                Button::new("diagram-save-used-stencils").label("Save shapes to library").xsmall().ghost()
+                Button::new("diagram-save-used-stencils").label("Keep as stencil pack").xsmall().ghost()
                 .on_click(cx.listener(|v,_,_,cx|v.save_imported_stencils(&[v.editor.active_page()],cx)))
             );
             if used.total > PAGE_SIZE {

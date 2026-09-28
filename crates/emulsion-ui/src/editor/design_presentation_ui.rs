@@ -498,9 +498,9 @@ impl EditorView {
         let ticket = self.edit_ticket();
         window.open_dialog(cx,move|dialog,_,_| {
             let input=input.clone();let owner=owner.clone();
-            dialog.title("Speaker notes").width(px(640.))
+            dialog.title("Speaker notes").width(px(800.))
                 .child(div().flex().flex_col().gap_2().child("Only the presenter window displays these notes. They are saved with this page.")
-                    .child(div().id("design-speaker-notes-input").test_support().child(Textarea::new(&input))))
+                    .child(div().id("design-speaker-notes-input").test_support().child(Textarea::new(&input).h(rems(20.)).flex_shrink_0())))
                 .footer(div().id("design-speaker-notes-footer").test_support().child(crate::widgets::form_dialog_footer("Save notes")))
                 .on_ok(move|_,_,cx| {
                     let notes=input.read(cx).value().to_string();

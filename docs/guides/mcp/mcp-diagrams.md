@@ -42,7 +42,7 @@ Each mutation uses one Undo step and rejects an in-progress interactive transact
 | --- | --- |
 | `quick_create_diagram` | Add a connected neighbor in a cardinal direction. |
 | `generate_diagram` | Generate a new page from text, CSV, Mermaid or SQL; `refresh=true` updates linked data on the active page. |
-| `import_diagram` | Import every page from a supported local file or supplied draw.io XML, returning warnings and saved stencil pack IDs. `save_stencils` defaults to true. |
+| `import_diagram` | Import every page from a supported local file or supplied draw.io XML, returning warnings and saved stencil pack IDs. `save_stencils` defaults to false; permanence requires explicit opt-in. |
 | `save_document_stencils` | Save the open diagram’s reusable objects into deduplicated persistent packs; optional `name`. |
 | `export_diagram` | Export all pages as editable draw.io; omit `path` to return XML. Existing files require `overwrite=true`. |
 
@@ -141,8 +141,9 @@ editable vector nodes and survive native persistence and SVG export.
 Live-editor imports and stencil pack generation perform file parsing and library
 serialization in background work. The import checks that the target document has
 not changed before insertion. Library persistence does not add document undo steps;
-undoing an import leaves its reusable library packs installed. Set
-`save_stencils: false` to import pages without saving packs.
+imports only expose temporary page shapes by default. Use `save_stencils: true`,
+`save_document_stencils`, or `install_diagram_stencil_pack` to keep a permanent pack.
+Use `remove_creative_asset` to remove a saved pack from the library.
 
 
 ## Structured objects, defaults and local review

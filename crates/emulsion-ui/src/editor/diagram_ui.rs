@@ -7,7 +7,7 @@ use emulsion_core::{
 use gpui_kit::component::{
     Disableable, Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
-    input::InputEvent,
+    input::{InputEvent, Textarea, TextareaState},
     menu::{DropdownMenu, PopupMenuItem},
 };
 
@@ -65,6 +65,7 @@ pub(super) struct DiagramUi {
     pub(super) theme_selection: bool,
     pub(super) pack_filter: usize,
     pub(super) stencil_page: usize,
+    pub(super) expanded_stencil_packs: std::collections::HashSet<u64>,
     import_notes: Vec<String>,
     pub(super) collapsed_categories: std::collections::HashSet<&'static str>,
 }
@@ -97,6 +98,7 @@ impl Default for DiagramUi {
             theme_selection: false,
             pack_filter: 0,
             stencil_page: 0,
+            expanded_stencil_packs: Default::default(),
             import_notes: Vec::new(),
             collapsed_categories: diagram::stencils::CATEGORIES
                 .iter()
@@ -341,7 +343,6 @@ impl EditorView {
                         .map(|ids| (ids, imported.warnings))
                 }) {
                     Ok((ids, warnings)) => {
-                        this.save_imported_stencils(&ids,cx);
                         this.diagram_import_notes(warnings.clone());
                         this.after_change(cx);
                         this.set_status(
@@ -478,13 +479,12 @@ impl EditorView {
             {
                 continue;
             }
-            let port = [Port::North, Port::East, Port::South, Port::West]
-                .into_iter()
-                .find(|port| {
-                    let (p, _) = port.anchor([x, y, w, h], point);
-                    (p.0 - point.0).hypot(p.1 - point.1) <= tolerance
-                })
-                .unwrap_or(Port::Auto);
+            // Store the picked position in object-relative coordinates so the
+            // attachment follows movement/resizing without jumping to a midpoint.
+            let port = Port::Custom {
+                x: ((point.0 - x) / w.max(f64::EPSILON)).clamp(0., 1.),
+                y: ((point.1 - y) / h.max(f64::EPSILON)).clamp(0., 1.),
+            };
             return Some(Endpoint {
                 shape: id,
                 port,
@@ -1022,8 +1022,8 @@ impl EditorView {
         } else {
             String::new()
         };
-        let label = cx.new(|cx| InputState::new(window, cx).default_value(text));
-        let details = cx.new(|cx| InputState::new(window, cx).default_value(data));
+        let label = cx.new(|cx| TextareaState::new(window, cx).rows(3).default_value(text));
+        let details = cx.new(|cx| TextareaState::new(window, cx).rows(10).default_value(data));
         let owner = cx.weak_entity();
         let page = self.editor.active_page();
         window.open_dialog(cx, move |dialog, _, _| {
@@ -1036,20 +1036,20 @@ impl EditorView {
                 } else {
                     "Connector label and waypoints"
                 })
-                .width(px(480.))
+                .width(px(800.))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_2()
                         .child("Label")
-                        .child(Input::new(&label))
+                        .child(Textarea::new(&label).h(rems(6.)).flex_shrink_0().aria_label("Object label"))
                         .child(if shape {
                             "Data · JSON object, e.g. {\"owner\":\"Design\"}"
                         } else {
                             "Waypoints · JSON coordinates, e.g. [[200,100],[200,300]]"
                         })
-                        .child(Input::new(&details)),
+                        .child(Textarea::new(&details).h(rems(16.)).flex_shrink_0().aria_label("Object data")),
                 )
                 .footer(crate::widgets::form_dialog_footer("Apply changes"))
                 .on_ok(move |_, _, cx| {
@@ -2223,7 +2223,7 @@ impl EditorView {
             }
         }
         if self.diagram_ui.library_tab == 0 {
-            content=content.child(Button::new("diagram-connect").label(if self.diagram_ui.connecting{"Cancel connection"}else{"Connect shapes"}).selected(self.diagram_ui.connecting).outline().on_click(cx.listener(|this,_,_,cx|{let active=this.diagram_ui.connecting;this.set_tool(Tool::Move,cx);this.diagram_cancel_connection();this.diagram_ui.connecting= !active;this.set_status(if active{"Connection cancelled."}else{"Click a source shape, then a destination. Click near an edge midpoint for a fixed port."},false,cx);})));
+            content=content.child(Button::new("diagram-connect").label(if self.diagram_ui.connecting{"Cancel connection"}else{"Connect shapes"}).selected(self.diagram_ui.connecting).outline().on_click(cx.listener(|this,_,_,cx|{let active=this.diagram_ui.connecting;this.set_tool(Tool::Move,cx);this.diagram_cancel_connection();this.diagram_ui.connecting= !active;this.set_status(if active{"Connection cancelled."}else{"Click anywhere on a source object, then anywhere on the destination. Attachments follow the objects."},false,cx);})));
             let owner = cx.weak_entity();
             content = content.child(
                 Button::new("diagram-layout")

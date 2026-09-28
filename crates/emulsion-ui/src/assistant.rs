@@ -1480,7 +1480,7 @@ impl EditorView {
             }).detach();return;
         }
         if call.name=="import_diagram" {
-            let args=call.arguments.clone();let save=args["save_stencils"]!=false;
+            let args=call.arguments.clone();let save=args["save_stencils"]==true;
             let ticket=self.edit_ticket();let stamp=self.editor.stamp();
             cx.spawn(async move |this,cx| {
                 let imported=cx.background_spawn(async move {emulsion_mcp::diagram_project_tools::load_import(&args)}).await;

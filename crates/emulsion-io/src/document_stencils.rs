@@ -1,4 +1,4 @@
-//! Capture imported objects as durable local packs without modifying the source diagram.
+//! Explicitly save document objects as durable local packs without modifying the source diagram.
 use crate::{
     IoError, Result,
     template_pack::{self, Kind, Manifest, Pack},
@@ -130,8 +130,8 @@ fn install(root: &Path, pages: Vec<ProjectPage>, name: &str, part: usize) -> Res
         .filter(|c| !c.is_control())
         .take(150)
         .collect::<String>();
-    let mut manifest = Manifest::new(Kind::Stencil, format!("Imported · {name} · {part}"));
-    manifest.tags = vec!["Imported shapes".into()];
+    let mut manifest = Manifest::new(Kind::Stencil, format!("Saved shapes · {name} · {part}"));
+    manifest.tags = vec!["Saved shapes".into()];
     manifest.description="Editable objects captured from an imported diagram. Source artwork and captions are preserved.".into();
     let pack = Pack {
         manifest,

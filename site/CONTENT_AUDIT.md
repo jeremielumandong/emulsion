@@ -55,3 +55,60 @@ Omarchy compatibility is highlighted in the workspace introduction and its own
 capability card. The setup instructions match README → Appearance: Linux-only
 live theme following via the top-bar control, no restart or hooks required,
 and document colours unaffected.
+
+
+## September 28: Emulsion positioning and workspace showcases
+
+- The primary artwork is the app's existing splash PNG, copied without changes.
+- The hero and name explanation introduce distinct creative tools working
+  together: Photo, Paint, Library, Design, and Diagram. This is not a claim of
+  feature parity with other commercial products.
+- The five new `showcase-*` media slots are explicitly labeled placeholders for
+  upcoming showcase films. Existing application screenshots remain in the tour
+  and detailed workflow sections.
+- Workspace names and blank/template creation follow
+  `crates/emulsion-ui/src/workspace/destinations.rs` and
+  `crates/emulsion-ui/src/workspace/new_canvas_templates.rs`. Design/Diagram
+  use the existing editable project types in `crates/emulsion-core/src/creation.rs`.
+- Existing installation links, platform distinctions, and detailed capability
+  limitations remain. The new Library guide link targets the existing recipes
+  and batch guide.
+
+
+## September 28: details for all five workspaces
+
+- Replaced the three-view tour with Photo, Paint, Library, Design, and Diagram.
+  Library's image is identified as an earlier Batch capture; Design and Diagram
+  have explicit screenshot placeholders and working links to their guides.
+- Capabilities and practical workflows now cover all five destinations. The
+  documentation has one guide per workspace plus shared saving, format,
+  installation, assistant, and troubleshooting topics. Existing anchors remain.
+- Checked Library collections, culling, Develop, sidecars, history, virtual copies,
+  export, and portable backups against `docs/guides/library-develop.md`.
+- Checked Design templates, blank starts, layout, pages, presentation, and export
+  against `docs/guides/design-starters-and-layout.md`, `design-presentation.md`,
+  `design-selection-export.md`, and `workspace/new_canvas_templates.rs`.
+- Checked Diagram shapes, bound connectors, containers, context actions, and
+  saving against `docs/guides/diagram-functionality.md`.
+- Checked Paint library/studio guidance against `docs/guides/brush-workflow.md`.
+- Saving guidance distinguishes ORA layered documents, EMU page projects,
+  Library sidecars/history, and EMULIBRARY backups. Page project storage is
+  defined in `crates/emulsion-io/src/project.rs`. Photo RAW and Library Develop
+  are described separately; native Design selection PDF export is distinguished
+  from raster export paths that may use converters.
+- Production build and Chromium review cover all five tour tabs, placeholder
+  links, keyboard navigation, screenshot lightbox, installation dialog, and
+  layouts from 320 to 1440 pixels. No application code changed in this pass.
+
+## Supplied Design showcase capture
+
+The user-supplied 2530×1377 Design workspace screenshot now fills both the
+`showcase-design` slot and the Design tour tab. It shows the template library,
+editable product-launch artwork, page thumbnails, and presentation controls.
+`design.png` is copied unchanged; full-size viewing remains available. Diagram
+continues to use an explicitly labeled screenshot placeholder.
+
+The supplied Diagram capture also fills `showcase-diagram` and the Diagram
+tour tab. It shows a credit approval process with swimlanes, shapes, connections,
+and properties. `diagram.png` is copied unchanged. Both supplied captures
+support full-size viewing; the remaining film placeholders stay explicit.

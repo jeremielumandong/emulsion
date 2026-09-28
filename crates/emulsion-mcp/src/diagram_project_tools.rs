@@ -184,7 +184,7 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
         }
         "import_diagram" => {
             let imported=load_import(args)?;
-            let captured=(args["save_stencils"]!=false).then(||imported.project.clone());
+            let captured=(args["save_stencils"]==true).then(||imported.project.clone());
             let pages = editor.import_pages(imported.project)?;
             let mut warnings=imported.warnings;
             let packs=if let Some(project)=captured {
@@ -284,7 +284,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         def(
             "import_diagram",
             "Add all pages from a local draw.io, supported Visio/Lucid file or native stencil/template pack; alternatively supply draw.io XML. Returns compatibility warnings. One undo step; binary legacy Visio requires conversion first.",
-            json!({"path":string,"xml":string,"save_stencils":{"type":"boolean","default":true}}),
+            json!({"path":string,"xml":string,"save_stencils":{"type":"boolean","default":false}}),
             &[],
         ),
         def(
@@ -356,7 +356,8 @@ mod tests {
         assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(), 2);
         let xml = call(&mut e, "export_diagram", json!({}));
         let mut target = project();
-        call(&mut target, "import_diagram", json!({"xml":xml["xml"],"save_stencils":false}));
+        let imported = call(&mut target, "import_diagram", json!({"xml":xml["xml"]}));
+        assert_eq!(imported["stencil_packs"], json!([]));
         assert_eq!(target.page_list().len(), 3);
         target.undo();
         assert_eq!(target.page_list().len(), 1);

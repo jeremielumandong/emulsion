@@ -7,6 +7,9 @@ pub(super) struct Xml {
     pub attrs: BTreeMap<String, String>,
     pub children: Vec<Xml>,
     pub text: String,
+    /// Byte position in the parent’s mixed text, used by Visio cp/pp runs.
+    pub text_offset: usize,
+    pub image_part: Option<String>,
 }
 impl Xml {
     pub fn attr(&self, key: &str) -> &str {
@@ -44,6 +47,7 @@ pub(super) fn parse(text: &str) -> Result<Xml> {
                 }
                 let mut node = Xml {
                     name: e.local_name().as_ref().to_string(),
+                    text_offset: stack.last().unwrap().text.len(),
                     ..Default::default()
                 };
                 for a in e.attributes() {

@@ -447,3 +447,30 @@ fn reopening_classified_paint_uses_paint_and_explicit_photo_import_uses_photo(
         assert!(!editor.has_unsaved_changes());
     });
 }
+
+#[gpui_kit::test]
+fn gallery_blank_document_creates_empty_design_and_diagram(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(32, 24));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1000.)));
+    for (kind, project_kind) in [
+        (CanvasKind::Design, emulsion_core::project::ProjectKind::Design),
+        (CanvasKind::Diagram, emulsion_core::project::ProjectKind::Diagram),
+    ] {
+        cx.update(|window, cx| ws.update(cx, |ws, cx| ws.open_new_canvas_kind(kind, window, cx)));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("new-template-blank", cx));
+        cx.run_until_parked();
+        type_field(cx, "Width", "80");
+        type_field(cx, "Height", "60");
+        cx.update(|window, cx| window.click("new-canvas-create", cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let editor = ws.read(cx).editor.as_ref().unwrap().read(cx);
+            assert_eq!(editor.editor.kind(), Some(project_kind));
+            assert_eq!(editor.editor.page_list().len(), 1);
+            assert!(editor.editor.doc.nodes.iter().all(|node| node.name == "Background"));
+            assert!(editor.editor.doc.diagram.as_ref().is_none_or(|diagram| diagram.shapes.is_empty() && diagram.edges.is_empty()));
+            assert_eq!((editor.editor.doc.width, editor.editor.doc.height), (80, 60));
+        });
+    }
+}

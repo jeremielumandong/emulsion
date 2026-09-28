@@ -1130,8 +1130,11 @@ impl Workspace {
 
     fn splash_view(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let viewport = window.viewport_size();
-        // Fit the entire composition, including its title, without cropping it.
-        let scale = (f32::from(viewport.width) / 1672.).min(f32::from(viewport.height) / 941.);
+        // A classic, compact splash card: preserve the artwork and leave the
+        // workspace visible around it, even when the main window is maximized.
+        let scale = ((f32::from(viewport.width) - 48.).max(1.) / 1672.)
+            .min((f32::from(viewport.height) - 48.).max(1.) / 941.)
+            .min(680. / 1672.);
         let width = 1672. * scale;
         let height = 941. * scale;
         let artwork = self.landing.as_ref().map(|images| {
@@ -1141,11 +1144,11 @@ impl Workspace {
         });
         div()
             .id("splash")
+            .test_support()
             .absolute()
             .top_0()
             .left_0()
             .size_full()
-            .bg(rgb(0x080e13))
             .flex()
             .items_center()
             .justify_center()
@@ -1159,7 +1162,13 @@ impl Workspace {
             )
             .child(
                 div()
+                    .id("splash-card")
+                    .test_support()
                     .relative()
+                    .rounded(px(8.))
+                    .overflow_hidden()
+                    .bg(rgb(0x080e13))
+                    .shadow_2xl()
                     .w(px(width))
                     .h(px(height))
                     .children(artwork)

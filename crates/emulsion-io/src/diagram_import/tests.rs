@@ -231,3 +231,68 @@ fn visio_stencil_suffix_with_drawing_pages_and_themed_cells_imports_natively() {
     assert!(imported.warnings.iter().any(|w| w.contains("instead of masters")));
     std::fs::remove_file(file).unwrap();
 }
+
+#[test]
+fn visio_group_labels_text_frames_and_geometry_visibility_are_preserved() {
+    let xml = r##"<VisioDocument><Pages><Page><PageSheet><PageWidth>5</PageWidth><PageHeight>4</PageHeight></PageSheet><Shapes>
+<Shape ID="1" Type="Group"><Cell N="Width" V="2"/><Cell N="Height" V="1"/><Cell N="PinX" V="2"/><Cell N="PinY" V="2"/>
+<Cell N="TxtWidth" V="1.5"/><Cell N="TxtHeight" V="0.25"/><Cell N="TxtPinX" V="1"/><Cell N="TxtPinY" V="0.8"/><Cell N="TxtLocPinX" V="0.75"/><Cell N="TxtLocPinY" V="0.125"/><Cell N="VerticalAlign" V="0"/>
+<Section N="Character"><Row IX="0"><Cell N="Size" V="0.125"/><Cell N="Style" V="1"/></Row><Row IX="1"><Cell N="Size" V="0.125"/><Cell N="Style" V="0"/></Row></Section>
+<Text><cp IX="0"/>Title <cp IX="1"/>value</Text><Shapes>
+<Shape ID="2"><Cell N="Width" V="2"/><Cell N="Height" V="1"/><Cell N="PinX" V="1"/><Cell N="PinY" V="0.5"/>
+<Section N="Geometry"><Cell N="NoFill" V="1"/><Cell N="NoLine" V="1"/><Row T="RelMoveTo"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row><Row T="RelLineTo"><Cell N="X" V="1"/><Cell N="Y" V="1"/></Row></Section>
+<Section N="Geometry" IX="1"><Cell N="NoFill" V="1"/><Row T="RelMoveTo"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row><Row T="RelLineTo"><Cell N="X" V="1"/><Cell N="Y" V="0"/></Row></Section></Shape>
+<Shape ID="3"><Cell N="Width" V="2"/><Cell N="Height" V="1"/><Text>Text only</Text></Shape>
+</Shapes></Shape></Shapes></Page></Pages></VisioDocument>"##;
+    let imported = visio::from_xml(xml).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    let model = doc.diagram.as_ref().unwrap();
+    let lookup = |key: &str| model.shapes.values().find(|s|s.data.get("import_id").map(String::as_str)==Some(key)).unwrap();
+    let parent = lookup("1"); let child = lookup("2"); let text_only = lookup("3");
+    let index = |id| doc.nodes.iter().position(|n|n.id==id).unwrap();
+    assert!(index(parent.label)>index(child.body));
+    for id in [child.body,text_only.body] {
+        let NodeKind::Path { style,.. } = &doc.node(id).unwrap().kind else { panic!() };
+        assert!(style.fill.is_none() && style.stroke.is_none());
+    }
+    assert!(doc.nodes.iter().any(|n|n.parent==doc.node(child.body).unwrap().parent && matches!(&n.kind,NodeKind::Path{style,..} if style.fill.is_none()&&style.stroke.is_some())));
+    let NodeKind::Text { spec,.. } = &doc.node(parent.label).unwrap().kind else {panic!()};
+    assert!((spec.x-120.).abs()<0.01 && (spec.y-151.2).abs()<0.01, "{spec:?}");
+    assert_eq!(spec.width,Some(144.));
+    assert_eq!(spec.text,"Title value");
+    assert!(spec.bold && !spec.runs[0].style.bold);
+    assert_eq!((spec.runs[0].start,spec.runs[0].end),(6,11));
+    let mut moved=doc.clone();
+    let before=spec.clone();
+    emulsion_core::command::Command::TranslateNode{id:doc.node(parent.body).unwrap().parent.unwrap(),dx:20.,dy:30.}.apply(&mut moved).unwrap();
+    let NodeKind::Text {spec,..}=&moved.node(parent.label).unwrap().kind else{panic!()};
+    assert_eq!((spec.x,spec.y),(before.x+20.,before.y+30.));
+}
+
+#[test]
+fn visio_embedded_master_bitmap_uses_scaled_placement_and_native_clip() {
+    let png = crate::export::png8(2,1,&[255,0,0,255,0,0,255,255]).unwrap();
+    let file = temp("bitmap.vsdx");
+    write_zip(&file,&[
+        ("visio/document.xml",b"<VisioDocument/>"),
+        ("visio/pages/pages.xml",br#"<Pages><Page ID="0"><PageSheet><Cell N="PageWidth" V="2"/><Cell N="PageHeight" V="2"/></PageSheet><Rel r:id="r1"/></Page></Pages>"#),
+        ("visio/pages/_rels/pages.xml.rels",br#"<Relationships><Relationship Id="r1" Target="page1.xml"/></Relationships>"#),
+        ("visio/pages/page1.xml",br#"<PageContents><Shapes><Shape ID="1" Master="0"><Cell N="PinX" V="0.5"/><Cell N="PinY" V="0.5"/><Cell N="Width" V="1"/><Cell N="Height" V="1"/></Shape></Shapes></PageContents>"#),
+        ("visio/masters/masters.xml",br#"<Masters><Master ID="0"><Rel r:id="m1"/></Master></Masters>"#),
+        ("visio/masters/_rels/masters.xml.rels",br#"<Relationships><Relationship Id="m1" Target="master1.xml"/></Relationships>"#),
+        ("visio/masters/master1.xml",br#"<MasterContents><Shapes><Shape ID="10"><Cell N="Width" V="1"/><Cell N="Height" V="1"/><Cell N="ImgWidth" V="2"/><Cell N="ImgHeight" V="1"/><Cell N="ImgOffsetX" V="-0.5"/><ForeignData ForeignType="Bitmap"><Rel r:id="image"/></ForeignData></Shape></Shapes></MasterContents>"#),
+        ("visio/masters/_rels/master1.xml.rels",br#"<Relationships><Relationship Id="image" Target="../media/image.png"/></Relationships>"#),
+        ("visio/media/image.png",&png),
+    ]);
+    let imported = read(&file).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    let node = doc.nodes.iter().find(|n|matches!(n.kind,NodeKind::Raster{..})).unwrap();
+    let NodeKind::Raster{raster,placement}=&node.kind else {panic!()};
+    let matrix = placement.to_doc(raster.width(),raster.height());
+    assert_eq!(matrix.transform_point2(glam::dvec2(1.,0.5)),glam::dvec2(48.,144.));
+    assert!(node.clip_to.is_some());
+    let (svg,fallback)=crate::project_export::svg(doc).unwrap();
+    assert!(!fallback);
+    assert!(String::from_utf8(svg).unwrap().contains("data:image/png;base64,"));
+    std::fs::remove_file(file).unwrap();
+}

@@ -94,7 +94,7 @@ impl EditorView {
             let owner = owner.clone();
             dialog
                 .title("Open diagram link")
-                .width(px(520.))
+                .width(px(680.))
                 .child(Input::new(&input).id("diagram-link-input"))
                 .on_ok(move |_, _, cx| {
                     let text = input.read(cx).value().to_string();
@@ -197,7 +197,7 @@ impl EditorView {
                 } else {
                     "ER entity"
                 })
-                .width(px(520.))
+                .width(px(680.))
                 .child("Name")
                 .child(Input::new(&title).id("diagram-structure-title"))
                 .child("Fields — one per line")
@@ -205,14 +205,14 @@ impl EditorView {
                     div()
                         .id("diagram-structure-fields")
                         .test_support()
-                        .child(Textarea::new(&fields)),
+                        .child(Textarea::new(&fields).h(rems(8.)).flex_shrink_0()),
                 );
             if kind == diagram::ShapeKind::Class {
                 dialog = dialog.child("Methods — one per line").child(
                     div()
                         .id("diagram-structure-methods")
                         .test_support()
-                        .child(Textarea::new(&methods)),
+                        .child(Textarea::new(&methods).h(rems(6.75)).flex_shrink_0()),
                 );
             }
             dialog.on_ok(move |_, _, cx| {
@@ -393,7 +393,7 @@ impl EditorView {
                     div()
                         .id("diagram-comment-input")
                         .test_support()
-                        .child(Textarea::new(&input)),
+                        .child(Textarea::new(&input).h(rems(10.)).flex_shrink_0()),
                 )
                 .on_ok(move |_, _, cx| {
                     let text = input.read(cx).value().to_string();

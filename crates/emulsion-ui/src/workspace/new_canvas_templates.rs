@@ -385,6 +385,22 @@ impl NewCanvas {
                 }
                 menu
             });
+        let blank = Button::new("new-template-blank")
+            .accessibility_label(format!("New blank {} document", self.spec.kind.label()))
+            .outline().w_full().h(px(72.)).p_3().disabled(self.submitted)
+            .child(div().flex().items_center().gap_3().w_full()
+                .child(div().w(px(30.)).h(px(38.)).flex_none().border_1().border_color(p.line).bg(p.paper))
+                .child(div().flex().flex_col().items_start().gap_1()
+                    .child(div().child("Blank document"))
+                    .child(div().text_xs().text_color(p.muted).child("Start empty · choose your canvas size"))))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.templates.enabled = false;
+                this.templates.selected = None;
+                this.notice = None;
+                let name = format!("Untitled {}", this.spec.kind.label().to_lowercase());
+                this.fields[0].update(cx, |field, cx| field.set_value(name, window, cx));
+                cx.notify();
+            }));
         let mut grid = div()
             .id("new-template-grid")
             .test_support()
@@ -482,9 +498,9 @@ impl NewCanvas {
                 );
         } else {
             details = details
-                .child(div().text_lg().child("Start with a template"))
+                .child(div().text_lg().child("How would you like to start?"))
                 .child(div().text_color(p.muted).child(
-                    "Choose a layout to preview it. Its pages, size and content come with it.",
+                    "Start with a blank document, or choose a template to bring its layout and content with you.",
                 ));
         }
         div().id("new-canvas-form").test_support().flex().flex_col().gap_3().text_size(px(12.)).text_color(p.ink)
@@ -497,7 +513,7 @@ impl NewCanvas {
                 .child(div().flex().flex_wrap().gap_4()
                     .child(div().flex_1().min_w(px(240.)).flex().flex_col().gap_3()
                         .child(div().id("new-canvas-search").test_support().child(Input::new(&self.search).small()))
-                        .child(categories).child(grid)
+                        .child(blank).child(categories).child(grid)
                         .when(entries.is_empty(), |d| d.child("No matching templates. Try another search or category."))
                         .when(entries.len() > PAGE, |d| d.child(div().flex().items_center().gap_2()
                             .child(Button::new("new-template-prev").label("Previous").small().disabled(self.templates.page == 0 || self.submitted)

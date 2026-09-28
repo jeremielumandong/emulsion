@@ -14,7 +14,7 @@ pixel-for-pixel compatibility with another application.
 | Selection | Mouse marquee, Ctrl/Shift selection, group/ungroup, graph-aware copy/paste/delete, connected movement, undo/redo |
 | Formatting | Fill/stroke/text color pickers, typography, thin dark default outlines, white/soft teal/soft blue palettes, line patterns, rounded elbows, filled/hollow connector markers, theme application |
 | Library | Shapes, Templates, Containers, Themes and Stencil packs drawers; search; 68 original default stencils, 18 editable templates, nine themes |
-| Diagram objects as stencils | Imported and existing shapes automatically appear in Shapes in this diagram; cached background previews, search and pagination; click/drag reuses editable artwork with fresh IDs and one undo step, excluding connections and container contents |
+| Diagram objects as stencils | Imported and existing shapes automatically appear in the temporary Imported data group; cached background previews, search and pagination; click/drag reuses editable artwork with fresh IDs and one undo step, excluding connections and container contents |
 | Installed stencils | Per-entry vector-generated previews; click or drag an installed entry to the pointer position; a drop is one undo step |
 | Offline vendor packs | AWS, Azure, Google Cloud, Kubernetes, Cisco, network devices, BPMN, flowchart, floor plans, electrical, wireframes and office; all available entries in each family, paginated 96 at a time |
 | Pages/data | Page management and persistence, four layouts, container membership, layout locks, text/CSV/Mermaid/SQL generation, data refresh and conditional fills |
@@ -24,7 +24,7 @@ New process shapes have a white fill, one-pixel charcoal outline, a subtle four-
 
 Right-click an object to arrange, align/distribute, group, lock, copy/paste style, edit annotations or export the selection. Selecting a connector opens its dedicated floating toolbar: routing, color, width, dash patterns, arrowheads, reverse direction, endpoint size, corner radius, crossings and label editing. Corner rounding applies to straight/elbow routes. Crossing bridges also support curved/cyclical routes. Double lines and label backgrounds are native vector artwork, with undo and export support. Connectors can attach to other connectors; branches follow their parent route and dependency cycles are rejected.
 
-The document toolbox is reconstructed from the active page on import/open and after edits. Basic shapes with matching artwork/style share an entry; complex symbols retain individual entries. A container stencil includes its own frame and artwork, excluding the nested diagram. Import also saves deduplicated, editable packs in the persistent library. “Save shapes to library” captures objects from an existing page. Pack generation runs in the background and reports failures without discarding the imported diagram.
+The document toolbox is reconstructed from the active page on import/open and after edits. Basic shapes with matching artwork/style share an entry; complex symbols retain individual entries. A container stencil includes its own frame and artwork, excluding the nested diagram. Ordinary import/open never saves permanent packs. The temporary Imported data group can be collapsed, cleared, and restored without changing the canvas. “Keep as stencil pack” explicitly saves deduplicated objects from the page; Import stencils installs permanent packs. Saved packs are grouped and removable. A cleanup action removes packs collected by earlier versions from the library, retaining source files and placed objects. Pack generation runs in the background and reports failures without discarding the imported diagram.
 
 ## Structured objects and review
 
@@ -213,3 +213,5 @@ A project is limited to 4,096 pages, 10,000 graph shapes and 20,000 connectors p
 page, with 150,000 document nodes. Larger libraries must be split; empty/corrupt files cannot supply
 artwork. The supplied Visio collection includes 701 zero-byte files. Loading a
 file does not imply that its bitmap source imagery becomes vector geometry.
+
+Connector mode accepts any picked position on an object as a relative attachment. The point follows object movement and resizing; the visible midpoint handles remain available as shortcuts.

@@ -147,12 +147,16 @@ struct Shape {
     bounds: [f64; 4],
     text: TextSpec,
     path: Option<VectorPath>,
+    extra_paths: Vec<(VectorPath, PathStyle)>,
+    positioned_text: bool,
+    label_above_children: bool,
     style: PathStyle,
     data: BTreeMap<String, String>,
     parent: Option<String>,
     opacity: f32,
     visible: bool,
     image: Option<Arc<emulsion_raster::Raster>>,
+    image_placement: Option<emulsion_raster::Placement>,
 }
 impl Shape {
     fn new(key: String, kind: ShapeKind, bounds: [f64; 4], text: String) -> Self {
@@ -169,6 +173,9 @@ impl Shape {
                 ..Default::default()
             },
             path: None,
+            extra_paths: Vec::new(),
+            positioned_text: false,
+            label_above_children: false,
             style: PathStyle {
                 fill: Some([255; 4]),
                 stroke: Some([0, 0, 0, 255]),
@@ -180,6 +187,7 @@ impl Shape {
             opacity: 1.,
             visible: true,
             image: None,
+            image_placement: None,
         }
     }
 }
@@ -265,6 +273,7 @@ impl Scene {
             ids.insert(key, group);
             parents.push((group, parent));
         }
+        let mut foreground_labels = Vec::new();
         for s in self.shapes {
             let id = ids[&s.key];
             let shape = model.shapes.get_mut(&id).unwrap();
@@ -288,23 +297,37 @@ impl Scene {
                 unreachable!()
             };
             let mut text = s.text;
-            text.x = s.bounds[0] as f32 + 8.;
-            text.y = (s.bounds[1] + (s.bounds[3] - text.size as f64 * 1.4).max(0.) / 2.) as f32;
-            text.width = Some((s.bounds[2] - 16.).max(1.) as f32);
+            if !s.positioned_text {
+                text.x = s.bounds[0] as f32 + 8.;
+                text.y = (s.bounds[1] + (s.bounds[3] - text.size as f64 * 1.4).max(0.) / 2.) as f32;
+                text.width = Some((s.bounds[2] - 16.).max(1.) as f32);
+            }
             *spec = Arc::new(text);
             *cache = VectorRaster::text(spec.clone(), self.width, self.height);
+            if s.label_above_children { foreground_labels.push(shape.label); }
+            for (path, style) in s.extra_paths {
+                let path_id = doc.alloc_id();
+                let path = Arc::new(path);
+                let mut node = Node::new(path_id, "Visio geometry", NodeKind::Path {
+                    path: path.clone(), style,
+                    cache: VectorRaster::path(path, style, self.width, self.height),
+                });
+                node.parent = Some(id);
+                let label_index = doc.nodes.iter().position(|n| n.id == shape.label).unwrap();
+                doc.nodes.insert(label_index, node);
+            }
             if let Some(image) = s.image {
                 let image_id = doc.alloc_id();
                 let [x, y, w, h] = s.bounds;
                 let sx = w / image.width() as f64;
                 let sy = h / image.height() as f64;
-                let placement = emulsion_raster::Placement {
-                    x: x - (image.width() as f64 - w) / 2.,
-                    y: y - (image.height() as f64 - h) / 2.,
+                let placement = s.image_placement.unwrap_or(emulsion_raster::Placement {
+                    x,
+                    y,
                     scale_x: sx,
                     scale_y: sy,
                     ..Default::default()
-                };
+                });
                 let mut node = Node::raster(image_id, "Embedded image", image, placement);
                 node.parent = Some(id);
                 node.clip_to = Some(shape.body);
@@ -350,6 +373,12 @@ impl Scene {
                 current = parents.get(&id).copied().flatten();
             }
         }
+        // A Visio group paints its own text after its child artwork. Preserve
+        // sibling order for everything else, including labels in nested groups.
+        let labels = foreground_labels.into_iter().collect::<HashSet<_>>();
+        let (mut nodes, mut text): (Vec<_>, Vec<_>) = doc.nodes.drain(..).partition(|n| !labels.contains(&n.id));
+        nodes.append(&mut text);
+        doc.nodes = nodes;
         doc.normalize();
         doc.diagram = Some(Arc::new(model));
         diagram::synchronize(&Document::new(self.width, self.height), &mut doc).map_err(error)?;

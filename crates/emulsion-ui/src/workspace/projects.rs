@@ -52,10 +52,6 @@ impl Workspace {
                                     } else {
                                         "Imported editable project. Save as an Emulsion project to retain all page history.".into()
                                     };
-                                    if e.editor.kind()==Some(emulsion_core::project::ProjectKind::Diagram) && !is_pack {
-                                        let pages=e.editor.page_list().iter().map(|p|p.id).collect::<Vec<_>>();
-                                        e.save_imported_stencils(&pages,cx);
-                                    }
                                     e.diagram_import_notes(warnings.clone());
                                     e.set_status(message, !warnings.is_empty(), cx);
                                 });

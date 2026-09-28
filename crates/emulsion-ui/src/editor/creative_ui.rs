@@ -247,7 +247,7 @@ impl EditorView {
         })
         .detach();
     }
-    fn asset_properties(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn asset_properties(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(asset) = self
             .creative
             .catalog

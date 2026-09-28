@@ -8,7 +8,7 @@ use emulsion_core::{
     command::Alignment,
     layer_links::{Arrange, ArrangeTarget, Distribution},
 };
-use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::{menu::PopupMenu, input::{Textarea, TextareaState}};
 
 pub(super) use emulsion_core::diagram::ObjectStyle;
 
@@ -172,7 +172,7 @@ impl EditorView {
             return;
         };
         let value = shape.data.get(key).cloned().unwrap_or_default();
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+        let input = cx.new(|cx| TextareaState::new(window, cx).rows(8).default_value(value));
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
         window.open_dialog(cx, move |dialog, _, _| {
@@ -180,8 +180,10 @@ impl EditorView {
             let owner = owner.clone();
             dialog
                 .title(title)
-                .width(px(440.))
-                .child(Input::new(&input).id("diagram-object-detail-input"))
+                .width(px(720.))
+                .child(div().id("diagram-object-detail-input").test_support().flex_shrink_0()
+                    .child(Textarea::new(&input).h(rems(12.)).aria_label(title)))
+                .footer(crate::widgets::form_dialog_footer("Save"))
                 .on_ok(move |_, _, cx| {
                     let value = input_ok.read(cx).value().to_string();
                     owner

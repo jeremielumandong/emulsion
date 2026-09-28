@@ -47,3 +47,39 @@ The full shared workspace release build and AppImage packaging succeeded.
 Artifact: `target/appimage/Emulsion-0.0.3-x86_64.AppImage`. Installation was
 attempted, but the installer stopped because the installed Emulsion was still
 running. The running session was left intact.
+
+## Follow-up: compact splash and empty documents
+
+The startup artwork now appears as a centered card up to 680 pixels wide, with
+Home visible around it and 24-pixel margins on small windows. It preserves the
+artwork's aspect ratio and existing timer/click/key dismissal; it does not change
+the native editor window's bounds.
+
+Design and Diagram galleries also offer a visible Blank document card above the
+template choices. It opens the existing blank-canvas setup, clears the selected
+template/name, and creates an empty page project of the chosen kind. The existing
+Blank canvas toolbar option remains available.
+
+Three focused interaction tests passed: splash geometry/dismissal, empty Design
+and Diagram creation, and the existing template creation flow.
+
+## Compact Recent history
+
+Recent opens newest-first with at most 12 files from the last 14 days. Work
+opened 14–29 days ago and work opened at least 30 days ago appear in separate,
+collapsed sections. Each expanded section has its own 12-file page controls.
+No entries are deleted or removed from their projects. Search, project folders,
+type filters, pinned/unfinished views, Trash, and name sorting retain the full
+filtered collection with its existing 48-file pagination. Choosing Recent in
+the sidebar restores chronological order.
+
+Collapsed age sections create no cards or thumbnail requests; all three open
+sections together render at most 36 cards. Existing bounded thumbnail workers
+and cache remain in use. Card footers show a compact sync status icon with an
+accessible provider/status description. Clicking it opens sync actions; the
+file context menu also offers connection, upload, pause/resume, and history as
+appropriate. Full sync controls remain in file details.
+
+Regression coverage checks exact 14/30-day boundaries, reverse input ordering,
+12-file page transitions, collapsed preview loading, searching older files,
+and cloud actions with unsaved work.
