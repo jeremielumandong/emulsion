@@ -1401,6 +1401,8 @@ impl Workspace {
                             e.name = stem(&path);
                             e.source = Some(path.clone());
                         }
+                        // A native Save As makes a source tab an independent document.
+                        if !sidecar { e.smart.source_session = None; }
                         if (multipage && e.editor.stamp() == stamp)
                             || (!multipage && e.editor.revision == rev)
                         {

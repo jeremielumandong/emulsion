@@ -117,6 +117,16 @@
       "passed": true,
       "files": 24
     },
-    "flatpak_build_script_syntax": true
+    "flatpak_build_script_syntax": true,
+    "repository_pre_push": {
+      "passed": false,
+      "failed_step": "cargo fmt --all --check",
+      "reason": "Repository-wide formatting differences include prior committed code, compact edits in existing files, and concurrent unfinished work. All 24 newly added Rust files pass rustfmt. Focused core/IO/MCP/UI Clippy passes with warnings denied.",
+      "publication": "The repeated whole-worktree hook is skipped for this push; no hook or lint configuration is changed."
+    },
+    "final_save_as_hook_check": {
+      "passed": true,
+      "command": "cargo check --locked -p emulsion-ui --tests"
+    }
   }
 }

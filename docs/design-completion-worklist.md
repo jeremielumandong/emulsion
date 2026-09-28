@@ -92,3 +92,5 @@ These changes are separate from the previous AppImage listed above. Current sour
 validation is recorded in [interchange results](design-interchange-results.json); format boundaries are recorded in the associated feature documents.
 
 Current batch: 311 core, 260 IO, 194 MCP and 16 focused native UI tests passed (one core test intentionally ignored). Clippy passed with warnings denied for core/IO/MCP/UI library and test targets. Independent LibreOffice and official Lottie-player checks passed; the shared GNOME Flatpak runtime passed H.264 and YouTube playback checks.
+
+The whole-worktree pre-push formatting check remains failing on existing and concurrent formatting differences. New Rust files and focused Clippy pass; publication skips only the repeated local hook without changing its configuration. See the recorded acceptance boundaries.
