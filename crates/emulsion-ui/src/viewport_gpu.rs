@@ -65,6 +65,7 @@ pub enum Status {
         revision: u64,
         generation: Option<u64>,
         retry_at: Option<std::time::Instant>,
+        previous: Option<Box<PreviousFrame>>,
     },
 }
 
@@ -109,16 +110,6 @@ impl Status {
         }
     }
 
-    fn refuse(&mut self, reason: String, revision: u64, transient: bool) {
-        *self = Self::Refused {
-            reason,
-            revision,
-            generation: device_generation(),
-            retry_at: transient
-                .then(|| std::time::Instant::now() + std::time::Duration::from_secs(2)),
-        };
-    }
-
     pub fn defers_to_gpu(&self, view: &View, revision: u64) -> bool {
         enabled()
             && view.rotation.rem_euclid(360.0) == 0.0
@@ -145,10 +136,10 @@ impl Status {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub use hosted::{Canvas, paint};
+pub use hosted::{Canvas, PreviousFrame, paint, paint_previous};
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub use unhosted::{Canvas, paint};
+pub use unhosted::{Canvas, PreviousFrame, paint, paint_previous};
 
 /// No GPUI hosting backend on this platform; [`enabled`] is already false.
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -156,6 +147,18 @@ mod unhosted {
     use super::{Status, View};
 
     pub enum Canvas {}
+    pub enum PreviousFrame {}
+
+    pub fn paint_previous(
+        _: &mut Status,
+        _: &View,
+        _: gpui_kit::Bounds<gpui_kit::Pixels>,
+        _: Option<u64>,
+        _: Option<u64>,
+        _: &mut gpui_kit::Window,
+    ) -> bool {
+        false
+    }
 
     impl Status {
         pub(crate) fn begin_brush(
@@ -221,6 +224,25 @@ mod hosted {
         target: backend::Target,
         /// Document revision the program and atlas were compiled at.
         revision: u64,
+        last_frame: Option<(View, (u32, u32))>,
+    }
+
+    /// Retain just the presented texture while CPU tiles arrive, not the engine/atlas.
+    pub struct PreviousFrame {
+        gpu: Arc<Gpu>,
+        target: backend::Target,
+        view: View,
+        document_size: (u32, u32),
+        cpu_revision: Option<u64>,
+    }
+
+    impl PreviousFrame {
+        fn covered(&mut self, requested: u64, oldest: Option<u64>) -> bool {
+            // Progress may finish a few drag revisions behind the pointer. A
+            // complete CPU frame newer than this handoff is enough to resume it.
+            let first = *self.cpu_revision.get_or_insert(requested);
+            oldest.is_some_and(|revision| revision >= first)
+        }
     }
 
     impl Canvas {
@@ -241,6 +263,7 @@ mod hosted {
                 engine,
                 target,
                 revision,
+                last_frame: None,
             })
         }
 
@@ -254,6 +277,38 @@ mod hosted {
     }
 
     impl Status {
+        fn refuse(&mut self, reason: String, revision: u64, transient: bool) {
+            let previous = match std::mem::take(self) {
+                Self::Active(canvas) if !transient && !canvas.gpu.is_lost() => {
+                    let Canvas {
+                        gpu,
+                        target,
+                        last_frame,
+                        ..
+                    } = *canvas;
+                    last_frame.map(|(view, document_size)| {
+                        Box::new(PreviousFrame {
+                            gpu,
+                            target,
+                            view,
+                            document_size,
+                            cpu_revision: None,
+                        })
+                    })
+                }
+                Self::Refused { previous, .. } => previous,
+                _ => None,
+            };
+            *self = Self::Refused {
+                reason,
+                revision,
+                previous,
+                generation: super::device_generation(),
+                retry_at: transient
+                    .then(|| std::time::Instant::now() + std::time::Duration::from_secs(2)),
+            };
+        }
+
         pub(crate) fn begin_brush(
             &mut self,
             doc: &Document,
@@ -367,8 +422,8 @@ mod hosted {
     }
 
     /// Render the document into the scene. Returns false when the caller must
-    /// fall back to the CPU tile path; `status` is left `Refused` in that case,
-    /// so it only costs one frame.
+    /// paint the CPU fallback in the same frame. A retained successful target
+    /// bridges the handoff while the first replacement CPU tiles are prepared.
     pub fn paint(
         status: &mut Status,
         doc: &Document,
@@ -380,9 +435,7 @@ mod hosted {
         if !status.defers_to_gpu(view, revision) {
             return false;
         }
-        if matches!(status, Status::Refused { .. })
-            || matches!(status, Status::Active(canvas) if canvas.gpu.is_lost())
-        {
+        if matches!(status, Status::Active(canvas) if canvas.gpu.is_lost()) {
             *status = Status::Untried;
         }
         let scale = window.scale_factor();
@@ -422,12 +475,18 @@ mod hosted {
                 }
                 Err(err) => {
                     tracing::info!("gpu canvas reload failed, rebuilding: {err:#}");
-                    *status = Status::Untried;
+                    // A larger inserted picture can exhaust the old atlas. Keep
+                    // its last frame if rebuilding also needs a CPU fallback.
+                    status.refuse(
+                        format!("GPU canvas reload failed: {err:#}"),
+                        revision,
+                        false,
+                    );
                 }
             }
         }
 
-        if matches!(status, Status::Untried) {
+        if matches!(status, Status::Untried | Status::Refused { .. }) {
             match Canvas::build(doc, size, revision) {
                 Ok(canvas) => {
                     tracing::info!(
@@ -507,26 +566,259 @@ mod hosted {
             status.refuse("Graphics device is recovering.".into(), revision, true);
             return false;
         }
-        // The shared engine includes its benchmark stage outside the document.
-        // Keep that area owned by GPUI so dark/light/external themes match the
-        // CPU canvas. The hosted GPU path only accepts unrotated views.
+        canvas.last_frame = Some((*view, (doc.width, doc.height)));
+        paint_target(
+            &canvas.target,
+            *view,
+            (doc.width, doc.height),
+            bounds,
+            window,
+        );
+        true
+    }
+
+    /// Fill holes during a GPU-to-CPU handoff with the last successful frame.
+    /// Cached CPU tiles replace it immediately, and release it once coverage is complete.
+    pub fn paint_previous(
+        status: &mut Status,
+        view: &View,
+        bounds: Bounds<Pixels>,
+        covered_revision: Option<u64>,
+        requested_revision: Option<u64>,
+        window: &mut Window,
+    ) -> bool {
+        let Status::Refused {
+            previous,
+            generation,
+            ..
+        } = status
+        else {
+            return false;
+        };
+        let scale = window.scale_factor();
+        let size = (
+            ((f32::from(bounds.size.width) * scale).round() as u32).max(1),
+            ((f32::from(bounds.size.height) * scale).round() as u32).max(1),
+        );
+        if requested_revision.is_none()
+            || previous
+                .as_mut()
+                .is_some_and(|frame| frame.covered(requested_revision.unwrap(), covered_revision))
+            || *generation != super::device_generation()
+            || previous.as_ref().is_some_and(|frame| {
+                frame.gpu.is_lost() || frame.view != *view || frame.target.size != size
+            })
+        {
+            *previous = None;
+        }
+        if let Some(frame) = previous {
+            paint_target(
+                &frame.target,
+                frame.view,
+                frame.document_size,
+                bounds,
+                window,
+            );
+            return true;
+        }
+        false
+    }
+
+    fn paint_target(
+        target: &backend::Target,
+        view: View,
+        document_size: (u32, u32),
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+    ) {
+        // The engine's benchmark stage must never replace the editor's theme.
         let origin = view.doc_to_screen((0., 0.), &bounds);
-        let document = gpui_kit::Bounds::new(
-            gpui_kit::point(gpui_kit::px(origin.0 as f32), gpui_kit::px(origin.1 as f32)),
-            gpui_kit::size(
-                gpui_kit::px((doc.width as f64 * view.zoom) as f32),
-                gpui_kit::px((doc.height as f64 * view.zoom) as f32),
+        let document = Bounds::new(
+            point(px(origin.0 as f32), px(origin.1 as f32)),
+            size(
+                px((document_size.0 as f64 * view.zoom) as f32),
+                px((document_size.1 as f64 * view.zoom) as f32),
             ),
         );
         window.with_content_mask(
-            Some(gpui_kit::ContentMask {
+            Some(ContentMask {
                 bounds: document.intersect(&bounds),
             }),
-            |window| {
-                canvas.target.paint(window, bounds);
-            },
+            |window| target.paint(window, bounds),
         );
-        true
+    }
+    #[cfg(test)]
+    mod gpu_handoff_tests {
+        use super::{
+            Arc, Camera, Canvas, Document, Engine, Gpu, Output, Status, VectorSpace, View, backend,
+        };
+
+        #[test]
+        #[ignore = "Requires a host GPU; run serially"]
+        fn picture_edit_keeps_last_gpu_target_across_fallback_retries() {
+            use emulsion_core::{Command, Node, command::Slot};
+            use emulsion_raster::{BlendMode, Placement, Raster};
+            let gpu = Gpu::new(emulsion_engine::gpu::instance(), None, None)
+                .expect("host GPU required for canvas handoff regression");
+            let mut doc = Document::new(64, 64);
+            Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "Background",
+                    Arc::new(Raster::solid(64, 64, [0., 0., 1., 1.])),
+                    Placement::default(),
+                )),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &doc,
+                None,
+                VectorSpace::Srgb,
+                true,
+                true,
+                (64, 64),
+            )
+            .unwrap();
+            assert!(engine.canvas.unsupported.is_empty());
+            engine.camera = Camera {
+                center: [32., 32.],
+                zoom: 1.,
+            };
+            let output =
+                emulsion_engine::Offscreen::new(&gpu, (64, 64), wgpu::TextureFormat::Rgba8Unorm);
+            engine
+                .render(&output.view, output.format, Output::Raw)
+                .unwrap();
+            let backdrop = output.read(&gpu).unwrap();
+            let picture = Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "Picture",
+                    Arc::new(Raster::solid(32, 32, [1., 0., 0., 1.])),
+                    Placement::default(),
+                )),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap()
+            .unwrap();
+            // Insertion, pixel replacement and continuous movement must keep
+            // the unchanged background and current picture on every GPU frame.
+            for step in 0..6 {
+                let color = if step % 2 == 0 {
+                    [1., 0., 0., 1.]
+                } else {
+                    [0., 1., 0., 1.]
+                };
+                let emulsion_core::NodeKind::Raster { raster, .. } =
+                    &mut doc.nodes.iter_mut().find(|n| n.id == picture).unwrap().kind
+                else {
+                    unreachable!()
+                };
+                *raster = Arc::new(Raster::solid(32, 32, color));
+                Command::TranslateNode {
+                    id: picture,
+                    dx: 2.,
+                    dy: 0.,
+                }
+                .apply(&mut doc)
+                .unwrap();
+                engine.reload(&doc, None, true).unwrap();
+                engine
+                    .render(&output.view, output.format, Output::Raw)
+                    .unwrap();
+                let pixels = output.read(&gpu).unwrap();
+                let corner = (63 * 64 + 63) * 4;
+                assert_eq!(
+                    &pixels[corner..corner + 4],
+                    &backdrop[corner..corner + 4],
+                    "background changed during picture edit {step}"
+                );
+                let center = (20 * 64 + 20) * 4;
+                let expected = if step % 2 == 0 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 255, 0, 255]
+                };
+                assert_eq!(
+                    &pixels[center..center + 4],
+                    &expected,
+                    "picture update missing at {step}"
+                );
+            }
+            let mut target = backend::Target::new(&gpu, (64, 64)).unwrap();
+            engine
+                .render(&target.acquire(), backend::FORMAT, Output::Encoded)
+                .unwrap();
+            gpu.wait();
+            let view = View {
+                center: (32., 32.),
+                zoom: 1.,
+                rotation: 0.,
+            };
+            let mut canvas = Canvas {
+                gpu,
+                engine,
+                target,
+                revision: 1,
+                live_brush: None,
+                last_frame: Some((view, (64, 64))),
+            };
+            // A real unsupported appearance on an inserted picture triggers the
+            // same reload refusal as the hosted editor, with a successful image
+            // already on the target. The old refusal discarded that target.
+            doc.nodes
+                .iter_mut()
+                .find(|n| n.id == picture)
+                .unwrap()
+                .blend = BlendMode::Dissolve;
+            canvas.engine.reload(&doc, None, true).unwrap();
+            assert!(!canvas.engine.canvas.unsupported.is_empty());
+            let mut status = Status::Active(Box::new(canvas));
+            status.refuse("picture blending requires CPU".into(), 2, false);
+            let frame = match &status {
+                Status::Refused {
+                    previous: Some(previous),
+                    ..
+                } => {
+                    assert_eq!(previous.view, view);
+                    assert_eq!(previous.document_size, (64, 64));
+                    assert_eq!(previous.target.size, (64, 64));
+                    std::ptr::from_ref(previous.as_ref())
+                }
+                _ => panic!("GPU-to-CPU handoff dropped the last presented picture"),
+            };
+            for revision in 3..8 {
+                status.refuse("picture blending requires CPU".into(), revision, false);
+                let Status::Refused {
+                    previous: Some(previous),
+                    ..
+                } = &status
+                else {
+                    panic!("a drag retry discarded the picture before CPU tiles arrived");
+                };
+                assert_eq!(std::ptr::from_ref(previous.as_ref()), frame);
+            }
+            let Status::Refused {
+                previous: Some(previous),
+                ..
+            } = &mut status
+            else {
+                unreachable!()
+            };
+            assert!(!previous.covered(10, None));
+            assert!(
+                !previous.covered(11, Some(9)),
+                "old cached tiles would flash an obsolete picture"
+            );
+            assert!(
+                previous.covered(12, Some(10)),
+                "completed CPU progress must take over during a continuous drag"
+            );
+        }
     }
 }
 
@@ -543,6 +835,7 @@ mod tests {
             revision: 7,
             generation: Some(1),
             retry_at: None,
+            previous: None,
         };
         assert!(!status.retry_due(7, Some(1), now + Duration::from_secs(10)));
         assert!(status.retry_due(8, Some(1), now));
@@ -557,6 +850,7 @@ mod tests {
             revision: 7,
             generation: None,
             retry_at: Some(now + Duration::from_secs(2)),
+            previous: None,
         };
         assert!(!status.retry_due(7, None, now));
         assert!(!status.retry_due(8, None, now));

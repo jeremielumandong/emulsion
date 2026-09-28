@@ -438,6 +438,7 @@ pub struct Draw {
 pub struct Plan {
     draws: Vec<Draw>,
     images: bool,
+    covered_revision: Option<u64>,
 
     doc_rect: Option<Bounds<Pixels>>,
     grid: Option<GridSpec>,
@@ -664,9 +665,25 @@ pub fn prepaint(
         step: view.zoom,
         bounds: doc_rect.unwrap_or(canvas).intersect(&canvas),
     });
+    let covered_revision = images
+        .then(|| {
+            tiles.iter().try_fold(u64::MAX, |oldest, &(x, y)| {
+                cache
+                    .entries
+                    .get(&Key {
+                        which: Which::Current,
+                        level,
+                        x,
+                        y,
+                    })
+                    .map(|entry| oldest.min(entry.rev))
+            })
+        })
+        .flatten();
     Plan {
         draws,
         images,
+        covered_revision,
         doc_rect,
         grid,
         wipe_x,
@@ -835,6 +852,21 @@ impl Plan {
     /// Whether this plan composes the document's pixels. A plan built with
     /// `images = false` carries only chrome, for a renderer that draws the
     /// document itself.
+    /// Reuse resident (including stale) tiles on the very frame an external
+    /// renderer fails. Deferring this plan until the next frame flashes the stage.
+    pub fn cpu_fallback(self, scene: &Scene, cache: &mut TileCache, scale: f32) -> Self {
+        if self.images {
+            self
+        } else {
+            prepaint(scene, cache, self.bounds, scale, true)
+        }
+    }
+
+    /// Oldest resident revision covering the whole current view, or None if any tile is missing.
+    pub fn covered_revision(&self) -> Option<u64> {
+        self.covered_revision
+    }
+
     pub fn composes_images(&self) -> bool {
         // Missing or offscreen CPU tiles do not turn a CPU plan into a GPU
         // plan: retrying the GPU then would schedule endless fallback frames.
@@ -935,17 +967,22 @@ pub fn paint(
     cache: &Rc<RefCell<TileCache>>,
     window: &mut Window,
     cx: &mut App,
+    underlay: impl FnOnce(&mut Window) -> bool,
 ) {
     paint_under(&plan, scene, window);
-    for d in &plan.draws {
-        let _ = window.paint_image(
-            d.bounds,
-            d.image_bounds,
-            Corners::default(),
-            d.image.clone(),
-            0,
-            false,
-        );
+    // A retained external frame is newer than the old CPU cache. Keep it whole
+    // until a complete replacement has arrived, rather than overlaying stale tiles.
+    if !underlay(window) {
+        for d in &plan.draws {
+            let _ = window.paint_image(
+                d.bounds,
+                d.image_bounds,
+                Corners::default(),
+                d.image.clone(),
+                0,
+                false,
+            );
+        }
     }
     paint_over(&plan, scene, window, cx);
     for img in cache.borrow_mut().to_drop.drain(..) {
@@ -1269,6 +1306,128 @@ mod tests {
             cache.poll_settle_wakeup(std::time::Instant::now()),
             SettleWakeup::Cancel
         ));
+    }
+
+    #[test]
+    fn refused_frames_keep_resident_artwork_through_picture_edits_and_drags() {
+        use super::{Key, Which, bgra_image};
+        use std::sync::Arc;
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(128.), px(128.)));
+        let mut scene = Scene {
+            view: View {
+                center: (64., 64.),
+                zoom: 1.,
+                rotation: 0.,
+            },
+            doc_size: (128, 128),
+            max_level: 7,
+            rev: 1,
+            before: None,
+            raw_compare: false,
+            stage: Default::default(),
+            ink: Default::default(),
+            accent: Default::default(),
+            rulers: false,
+            ruler_settings: Default::default(),
+            resolution: 72.,
+            diagram_grid: false,
+        };
+        let key = Key {
+            which: Which::Current,
+            level: 0,
+            x: 0,
+            y: 0,
+        };
+        let mut cache = TileCache::default();
+        let mut shown = Arc::new(bgra_image(256, 256, [0, 128, 255, 255].repeat(256 * 256)));
+        cache.insert(key, scene.rev, shown.clone());
+        for revision in 2..=12 {
+            scene.rev = revision;
+            // Every document edit retries the GPU. The old path painted only
+            // chrome on refusal, even though this valid cached image existed.
+            let trial = prepaint(&scene, &mut cache, bounds, 1., false);
+            assert!(trial.draws.is_empty());
+            let fallback = trial.cpu_fallback(&scene, &mut cache, 1.);
+            assert!(fallback.composes_images());
+            assert_eq!(fallback.covered_revision(), Some(revision - 1));
+            assert_eq!(fallback.draws.len(), 1);
+            assert!(Arc::ptr_eq(&fallback.draws[0].image, &shown));
+            let requests = cache.take_batch(revision, None);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].rev, revision);
+            // A completed insertion/edit replaces the resident picture; later
+            // drags must retain this new image rather than an older snapshot.
+            shown = Arc::new(bgra_image(
+                256,
+                256,
+                [revision as u8, 0, 255, 255].repeat(256 * 256),
+            ));
+            cache.insert(key, revision, shown.clone());
+            let fresh = prepaint(&scene, &mut cache, bounds, 1., true);
+            assert!(Arc::ptr_eq(&fresh.draws[0].image, &shown));
+            assert!(cache.queue.is_empty());
+        }
+    }
+
+    #[test]
+    fn fallback_retains_gpu_underlay_until_all_visible_cpu_tiles_exist() {
+        use super::{Key, Which, bgra_image};
+        use std::sync::Arc;
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(512.), px(256.)));
+        let scene = Scene {
+            view: View {
+                center: (256., 128.),
+                zoom: 1.,
+                rotation: 0.,
+            },
+            doc_size: (512, 256),
+            max_level: 9,
+            rev: 4,
+            before: None,
+            raw_compare: false,
+            stage: Default::default(),
+            ink: Default::default(),
+            accent: Default::default(),
+            rulers: false,
+            ruler_settings: Default::default(),
+            resolution: 72.,
+            diagram_grid: false,
+        };
+        let mut cache = TileCache::default();
+        let cold =
+            prepaint(&scene, &mut cache, bounds, 1., false).cpu_fallback(&scene, &mut cache, 1.);
+        assert_eq!(cold.covered_revision(), None);
+        assert_eq!(cache.take_batch(scene.rev, None).len(), 2);
+        let image = Arc::new(bgra_image(256, 256, [255, 255, 255, 255].repeat(256 * 256)));
+        cache.insert(
+            Key {
+                which: Which::Current,
+                level: 0,
+                x: 0,
+                y: 0,
+            },
+            4,
+            image.clone(),
+        );
+        let partial = prepaint(&scene, &mut cache, bounds, 1., true);
+        assert!(
+            partial.covered_revision().is_none(),
+            "one tile must not release the full-frame underlay"
+        );
+        assert_eq!(partial.draws.len(), 1);
+        cache.insert(
+            Key {
+                which: Which::Current,
+                level: 0,
+                x: 1,
+                y: 0,
+            },
+            4,
+            image,
+        );
+        let ready = prepaint(&scene, &mut cache, bounds, 1., true);
+        assert_eq!(ready.covered_revision(), Some(4));
+        assert_eq!(ready.draws.len(), 2);
     }
 
     #[test]

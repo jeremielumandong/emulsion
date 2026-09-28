@@ -2890,28 +2890,27 @@ impl EditorView {
                     },
                     move |bounds, plan, window, cx| {
                         if let Some(plan) = plan {
-                            if !plan.composes_images()
+                            let external = !plan.composes_images();
+                            let drawn = if external
                                 && svg_enabled
                                 && svg_canvas2.borrow().displayable(svg_key)
                             {
                                 viewport::paint_under(&plan, &scene2, window);
-                                if !svg_canvas2.borrow_mut().paint(
+                                let drawn = svg_canvas2.borrow_mut().paint(
                                     svg_key,
                                     &view_for_overlay,
                                     bounds,
                                     window,
-                                ) {
+                                );
+                                if !drawn {
                                     svg_canvas2.borrow_mut().scene = None;
-                                    let again = w2.clone();
-                                    cx.defer(move |cx| {
-                                        again.update(cx, |_, cx| cx.notify()).ok();
-                                    });
                                 }
-                                viewport::paint_over(&plan, &scene2, window, cx);
-                            } else if !plan.composes_images() && crate::viewport_gpu::enabled() {
-                                // The engine draws the document, between the
-                                // chrome that sits under it and the chrome
-                                // that sits over it.
+                                #[cfg(feature = "canvas-bench")]
+                                if drawn {
+                                    canvas_benchmark::painted("svg", cx);
+                                }
+                                drawn
+                            } else if external && crate::viewport_gpu::enabled() {
                                 viewport::paint_under(&plan, &scene2, window);
                                 let drawn = crate::viewport_gpu::paint(
                                     &mut gpu_canvas2.borrow_mut(),
@@ -2921,20 +2920,46 @@ impl EditorView {
                                     bounds,
                                     window,
                                 );
-                                viewport::paint_over(&plan, &scene2, window, cx);
                                 #[cfg(feature = "canvas-bench")]
                                 if drawn {
                                     canvas_benchmark::painted("gpu", cx);
                                 }
-                                if !drawn {
-                                    // It refused; come back on the tile path.
+                                drawn
+                            } else {
+                                false
+                            };
+                            if drawn {
+                                viewport::paint_over(&plan, &scene2, window, cx);
+                            } else {
+                                // A refused GPU/SVG frame must still paint resident artwork.
+                                // Re-plan now, rather than showing only the stage until next frame.
+                                let plan = plan.cpu_fallback(
+                                    &scene2,
+                                    &mut cache2.borrow_mut(),
+                                    window.scale_factor(),
+                                );
+                                let covered_revision = plan.covered_revision();
+                                viewport::paint(plan, &scene2, &cache2, window, cx, |window| {
+                                    crate::viewport_gpu::paint_previous(
+                                        &mut gpu_canvas2.borrow_mut(),
+                                        &gpu_view,
+                                        bounds,
+                                        covered_revision,
+                                        scene2.before.is_none().then_some(scene2.rev),
+                                        window,
+                                    )
+                                });
+                                if external {
                                     let again = w2.clone();
                                     cx.defer(move |cx| {
-                                        again.update(cx, |_, cx| cx.notify()).ok();
+                                        again
+                                            .update(cx, |this, cx| {
+                                                this.dispatch_render(cx);
+                                                this.notify_canvas(cx);
+                                            })
+                                            .ok();
                                     });
                                 }
-                            } else {
-                                viewport::paint(plan, &scene2, &cache2, window, cx);
                                 #[cfg(feature = "canvas-bench")]
                                 if !cache2.borrow().in_flight
                                     && cache2.borrow().pending_request_count() == 0
