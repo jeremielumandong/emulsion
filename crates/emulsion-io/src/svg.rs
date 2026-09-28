@@ -372,12 +372,7 @@ const RASTER_MAX_SIDE: f32 = 8192.0;
 /// least `RASTER_MIN_SIDE` and at most `RASTER_MAX_SIDE`.
 pub fn rasterize(text: &str) -> Result<Raster> {
     use resvg::usvg;
-    let mut fonts = usvg::fontdb::Database::new();
-    fonts.load_system_fonts();
-    let opt = usvg::Options {
-        fontdb: Arc::new(fonts),
-        ..Default::default()
-    };
+    let opt = crate::svg_vectors::options();
     let tree =
         usvg::Tree::from_str(text, &opt).map_err(|e| IoError::Unsupported(format!("SVG: {e}")))?;
     let size = tree.size();

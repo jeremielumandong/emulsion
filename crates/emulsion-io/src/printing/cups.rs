@@ -399,6 +399,9 @@ fn job_options<'a>(a: &'a Api, c: &Connection<'_>, s: &Settings) -> Result<Optio
             "multiple-document-handling",
             "separate-documents-collated-copies",
         )?;
+        if s.production.enabled() {
+            options.add("cm-calibration", "true")?;
+        }
         options.add("print-scaling", "none")?;
         options.add("number-up", "1")?;
         options.add("orientation-requested", if s.landscape { "4" } else { "3" })?;

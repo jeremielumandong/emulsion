@@ -51,8 +51,8 @@ defaults are isolated by normalized make/model and are not keyed by extension.
 
 ## Current limits
 
-- The working document is bounded linear sRGB; there is no wide-gamut RAW
-  working storage.
+- Photo working documents remain bounded linear sRGB. Library has an opt-in
+  linear-ProPhoto RAW development/export path; see [Library and Develop](library-develop.md).
 - Saturated-channel highlight reconstruction is not implemented.
 - The editor has no dedicated filmstrip or live group editing.
 - XMP sidecar interoperability and DNG writing are not implemented.

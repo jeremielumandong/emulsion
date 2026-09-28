@@ -129,7 +129,7 @@ fn label(value: &str) -> bool {
 impl Catalog {
     pub fn validate(&self) -> Result<()> {
         if self.version != 1
-            || self.assets.len() > 10_000
+            || self.assets.len() > 100_000
             || self.brands.len() > 100
             || self.collections.len() > 500
             || self.projects.len() > 20_000
@@ -214,13 +214,14 @@ impl Catalog {
                 return Err(error("Invalid brand kit or logo references."));
             }
         }
+        let asset_ids:HashSet<_>=self.assets.iter().map(|a|a.id).collect();
         for collection in &self.collections {
             if !label(&collection.name)
-                || collection.assets.len() > 10_000
+                || collection.assets.len() > 100_000
                 || collection
                     .assets
                     .iter()
-                    .any(|id| !self.assets.iter().any(|a| a.id == *id))
+                    .any(|id| !asset_ids.contains(id))
             {
                 return Err(error("Invalid collection."));
             }
@@ -339,7 +340,7 @@ impl Catalog {
             .chars()
             .take(200)
             .collect();
-        if !label(&name) || self.assets.len() >= 10_000 {
+        if !label(&name) || self.assets.len() >= 100_000 {
             return Err(error("Invalid asset name or library asset limit reached."));
         }
         let id = self.next_id;
@@ -364,6 +365,23 @@ impl Catalog {
             folder: None,
         });
         self.validate()?;
+        Ok(id)
+    }
+    /// Bulk migration accepts absolute offline photo references; the caller
+    /// validates the completed transaction once, not once per imported photo.
+    pub fn add_photo_reference(&mut self,path:PathBuf)->Result<u64> {
+        let path=path.canonicalize().unwrap_or(path);
+        if let Some(a)=self.assets.iter().find(|a|a.path==path && a.kind==AssetKind::Image){return Ok(a.id);}
+        self.insert_photo_reference(path)
+    }
+    pub(crate) fn insert_photo_reference(&mut self,path:PathBuf)->Result<u64> {
+        if !path.is_absolute() || path.components().any(|c|matches!(c,std::path::Component::ParentDir)) || !crate::photo_develop::supported(&path) {return Err(error("Invalid photo reference"));}
+        let path=path.canonicalize().unwrap_or(path);
+        if self.assets.len()>=100_000 || self.next_id>=u64::MAX-1 {return Err(error("Photo catalog limit reached"));}
+        let name=path.file_stem().unwrap_or_default().to_string_lossy().chars().take(200).collect::<String>();
+        if !label(&name){return Err(error("Invalid photo name"));}
+        let id=self.next_id;self.next_id+=1;
+        self.assets.push(Asset{id,path,name,kind:AssetKind::Image,tags:vec![],attribution:String::new(),license:String::new(),rating:0,flagged:false,rejected:false,color_label:0,variants:vec![],folder:None});
         Ok(id)
     }
     pub fn add_brand(&mut self, name: String, font: String, colors: Vec<[u8; 4]>) -> Result<u64> {
@@ -410,7 +428,7 @@ impl Catalog {
         assets.dedup();
         if !label(&name)
             || self.collections.len() >= 500
-            || assets.len() > 10_000
+            || assets.len() > 100_000
             || assets
                 .iter()
                 .any(|id| !self.assets.iter().any(|a| a.id == *id))
@@ -485,6 +503,7 @@ pub fn update<T>(
         file.write_all(&bytes)?;
         Ok(())
     })?;
+    let _=crate::photo_index::Index::build(&catalog).save(root);
     Ok((catalog, result))
 }
 #[derive(Serialize, Deserialize)]

@@ -858,8 +858,8 @@ fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut Tes
     let original = doc(&["Photo"], None);
     let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
     cx.update(|window, cx| {
-        // Photoshop: menus in the header, document tabs under the options
-        // bar, between the Tools panel and the panel dock.
+        // Photo and Paint keep document navigation below the header and
+        // outside the movable toolbars.
         let header = window.find("editor-document-bar").bounds();
         let tab_bar = window.find("document-tab-bar").bounds();
         let tabs = window.find("compact-document-tabs").bounds();
@@ -868,9 +868,9 @@ fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut Tes
         let canvas = window.find("canvas").bounds();
         assert!(tabs.origin.y >= tab_bar.origin.y && tabs.bottom() <= tab_bar.bottom());
         assert!(tab_bar.origin.y >= header.bottom());
-        assert!(tab_bar.origin.y >= options.bottom() - gpui_kit::px(1.));
+        assert!(tab_bar.bottom() <= options.top() + gpui_kit::px(1.));
         assert!(tab_bar.bottom() <= canvas.origin.y + gpui_kit::px(1.));
-        assert!(tab_bar.origin.x >= tools.right() - gpui_kit::px(1.));
+        assert!(tab_bar.bottom() <= tools.top() + gpui_kit::px(1.));
         window.click("dock-channels", cx);
     });
     cx.run_until_parked();
@@ -898,8 +898,7 @@ fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut Tes
         assert_eq!(editor.read(cx).dock_tab, crate::editor::DockTab::Layers);
         assert_eq!(editor.read(cx).editor.doc, original);
     });
-    // Paint shares the attached document strip. Saved floating layouts still
-    // restore their header tabs (covered by the custom workspace tests).
+    // Paint shares the same document row, including floating layouts.
     cx.update(|window, cx| pick_workspace(window, DRAW, cx));
     cx.run_until_parked();
     cx.update(|window, _| {

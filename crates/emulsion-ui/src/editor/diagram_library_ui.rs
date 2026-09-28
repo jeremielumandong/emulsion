@@ -186,10 +186,7 @@ impl EditorView {
             .gap_2();
         let mut matches = 0;
         for (index, template) in TEMPLATES.iter().copied().enumerate() {
-            if !format!("{} {}", template.name, template.description)
-                .to_lowercase()
-                .contains(query)
-            {
+            if !template.matches(query) {
                 continue;
             }
             matches += 1;
@@ -372,7 +369,7 @@ fn template_previews() -> &'static Vec<Arc<Document>> {
 fn template_preview(doc: Arc<Document>) -> impl IntoElement + Styled {
     canvas(
         |_, _, _| (),
-        move |bounds, _, window, _| {
+        move |bounds, _, window, cx| {
             let scale = (f32::from(bounds.size.width) / doc.width as f32)
                 .min(f32::from(bounds.size.height) / doc.height as f32);
             let dx = f32::from(bounds.left())
@@ -380,6 +377,25 @@ fn template_preview(doc: Arc<Document>) -> impl IntoElement + Styled {
             let dy = f32::from(bounds.top())
                 + (f32::from(bounds.size.height) - doc.height as f32 * scale) / 2.;
             for node in &doc.nodes {
+                if let NodeKind::Text { spec, .. } = &node.kind {
+                    let mut font = gpui::font(spec.font.clone());
+                    if spec.bold { font.weight = FontWeight::BOLD; }
+                    for (index, text) in spec.text.lines().enumerate() {
+                        let line = window.text_system().shape_line(
+                            text.to_owned().into(), px(spec.size * scale),
+                            &[gpui::TextRun { len: text.len(), font: font.clone(), color: gpui::rgba(u32::from_be_bytes(spec.color)).into(), background_color: None, underline: None, strikethrough: None }], None,
+                        );
+                        let width = spec.width.unwrap_or(0.) * scale;
+                        let offset = match spec.align {
+                            emulsion_core::text::Align::Center => (width - f32::from(line.width)) / 2.,
+                            emulsion_core::text::Align::Right => width - f32::from(line.width),
+                            _ => 0.,
+                        };
+                        let at = point(px(dx + spec.x * scale + offset), px(dy + (spec.y + index as f32 * spec.size * spec.line_height) * scale));
+                        let _ = line.paint(at, px(spec.size * spec.line_height * scale), gpui::TextAlign::Left, None, window, cx);
+                    }
+                    continue;
+                }
                 let NodeKind::Path { path, style, .. } = &node.kind else {
                     continue;
                 };

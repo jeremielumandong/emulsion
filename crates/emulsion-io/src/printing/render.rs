@@ -66,7 +66,7 @@ pub fn prepare_sources(
     Ok(result)
 }
 
-fn sheet_svg(sources: &[Source], sheet: &Sheet) -> Result<String> {
+pub(super) fn sheet_svg(sources: &[Source], sheet: &Sheet) -> Result<String> {
     let mut svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\"><rect width=\"100%\" height=\"100%\" fill=\"white\"/>",
         sheet.width, sheet.height, sheet.width, sheet.height
@@ -161,6 +161,47 @@ fn sheet_svg(sources: &[Source], sheet: &Sheet) -> Result<String> {
                     "<path d=\"M{x1} {y}H{x2}\" fill=\"none\" stroke=\"black\" stroke-width=\"0.2\"/>"
                 )?;
             }
+        }
+    }
+    for (i, item) in sheet.items.iter().enumerate() {
+        if let Some(label) = &item.label {
+            // Use native outlined text, so labels need no external fonts in the PDF.
+            let w = (label.bounds.w * 10.).floor().max(1.) as u32;
+            let mut doc = emulsion_core::Document::new(w, 60);
+            let text = label
+                .text
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(300)
+                .collect::<String>();
+            emulsion_core::Command::AddNode {
+                node: Box::new(emulsion_core::Node::text(
+                    0,
+                    "Print label",
+                    emulsion_core::text::TextSpec {
+                        text,
+                        x: 0.,
+                        y: 4.,
+                        size: 28.,
+                        width: Some(w as f32),
+                        height: Some(50.),
+                        ..Default::default()
+                    },
+                    w,
+                    60,
+                )),
+                slot: emulsion_core::command::Slot::TOP,
+            }
+            .apply(&mut doc)?;
+            use base64::Engine as _;
+            let encoded = base64::engine::general_purpose::STANDARD
+                .encode(crate::project_export::svg(&doc)?.0);
+            let b = label.bounds;
+            write!(
+                svg,
+                "<svg x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {w} 60\" overflow=\"hidden\"><image id=\"label_{i}\" width=\"{w}\" height=\"60\" href=\"data:image/svg+xml;base64,{encoded}\"/></svg>",
+                b.x, b.y, b.w, b.h
+            )?;
         }
     }
     svg.push_str("</svg>");

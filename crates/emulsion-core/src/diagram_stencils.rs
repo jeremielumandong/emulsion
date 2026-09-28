@@ -9,7 +9,7 @@ pub struct Stencil {
     pub keywords: &'static str,
     pub kind: ShapeKind,
     svg: Option<&'static str>,
-    label_below: bool,
+    pub(super) label_below: bool,
 }
 impl Stencil {
     pub fn path(self, [x, y, w, h]: Bounds) -> Path {
@@ -49,13 +49,13 @@ impl Stencil {
             let NodeKind::Path { style, .. } = &editor.doc.node(body).unwrap().kind else {
                 unreachable!()
             };
-            editor
+            if !matches!(self.kind, ShapeKind::Class | ShapeKind::Entity) { editor
                 .execute(Command::SetPath {
                     id: body,
                     path: Arc::new(self.path(bounds)),
                     style: *style,
                 })
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?; }
             if self.label_below {
                 let NodeKind::Text { spec, .. } = &editor.doc.node(label).unwrap().kind else {
                     unreachable!()
@@ -82,6 +82,7 @@ impl Stencil {
                     diagram: Some(Arc::new(model)),
                 })
                 .map_err(|e| e.to_string())?;
+            workspace::apply_default(editor, id, false)?;
             Ok(id)
         })();
         match result {
@@ -180,22 +181,8 @@ pub const STENCILS: &[Stencil] = &[
         Document
     ),
     native!("note", "Note", "General", "annotation comment sticky", Note),
-    vector!(
-        "uml-class",
-        "UML Class",
-        "UML / Software",
-        "attributes methods object",
-        "M0 0H100V100H0Z M0 30H100 M0 65H100",
-        true
-    ),
-    vector!(
-        "entity",
-        "Entity",
-        "Entity relationship",
-        "erd table record fields database sql",
-        "M0 0H100V100H0Z M0 25H100 M0 50H100 M0 75H100 M25 25V100",
-        true
-    ),
+    native!("uml-class", "UML Class", "UML / Software", "attributes methods object", Class),
+    native!("entity", "Entity", "Entity relationship", "erd table record fields database sql", Entity),
     native!(
         "container",
         "Container",

@@ -77,6 +77,7 @@ fn main() -> anyhow::Result<()> {
         settings.creative.bleed_mm = 3.;
         settings.creative.crop_marks = true;
         if layout == Layout::Repeat {
+            settings.creative.labels = print::LabelMode::Name;
             settings.creative.artwork_mm = Some([100., 60.]);
             settings.creative.columns = 1;
             settings.creative.rows = 3;
@@ -98,6 +99,33 @@ fn main() -> anyhow::Result<()> {
             job.sheets[0].items[0].trim.w,
             job.sheets[0].items[0].trim.h
         );
+    }
+    if let Some(profile) = std::env::args_os().nth(2).map(PathBuf::from) {
+        for (name, standard) in [
+            ("pdfx1a", print::production::PdfStandard::PdfX1a2001),
+            ("pdfx3", print::production::PdfStandard::PdfX32002),
+        ] {
+            let mut settings = Settings {
+                layout: Layout::Document,
+                ..Default::default()
+            };
+            settings.creative.bleed_mm = 3.;
+            settings.creative.crop_marks = true;
+            settings.production.standard = standard;
+            settings.production.profile = Some(profile.clone());
+            settings.production.condition = "User-selected press profile".into();
+            let job = print::layout(&sources, &[0], &settings)?;
+            print::production::write_pdf(
+                &sources,
+                &job,
+                &settings,
+                &directory.join(format!("{name}.pdf")),
+                &cancel,
+            )?;
+            print::production::preview(&sources, &job.sheets[0], &settings, 1200)?
+                .save(directory.join(format!("{name}-proof.png")))?;
+            println!("Saved {name}: flattened CMYK, embedded output profile, 100 × 60 mm trim");
+        }
     }
     Ok(())
 }

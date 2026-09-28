@@ -1,0 +1,100 @@
+{
+  "date": "2026-09-28",
+  "scope": "Diagram completion; legacy Visio recovery excluded by user",
+  "drawio": {
+    "candidates": 623,
+    "imported": 621,
+    "pages": 821,
+    "movement_undo_passed": 621,
+    "exercise_errors": [],
+    "rejected": [
+      {
+        "file": "blog/er-diagram-library.drawio",
+        "error": "invalid manifest: Connector UNJGccIc8EjJBR6IzSFc-151 references missing source UNJGccIc8EjJBR6IzSFc-147"
+      },
+      {
+        "file": "blog/template-index.xml",
+        "error": "invalid manifest: No mxGraphModel found."
+      }
+    ]
+  },
+  "tests": {
+    "core_all_passed": 335,
+    "core_ignored": 1,
+    "diagram_core": 32,
+    "import_rendering": 75,
+    "diagram_mcp": 18,
+    "diagram_ui_and_project": 20,
+    "templates_native_and_svg": 18
+  },
+  "viewport": {
+    "shapes": 1000,
+    "nested": false,
+    "connectors": 999,
+    "cold_scene_ms": 860.555822,
+    "edit_p50_p95_ms": [
+      6.668416,
+      8.011778000000001
+    ],
+    "scene_p50_p95_ms": [
+      6.772765,
+      7.760282999999999
+    ],
+    "patch_p50_p95_ms": [
+      1.344961,
+      1.418619
+    ],
+    "max_rebuilt_layers": 3,
+    "zoom": [
+      {
+        "scale": 0.5,
+        "ms": 24.957601999999998
+      },
+      {
+        "scale": 1.0,
+        "ms": 11.680139
+      },
+      {
+        "scale": 4.0,
+        "ms": 2.7407109999999997
+      },
+      {
+        "scale": 16.0,
+        "ms": 1.798311
+      },
+      {
+        "scale": 64.0,
+        "ms": 1.422189
+      }
+    ]
+  },
+  "gpu": {
+    "adapter": "AMD Radeon RX 7700 XT (RADV NAVI32)",
+    "shapes": 1000,
+    "edit_p50_p95_ms": [
+      7.860521,
+      10.406686
+    ],
+    "reload_p50_p95_ms": [
+      3.140072,
+      5.811345
+    ],
+    "frame_gpu_complete_p50_p95_ms": [
+      1.651995,
+      3.565734
+    ],
+    "command_to_gpu_complete_p50_p95_ms": [
+      12.99712,
+      23.359767
+    ],
+    "note": "Earlier run during concurrent compilation: median 51.10 ms. Retest after heavy compile completed; timings vary with load."
+  },
+  "native_window": {
+    "status": "not_measured",
+    "reason": "Benchmark did not obtain sustained active-window state under the current compositor; timed out. Previous active window restored. No new foreground drag/FPS claim."
+  },
+  "platforms": {
+    "Linux": "UI, vector export, GPU and core/import tests performed",
+    "Windows_macOS": "runtime validation not performed on this host"
+  }
+}

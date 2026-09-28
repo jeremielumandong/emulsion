@@ -15,7 +15,7 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{Disableable, IconName, Selectable, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -25,10 +25,10 @@ pub(crate) struct GalleryThumbnail {
     file_bytes: Option<u64>,
 }
 
-fn thumbnail_width(viewport_width: f32, scale_factor: f32) -> u32 {
-    let pixels = (viewport_width / 4.0 * scale_factor).ceil() as u32;
+fn thumbnail_width(card_width: f32, scale_factor: f32) -> u32 {
+    let pixels = (card_width * scale_factor).ceil() as u32;
     // Bucket resize requests to avoid rebuilding on every single-pixel drag.
-    pixels.div_ceil(128).saturating_mul(128).clamp(128, 2048)
+    pixels.div_ceil(128).saturating_mul(128).clamp(128, 1024)
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -55,6 +55,7 @@ pub(crate) struct HomeState {
     pub(crate) checked: HashSet<PathBuf>,
     pub(crate) cloud_files: bool,
     pub(crate) page: usize,
+    thumbnail_order: VecDeque<PathBuf>,
 }
 
 fn path_id(prefix: &'static str, path: &Path) -> ElementId {
@@ -112,6 +113,94 @@ mod tests {
     use gpui_kit::test::TestWindowExt;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[test]
+    fn thumbnail_requests_follow_card_size_and_display_scale() {
+        assert_eq!(thumbnail_width(230., 1.), 256);
+        assert_eq!(thumbnail_width(230., 2.), 512);
+        assert_eq!(thumbnail_width(64., 1.), 128);
+        assert_eq!(thumbnail_width(900., 4.), 1024);
+    }
+
+    #[gpui_kit::test]
+    fn many_home_cards_keep_their_height_and_recent_pages_keep_previews(cx: &mut TestAppContext) {
+        let (workspace, cx) = browser(cx);
+        let entries: Vec<_> = (0..144)
+            .map(|i| recent::Recent {
+                path: format!("photos/preview-{i:03}.png").into(),
+                opened: recent::now().saturating_sub(i),
+                summary: "1 layer".into(),
+            })
+            .collect();
+        let preview = Arc::new(bgra_image(1, 1, vec![0, 0, 0, 255]));
+        cx.update(|_, cx| {
+            workspace.update(cx, |ws, cx| {
+                ws.recents = entries.clone();
+                ws.thumbs.clear();
+                ws.home_state.thumbnail_order.clear();
+                for entry in &entries[..48] {
+                    ws.thumbs.insert(
+                        entry.path.clone(),
+                        GalleryThumbnail {
+                            requested_width: 512,
+                            image: Some(preview.clone()),
+                            file_bytes: Some(10),
+                        },
+                    );
+                }
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let card = window
+                .find(path_id("home-file-card", &entries[0].path))
+                .bounds();
+            assert!(
+                card.size.height > card.size.width * 0.625 + px(40.),
+                "{card:?}"
+            );
+            let grid = window.find("home-recent-grid").bounds();
+            assert!(grid.size.height > window.viewport_size().height);
+            workspace.update(cx, |ws, cx| {
+                ws.home_state.page = 1;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            workspace.update(cx, |ws, cx| {
+                assert!(Arc::ptr_eq(
+                    ws.thumbs[&entries[0].path].image.as_ref().unwrap(),
+                    &preview
+                ));
+                ws.home_state.page = 0;
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            workspace.update(cx, |ws, cx| {
+                assert!(Arc::ptr_eq(
+                    ws.thumbs[&entries[0].path].image.as_ref().unwrap(),
+                    &preview
+                ));
+                ws.home_state.page = 2;
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let ws = workspace.read(cx);
+            assert!(ws.thumbs.len() <= 96);
+            assert!(ws.home_state.thumbnail_order.len() <= 96);
+            assert!(
+                !ws.thumbs.contains_key(&entries[48].path),
+                "least-recent page is evicted"
+            );
+            assert!(ws.thumbs.contains_key(&entries[0].path));
+        });
+    }
 
     #[gpui_kit::test]
     fn home_toolbar_arrows_move_focus_and_space_applies_filter(cx: &mut TestAppContext) {
@@ -698,18 +787,20 @@ impl Workspace {
         self.thumbs_loading.remove(path);
     }
 
-    fn load_thumbs(&mut self, width: u32, cx: &mut Context<Self>) {
+    fn load_thumbs(&mut self, visible: &[recent::Recent], width: u32, cx: &mut Context<Self>) {
         if self.home_state.cloud_files {
             return;
         }
-        let visible: Vec<_> = self
-            .visible_recents(cx)
-            .into_iter()
-            .skip(self.home_state.page * 48)
-            .take(48)
-            .collect();
-        let visible_paths: HashSet<_> = visible.iter().map(|r| &r.path).collect();
-        self.thumbs.retain(|path, _| visible_paths.contains(path));
+        // Keep two recent pages warm instead of decoding again after each filter change.
+        for r in visible {
+            self.home_state.thumbnail_order.retain(|p| p != &r.path);
+            self.home_state.thumbnail_order.push_back(r.path.clone());
+        }
+        while self.home_state.thumbnail_order.len() > 96 {
+            if let Some(path) = self.home_state.thumbnail_order.pop_front() {
+                self.thumbs.remove(&path);
+            }
+        }
         for r in visible {
             if self
                 .thumbs
@@ -747,6 +838,10 @@ impl Workspace {
                         return;
                     }
                     this.thumbs_loading.remove(&path);
+                    if !this.home_state.thumbnail_order.contains(&path) {
+                        cx.notify();
+                        return;
+                    }
                     let previous = this.thumbs.remove(&path).and_then(|thumb| thumb.image);
                     let image = result
                         .ok()
@@ -860,15 +955,6 @@ impl Workspace {
             .collect()
     }
 
-    fn selected_recent(&self, cx: &App) -> Option<recent::Recent> {
-        let visible = self.visible_recents(cx);
-        visible
-            .iter()
-            .find(|entry| Some(&entry.path) == self.home_state.selected.as_ref())
-            .cloned()
-            .or_else(|| visible.into_iter().next())
-    }
-
     pub(crate) fn home_header(
         &mut self,
         navigation: AnyElement,
@@ -959,14 +1045,22 @@ impl Workspace {
             .page
             .min(visible.len().saturating_sub(1) / 48);
 
-        self.load_thumbs(
-            thumbnail_width(
-                f32::from(window.viewport_size().width),
-                window.scale_factor(),
-            ),
-            cx,
-        );
-        let selected = self.selected_recent(cx);
+        let page_start = self.home_state.page * 48;
+        let page = &visible[page_start..(page_start + 48).min(visible.len())];
+        let card_width = if self.home_state.rows {
+            64.
+        } else {
+            ((center_width * f32::from(window.rem_size())).min(1240.)
+                - 64.
+                - 12. * f32::from(columns - 1))
+                / f32::from(columns)
+        };
+        self.load_thumbs(page, thumbnail_width(card_width, window.scale_factor()), cx);
+        let selected = visible
+            .iter()
+            .find(|entry| Some(&entry.path) == self.home_state.selected.as_ref())
+            .or_else(|| visible.first())
+            .cloned();
         let cells = visible
             .iter()
             .skip(self.home_state.page * 48)
@@ -989,6 +1083,7 @@ impl Workspace {
             div()
                 .id("home-recent-rows")
                 .test_support()
+                .flex_none()
                 .flex()
                 .flex_col()
                 .rounded(px(8.))
@@ -1002,6 +1097,7 @@ impl Workspace {
             div()
                 .id("home-recent-grid")
                 .test_support()
+                .flex_none()
                 .grid()
                 .grid_cols(columns)
                 .gap(px(12.))
@@ -1029,36 +1125,48 @@ impl Workspace {
                     .px(px(32.))
                     .pt(px(28.))
                     .pb(px(32.))
-                    .gap(px(22.))
-                    .child(self.home_welcome(&p, cx))
-                    .when(!self.home_state.cloud_files, |column| {
-                        column
-                            .child(self.home_starts(if narrow { 2 } else { 5 }, &p, cx))
-                            .children(self.recovered_rows(&p, cx))
-                            .children(self.home_project_cards(center_width, &p, cx))
-                            .child(self.home_file_controls(visible.len(), &p, cx))
-                    })
-                    .children(self.cloud_home_notice())
-                    .children(self.home_project_notice())
-                    .when(
-                        self.home_state.management && !self.home_state.cloud_files,
-                        |column| {
-                            column
-                                .child(self.home_projects_controls(&p, cx))
-                                .child(self.home_locations(cx))
-                                .child(
-                                    control("home-edit-artwork", "Edit welcome artwork", &p)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.open_landing(window, cx)
-                                        })),
-                                )
-                                .child(self.home_presets(&p, cx))
-                        },
-                    )
-                    .child(gallery)
-                    .when(
-                        !self.home_state.cloud_files && visible.len() > 48,
-                        |column| column.child(self.home_page_controls(visible.len(), cx)),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_none()
+                            .gap(px(22.))
+                            .child(self.home_welcome(&p, cx))
+                            .when(!self.home_state.cloud_files, |column| {
+                                column
+                                    .child(self.home_starts(if narrow { 2 } else { 5 }, &p, cx))
+                                    .children(self.recovered_rows(&p, cx))
+                                    .children(self.home_project_cards(center_width, &p, cx))
+                                    .child(self.home_file_controls(visible.len(), &p, cx))
+                            })
+                            .children(self.cloud_home_notice())
+                            .children(self.home_project_notice())
+                            .when(
+                                self.home_state.management && !self.home_state.cloud_files,
+                                |column| {
+                                    column
+                                        .child(self.home_projects_controls(&p, cx))
+                                        .child(self.home_locations(cx))
+                                        .child(
+                                            control(
+                                                "home-edit-artwork",
+                                                "Edit welcome artwork",
+                                                &p,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.open_landing(window, cx)
+                                                }),
+                                            ),
+                                        )
+                                        .child(self.home_presets(&p, cx))
+                                },
+                            )
+                            .child(gallery)
+                            .when(
+                                !self.home_state.cloud_files && visible.len() > 48,
+                                |column| column.child(self.home_page_controls(visible.len(), cx)),
+                            ),
                     ),
             );
         div()
@@ -1491,6 +1599,7 @@ impl Workspace {
                     div()
                         .relative()
                         .w_full()
+                        .flex_none()
                         .aspect_ratio(16. / 10.)
                         .overflow_hidden()
                         .child(self.recent_thumbnail(&path, p))

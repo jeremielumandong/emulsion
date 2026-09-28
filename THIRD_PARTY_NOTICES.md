@@ -78,3 +78,7 @@ are interpreted locally as vector drawing instructions. The original Apache
 license and additional stencil asset terms are distributed as `LICENSE-APACHE`
 and `LICENSE-STENCILS` in that directory. Vendor names and trademarks remain
 the property of their respective owners.
+
+Additional native translations of draw.io dynamic geometry are documented in
+`assets/diagram-stencils/UPSTREAM-DYNAMIC.json` with pinned source checksums.
+Copyright (c) 2006–2010, JGraph Holdings Ltd; distributed under Apache-2.0.

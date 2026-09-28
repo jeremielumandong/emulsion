@@ -794,3 +794,14 @@ fn embedded_bitmap_keeps_its_source_position_when_scaled_and_rotated() {
     let (raster,placement)=doc.nodes.iter().find_map(|n|match &n.kind{NodeKind::Raster{raster,placement}=>Some((raster,placement)),_=>None}).unwrap();
     assert_eq!(placement.doc_bounds(raster.width(),raster.height()),emulsion_raster::IRect::new(150,100,100,200));
 }
+
+#[test]
+fn table_css_column_width_padding_height_and_alignment_are_retained(){
+    let value=escape("<table width='300' border='1'><colgroup><col width='30%'><col width='70%'></colgroup><tr style='height:80px;background-color:#ffeeaa'><td style='padding:6px 10px;vertical-align:bottom'>ID</td><td style='padding:4px;text-align:right;vertical-align:top'>Name</td></tr></table>");
+    let imported=from_xml(&graph(&format!(r#"<mxCell id="a" vertex="1" parent="1" value="{value}" style="html=1;align=left;verticalAlign=top;"><mxGeometry x="40" y="60" width="300" height="160" as="geometry"/></mxCell>"#))).unwrap();
+    let doc=&imported.project.pages[0].doc;
+    let specs=doc.nodes.iter().filter_map(|n|match &n.kind{NodeKind::Text{spec,..} if !spec.text.is_empty()=>Some(spec),_=>None}).collect::<Vec<_>>();
+    assert_eq!(specs.len(),2);assert!((specs[0].width.unwrap()-70.).abs()<0.1);assert!((specs[1].width.unwrap()-202.).abs()<0.1);
+    assert_eq!(specs[1].align,emulsion_core::text::Align::Right);assert!(specs[0].y>specs[1].y+20.);
+    assert!(doc.nodes.iter().filter(|n|matches!(&n.kind,NodeKind::Path{style,..} if style.fill==Some([255,238,170,255]))).count()>=2);
+}

@@ -2,6 +2,8 @@
 //! Floor-plan dimensions follow jgraph/drawio mxFloorplan.js (Apache-2.0);
 //! pinned upstream attribution is distributed with assets/diagram-stencils.
 use super::*;
+#[path="dynamic_extra.rs"]
+mod extra;
 use std::fmt::Write as FmtWrite;
 pub(super) const NAMES: &[&str] = &[
     "mxgraph.floorplan.wall",
@@ -26,7 +28,7 @@ pub(super) const NAMES: &[&str] = &[
 
 ];
 pub(super) fn supports(name: &str) -> bool {
-    NAMES.contains(&name.to_ascii_lowercase().as_str())
+    NAMES.contains(&name.to_ascii_lowercase().as_str()) || extra::NAMES.contains(&name.to_ascii_lowercase().as_str())
 }
 pub(super) fn svg(
     name: &str,
@@ -258,6 +260,7 @@ pub(super) fn svg(
             }
             content.push_str("</g>");
         }
+        _ if extra::NAMES.contains(&name.as_str()) => content=extra::content(&name,s,w,h)?,
         _ => return Err(error("Unsupported parameterized stencil")),
     }
     Ok(format!(

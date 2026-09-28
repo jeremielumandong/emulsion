@@ -918,6 +918,7 @@ pub fn merge(
         let side = choices.get(&ConflictKey::Diagram);
         let shapes = merge_metadata(&b.shapes, &o.shapes, &t.shapes, side, &mut conflict);
         let edges = merge_metadata(&b.edges, &o.edges, &t.edges, side, &mut conflict);
+        let settings = merge_metadata(&std::collections::BTreeMap::from([(0,b.settings.clone())]), &std::collections::BTreeMap::from([(0,o.settings.clone())]), &std::collections::BTreeMap::from([(0,t.settings.clone())]), side, &mut conflict).remove(&0).unwrap_or_default();
         if conflict && side.is_none() {
             conflicts.push(Conflict {
                 key: ConflictKey::Diagram,
@@ -929,6 +930,7 @@ pub fn merge(
         out.diagram = Some(std::sync::Arc::new(crate::diagram::Diagram {
             shapes,
             edges,
+            settings,
         }));
     }
 

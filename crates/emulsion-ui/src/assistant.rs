@@ -1506,6 +1506,12 @@ impl EditorView {
                 this.update(cx,|v,cx|{if !result.is_error{v.refresh_creative_library(cx);}call.reply(result);if ordered{v.complete_tool_work(tool_generation,cx);}}).ok();
             }).detach();return;
         }
+        if call.name == "open_diagram_link" {
+            let result = call.arguments.get("link").and_then(|v|v.as_str()).ok_or_else(||"Missing diagram link".to_string()).and_then(|link|self.diagram_follow_link(link,cx));
+            call.reply(match result {Ok(())=>emulsion_mcp::ToolResult::text("Diagram link opened"),Err(e)=>emulsion_mcp::ToolResult::error(e)});
+            if ordered {self.complete_tool_work(tool_generation,cx);}
+            return;
+        }
         if emulsion_mcp::diagram_project_tools::is_tool(&call.name) {
             let before = self.editor.stamp();
             let page = self.editor.active_page();

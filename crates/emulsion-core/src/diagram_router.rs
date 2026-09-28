@@ -37,7 +37,7 @@ fn simplify(points: Vec<Point>) -> Vec<Point> {
     }
     out
 }
-pub fn orthogonal(start: Point, sd: Point, end: Point, ed: Point, bounds: &[Bounds]) -> Vec<Point> {
+pub fn orthogonal(start: Point, sd: Point, end: Point, ed: Point, bounds: &[Bounds]) -> (Vec<Point>, bool) {
     let a = (start.0 + sd.0 * 18., start.1 + sd.1 * 18.);
     let b = (end.0 + ed.0 * 18., end.1 + ed.1 * 18.);
     let obstacles = bounds
@@ -88,18 +88,17 @@ pub fn orthogonal(start: Point, sd: Point, end: Point, ed: Point, bounds: &[Boun
             let top=obstacles.iter().map(|r|r[1]).fold(a.1.min(b.1),f64::min)-12.;
             [vec![a,(left,a.1),(left,b.1),b],vec![a,(a.0,top),(b.0,top),b]].into_iter().find(|p|p.windows(2).all(|s|clear(s[0],s[1],&obstacles)))
         })
-        .unwrap_or_else(|| vec![a, (mx, a.1), (mx, b.1), b]);
-    simplify(
+        .or_else(|| grid(a,b,&obstacles));
+    let blocked=route.is_none();
+    let route=route.unwrap_or_else(|| vec![a, (mx, a.1), (mx, b.1), b]);
+    (simplify(
         std::iter::once(start)
             .chain(route)
             .chain(std::iter::once(end))
             .collect(),
-    )
+    ), blocked)
 }
 fn grid(start: Point, end: Point, obstacles: &[Bounds]) -> Option<Vec<Point>> {
-    if obstacles.len() > 64 {
-        return None;
-    }
     let mut xs = vec![start.0, end.0];
     let mut ys = vec![start.1, end.1];
     for &[x, y, w, h] in obstacles {
@@ -112,6 +111,25 @@ fn grid(start: Point, end: Point, obstacles: &[Bounds]) -> Option<Vec<Point>> {
     ys.dedup();
     let w = xs.len();
     let h = ys.len();
+    // Bound memory, not obstacle count. Dense aligned diagrams have few unique
+    // coordinates even with hundreds of objects.
+    if w.checked_mul(h)? > 1_000_000 { return None; }
+    let mut horizontal=vec![0i32;w*h];
+    let mut vertical=vec![0i32;w*h];
+    for &[x,y,bw,bh] in obstacles {
+        let x0=xs.partition_point(|v|*v<=x).saturating_sub(1);
+        let x1=xs.partition_point(|v|*v<x+bw).min(w-1);
+        let y0=ys.partition_point(|v|*v<=y).saturating_sub(1);
+        let y1=ys.partition_point(|v|*v<y+bh).min(h-1);
+        for row in ys.partition_point(|v|*v<=y)..ys.partition_point(|v|*v<y+bh) {
+            horizontal[row*w+x0]+=1;horizontal[row*w+x1]-=1;
+        }
+        for col in xs.partition_point(|v|*v<=x)..xs.partition_point(|v|*v<x+bw) {
+            vertical[y0*w+col]+=1;vertical[y1*w+col]-=1;
+        }
+    }
+    for row in 0..h {for col in 1..w {horizontal[row*w+col]+=horizontal[row*w+col-1];}}
+    for row in 1..h {for col in 0..w {vertical[row*w+col]+=vertical[(row-1)*w+col];}}
     let index = |p: Point| {
         Some(ys.iter().position(|y| *y == p.1)? * w + xs.iter().position(|x| *x == p.0)?)
     };
@@ -122,8 +140,9 @@ fn grid(start: Point, end: Point, obstacles: &[Bounds]) -> Option<Vec<Point>> {
     let mut previous = vec![usize::MAX; w * h];
     let mut queue = BinaryHeap::new();
     costs[from] = 0;
-    queue.push(Reverse((0u64, from)));
-    while let Some(Reverse((cost, i))) = queue.pop() {
+    let heuristic=|i| (distance(point(i),end)*1000.).floor() as u64;
+    queue.push(Reverse((heuristic(from),0u64, from)));
+    while let Some(Reverse((_,cost, i))) = queue.pop() {
         if cost != costs[i] {
             continue;
         }
@@ -139,14 +158,13 @@ fn grid(start: Point, end: Point, obstacles: &[Bounds]) -> Option<Vec<Point>> {
         .into_iter()
         .flatten()
         {
-            if !clear(point(i), point(n), obstacles) {
-                continue;
-            }
+            let blocked=if i/w==n/w{horizontal[i.min(n)]>0}else{vertical[i.min(n)]>0};
+            if blocked {continue;}
             let next = cost + (distance(point(i), point(n)) * 1000.).round() as u64;
             if next < costs[n] {
                 costs[n] = next;
                 previous[n] = i;
-                queue.push(Reverse((next, n)));
+                queue.push(Reverse((next.saturating_add(heuristic(n)),next, n)));
             }
         }
     }
@@ -167,10 +185,28 @@ fn grid(start: Point, end: Point, obstacles: &[Bounds]) -> Option<Vec<Point>> {
 mod tests {
     use super::*;
     #[test]
+    fn dense_grid_routes_and_overlaps_report_failure(){
+        let obstacles=(0..120).map(|i|[40.+(i%12) as f64*30.,20.+(i/12) as f64*30.,16.,16.]).collect::<Vec<_>>();
+        let route=grid((20.,25.),(420.,295.),&obstacles).unwrap();
+        assert!(route.windows(2).all(|p|clear(p[0],p[1],&obstacles)));
+        let (_,blocked)=orthogonal((0.,0.),(1.,0.),(100.,0.),(-1.,0.),&[[10.,-20.,30.,40.]]);
+        assert!(blocked);
+    }
+    #[test]
+    fn indexed_grid_segments_match_geometric_checks(){
+        // Varied overlapping rectangles exercise the horizontal/vertical interval boundaries.
+        for seed in 0..12 {
+            let obstacles=(0..90).map(|i|[((i*47+seed*13)%350) as f64,((i*83+seed*17)%350) as f64,12.+(i%9) as f64,19.]).collect::<Vec<_>>();
+            let path=grid((-10.,-10.),(380.,380.),&obstacles).unwrap();
+            assert!(path.windows(2).all(|p|clear(p[0],p[1],&obstacles)));
+        }
+    }
+    #[test]
     fn distant_objects_do_not_force_page_wide_detours(){
         let mut obstacles=vec![[20.,20.,80.,60.],[240.,20.,80.,60.],[140.,0.,60.,100.]];
         obstacles.extend((0..100).map(|i|[1000.+i as f64*100.,1000.,50.,50.]));
-        let points=orthogonal((100.,50.),(1.,0.),(240.,50.),(-1.,0.),&obstacles);
+        let (points,blocked)=orthogonal((100.,50.),(1.,0.),(240.,50.),(-1.,0.),&obstacles);
+        assert!(!blocked);
         assert!(points.iter().all(|p|p.0>-100.&&p.0<400.&&p.1>-100.&&p.1<200.));
         assert!(points.windows(2).all(|p|clear(p[0],p[1],&obstacles[2..])));
     }
@@ -181,7 +217,8 @@ mod tests {
             [240., 20., 80., 60.],
             [140., 0., 60., 100.],
         ];
-        let points = orthogonal((100., 50.), (1., 0.), (240., 50.), (-1., 0.), &obstacles);
+        let (points,blocked) = orthogonal((100., 50.), (1., 0.), (240., 50.), (-1., 0.), &obstacles);
+        assert!(!blocked);
         assert_eq!(points.first(), Some(&(100., 50.)));
         assert_eq!(points.last(), Some(&(240., 50.)));
         assert!(

@@ -59,6 +59,8 @@ pub fn save(catalog: &Catalog, path: &Path) -> Result<()> {
     }
     for (kind, dir) in [
         ("mask", crate::recent::data_dir().join("develop-masks")),
+        ("edits", crate::recent::data_dir().join("develop-edits")),
+        ("profile", crate::camera_profiles::directory()),
         ("preset", crate::lightroom_presets::library_dir()),
     ] {
         if dir.exists() {
@@ -165,7 +167,7 @@ pub fn restore(path: &Path, destination: &Path) -> Result<Catalog> {
     let mut resources = vec![];
     let mut total = 0u64;
     for (i, entry) in manifest.entries.iter().enumerate() {
-        if !["photo", "sidecar", "mask", "preset"].contains(&entry.kind.as_str())
+        if !["photo", "sidecar", "mask", "preset", "edits", "profile"].contains(&entry.kind.as_str())
             || entry.size > 2 * 1024 * 1024 * 1024
         {
             return Err(bad("Invalid backup resource"));
@@ -262,7 +264,7 @@ pub fn restore(path: &Path, destination: &Path) -> Result<Catalog> {
         .entries
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.kind == "mask" || e.kind == "preset")
+        .filter(|(_, e)| e.kind == "mask" || e.kind == "preset" || e.kind == "edits" || e.kind=="profile")
     {
         let name = e
             .source
@@ -270,11 +272,24 @@ pub fn restore(path: &Path, destination: &Path) -> Result<Catalog> {
             .ok_or_else(|| bad("Missing resource name"))?;
         let target = if e.kind == "mask" {
             crate::recent::data_dir().join("develop-masks").join(name)
+        } else if e.kind=="profile" {
+            crate::camera_profiles::directory().join(name)
+        } else if e.kind=="edits" {
+            crate::recent::data_dir().join("develop-edits").join(name)
         } else {
             crate::lightroom_presets::library_dir().join(name)
         };
         if e.kind == "mask" && name.to_string_lossy() != format!("{}.png", e.sha256) {
             return Err(bad("Invalid mask identity"));
+        }
+        if e.kind=="profile" {
+            if name.to_string_lossy()!=format!("{}.dcp",e.sha256){return Err(bad("Invalid profile identity"));}
+            crate::camera_profiles::read(&resources[i])?;
+        }
+        if e.kind=="edits" {
+            if name.to_string_lossy()!=format!("{}.json",e.sha256){return Err(bad("Invalid local edit identity"));}
+            let edits:emulsion_core::develop_edits::LocalEdits=serde_json::from_slice(&std::fs::read(&resources[i])?).map_err(|e|bad(e.to_string()))?;
+            edits.validate().map_err(bad)?;
         }
         if e.kind == "preset" {
             crate::lightroom_presets::load(&resources[i], Default::default())?;

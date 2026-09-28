@@ -117,7 +117,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if destination == Destination::Photo {
-            self.prompt_open_named("Open photo", window, cx);
+            self.prompt_open_named("Open photo", true, window, cx);
         } else if let Some(kind) = destination.canvas() {
             self.open_new_canvas_kind(kind, window, cx);
         } else {
@@ -145,7 +145,7 @@ impl Workspace {
                 {
                     self.activate_tab(index, window, cx);
                 } else if destination == Destination::Photo {
-                    self.prompt_open_named("Open photo", window, cx);
+                    self.prompt_open_named("Open photo", true, window, cx);
                 } else if let Some(kind) = destination.canvas() {
                     self.open_new_canvas_kind(kind, window, cx);
                 }

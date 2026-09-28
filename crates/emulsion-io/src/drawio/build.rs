@@ -272,6 +272,9 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             shape.data = serde_json::from_str(data)
                 .map_err(|e| error(format!("Invalid shape data: {e}")))?;
         }
+        if shape.data.contains_key("emulsion_structure") {
+            shape.kind=match cell.attrs.get("emulsionKind").map(String::as_str){Some("class")=>ShapeKind::Class,Some("entity")=>ShapeKind::Entity,_=>shape.kind};
+        }
         let geometry_style = style
             .iter()
             .filter(|(k, _)| {
@@ -440,6 +443,11 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 doc.height,
             )
             .kind;
+        }
+        if style.get("shape").is_some_and(|name|matches!(name.as_str(),"mxgraph.mockup.containers.anchor"|"mxgraph.mockup.graphics.anchor"|"mxgraph.ios7ui.anchor"|"mxgraph.bootstrap.anchor")) {
+            if let NodeKind::Path{path,style,cache}=&mut doc.node_mut(shape.body).unwrap().kind {
+                style.fill=None;style.stroke=None;*cache=VectorRaster::path(path.clone(),*style,page.width,page.height);
+            }
         }
         if shape.kind == ShapeKind::Swimlane {
             let horizontal = style.get("horizontal").is_none_or(|v| v != "0");

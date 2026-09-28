@@ -5,6 +5,8 @@ use emulsion_core::{
     diagram_library,
     project::{ProjectEditor, ProjectKind},
 };
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use std::collections::{HashSet, VecDeque};
 
 const PAGE: usize = 12;
 const LOCAL: usize = usize::MAX;
@@ -44,6 +46,7 @@ impl Starter {
         }
     }
 }
+#[derive(Clone)]
 struct Preview {
     image: Arc<RenderImage>,
     description: String,
@@ -55,7 +58,34 @@ pub(super) struct Gallery {
     pub category: Option<usize>,
     pub page: usize,
     previews: HashMap<String, Result<Preview, String>>,
-    loading: bool,
+    loading: HashSet<String>,
+}
+
+// Built-in templates are immutable during an app session. Keep only small rendered
+// previews, never the full editable documents. User templates stay dialog-local.
+#[derive(Default)]
+struct TemplatePreviewCache {
+    entries: HashMap<String, Preview>,
+    order: VecDeque<String>,
+}
+impl Global for TemplatePreviewCache {}
+impl TemplatePreviewCache {
+    fn get(&mut self, id: &str) -> Option<Preview> {
+        let preview = self.entries.get(id)?.clone();
+        self.order.retain(|key| key != id);
+        self.order.push_back(id.to_owned());
+        Some(preview)
+    }
+    fn insert(&mut self, id: String, preview: Preview) {
+        self.order.retain(|key| key != &id);
+        self.order.push_back(id.clone());
+        self.entries.insert(id, preview);
+        while self.order.len() > 64 {
+            if let Some(key) = self.order.pop_front() {
+                self.entries.remove(&key);
+            }
+        }
+    }
 }
 
 impl NewCanvas {
@@ -133,6 +163,8 @@ impl NewCanvas {
                     (true, "Templates", "new-canvas-templates"),
                     (false, "Blank canvas", "new-canvas-blank"),
                 ]
+                .into_iter()
+                .filter(|_| matches!(self.spec.kind, CanvasKind::Design | CanvasKind::Diagram))
                 .map(|(enabled, label, id)| {
                     Button::new(id)
                         .label(label)
@@ -147,72 +179,96 @@ impl NewCanvas {
                         }))
                 }),
             )
+            .child(
+                Button::new("new-canvas-import-photo")
+                    .label("Import photo…")
+                    .small()
+                    .outline()
+                    .disabled(self.submitted)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.cancelled = true;
+                        window.close_dialog(cx);
+                        this.workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.prompt_open_named("Import photo", true, window, cx);
+                            })
+                            .ok();
+                    })),
+            )
             .into_any_element()
     }
 
     fn load_starter_previews(&mut self, entries: &[Starter], cx: &mut Context<Self>) {
-        if self.templates.loading {
-            return;
+        if !cx.has_global::<TemplatePreviewCache>() {
+            cx.set_global(TemplatePreviewCache::default());
         }
-        let visible: std::collections::HashSet<_> = entries
+        // The selected preview comes first even when the category/page changes.
+        let candidates: Vec<_> = self
+            .templates
+            .selected
             .iter()
-            .skip(self.templates.page * PAGE)
-            .take(PAGE)
-            .map(|t| t.id.clone())
-            .chain(self.templates.selected.iter().map(|t| t.id.clone()))
+            .chain(entries.iter().skip(self.templates.page * PAGE).take(PAGE))
+            .cloned()
             .collect();
+        let visible: HashSet<_> = candidates.iter().map(|t| t.id.clone()).collect();
         self.templates
             .previews
             .retain(|key, _| visible.contains(key));
-        let batch: Vec<_> = entries
-            .iter()
-            .skip(self.templates.page * PAGE)
-            .take(PAGE)
-            .filter(|t| !self.templates.previews.contains_key(&t.id))
-            .take(4)
-            .cloned()
-            .collect();
-        if batch.is_empty() {
-            return;
+        for t in &candidates {
+            if !self.templates.previews.contains_key(&t.id)
+                && let Some(preview) = cx.global_mut::<TemplatePreviewCache>().get(&t.id)
+            {
+                self.templates.previews.insert(t.id.clone(), Ok(preview));
+            }
         }
-        self.templates.loading = true;
-        cx.spawn(async move |this, cx| {
-            let results = cx
-                .background_spawn(async move {
-                    batch
-                        .into_iter()
-                        .map(|t| {
-                            let preview = t.project(true).map(|project| {
-                                let size = match &t.source {
-                                    Source::Design(t) => t.native_size(),
-                                    _ => (project.doc.width, project.doc.height),
-                                };
-                                let description = format!(
-                                    "{} · {} × {} px · {} page(s)",
-                                    project.kind().unwrap().label(),
-                                    size.0,
-                                    size.1,
-                                    project.page_list().len()
-                                );
-                                let (w, h, bytes) = crate::editor::doc_thumb(&project.doc, 216);
-                                Preview {
-                                    image: Arc::new(crate::viewport::bgra_image(w, h, bytes)),
-                                    description,
-                                }
-                            });
-                            (t.id, preview)
+        for t in candidates {
+            if self.templates.previews.contains_key(&t.id) || self.templates.loading.contains(&t.id)
+            {
+                continue;
+            }
+            // Deliver each preview immediately; don't wait for a slow batch to finish.
+            if self.templates.loading.len() >= 2 {
+                break;
+            }
+            self.templates.loading.insert(t.id.clone());
+            let cacheable = !matches!(t.source, Source::Local(_));
+            let id = t.id.clone();
+            cx.spawn(async move |this, cx| {
+                let preview = cx
+                    .background_spawn(async move {
+                        t.project(true).map(|project| {
+                            let size = match &t.source {
+                                Source::Design(t) => t.native_size(),
+                                _ => (project.doc.width, project.doc.height),
+                            };
+                            let description = format!(
+                                "{} · {} × {} px · {} page(s)",
+                                project.kind().unwrap().label(),
+                                size.0,
+                                size.1,
+                                project.page_list().len()
+                            );
+                            let (w, h, bytes) = crate::editor::doc_thumb(&project.doc, 216);
+                            Preview {
+                                image: Arc::new(crate::viewport::bgra_image(w, h, bytes)),
+                                description,
+                            }
                         })
-                        .collect::<Vec<_>>()
+                    })
+                    .await;
+                this.update(cx, |this, cx| {
+                    if cacheable && let Ok(preview) = &preview {
+                        cx.global_mut::<TemplatePreviewCache>()
+                            .insert(id.clone(), preview.clone());
+                    }
+                    this.templates.loading.remove(&id);
+                    this.templates.previews.insert(id, preview);
+                    cx.notify();
                 })
-                .await;
-            this.update(cx, |this, cx| {
-                this.templates.previews.extend(results);
-                this.templates.loading = false;
-                cx.notify();
+                .ok();
             })
-            .ok();
-        })
-        .detach();
+            .detach();
+        }
     }
 
     pub(super) fn submit_template(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -290,8 +346,7 @@ impl NewCanvas {
             .min(entries.len().saturating_sub(1) / PAGE);
         self.load_starter_previews(&entries, cx);
         let selected = self.templates.selected.as_ref();
-        let mut categories = div().flex().flex_wrap().gap_1();
-        let labels = std::iter::once((None, "All templates"))
+        let labels: Vec<_> = std::iter::once((None, "All templates"))
             .chain(
                 Template::CATEGORIES
                     .iter()
@@ -299,22 +354,37 @@ impl NewCanvas {
                     .filter(|_| self.spec.kind == CanvasKind::Design)
                     .map(|(i, c)| (Some(i), c.label)),
             )
-            .chain(std::iter::once((Some(LOCAL), "My templates")));
-        for (i, (category, label)) in labels.enumerate() {
-            categories = categories.child(
-                Button::new(("new-template-category", i))
-                    .label(label)
-                    .xsmall()
-                    .ghost()
-                    .selected(self.templates.category == category)
-                    .disabled(self.submitted)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.templates.category = category;
-                        this.templates.page = 0;
-                        cx.notify();
-                    })),
-            );
-        }
+            .chain(std::iter::once((Some(LOCAL), "My templates")))
+            .collect();
+        let category = self.templates.category;
+        let label = labels
+            .iter()
+            .find(|(id, _)| *id == category)
+            .map_or("All templates", |(_, label)| *label);
+        let owner = cx.weak_entity();
+        let categories = Button::new("new-template-category-select")
+            .label(format!("{label} ▾"))
+            .accessibility_label(format!("Template category: {label}"))
+            .small()
+            .outline()
+            .disabled(self.submitted)
+            .dropdown_menu(move |mut menu, _, _| {
+                for &(id, label) in &labels {
+                    let owner = owner.clone();
+                    menu = menu.item(PopupMenuItem::new(label).checked(id == category).on_click(
+                        move |_, _, cx| {
+                            owner
+                                .update(cx, |this, cx| {
+                                    this.templates.category = id;
+                                    this.templates.page = 0;
+                                    cx.notify();
+                                })
+                                .ok();
+                        },
+                    ));
+                }
+                menu
+            });
         let mut grid = div()
             .id("new-template-grid")
             .test_support()
@@ -442,5 +512,37 @@ impl NewCanvas {
                 .child(Button::new("new-canvas-create").label(if self.submitted { "Creating…" } else { "Use template" }).small().primary().disabled(selected.is_none() || self.submitted)
                     .on_click(cx.listener(|this, _, window, cx| this.submit_template(window, cx)))))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    #[test]
+    fn template_cache_reuses_images_and_evicts_the_least_recent_preview() {
+        let image = Arc::new(crate::viewport::bgra_image(1, 1, vec![0, 0, 0, 255]));
+        let mut cache = TemplatePreviewCache::default();
+        for i in 0..64 {
+            cache.insert(
+                format!("design-{i}"),
+                Preview {
+                    image: image.clone(),
+                    description: String::new(),
+                },
+            );
+        }
+        assert!(Arc::ptr_eq(&cache.get("design-0").unwrap().image, &image));
+        cache.insert(
+            "design-64".into(),
+            Preview {
+                image,
+                description: String::new(),
+            },
+        );
+        assert_eq!(cache.entries.len(), 64);
+        assert!(cache.get("design-0").is_some());
+        assert!(cache.get("design-1").is_none());
     }
 }

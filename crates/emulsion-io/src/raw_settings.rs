@@ -41,6 +41,22 @@ pub fn merge_settings(
             target.wb_override = source.wb_override;
         }
         RawSettingsGroup::Tone => {
+            target.process_version = source.process_version;
+            target.camera_profile = source.camera_profile;
+            target.wide_gamut = source.wide_gamut;
+            target.calibration = source.calibration;
+            target.shadow_tint = source.shadow_tint;
+            target.global_grading = source.global_grading;
+            target.grading_balance = source.grading_balance;
+            target.grading_blending = source.grading_blending;
+            target.sharpening_radius = source.sharpening_radius;
+            target.sharpening_detail = source.sharpening_detail;
+            target.sharpening_masking = source.sharpening_masking;
+            target.luminance_detail = source.luminance_detail;
+            target.luminance_contrast = source.luminance_contrast;
+            target.color_noise_reduction = source.color_noise_reduction;
+            target.color_noise_detail = source.color_noise_detail;
+            target.color_noise_smoothness = source.color_noise_smoothness;
             target.hsl = source.hsl;
             target.grading = source.grading;
             target.exposure = source.exposure;
@@ -62,6 +78,9 @@ pub fn merge_settings(
             target.sensor_noise_reduction = source.sensor_noise_reduction;
         }
         RawSettingsGroup::Curve => {
+            target.process_version = source.process_version;
+            target.parametric = source.parametric;
+            target.parametric_splits = source.parametric_splits;
             target.point_curves = source.point_curves;
             target.tone_curve = source.tone_curve;
             target.smooth_curve = source.smooth_curve;
@@ -223,6 +242,64 @@ pub fn suggested_sidecar_path(doc: &Document) -> Result<PathBuf> {
 
 /// The automatically discovered recipe beside an original camera file.
 pub fn sidecar_path(source: &Path) -> Result<PathBuf> {
+    let managed = managed_sidecar_path(source);
+    if managed.is_file() {
+        return Ok(managed);
+    }
+    adjacent_sidecar_path(source)
+}
+/// Stable application-managed location for read-only media. The document still
+/// verifies the original content fingerprint before any settings are applied.
+pub fn managed_sidecar_path(source: &Path) -> PathBuf {
+    let identity = source
+        .canonicalize()
+        .unwrap_or_else(|_| source.to_path_buf());
+    let digest = Sha256::digest(identity.as_os_str().as_encoded_bytes());
+    crate::recent::data_dir()
+        .join("photo-sidecars")
+        .join(format!(
+            "{}.json",
+            digest
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ))
+}
+fn write_photo(source: &Path, path: &Path, saved: &SettingsFile) -> Result<()> {
+    if !source.exists() {
+        let target = managed_sidecar_path(source);
+        std::fs::create_dir_all(target.parent().unwrap())?;
+        return write(&target, saved);
+    }
+    match write(path, saved) {
+        Err(IoError::Io(e))
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            ) =>
+        {
+            let managed = managed_sidecar_path(source);
+            std::fs::create_dir_all(managed.parent().unwrap())?;
+            write(&managed, saved)
+        }
+        result => result,
+    }
+}
+pub(crate) fn make_managed(source: &Path, digest: &str) -> Result<()> {
+    let current = sidecar_path(source)?;
+    let saved = if current.exists() {
+        load_sidecar_verified(&current, digest)?;
+        read(&current, "emulsion-raw-sidecar")?
+    } else {
+        let mut r = record("emulsion-raw-sidecar", DevelopParams::default())?;
+        r.source_sha256 = Some(digest.into());
+        r
+    };
+    let target = managed_sidecar_path(source);
+    std::fs::create_dir_all(target.parent().unwrap())?;
+    write(&target, &saved)
+}
+fn adjacent_sidecar_path(source: &Path) -> Result<PathBuf> {
     let mut name = source
         .file_name()
         .ok_or_else(|| invalid("RAW source has no filename"))?
@@ -783,7 +860,7 @@ pub fn save_photo_settings(source: &Path, digest: &str, params: DevelopParams) -
     if saved.history.len() > 100 {
         saved.history.drain(..saved.history.len() - 100);
     }
-    write(&path, &saved)
+    write_photo(source, &path, &saved)
 }
 
 pub fn photo_history(
@@ -819,7 +896,7 @@ pub fn save_snapshot(source: &Path, digest: &str, name: &str, params: DevelopPar
     }
     params.validate().map_err(invalid)?;
     saved.snapshots.insert(name.into(), params);
-    write(&path, &saved)
+    write_photo(source, &path, &saved)
 }
 
 pub(crate) fn rebind_bytes(path: &Path, old: &str, new: &str) -> Result<Vec<u8>> {

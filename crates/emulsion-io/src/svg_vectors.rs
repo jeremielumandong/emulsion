@@ -14,10 +14,30 @@ fn error(s: impl Into<String>) -> IoError {
 pub(crate) fn options() -> usvg::Options<'static> {
     static FONTS: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     usvg::Options {
+        font_family: "Geist".into(),
         fontdb: FONTS
             .get_or_init(|| {
                 let mut db = usvg::fontdb::Database::new();
                 db.load_system_fonts();
+                db.load_font_data(include_bytes!("../../../assets/fonts/Geist.ttf").to_vec());
+                db.load_font_data(include_bytes!("../../../assets/fonts/GeistMono.ttf").to_vec());
+                db.set_sans_serif_family("Geist");
+                db.set_monospace_family("Geist Mono");
+                // fontdb does not apply fontconfig aliases. Without a known
+                // generic family, SVG fallback can select a symbol face.
+                let serif = ["Liberation Serif", "DejaVu Serif", "Georgia", "Geist"]
+                    .into_iter()
+                    .find(|name| {
+                        db.query(&usvg::fontdb::Query {
+                            families: &[usvg::fontdb::Family::Name(name)],
+                            ..Default::default()
+                        })
+                        .is_some()
+                    })
+                    .unwrap_or("Geist");
+                db.set_serif_family(serif);
+                db.set_cursive_family(serif);
+                db.set_fantasy_family("Geist");
                 Arc::new(db)
             })
             .clone(),
@@ -29,7 +49,9 @@ pub(crate) fn options() -> usvg::Options<'static> {
     }
 }
 pub(crate) fn path(data: &tiny_skia::Path, t: tiny_skia::Transform) -> Result<Path> {
-    if data.is_empty() { return Ok(Path::default()); }
+    if data.is_empty() {
+        return Ok(Path::default());
+    }
     let data = data
         .clone()
         .transform(t)
@@ -229,40 +251,107 @@ pub fn document(xml: &str) -> Result<Document> {
 
 /// Converter SVGs sometimes contain valid geometry but a zero-sized page.
 /// Recover the page from visible vector bounds, retaining the vector source.
-pub(crate) fn fitted_document(xml:&str)->Result<Document>{
-    use quick_xml::{Reader,Writer,events::{Event,BytesStart}};
-    fn root(xml:&str,w:f64,h:f64,view:Option<[f64;4]>)->Result<String>{
-        let mut reader=Reader::from_str(xml);
-        loop {match reader.read_event().map_err(|e|error(e.to_string()))?{
-            Event::Start(e) if e.local_name().as_ref()=="svg"=>{
-                let name=e.name().as_ref().to_string();let mut start=BytesStart::new(name);
-                for attr in e.attributes(){let a=attr.map_err(|e|error(e.to_string()))?;if !matches!(a.key.as_ref(),"width"|"height"|"viewBox"){start.push_attribute(a);}}
-                let width=w.to_string();let height=h.to_string();start.push_attribute(("width",width.as_str()));start.push_attribute(("height",height.as_str()));
-                let view=view.map(|b|format!("{} {} {} {}",b[0],b[1],b[2],b[3]));if let Some(view)=view.as_ref(){start.push_attribute(("viewBox",view.as_str()));}
-                let mut writer=Writer::new(Vec::new());writer.write_event(Event::Start(start))?;
-                let mut out=String::from_utf8(writer.into_inner()).map_err(|e|error(e.to_string()))?;out.push_str(&xml[reader.buffer_position() as usize..]);return Ok(out);
+pub(crate) fn fitted_document(xml: &str) -> Result<Document> {
+    use quick_xml::{
+        Reader, Writer,
+        events::{BytesStart, Event},
+    };
+    fn root(xml: &str, w: f64, h: f64, view: Option<[f64; 4]>) -> Result<String> {
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().map_err(|e| error(e.to_string()))? {
+                Event::Start(e) if e.local_name().as_ref() == "svg" => {
+                    let name = e.name().as_ref().to_string();
+                    let mut start = BytesStart::new(name);
+                    for attr in e.attributes() {
+                        let a = attr.map_err(|e| error(e.to_string()))?;
+                        if !matches!(a.key.as_ref(), "width" | "height" | "viewBox") {
+                            start.push_attribute(a);
+                        }
+                    }
+                    let width = w.to_string();
+                    let height = h.to_string();
+                    start.push_attribute(("width", width.as_str()));
+                    start.push_attribute(("height", height.as_str()));
+                    let view = view.map(|b| format!("{} {} {} {}", b[0], b[1], b[2], b[3]));
+                    if let Some(view) = view.as_ref() {
+                        start.push_attribute(("viewBox", view.as_str()));
+                    }
+                    let mut writer = Writer::new(Vec::new());
+                    writer.write_event(Event::Start(start))?;
+                    let mut out =
+                        String::from_utf8(writer.into_inner()).map_err(|e| error(e.to_string()))?;
+                    out.push_str(&xml[reader.buffer_position() as usize..]);
+                    return Ok(out);
+                }
+                Event::Eof => return Err(error("SVG has no root")),
+                _ => {}
             }
-            Event::Eof=>return Err(error("SVG has no root")),_=>{}
-        }}
+        }
     }
-    let provisional=root(xml,1000.,1000.,None)?;
-    let tree=usvg::Tree::from_str(&provisional,&options()).map_err(|e|error(e.to_string()))?;
-    if tree.root().children().is_empty(){return Err(error("SVG has no visible artwork"));}
-    let b=tree.root().abs_layer_bounding_box();
-    let (w,h)=(b.width().ceil().max(1.) as f64,b.height().ceil().max(1.) as f64);
-    let scale=(30000./w.max(h)).min((100_000_000./(w*h)).sqrt()).min(1.);
-    let (width,height)=((w*scale).ceil().max(1.),(h*scale).ceil().max(1.));
-    crate::import::check_size(width as u32,height as u32)?;
-    document(&root(xml,width,height,Some([b.x() as f64,b.y() as f64,w,h]))?)
+    let provisional = root(xml, 1000., 1000., None)?;
+    let tree = usvg::Tree::from_str(&provisional, &options()).map_err(|e| error(e.to_string()))?;
+    if tree.root().children().is_empty() {
+        return Err(error("SVG has no visible artwork"));
+    }
+    let b = tree.root().abs_layer_bounding_box();
+    let (w, h) = (
+        b.width().ceil().max(1.) as f64,
+        b.height().ceil().max(1.) as f64,
+    );
+    let scale = (30000. / w.max(h))
+        .min((100_000_000. / (w * h)).sqrt())
+        .min(1.);
+    let (width, height) = ((w * scale).ceil().max(1.), (h * scale).ceil().max(1.));
+    crate::import::check_size(width as u32, height as u32)?;
+    document(&root(
+        xml,
+        width,
+        height,
+        Some([b.x() as f64, b.y() as f64, w, h]),
+    )?)
 }
 
 #[cfg(test)]
 mod fit_tests {
     #[test]
-    fn zero_converter_page_uses_vector_ink_bounds(){
+    fn zero_converter_page_uses_vector_ink_bounds() {
         let doc=super::fitted_document(r#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"><rect x="20" y="30" width="80" height="40" fill="red"/></svg>"#).unwrap();
-        assert_eq!((doc.width,doc.height),(80,40));
-        let pixels=crate::svg_viewport::SvgViewport::new(&doc).unwrap().render((80,40),[1.,0.,0.,1.,0.,0.]).unwrap();
-        assert!(pixels.chunks_exact(4).all(|p|p==[0,0,255,255]));
+        assert_eq!((doc.width, doc.height), (80, 40));
+        let pixels = crate::svg_viewport::SvgViewport::new(&doc)
+            .unwrap()
+            .render((80, 40), [1., 0., 0., 1., 0., 0.])
+            .unwrap();
+        assert!(pixels.chunks_exact(4).all(|p| p == [0, 0, 255, 255]));
+    }
+}
+
+#[cfg(test)]
+mod diagram_font_tests {
+    use super::*;
+    #[test]
+    fn diagram_svg_fallback_uses_known_text_faces() {
+        let opts = options();
+        assert_eq!(opts.font_family, "Geist");
+        for family in [
+            usvg::fontdb::Family::SansSerif,
+            usvg::fontdb::Family::Serif,
+            usvg::fontdb::Family::Monospace,
+        ] {
+            let id = opts
+                .fontdb
+                .query(&usvg::fontdb::Query {
+                    families: &[family],
+                    ..Default::default()
+                })
+                .unwrap();
+            let face = opts.fontdb.face(id).unwrap();
+            assert!(
+                !face
+                    .families
+                    .iter()
+                    .any(|(name, _)| name.to_lowercase().contains("symbol"))
+            );
+        }
     }
 }

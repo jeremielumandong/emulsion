@@ -1,7 +1,10 @@
 # Print dialog design
 
 Status: design snapshot, 2026-09-27. The shared dialog and first native adapters
-are now implemented; see [Printing](../guides/printing.md) for current behavior and remaining
+are now implemented. The September 28 follow-up adds direct Library selections,
+Design frames and timestamped storyboards, labels, ICC conversion and flattened
+CMYK PDF/X-1a:2001 / PDF/X-3:2002. The sections below preserve the original plan;
+see [Printing](../guides/printing.md) for current behavior and remaining
 platform acceptance. Open [the interactive concept](print-dialog-prototype.html) in a
 browser. Its printers and artwork are demonstration data; it cannot submit jobs.
 

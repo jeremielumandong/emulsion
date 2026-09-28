@@ -26,6 +26,7 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
         bail!("Select at least one existing page")
     }
     s.creative.validate()?;
+    s.production.validate()?;
     if !(1..=999).contains(&s.copies)
         || !s.scale.is_finite()
         || !(1. ..=1000.).contains(&s.scale)
@@ -47,6 +48,9 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
         sheets: vec![],
         warnings: vec![],
     };
+    if s.production.enabled() {
+        result.warnings.push(format!("ICC-managed output flattens artwork at {} PPI using the selected profile; preview is an sRGB simulation.",s.production.dpi));
+    }
     if c.bleed_mm > 0. {
         result.warnings.push("Bleed uses artwork beyond the page edge. Uncovered areas remain paper white; extend your artwork before trimming.".into());
     }
@@ -83,6 +87,7 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
                     clip: trim.inset(-c.bleed_mm),
                     bleed: c.bleed_mm,
                     crop_marks: c.crop_marks,
+                    label: None,
                 }],
             });
             quality_warning(&mut result.warnings, &sources[source], 1.);
@@ -209,6 +214,7 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
                         trim: printable,
                         bleed: 0.,
                         crop_marks: false,
+                        label: None,
                     });
                     result.sheets.push(sheet);
                 }
@@ -242,6 +248,28 @@ fn add(
     let doc = &sources[source];
     let natural = doc.physical_size()?;
     let c = &s.creative;
+    let label =
+        if matches!(s.layout, Layout::Contact | Layout::Repeat) && c.labels != LabelMode::None {
+            let text = match c.labels {
+                LabelMode::NumberAndName => format!("{} · {}", source + 1, doc.name),
+                _ => doc.name.clone(),
+            };
+            Some(Label {
+                text,
+                bounds: Rect {
+                    x: cell.x,
+                    y: cell.y + cell.h - 6.,
+                    w: cell.w,
+                    h: 6.,
+                },
+            })
+        } else {
+            None
+        };
+    let cell = Rect {
+        h: cell.h - if label.is_some() { 6. } else { 0. },
+        ..cell
+    };
     let area = cell.inset(c.surround());
     if area.w <= 0. || area.h <= 0. {
         bail!("Bleed and crop marks leave no room for artwork")
@@ -291,6 +319,7 @@ fn add(
         clip: trim.inset(-c.bleed_mm),
         bleed: c.bleed_mm,
         crop_marks: c.crop_marks,
+        label,
     });
     Ok(())
 }
@@ -428,5 +457,40 @@ mod tests {
                 .is_err()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+    #[test]
+    fn contact_labels_reserve_space_outside_artwork_bleed_and_marks() {
+        let source = Source {
+            name: "long <filename> & text.png".into(),
+            width: 100,
+            height: 100,
+            ppi: 100.,
+            svg: String::new(),
+            rasterized: false,
+            document: None,
+            original_paths: vec![],
+        };
+        let mut s = Settings {
+            layout: Layout::Contact,
+            ..Default::default()
+        };
+        s.creative.labels = LabelMode::NumberAndName;
+        s.creative.crop_marks = true;
+        s.creative.bleed_mm = 3.;
+        let job = layout(&[source], &[0], &s).unwrap();
+        let item = &job.sheets[0].items[0];
+        let label = item.label.as_ref().unwrap();
+        assert_eq!(label.bounds.h, 6.);
+        assert!(item.clip.y + item.clip.h + 7. <= label.bounds.y + 0.001);
+        assert!(label.text.starts_with("1 · long <filename>"));
+        assert!(
+            label.bounds.y + label.bounds.h
+                <= job.sheets[0].printable.y + job.sheets[0].printable.h
+        );
     }
 }

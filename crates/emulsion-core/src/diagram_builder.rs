@@ -75,7 +75,8 @@ impl Builder {
                     (h - 20.) / 2.
                 }) as f32,
                 width: Some((w - 16.).max(1.) as f32),
-                align: Align::Center,
+                // Leave the middle of a lane free for cross-lane connectors.
+                align: if kind.is_container() { Align::Left } else { Align::Center },
                 color: DEFAULT_TEXT,
                 ..Default::default()
             },
@@ -102,6 +103,44 @@ impl Builder {
             },
         );
         Ok(group)
+    }
+    /// Use the same editable geometry and catalog identity as the shapes toolbox.
+    pub fn add_stencil(
+        &mut self,
+        stencil: stencils::Stencil,
+        bounds: Bounds,
+        label: &str,
+    ) -> Result<NodeId, String> {
+        let id = self.add_shape(stencil.kind, bounds, label)?;
+        let shape = self.model.shapes.get_mut(&id).unwrap();
+        shape.data.insert("emulsion_stencil".into(), stencil.id.into());
+        let node = self.doc.node_mut(shape.body).unwrap();
+        if let NodeKind::Path { path, .. } = &mut node.kind {
+            *path = Arc::new(stencil.path(bounds));
+        }
+        if stencil.label_below {
+            let [x, y, w, h] = bounds;
+            if let NodeKind::Text { spec, .. } = &mut self.doc.node_mut(shape.label).unwrap().kind {
+                let spec = Arc::make_mut(spec);
+                spec.x = x as f32;
+                spec.y = (y + h + 8.) as f32;
+                spec.width = Some(w as f32);
+            }
+        }
+        // Refresh the lazy vector caches after replacing geometry and text frames.
+        for node_id in [shape.body, shape.label] {
+            let (w, h) = (self.doc.width, self.doc.height);
+            match &mut self.doc.node_mut(node_id).unwrap().kind {
+                NodeKind::Path { path, style, cache } => {
+                    *cache = crate::vector_cache::VectorRaster::path(path.clone(), *style, w, h);
+                }
+                NodeKind::Text { spec, cache } => {
+                    *cache = crate::vector_cache::VectorRaster::text(spec.clone(), w, h);
+                }
+                _ => unreachable!(),
+            }
+        }
+        Ok(id)
     }
     pub fn connect(
         &mut self,
@@ -167,6 +206,7 @@ impl Builder {
         self.model.edges.insert(
             group,
             Edge {
+                routing_warning:None,
                 double_line: false, label_background: None, double_path: None, label_background_path: None,
                 corner_radius: 0.,
                 labels:Vec::new(),
@@ -191,7 +231,13 @@ impl Builder {
         Ok(group)
     }
     pub fn finish(mut self) -> Result<Document, String> {
-        self.doc.nodes.splice(1..1, self.edges);
+        // Container frames are opaque. Their descendants form one stacking
+        // subtree, so root connectors must paint above it to remain visible.
+        if self.model.shapes.values().any(|s| s.kind.is_container()) {
+            self.doc.nodes.extend(self.edges);
+        } else {
+            self.doc.nodes.splice(1..1, self.edges);
+        }
         self.doc.diagram = Some(Arc::new(self.model));
         self.doc.validate().map_err(|e| e.to_string())?;
         synchronize(

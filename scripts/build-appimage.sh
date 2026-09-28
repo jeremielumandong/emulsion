@@ -25,7 +25,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLS_DIR="${EMULSION_TOOLS_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/emulsion/tools}"
-OUT_DIR="$ROOT_DIR/target/appimage"
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
+[[ "$TARGET_DIR" = /* ]] || TARGET_DIR="$ROOT_DIR/$TARGET_DIR"
+OUT_DIR="$TARGET_DIR/appimage"
 APPDIR="$OUT_DIR/Emulsion.AppDir"
 ARCH=x86_64
 APP_ID=app.emulsion.Emulsion
@@ -77,7 +79,7 @@ if (( DO_BUILD )); then
   log "Building emulsion $VERSION (release)"
   ( cd "$ROOT_DIR" && cargo build --release --locked -p emulsion-app )
 fi
-BIN="$ROOT_DIR/target/release/emulsion"
+BIN="$TARGET_DIR/release/emulsion"
 [[ -x "$BIN" ]] || die "$BIN is missing — run without --no-build"
 
 APPIMAGETOOL="$TOOLS_DIR/appimagetool-$APPIMAGETOOL_VERSION-$ARCH.AppImage"

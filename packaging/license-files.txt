@@ -48,3 +48,4 @@ vendor/gpui/licenses/MICROSOFT-TERMINAL-MIT.txt
 assets/diagram-stencils/LICENSE-APACHE
 assets/diagram-stencils/LICENSE-STENCILS
 assets/diagram-stencils/UPSTREAM.json
+assets/diagram-stencils/UPSTREAM-DYNAMIC.json

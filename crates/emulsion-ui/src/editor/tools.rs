@@ -12,6 +12,7 @@ use emulsion_raster::{IRect, Mask, fill};
 use glam::{DAffine2, dvec2};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::Button;
+use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 
 #[path = "shape_fill.rs"]
@@ -4557,43 +4558,71 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let current = self.brush_settings_section;
-        let navigation = div().flex().flex_wrap().gap_1().children(
-            [
-                (
-                    BrushSettingsSection::Presets,
-                    "brush-settings-presets",
-                    "Presets",
-                ),
-                (BrushSettingsSection::Tip, "brush-settings-tip", "Tip"),
-                (
-                    BrushSettingsSection::Texture,
-                    "brush-settings-texture",
-                    "Texture",
-                ),
-                (
-                    BrushSettingsSection::Dynamics,
-                    "brush-settings-dynamics",
-                    "Dynamics",
-                ),
-                (
-                    BrushSettingsSection::Drawing,
-                    "brush-settings-drawing",
-                    "Drawing",
-                ),
-            ]
-            .into_iter()
-            .map(|(section, id, label)| {
-                chip(id, label, current == section, p)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.brush_settings_section = section;
-                        if section == BrushSettingsSection::Presets {
+        let sections = [
+            (BrushSettingsSection::Presets, "Brushes"),
+            (BrushSettingsSection::Tip, "Tip"),
+            (BrushSettingsSection::Texture, "Texture"),
+            (BrushSettingsSection::Dynamics, "Dynamics"),
+            (BrushSettingsSection::Drawing, "Drawing"),
+        ];
+        let focus = self
+            .presets
+            .tabs_focus
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone();
+        let navigation = div()
+            .id("brush-settings-navigation")
+            .w_full()
+            .track_focus(&focus)
+            .tab_index(0)
+            .key_context("BrushSettingsTabs")
+            // The vendored TabBar supplies selection visuals and overflow;
+            // explicit keyboard handling fills its desktop navigation gap.
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let current = sections
+                    .iter()
+                    .position(|(s, _)| *s == this.brush_settings_section)
+                    .unwrap_or(1);
+                let index = match event.keystroke.key.as_str() {
+                    "right" => (current + 1) % sections.len(),
+                    "left" => (current + sections.len() - 1) % sections.len(),
+                    "home" => 0,
+                    "end" => sections.len() - 1,
+                    _ => return,
+                };
+                this.brush_settings_section = sections[index].0;
+                this.presets.tabs_scroll.scroll_to_item(index);
+                if this.brush_settings_section == BrushSettingsSection::Presets {
+                    this.prepare_presets(cx);
+                }
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .child(
+                TabBar::new("brush-settings-tabs")
+                    .track_scroll(&self.presets.tabs_scroll)
+                    .small()
+                    .underline()
+                    .menu(true)
+                    .w_full()
+                    .selected_index(
+                        sections
+                            .iter()
+                            .position(|(s, _)| *s == current)
+                            .unwrap_or(1),
+                    )
+                    .children(sections.iter().map(|(_, label)| Tab::new().label(*label)))
+                    .on_click(cx.listener(move |this, index: &usize, window, cx| {
+                        window.focus(&focus, cx);
+                        this.brush_settings_section = sections[*index].0;
+                        this.presets.tabs_scroll.scroll_to_item(*index);
+                        if this.brush_settings_section == BrushSettingsSection::Presets {
                             this.prepare_presets(cx);
                         }
                         cx.notify();
-                    }))
-                    .test_support()
-            }),
-        );
+                    })),
+            );
         let controls = if current == BrushSettingsSection::Presets {
             self.presets_view(p, cx)
                 .map(IntoElement::into_any_element)
@@ -4610,21 +4639,23 @@ impl EditorView {
             .gap_3()
             .p_3()
             .w_full()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(mono("Brush settings", 12., p.ink))
-                    .child(
-                        chip("brush-settings-close", "Close", false, p)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.select_sidebar(SidebarTab::History, cx);
-                                window.focus(&this.canvas_focus, cx);
-                            }))
-                            .test_support(),
-                    ),
-            )
+            .when(!self.sidebar_layout.flyout_open, |panel| {
+                panel.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(mono("Brush settings", 12., p.ink))
+                        .child(
+                            chip("brush-settings-close", "Close", false, p)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.select_sidebar(SidebarTab::History, cx);
+                                    window.focus(&this.canvas_focus, cx);
+                                }))
+                                .test_support(),
+                        ),
+                )
+            })
             .child(navigation)
             .child(
                 div()

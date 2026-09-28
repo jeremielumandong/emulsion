@@ -2,11 +2,20 @@
 use super::*;
 use emulsion_core::raw::DevelopParams;
 use gpui_kit::component::{
-    Disableable, Selectable,
+    Disableable, Selectable, WindowExt,
     slider::{Slider, SliderEvent, SliderState},
 };
 #[derive(Clone, Copy)]
-enum Field {
+pub(super) enum Field {
+    Basic(usize),
+    Parametric(usize),
+    Split(usize),
+    Calibration(usize, usize),
+    ShadowTint,
+    GlobalGrade(usize),
+    Blend,
+    Balance,
+    Detail(usize),
     Crop(usize),
     Straighten,
     Perspective(usize),
@@ -18,8 +27,71 @@ enum Field {
     Grade(usize, usize),
     Mask(usize, usize),
 }
-fn assign(p: &mut DevelopParams, f: Field, v: f32) {
+pub(super) fn assign(p: &mut DevelopParams, f: Field, v: f32) {
     match f {
+        Field::Basic(i) => match i {
+            0 => p.exposure = v,
+            1 => p.contrast = v,
+            2 => p.highlights = -v,
+            3 => p.shadows = v,
+            4 => p.blacks = v,
+            5 => p.whites = v,
+            6 => p.temperature = v,
+            7 => p.tint = v,
+            8 => p.saturation = v,
+            9 => p.vibrance = v,
+            10 => p.texture = v,
+            11 => p.clarity = v,
+            12 => p.dehaze = v,
+            13 => p.vignette = v,
+            14 => p.sharpening = v,
+            15 => p.noise_reduction = v,
+            _ => p.sensor_noise_reduction = v,
+        },
+        Field::Parametric(i) => {
+            p.process_version = 2;
+            p.parametric[i] = v;
+        }
+        Field::Split(i) => {
+            p.process_version = 2;
+            p.parametric_splits[i] = v;
+        }
+        Field::Calibration(i, j) => {
+            p.process_version = 2;
+            p.calibration[i][j] = v;
+        }
+        Field::ShadowTint => {
+            p.process_version = 2;
+            p.shadow_tint = v;
+        }
+        Field::GlobalGrade(i) => {
+            p.process_version = 2;
+            p.global_grading[i] = v;
+        }
+        Field::Blend => {
+            p.process_version = 2;
+            p.grading_blending = v;
+        }
+        Field::Balance => {
+            p.process_version = 2;
+            p.grading_balance = v;
+        }
+        Field::Detail(i) => {
+            p.process_version = 2;
+            match i {
+                0 => p.sharpening = v,
+                1 => p.sharpening_radius = v,
+                2 => p.sharpening_detail = v,
+                3 => p.sharpening_masking = v,
+                4 => p.noise_reduction = v,
+                5 => p.luminance_detail = v,
+                6 => p.luminance_contrast = v,
+                7 => p.color_noise_reduction = v,
+                8 => p.color_noise_detail = v,
+                9 => p.color_noise_smoothness = v,
+                _ => p.sensor_noise_reduction = v,
+            }
+        }
         Field::Crop(i) => {
             let (lo, hi) = match i {
                 0 => (0., p.crop[2] - 0.001),
@@ -88,6 +160,40 @@ impl Workspace {
         match section {
             1 => {
                 panel = panel.child(label("Crop and geometry", &palette));
+                for (tool, name) in [
+                    (5, "Draw crop"),
+                    (6, "Straighten line"),
+                    (7, "Perspective guide"),
+                ] {
+                    panel = panel.child(
+                        Button::new(("develop-geometry-tool", tool))
+                            .label(name)
+                            .small()
+                            .outline()
+                            .selected(self.batch.develop.canvas_tool == tool)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.batch.develop.canvas_tool =
+                                    if this.batch.develop.canvas_tool == tool {
+                                        0
+                                    } else {
+                                        tool
+                                    };
+                                this.invalidate_library_preview();
+                                cx.notify();
+                            })),
+                    );
+                }
+                panel = panel.child(
+                    Button::new("develop-geometry-done")
+                        .label("Done")
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.batch.develop.canvas_tool = 0;
+                            this.invalidate_library_preview();
+                            cx.notify();
+                        })),
+                );
                 panel = panel.child(
                     Button::new("library-lens-auto")
                         .label("Match lens profile")
@@ -312,6 +418,7 @@ impl Workspace {
                 }
             }
             5 => {
+                panel = panel.child(self.library_local_panel(cx));
                 panel = panel.child(label("Local adjustments", &palette));
                 let mut buttons = div().flex().flex_wrap().gap_1();
                 for i in 0..8 {
@@ -373,6 +480,106 @@ impl Workspace {
                     ),
                 ]);
             }
+            9 => {
+                let values = [
+                    params.sharpening,
+                    params.sharpening_radius,
+                    params.sharpening_detail,
+                    params.sharpening_masking,
+                    params.noise_reduction,
+                    params.luminance_detail,
+                    params.luminance_contrast,
+                    params.color_noise_reduction,
+                    params.color_noise_detail,
+                    params.color_noise_smoothness,
+                    params.sensor_noise_reduction,
+                ];
+                for (i, name) in [
+                    "Sharpening",
+                    "Radius (pixels)",
+                    "Detail",
+                    "Edge masking",
+                    "Luminance noise",
+                    "Luminance detail",
+                    "Luminance contrast",
+                    "Color noise",
+                    "Color detail",
+                    "Color smoothness",
+                    "Sensor denoise (RAW)",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if i == 10 && !emulsion_io::photo_develop::is_raw_photo(&path) {
+                        continue;
+                    }
+                    fields.push((
+                        name,
+                        Field::Detail(i),
+                        values[i],
+                        if i == 1 { 0.5 } else { 0. },
+                        if i == 1 { 3. } else { 1. },
+                        0.01,
+                    ));
+                }
+            }
+            10 => {
+                fields.push((
+                    "Shadow tint",
+                    Field::ShadowTint,
+                    params.shadow_tint,
+                    -1.,
+                    1.,
+                    0.01,
+                ));
+                for (i, names) in [
+                    ["Red primary hue", "Red primary saturation"],
+                    ["Green primary hue", "Green primary saturation"],
+                    ["Blue primary hue", "Blue primary saturation"],
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    for (j, name) in names.into_iter().enumerate() {
+                        fields.push((
+                            name,
+                            Field::Calibration(i, j),
+                            params.calibration[i][j],
+                            -1.,
+                            1.,
+                            0.01,
+                        ));
+                    }
+                }
+            }
+            11 => {
+                for (i, name) in ["Shadows", "Darks", "Lights", "Highlights"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    fields.push((
+                        name,
+                        Field::Parametric(i),
+                        params.parametric[i],
+                        -1.,
+                        1.,
+                        0.01,
+                    ));
+                }
+                for (i, name) in ["Shadow split", "Midtone split", "Highlight split"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    fields.push((
+                        name,
+                        Field::Split(i),
+                        params.parametric_splits[i],
+                        0.01,
+                        0.99,
+                        0.01,
+                    ));
+                }
+            }
             _ => {
                 panel = panel.child(label("White balance", &palette));
                 fields.push((
@@ -394,6 +601,50 @@ impl Workspace {
                 ));
             }
         }
+        if section == 4 {
+            fields.extend([
+                (
+                    "Global hue",
+                    Field::GlobalGrade(0),
+                    params.global_grading[0],
+                    0.,
+                    360.,
+                    1.,
+                ),
+                (
+                    "Global saturation",
+                    Field::GlobalGrade(1),
+                    params.global_grading[1],
+                    0.,
+                    1.,
+                    0.01,
+                ),
+                (
+                    "Global luminance",
+                    Field::GlobalGrade(2),
+                    params.global_grading[2],
+                    -1.,
+                    1.,
+                    0.01,
+                ),
+                (
+                    "Blending",
+                    Field::Blend,
+                    params.grading_blending,
+                    0.,
+                    1.,
+                    0.01,
+                ),
+                (
+                    "Balance",
+                    Field::Balance,
+                    params.grading_balance,
+                    -1.,
+                    1.,
+                    0.01,
+                ),
+            ]);
+        }
         if self.batch.develop.slider_key.as_ref() != Some(&(path.clone(), params)) {
             self.batch.develop.sliders.clear();
             for &(_, field, value, min, max, step) in &fields {
@@ -405,7 +656,13 @@ impl Workspace {
                         .default_value(value)
                 });
                 let sub = cx.subscribe(&slider, move |this, _, event, cx| {
+                    if let SliderEvent::Release(_) = event {
+                        this.batch.develop.gesture_active = false;
+                        this.batch.develop.gesture_recorded = false;
+                        return;
+                    }
                     if let SliderEvent::Change(value) = event {
+                        this.batch.develop.gesture_active = true;
                         let Some(path) = this
                             .batch
                             .current
@@ -429,7 +686,7 @@ impl Workspace {
             }
             self.batch.develop.slider_key = Some((path, params));
         }
-        for (index, (name, _, value, _, _, _)) in fields.into_iter().enumerate() {
+        for (index, (name, field, value, min, max, step)) in fields.into_iter().enumerate() {
             panel = panel.child(
                 div()
                     .flex()
@@ -439,8 +696,10 @@ impl Workspace {
                         div()
                             .flex()
                             .justify_between()
-                            .child(mono(name, 11., palette.muted))
-                            .child(mono(format!("{value:.3}"), 10., palette.ink)),
+                            .child(self.library_control_label(index, name, field, cx))
+                            .child(self.library_numeric_control(
+                                index, name, field, value, min, max, step, cx,
+                            )),
                     )
                     .child(
                         Slider::new(&self.batch.develop.sliders[index].0)
@@ -449,6 +708,183 @@ impl Workspace {
             );
         }
         panel.into_any_element()
+    }
+    pub(super) fn library_numeric_control(
+        &self,
+        index: usize,
+        name: &str,
+        field: Field,
+        value: f32,
+        min: f32,
+        max: f32,
+        step: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let name = name.to_owned();
+        div()
+            .id(("develop-number-control", index))
+            .flex()
+            .gap_1()
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                let delta = match event.keystroke.key.as_str() {
+                    "left" | "down" => -step,
+                    "right" | "up" => step,
+                    _ => return,
+                };
+                if this.batch.develop.saving {
+                    return;
+                }
+                let Some(path) = this
+                    .batch
+                    .current
+                    .and_then(|i| this.batch.items.get(i))
+                    .map(|i| i.path.clone())
+                else {
+                    return;
+                };
+                let Some(mut p) = this.batch.develop.current_params(&path) else {
+                    return;
+                };
+                assign(&mut p, field, (value + delta).clamp(min, max));
+                if p.validate().is_ok() {
+                    this.library_adjust(p, cx);
+                }
+                cx.stop_propagation();
+            }))
+            .child(
+                Button::new(("develop-number", index))
+                    .label(format!("{value:.3}"))
+                    .small()
+                    .ghost()
+                    .tooltip("Enter an exact value")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let Some(path) = this
+                            .batch
+                            .current
+                            .and_then(|i| this.batch.items.get(i))
+                            .map(|i| i.path.clone())
+                        else {
+                            return;
+                        };
+                        let input = cx.new(|cx| {
+                            InputState::new(window, cx).default_value(format!("{value}"))
+                        });
+                        let owner = cx.weak_entity();
+                        let title = name.clone();
+                        window.open_dialog(cx, move |dialog, _, _| {
+                            let input = input.clone();
+                            let submitted = input.clone();
+                            let owner = owner.clone();
+                            let path = path.clone();
+                            dialog
+                                .title(title.clone())
+                                .child(Input::new(&input))
+                                .child(format!("Range: {min} to {max}"))
+                                .footer(crate::widgets::form_dialog_footer("Apply"))
+                                .on_ok(move |_, _, cx| {
+                                    let Ok(v) = submitted.read(cx).value().parse::<f32>() else {
+                                        return false;
+                                    };
+                                    if !v.is_finite() || !(min..=max).contains(&v) {
+                                        return false;
+                                    }
+                                    owner
+                                        .update(cx, |this, cx| {
+                                            if this.batch.develop.saving
+                                                || this
+                                                    .batch
+                                                    .current
+                                                    .and_then(|i| this.batch.items.get(i))
+                                                    .is_none_or(|i| i.path != path)
+                                            {
+                                                return false;
+                                            }
+                                            let Some(mut p) =
+                                                this.batch.develop.current_params(&path)
+                                            else {
+                                                return false;
+                                            };
+                                            assign(&mut p, field, v);
+                                            if p.validate().is_err() {
+                                                return false;
+                                            }
+                                            this.batch.develop.gesture_active = false;
+                                            this.batch.develop.gesture_recorded = false;
+                                            this.library_adjust(p, cx);
+                                            true
+                                        })
+                                        .unwrap_or(false)
+                                })
+                        });
+                    })),
+            )
+            .child(
+                Button::new(("develop-reset-control", index))
+                    .label("↺")
+                    .small()
+                    .ghost()
+                    .tooltip("Reset this control")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.library_reset_field(field, cx);
+                    })),
+            )
+            .into_any_element()
+    }
+    pub(super) fn library_reset_field(&mut self, field: Field, cx: &mut Context<Self>) {
+        if self.batch.develop.saving {
+            return;
+        }
+        let Some(path) = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone())
+        else {
+            return;
+        };
+        let Some(mut p) = self.batch.develop.current_params(&path) else {
+            return;
+        };
+        let default = match field {
+            Field::Crop(i) => [0., 0., 1., 1.][i],
+            Field::Kelvin => 6504.,
+            Field::Split(i) => [0.25, 0.5, 0.75][i],
+            Field::Blend => 0.5,
+            Field::Detail(1) => 0.8,
+            Field::Detail(2 | 5 | 8 | 9) => 0.5,
+            Field::Mask(_, 0 | 1) => 0.5,
+            Field::Mask(_, 2 | 3) => 0.25,
+            Field::Mask(_, 4) => 0.5,
+            Field::Curve(channel, i) => p.point_curves[channel].points[i][0],
+            _ => 0.,
+        };
+        if matches!(field, Field::Kelvin) {
+            p.kelvin = None;
+            p.wb_override = None;
+            p.temperature = 0.;
+        } else {
+            assign(&mut p, field, default);
+        }
+        if p.validate().is_ok() {
+            self.library_adjust(p, cx);
+        }
+    }
+    pub(super) fn library_control_label(
+        &self,
+        index: usize,
+        name: &str,
+        field: Field,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(("develop-control-label", index))
+            .child(mono(name.to_owned(), 11., theme::palette(cx).muted))
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if event.click_count() == 2 {
+                    this.library_reset_field(field, cx);
+                }
+            }))
+            .into_any_element()
     }
     fn library_curve_graph(&self, params: DevelopParams, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
@@ -808,6 +1244,28 @@ impl Workspace {
             );
         }
         panel = panel.child(sizes);
+        let mut spaces = div().flex().flex_wrap().gap_1();
+        for (i, (title, space)) in [
+            ("sRGB", emulsion_io::photo_color::Space::Srgb),
+            ("Adobe RGB", emulsion_io::photo_color::Space::AdobeRgb),
+            ("ProPhoto RGB", emulsion_io::photo_color::Space::ProPhoto),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            spaces = spaces.child(
+                Button::new(("library-output-color", i))
+                    .label(title)
+                    .small()
+                    .ghost()
+                    .selected(settings.color_space == space)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.batch.output_settings.color_space = space;
+                        cx.notify();
+                    })),
+            );
+        }
+        panel = panel.child(label("Output color space", &p)).child(spaces);
         let mut quality = div().flex().flex_wrap().gap_1();
         for (i, value) in [80, 92, 100].into_iter().enumerate() {
             quality = quality.child(
@@ -1022,7 +1480,46 @@ impl Workspace {
 
 impl Workspace {
     pub(super) fn library_catalog_controls(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut panel = div().flex().flex_col().gap_1();
+        let mut panel = div().flex().flex_col().gap_1().child(
+            Button::new("library-relink-root")
+                .label("Relink folder root…")
+                .small()
+                .ghost()
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.library_relink_root_dialog(window, cx)),
+                ),
+        );
+        panel = panel.child(
+            Button::new("library-maintain-cache")
+                .label("Manage preview storage")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.spawn(async move |this, cx| {
+                        let result = cx
+                            .background_spawn(async { emulsion_io::thumb::maintain_cache() })
+                            .await;
+                        this.update(cx, |this, cx| {
+                            this.batch.note = Some(match result {
+                                Ok(r) => (
+                                    format!(
+                                        "Preview storage: {} files, {:.1} MiB; reclaimed {:.1} MiB",
+                                        r.files,
+                                        r.bytes as f64 / 1048576.,
+                                        r.reclaimed_bytes as f64 / 1048576.
+                                    )
+                                    .into(),
+                                    false,
+                                ),
+                                Err(e) => (e.to_string().into(), true),
+                            });
+                            cx.notify();
+                        })
+                        .ok();
+                    })
+                    .detach();
+                })),
+        );
         for (i, title) in [
             "Create virtual copy",
             "Stack selection",
@@ -1172,8 +1669,8 @@ impl Workspace {
                             this.library_show(cx);
                             this.batch.note = Some((
                                 format!(
-                                    "Imported {} photos; {} missing. {}",
-                                    report.imported,
+                                    "Imported {} photos, {} keyword assignments, {} labels, {} collections and {} histories; {} offline. {}",
+                                    report.imported, report.keywords, report.color_labels, report.collections, report.histories,
                                     report.missing.len(),
                                     report.warnings.join(" ")
                                 )

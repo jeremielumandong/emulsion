@@ -961,7 +961,8 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 node.opacity * 100.
             ));
             let link=doc.design.interactions.get(id).and_then(|actions|actions.iter().find_map(|a|if let emulsion_core::design_interactions::Action::Url{url}=a{Some(url)}else{None})).or_else(||shape.data.get("drawio_link")).map_or(String::new(),|url|format!(" link=\"{}\"",escape(url)));
-            cells.insert(*id, format!("<mxCell{link} id=\"s{id}\" value=\"{}\" vertex=\"1\" visible=\"{}\" parent=\"{parent}\" style=\"{style}\" emulsionData=\"{}\"><mxGeometry x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" as=\"geometry\"/></mxCell>",escape(&label_html(doc,shape.label)),u8::from(node.visible),escape(&serde_json::to_string(&shape.data).map_err(|e|error(e.to_string()))?)));
+            let structured=if shape.data.contains_key("emulsion_structure"){match shape.kind{ShapeKind::Class=>" emulsionKind=\"class\"",ShapeKind::Entity=>" emulsionKind=\"entity\"",_=>""}}else{""};
+            cells.insert(*id, format!("<mxCell{link}{structured} id=\"s{id}\" value=\"{}\" vertex=\"1\" visible=\"{}\" parent=\"{parent}\" style=\"{style}\" emulsionData=\"{}\"><mxGeometry x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" as=\"geometry\"/></mxCell>",escape(&label_html(doc,shape.label)),u8::from(node.visible),escape(&serde_json::to_string(&shape.data).map_err(|e|error(e.to_string()))?)));
         }
         for (id, edge) in &model.edges {
             let mut cell_xml = String::new();

@@ -13,10 +13,19 @@ pub(super) fn apply(
     let mut pixels: Vec<[f32; 4]> = pixels.into_iter().map(|p| [p[0], p[1], p[2], 1.]).collect();
     if params.noise_reduction > 0. {
         cancelled(cancel)?;
+        let original = if params.process_version >= 2 && params.luminance_contrast > 0. {
+            Some(pixels.clone())
+        } else {
+            None
+        };
         pixels = apply_pixels_cpu(
             &Filter::ReduceNoise {
                 strength: params.noise_reduction * 10.,
-                detail: 50.,
+                detail: if params.process_version == 1 {
+                    50.
+                } else {
+                    params.luminance_detail * 100.
+                },
             },
             w,
             h,
@@ -24,12 +33,53 @@ pub(super) fn apply(
         )
         .ok_or_else(|| invalid("RAW noise reduction failed"))?;
         normalize(&mut pixels);
+        if let Some(original) = original {
+            for (p, src) in pixels.iter_mut().zip(original) {
+                let y = luminance([p[0], p[1], p[2]]);
+                let sy = luminance([src[0], src[1], src[2]]);
+                let weight = ((sy - y).abs() * 20.).clamp(0., 1.) * params.luminance_contrast;
+                for c in 0..3 {
+                    p[c] += (sy - y) * weight;
+                }
+            }
+        }
     }
-    for (amount, radius) in [
+    if params.process_version >= 2 && params.color_noise_reduction > 0. {
+        cancelled(cancel)?;
+        let radius = 0.5 + params.color_noise_smoothness * 2.5;
+        let blur = apply_pixels_cpu(&Filter::GaussianBlur { radius }, w, h, pixels.clone())
+            .ok_or_else(|| invalid("Chroma denoise failed"))?;
+        pixels
+            .par_iter_mut()
+            .zip(blur.par_iter())
+            .for_each(|(p, b)| {
+                let src = [p[0], p[1], p[2]];
+                let dst = [b[0], b[1], b[2]].map(|v| v / b[3].max(1e-6));
+                let y = luminance(src);
+                let by = luminance(dst);
+                let edge = (y - by).abs();
+                let weight =
+                    params.color_noise_reduction / (1. + edge * params.color_noise_detail * 100.);
+                for c in 0..3 {
+                    p[c] = y + (src[c] - y) * (1. - weight) + (dst[c] - by) * weight;
+                }
+            });
+    }
+    for (index, (amount, radius)) in [
         (params.texture, 1.5),
         (params.clarity, 12.),
-        (params.sharpening * 1.5, 0.8),
-    ] {
+        (
+            params.sharpening * 1.5,
+            if params.process_version == 1 {
+                0.8
+            } else {
+                params.sharpening_radius
+            },
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         if amount == 0. {
             continue;
         }
@@ -43,8 +93,22 @@ pub(super) fn apply(
                 // Normalize the blur at image boundaries so a constant field stays
                 // constant, without dark rims from the filter's transparent padding.
                 let alpha = b[3].max(1e-6);
+                let edge = ((p[0] - b[0] / alpha).abs()
+                    + (p[1] - b[1] / alpha).abs()
+                    + (p[2] - b[2] / alpha).abs())
+                    / 3.;
+                let weight = if index == 2 && params.process_version >= 2 {
+                    let mask = if params.sharpening_masking == 0. {
+                        1.
+                    } else {
+                        (edge / (params.sharpening_masking * 0.08).max(1e-6)).clamp(0., 1.)
+                    };
+                    mask * (0.5 + params.sharpening_detail)
+                } else {
+                    1.
+                };
                 for ch in 0..3 {
-                    p[ch] += amount * (p[ch] - b[ch] / alpha);
+                    p[ch] += amount * weight * (p[ch] - b[ch] / alpha);
                 }
             });
     }

@@ -51,11 +51,11 @@ impl EditorView {
             "diagram-connector-route",
             match edge.routing {
                 Routing::Straight => "Straight",
-                Routing::Orthogonal => "Elbow",
+                Routing::Orthogonal => if edge.routing_warning.is_some(){"Elbow ⚠"}else{"Elbow"},
                 Routing::Curved => "Bendy",
                 Routing::Cyclical => "Cyclical",
             },
-            "Connector routing",
+            edge.routing_warning.as_deref().unwrap_or("Connector routing"),
         )
         .dropdown_menu(move |mut menu, _, _| {
             let Some(editor) = route_owner.upgrade() else {

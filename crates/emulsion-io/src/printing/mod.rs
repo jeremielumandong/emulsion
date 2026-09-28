@@ -13,7 +13,9 @@ mod layout;
 #[cfg(target_os = "linux")]
 pub mod portal;
 pub mod presets;
+pub mod production;
 mod render;
+pub mod sources;
 pub use layout::layout;
 #[cfg(target_os = "windows")]
 mod windows;
@@ -105,6 +107,7 @@ pub enum Layout {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub production: production::Production,
     pub creative: CreativeSettings,
     pub paper: Paper,
     pub landscape: bool,
@@ -123,6 +126,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            production: production::Production::default(),
             creative: CreativeSettings::default(),
             paper: Paper::pdf().remove(0),
             landscape: false,
@@ -146,6 +150,7 @@ impl Default for Settings {
 pub struct CreativeSettings {
     /// Finished artwork box, in mm. Fit/fill never distort the source.
     pub artwork_mm: Option<[f64; 2]>,
+    pub labels: LabelMode,
     pub rows: u16,
     pub columns: u16,
     pub gutter_mm: f64,
@@ -158,6 +163,7 @@ impl Default for CreativeSettings {
     fn default() -> Self {
         Self {
             artwork_mm: None,
+            labels: LabelMode::None,
             rows: 3,
             columns: 2,
             gutter_mm: 5.,
@@ -194,6 +200,20 @@ impl CreativeSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelMode {
+    #[default]
+    None,
+    Name,
+    NumberAndName,
+}
+#[derive(Clone, Debug)]
+pub struct Label {
+    pub text: String,
+    pub bounds: Rect,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Rect {
     pub x: f64,
@@ -210,6 +230,7 @@ pub struct Item {
     pub trim: Rect,
     pub bleed: f64,
     pub crop_marks: bool,
+    pub label: Option<Label>,
 }
 #[derive(Clone, Debug)]
 pub struct Sheet {
@@ -315,6 +336,7 @@ pub fn submit(
     cancel: &AtomicBool,
 ) -> Result<String> {
     canceled(cancel)?;
+    settings.production.validate_device(false)?;
     if settings.layout == Layout::Document {
         bail!("Document page sizes are for PDF. Select printer paper for a physical print job.")
     }
@@ -322,7 +344,7 @@ pub fn submit(
     {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("print.pdf");
-        write_pdf(sources, layout, settings.grayscale, &path, cancel)?;
+        production::write_device_pdf(sources, layout, settings, &path, cancel)?;
         canceled(cancel)?;
         cups::submit(printer, title, &path, settings, cancel)
     }

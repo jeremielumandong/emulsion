@@ -13,7 +13,7 @@ pixel-for-pixel compatibility with another application.
 | Object controls | Right-click arrange/alignment, grouping, locking, copy/paste style, annotations and selection export; floating selection toolbar |
 | Selection | Mouse marquee, Ctrl/Shift selection, group/ungroup, graph-aware copy/paste/delete, connected movement, undo/redo |
 | Formatting | Fill/stroke/text color pickers, typography, thin dark default outlines, white/soft teal/soft blue palettes, line patterns, rounded elbows, filled/hollow connector markers, theme application |
-| Library | Shapes, Templates, Containers, Themes and Stencil packs drawers; search; 68 original default stencils, eight editable templates, nine themes |
+| Library | Shapes, Templates, Containers, Themes and Stencil packs drawers; search; 68 original default stencils, 18 editable templates, nine themes |
 | Diagram objects as stencils | Imported and existing shapes automatically appear in Shapes in this diagram; cached background previews, search and pagination; click/drag reuses editable artwork with fresh IDs and one undo step, excluding connections and container contents |
 | Installed stencils | Per-entry vector-generated previews; click or drag an installed entry to the pointer position; a drop is one undo step |
 | Offline vendor packs | AWS, Azure, Google Cloud, Kubernetes, Cisco, network devices, BPMN, flowchart, floor plans, electrical, wireframes and office; all available entries in each family, paginated 96 at a time |
@@ -25,6 +25,31 @@ New process shapes have a white fill, one-pixel charcoal outline, a subtle four-
 Right-click an object to arrange, align/distribute, group, lock, copy/paste style, edit annotations or export the selection. Selecting a connector opens its dedicated floating toolbar: routing, color, width, dash patterns, arrowheads, reverse direction, endpoint size, corner radius, crossings and label editing. Corner rounding applies to straight/elbow routes. Crossing bridges also support curved/cyclical routes. Double lines and label backgrounds are native vector artwork, with undo and export support. Connectors can attach to other connectors; branches follow their parent route and dependency cycles are rejected.
 
 The document toolbox is reconstructed from the active page on import/open and after edits. Basic shapes with matching artwork/style share an entry; complex symbols retain individual entries. A container stencil includes its own frame and artwork, excluding the nested diagram. Import also saves deduplicated, editable packs in the persistent library. “Save shapes to library” captures objects from an existing page. Pack generation runs in the background and reports failures without discarding the imported diagram.
+
+## Sample-inspired templates
+
+The Templates drawer now contains 18 offline, editable starters. Ten additions
+use the layouts in the local `Downloads/Diagram` reference collection: Business
+process, Purchase approval, Family tree, Cause and effect, Team directory,
+Strategy tree, Improvement cycle, Project roadmap, Relationship map and Cloud
+architecture. The existing Network diagram also uses the bundled infrastructure
+stencils. Search accepts multiple words, such as `credit workflow` or `cloud storage`.
+
+These are original native vector compositions with editable labels, one-pixel
+dark outlines, soft fills and bound connectors. Family/person placeholders can
+be renamed; no stock portraits, website scripts or reference branding are bundled.
+Swimlane objects retain their container membership. Fishbone and relationship
+branches attach to their parent connector and follow edits. Template shapes carry
+the same catalog identity as toolbox stencils and appear in Shapes in this diagram.
+Each template opens as a new page with one-step undo/redo, through either UI or MCP.
+
+Generate SVG, PNG, editable `.emu` projects and a visual review index with:
+
+```sh
+cargo run --offline -p emulsion-io --example diagram_template_preview -- target/diagram-template-review
+```
+
+The review command also checks native save/reopen and rejects raster export fallback.
 
 ## Scalable rendering and movement
 

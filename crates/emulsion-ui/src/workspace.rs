@@ -762,7 +762,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// Navigation and document tabs share the compact editor's single header.
+    /// Document tabs share a dedicated row across the compact editors.
     fn compact_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let mut tabs = div()
@@ -994,9 +994,18 @@ impl Workspace {
                                 window,
                                 cx,
                             );
-                            if photo && let Some(ed) = &this.editor {
+                            let kind = if photo {
+                                Some(emulsion_core::creation::CanvasKind::Photo)
+                            } else {
+                                this.home_project_kind(&path)
+                            };
+                            if let Some(kind) = kind
+                                && let Some(ed) = &this.editor
+                                && matches!(kind, emulsion_core::creation::CanvasKind::Photo | emulsion_core::creation::CanvasKind::Paint)
+                            {
                                 ed.update(cx, |e, cx| {
-                                    if e.draw_mode { e.toggle_draw_mode(cx); }
+                                    let paint = kind == emulsion_core::creation::CanvasKind::Paint;
+                                    if e.draw_mode != paint { e.toggle_draw_mode(cx); }
                                 });
                             }
                             if let (Some(err), Some(ed)) = (broken, &this.editor) {
@@ -1169,12 +1178,13 @@ impl Workspace {
     }
 
     fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.prompt_open_named("Open", window, cx);
+        self.prompt_open_named("Open", false, window, cx);
     }
 
     fn prompt_open_named(
         &mut self,
         title: &'static str,
+        photo: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1189,8 +1199,14 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
                 for p in paths {
-                    this.update_in(cx, |this, window, cx| this.open_path(p, window, cx))
-                        .ok();
+                    this.update_in(cx, |this, window, cx| {
+                        if photo {
+                            this.open_photo_path(p, window, cx);
+                        } else {
+                            this.open_path(p, window, cx);
+                        }
+                    })
+                    .ok();
                 }
             }
         })
@@ -1435,6 +1451,7 @@ impl Workspace {
     }
 
     fn print_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.screen == Screen::Batch { self.library_print(window, cx); return; }
         if self.style_dialog_open(cx) || self.screen != Screen::Editor {
             return;
         }
@@ -1983,7 +2000,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Open, window, cx| this.prompt_open(window, cx)))
             .on_action(cx.listener(|this, _: &Save, window, cx| this.save(false, window, cx)))
             .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.save(true, window, cx)))
-            .on_action(cx.listener(|this, _: &Export, window, cx| this.export(window, cx)))
+            .on_action(cx.listener(|this, _: &Export, window, cx| {
+                if this.style_dialog_open(cx) { return; }
+                if let Some(editor) = &this.editor {
+                    editor.update(cx, |editor, cx| editor.open_export_dialog(window, cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ConfirmExport, window, cx| this.export(window, cx)))
             .on_action(cx.listener(|this, _: &Print, window, cx| this.print_document(window, cx)))
             .on_action(
                 cx.listener(|this, _: &SynchronizeRaw, window, cx| {
@@ -2639,12 +2662,14 @@ mod compact_tests {
             assert_eq!(workspace.editor.as_ref(), Some(&first));
         });
 
-        // Draw mode docks the document tabs in the header; on a small
-        // window the theme and Settings controls must still be on screen.
+        // Paint keeps its tabs below the menu, including on a small window.
         cx.update(|_, cx| first.update(cx, |editor, cx| editor.toggle_draw_mode(cx)));
         cx.simulate_resize(size(px(900.), px(600.)));
         cx.run_until_parked();
         cx.update(|window, _| {
+            let tabs = window.find("document-tab-bar").bounds();
+            assert!(tabs.top() >= window.find("editor-document-bar").bounds().bottom());
+            assert!(window.within("document-tab-bar").find(("compact-document", first.entity_id())).visible());
             for id in ["window-menu-button", "compact-theme", "compact-settings"] {
                 let control = window.find(id);
                 assert!(control.visible(), "{id}");

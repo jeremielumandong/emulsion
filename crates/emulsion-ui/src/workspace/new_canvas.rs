@@ -394,7 +394,7 @@ impl Render for NewCanvas {
             .gap_4()
             .text_size(px(12.))
             .text_color(p.ink)
-            .when(matches!(self.spec.kind, CanvasKind::Design | CanvasKind::Diagram), |d| d.child(self.creation_mode(cx)))
+            .child(self.creation_mode(cx))
             .child(
                 div()
                     .id("new-canvas-scroll")

@@ -9,6 +9,7 @@ use std::{path::PathBuf, sync::Arc};
 pub struct OutputSettings {
     /// Zero preserves dimensions; never enlarges an image.
     pub long_edge: u32,
+    pub color_space: crate::photo_color::Space,
     pub metadata: crate::photo_metadata::Policy,
     pub publish: Option<crate::photo_publish::Destination>,
     pub jpeg_quality: u8,
@@ -23,6 +24,7 @@ impl Default for OutputSettings {
     fn default() -> Self {
         Self {
             long_edge: 0,
+            color_space: Default::default(),
             metadata: Default::default(),
             publish: None,
             jpeg_quality: 92,
@@ -54,6 +56,13 @@ impl OutputSettings {
         Ok(())
     }
     pub fn prepare(&self, doc: &Document) -> Result<Document> {
+        self.prepare_in_space(doc, crate::photo_color::Space::Srgb)
+    }
+    pub fn prepare_in_space(
+        &self,
+        doc: &Document,
+        working: crate::photo_color::Space,
+    ) -> Result<Document> {
         self.validate()?;
         if self.long_edge == 0 && self.sharpening == 0. && self.watermark.is_none() {
             let mut doc = doc.clone();
@@ -82,7 +91,11 @@ impl OutputSettings {
             )?;
         }
         if let Some(path) = &self.watermark {
-            let mark = crate::import::decode(path)?.raster;
+            let mark = crate::photo_color::convert_raster(
+                crate::import::decode(path)?.raster,
+                crate::photo_color::Space::Srgb,
+                working,
+            )?;
             let width = (raster.width() as f32 * self.watermark_width)
                 .round()
                 .max(1.) as u32;

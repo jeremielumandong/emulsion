@@ -2,6 +2,8 @@
 //! submission run off the UI thread. Generations discard stale worker results.
 use crate::theme;
 mod creative;
+mod production;
+mod sources;
 use emulsion_io::printing::{
     self as print, Capabilities, Choice, JobLayout, Layout, Placement, Printer, Settings, Source,
 };
@@ -15,6 +17,7 @@ use gpui_kit::{
     prelude::FluentBuilder,
     *,
 };
+pub(crate) use sources::open_prepared;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -33,6 +36,9 @@ pub fn open(
         this.load_sources(docs, cx);
         this.refresh(cx)
     });
+    show(view, window, cx);
+}
+fn show(view: Entity<PrintDialog>, window: &mut Window, cx: &mut App) {
     let cancel = view.read(cx).cancel.clone();
     window.open_dialog(cx, move |dialog, _, _| {
         let cancel = cancel.clone();
@@ -57,7 +63,10 @@ struct PrintDialog {
     settings: Settings,
     paper_chosen: bool,
     scope: String,
-    fields: [Entity<InputState>; 14],
+    fields: [Entity<InputState>; 18],
+    original_sources: Option<Arc<Vec<Source>>>,
+    original_active: usize,
+    source_pending: bool,
     presets: Vec<print::presets::Preset>,
     preset_busy: bool,
     preset_notice: Option<String>,
@@ -84,7 +93,24 @@ impl Drop for PrintDialog {
 impl PrintDialog {
     fn new(name: String, active: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let fields = [
-            "1", "100", "5", "5", "", "101.6", "152.4", "3", "2", "5", "50", "50", "0", "",
+            "1",
+            "100",
+            "5",
+            "5",
+            "",
+            "101.6",
+            "152.4",
+            "3",
+            "2",
+            "5",
+            "50",
+            "50",
+            "0",
+            "",
+            "",
+            "300",
+            "Custom print condition",
+            "0, 1000, 2000",
         ]
         .map(|v| cx.new(|cx| InputState::new(window, cx).default_value(v)));
         let subscriptions = fields
@@ -93,7 +119,7 @@ impl PrintDialog {
             .map(|(index, field)| {
                 cx.subscribe(field, move |this, _, event, cx| {
                     if matches!(event, InputEvent::Change) {
-                        if index == 13 {
+                        if index == 13 || index == 17 {
                             cx.notify();
                         } else {
                             this.changed(cx);
@@ -114,6 +140,9 @@ impl PrintDialog {
             paper_chosen: false,
             scope: "current".into(),
             fields,
+            original_sources: None,
+            original_active: active,
+            source_pending: false,
             presets: vec![],
             preset_busy: false,
             preset_notice: None,
@@ -138,24 +167,11 @@ impl PrintDialog {
         docs: Vec<(String, emulsion_core::Document)>,
         cx: &mut Context<Self>,
     ) {
-        let cancel = self.cancel.clone();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { print::prepare_sources(docs, &cancel) })
-                .await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(s) => {
-                        this.sources = Some(Arc::new(s));
-                        this.suggest_paper();
-                    }
-                    Err(e) => this.source_error = Some(e.to_string()),
-                }
-                this.changed(cx)
-            })
-            .ok();
-        })
-        .detach();
+        self.load_prepared(
+            move |cancel| print::prepare_sources(docs, &cancel),
+            true,
+            cx,
+        );
     }
     fn refresh(&mut self, cx: &mut Context<Self>) {
         #[cfg(target_os = "linux")]
@@ -192,8 +208,12 @@ impl PrintDialog {
         self.generation += 1;
         let generation = self.generation;
         self.destination = id.clone();
+        self.settings.production.driver_color_disabled = false;
+        if id != "pdf" {
+            self.settings.production.standard = print::production::PdfStandard::Pdf;
+        }
         self.paper_chosen = false;
-        if id == "pdf" {
+        if id == "pdf" && self.settings.layout == Layout::Single {
             self.settings.layout = Layout::Document;
         }
         if id != "pdf" && self.settings.layout == Layout::Document {
@@ -275,6 +295,12 @@ impl PrintDialog {
     }
     fn draft(&self, cx: &App) -> anyhow::Result<(Settings, JobLayout)> {
         use anyhow::{Context, bail};
+        if let Some(error) = &self.source_error {
+            bail!("{error}")
+        }
+        if self.source_pending {
+            bail!("Preparing print sources…")
+        }
         if self.caps.is_none() {
             bail!("Select an available printer or Save PDF")
         }
@@ -347,6 +373,7 @@ impl PrintDialog {
             _ => vec![self.active],
         };
         self.creative_draft(&mut settings, cx)?;
+        self.production_draft(&mut settings, cx)?;
         let layout = print::layout(sources, &selected, &settings)?;
         Ok((settings, layout))
     }
@@ -364,11 +391,15 @@ impl PrintDialog {
         let sheet = layout.sheets[self.sheet].clone();
         let sources = self.sources.as_ref().unwrap().clone();
         self.preview_pending = true;
+        let device = self.destination != "pdf";
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    print::preview(&sources, &sheet, settings.grayscale, 900)
+                    if device {
+                        print::production::validate_device_profile(&settings)?;
+                    }
+                    print::production::preview(&sources, &sheet, &settings, 900)
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -538,14 +569,14 @@ impl PrintDialog {
                 .background_spawn(async move {
                     print::canceled(&cancel)?;
                     if let Some(path) = path {
-                        print::write_pdf(&sources, &layout, settings.grayscale, &path, &cancel)?;
+                        print::production::write_pdf(&sources, &layout, &settings, &path, &cancel)?;
                         return Ok(format!("Saved {}", path.display()));
                     }
                     #[cfg(target_os = "linux")]
                     if let Some(portal) = portal {
                         let dir = tempfile::tempdir()?;
                         let path = dir.path().join("print.pdf");
-                        print::write_pdf(&sources, &layout, settings.grayscale, &path, &cancel)?;
+                        print::production::write_pdf(&sources, &layout, &settings, &path, &cancel)?;
                         print::canceled(&cancel)?;
                         return print::portal::submit(&portal, &title, &path);
                     }
@@ -737,6 +768,8 @@ impl Render for PrintDialog {
             controls = controls.child(self.field(3, "Tile overlap (mm)"));
         }
         controls = controls
+            .child(self.source_controls(cx))
+            .child(self.production_controls(cx))
             .child(self.creative_controls(cx))
             .child(self.preset_controls(cx));
         if !portal && self.destination != "pdf" {
@@ -1069,6 +1102,55 @@ mod tests {
                 v.settings.layout = Layout::Document;
                 v.fields[10].update(cx, |f, cx| f.set_value("bad", window, cx));
                 assert!(v.draft(cx).is_ok());
+            });
+        });
+    }
+    #[gpui_kit::test]
+    fn production_controls_preflight_profiles_and_source_changes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            theme::install(cx);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|_| Host);
+            Root::new(host, window, cx)
+        });
+        cx.update(|window, cx| {
+            let view = cx.new(|cx| PrintDialog::new("Proof".into(), 0, window, cx));
+            view.update(cx, |s, cx| {
+                s.caps = Some(Capabilities::pdf());
+                s.destination = "pdf".into();
+                s.loading = false;
+                s.sources = Some(Arc::new(vec![Source {
+                    name: "Photo".into(),
+                    width: 100,
+                    height: 100,
+                    ppi: 100.,
+                    svg: String::new(),
+                    rasterized: false,
+                    document: None,
+                    original_paths: vec![],
+                }]));
+                s.settings.layout = Layout::Contact;
+                s.settings.creative.labels = print::LabelMode::Name;
+                assert!(s.draft(cx).unwrap().1.sheets[0].items[0].label.is_some());
+                s.settings.production.managed = true;
+                assert!(s.draft(cx).is_err());
+                s.fields[14].update(cx, |f, cx| f.set_value("/path/to/output.icc", window, cx));
+                let settings = s.draft(cx).unwrap().0;
+                assert!(settings.production.enabled());
+                s.destination = "queue".into();
+                assert!(s.draft(cx).is_err());
+                s.settings.production.driver_color_disabled = true;
+                assert!(s.draft(cx).is_ok());
+                s.destination = "portal".into();
+                assert!(s.draft(cx).is_err());
+                s.destination = "pdf".into();
+                s.source_pending = true;
+                assert!(s.draft(cx).is_err());
+                s.source_pending = false;
+                s.source_error = Some("Cannot decode chosen frame".into());
+                assert!(s.draft(cx).is_err());
             });
         });
     }

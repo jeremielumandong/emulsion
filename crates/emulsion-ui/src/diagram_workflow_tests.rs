@@ -528,6 +528,41 @@ fn diagram_color_dialog_applies_to_selection_and_cancel_keeps_original(cx: &mut 
 }
 
 #[gpui_kit::test]
+fn sample_template_search_inserts_reusable_stencils_and_undoes(cx: &mut TestAppContext) {
+    let doc = emulsion_core::Document::new(800, 600);
+    let (ws, cx) = open(cx, doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| ws.install_project(
+            ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap(),
+            "Templates".into(), window, cx,
+        ));
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("diagram-library-tab", 1usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("diagram-stencil-search", cx));
+    cx.simulate_input("cloud storage");
+    cx.run_until_parked();
+    let index = emulsion_core::diagram_library::TEMPLATES.iter().position(|t| t.id == "cloud-architecture").unwrap();
+    cx.update(|window,cx| {
+        assert!(window.find(("diagram-template",index)).visible());
+        window.click(("diagram-template",index),cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window,cx| {
+        let editor = &view.read(cx).editor;
+        assert_eq!(editor.page_list().len(),2);
+        assert!(editor.doc.diagram.as_ref().unwrap().shapes.values().any(|s| s.data.get("emulsion_stencil").is_some_and(|id| id == "load-balancer")));
+        assert!(!emulsion_core::diagram::document_stencils(&editor.doc).is_empty());
+        window.click("project-undo",cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_,cx| assert_eq!(view.read(cx).editor.page_list().len(),1));
+}
+
+#[gpui_kit::test]
 fn diagram_library_templates_containers_themes_and_packs_are_functional(cx: &mut TestAppContext) {
     let doc = emulsion_core::Document::new(800, 600);
     let (ws, cx) = open(cx, doc.clone());

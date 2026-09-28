@@ -12,6 +12,7 @@ pub const READ_ONLY: &[&str] = &[
 ];
 pub const DESTRUCTIVE: &[&str] = &[
     "submit_print_job",
+    "export_print_pdf",
     "save_print_preset",
     "delete_print_preset",
 ];
@@ -21,6 +22,14 @@ pub fn is_tool(name: &str) -> bool {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Options {
+    pub output_path: Option<String>,
+    pub production: Option<print::production::Production>,
+    pub labels: Option<print::LabelMode>,
+    pub photos: Option<Vec<print::sources::PhotoInput>>,
+    pub video_path: Option<String>,
+    pub frame_times_ms: Option<Vec<u32>>,
+    pub source_page: Option<usize>,
+    pub frame_nodes: Option<Vec<u64>>,
     pub preset_name: Option<String>,
     pub artwork_width_mm: Option<f64>,
     pub artwork_height_mm: Option<f64>,
@@ -56,11 +65,30 @@ pub fn definitions() -> Vec<ToolDef> {
         "rows":{"type":"integer","minimum":1,"maximum":20},"columns":{"type":"integer","minimum":1,"maximum":20},
         "gutter_mm":{"type":"number","minimum":0,"maximum":100},"crop_x_percent":{"type":"number","minimum":0,"maximum":100},
         "crop_y_percent":{"type":"number","minimum":0,"maximum":100},"bleed_mm":{"type":"number","minimum":0,"maximum":20},"crop_marks":{"type":"boolean"}});
+    let advanced = json!({
+        "output_path":{"type":"string","minLength":1},
+        "production":{"type":"object","additionalProperties":false,"properties":{
+            "managed":{"type":"boolean"},"profile":{"type":"string"},"intent":{"type":"integer","minimum":0,"maximum":3},
+            "dpi":{"type":"integer","minimum":150,"maximum":600},"standard":{"enum":["pdf","pdf_x1a2001","pdf_x32002"]},
+            "condition":{"type":"string","minLength":1,"maxLength":200},"driver_color_disabled":{"type":"boolean"}}},
+        "labels":{"enum":["none","name","number_and_name"]},
+        "photos":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["path"],"properties":{
+            "path":{"type":"string","minLength":1},"params":{"type":"object","description":"Native DevelopParams snapshot, including unsaved Library settings."},"expected_digest":{"type":"string"}}}},
+        "video_path":{"type":"string","minLength":1,"description":"Local video file; requires installed FFmpeg and frame_times_ms."},
+        "frame_times_ms":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"integer","minimum":0,"maximum":86400000}},
+        "frame_nodes":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"integer","minimum":1},"description":"Responsive Design frame IDs to print individually."},
+        "source_page":{"type":"integer","minimum":0,"description":"Zero-based source page for animation frames; defaults to first page."}
+    });
+    settings
+        .as_object_mut()
+        .unwrap()
+        .extend(advanced.as_object().unwrap().clone());
     settings
         .as_object_mut()
         .unwrap()
         .extend(extra.as_object().unwrap().clone());
     [
+ ("export_print_pdf","Write composed print sheets to PDF. Supports edited photo snapshots, local-video or animation frame timestamps, labels, ICC conversion and flattened CMYK PDF/X. Never submits to a printer.",settings.clone(),vec!["output_path"]),
  ("list_print_presets","Read local named print layout presets without printer I/O.",json!({}),vec![]),
  ("save_print_preset","Save or replace a local creative print layout preset. Printer-specific options and copies are not saved. Never submits a print job.",settings.clone(),vec!["preset_name"]),
  ("delete_print_preset","Delete a named local print layout preset. Never submits a print job.",json!({"preset_name":{"type":"string","minLength":1,"maxLength":100}}),vec!["preset_name"]),
@@ -103,6 +131,46 @@ pub fn parse(name: &str, args: &Value) -> Result<Options, String> {
     creative(&options, print::CreativeSettings::default())?
         .validate()
         .map_err(|e| e.to_string())?;
+    if name == "export_print_pdf" && (options.output_path.is_none() || options.printer.is_some()) {
+        return Err("PDF export needs output_path and no printer queue.".into());
+    }
+    if options
+        .photos
+        .as_ref()
+        .is_some_and(|p| p.is_empty() || p.len() > 200)
+        || options
+            .frame_times_ms
+            .as_ref()
+            .is_some_and(|t| t.is_empty() || t.len() > 100 || t.iter().any(|&v| v > 86400000))
+    {
+        return Err("Select 1–200 photos or 1–100 timestamps within 24 hours.".into());
+    }
+    if options
+        .frame_nodes
+        .as_ref()
+        .is_some_and(|f| f.is_empty() || f.len() > 200 || f.contains(&0))
+    {
+        return Err("Choose 1–200 valid Design frame IDs.".into());
+    }
+    if options.frame_nodes.is_some()
+        && (options.photos.is_some()
+            || options.video_path.is_some()
+            || options.frame_times_ms.is_some())
+    {
+        return Err("Choose one print source type.".into());
+    }
+    if options.photos.is_some()
+        && (options.video_path.is_some() || options.frame_times_ms.is_some())
+        || options.video_path.is_some() && options.frame_times_ms.is_none()
+    {
+        return Err(
+            "Choose either photos, page animation timestamps, or a local video with timestamps."
+                .into(),
+        );
+    }
+    if let Some(p) = &options.production {
+        p.validate().map_err(|e| e.to_string())?;
+    }
     for value in [
         &options.printer,
         &options.paper,
@@ -164,6 +232,7 @@ fn creative(
         (None, None) => (),
         _ => return Err("Supply both artwork_width_mm and artwork_height_mm.".into()),
     }
+    c.labels = options.labels.unwrap_or(c.labels);
     c.rows = options.rows.unwrap_or(c.rows);
     c.columns = options.columns.unwrap_or(c.columns);
     c.gutter_mm = options.gutter_mm.unwrap_or(c.gutter_mm);
@@ -208,6 +277,7 @@ fn resolve_settings(
             &caps.default_paper
         });
     let settings = print::Settings {
+        production: options.production.clone().unwrap_or(base.production),
         creative: creative(options, base.creative)?,
         paper: caps
             .papers
@@ -327,13 +397,47 @@ fn run(
         return Ok(ToolResult::text(json!({"presets":presets}).to_string()));
     }
     let cancel = AtomicBool::new(false);
-    let sources = print::prepare_sources(docs, &cancel).map_err(|e| e.to_string())?;
+    if options.printer.is_some() {
+        print::production::validate_device_profile(&settings).map_err(|e| e.to_string())?;
+    }
+    let sources = if let Some(photos) = &options.photos {
+        print::sources::photos(photos, &cancel)
+    } else if let Some(path) = &options.video_path {
+        print::sources::video(
+            std::path::Path::new(path),
+            options
+                .frame_times_ms
+                .as_deref()
+                .ok_or("Choose timestamps")?,
+            &cancel,
+        )
+    } else if let Some(ids) = &options.frame_nodes {
+        let (name, doc) = docs
+            .get(options.source_page.unwrap_or(0))
+            .ok_or("Source page is outside the project")?;
+        print::sources::frames(name, doc, ids, &cancel)
+    } else if let Some(times) = &options.frame_times_ms {
+        let (name, doc) = docs
+            .get(options.source_page.unwrap_or(0))
+            .ok_or("Source page is outside the project")?;
+        print::sources::animation(name, doc, times, &cancel)
+    } else {
+        print::prepare_sources(docs, &cancel)
+    }
+    .map_err(|e| e.to_string())?;
     let selected = if let Some(pages) = &options.pages {
         print::page_range(pages, sources.len()).map_err(|e| e.to_string())?
     } else {
         (0..sources.len()).collect()
     };
     let layout = print::layout(&sources, &selected, &settings).map_err(|e| e.to_string())?;
+    if name == "export_print_pdf" {
+        let path =
+            std::path::Path::new(options.output_path.as_deref().ok_or("Choose output_path")?);
+        print::production::write_pdf(&sources, &layout, &settings, path, &cancel)
+            .map_err(|e| e.to_string())?;
+        return Ok(ToolResult::text(json!({"path":path,"sheets":layout.sheets.len(),"standard":settings.production.standard,"warnings":layout.warnings}).to_string()));
+    }
     if name == "submit_print_job" {
         let printer = options.printer.ok_or("Choose a printer.")?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -348,7 +452,7 @@ fn run(
         .get(sheet)
         .ok_or("Preview sheet is outside the composed job.")?;
     let rgba =
-        print::preview(&sources, page, settings.grayscale, 1200).map_err(|e| e.to_string())?;
+        print::production::preview(&sources, page, &settings, 1200).map_err(|e| e.to_string())?;
     let mut bytes = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(rgba)
         .write_to(&mut bytes, image::ImageFormat::Png)
@@ -470,5 +574,51 @@ mod tests {
         let settings = resolve_settings(&options, &print::Capabilities::pdf(), base).unwrap();
         assert_eq!(settings.paper.id, "A4");
         assert_eq!(settings.layout, print::Layout::Single);
+    }
+    #[test]
+    fn source_and_production_options_reject_ambiguous_jobs_before_io() {
+        for args in [
+            json!({"video_path":"a.mp4"}),
+            json!({"frame_times_ms":[]}),
+            json!({"frame_nodes":[]}),
+            json!({"frame_nodes":[1],"frame_times_ms":[0]}),
+            json!({"photos":[],"labels":"name"}),
+            json!({"production":{"managed":true}}),
+            json!({"production":{"dpi":0}}),
+        ] {
+            assert!(parse("preview_print_job", &args).is_err(), "{args}");
+        }
+        assert!(parse("export_print_pdf", &json!({})).is_err());
+        assert!(
+            parse(
+                "export_print_pdf",
+                &json!({"output_path":"proof.pdf","printer":"queue"})
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn photo_print_pdf_export_keeps_the_input_and_includes_label_artwork() {
+        let dir = std::env::temp_dir().join(format!(
+            "emulsion-print-mcp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let input = dir.join("selected.png");
+        let output = dir.join("contact.pdf");
+        image::RgbaImage::from_pixel(20, 20, image::Rgba([255, 0, 0, 255]))
+            .save(&input)
+            .unwrap();
+        let before = std::fs::read(&input).unwrap();
+        let options=parse("export_print_pdf",&json!({"output_path":output,"photos":[{"path":input}],"layout":"contact","labels":"number_and_name"})).unwrap();
+        let result = execute("export_print_pdf", options, "Selected", vec![]);
+        assert!(!result.is_error, "{:?}", result.content);
+        assert!(std::fs::read(&output).unwrap().starts_with(b"%PDF"));
+        assert_eq!(std::fs::read(&input).unwrap(), before);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

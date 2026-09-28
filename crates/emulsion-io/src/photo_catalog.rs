@@ -53,7 +53,7 @@ pub struct PhotoRecords {
 }
 impl PhotoRecords {
     pub fn validate(&self, catalog: &Catalog) -> Result<()> {
-        if self.smart.len() > 500 || self.stacks.len() > 10000 || self.fingerprints.len() > 10000 {
+        if self.smart.len() > 500 || self.stacks.len() > 10000 || self.fingerprints.len() > 100000 {
             return Err(IoError::Manifest("Photo catalog limits exceeded".into()));
         }
         for (id, rule) in &self.smart {
@@ -64,13 +64,14 @@ impl PhotoRecords {
                 ));
             }
         }
+        let asset_ids: HashSet<_> = catalog.assets.iter().map(|a| a.id).collect();
         let mut seen = HashSet::new();
         for (top, members) in &self.stacks {
             if members.len() < 2
                 || !members.contains(top)
                 || members
                     .iter()
-                    .any(|id| !seen.insert(id) || !catalog.assets.iter().any(|a| a.id == *id))
+                    .any(|id| !seen.insert(id) || !asset_ids.contains(id))
             {
                 return Err(IoError::Manifest("Invalid photo stack".into()));
             }
@@ -123,20 +124,16 @@ pub fn import(c: &mut Catalog, paths: &[PathBuf], deduplicate: bool) -> Result<V
                 .insert(a.path.clone(), crate::raw::source_digest(&a.path)?);
         }
     }
-    let mut imported = Vec::new();
+    let mut imported=Vec::new();
+    let mut paths_seen:HashSet<_>=c.assets.iter().map(|a|a.path.clone()).collect();
+    let mut hashes:HashSet<_>=c.photos.fingerprints.values().cloned().collect();
     for path in paths {
-        let path = path.canonicalize()?;
-        let digest = crate::raw::source_digest(&path)?;
-        if deduplicate
-            && !c.assets.iter().any(|a| a.path == path)
-            && c.photos.fingerprints.values().any(|d| d == &digest)
-        {
-            continue;
-        }
-        c.add_asset(path.clone(), AssetKind::Image)?;
-        c.photos.fingerprints.insert(path.clone(), digest);
-        imported.push(path);
+        let path=path.canonicalize()?;let digest=crate::raw::source_digest(&path)?;
+        if deduplicate&&!paths_seen.contains(&path)&&hashes.contains(&digest){continue;}
+        if !paths_seen.contains(&path){if crate::photo_develop::supported(&path){c.insert_photo_reference(path.clone())?;}else{c.add_asset(path.clone(),AssetKind::Image)?;}}
+        paths_seen.insert(path.clone());hashes.insert(digest.clone());c.photos.fingerprints.insert(path.clone(),digest);imported.push(path);
     }
+    c.validate()?;
     Ok(imported)
 }
 pub fn relink(c: &mut Catalog, old: &Path, new: &Path) -> Result<()> {
@@ -351,5 +348,137 @@ mod tests {
         restore(&mut newer, &file, &dir.path().join("backups")).unwrap();
         assert_eq!(newer, c);
         assert_eq!(std::fs::read(&b).unwrap(), b"b");
+    }
+}
+
+/// Undo metadata only while the recorded result still matches the catalog.
+pub fn undo_metadata(
+    catalog: &mut crate::creative_library::Catalog,
+    changes: &[(
+        crate::creative_library::Asset,
+        crate::creative_library::Asset,
+    )],
+) -> crate::Result<()> {
+    for (_, expected) in changes {
+        if catalog.assets.iter().find(|a| a.id == expected.id) != Some(expected) {
+            return Err(crate::IoError::Manifest(
+                "Photo metadata changed outside this undo history".into(),
+            ));
+        }
+    }
+    for (before, _) in changes {
+        if let Some(asset) = catalog.assets.iter_mut().find(|a| a.id == before.id) {
+            *asset = before.clone();
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RootRelinkReport {
+    pub relinked: usize,
+    pub metadata_only: usize,
+    pub skipped: Vec<(PathBuf, String)>,
+}
+/// Keep successful mappings and report every skipped reference. Source bytes
+/// are never changed. Known originals must match their stored fingerprints.
+pub fn relink_root(c: &mut Catalog, old_root: &Path, new_root: &Path) -> Result<RootRelinkReport> {
+    if !old_root.is_absolute() || !new_root.is_dir() {
+        return Err(IoError::Manifest(
+            "Use an absolute old root and an existing replacement folder".into(),
+        ));
+    }
+    let new_root = new_root.canonicalize()?;
+    let paths: Vec<_> = c
+        .assets
+        .iter()
+        .filter(|a| a.kind == AssetKind::Image && a.path.starts_with(old_root))
+        .map(|a| a.path.clone())
+        .collect();
+    let mut report = RootRelinkReport {
+        relinked: 0,
+        metadata_only: 0,
+        skipped: vec![],
+    };
+    for old in paths {
+        let new = new_root.join(old.strip_prefix(old_root).unwrap());
+        let result = (|| -> Result<bool> {
+            if c.photos.fingerprints.contains_key(&old) || old.is_file() {
+                relink(c, &old, &new)?;
+                return Ok(false);
+            }
+            // An offline imported record has no proven pixel identity. Only bind
+            // metadata when there are no existing development or virtual-copy edits.
+            if crate::raw_settings::sidecar_path(&old)?.exists()
+                || c.assets
+                    .iter()
+                    .filter(|a| crate::photo_develop::is_virtual(&a.path))
+                    .any(|a| {
+                        crate::photo_develop::reference(&a.path).is_ok_and(|r| r.source == old)
+                    })
+            {
+                return Err(IoError::Manifest("Unverified original has saved edits; relink it individually after verifying identity".into()));
+            }
+            let new = new.canonicalize()?;
+            if !new.is_file()
+                || !crate::photo_develop::supported(&new)
+                || c.assets.iter().any(|a| a.path == new && a.path != old)
+            {
+                return Err(IoError::Manifest(
+                    "Missing, unsupported or duplicate replacement".into(),
+                ));
+            }
+            let digest = crate::raw::source_digest(&new)?;
+            let asset = c.assets.iter_mut().find(|a| a.path == old).unwrap();
+            asset.path = new.clone();
+            c.photos.fingerprints.insert(new, digest);
+            Ok(true)
+        })();
+        match result {
+            Ok(metadata_only) => {
+                report.relinked += 1;
+                report.metadata_only += usize::from(metadata_only);
+            }
+            Err(e) => report.skipped.push((old, e.to_string())),
+        }
+    }
+    c.validate()?;
+    Ok(report)
+}
+
+#[cfg(test)]
+mod root_relink_tests {
+    use super::*;
+    #[test]
+    fn root_mapping_preserves_metadata_and_rejects_wrong_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old");
+        let new = dir.path().join("new");
+        std::fs::create_dir(&new).unwrap();
+        let photo = new.join("photo.png");
+        std::fs::write(
+            &photo,
+            crate::export::png8(1, 1, &[80, 90, 100, 255]).unwrap(),
+        )
+        .unwrap();
+        let mut c = Catalog::default();
+        c.add_photo_reference(old.join("photo.png")).unwrap();
+        c.assets[0].rating = 5;
+        let report = relink_root(&mut c, &old, &new).unwrap();
+        assert_eq!(report.relinked, 1);
+        assert_eq!(report.metadata_only, 1);
+        assert_eq!(c.assets[0].path, photo);
+        assert_eq!(c.assets[0].rating, 5);
+        let mismatch = dir.path().join("wrong");
+        std::fs::create_dir(&mismatch).unwrap();
+        std::fs::write(
+            mismatch.join("photo.png"),
+            crate::export::png8(1, 1, &[0, 0, 0, 255]).unwrap(),
+        )
+        .unwrap();
+        let report = relink_root(&mut c, &new, &mismatch).unwrap();
+        assert_eq!(report.relinked, 0);
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(c.assets[0].path, photo);
     }
 }

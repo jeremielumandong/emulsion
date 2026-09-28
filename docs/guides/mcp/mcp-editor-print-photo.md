@@ -56,6 +56,55 @@ copies, ranges and device-specific options; incompatible printer paper reports a
 error. Preset writes are atomic and serialized across processes. The normal UI
 also provides preset loading, saving/replacing and deletion.
 
+`preview_print_job`, `submit_print_job` and `export_print_pdf` share additional
+source options. Choose one of:
+
+- `photos: [{path, params?, expected_digest?}]`: 1–200 local photos, optionally
+  with native DevelopParams snapshots; drafts are rendered without saving them.
+- `frame_nodes: [id, ...]`: responsive Design frames on `source_page` (zero-based,
+  defaults to 0), preserving each frame's physical size.
+- `frame_times_ms: [0, 1000, 2500]`: samples page animation on `source_page`.
+- `video_path` plus `frame_times_ms`: extracts local video frames using installed
+  FFmpeg, with no network inputs. Up to 100 frames within 24 hours, at most 4096
+  pixels per side without upscaling. Out-of-duration frames fail.
+
+Omitting these uses the originating project's pages. `pages` selects from the
+prepared sources; frame timestamps preserve requested order and duplicates.
+Use `layout: "contact"` and `labels: "name"` or `"number_and_name"` for a labeled
+storyboard/contact sheet (`"none"` disables labels).
+
+`export_print_pdf` requires `output_path` and no printer. Writes are atomic and
+cannot replace a source photo/video or the ICC profile. Like printer submission,
+this is an explicit external action in the MCP tool policy. It accepts the same
+physical page layouts as preview. For example:
+
+```json
+{
+  "output_path": "/path/to/press.pdf",
+  "layout": "document",
+  "bleed_mm": 3,
+  "crop_marks": true,
+  "production": {
+    "standard": "pdf_x1a2001",
+    "profile": "/path/to/press-output-v2.icc",
+    "intent": 1,
+    "dpi": 300,
+    "condition": "Provider-supplied press and paper condition"
+  }
+}
+```
+
+Production `standard` is `pdf`, `pdf_x1a2001`, or `pdf_x32002`. PDF/X enables
+conversion implicitly and requires a CMYK ICC v2 output-device profile. Ordinary
+PDF can use `managed: true` with RGB/CMYK profiles. Intent 0/1/2/3 means perceptual,
+relative, saturation or absolute; `dpi` is 150–600. Managed output flattens the
+sheet at that PPI and embeds its output profile. Preview is an sRGB proof
+simulation. Native printer output requires an RGB printer profile and explicit
+`driver_color_disabled: true` after disabling correction in the driver; the
+portal rejects managed output. See [Printing](../printing.md) for production
+limits and platform acceptance. Presets retain profile paths and labels but
+never the driver-correction acknowledgment.
+
 Tests cover strict parsing, device-free native print rendering, crop/replacement
 source preservation and Undo, actual crop dialog validation, and native editor
 state/guide/quick-mask history. No physical print job is submitted by tests.

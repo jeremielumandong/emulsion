@@ -73,6 +73,25 @@ impl PrintDialog {
             }
         }
         if matches!(self.settings.layout, Layout::Contact | Layout::Repeat) {
+            controls = controls.child(self.select(
+                "print-labels",
+                "Contact-sheet labels",
+                format!("{:?}", self.settings.creative.labels),
+                vec![
+                    ("None".into(), "Off".into()),
+                    ("Name".into(), "Filename / frame timestamp".into()),
+                    ("NumberAndName".into(), "Page number and name".into()),
+                ],
+                |s, v, cx| {
+                    s.settings.creative.labels = match v.as_str() {
+                        "Name" => print::LabelMode::Name,
+                        "NumberAndName" => print::LabelMode::NumberAndName,
+                        _ => print::LabelMode::None,
+                    };
+                    s.changed(cx);
+                },
+                cx,
+            ));
             controls = controls
                 .child(self.field(7, "Rows (1–20)"))
                 .child(self.field(8, "Columns (1–20)"))
@@ -163,6 +182,24 @@ impl PrintDialog {
             self.fields[i].update(cx, |f, cx| f.set_value(value.to_string(), window, cx));
         }
         self.fields[13].update(cx, |f, cx| f.set_value(preset.name.clone(), window, cx));
+        self.fields[14].update(cx, |f, cx| {
+            f.set_value(
+                settings
+                    .production
+                    .profile
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            )
+        });
+        self.fields[15].update(cx, |f, cx| {
+            f.set_value(settings.production.dpi.to_string(), window, cx)
+        });
+        self.fields[16].update(cx, |f, cx| {
+            f.set_value(settings.production.condition.clone(), window, cx)
+        });
         self.settings = settings;
         self.paper_chosen = true;
         self.sheet = 0;

@@ -453,6 +453,7 @@ fn translate(
     mut p: DevelopParams,
     name: String,
 ) -> Result<ImportedPreset> {
+    p.process_version = 2;
     let mut report = ImportedPreset {
         name,
         params: p,
@@ -528,6 +529,35 @@ fn translate(
             "PostCropVignetteAmount" | "VignetteAmount" => p.vignette = unit()?,
             "Sharpness" => p.sharpening = (number()? / 150.).clamp(0., 1.),
             "LuminanceSmoothing" => p.noise_reduction = unit()?.max(0.),
+            "SharpenRadius" => p.sharpening_radius = number()?.clamp(0.5, 3.),
+            "SharpenDetail" => p.sharpening_detail = unit()?.max(0.),
+            "SharpenEdgeMasking" => p.sharpening_masking = unit()?.max(0.),
+            "LuminanceNoiseReductionDetail" => p.luminance_detail = unit()?.max(0.),
+            "LuminanceNoiseReductionContrast" => p.luminance_contrast = unit()?.max(0.),
+            "ColorNoiseReduction" => p.color_noise_reduction = unit()?.max(0.),
+            "ColorNoiseReductionDetail" => p.color_noise_detail = unit()?.max(0.),
+            "ColorNoiseReductionSmoothness" => p.color_noise_smoothness = unit()?.max(0.),
+            "IncrementalTemperature" => p.temperature = unit()?,
+            "IncrementalTint" => p.tint = unit()?,
+            "RedHue" => p.calibration[0][0] = unit()?,
+            "RedSaturation" => p.calibration[0][1] = unit()?,
+            "GreenHue" => p.calibration[1][0] = unit()?,
+            "GreenSaturation" => p.calibration[1][1] = unit()?,
+            "BlueHue" => p.calibration[2][0] = unit()?,
+            "BlueSaturation" => p.calibration[2][1] = unit()?,
+            "ShadowTint" => p.shadow_tint = unit()?,
+            "ParametricShadows" => p.parametric[0] = unit()?,
+            "ParametricDarks" => p.parametric[1] = unit()?,
+            "ParametricLights" => p.parametric[2] = unit()?,
+            "ParametricHighlights" => p.parametric[3] = unit()?,
+            "ParametricShadowSplit" => p.parametric_splits[0] = number()? / 100.,
+            "ParametricMidtoneSplit" => p.parametric_splits[1] = number()? / 100.,
+            "ParametricHighlightSplit" => p.parametric_splits[2] = number()? / 100.,
+            "ColorGradeGlobalHue" => p.global_grading[0] = number()?,
+            "ColorGradeGlobalSat" => p.global_grading[1] = unit()?.max(0.),
+            "ColorGradeGlobalLum" => p.global_grading[2] = unit()?,
+            "ColorGradeBlending" => p.grading_blending = unit()?.max(0.),
+            "SplitToningBalance" => p.grading_balance = unit()?,
             "Temperature" => {
                 p.kelvin = Some(number()?.clamp(2000., 50000.));
                 p.temperature = 0.;
@@ -595,6 +625,9 @@ fn translate(
             "ColorGradeShadowLum" => p.grading[0][2] = unit()?,
             "ColorGradeMidtoneLum" => p.grading[1][2] = unit()?,
             "ColorGradeHighlightLum" => p.grading[2][2] = unit()?,
+            "CameraProfile" if crate::camera_profiles::resolve(value).is_some() => {
+                p.camera_profile = crate::camera_profiles::resolve(value);
+            }
             "CameraProfile" | "CameraProfileDigest" | "Look" | "LookTable" => {
                 report.warnings.push(format!(
                     "{key}: {} requires an Adobe/DCP profile that is not applied",
@@ -755,24 +788,12 @@ mod tests {
         for inactive in ["Copyright", "Defringe", "Grain", "ColorNoise"] {
             assert!(!notes.contains(inactive), "{notes}");
         }
-        for active in [
-            "RedHue=49",
-            "BlueHue=-44",
-            "BlueSaturation=33",
-            "ParametricDarks=52",
-            "ParametricShadowSplit=10",
-            "UnknownMode=0",
-        ] {
-            assert!(notes.contains(active), "{notes}");
-        }
-        assert_eq!(
-            report
-                .warnings
-                .iter()
-                .filter(|s| s.starts_with("Camera calibration"))
-                .count(),
-            1
-        );
+        assert!(notes.contains("UnknownMode=0"));
+        assert_eq!(report.params.calibration[0][0], 0.49);
+        assert_eq!(report.params.calibration[2], [-0.44, 0.33]);
+        assert_eq!(report.params.parametric[1], 0.52);
+        assert_eq!(report.params.parametric_splits[0], 0.1);
+        assert!(!notes.contains("Camera calibration"));
     }
     #[test]
     #[ignore = "requires the user-provided Chic.xmp via EMULSION_CHIC_PRESET"]
@@ -792,7 +813,9 @@ mod tests {
         assert_eq!(report.params.grading[0][0], 236.);
         assert_eq!(report.params.grading[2][0], 78.);
         let notes = report.warnings.join("\n");
-        assert!(notes.contains("RedHue=+49") && notes.contains("ParametricDarks=+52"));
+        assert_eq!(report.params.calibration[0][0], 0.49);
+        assert_eq!(report.params.parametric[1], 0.52);
+        assert!(!notes.contains("ParametricDarks"));
         assert!(!notes.contains("Defringe") && !notes.contains("ContactInfo"));
         assert!(report.warnings.len() <= 8, "{notes}");
         let raster = emulsion_raster::Raster::solid(16, 16, [0.3, 0.4, 0.2, 1.]);

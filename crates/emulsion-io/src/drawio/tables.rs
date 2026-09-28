@@ -40,6 +40,20 @@ fn descendants(node: &Handle, name: &str, depth: usize, out: &mut Vec<Handle>) {
         descendants(child, name, depth + 1, out);
     }
 }
+fn dimension(value: &str, available: f64) -> Option<f64> {
+    let value=value.trim();
+    let n=if let Some(p)=value.strip_suffix('%'){p.parse::<f64>().ok()?*available/100.}else{value.trim_end_matches("px").parse::<f64>().ok()?};
+    (n.is_finite()&&n>=0.).then_some(n.min(30000.))
+}
+fn padding(node:&Handle,fallback:f64)->[f64;4]{
+    let mut result=[fallback;4];
+    if let Some(value)=css(node,"padding"){
+        let values=value.split_whitespace().map(|v|dimension(v,0.)).collect::<Option<Vec<_>>>();
+        if let Some(v)=values {result=match v.as_slice(){[a]=>[*a;4],[a,b]=>[*a,*b,*a,*b],[a,b,c]=>[*a,*b,*c,*b],[a,b,c,d]=>[*a,*b,*c,*d],_=>result};}
+    }
+    for (i,key) in ["padding-top","padding-right","padding-bottom","padding-left"].iter().enumerate(){if let Some(v)=css(node,key).and_then(|v|dimension(&v,0.)){result[i]=v;}}
+    result.map(|v|v.clamp(0.,100.))
+}
 struct CellLayout {
     row: usize,
     col: usize,
@@ -48,6 +62,10 @@ struct CellLayout {
     spec: emulsion_core::text::TextSpec,
     bg: Option<[u8; 4]>,
     border: bool,
+    padding: [f64;4],
+    width: Option<String>,
+    height: Option<f64>,
+    vertical: String,
 }
 pub(super) fn append(
     doc: &mut Document,
@@ -81,6 +99,7 @@ pub(super) fn append(
         NodeKind::Text { spec, .. } => (**spec).clone(),
         _ => return Ok(()),
     };
+    let default_padding=attr(table,"cellpadding").and_then(|s|dimension(&s,0.)).unwrap_or(4.).clamp(0.,50.);
     let mut cells = Vec::new();
     let mut occupied = HashSet::new();
     let mut columns = 0usize;
@@ -135,11 +154,18 @@ pub(super) fn append(
             spec.height = None;
             let bg = css(child, "background-color")
                 .or_else(|| attr(child, "bgcolor"))
+                .or_else(|| css(tr,"background-color"))
+                .or_else(|| css(table,"background-color"))
                 .and_then(|c| color(&c).ok().flatten());
             let border = attr(table, "border").is_some_and(|s| s != "0")
                 || css(table, "border").is_some_and(|s| !s.starts_with('0') && s != "none")
                 || css(child, "border").is_some_and(|s| !s.starts_with('0') && s != "none");
+            if let Some(align)=css(child,"text-align").or_else(||attr(child,"align")) {spec.align=match align.as_str(){"right"=>emulsion_core::text::Align::Right,"center"=>emulsion_core::text::Align::Center,_=>emulsion_core::text::Align::Left};}
             cells.push(CellLayout {
+                padding:padding(child,default_padding),
+                width:css(child,"width").or_else(||attr(child,"width")),
+                height:css(child,"height").or_else(||attr(child,"height")).or_else(||css(tr,"height")).and_then(|v|dimension(&v,b[3])),
+                vertical:css(child,"vertical-align").or_else(||attr(child,"valign")).unwrap_or_else(||"middle".into()),
                 row,
                 col,
                 rows: rowspan,
@@ -155,44 +181,41 @@ pub(super) fn append(
     if cells.is_empty() {
         return Ok(());
     }
-    let padding = attr(table, "cellpadding")
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(4.)
-        .clamp(0., 50.);
-    let width = css(table, "width")
-        .or_else(|| attr(table, "width"))
-        .and_then(|s| {
-            if let Some(p) = s.strip_suffix('%') {
-                p.parse::<f64>().ok().map(|p| b[2] * p / 100.)
-            } else {
-                s.trim_end_matches("px").parse::<f64>().ok()
-            }
-        })
-        .unwrap_or(b[2])
-        .clamp(1., 30000.);
+    let width=css(table,"width").or_else(||attr(table,"width")).and_then(|v|dimension(&v,b[2])).unwrap_or(b[2]).clamp(1.,30000.);
     let mut widths = vec![12.; columns];
+    let mut explicit=vec![false;columns];
+    let mut cols=Vec::new();descendants(table,"col",0,&mut cols);
+    let mut column=0;
+    for col in cols {
+        let span=attr(&col,"span").and_then(|v|v.parse::<usize>().ok()).unwrap_or(1).clamp(1,64);
+        let size=css(&col,"width").or_else(||attr(&col,"width")).and_then(|v|dimension(&v,width));
+        for i in column..(column+span).min(columns){if let Some(size)=size{widths[i]=size.max(1.);explicit[i]=true;}}
+        column+=span;
+    }
     for cell in &cells {
-        let preferred =
-            f64::from(emulsion_core::text::layout(&cell.spec).bounds().width) + padding * 2.;
-        let current = widths[cell.col..cell.col + cell.cols].iter().sum::<f64>();
-        let extra = (preferred - current).max(0.) / cell.cols as f64;
-        for w in &mut widths[cell.col..cell.col + cell.cols] {
-            *w += extra;
+        if let Some(size)=cell.width.as_ref().and_then(|v|dimension(v,width)){
+            for i in cell.col..cell.col+cell.cols {widths[i]=(size/cell.cols as f64).max(1.);explicit[i]=true;}
         }
     }
-    let total = widths.iter().sum::<f64>();
-    for w in &mut widths {
-        *w *= width / total;
+    for cell in &cells {
+        let preferred = f64::from(emulsion_core::text::layout(&cell.spec).bounds().width) + cell.padding[1]+cell.padding[3];
+        let current = widths[cell.col..cell.col + cell.cols].iter().sum::<f64>();
+        let flexible=(cell.col..cell.col+cell.cols).filter(|i|!explicit[*i]).count();
+        if flexible>0 {let extra=(preferred-current).max(0.)/flexible as f64;for i in cell.col..cell.col+cell.cols {if !explicit[i]{widths[i]+=extra;}}}
     }
+    let total = widths.iter().sum::<f64>();
+    let fixed=widths.iter().zip(&explicit).filter(|(_,e)|**e).map(|(w,_)|*w).sum::<f64>();
+    if fixed<width && explicit.iter().any(|e|!*e) {let flexible=total-fixed;for (w,e) in widths.iter_mut().zip(&explicit){if !e{*w*=(width-fixed)/flexible;}}}
+    else {for w in &mut widths {*w*=width/total;}}
     let mut heights =
-        vec![f64::from(base.size) * base.line_height as f64 + padding * 2.; rows.len()];
+        vec![f64::from(base.size) * base.line_height as f64 + default_padding * 2.; rows.len()];
     for cell in &mut cells {
         cell.spec.width = Some(
-            (widths[cell.col..cell.col + cell.cols].iter().sum::<f64>() - 2. * padding).max(1.)
+            (widths[cell.col..cell.col + cell.cols].iter().sum::<f64>() - cell.padding[1]-cell.padding[3]).max(1.)
                 as f32,
         );
         let required =
-            f64::from(emulsion_core::text::layout(&cell.spec).bounds().height) + padding * 2.;
+            (f64::from(emulsion_core::text::layout(&cell.spec).bounds().height) + cell.padding[0]+cell.padding[2]).max(cell.height.unwrap_or(0.));
         let current = heights[cell.row..cell.row + cell.rows].iter().sum::<f64>();
         let extra = (required - current).max(0.) / cell.rows as f64;
         for h in &mut heights[cell.row..cell.row + cell.rows] {
@@ -236,8 +259,10 @@ pub(super) fn append(
             node.parent = Some(parent);
             doc.nodes.push(node);
         }
-        cell.spec.x = (cx + padding) as f32;
-        cell.spec.y = (cy + padding) as f32;
+        cell.spec.x = (cx + cell.padding[3]) as f32;
+        let content=f64::from(emulsion_core::text::layout(&cell.spec).bounds().height);
+        let spare=(h-cell.padding[0]-cell.padding[2]-content).max(0.);
+        cell.spec.y = (cy + cell.padding[0]+match cell.vertical.as_str(){"top"|"baseline"=>0.,"bottom"=>spare,_=>spare/2.}) as f32;
         let id = doc.alloc_id();
         let mut node = Node::text(id, "Table cell text", cell.spec, doc.width, doc.height);
         node.parent = Some(parent);

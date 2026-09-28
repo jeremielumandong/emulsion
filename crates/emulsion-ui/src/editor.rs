@@ -2399,7 +2399,7 @@ impl EditorView {
             )
             .child(
                 button("export", "Export", true, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_export_panel(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx))),
             )
     }
 
@@ -4472,7 +4472,6 @@ impl EditorView {
         let strip = self.status_strip(&p, cx);
         let ask = self.ask_area(&p, cx);
         let size_panel = self.size_panel_view(&p, cx);
-        let export_panel = self.export_panel_view(&p, cx);
         let dock = if self.sidebar_tab == SidebarTab::Assistant {
             None
         } else {
@@ -4519,7 +4518,6 @@ impl EditorView {
                             .min_h_0()
                             .overflow_hidden()
                             .children(size_panel)
-                            .children(export_panel)
                             .children(ask)
                             .children(self.design_canvas_toolbar(&p, window, cx))
                             .child(

@@ -68,7 +68,6 @@ impl EditorView {
                 this.notify_canvas(cx);
             }))
             .children(self.size_panel_view(p, cx))
-            .children(self.export_panel_view(p, cx))
             .children(self.ask_area(p, cx))
             .child(
                 div()

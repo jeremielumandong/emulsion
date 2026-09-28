@@ -51,7 +51,7 @@ if !result.is_error&&!readonly{this.editor.commit_design_document(doc,"Edit imag
             }
         };
         let requires_document =
-            matches!(call.name.as_str(), "preview_print_job" | "submit_print_job");
+            matches!(call.name.as_str(), "preview_print_job" | "submit_print_job" | "export_print_pdf");
         if requires_document
             && (self.raw.is_pending()
                 || (self.editor.in_transaction()

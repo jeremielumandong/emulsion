@@ -5,6 +5,9 @@ impl Diagram {
         self.shapes.contains_key(&id) || self.edges.contains_key(&id)
     }
     pub fn edge_order(&self) -> Result<Vec<NodeId>, String> {
+        if self.edges.values().all(|e|self.shapes.contains_key(&e.source.shape)&&self.shapes.contains_key(&e.target.shape)) {
+            return Ok(self.edges.keys().copied().collect());
+        }
         let mut incoming = HashMap::new();
         let mut dependents: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         let mut ready = std::collections::BTreeSet::new();

@@ -9,6 +9,9 @@ use gpui_kit::component::{
 #[derive(Default)]
 pub(super) struct LibraryUi {
     pub(super) catalog: Catalog,
+    pub(super) photo_index: Option<emulsion_io::photo_index::Index>,
+    pub(super) metadata_undo: Vec<Vec<(catalog::Asset, catalog::Asset)>>,
+    pub(super) advance_to: Option<PathBuf>,
     pub(super) source_paths: Option<Vec<PathBuf>>,
     pub(super) raw_only: bool,
     pub(super) unedited: bool,
@@ -43,15 +46,21 @@ impl Workspace {
         self.batch.library.loading = true;
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async { catalog::load(&catalog::root()) })
+                .background_spawn(async {
+                    let root = catalog::root();
+                    let c = catalog::load(&root)?;
+                    let index = emulsion_io::photo_index::Index::load(&root, &c);
+                    Ok::<_, emulsion_io::IoError>((c, index))
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.batch.library.loading = false;
                 this.batch.library.loaded = true;
                 match result {
-                    Ok(c) => {
+                    Ok((c, index)) => {
                         if c.revision >= this.batch.library.catalog.revision {
                             this.batch.library.catalog = c;
+                            this.batch.library.photo_index = Some(index);
                         }
                         if this.batch.items.is_empty() {
                             this.library_show(cx);
@@ -72,17 +81,47 @@ impl Workspace {
     ) {
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { catalog::update(&catalog::root(), edit) })
+                .background_spawn(async move {
+                    catalog::update(&catalog::root(), |c| {
+                        let before = c.assets.clone();
+                        edit(c)?;
+                        let by_id: std::collections::HashMap<_, _> =
+                            c.assets.iter().map(|a| (a.id, a)).collect();
+                        Ok(before
+                            .into_iter()
+                            .filter_map(|a| {
+                                by_id
+                                    .get(&a.id)
+                                    .filter(|b| b.path == a.path && ***b != a)
+                                    .map(|b| (a, (*b).clone()))
+                            })
+                            .collect::<Vec<_>>())
+                    })
+                })
                 .await;
             this.update(cx, |this, cx| {
                 match result {
-                    Ok((c, _)) => {
-                        let membership_changed=c.assets.iter().map(|a|(&a.id,&a.path)).ne(this.batch.library.catalog.assets.iter().map(|a|(&a.id,&a.path))) || c.photos.stacks!=this.batch.library.catalog.photos.stacks;
+                    Ok((c, changes)) => {
+                        if !changes.is_empty() {
+                            this.batch.library.metadata_undo.push(changes);
+                            if this.batch.library.metadata_undo.len() > 100 {
+                                this.batch.library.metadata_undo.remove(0);
+                            }
+                        }
+                        let membership_changed = c.assets.iter().map(|a| (&a.id, &a.path)).ne(this
+                            .batch
+                            .library
+                            .catalog
+                            .assets
+                            .iter()
+                            .map(|a| (&a.id, &a.path)))
+                            || c.photos.stacks != this.batch.library.catalog.photos.stacks;
                         if c.revision >= this.batch.library.catalog.revision {
                             this.batch.library.catalog = c;
                         }
                         if this.batch.running.is_none()
-                            && (membership_changed || this.batch.library.rating > 0
+                            && (membership_changed
+                                || this.batch.library.rating > 0
                                 || this.batch.library.flagged
                                 || this.batch.library.rejected
                                 || this.batch.library.color_label > 0
@@ -90,6 +129,12 @@ impl Workspace {
                                 || this.batch.library.collection.is_some())
                         {
                             this.library_show(cx);
+                        }
+                        if let Some(next) = this.batch.library.advance_to.take()
+                            && let Some(index) =
+                                this.batch.items.iter().position(|i| i.path == next)
+                        {
+                            this.library_select(index, false, false, cx);
                         }
                         this.batch.note = Some(("Local library updated.".into(), false));
                     }
@@ -125,6 +170,17 @@ impl Workspace {
             cx.notify();
             return;
         }
+        if self
+            .batch
+            .library
+            .photo_index
+            .as_ref()
+            .is_none_or(|i| i.revision != self.batch.library.catalog.revision)
+        {
+            self.batch.library.photo_index = Some(emulsion_io::photo_index::Index::build(
+                &self.batch.library.catalog,
+            ));
+        }
         let state = &self.batch.library;
         let query = state
             .search
@@ -134,6 +190,20 @@ impl Workspace {
         let members = state
             .collection
             .and_then(|id| state.catalog.collections.iter().find(|c| c.id == id));
+        let matches = state.photo_index.as_ref().unwrap().search(
+            &query,
+            state.rating,
+            state.color_label,
+            state.flagged,
+            state.rejected,
+        );
+        let photo_index: std::collections::HashMap<_, _> = state
+            .catalog
+            .assets
+            .iter()
+            .filter(|a| a.kind == AssetKind::Image)
+            .map(|a| (a.path.as_path(), a))
+            .collect();
         let mut missing = 0;
         let source = state.source_paths.clone().unwrap_or_else(|| {
             state
@@ -147,23 +217,37 @@ impl Workspace {
         let mut paths = source
             .into_iter()
             .filter(|path| {
-                let asset = state
-                    .catalog
-                    .assets
-                    .iter()
-                    .find(|a| a.path == *path && a.kind == AssetKind::Image);
+                let asset = photo_index.get(path.as_path()).copied();
                 let raw = emulsion_io::photo_develop::is_raw_photo(path);
                 let edited =
                     raw && emulsion_io::raw_settings::sidecar_path(path).is_ok_and(|p| p.exists());
-                asset.map_or(0, |a| a.rating) >= state.rating
+                asset.is_none_or(|a| matches.contains(&a.id))
+                    && asset.map_or(0, |a| a.rating) >= state.rating
                     && (!state.flagged || asset.is_some_and(|a| a.flagged))
                     && (!state.rejected || asset.is_some_and(|a| a.rejected))
                     && (state.color_label == 0
                         || asset.is_some_and(|a| a.color_label == state.color_label))
                     && (!state.raw_only || raw)
                     && (!state.unedited || !edited)
-                    && members.is_none_or(|c| asset.is_some_and(|a| state.catalog.photos.smart.get(&c.id).map_or_else(||c.assets.contains(&a.id),|r|r.matches(a))))
-                    && (!state.collapse_stacks || asset.is_none_or(|a| !state.catalog.photos.stacks.iter().any(|(top,members)|*top!=a.id && members.contains(&a.id))))
+                    && members.is_none_or(|c| {
+                        asset.is_some_and(|a| {
+                            state
+                                .catalog
+                                .photos
+                                .smart
+                                .get(&c.id)
+                                .map_or_else(|| c.assets.contains(&a.id), |r| r.matches(a))
+                        })
+                    })
+                    && (!state.collapse_stacks
+                        || asset.is_none_or(|a| {
+                            !state
+                                .catalog
+                                .photos
+                                .stacks
+                                .iter()
+                                .any(|(top, members)| *top != a.id && members.contains(&a.id))
+                        }))
                     && (query.is_empty()
                         || path
                             .file_name()
@@ -180,7 +264,7 @@ impl Workspace {
                     true
                 } else {
                     missing += 1;
-                    false
+                    true
                 }
             })
             .collect::<Vec<_>>();
@@ -244,7 +328,7 @@ impl Workspace {
         self.batch.current =
             current.and_then(|p| self.batch.items.iter().position(|i| i.path == p));
         if missing > 0 {
-            self.batch.note=Some((format!("{missing} missing file(s) omitted. Relink their entries from Design asset properties.").into(),true));
+            self.batch.note=Some((format!("{missing} offline photo(s). Reconnect the drive or use Relink folder root. Available proxies remain editable.").into(),true));
         }
     }
     fn library_metadata(&mut self, collection: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -604,7 +688,24 @@ impl Workspace {
             let id = collection.id;
             rows = rows.child(
                 Button::new(("library-collection-row", id))
-                    .label(format!("{} · {}", collection.name, self.batch.library.catalog.photos.smart.get(&collection.id).map_or(collection.assets.len(),|rule|self.batch.library.catalog.assets.iter().filter(|a|rule.matches(a)).count())))
+                    .label(format!(
+                        "{} · {}",
+                        collection.name,
+                        self.batch
+                            .library
+                            .catalog
+                            .photos
+                            .smart
+                            .get(&collection.id)
+                            .map_or(collection.assets.len(), |rule| self
+                                .batch
+                                .library
+                                .catalog
+                                .assets
+                                .iter()
+                                .filter(|a| rule.matches(a))
+                                .count())
+                    ))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -867,6 +968,28 @@ impl Workspace {
                         this.library_select(i, false, false, cx);
                     })),
             );
+        if self.batch.develop.loupe {
+            strip =
+                strip
+                    .child(chip("batch-all", "All", false, &p).test_support().on_click(
+                        cx.listener(|this, _, _, cx| {
+                            for i in &mut this.batch.items {
+                                i.selected = true;
+                            }
+                            cx.notify();
+                        }),
+                    ))
+                    .child(
+                        chip("batch-none", "None", false, &p)
+                            .test_support()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                for i in &mut this.batch.items {
+                                    i.selected = false;
+                                }
+                                cx.notify();
+                            })),
+                    );
+        }
         let mut photos = div()
             .id("library-filmstrip-scroll")
             .flex_1()
@@ -1055,29 +1178,6 @@ impl Workspace {
 }
 
 impl Workspace {
-    pub(super) fn library_workspace_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        use crate::workspace::destinations::Destination;
-        let p = theme::palette(cx);
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .h(px(36.))
-            .border_b_1()
-            .border_color(p.line)
-            .children(Destination::ALL.map(|destination| {
-                Button::new((ElementId::from("library-destination"), destination.label()))
-                    .label(destination.label())
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.visit_destination(destination, window, cx)
-                    }))
-            }))
-            .into_any_element()
-    }
     pub(super) fn library_grid_tools(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let title = self
@@ -1302,10 +1402,75 @@ impl Workspace {
             return;
         }
         let modifiers = event.keystroke.modifiers;
+        if event.keystroke.key == "tab" {
+            self.batch.develop.panels_hidden = !self.batch.develop.panels_hidden;
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        if (modifiers.control || modifiers.platform)
+            && event.keystroke.key == "z"
+            && !self.batch.develop.module_develop
+        {
+            self.library_undo_metadata(cx);
+            cx.stop_propagation();
+            return;
+        }
         if modifiers.control || modifiers.platform || modifiers.alt {
             return;
         }
-        match event.keystroke.key.as_str() {
+        let key = event.keystroke.key.as_str();
+        if matches!(
+            key,
+            "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "p" | "u" | "x"
+        ) && (self.batch.develop.auto_advance || modifiers.shift)
+        {
+            self.batch.library.advance_to = self
+                .batch
+                .current
+                .and_then(|i| self.batch.items.get(i + 1))
+                .map(|i| i.path.clone());
+        }
+        match key {
+            "escape" => {
+                self.batch.develop.canvas_tool = 0;
+                self.batch.develop.canvas_points.clear();
+                self.invalidate_library_preview();
+                cx.notify();
+            }
+            "r" | "q" | "k" | "m" => {
+                self.batch.develop.canvas_tool = match key {
+                    "r" => 5,
+                    "q" => 3,
+                    "k" => 1,
+                    _ => {
+                        if modifiers.shift {
+                            8
+                        } else {
+                            9
+                        }
+                    }
+                };
+                self.batch.develop.module_develop = true;
+                self.batch.develop.loupe = true;
+                self.batch.develop.detail_region = None;
+                self.batch.develop.section = if key == "r" { 1 } else { 5 };
+                self.invalidate_library_preview();
+                cx.notify();
+            }
+            "6" => self.library_cull(Some(1), None, cx),
+            "7" => self.library_cull(Some(2), None, cx),
+            "8" => self.library_cull(Some(3), None, cx),
+            "9" => self.library_cull(Some(4), None, cx),
+            "o" => {
+                self.batch.develop.mask_overlay = !self.batch.develop.mask_overlay;
+                self.invalidate_library_preview();
+                cx.notify();
+            }
+            "a" => {
+                self.batch.develop.auto_advance = !self.batch.develop.auto_advance;
+                cx.notify();
+            }
             "0" => self.library_rate(Some(0), None, cx),
             "1" => self.library_rate(Some(1), None, cx),
             "2" => self.library_rate(Some(2), None, cx),
@@ -1316,10 +1481,12 @@ impl Workspace {
             "u" => self.library_rate(None, Some(false), cx),
             "x" => self.library_cull(None, Some(true), cx),
             "g" => {
+                self.batch.develop.module_develop = false;
                 self.batch.develop.loupe = false;
                 cx.notify();
             }
             "e" | "d" => {
+                self.batch.develop.module_develop = key == "d";
                 self.batch.develop.loupe = true;
                 cx.notify();
             }
@@ -1401,7 +1568,6 @@ impl Workspace {
         })
         .detach();
     }
-
 }
 
 impl Workspace {
@@ -1458,5 +1624,53 @@ impl Workspace {
                     true
                 })
         });
+    }
+}
+
+impl Workspace {
+    pub(super) fn library_undo_metadata(&mut self, cx: &mut Context<Self>) {
+        let Some(changes) = self.batch.library.metadata_undo.pop() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let rollback = changes.clone();
+            let result = cx
+                .background_spawn(async move {
+                    catalog::update(&catalog::root(), |catalog| {
+                        for (_, expected) in &changes {
+                            if catalog.assets.iter().find(|a| a.id == expected.id) != Some(expected)
+                            {
+                                return Err(emulsion_io::IoError::Manifest(
+                                    "Photo metadata changed outside this undo history".into(),
+                                ));
+                            }
+                        }
+                        for (before, _) in changes {
+                            if let Some(asset) =
+                                catalog.assets.iter_mut().find(|a| a.id == before.id)
+                            {
+                                *asset = before;
+                            }
+                        }
+                        Ok(())
+                    })
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok((catalog, _)) => {
+                        this.batch.library.catalog = catalog;
+                        this.library_show(cx);
+                    }
+                    Err(e) => {
+                        this.batch.library.metadata_undo.push(rollback);
+                        this.batch.note = Some((e.to_string().into(), true));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 }

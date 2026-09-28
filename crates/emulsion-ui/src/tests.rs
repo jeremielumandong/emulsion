@@ -1380,6 +1380,16 @@ fn batch_recipe_browser_preserves_photo_selection_and_export_settings(cx: &mut T
     cx.run_until_parked();
     cx.update(|window, cx| window.click(("batch-fmt", 13usize), cx));
     cx.run_until_parked();
+    // The desktop filmstrip reserves vertical space. The inspector scrolls
+    // independently so output controls remain reachable on short windows.
+    cx.update(|window, cx| {
+        window.scroll(
+            "batch-settings",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-220.))),
+            cx,
+        );
+    });
+    cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("batch-settings").visible());
         assert!(window.find("batch-out").visible());

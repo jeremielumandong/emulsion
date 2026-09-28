@@ -23,8 +23,13 @@ pub(super) struct Develop {
     pub(super) picking_sky: bool,
     pub(super) mask_seed: Option<[f32; 2]>,
     pub(super) curve_bounds: crate::widgets::TrackBounds,
+    pub(super) navigator_bounds: crate::widgets::TrackBounds,
+    pub(super) navigator_preview:Option<(PathBuf,Arc<RenderImage>)>,
     pub(super) curve_drag: Option<usize>,
     pub(super) presets_loaded: bool,
+    pub(super) profiles_open: bool,
+    pub(super) color_view_open: bool,
+    pub(super) profiles: Option<Vec<emulsion_io::camera_profiles::ProfileSummary>>,
     pub(super) preset_files: Vec<PathBuf>,
     pub(super) preset_report: Option<emulsion_io::lightroom_presets::ImportedPreset>,
     pub(super) preset_import_notes: Vec<String>,
@@ -32,12 +37,38 @@ pub(super) struct Develop {
     pub(super) preset_report_expanded: bool,
     pub(super) ai_job: Option<Arc<emulsion_ai::jobs::Job>>,
     pub busy: bool,
+    pub(super) preview_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub(super) gesture_active: bool,
+    pub(super) gesture_recorded: bool,
+    pub(super) panels_hidden: bool,
+    pub(super) filmstrip_hidden: bool,
+    pub(super) left_section: usize,
+    pub(super) auto_advance: bool,
+    pub(super) canvas_tool: usize,
+    pub(super) canvas_points: Vec<[f32; 2]>,
+    pub(super) clone_source: Option<[f32; 2]>,
+    pub(super) brush_radius: f32,
+    pub(super) active_mask: Option<u32>,
+    pub(super) mask_overlay: bool,
+    pub(super) dust_visualization: bool,
+    pub(super) mask_intersect: bool,
+    pub(super) culling_mode: usize,
+    pub(super) culling_loading: bool,
+    pub(super) culling_key: Vec<(PathBuf, Option<DevelopParams>)>,
+    pub(super) culling_images: HashMap<PathBuf, Arc<RenderImage>>,
+    pub(super) culling_zoom: f32,
+    pub(super) culling_center: Option<[f32; 2]>,
+    pub(super) preview_stale: bool,
+    pub(super) full_preview:bool,
+    pub(super) color_view: emulsion_io::icc::PhotoView,
+    pub(super) detail_region: Option<[f32; 2]>,
     pub saving: bool,
     pub before: bool,
     pub histogram: [u32; 32],
     pub rgb_histogram: [[u32; 32]; 3],
     pub clipping: bool,
     pub loupe: bool,
+    pub(super) module_develop: bool,
     pub list: bool,
     pub compare: bool,
     baseline_preview: Option<(PathBuf, Arc<RenderImage>)>,
@@ -93,8 +124,20 @@ pub(super) fn histogram(bytes: &[u8]) -> [u32; 32] {
 
 impl Workspace {
     pub(super) fn invalidate_library_preview(&mut self) {
+        if let Some(cancel) = self.batch.develop.preview_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         self.batch.preview_generation = self.batch.preview_generation.wrapping_add(1);
-        self.batch.preview = None;
+        if self.batch.preview.as_ref().is_some_and(|(path, _, _)| {
+            self.batch
+                .current
+                .and_then(|i| self.batch.items.get(i))
+                .is_none_or(|i| &i.path != path)
+        }) {
+            self.batch.preview = None;
+        }
+        self.batch.develop.preview_stale = true;
+        self.batch.develop.full_preview=false;
         self.batch.preview_loading = None;
         self.batch.preview_failed = None;
     }
@@ -133,6 +176,10 @@ impl Workspace {
             }
             self.batch.develop.anchor = Some(index);
         }
+        self.batch.develop.gesture_active = false;
+        self.batch.develop.gesture_recorded = false;
+        self.batch.develop.canvas_points.clear();
+        self.batch.develop.active_mask = None;
         self.batch.current = Some(index);
         if self
             .batch
@@ -153,12 +200,9 @@ impl Workspace {
             return;
         }
         let key = (path.clone(), self.batch.recipe.clone());
-        if self
-            .batch
-            .preview
-            .as_ref()
-            .is_some_and(|(p, r, _)| (p, r) == (&key.0, &key.1))
-            || self.batch.preview_loading.as_ref() == Some(&key)
+        if self.batch.preview.as_ref().is_some_and(|(p, r, _)| {
+            !self.batch.develop.preview_stale && (p, r) == (&key.0, &key.1)
+        }) || self.batch.preview_loading.as_ref() == Some(&key)
             || self.batch.preview_failed.as_ref() == Some(&key)
         {
             return;
@@ -181,8 +225,23 @@ impl Workspace {
             .source
             .clone()
             .filter(|s| s.source == path);
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.batch.develop.preview_cancel = Some(cancel.clone());
+        let detail_region = self.batch.develop.detail_region;
+        let full_preview=self.batch.develop.full_preview;
+        let tool_active = self.batch.develop.canvas_tool != 0;
+        let mask_overlay = self.batch.develop.mask_overlay;
+        let dust_visualization = self.batch.develop.dust_visualization;
+        let active_mask = self.batch.develop.active_mask;
+        let color_view = self.batch.develop.color_view.clone();
         let clipping = self.batch.develop.clipping;
         let before = self.batch.develop.before;
+        let cached_baseline = self
+            .batch
+            .develop
+            .baseline_preview
+            .as_ref()
+            .is_some_and(|(p, _)| p == &path);
         let compare = self.batch.develop.compare;
         let recipe = if before { None } else { self.chosen_recipe() };
         self.batch.develop.busy = true;
@@ -198,26 +257,94 @@ impl Workspace {
                         raw_settings::adjacent_settings(&source.source, &source.source_sha256)
                             .map_err(|e| e.to_string())?;
                     let params = params.unwrap_or(saved);
-                    let raster = source
-                        .develop_with(&if before {
-                            DevelopParams::default()
-                        } else {
-                            params
-                        })
-                        .map_err(|e| e.to_string())?;
-                    let (w, h, rgba) =
-                        display_raster(&raster).ok_or("Could not build RAW preview")?;
+                    let render_params = if before {
+                        DevelopParams::default()
+                    } else if tool_active {
+                        DevelopParams {
+                            crop: [0., 0., 1., 1.],
+                            straighten: 0.,
+                            perspective: [0.; 2],
+                            distortion: 0.,
+                            lens_profile: None,
+                            aberration: [0.; 2],
+                            ..params
+                        }
+                    } else {
+                        params
+                    };
+                    let raster = if detail_region.is_some() || full_preview {
+                        source.develop_with_cancel(&render_params,&cancel)
+                    } else {
+                        source.develop_preview(&render_params, &cancel)
+                    }
+                    .map_err(|e| e.to_string())?;
+                    let (w, h, rgba) = if let Some(center) = detail_region {
+                        let (w, h) = (raster.width().min(1024), raster.height().min(1024));
+                        let x = (center[0] * raster.width() as f32 - w as f32 * 0.5)
+                            .clamp(0., (raster.width() - w) as f32)
+                            as u32;
+                        let y = (center[1] * raster.height() as f32 - h as f32 * 0.5)
+                            .clamp(0., (raster.height() - h) as f32)
+                            as u32;
+                        let mut pixels = Vec::with_capacity((w * h) as usize);
+                        for dy in 0..h {
+                            for dx in 0..w {
+                                pixels.push(raster.get(x + dx, y + dy));
+                            }
+                        }
+                        (w, h, Raster::from_pixels(w, h, [0; 4], &pixels).to_srgba8())
+                    } else {
+                        display_raster(&raster).ok_or("Could not build RAW preview")?
+                    };
                     let bins = histogram(&rgba);
                     let rgb_bins = rgb_histogram(&rgba);
                     let mut pixels =
                         render_with(Arc::new(Raster::from_srgba8(w, h, &rgba)), recipe.as_ref())
                             .ok_or("Could not render recipe")?;
+                    if mask_overlay
+                        && tool_active
+                        && let Some(digest) = params.local_edits
+                    {
+                        let edits =
+                            emulsion_io::develop_edits::load(&digest).map_err(|e| e.to_string())?;
+                        let reference = source
+                            .develop_preview(
+                                &DevelopParams {
+                                    local_edits: None,
+                                    ..render_params
+                                },
+                                &cancel,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        let mut spots = edits.clone();
+                        spots.masks.clear();
+                        let reference =
+                            emulsion_io::develop_edits::apply(reference, &spots, &cancel)
+                                .map_err(|e| e.to_string())?;
+                        emulsion_io::develop_edits::overlay(
+                            &mut pixels.2,
+                            pixels.0,
+                            pixels.1,
+                            &reference,
+                            &edits,
+                            active_mask,
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                    if dust_visualization {
+                        emulsion_io::develop_edits::visualize_dust(
+                            &mut pixels.2,
+                            pixels.0,
+                            pixels.1,
+                        );
+                    }
+                    color_view.apply(&mut pixels.2).map_err(|e| e.to_string())?;
                     if clipping {
                         clipping_overlay(&mut pixels.2);
                     }
-                    let baseline = if compare {
+                    let baseline = if compare && !cached_baseline {
                         let raster = source
-                            .develop_with(&DevelopParams::default())
+                            .develop_preview(&DevelopParams::default(), &cancel)
                             .map_err(|e| e.to_string())?;
                         let (w, h, mut rgba) =
                             display_raster(&raster).ok_or("Could not build comparison")?;
@@ -289,15 +416,28 @@ impl Workspace {
                             .or_insert(params);
                         let path = key.0.clone();
                         if this.batch.finish_preview(generation, key, Some(pixels)) {
+                            this.batch.develop.preview_stale = false;
+                            if detail_region.is_none(){if let Some((path,_,image))=&this.batch.preview{this.batch.develop.navigator_preview=Some((path.clone(),image.clone()));}}
                             if let Some((w, h, bytes)) = baseline {
                                 this.batch.develop.baseline_preview =
                                     Some((path, Arc::new(bgra_image(w, h, bytes))));
+                            }
+                            if !full_preview && detail_region.is_none() && !tool_active && this.batch.develop.source.as_ref().is_some_and(|s|!s.is_proxy() && emulsion_io::photo_develop::is_raw_photo(&s.source) && s.info.width.max(s.info.height)>PREVIEW) {
+                                cx.spawn(async move|this,cx|{
+                                    cx.background_executor().timer(std::time::Duration::from_millis(900)).await;
+                                    this.update(cx,|this,cx|{
+                                        if this.batch.preview_generation==generation && !this.batch.develop.busy && !this.batch.develop.gesture_active && this.batch.develop.culling_mode==0 && this.batch.develop.module_develop {
+                                            this.batch.develop.full_preview=true;this.batch.develop.preview_stale=true;cx.notify();
+                                        }
+                                    }).ok();
+                                }).detach();
                             }
                             this.batch.develop.histogram = bins;
                             this.batch.develop.rgb_histogram = rgb_bins;
                         }
                     }
                     Err(e) => {
+                        if full_preview && this.batch.preview.is_some(){this.batch.develop.preview_stale=false;this.batch.preview_loading=None;this.batch.note=Some((format!("Showing fit preview; full refinement unavailable: {e}").into(),true));cx.notify();return;}
                         if this.batch.finish_preview(generation, key, None) {
                             this.batch.note = Some((e.into(), true));
                         }
@@ -319,9 +459,13 @@ impl Workspace {
         else {
             return;
         };
+        if let Some(source)=self.batch.develop.source.as_ref().filter(|s|s.source==path) && let Err(e)=source.validate_settings(&params){self.batch.note=Some((e.to_string().into(),true));cx.notify();return;}
         if let Some(previous) = self.batch.develop.current_params(&path) {
             let history = self.batch.develop.history.entry(path.clone()).or_default();
-            if previous != params {
+            if previous != params
+                && (!self.batch.develop.gesture_active || !self.batch.develop.gesture_recorded)
+            {
+                self.batch.develop.gesture_recorded = self.batch.develop.gesture_active;
                 history.push(previous);
                 if history.len() > 100 {
                     history.remove(0);
@@ -397,7 +541,7 @@ impl Workspace {
                             let mut previous = None;
                             let result = (|| {
                                 let source = match cached_source.as_ref().filter(|s|s.source==path) {
-                                    Some(source) => {if emulsion_io::raw::source_digest(&path)? != source.source_sha256 {return Err(emulsion_io::IoError::Manifest("RAW original changed; reload before saving.".into()));} source.clone()},
+                                    Some(source) => {if !source.is_proxy() && emulsion_io::raw::source_digest(&path)? != source.source_sha256 {return Err(emulsion_io::IoError::Manifest("RAW original changed; reload before saving.".into()));} source.clone()},
                                     None => Arc::new(RawSource::load(&path)?),
                                 };
                                 // Validate existing settings before replacing them, including fingerprint.
@@ -507,7 +651,7 @@ impl Workspace {
         .detach();
     }
 
-    pub(super) fn library_develop_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn library_develop_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let path = self
             .batch
@@ -519,8 +663,6 @@ impl Workspace {
             .and_then(|p| self.batch.develop.current_params(p));
         let mut panel = div()
             .id("library-develop")
-            .max_h(px(360.))
-            .overflow_y_scroll()
             .flex_none()
             .test_support()
             .flex()
@@ -607,12 +749,31 @@ impl Workspace {
             })
             .detach();
         }
-        panel = panel.child(self.library_preset_bank(params, cx));
-        let bins = self.batch.develop.histogram;
-        let peak = bins.iter().copied().max().unwrap_or(1).max(1) as f32;
+        if !self.batch.develop.loupe {
+            panel = panel.child(self.library_preset_bank(params, cx));
+        }
+        if params.process_version == 1 {
+            panel = panel.child(
+                Button::new("library-upgrade-process")
+                    .label("Upgrade rendering process")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.library_adjust(
+                            DevelopParams {
+                                process_version: 2,
+                                ..params
+                            },
+                            cx,
+                        )
+                    })),
+            );
+        }
+
         let rgb = self.batch.develop.rgb_histogram;
         let rgb_peak = rgb.iter().flatten().copied().max().unwrap_or(1).max(1) as f32;
         panel = panel
+            .child(self.library_color_view_panel(cx))
             .child(
                 div()
                     .h(px(48.))
@@ -643,18 +804,6 @@ impl Workspace {
             );
 
         panel = panel
-            .child(
-                div()
-                    .h(px(65.))
-                    .flex()
-                    .items_end()
-                    .gap(px(1.))
-                    .bg(p.stage)
-                    .children(
-                        bins.into_iter()
-                            .map(|n| div().flex_1().h(px(60. * n as f32 / peak)).bg(p.muted)),
-                    ),
-            )
             .child(
                 div()
                     .flex()
@@ -694,7 +843,7 @@ impl Workspace {
                             })),
                     ),
             )
-            .child(mono("Profile · Camera color", 10., p.muted));
+            .child(self.library_profile_panel(params, cx));
         panel = panel.child(
             Button::new("library-raw-undo")
                 .label("Undo adjustment")
@@ -730,35 +879,12 @@ impl Workspace {
                     }
                 })),
         );
-        let mut sections = div().flex().flex_wrap().gap_1();
-        for (index, title) in [
-            "Basic",
-            "Crop / lens",
-            "Curve",
-            "Mixer",
-            "Grading",
-            "Masks",
-            "Kelvin",
-            "History",
-            "Enhance",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            sections = sections.child(
-                Button::new(("library-develop-section", index))
-                    .label(title)
-                    .small()
-                    .ghost()
-                    .selected(self.batch.develop.section == index)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.batch.develop.section = index;
-                        this.batch.develop.slider_key = None;
-                        cx.notify();
-                    })),
-            );
+        for &(index, title) in &super::layout::SECTIONS {
+            panel = panel.child(self.library_section_header(index, title, cx));
+            if index == self.batch.develop.section {
+                break;
+            }
         }
-        panel = panel.child(sections);
         if self.batch.develop.section == 8 {
             return panel
                 .child(self.library_enhance_panel(cx))
@@ -810,7 +936,13 @@ impl Workspace {
                         .default_value(*value)
                 });
                 let sub = cx.subscribe(&slider, move |this, _, event, cx| {
+                    if let SliderEvent::Release(_) = event {
+                        this.batch.develop.gesture_active = false;
+                        this.batch.develop.gesture_recorded = false;
+                        return;
+                    }
                     if let SliderEvent::Change(value) = event {
+                        this.batch.develop.gesture_active = true;
                         let Some(path) = this
                             .batch
                             .current
@@ -850,7 +982,7 @@ impl Workspace {
             }
             self.batch.develop.slider_key = Some((path.clone(), params));
         }
-        for (index, (name, value, _, _, _)) in fields.into_iter().enumerate() {
+        for (index, (name, value, min, max, step)) in fields.into_iter().enumerate() {
             if [0, 6, 10, 14].contains(&index) {
                 panel = panel.child(label(
                     match index {
@@ -871,15 +1003,21 @@ impl Workspace {
                         div()
                             .flex()
                             .justify_between()
-                            .child(mono(name, 11., p.muted))
-                            .child(mono(
-                                if index == 0 {
-                                    format!("{value:+.2} EV")
-                                } else {
-                                    format!("{:+.0}", value * 100.)
-                                },
-                                10.,
-                                p.ink,
+                            .child(self.library_control_label(
+                                index,
+                                name,
+                                super::advanced::Field::Basic(index),
+                                cx,
+                            ))
+                            .child(self.library_numeric_control(
+                                index,
+                                name,
+                                super::advanced::Field::Basic(index),
+                                value,
+                                min,
+                                max,
+                                step,
+                                cx,
                             )),
                     )
                     .child(Slider::new(&self.batch.develop.sliders[index].0).disabled(
@@ -1043,11 +1181,16 @@ impl Workspace {
         {
             panel = panel.child(label("Info", &p)).child(mono(
                 format!(
-                    "{} {} · {} × {}",
+                    "{} {} · {} × {}{}",
                     source.metadata.make,
                     source.metadata.model,
                     source.info.width,
-                    source.info.height
+                    source.info.height,
+                    if source.is_proxy() {
+                        " · Offline proxy (approximate preview)"
+                    } else {
+                        ""
+                    }
                 ),
                 10.,
                 p.muted,

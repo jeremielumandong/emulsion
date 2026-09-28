@@ -16,6 +16,11 @@ fn decode<R: BufRead + Seek>(reader: ImageReader<R>) -> Result<DynamicImage> {
 }
 
 fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
+    if !path.exists() && crate::photo_proxy::exists(path){
+        let photo=crate::photo_develop::PhotoSource::load(path)?;let params=crate::raw_settings::adjacent_settings(path,&photo.source_sha256)?;
+        let r=photo.develop_preview(&params,&std::sync::atomic::AtomicBool::new(false))?;
+        return image::RgbaImage::from_raw(r.width(),r.height(),r.to_srgba8()).map(DynamicImage::ImageRgba8).ok_or_else(||crate::IoError::Unsupported("Invalid proxy thumbnail".into()));
+    }
     if crate::photo_develop::is_virtual(path) || (!crate::raw::is_raw(path) && crate::photo_develop::supported(path) && crate::raw_settings::sidecar_path(path)?.exists()) {return composite(&crate::open(path)?,width,height);}
     if crate::diagram_import::is_diagram(path) {
         return composite(
@@ -180,7 +185,10 @@ pub fn thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
 /// composites a document, or launches an external converter.
 pub fn batch_thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
     import::check_size(max, max)?;
-    let img = if crate::is_native(path) {
+    let img = if !path.exists() && crate::photo_proxy::exists(path) {
+        let (_,r)=crate::photo_proxy::load(path)?;
+        DynamicImage::ImageRgba8(image::RgbaImage::from_raw(r.width(),r.height(),r.to_srgba8()).ok_or_else(||crate::IoError::Unsupported("Invalid proxy thumbnail".into()))?)
+    } else if crate::is_native(path) {
         let mut archive =
             zip::ZipArchive::new(std::io::BufReader::new(std::fs::File::open(path)?))?;
         let bytes = crate::ora::read_entry(&mut archive, "Thumbnails/thumbnail.png", 16 << 20)?;
@@ -253,6 +261,8 @@ pub fn thumbnail_cover(path: &Path, width: u32, height: u32) -> Result<(u32, u32
         && let Ok(bytes) = crate::export::png8(w, h, &px)
     {
         let _ = std::fs::write(c, bytes);
+        static WRITES:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
+        if WRITES.fetch_add(1,std::sync::atomic::Ordering::Relaxed).is_multiple_of(64){let _=maintain_cache();}
     }
     Ok((w, h, px))
 }
@@ -520,4 +530,22 @@ mod tests {
         assert_eq!(thumbnail_cover(&file.0, 36, 24).unwrap(), original);
         assert_eq!(std::fs::read(&file.0).unwrap(), source_bytes);
     }
+}
+
+/// Bound only Emulsion's generated thumbnails, never source photographs.
+#[derive(Default,serde::Serialize)]
+pub struct CacheReport {pub files:usize,pub bytes:u64,pub removed:usize,pub reclaimed_bytes:u64}
+pub fn maintain_cache()->Result<CacheReport>{maintain_cache_in(&crate::recent::data_dir().join("thumbs"),2*1024*1024*1024,20000)}
+fn maintain_cache_in(directory:&Path,budget:u64,max_files:usize)->Result<CacheReport>{
+    let mut report=CacheReport::default();if !directory.exists(){return Ok(report);}
+    let mut files=vec![];
+    for entry in std::fs::read_dir(directory)?{let entry=entry?;let name=entry.file_name();let name=name.to_string_lossy();if name.len()!=20||!name.ends_with(".png")||!name[..16].bytes().all(|b|b.is_ascii_hexdigit())||!entry.file_type()?.is_file(){continue;}
+        let meta=entry.metadata()?;report.bytes+=meta.len();report.files+=1;files.push((meta.modified().unwrap_or(std::time::UNIX_EPOCH),meta.len(),entry.path()));}
+    files.sort_by_key(|f|f.0);
+    for (_,bytes,path) in files{if report.bytes<=budget&&report.files<=max_files{break;}match std::fs::remove_file(path){Ok(())=>{report.removed+=1;report.reclaimed_bytes+=bytes;report.bytes-=bytes;report.files-=1;},Err(e)if e.kind()==std::io::ErrorKind::NotFound=>{},Err(e)=>return Err(e.into())}}
+    Ok(report)
+}
+#[cfg(test)]mod cache_budget_tests{
+    use super::*;
+    #[test]fn eviction_is_bounded_and_leaves_other_files_alone(){let dir=tempfile::tempdir().unwrap();for i in 0..5{std::fs::write(dir.path().join(format!("{i:016x}.png")),[0;20]).unwrap();}let original=dir.path().join("original.png");std::fs::write(&original,[1;100]).unwrap();let r=maintain_cache_in(dir.path(),40,2).unwrap();assert_eq!((r.files,r.bytes,r.removed),(2,40,3));assert_eq!(std::fs::read(original).unwrap(),[1;100]);}
 }

@@ -16,6 +16,7 @@ fn validate_name(name: &str) -> Result<()> {
 }
 fn sanitized(mut settings: Settings) -> Settings {
     settings.copies = 1;
+    settings.production.driver_color_disabled = false;
     settings.media = None;
     settings.tray = None;
     settings.quality = None;
@@ -53,6 +54,9 @@ pub fn load(path: &Path) -> Result<Vec<Preset>> {
     Ok(presets)
 }
 fn validate_settings(s: &Settings) -> Result<()> {
+    // Profile paths are resolved at preview/output, allowing an unavailable
+    // profile to remain in a preset without making the entire catalog unreadable.
+    s.production.validate()?;
     // Exercise the same validation and limits as output, without any device I/O.
     let source = Source {
         name: "Preset".into(),
@@ -154,6 +158,10 @@ pub fn apply(
     } else {
         settings.paper = current.paper.clone();
         notes.push("Preset paper is unavailable; retained the current paper.");
+    }
+    if !pdf && settings.production.standard != super::production::PdfStandard::Pdf {
+        settings.production.standard = super::production::PdfStandard::Pdf;
+        notes.push("PDF/X applies to Save PDF; this queue uses ordinary ICC-managed output.");
     }
     if !pdf && settings.layout == Layout::Document {
         settings.layout = Layout::Single;

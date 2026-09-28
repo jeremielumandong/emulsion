@@ -3,7 +3,7 @@ use super::*;
 use emulsion_core::design::Element;
 use emulsion_raster::vector::{Anchor, Path as VectorPath, SubPath};
 
-pub(super) fn supports(name:&str)->bool { matches!(name,"datastore"|"waypoint"|"umlFrame"|"tableRow"|"cube"|"trapezoid"|"step"|"process"|"folder"|"component"|"message"|"offPageConnector"|"delay"|"note2"|"plus"|"umlDestroy"|"lollipop"|"mxgraph.sysml.package") }
+pub(super) fn supports(name:&str)->bool { matches!(name,"mxgraph.mockup.containers.anchor"|"mxgraph.mockup.graphics.anchor"|"mxgraph.ios7ui.anchor"|"mxgraph.bootstrap.anchor"|"datastore"|"waypoint"|"umlFrame"|"tableRow"|"cube"|"trapezoid"|"step"|"process"|"folder"|"component"|"message"|"offPageConnector"|"delay"|"note2"|"plus"|"umlDestroy"|"lollipop"|"mxgraph.sysml.package") }
 
 pub(super) fn path(style: &BTreeMap<String, String>, b: [f64; 4]) -> Result<Option<VectorPath>> {
     let [x, y, w, h] = b;

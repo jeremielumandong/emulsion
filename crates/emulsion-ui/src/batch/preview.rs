@@ -1,6 +1,7 @@
 //! Navigation of the rendered batch preview, independent of export settings.
 use super::*;
 use crate::viewport::View;
+use gpui_kit::component::Disableable;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -84,11 +85,29 @@ impl Workspace {
             &path,
             (dimensions.width.0 as u32, dimensions.height.0 as u32),
         );
-        let label = if navigation.borrow().manual {
+        let detail = self.batch.develop.detail_region.is_some();
+        if detail && !navigation.borrow().manual {
+            let mut nav = navigation.borrow_mut();
+            nav.manual = true;
+            nav.view.zoom = 1.;
+            nav.view.center = (nav.dimensions.0 as f64 * 0.5, nav.dimensions.1 as f64 * 0.5);
+        }
+        let label = if detail {
+            "100% · full-resolution region".into()
+        } else if navigation.borrow().manual {
             format!("{:.0}% preview", navigation.borrow().view.zoom * 100.)
         } else {
             "Fit".into()
         };
+        let tool = self.batch.develop.canvas_tool;
+        let points = self.batch.develop.canvas_points.clone();
+        let crop = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .and_then(|i| self.batch.develop.current_params(&i.path))
+            .map(|p| p.crop);
+        let spots = self.library_edit_set().map(|e| e.spots).unwrap_or_default();
         let layout = navigation.clone();
         let paint = navigation.clone();
         let surface = div()
@@ -103,10 +122,39 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                    if this.batch.develop.picking_sky && this.batch.preview.is_some() && !this.batch.develop.busy {
-                        let seed={let nav=this.batch.navigation.borrow();nav.bounds.map(|bounds|{let (x,y)=nav.view.screen_to_doc((f32::from(e.position.x) as f64,f32::from(e.position.y) as f64),&bounds);[x as f32/nav.dimensions.0 as f32,y as f32/nav.dimensions.1 as f32]})};
-                        if let Some(seed)=seed.filter(|s|s.iter().all(|v|(0.0..=1.0).contains(v))){this.batch.develop.picking_sky=false;this.batch.develop.mask_seed=Some(seed);this.library_enhance(3,cx);}
-                        cx.stop_propagation();return;
+                    if this.library_canvas_down(e, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if this.batch.develop.picking_sky
+                        && this.batch.preview.is_some()
+                        && !this.batch.develop.busy
+                    {
+                        let seed = {
+                            let nav = this.batch.navigation.borrow();
+                            nav.bounds.map(|bounds| {
+                                let (x, y) = nav.view.screen_to_doc(
+                                    (
+                                        f32::from(e.position.x) as f64,
+                                        f32::from(e.position.y) as f64,
+                                    ),
+                                    &bounds,
+                                );
+                                [
+                                    x as f32 / nav.dimensions.0 as f32,
+                                    y as f32 / nav.dimensions.1 as f32,
+                                ]
+                            })
+                        };
+                        if let Some(seed) =
+                            seed.filter(|s| s.iter().all(|v| (0.0..=1.0).contains(v)))
+                        {
+                            this.batch.develop.picking_sky = false;
+                            this.batch.develop.mask_seed = Some(seed);
+                            this.library_enhance(3, cx);
+                        }
+                        cx.stop_propagation();
+                        return;
                     }
                     let mut nav = this.batch.navigation.borrow_mut();
                     if e.click_count == 2 {
@@ -119,6 +167,9 @@ impl Workspace {
                 }),
             )
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
+                if this.library_canvas_move(e, cx) {
+                    return;
+                }
                 let mut nav = this.batch.navigation.borrow_mut();
                 if e.pressed_button != Some(MouseButton::Left) {
                     nav.drag = None;
@@ -135,11 +186,17 @@ impl Workspace {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.batch.navigation.borrow_mut().drag = None),
+                cx.listener(|this, _, _, cx| {
+                    this.batch.navigation.borrow_mut().drag = None;
+                    this.library_canvas_up(cx);
+                }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.batch.navigation.borrow_mut().drag = None),
+                cx.listener(|this, _, _, cx| {
+                    this.batch.navigation.borrow_mut().drag = None;
+                    this.library_canvas_up(cx);
+                }),
             )
             .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
                 let delta = e.delta.pixel_delta(px(20.));
@@ -184,6 +241,71 @@ impl Workspace {
                             0,
                             false,
                         );
+                        let at = |p: [f32; 2]| {
+                            let (x, y) = nav.view.doc_to_screen(
+                                (
+                                    p[0] as f64 * nav.dimensions.0 as f64,
+                                    p[1] as f64 * nav.dimensions.1 as f64,
+                                ),
+                                &bounds,
+                            );
+                            point(px(x as f32), px(y as f32))
+                        };
+                        let color = gpui_kit::rgb(0xf2d37a);
+                        if tool != 0 {
+                            for spot in &spots {
+                                for position in [spot.source, spot.target] {
+                                    window.paint_quad(outline(
+                                        Bounds::new(
+                                            at(position) - point(px(4.), px(4.)),
+                                            size(px(8.), px(8.)),
+                                        ),
+                                        color,
+                                        BorderStyle::Solid,
+                                    ));
+                                }
+                            }
+                            if tool == 5
+                                && let Some([l, t, r, b]) = crop
+                            {
+                                for (a, z) in [
+                                    ([l, t], [r, t]),
+                                    ([r, t], [r, b]),
+                                    ([r, b], [l, b]),
+                                    ([l, b], [l, t]),
+                                    ([l + (r - l) / 3., t], [l + (r - l) / 3., b]),
+                                    ([l + 2. * (r - l) / 3., t], [l + 2. * (r - l) / 3., b]),
+                                    ([l, t + (b - t) / 3.], [r, t + (b - t) / 3.]),
+                                    ([l, t + 2. * (b - t) / 3.], [r, t + 2. * (b - t) / 3.]),
+                                ] {
+                                    let mut line = PathBuilder::stroke(px(1.));
+                                    line.move_to(at(a));
+                                    line.line_to(at(z));
+                                    if let Ok(line) = line.build() {
+                                        window.paint_path(line, color);
+                                    }
+                                }
+                                for position in [[l, t], [r, t], [r, b], [l, b]] {
+                                    window.paint_quad(fill(
+                                        Bounds::new(
+                                            at(position) - point(px(3.), px(3.)),
+                                            size(px(6.), px(6.)),
+                                        ),
+                                        color,
+                                    ));
+                                }
+                            }
+                            if let Some(first) = points.first() {
+                                let mut line = PathBuilder::stroke(px(2.));
+                                line.move_to(at(*first));
+                                for point in &points[1..] {
+                                    line.line_to(at(*point));
+                                }
+                                if let Ok(line) = line.build() {
+                                    window.paint_path(line, color);
+                                }
+                            }
+                        }
                     },
                 )
                 .size_full(),
@@ -205,6 +327,8 @@ impl Workspace {
                         chip("batch-preview-fit", "Fit image", false, &p)
                             .test_support()
                             .on_click(cx.listener(|this, _, _, cx| {
+                                this.batch.develop.detail_region = None;
+                                this.invalidate_library_preview();
                                 this.batch.navigation.borrow_mut().fit();
                                 cx.notify();
                             })),
@@ -224,6 +348,27 @@ impl Workspace {
                             .test_support()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.batch.navigation.borrow_mut().step(true);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("library-detail-100")
+                            .label("100%")
+                            .small()
+                            .ghost()
+                            .disabled(
+                                self.batch
+                                    .develop
+                                    .source
+                                    .as_ref()
+                                    .is_some_and(|s| s.is_proxy()),
+                            )
+                            .tooltip("Full-resolution detail requires the original")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.batch.develop.detail_region = Some([0.5, 0.5]);
+                                this.batch.develop.canvas_tool = 0;
+                                this.batch.navigation.borrow_mut().manual = false;
+                                this.invalidate_library_preview();
                                 cx.notify();
                             })),
                     )

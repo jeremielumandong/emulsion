@@ -56,7 +56,7 @@ for sample coverage, the default catalog and remaining compatibility limits.
 
 | Tool | Purpose |
 | --- | --- |
-| `list_diagram_library` | Discover the eight bundled templates and nine theme IDs. |
+| `list_diagram_library` | Discover the 18 bundled templates and nine theme IDs. |
 | `insert_diagram_template` | Insert a discovered template as a new editable page, with one undo step. |
 | `apply_diagram_theme` | Apply a theme to the whole diagram or supplied `nodes`, atomically and with undo. |
 | `list_diagram_stencil_packs` | Inspect installed offline stencil packs and their entry paths. |

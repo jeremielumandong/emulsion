@@ -14,7 +14,7 @@ impl EditorView {
     ) -> AnyElement {
         let tabs = [
             (SidebarTab::Properties, "Properties", "sliders-horizontal"),
-            (SidebarTab::BrushSettings, "Brushes", "brush"),
+            (SidebarTab::BrushSettings, "Brush settings", "brush"),
             (SidebarTab::History, "History", "history"),
             (SidebarTab::Character, "Character", "type"),
             (SidebarTab::Assistant, "Assistant", "sparkles"),

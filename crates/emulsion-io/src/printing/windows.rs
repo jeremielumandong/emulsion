@@ -94,13 +94,19 @@ pub fn submit(
     for (i, sheet) in layout.sheets.iter().enumerate() {
         canceled(cancel)?;
         let path = dir.path().join(format!("sheet-{i}.png"));
-        let max_side = (sheet.width.max(sheet.height) / 25.4 * 300.).ceil() as u32;
-        preview(sources, sheet, s.grayscale, max_side)?.save(&path)?;
+        let max_side = (sheet.width.max(sheet.height) / 25.4
+            * if s.production.enabled() {
+                s.production.dpi as f64
+            } else {
+                300.
+            })
+        .ceil() as u32;
+        production::device_image(sources, sheet, s, max_side)?.save(&path)?;
         files.push(path);
     }
     canceled(cancel)?;
     let result = run(
-        json!({"action":"submit","printer":printer,"title":title,"paper":s.paper.id,"width":s.paper.width,"height":s.paper.height,"margins":s.paper.margins,"copies":s.copies,"landscape":s.landscape,"grayscale":s.grayscale,"sides":s.sides,"tray":s.tray,"quality":s.quality,"files":files}),
+        json!({"action":"submit","printer":printer,"title":title,"paper":s.paper.id,"width":s.paper.width,"height":s.paper.height,"margins":s.paper.margins,"copies":s.copies,"landscape":s.landscape,"managed":s.production.enabled(),"grayscale":s.grayscale,"sides":s.sides,"tray":s.tray,"quality":s.quality,"files":files}),
         cancel,
     )?;
     Ok(result["message"]

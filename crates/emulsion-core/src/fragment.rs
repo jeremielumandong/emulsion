@@ -226,6 +226,7 @@ impl Fragment {
                 let mut model = editor.doc.diagram.as_deref().cloned().unwrap_or_default();
                 model.shapes.extend(additions.shapes);
                 model.edges.extend(additions.edges);
+                model.settings.append_threads(additions.settings)?;
                 editor
                     .execute(Command::SetDiagram {
                         diagram: Some(std::sync::Arc::new(model)),

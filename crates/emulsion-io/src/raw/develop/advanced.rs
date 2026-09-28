@@ -31,6 +31,55 @@ fn rgb([h, s, v]: [f32; 3]) -> [f32; 3] {
     };
     p.map(|v| v + m)
 }
+/// Independent primary calibration: mix each channel's chromatic contribution
+/// around the neutral axis. Neutral input remains neutral at every setting.
+pub(super) fn calibrate(pixel: [f32; 3], p: &DevelopParams) -> [f32; 3] {
+    if p.process_version < 2 {
+        return pixel;
+    }
+    let gray = luminance(pixel);
+    let mut out = pixel;
+    for c in 0..3 {
+        let [h, s] = p.calibration[c];
+        let chroma = pixel[c] - gray;
+        let a = (c + 1) % 3;
+        let b = (c + 2) % 3;
+        out[c] += chroma * s * 0.5;
+        out[a] += chroma * h * 0.35 - chroma * s * 0.25;
+        out[b] -= chroma * h * 0.35 + chroma * s * 0.25;
+    }
+    let tint = p.shadow_tint * (1. - gray.clamp(0., 1.)).powi(2) * gray * 0.25;
+    out[0] += tint;
+    out[1] -= tint;
+    out[2] += tint;
+    out
+}
+
+pub(super) fn parametric(pixel: [f32; 3], p: &DevelopParams) -> [f32; 3] {
+    if p.process_version < 2 || p.parametric == [0.; 4] {
+        return pixel;
+    }
+    let l = luminance(pixel).max(0.);
+    if l <= 1e-8 || l >= 1. {
+        return pixel;
+    }
+    let x = l.powf(1. / 2.2);
+    let [a, b, c] = p.parametric_splits;
+    let centers = [0., a, b, c, 1.];
+    let mut adjustment = 0.;
+    // Overlapping smooth lobes keep split boundaries continuous.
+    for i in 0..4 {
+        let center = (centers[i] + centers[i + 1]) * 0.5;
+        let radius = (centers[i + 1] - centers[i]) * 0.5 + 0.18;
+        let t = (1. - (x - center).abs() / radius).clamp(0., 1.);
+        adjustment += p.parametric[i] * t * t * (3. - 2. * t);
+    }
+    let y = (x + adjustment * x * (1. - x) * 0.5)
+        .clamp(0., 1.)
+        .powf(2.2);
+    pixel.map(|v| v * y / l)
+}
+
 pub(super) fn color(mut pixel: [f32; 3], p: &DevelopParams) -> [f32; 3] {
     if p.hsl != [[0.; 3]; 8] {
         let [h, s, v] = hsv(pixel);
@@ -56,11 +105,18 @@ pub(super) fn color(mut pixel: [f32; 3], p: &DevelopParams) -> [f32; 3] {
     }
     if p.grading != [[0.; 3]; 3] {
         let l = luminance(pixel).clamp(0., 1.).sqrt();
-        let weights = [
+        let mut weights = [
             (1. - 2. * l).max(0.),
             1. - (2. * l - 1.).abs(),
             (2. * l - 1.).max(0.),
         ];
+        if p.process_version >= 2 && (p.grading_balance != 0. || p.grading_blending != 0.5) {
+            let shifted = (l - p.grading_balance * 0.4).clamp(0., 1.);
+            let width = 0.25 + p.grading_blending * 0.75;
+            weights = [0., 0.5, 1.].map(|center| (1. - (shifted - center).abs() / width).max(0.));
+            let total = weights.iter().sum::<f32>().max(1e-6);
+            weights = weights.map(|v| v / total);
+        }
         for ([h, s, light], weight) in p.grading.into_iter().zip(weights) {
             let tint = rgb([h, 1., 1.]);
             let mean = luminance(tint);
@@ -68,6 +124,14 @@ pub(super) fn color(mut pixel: [f32; 3], p: &DevelopParams) -> [f32; 3] {
                 pixel[c] =
                     (pixel[c] + (tint[c] - mean) * s * weight * 0.25) * 2f32.powf(light * weight);
             }
+        }
+    }
+    if p.process_version >= 2 && p.global_grading != [0.; 3] {
+        let [h, s, l] = p.global_grading;
+        let tint = rgb([h, 1., 1.]);
+        let mean = luminance(tint);
+        for c in 0..3 {
+            pixel[c] = (pixel[c] + (tint[c] - mean) * s * 0.25) * 2f32.powf(l);
         }
     }
     pixel

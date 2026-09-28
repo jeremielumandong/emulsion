@@ -5,7 +5,7 @@
 use super::compact::{Bar, CompactLayout};
 use super::*;
 use gpui_kit::component::{
-    Sizable,
+    Selectable, Sizable,
     button::{Button, ButtonVariants},
     menu::PopupMenuItem,
     tooltip::Tooltip,
@@ -32,8 +32,8 @@ impl BuiltinWorkspace {
 }
 use std::collections::{HashMap, HashSet};
 
-/// Brushes the shelf shows when nothing is pinned.
-const SHELF_LEN: usize = 8;
+/// A small quick-access shelf; the gallery contains the full collection.
+const SHELF_LEN: usize = 4;
 /// Gallery tabs that are not brush sets.
 const PINNED: &str = "pinned";
 const RECENT: &str = "recent";
@@ -192,17 +192,17 @@ impl EditorView {
             .iter()
             .filter(|b| Some(&b.set_id) == set.as_ref())
             .map(|b| &b.id);
-        let limit = catalog.pinned.len().max(SHELF_LEN);
         let mut seen = HashSet::new();
-        catalog
-            .pinned
+        self.presets
+            .current_id
             .iter()
+            .chain(catalog.pinned.iter())
             .chain(catalog.recent.iter())
             .chain(in_set)
             .chain(catalog.brushes.iter().map(|b| &b.id))
             .filter(|id| seen.insert(id.as_str()))
             .filter_map(|id| catalog.brush(id).map(|b| (id.clone(), b.name.clone())))
-            .take(limit)
+            .take(SHELF_LEN)
             .collect()
     }
 
@@ -255,23 +255,21 @@ impl EditorView {
                 .contains(id)
         });
         let gallery_open = self.draw_ui.gallery_open;
-        div()
-            .id("brush-shelf")
-            .test_support()
-            .flex()
+        crate::widgets::command_bar("brush-shelf", "Quick brushes")
+            .flex_nowrap()
             .items_center()
             .gap_1()
             .when(vertical, |d| d.flex_col().items_stretch())
             .child(
                 Button::new("brush-gallery-toggle")
                     .label(if gallery_open {
-                        "Brushes ▴"
+                        "Browse ▴"
                     } else {
-                        "Brushes ▾"
+                        "Browse ▾"
                     })
                     .small()
-                    .when(gallery_open, |b| b.bg(p.ink).text_color(p.paper))
-                    .tooltip("Brush gallery: every brush with a stroke preview")
+                    .selected(gallery_open)
+                    .tooltip("Browse all brushes with stroke previews")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_brush_gallery(cx))),
             )
             .children(brushes.into_iter().enumerate().map(|(index, (id, name))| {
@@ -279,8 +277,9 @@ impl EditorView {
                 Button::new(("shelf-brush", index))
                     .label(name.clone())
                     .small()
-                    .when(on, |b| b.bg(p.soft_bg).border_1().border_color(p.accent))
-                    .when(!on, |b| b.outline())
+                    .ghost()
+                    .selected(on)
+                    .max_w(rems(8.))
                     .tooltip(format!("Paint with {name}"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.apply_brush_id(&id, cx);
@@ -307,6 +306,69 @@ impl EditorView {
                             .text_color(if pinned { p.accent } else { p.ink }),
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_pin_current(cx))),
+            )
+            .into_any_element()
+    }
+
+    /// Properties summarizes the active brush; the full browser and editor
+    /// each have their own entry point instead of repeating every preset.
+    pub(super) fn brush_summary(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let name = self
+            .presets
+            .current_id
+            .as_ref()
+            .and_then(|id| {
+                self.presets
+                    .library
+                    .as_ref()?
+                    .read(cx)
+                    .catalog
+                    .brush(id)
+                    .map(|b| b.name.clone())
+            })
+            .unwrap_or_else(|| "Custom brush".into());
+        div()
+            .id("brush-summary")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_3()
+            .child(label("Active brush", p))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(name),
+            )
+            .child(mono(
+                format!(
+                    "{:.0} px · {:.0}% opacity",
+                    self.tools.brush.size,
+                    self.tools.brush.opacity * 100.
+                ),
+                11.,
+                p.muted,
+            ))
+            .child(
+                crate::widgets::command_bar("brush-summary-actions", "Brush actions")
+                    .child(
+                        Button::new("brush-summary-browse")
+                            .label("Choose brush…")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_brush_gallery(cx))),
+                    )
+                    .child(
+                        Button::new("brush-summary-settings")
+                            .label("Edit settings")
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.brush_settings_section = tools::BrushSettingsSection::Tip;
+                                this.show_brush_settings(cx);
+                            })),
+                    ),
             )
             .into_any_element()
     }

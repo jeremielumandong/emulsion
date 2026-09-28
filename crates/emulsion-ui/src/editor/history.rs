@@ -176,6 +176,8 @@ pub fn recovery_dir() -> PathBuf {
 
 /// Straight sRGBA8 → BGRA thumbnail of `doc`, at most `max` px a side.
 pub(crate) fn doc_thumb(doc: &Document, max: u32) -> (u32, u32, Vec<u8>) {
+    let selected = emulsion_core::diagram::workspace::thumbnail_document(doc);
+    let doc = selected.as_ref().unwrap_or(doc);
     let tree = doc.composite_tree();
     let mut level = 0;
     while {

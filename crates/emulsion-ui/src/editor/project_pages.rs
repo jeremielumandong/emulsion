@@ -78,10 +78,19 @@ impl EditorView {
     }
 
     pub(super) fn project_export_button(&self, cx: &Context<Self>) -> AnyElement {
+        Button::new("project-export-pages")
+            .label("Export")
+            .small()
+            .outline()
+            .on_click(cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx)))
+            .into_any_element()
+    }
+
+    pub(super) fn project_export_options(&self, cx: &Context<Self>) -> AnyElement {
         let owner = cx.weak_entity();
         let include_bleed = self.pages_ui.include_bleed;
-        Button::new("project-export-pages")
-            .label("Export ▾")
+        Button::new("project-export-options")
+            .label("Pages, vectors and presentations…")
             .small()
             .outline()
             .dropdown_menu(move |mut menu, _, _| {
@@ -100,21 +109,63 @@ impl EditorView {
                             }),
                     )
                     .separator();
-                let selection_owner=owner.clone();
-                menu=menu.item(PopupMenuItem::new("Export selected objects…").on_click(move |_,window,cx| {
-                    selection_owner.update(cx,|this,cx|this.show_selection_export(window,cx)).ok();
-                }));
+                let selection_owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new("Export selected objects…").on_click(
+                    move |_, window, cx| {
+                        selection_owner
+                            .update(cx, |this, cx| {
+                                this.dismiss_export_dialog(window, cx);
+                                this.show_selection_export(window, cx)
+                            })
+                            .ok();
+                    },
+                ));
                 for all in [true, false] {
                     let owner = owner.clone();
-                    menu = menu.item(PopupMenuItem::new(if all { "Interactive HTML · all pages" } else { "Interactive HTML · current page" }).on_click(move |_, window, cx| {
-                        owner.update(cx, |this, cx| this.export_design_html(all, window, cx)).ok();
-                    }));
+                    menu = menu.item(
+                        PopupMenuItem::new(if all {
+                            "Interactive HTML · all pages"
+                        } else {
+                            "Interactive HTML · current page"
+                        })
+                        .on_click(move |_, window, cx| {
+                            owner
+                                .update(cx, |this, cx| {
+                                    this.dismiss_export_dialog(window, cx);
+                                    this.export_design_html(all, window, cx)
+                                })
+                                .ok();
+                        }),
+                    );
                 }
-                let notes_owner=owner.clone();
-                menu=menu.item(PopupMenuItem::new("Import / export notes…").on_click(move|_,window,cx|{notes_owner.update(cx,|this,cx|this.show_diagram_import_notes(window,cx)).ok();}));
-                for all in [true,false] {
-                    let owner=owner.clone();
-                    menu=menu.item(PopupMenuItem::new(if all {"Editable PowerPoint · all pages"}else{"Editable PowerPoint · current page"}).on_click(move|_,_,cx|{owner.update(cx,|this,cx|this.export_design_pptx(all,cx)).ok();}));
+                let notes_owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new("Import / export notes…").on_click(
+                    move |_, window, cx| {
+                        notes_owner
+                            .update(cx, |this, cx| {
+                                this.dismiss_export_dialog(window, cx);
+                                this.show_diagram_import_notes(window, cx)
+                            })
+                            .ok();
+                    },
+                ));
+                for all in [true, false] {
+                    let owner = owner.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(if all {
+                            "Editable PowerPoint · all pages"
+                        } else {
+                            "Editable PowerPoint · current page"
+                        })
+                        .on_click(move |_, window, cx| {
+                            owner
+                                .update(cx, |this, cx| {
+                                    this.dismiss_export_dialog(window, cx);
+                                    this.export_design_pptx(all, cx)
+                                })
+                                .ok();
+                        }),
+                    );
                 }
                 for format in emulsion_io::project_export::Format::ALL {
                     for all in [true, false] {
@@ -125,9 +176,10 @@ impl EditorView {
                                 format.label(),
                                 if all { "all pages" } else { "current page" }
                             ))
-                            .on_click(move |_, _, cx| {
+                            .on_click(move |_, window, cx| {
                                 owner
                                     .update(cx, |this, cx| {
+                                        this.dismiss_export_dialog(window, cx);
                                         this.export_project_pages(format, all, cx)
                                     })
                                     .ok();
@@ -139,6 +191,7 @@ impl EditorView {
             })
             .into_any_element()
     }
+
     pub(crate) fn install_project_session(
         &mut self,
         session: ProjectEditor,

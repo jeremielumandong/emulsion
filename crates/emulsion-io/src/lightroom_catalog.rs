@@ -1,9 +1,6 @@
 //! Read-only migration of file references and ratings from recognized Classic catalogs.
 //! Adobe's private Develop/history/profile data is deliberately not interpreted.
-use crate::{
-    IoError, Result,
-    creative_library::{AssetKind, Catalog},
-};
+use crate::{IoError, Result, creative_library::Catalog};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 #[derive(Debug, Serialize, Deserialize)]
@@ -11,6 +8,8 @@ pub struct ImportReport {
     pub imported: usize,
     pub collections: usize,
     pub histories: usize,
+    #[serde(default)] pub keywords:usize,
+    #[serde(default)] pub color_labels:usize,
     pub missing: Vec<PathBuf>,
     pub warnings: Vec<String>,
 }
@@ -35,39 +34,29 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
     } else {
         "i.rowid"
     };
-    let query = format!(
-        "PRAGMA trusted_schema=OFF; SELECT {image_id} AS image_id,r.absolutePath AS root,d.pathFromRoot AS folder,f.baseName AS name,f.extension AS extension,COALESCE(i.rating,0) AS rating,COALESCE(i.pick,0) AS pick FROM Adobe_images i JOIN AgLibraryFile f ON i.rootFile=f.id_local JOIN AgLibraryFolder d ON f.folder=d.id_local JOIN AgLibraryRootFolder r ON d.rootFolder=r.id_local LIMIT 10001;"
-    );
-    use std::{io::Read, process::Stdio};
-    let mut child = std::process::Command::new("sqlite3")
-        .args(["-readonly", "-json"])
-        .arg(path.canonicalize()?)
-        .arg(query)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            IoError::Unsupported(format!("Lightroom catalog import requires sqlite3: {e}"))
-        })?;
-    let mut bytes = Vec::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .take(32 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > 32 * 1024 * 1024 {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(IoError::Manifest("Catalog import exceeds 32 MiB".into()));
-    }
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        return Err(IoError::Manifest(format!(
-            "Unrecognized or busy Lightroom catalog: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
+    let color = if image_columns.iter().any(|v| v["name"] == "colorLabels") {
+        "COALESCE(i.colorLabels,'')"
+    } else {
+        "''"
+    };
+    let mut rows = Vec::new();
+    // Page a stable image ID ordering; SQL identifiers are selected only from
+    // the recognized schema, never from user-supplied values.
+    for offset in (0..100_001).step_by(1000) {
+        let query = format!(
+            "SELECT {image_id} AS image_id,r.absolutePath AS root,d.pathFromRoot AS folder,f.baseName AS name,f.extension AS extension,COALESCE(i.rating,0) AS rating,COALESCE(i.pick,0) AS pick,{color} AS color FROM Adobe_images i JOIN AgLibraryFile f ON i.rootFile=f.id_local JOIN AgLibraryFolder d ON f.folder=d.id_local JOIN AgLibraryRootFolder r ON d.rootFolder=r.id_local ORDER BY {image_id} LIMIT 1000 OFFSET {offset}"
+        );
+        let page = sql(path, &query)?;
+        let count = page.len();
+        rows.extend(page);
+        if rows.len() > 100_000 {
+            return Err(IoError::Manifest(
+                "Catalog exceeds 100000 photo migration limit".into(),
+            ));
+        }
+        if count < 1000 {
+            break;
+        }
     }
     #[derive(Deserialize)]
     struct Row {
@@ -78,20 +67,23 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
         extension: String,
         rating: i64,
         pick: i64,
+        color: String,
     }
-    let rows: Vec<Row> = if bytes.is_empty() {
-        vec![]
-    } else {
-        serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?
-    };
-    if rows.len() > 10000 {
-        return Err(IoError::Manifest(
-            "Catalog contains more than 10000 images; export a smaller catalog first".into(),
-        ));
-    }
-    let mut report=ImportReport{imported:0,collections:0,histories:0,missing:vec![],warnings:vec!["Adobe settings use Emulsion rendering. Private/proprietary settings that cannot be translated are reported; rendered Lightroom handoff TIFFs retain Adobe/VSCO appearance.".into()]};
+    let rows: Vec<Row> = rows
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| IoError::Manifest(e.to_string()))?;
+    let mut report=ImportReport{imported:0,collections:0,histories:0,keywords:0,color_labels:0,missing:vec![],warnings:vec!["Adobe settings use Emulsion rendering. Private/proprietary settings that cannot be translated are reported; rendered Lightroom handoff TIFFs retain Adobe/VSCO appearance.".into()]};
     let mut staged = catalog.clone();
     let mut images = std::collections::BTreeMap::new();
+    let mut by_path: std::collections::HashMap<_, _> = staged
+        .assets
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.kind == crate::creative_library::AssetKind::Image)
+        .map(|(i, a)| (a.path.clone(), i))
+        .collect();
     for row in rows {
         let root = PathBuf::from(&row.root);
         if !root.is_absolute() {
@@ -107,8 +99,7 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
             format!("{}.{}", row.name, row.extension)
         });
         if !file.is_file() {
-            report.missing.push(file);
-            continue;
+            report.missing.push(file.clone());
         }
         if !crate::photo_develop::supported(&file) {
             report
@@ -116,15 +107,36 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
                 .push(format!("Unsupported photo: {}", file.display()));
             continue;
         }
-        let id = staged.add_asset(file.clone(), AssetKind::Image)?;
-        let asset = staged.assets.iter_mut().find(|a| a.id == id).unwrap();
+        let file = file.canonicalize().unwrap_or(file);
+        let index = match by_path.get(&file) {
+            Some(&i) => i,
+            None => {
+                staged.insert_photo_reference(file.clone())?;
+                let i = staged.assets.len() - 1;
+                by_path.insert(file.clone(), i);
+                i
+            }
+        };
+        let asset = &mut staged.assets[index];
+        let id = asset.id;
+        asset.color_label = match row.color.to_lowercase().as_str() {
+            "red" => 1,
+            "yellow" => 2,
+            "green" => 3,
+            "blue" => 4,
+            "purple" => 5,
+            _ => 0,
+        };
+        report.color_labels+=usize::from(asset.color_label>0);
         asset.rating = row.rating.clamp(0, 5) as u8;
         asset.flagged = row.pick > 0;
         asset.rejected = row.pick < 0;
-        staged
-            .photos
-            .fingerprints
-            .insert(file.canonicalize()?, crate::raw::source_digest(&file)?);
+        if file.is_file() {
+            staged
+                .photos
+                .fingerprints
+                .insert(file.canonicalize()?, crate::raw::source_digest(&file)?);
+        }
         images.insert(row.image_id, (id, file));
         report.imported += 1;
     }
@@ -209,8 +221,74 @@ fn migrate(
     images: &std::collections::BTreeMap<i64, (u64, PathBuf)>,
     report: &mut ImportReport,
 ) -> Result<()> {
+    let by_id: std::collections::HashMap<_, _> = catalog
+        .assets
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.id, i))
+        .collect();
     let tables = sql(path, "SELECT name FROM sqlite_master WHERE type='table'")?;
     let has = |table: &str| tables.iter().any(|v| v["name"] == table);
+    if has("AgLibraryKeyword") && has("AgLibraryKeywordImage") {
+        let result = (|| -> Result<()> {
+            let keywords = sql(
+                path,
+                "SELECT id_local,name,parent FROM AgLibraryKeyword LIMIT 100001",
+            )?;
+            let mut names = std::collections::BTreeMap::new();
+            for k in &keywords {
+                if let (Some(id), Some(name)) = (k["id_local"].as_i64(), k["name"].as_str()) {
+                    names.insert(id, (name.to_owned(), k["parent"].as_i64()));
+                }
+            }
+            for offset in (0..1_000_000).step_by(10000) {
+                let members = sql(
+                    path,
+                    &format!(
+                        "SELECT image,tag FROM AgLibraryKeywordImage ORDER BY image,tag LIMIT 10000 OFFSET {offset}"
+                    ),
+                )?;
+                let count = members.len();
+                for member in members {
+                    let Some((id, _)) = member["image"].as_i64().and_then(|id| images.get(&id))
+                    else {
+                        continue;
+                    };
+                    let mut key = member["tag"].as_i64();
+                    let mut parts = vec![];
+                    let mut seen = std::collections::BTreeSet::new();
+                    while let Some(k) = key {
+                        if !seen.insert(k) || parts.len() >= 32 {
+                            break;
+                        }
+                        let Some((name, parent)) = names.get(&k) else {
+                            break;
+                        };
+                        parts.push(name.clone());
+                        key = *parent;
+                    }
+                    parts.reverse();
+                    let tag = parts.join(" > ");
+                    if !tag.is_empty()
+                        && tag.chars().count() <= 200
+                        && let Some(&index) = by_id.get(id)
+                    {
+                        let a = &mut catalog.assets[index];
+                        if !a.tags.contains(&tag) {
+                            if a.tags.len()<50 {a.tags.push(tag);report.keywords+=1;}else if !report.warnings.iter().any(|w|w=="Some photos exceed the 50-keyword limit; excess keywords were omitted"){report.warnings.push("Some photos exceed the 50-keyword limit; excess keywords were omitted".into());}
+                        }
+                    }
+                }
+                if count < 10000 {
+                    break;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            report.warnings.push(format!("Keyword migration: {e}"));
+        }
+    }
     if has("AgLibraryCollection") && has("AgLibraryCollectionImage") {
         let result = (|| -> Result<()> {
             let collections = sql(
@@ -357,4 +435,39 @@ fn migrate(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod migration_pages_tests {
+    use super::*;
+    #[test]
+    fn paged_catalog_retains_offline_keywords_and_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("large.lrcat");
+        let folder = dir
+            .path()
+            .join("offline")
+            .to_string_lossy()
+            .replace('\'', "''");
+        let sql = format!(
+            "CREATE TABLE AgLibraryRootFolder(id_local INTEGER,absolutePath TEXT);CREATE TABLE AgLibraryFolder(id_local INTEGER,rootFolder INTEGER,pathFromRoot TEXT);CREATE TABLE AgLibraryFile(id_local INTEGER,folder INTEGER,baseName TEXT,extension TEXT);CREATE TABLE Adobe_images(id_local INTEGER,rootFile INTEGER,rating INTEGER,pick INTEGER,colorLabels TEXT);CREATE TABLE AgLibraryKeyword(id_local INTEGER,name TEXT,parent INTEGER);CREATE TABLE AgLibraryKeywordImage(image INTEGER,tag INTEGER);INSERT INTO AgLibraryRootFolder VALUES(1,'{folder}/');INSERT INTO AgLibraryFolder VALUES(2,1,'');WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10005) INSERT INTO AgLibraryFile SELECT x,2,'photo-'||x,'nef' FROM n;INSERT INTO Adobe_images SELECT id_local,id_local,4,1,'red' FROM AgLibraryFile;INSERT INTO AgLibraryKeyword VALUES(1,'Travel',NULL),(2,'Japan',1);INSERT INTO AgLibraryKeywordImage VALUES(10005,2);"
+        );
+        let result = std::process::Command::new("sqlite3")
+            .arg(&db)
+            .arg(sql)
+            .status();
+        if matches!(&result,Err(e)if e.kind()==std::io::ErrorKind::NotFound) {
+            return;
+        }
+        assert!(result.unwrap().success());
+        let before = crate::raw::source_digest(&db).unwrap();
+        let mut c = Catalog::default();
+        let report = import(&db, &mut c).unwrap();
+        assert_eq!(report.imported, 10005);
+        assert_eq!(report.missing.len(), 10005);
+        assert_eq!(c.assets.last().unwrap().tags, ["Travel > Japan"]);
+        assert_eq!(c.assets.last().unwrap().color_label, 1);
+        assert_eq!(before, crate::raw::source_digest(&db).unwrap());
+        c.validate().unwrap();
+    }
 }

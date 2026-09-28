@@ -142,6 +142,31 @@ impl PointCurve {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DevelopParams {
+    /// Content-addressed, scalable composed masks and healing spots.
+    pub local_edits: Option<[u8; 32]>,
+    pub camera_profile: Option<[u8; 32]>,
+    /// Renderer contract. Recipes without this field retain process 1.
+    #[serde(default = "legacy_process")]
+    pub process_version: u32,
+    /// Opt-in linear ProPhoto working primaries for camera RAW.
+    pub wide_gamut: bool,
+    /// Shadows, darks, lights, highlights in gamma curve coordinates.
+    pub parametric: [f32; 4],
+    pub parametric_splits: [f32; 3],
+    /// Primary hue rotation and saturation, independent of the HSL mixer.
+    pub calibration: [[f32; 2]; 3],
+    pub shadow_tint: f32,
+    pub global_grading: [f32; 3],
+    pub grading_balance: f32,
+    pub grading_blending: f32,
+    pub sharpening_radius: f32,
+    pub sharpening_detail: f32,
+    pub sharpening_masking: f32,
+    pub luminance_detail: f32,
+    pub luminance_contrast: f32,
+    pub color_noise_reduction: f32,
+    pub color_noise_detail: f32,
+    pub color_noise_smoothness: f32,
     /// Normalized left, top, right, bottom in the oriented source.
     pub crop: [f32; 4],
     /// Composite, red, green and blue point curves.
@@ -191,9 +216,32 @@ pub struct DevelopParams {
     pub wb_override: Option<[f32; 4]>,
 }
 
+fn legacy_process() -> u32 {
+    1
+}
+
 impl Default for DevelopParams {
     fn default() -> Self {
         Self {
+            local_edits: None,
+            camera_profile: None,
+            process_version: 2,
+            wide_gamut: false,
+            parametric: [0.; 4],
+            parametric_splits: [0.25, 0.5, 0.75],
+            calibration: [[0.; 2]; 3],
+            shadow_tint: 0.,
+            global_grading: [0.; 3],
+            grading_balance: 0.,
+            grading_blending: 0.5,
+            sharpening_radius: 0.8,
+            sharpening_detail: 0.5,
+            sharpening_masking: 0.,
+            luminance_detail: 0.5,
+            luminance_contrast: 0.,
+            color_noise_reduction: 0.,
+            color_noise_detail: 0.5,
+            color_noise_smoothness: 0.5,
             crop: [0., 0., 1., 1.],
             point_curves: [PointCurve::default(); 4],
             sensor_noise_reduction: 0.,
@@ -252,6 +300,75 @@ impl DevelopParams {
     pub const STRONG_CONTRAST_CURVE: [f32; 5] = [0.0, 0.15, 0.5, 0.85, 1.0];
 
     pub fn validate(&self) -> Result<(), &'static str> {
+        if !(1..=2).contains(&self.process_version) {
+            return Err("Unsupported rendering process version");
+        }
+        for value in self
+            .parametric
+            .iter()
+            .chain(self.calibration.iter().flatten())
+            .chain([&self.shadow_tint, &self.grading_balance])
+        {
+            if !value.is_finite() || !(-1.0..=1.0).contains(value) {
+                return Err("Invalid tonal/color control");
+            }
+        }
+        if self
+            .parametric_splits
+            .iter()
+            .any(|v| !v.is_finite() || !(0.01..=0.99).contains(v))
+            || self
+                .parametric_splits
+                .windows(2)
+                .any(|v| v[1] - v[0] < 0.01)
+        {
+            return Err("Curve splits must be ordered with at least 0.01 spacing");
+        }
+        for value in [
+            self.grading_blending,
+            self.sharpening_detail,
+            self.sharpening_masking,
+            self.luminance_detail,
+            self.luminance_contrast,
+            self.color_noise_reduction,
+            self.color_noise_detail,
+            self.color_noise_smoothness,
+        ] {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err("Detail/blending control must be 0–1");
+            }
+        }
+        if !self.sharpening_radius.is_finite() || !(0.5..=3.0).contains(&self.sharpening_radius) {
+            return Err("Sharpening radius must be 0.5–3 pixels");
+        }
+        if !self.global_grading[0].is_finite()
+            || !(0.0..=360.0).contains(&self.global_grading[0])
+            || !self.global_grading[1].is_finite()
+            || !(0.0..=1.0).contains(&self.global_grading[1])
+            || !self.global_grading[2].is_finite()
+            || !(-1.0..=1.0).contains(&self.global_grading[2])
+        {
+            return Err("Invalid global grading");
+        }
+        if self.process_version == 1
+            && (self.wide_gamut
+                || self.parametric != [0.; 4]
+                || self.calibration != [[0.; 2]; 3]
+                || self.shadow_tint != 0.
+                || self.global_grading != [0.; 3]
+                || self.grading_balance != 0.
+                || self.grading_blending != 0.5
+                || self.color_noise_reduction != 0.
+                || self.sharpening_radius != 0.8
+                || self.sharpening_detail != 0.5
+                || self.sharpening_masking != 0.
+                || self.luminance_detail != 0.5
+                || self.luminance_contrast != 0.
+                || self.color_noise_detail != 0.5
+                || self.color_noise_smoothness != 0.5)
+        {
+            return Err("Upgrade rendering process before applying new color controls");
+        }
         if !self.sensor_noise_reduction.is_finite()
             || !(0. ..=1.).contains(&self.sensor_noise_reduction)
         {

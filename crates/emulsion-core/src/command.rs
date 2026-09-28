@@ -631,8 +631,11 @@ impl Command {
                 }
             }
         }
-        next.design
-            .retain_nodes(&next.nodes.iter().map(|n| n.id).collect());
+        // Translation cannot remove metadata targets. Avoid rebuilding a full
+        // ID set twice per pointer event on large diagrams.
+        if !matches!(self,Self::TranslateNode{..}|Self::TranslateNodes{..}) || next.nodes.len()!=doc.nodes.len() {
+            next.design.retain_nodes(&next.nodes.iter().map(|n|n.id).collect());
+        }
         if !next.design.variable_bindings.is_empty() && !self.is_view_only() {
             crate::design_variables::synchronize(doc, &mut next)
                 .map_err(crate::DocumentError::BadDesign)?;
@@ -666,8 +669,11 @@ impl Command {
             }
             fix_clips(&mut next);
         }
-        next.design
-            .retain_nodes(&next.nodes.iter().map(|n| n.id).collect());
+        // Translation cannot remove metadata targets. Avoid rebuilding a full
+        // ID set twice per pointer event on large diagrams.
+        if !matches!(self,Self::TranslateNode{..}|Self::TranslateNodes{..}) || next.nodes.len()!=doc.nodes.len() {
+            next.design.retain_nodes(&next.nodes.iter().map(|n|n.id).collect());
+        }
         if !next.design.frames.is_empty() {
             crate::design_layout::prune(&mut next);
             if !self.is_view_only() {

@@ -996,3 +996,67 @@ fn library_preset_import_details_are_collapsed_bounded_and_available_to_mcp(
     assert_eq!(state["preset_import_notes"].as_array().unwrap().len(), 40);
     cx.update(|window, _| assert!(window.try_find("library-preset-import-notes").is_none()));
 }
+
+#[gpui_kit::test]
+fn library_desktop_layout_and_local_edits_share_mcp(cx: &mut TestAppContext) {
+    use serde_json::json;
+    let fixture = Fixture::new();
+    let photos = fixture.pngs();
+    let root = fixture.0.join("catalog");
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(1100.)));
+    cx.update(|_, cx| ws.update(cx, |ws, _| ws.screen = Screen::Batch));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "import_library",
+        json!({"folder":fixture.0}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "select_library_photos",
+        json!({"paths":[photos[0]],"active":photos[0]}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "set_library_view",
+        json!({"mode":"develop","develop_section":"detail","auto_advance":true}),
+    ));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let left = window.find("library-navigation").bounds();
+        let right = window.find("library-settings-panel").bounds();
+        let film = window.find("library-filmstrip").bounds();
+        let preview = window.find("library-preview").bounds();
+        assert!(left.origin.x < preview.origin.x);
+        assert!(right.origin.x > preview.origin.x);
+        assert!(film.origin.y >= preview.origin.y + preview.size.height);
+        assert!(film.size.width > preview.size.width);
+        let _ = cx;
+    });
+    let edits = json!({"version":1,"masks":[{"id":1,"name":"Center","enabled":true,"components":[{"operation":"add","shape":{"type":"radial","center":[0.5,0.5],"radius":[0.5,0.5],"feather":0.5}}],"exposure":1.,"contrast":0.,"saturation":0.,"temperature":0.,"tint":0.}],"spots":[]});
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"local_edits","edits":edits}),
+    ));
+    assert!(state["develop"]["settings"]["local_edits"].is_array());
+    let params = emulsion_io::raw_settings::adjacent_settings(
+        &photos[0],
+        &emulsion_io::raw::source_digest(&photos[0]).unwrap(),
+    )
+    .unwrap();
+    assert!(params.local_edits.is_some());
+    let source = emulsion_io::photo_develop::PhotoSource::load(&photos[0]).unwrap();
+    assert_ne!(
+        source.develop_with(&params).unwrap().get(2, 2),
+        source.develop_with(&Default::default()).unwrap().get(2, 2)
+    );
+}

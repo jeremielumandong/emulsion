@@ -634,6 +634,8 @@ impl Workspace {
                 control("home-project-reload", "Reload", p).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.home_state.projects.loaded = false;
+                        this.thumbs.clear();
+                        this.thumbs_loading.clear();
                         this.ensure_home_projects(cx);
                     },
                 )),

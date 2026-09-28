@@ -24,12 +24,13 @@ fn editable(doc: &Document, id: NodeId) -> Result<(), String> {
     }
     Ok(())
 }
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ObjectStyle {
     body: Appearance,
     label: Appearance,
 }
 impl ObjectStyle {
+    pub fn validate(&self) -> Result<(), String> { self.body.validate()?; self.label.validate() }
     pub fn capture(doc: &Document, id: NodeId) -> Result<Self, String> {
         let (body, label) = parts(doc, id)?;
         Ok(Self {

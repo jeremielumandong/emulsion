@@ -316,14 +316,12 @@ fn new_saved_template_copies_every_page_without_overwriting_source(cx: &mut Test
         })
     });
     cx.run_until_parked();
+    cx.update(|window, cx| window.click("new-template-category-select", cx));
+    cx.run_until_parked();
     cx.update(|window, cx| {
-        window.click(
-            (
-                "new-template-category",
-                emulsion_core::design::Template::CATEGORIES.len() + 1,
-            ),
-            cx,
-        )
+        window.within("popup-menu").click(
+            emulsion_core::design::Template::CATEGORIES.len() + 1, cx,
+        );
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -343,4 +341,109 @@ fn new_saved_template_copies_every_page_without_overwriting_source(cx: &mut Test
         assert!(e.has_unsaved_changes());
     });
     assert_eq!(std::fs::read(path).unwrap(), source_bytes);
+}
+
+
+#[gpui_kit::test]
+fn new_document_imports_photos_from_blank_and_template_views(cx: &mut TestAppContext) {
+    let original = doc(&["Existing painting"], None);
+    let (ws, cx) = open(cx, original.clone());
+    for kind in [
+        CanvasKind::Photo,
+        CanvasKind::Paint,
+        CanvasKind::Design,
+        CanvasKind::Diagram,
+    ] {
+        cx.update(|window, cx| {
+            ws.update(cx, |ws, cx| ws.open_new_canvas_kind(kind, window, cx))
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("new-canvas-import-photo", cx));
+        cx.run_until_parked();
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| None);
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert_eq!(ws.read(cx).tabs.len(), 1);
+            assert_eq!(ws.read(cx).tabs[0].read(cx).editor.doc, original);
+        });
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Imported photo.png");
+    image::RgbaImage::from_pixel(32, 24, image::Rgba([40, 80, 120, 255]))
+        .save(&path)
+        .unwrap();
+    cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.open_new_canvas_kind(CanvasKind::Paint, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("new-canvas-import-photo", cx));
+    cx.run_until_parked();
+    cx.simulate_path_prompt_response(|_| Some(vec![path.clone()]));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let workspace = ws.read(cx);
+        assert_eq!(workspace.tabs.len(), 2);
+        let editor = workspace.editor.as_ref().unwrap().read(cx);
+        assert!(!editor.draw_mode);
+        assert_eq!(editor.source.as_ref(), Some(&path));
+        assert_eq!(
+            (editor.editor.doc.width, editor.editor.doc.height),
+            (32, 24)
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn reopening_classified_paint_uses_paint_and_explicit_photo_import_uses_photo(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Painting.ora");
+    let painting = doc(&["Painted layer"], None);
+    emulsion_io::ora::write(&painting, &path).unwrap();
+    let (ws, cx) = open(cx, Document::new(32, 32));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.home_state
+                .projects
+                .catalog
+                .remember_project(
+                    &emulsion_io::recent::Recent {
+                        path: path.clone(),
+                        opened: emulsion_io::recent::now(),
+                        summary: "1 layer".into(),
+                    },
+                    Some(CanvasKind::Paint),
+                )
+                .unwrap();
+            ws.open_path(path.clone(), window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let editor = ws.read(cx).editor.as_ref().unwrap().read(cx);
+        assert!(editor.draw_mode);
+        assert_eq!(
+            (editor.editor.doc.width, editor.editor.doc.height),
+            (256, 192)
+        );
+        assert_eq!(editor.editor.doc.nodes[0].name, "Painted layer");
+        assert!(!editor.has_unsaved_changes());
+        ws.update(cx, |ws, cx| ws.open_photo_path(path.clone(), window, cx));
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let editor = ws.read(cx).editor.as_ref().unwrap().read(cx);
+        assert!(!editor.draw_mode);
+        assert_eq!(
+            (editor.editor.doc.width, editor.editor.doc.height),
+            (256, 192)
+        );
+        assert_eq!(editor.editor.doc.nodes[0].name, "Painted layer");
+        assert!(!editor.has_unsaved_changes());
+    });
 }

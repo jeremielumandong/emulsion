@@ -4,6 +4,12 @@ Open a document and choose **File → Print…**, or press **Ctrl+P** on Windows
 and **Cmd+P** on macOS. The dialog prints a snapshot of the edited document,
 including unsaved changes. Printing does not flatten or resize your project.
 
+In the Photo Library, select photos and choose **Print selected…** (or use the
+same keyboard shortcut). The contact sheet includes unsaved Develop settings and
+the selected recipe, prepared at full source resolution. It does not save drafts
+or change the original photos. Select 1–200 photos; a changed source fingerprint
+blocks preparation so you can refresh the Library first.
+
 Choose an installed printer or **Save PDF…**. The dialog reads printer paper
 sizes and minimum margins. Borderless variants appear in the paper list when
 reported by the driver. Set **Extra margin** to zero to use the entire available
@@ -54,6 +60,9 @@ for device submission. The Flatpak system dialog receives the selected orientati
   left to right, then top to bottom. Each tile can be inspected in the preview.
 - Portrait/landscape, extra margins, copies, color/grayscale, and available device
   choices for media, source tray, quality and duplex.
+- Contact/repeat labels: none, source name, or number and source name. Labels
+  reserve a separate 6 mm strip below each image, outside its bleed/crop marks.
+  Long names are clipped to the cell; ordinary PDF labels use outlined text.
 
 The preview and print output use the same physical sheet composition. PDF export
 saves one set of the composed sheets; copies are a physical printer setting.
@@ -101,6 +110,62 @@ MCP has the same creative controls through `artwork_width_mm` /
 presets. Preview/submission can load one using `preset_name`; explicit options
 override it. A preset incompatible with the selected destination reports an error
 so the caller can supply explicit settings. These tools do not install drivers.
+
+## Frames and storyboards
+
+The Content section can print one responsive Design frame or **Use all Design
+frames** from the original active page. Each frame retains its physical size.
+For motion, enter comma-separated millisecond timestamps, such as
+`0, 1000, 2500`, and choose **Use page animation frames**. Timestamps must be
+inside that page's duration. Their order, including deliberate repeats, is kept.
+
+**Choose local video frames…** extracts stills from a local video using installed
+FFmpeg on Windows, macOS or Linux. It accepts up to 100 timestamps within 24 hours,
+limits frames to 4096 pixels per side without upscaling, and cancels a stalled
+decode after 30 seconds. Missing FFmpeg, unsupported codecs and timestamps past
+the video end report an error. Emulsion does not bundle a new codec or browser.
+Frame labels include the source name and requested timestamp.
+
+These choices replace the dialog's sources with a contact sheet. **Restore
+original pages / photos** returns to its initial snapshot. Failed preparation
+blocks printing until resolved. Linked/embedded video in page-animation samples
+keeps its stored poster artwork; use the local-video picker to extract playback
+frames. Remote video/audio playback is not printable.
+
+## ICC output and press PDFs
+
+Choose app-managed color, select an RGB or CMYK ICC file, and choose perceptual,
+relative colorimetric, saturation or absolute colorimetric intent. The compositor
+converts its sRGB sheet into that profile; it does not merely attach a profile to
+unchanged pixels. Profiles must contain transforms for the chosen intent.
+The preview converts the result back to sRGB as a simulation, not a calibrated
+monitor or certified contract proof. Black-point compensation is not exposed.
+
+Managed output flattens each composed sheet at the chosen **150–600 PPI**
+(default 300). The source document remains editable. Ordinary unmanaged color
+PDF continues to preserve supported vectors and outlined text. Oversized renders
+fail rather than silently lowering resolution.
+
+For **Save PDF**, choose **PDF/X-1a:2001** or **PDF/X-3:2002**, a **CMYK ICC v2
+output-device profile** supplied for the intended press/paper, and a print
+condition name. Both workflows produce opaque, flattened CMYK pages with the
+embedded output intent, file identity, PDF/X metadata and physical MediaBox,
+TrimBox and BleedBox. This implementation does not provide PDF/X-4, live
+transparency, spot inks, separations or overprint authoring. Have the print
+provider preflight the file against its own production requirements.
+
+For native printer queues, managed color requires an **RGB printer output
+profile** and **Printer color correction → Disabled in printer settings** after
+turning correction off in the actual driver. CUPS jobs request color-management
+bypass; Windows disables ICM on the drawing context. CMYK press profiles belong
+to the PDF workflow. The system print portal cannot verify a bypass and rejects
+app-managed output; printer-managed printing and PDF export remain available.
+
+Presets retain labels, ICC path, rendering intent, output PPI and PDF standard.
+They never retain the driver-correction acknowledgment, which resets when changing
+printers. Copy the ICC file separately when moving a preset to another computer.
+Loading a PDF/X preset for a physical printer resets the PDF standard and reports
+the change; choose a compatible RGB printer profile before printing.
 
 ## Platform connections
 
@@ -177,11 +242,12 @@ on Windows/macOS are still required. Full Windows cross-compilation on the Linux
 work machine requires a MinGW C toolchain for existing dependencies. The Flatpak
 portal path also requires runtime acceptance on a desktop with a Print backend.
 
-This implementation covers open document/project pages. Printing a photo-library
-selection directly, frame/storyboard picking, contact-sheet labels,
-app-managed ICC output and press-specific PDF standards remain
-follow-up work from the [design plan](../specs/print-dialog-plan.md). Linked video objects
-print their stored poster artwork; video/audio playback is not printable.
+Direct Library printing, Design frames, animation/local-video storyboards,
+contact labels, ICC conversion and flattened PDF/X are now implemented. Physical
+printer/driver trials, calibrated proofing and independent production preflight
+remain acceptance work; PDF structure and rendered proofs alone cannot establish
+device color accuracy. The [design plan](../specs/print-dialog-plan.md) records
+the broader platform acceptance criteria.
 
 For a read-only printer probe, run:
 

@@ -243,6 +243,9 @@ pub enum Routing {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
+    /// Automatic routing could not find a clear corridor; use manual waypoints or move overlapping objects.
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub routing_warning: Option<String>,
     #[serde(default)]
     pub double_line: bool,
     #[serde(default, skip_serializing_if="Option::is_none")]
@@ -297,6 +300,8 @@ impl Edge {
 pub struct Diagram {
     pub shapes: BTreeMap<NodeId, Shape>,
     pub edges: BTreeMap<NodeId, Edge>,
+    #[serde(default)]
+    pub settings: workspace::Settings,
 }
 
 pub fn shape_bounds(doc: &Document, shape: &Shape) -> Option<Bounds> {
@@ -317,6 +322,7 @@ fn valid_bounds(b: Bounds) -> bool {
 
 impl Diagram {
     pub fn validate(&self, doc: &Document) -> Result<(), String> {
+        self.settings.validate(self, doc)?;
         if self.shapes.len() > MAX_SHAPES || self.edges.len() > MAX_EDGES {
             return Err("Diagram exceeds the shape or connector limit.".into());
         }
@@ -340,6 +346,7 @@ impl Diagram {
         };
         let mut owned = HashSet::new();
         for (id, shape) in &self.shapes {
+            structure::validate(shape)?;
             if !node(*id).is_some_and(Node::is_group)
                 || !owned.insert(*id)
                 || !owned.insert(shape.body)
@@ -440,6 +447,7 @@ impl Diagram {
     pub fn remap(&self, map: &HashMap<NodeId, NodeId>) -> Self {
         let id = |old| map.get(&old).copied().unwrap_or(old);
         Self {
+            settings: self.settings.remap(map),
             shapes: self
                 .shapes
                 .iter()
@@ -471,6 +479,7 @@ impl Diagram {
     }
     pub fn fragment(&self, ids: &HashSet<NodeId>) -> Self {
         Self {
+            settings: self.settings.fragment(ids),
             shapes: self
                 .shapes
                 .iter()
@@ -599,6 +608,9 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
             .collect();
     }
     for edge in diagram.edges.values_mut(){edge.labels.retain(|l|indices.contains_key(&l.node));}
+    if !diagram.settings.thumbnail.is_empty() || !diagram.settings.threads.is_empty() {
+        diagram.settings.retain(&indices.keys().copied().collect());
+    }
     diagram.validate(doc)?;
     let bounds = |node: &Node| {
         let NodeKind::Path { path, .. } = &node.kind else {
@@ -652,34 +664,14 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
             }
         }
     }
-    let obstacles = diagram
-        .shapes
-        .values()
-        .filter(|s| !s.kind.is_container())
-        .filter_map(|s| indices.get(&s.body).and_then(|i| bounds(&doc.nodes[*i])))
-        .collect::<Vec<_>>();
-    let new_bounds = diagram
-        .shapes
-        .iter()
-        .filter_map(|(id, s)| {
-            indices
-                .get(&s.body)
-                .and_then(|i| bounds(&doc.nodes[*i]))
-                .map(|b| (*id, b))
-        })
-        .collect::<HashMap<_, _>>();
-    let old_bounds = before
-        .diagram
-        .as_ref()
-        .into_iter()
-        .flat_map(|d| &d.shapes)
-        .filter_map(|(id, s)| {
-            before_nodes
-                .get(&s.body)
-                .and_then(|n| bounds(n))
-                .map(|b| (*id, b))
-        })
-        .collect::<HashMap<_, _>>();
+    structure::synchronize(before, doc, &mut diagram)?;
+    let new_bounds = diagram.shapes.iter().filter_map(|(id,s)|indices.get(&s.body).and_then(|i|bounds(&doc.nodes[*i])).map(|b|(*id,b))).collect::<HashMap<_,_>>();
+    let obstacles = diagram.shapes.iter().filter(|(_,s)|!s.kind.is_container()).filter_map(|(id,_)|new_bounds.get(id).copied()).collect::<Vec<_>>();
+    let old_bounds = before.diagram.as_ref().into_iter().flat_map(|d|&d.shapes).filter_map(|(id,s)|{
+        let old=before_nodes.get(&s.body)?;
+        let unchanged=indices.get(&s.body).is_some_and(|i|matches!((&old.kind,&doc.nodes[*i].kind),(NodeKind::Path{path:a,..},NodeKind::Path{path:b,..}) if Arc::ptr_eq(a,b)));
+        (if unchanged{new_bounds.get(id).copied()}else{bounds(old)}).map(|b|(*id,b))
+    }).collect::<HashMap<_,_>>();
     let changed_bounds = new_bounds
         .iter()
         .filter(|(id, b)| old_bounds.get(id) != Some(*b))
@@ -735,7 +727,7 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                 &old_label.kind,
                 &new_label.kind,
             )
-            && old == new
+            && (Arc::ptr_eq(old,new) || old == new)
             && old_style.width == new_style.width
             && old_text.x == new_text.x
             && old_text.y == new_text.y
@@ -749,7 +741,7 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                         && y + h + 20. > b[1]
                 })
             });
-            if !edge.waypoints.is_empty() || !intersects {
+            if edge.routing != Routing::Orthogonal || !edge.waypoints.is_empty() || !intersects {
                 continue;
             }
         }
@@ -786,6 +778,7 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                 .map(|a| a.p)
                 .collect();
         }
+        edge.routing_warning=None;
         let points = if !edge.waypoints.is_empty() {
             std::iter::once(start)
                 .chain(edge.waypoints.iter().copied())
@@ -796,7 +789,9 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
         } else if edge.routing != Routing::Orthogonal {
             vec![start, end]
         } else {
-            router::orthogonal(start, sd, end, ed, &obstacles)
+            let (points,blocked)=router::orthogonal(start, sd, end, ed, &obstacles);
+            if blocked {edge.routing_warning=Some("No clear automatic route. Move overlapping objects or add manual waypoints.".into());}
+            points
         };
 
         let mut route = if matches!(edge.routing, Routing::Curved | Routing::Cyclical) {
@@ -977,6 +972,9 @@ fn add_shape_inner(
             color: DEFAULT_TEXT,
             ..Default::default()
         };
+        let structure_data = if matches!(kind, ShapeKind::Class | ShapeKind::Entity) {
+            BTreeMap::from([("emulsion_structure".into(), serde_json::to_string(&structure::StructuredObject::from_text(label)).map_err(|e|e.to_string())?)])
+        } else { BTreeMap::new() };
         let label = editor
             .execute(Command::AddNode {
                 node: Box::new(Node::text(
@@ -998,7 +996,7 @@ fn add_shape_inner(
                 label,
                 kind,
                 container: None,
-                data: BTreeMap::new(),
+                data: structure_data,
                 layout_locked: false,
                 conditions: Vec::new(),
                 unconditional_style: None,
@@ -1009,6 +1007,7 @@ fn add_shape_inner(
                 diagram: Some(Arc::new(diagram)),
             })
             .map_err(|e| e.to_string())?;
+        workspace::apply_default(editor, group, false)?;
         Ok(group)
     })();
     match result {
@@ -1137,6 +1136,7 @@ fn connect_inner(
         diagram.edges.insert(
             group,
             Edge {
+                routing_warning:None,
                 double_line: false, label_background: None, double_path: None, label_background_path: None,
                 corner_radius: 0.,
                 labels:Vec::new(),
@@ -1163,6 +1163,7 @@ fn connect_inner(
                 diagram: Some(Arc::new(diagram)),
             })
             .map_err(|e| e.to_string())?;
+        workspace::apply_default(editor, group, true)?;
         Ok(group)
     })();
     match result {
@@ -1277,6 +1278,11 @@ mod tests;
 #[path = "diagram_object.rs"]
 mod object;
 pub use object::{ObjectStyle, object_details_commands, connector_style_command};
+
+#[path = "diagram_workspace.rs"]
+pub mod workspace;
+#[path = "diagram_structure.rs"]
+pub mod structure;
 
 #[path = "diagram_catalog.rs"]
 mod catalog;

@@ -226,7 +226,8 @@ pub(crate) fn cover(path: &Path) -> Result<emulsion_core::Document> {
     let first = &manifest.pages[0];
     let bytes = ora::read_entry(&mut zip, &format!("pages/{}.ora", first.meta.id), MAX_BYTES)?;
     check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
-    Ok(ora::read_from(Cursor::new(bytes))?.doc)
+    let doc=ora::read_from(Cursor::new(bytes))?.doc;
+    Ok(emulsion_core::diagram::workspace::thumbnail_document(&doc).unwrap_or(doc))
 }
 
 #[cfg(test)]

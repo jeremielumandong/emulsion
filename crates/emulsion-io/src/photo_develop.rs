@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 enum Pixels {
     Raw(Box<RawSource>),
     Rgb(Raster),
+    Proxy(Raster),
 }
 pub struct PhotoSource {
     pub source: PathBuf,
@@ -29,7 +30,24 @@ pub fn supported(path: &Path) -> bool {
         })
 }
 impl PhotoSource {
+    pub fn is_proxy(&self) -> bool {
+        matches!(self.pixels, Pixels::Proxy(_))
+    }
     pub fn load(path: &Path) -> Result<Self> {
+        if !path.exists() && crate::photo_proxy::exists(path) {
+            let (proxy, raster) = crate::photo_proxy::load(path)?;
+            return Ok(Self {
+                source: path.to_path_buf(),
+                source_sha256: proxy.source_sha256,
+                info: RawInfo {
+                    width: proxy.width,
+                    height: proxy.height,
+                    ..Default::default()
+                },
+                metadata: proxy.metadata,
+                pixels: Pixels::Proxy(raster),
+            });
+        }
         if is_virtual(path) {
             let copy = reference(path)?;
             let mut source = Self::load_verified(&copy.source, &copy.source_sha256)?;
@@ -82,16 +100,56 @@ impl PhotoSource {
         }
         Ok(source)
     }
+    pub fn validate_settings(&self,params:&DevelopParams)->Result<()>{
+        params.validate().map_err(|e|IoError::Manifest(e.into()))?;
+        if matches!(self.pixels,Pixels::Rgb(_)) && (params.wide_gamut||params.camera_profile.is_some()||params.sensor_noise_reduction>0.||params.wb_override.is_some()) {return Err(IoError::Unsupported("Camera profile, sensor denoise, camera-channel white balance and wide-gamut working space require a RAW original".into()));}
+        if let Some(digest)=params.camera_profile{let profile=crate::camera_profiles::load(&digest)?;if !profile.compatible(&self.metadata.make,&self.metadata.model){return Err(IoError::Unsupported("Camera profile does not match this photo".into()));}}
+        if let Some(digest)=params.local_edits{crate::develop_edits::load(&digest)?;}
+        Ok(())
+    }
+    pub fn develop_working(&self, params: &DevelopParams) -> Result<Raster> {
+        match &self.pixels {
+            Pixels::Raw(raw) => raw.develop_working(params),
+            _ => self.develop_with(params),
+        }
+    }
+    pub fn develop_with_cancel(&self,params:&DevelopParams,cancel:&std::sync::atomic::AtomicBool)->Result<Raster>{
+        if cancel.load(std::sync::atomic::Ordering::Relaxed){return Err(IoError::Unsupported("Development cancelled".into()));}
+        match &self.pixels{Pixels::Raw(raw)=>raw.develop_with_cancel(params,cancel),_=>self.develop_with(params)}
+    }
     pub fn develop_with(&self, params: &DevelopParams) -> Result<Raster> {
         match &self.pixels {
             Pixels::Raw(raw) => raw.develop_with(params),
             Pixels::Rgb(rgb) => raw::develop_raster(rgb, params),
+            Pixels::Proxy(_) => Err(IoError::Unsupported(
+                "Reconnect the verified original for full-quality rendering or export".into(),
+            )),
+        }
+    }
+    pub fn develop_preview(
+        &self,
+        params: &DevelopParams,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Raster> {
+        match &self.pixels {
+            Pixels::Raw(raw) => raw.develop_preview(params, cancel),
+            Pixels::Rgb(rgb) => raw::develop_raster(rgb, params),
+            Pixels::Proxy(rgb) => raw::develop_raster(
+                rgb,
+                &DevelopParams {
+                    sensor_noise_reduction: 0.,
+                    camera_profile: None,
+                    wb_override: None,
+                    wide_gamut: false,
+                    ..*params
+                },
+            ),
         }
     }
     pub fn auto_adjust(&self, params: &DevelopParams) -> Result<DevelopParams> {
         match &self.pixels {
             Pixels::Raw(raw) => raw.auto_adjust(params),
-            Pixels::Rgb(rgb) => {
+            Pixels::Rgb(rgb) | Pixels::Proxy(rgb) => {
                 let pixels = rgb.to_pixels();
                 let stride = pixels.len().div_ceil(65536).max(1);
                 let mut levels: Vec<_> = pixels
@@ -122,6 +180,36 @@ impl PhotoSource {
 
 pub fn open_saved(path: &Path) -> Result<emulsion_core::Document> {
     crate::open(path)
+}
+
+/// Full-quality Library export keeps RAW wide working pixels until encoding.
+pub fn open_saved_working(
+    path: &Path,
+) -> Result<(emulsion_core::Document, crate::photo_color::Space)> {
+    use crate::photo_color::Space;
+    if !is_raw_photo(path) {
+        return Ok((open_saved(path)?, Space::Srgb));
+    }
+    let source = PhotoSource::load(path)?;
+    let params = raw_settings::adjacent_settings(&source.source, &source.source_sha256)?;
+    let raster = source.develop_working(&params)?;
+    let mut doc = emulsion_core::Document::new(raster.width(), raster.height());
+    doc.source_depth = 16;
+    doc.nodes.push(emulsion_core::Node::raster(
+        1,
+        "Developed photo",
+        std::sync::Arc::new(raster),
+        Default::default(),
+    ));
+    doc.next_id = 2;
+    Ok((
+        doc,
+        if params.wide_gamut {
+            Space::ProPhoto
+        } else {
+            Space::Srgb
+        },
+    ))
 }
 
 /// Resolve measured correction from installed Lensfun data and source EXIF.
@@ -394,6 +482,19 @@ fn mask_path(digest: [u8; 32]) -> PathBuf {
         .join("develop-masks")
         .join(format!("{name}.png"))
 }
+pub(crate) fn load_mask(digest: &[u8; 32]) -> Result<emulsion_raster::Mask> {
+    let path = mask_path(*digest);
+    let expected: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    if raw::source_digest(&path)? != expected {
+        return Err(IoError::Manifest("Local mask asset changed".into()));
+    }
+    let (w, h) = image::ImageReader::open(&path)?
+        .with_guessed_format()?
+        .into_dimensions()?;
+    crate::import::check_size(w, h)?;
+    let gray = image::open(path)?.into_luma8();
+    Ok(emulsion_raster::Mask::from_pixels(w, h, 0, gray.as_raw()))
+}
 pub(crate) fn load_masks(params: &DevelopParams) -> Result<Vec<Option<emulsion_raster::Mask>>> {
     params
         .masks
@@ -402,21 +503,7 @@ pub(crate) fn load_masks(params: &DevelopParams) -> Result<Vec<Option<emulsion_r
             let Some(digest) = m.bitmap.filter(|_| m.enabled) else {
                 return Ok(None);
             };
-            let path = mask_path(digest);
-            let expected: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-            if raw::source_digest(&path)? != expected {
-                return Err(IoError::Manifest("Local mask asset changed".into()));
-            }
-            let reader = image::ImageReader::open(&path)?.with_guessed_format()?;
-            let (w, h) = reader.into_dimensions()?;
-            crate::import::check_size(w, h)?;
-            let gray = image::open(&path)?.into_luma8();
-            Ok(Some(emulsion_raster::Mask::from_pixels(
-                w,
-                h,
-                0,
-                gray.as_raw(),
-            )))
+            load_mask(&digest).map(Some)
         })
         .collect()
 }

@@ -44,6 +44,15 @@ try {
         if (-not $settings.CanDuplex) {throw 'This printer does not support duplex.'}
         $settings.Duplex = if ($r.sides -eq 'two-sided-long-edge') {[System.Drawing.Printing.Duplex]::Vertical} else {[System.Drawing.Printing.Duplex]::Horizontal}
     } else {$settings.Duplex = [System.Drawing.Printing.Duplex]::Simplex}
+    if ($r.managed) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class EmulsionPrintColor {
+    [DllImport("gdi32.dll", SetLastError=true)] public static extern int SetICMMode(IntPtr hdc, int mode);
+}
+'@
+    }
     $document = New-Object System.Drawing.Printing.PrintDocument
     try {
         $document.PrinterSettings = $settings
@@ -69,6 +78,11 @@ try {
             param($sender,$event)
             $image = [System.Drawing.Image]::FromFile($r.files[$script:pageIndex])
             try {
+                if ($r.managed) {
+                    $dc = $event.Graphics.GetHdc()
+                    try { if ([EmulsionPrintColor]::SetICMMode($dc,1) -eq 0) {throw 'Could not disable Windows ICM; use printer-managed color.'} }
+                    finally {$event.Graphics.ReleaseHdc($dc)}
+                }
                 $event.Graphics.PageUnit = [System.Drawing.GraphicsUnit]::Display
                 $event.Graphics.TranslateTransform(-$event.PageSettings.HardMarginX, -$event.PageSettings.HardMarginY)
                 $event.Graphics.DrawImage($image, [System.Drawing.RectangleF]::new(0,0,$event.PageBounds.Width,$event.PageBounds.Height))

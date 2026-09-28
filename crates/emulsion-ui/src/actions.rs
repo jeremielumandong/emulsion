@@ -14,6 +14,7 @@ gpui_kit::actions!(
         Save,
         SaveAs,
         Export,
+        ConfirmExport,
         Print,
         SynchronizeRaw,
         Undo,

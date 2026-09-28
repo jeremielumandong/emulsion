@@ -5,6 +5,9 @@ use crate::{
 };
 use std::sync::Arc;
 
+#[path = "diagram_library_samples.rs"]
+mod samples;
+
 #[derive(Clone, Copy)]
 pub struct Template {
     pub id: &'static str,
@@ -35,7 +38,7 @@ pub const TEMPLATES: &[Template] = &[
     Template {
         id: "network",
         name: "Network diagram",
-        description: "Client, gateway, services and database",
+        description: "Workstation, firewall, router, services and storage stencils",
     },
     Template {
         id: "swimlanes",
@@ -52,6 +55,16 @@ pub const TEMPLATES: &[Template] = &[
         name: "UML classes",
         description: "Three connected editable class objects",
     },
+    Template { id: "business-process", name: "Business process", description: "Sales and credit approval workflow across four team swimlanes" },
+    Template { id: "purchase-process", name: "Purchase approval", description: "Procurement requisitions, decisions, payment and purchase orders" },
+    Template { id: "family-tree", name: "Family tree", description: "Three generations of ancestry with editable person placeholders" },
+    Template { id: "fishbone", name: "Cause and effect", description: "Fishbone Ishikawa root cause analysis with six categories" },
+    Template { id: "org-profiles", name: "Team directory", description: "Organization hierarchy with person profiles and reporting lines" },
+    Template { id: "branching-tree", name: "Strategy tree", description: "Five workstreams with objectives and editable branch connectors" },
+    Template { id: "improvement-cycle", name: "Improvement cycle", description: "Three step circular process: discover, deliver and learn" },
+    Template { id: "infographic-flow", name: "Project roadmap", description: "Color coded branching infographic from discovery to launch" },
+    Template { id: "genogram", name: "Relationship map", description: "Genogram family relationships with symbols and a customizable legend" },
+    Template { id: "cloud-architecture", name: "Cloud architecture", description: "Cloud network stencils, load balancer, services, queue and storage" },
 ];
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -110,6 +123,10 @@ pub const THEMES: &[Theme] = &[
     },
 ];
 impl Template {
+    pub fn matches(self, query: &str) -> bool {
+        let text = format!("{} {} {}", self.id, self.name, self.description).to_lowercase();
+        query.to_lowercase().split_whitespace().all(|word| text.contains(word))
+    }
     pub fn insert(self, editor: &mut crate::project::ProjectEditor) -> Result<u64, String> {
         if editor.kind() != Some(crate::project::ProjectKind::Diagram) {
             return Err("Open a Diagram project first".into());
@@ -125,6 +142,9 @@ impl Template {
     }
 
     pub fn build(self) -> Result<Document, String> {
+        if let Some(doc) = samples::build(self.id) {
+            return doc;
+        }
         use ShapeKind::*;
         let mut b = Builder::new(960, 640)?;
         let mut nodes = Vec::new();
@@ -169,15 +189,6 @@ impl Template {
                     (Process, [710., 455., 180., 80.], "Outcomes"),
                 ],
                 vec![(0, 1, ""), (0, 2, ""), (0, 3, ""), (0, 4, "")],
-            ),
-            "network" => (
-                vec![
-                    (Process, [50., 275., 150., 80.], "Client"),
-                    (Cloud, [300., 250., 190., 120.], "Gateway"),
-                    (Process, [650., 120., 180., 80.], "Application"),
-                    (Database, [650., 390., 180., 100.], "Database"),
-                ],
-                vec![(0, 1, "HTTPS"), (1, 2, "API"), (2, 3, "Query")],
             ),
             "swimlanes" => {
                 let a = b.add_shape(Swimlane, [45., 60., 870., 230.], "Requesting team")?;
@@ -318,6 +329,49 @@ pub fn theme_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sample_templates_have_live_connections_stencils_and_roundtrip() {
+        let mut ids = std::collections::HashSet::new();
+        for template in TEMPLATES {
+            assert!(ids.insert(template.id), "duplicate template ID");
+            let doc = template.build().unwrap();
+            let restored: crate::diagram::Diagram = serde_json::from_slice(&serde_json::to_vec(doc.diagram.as_ref().unwrap()).unwrap()).unwrap();
+            restored.validate(&doc).unwrap();
+            assert_eq!(doc.diagram.as_deref().unwrap(), &restored, "{} graph serialization", template.id);
+            if !matches!(template.id, "network" | "business-process" | "purchase-process" | "family-tree" | "fishbone" | "org-profiles" | "branching-tree" | "improvement-cycle" | "infographic-flow" | "genogram" | "cloud-architecture") { continue; }
+            let graph = doc.diagram.as_ref().unwrap();
+            assert!(!graph.edges.is_empty());
+            for shape in graph.shapes.values() {
+                let stencil = &shape.data["emulsion_stencil"];
+                assert!(crate::diagram::stencils::STENCILS.iter().any(|s| s.id == stencil));
+                let [x,y,w,h] = crate::diagram::shape_bounds(&doc, shape).unwrap();
+                assert!(x >= 0. && y >= 0. && x+w <= doc.width as f64 && y+h <= doc.height as f64, "{} shape outside page", template.id);
+            }
+            // Each shape can move independently, keeping the graph valid and undo exact.
+            for id in graph.shapes.keys() {
+                let mut editor = crate::Editor::new(doc.clone(), None);
+                editor.execute(Command::TranslateNode { id: *id, dx: 17., dy: 11. }).unwrap();
+                editor.doc.validate().unwrap();
+                assert_eq!(editor.doc.diagram.as_ref().unwrap().edges.len(), graph.edges.len());
+                editor.undo();
+                assert_eq!(editor.doc, doc, "{} move undo", template.id);
+            }
+            assert!(doc.nodes.iter().all(|n| matches!(n.kind, NodeKind::Fill { .. } | NodeKind::Group { .. } | NodeKind::Text { .. } | NodeKind::Path { .. })));
+        }
+        assert!(TEMPLATES.iter().any(|t| t.matches("credit workflow")));
+        assert!(TEMPLATES.iter().any(|t| t.matches("CLOUD storage")));
+    }
+    #[test]
+    fn swimlane_frames_do_not_cover_connectors() {
+        for id in ["swimlanes", "business-process"] {
+            let doc = TEMPLATES.iter().find(|t| t.id == id).unwrap().build().unwrap();
+            let graph = doc.diagram.as_ref().unwrap();
+            let roots = doc.children(None);
+            let last_lane = graph.shapes.iter().filter(|(_,s)| s.kind.is_container())
+                .map(|(id,_)| roots.iter().position(|root| root == id).unwrap()).max().unwrap();
+            assert!(graph.edges.keys().all(|id| roots.iter().position(|root| root == id).unwrap() > last_lane));
+        }
+    }
     #[test]
     fn all_starters_are_editable_valid_and_themes_undo_atomically() {
         for template in TEMPLATES {

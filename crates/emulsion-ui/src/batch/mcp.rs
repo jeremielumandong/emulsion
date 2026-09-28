@@ -67,13 +67,13 @@ impl Workspace {
         let limit = page.limit.unwrap_or(100);
         let files:Vec<_>=b.items.iter().skip(page.offset).take(limit).map(|item|{
             let asset=l.catalog.assets.iter().find(|a|a.kind==AssetKind::Image&&a.path==item.path);
-            json!({"path":item.path,"selected":item.selected,"raw":emulsion_io::photo_develop::is_raw_photo(&item.path),"metadata":asset,"exif":l.metadata.get(&item.path),"thumbnail":{"status":if item.thumb.is_some(){"ready"}else if b.thumbs_failed.contains_key(&item.path){"error"}else if b.thumbs_requested.contains(&item.path){"loading"}else{"pending"},"error":b.thumbs_failed.get(&item.path)}})
+            json!({"path":item.path,"selected":item.selected,"raw":emulsion_io::photo_develop::is_raw_photo(&item.path),"offline":!item.path.is_file(),"proxy_available":emulsion_io::photo_proxy::exists(&item.path),"metadata":asset,"exif":l.metadata.get(&item.path),"thumbnail":{"status":if item.thumb.is_some(){"ready"}else if b.thumbs_failed.contains_key(&item.path){"error"}else if b.thumbs_requested.contains(&item.path){"loading"}else{"pending"},"error":b.thumbs_failed.get(&item.path)}})
         }).collect();
         json!({"total":b.items.len(),"offset":page.offset,"next_offset":(page.offset.saturating_add(limit)<b.items.len()).then(||page.offset+limit),"files":files,
             "active":active,"selected":b.items.iter().filter(|i|i.selected).map(|i|&i.path).collect::<Vec<_>>(),"collections":l.catalog.collections,"photo_catalog":l.catalog.photos,"catalog_revision":l.catalog.revision,
             "filters":{"collapse_stacks":l.collapse_stacks,"query":l.search.as_ref().map(|s|s.read(cx).value().to_string()).unwrap_or_default(),"source":if l.source_paths.is_some(){"folder"}else{"all"},"collection":l.collection,"minimum_rating":l.rating,"flag":if l.flagged{"picked"}else if l.rejected{"rejected"}else{"all"},"color_label":l.color_label,"raw_only":l.raw_only,"unedited":l.unedited,"sort":if l.capture_sort{"capture_time"}else{"filename"},"reverse":l.reverse},
-            "view":if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.loupe{"develop"}else if b.develop.list{"list"}else{"grid"},"inspector":(["develop","info","keywords"][b.develop.inspector.min(2)]),"recipe":b.recipe,
-            "preset_files":b.develop.preset_files,"preset_import":b.develop.preset_report,"preset_import_notes":b.develop.preset_import_notes,"snapshots":active.and_then(|p|b.develop.snapshots.get(p)),"develop":{"history":active.and_then(|p|b.develop.history.get(p)),"settings":active.and_then(|p|b.develop.current_params(p)),"histogram":b.develop.histogram,"rgb_histogram":b.develop.rgb_histogram,"clipping_overlay":b.develop.clipping,"enhancement":b.develop.ai_job.as_ref().map(|j|j.summary()),"histogram_kind":"32-bin display luminance","histogram_pending":b.develop.busy||b.preview.is_none(),"dirty":b.develop.dirty(),"dirty_paths":b.develop.drafts.iter().filter(|(p,v)|b.develop.saved.get(*p)!=Some(*v)).map(|(p,_)|p).collect::<Vec<_>>(),"saving":b.develop.saving,"busy":b.develop.busy,"undo_steps":active.and_then(|p|b.develop.history.get(p)).map_or(0,Vec::len)},
+            "layout":{"color_view":b.develop.color_view,"detail_region":b.develop.detail_region,"mask_overlay":b.develop.mask_overlay,"dust_visualization":b.develop.dust_visualization,"auto_advance":b.develop.auto_advance,"panels_hidden":b.develop.panels_hidden,"filmstrip_hidden":b.develop.filmstrip_hidden},"metadata_undo_steps":l.metadata_undo.len(),"view":if b.develop.culling_mode==1{"photo_compare"}else if b.develop.culling_mode==2{"survey"}else if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.module_develop{"develop"}else if b.develop.loupe{"loupe"}else if b.develop.list{"list"}else{"grid"},"inspector":(["develop","info","keywords"][b.develop.inspector.min(2)]),"recipe":b.recipe,
+            "camera_profiles":emulsion_io::camera_profiles::installed().iter().map(|p|json!({"name":p.name,"camera":p.camera,"digest":p.digest})).collect::<Vec<_>>(),"preset_files":b.develop.preset_files,"preset_import":b.develop.preset_report,"preset_import_notes":b.develop.preset_import_notes,"snapshots":active.and_then(|p|b.develop.snapshots.get(p)),"develop":{"local_edits":active.and_then(|p|b.develop.current_params(p)).and_then(|p|p.local_edits).and_then(|d|emulsion_io::develop_edits::load(&d).ok()),"history":active.and_then(|p|b.develop.history.get(p)),"settings":active.and_then(|p|b.develop.current_params(p)),"histogram":b.develop.histogram,"rgb_histogram":b.develop.rgb_histogram,"clipping_overlay":b.develop.clipping,"enhancement":b.develop.ai_job.as_ref().map(|j|j.summary()),"histogram_kind":"32-bin display luminance","histogram_pending":b.develop.busy||b.preview.is_none(),"dirty":b.develop.dirty(),"dirty_paths":b.develop.drafts.iter().filter(|(p,v)|b.develop.saved.get(*p)!=Some(*v)).map(|(p,_)|p).collect::<Vec<_>>(),"saving":b.develop.saving,"busy":b.develop.busy,"undo_steps":active.and_then(|p|b.develop.history.get(p)).map_or(0,Vec::len)},
             "export":{"settings":b.output_settings,"progress":b.running,"current":b.exporting,"out_dir":b.out_dir,"format":b.format},"mcp_busy":b.mcp_busy,"note":b.note.as_ref().map(|(text,error)|json!({"text":text,"error":error}))})
     }
 }
@@ -107,6 +107,7 @@ async fn settle(this: &WeakEntity<Workspace>, cx: &mut AsyncApp) -> Result<()> {
             ws.batch.develop.ai_job.is_some()
                 || ws.batch.develop.saving
                 || ws.batch.develop.busy
+                || ws.batch.develop.culling_loading
                 || ws.batch.library.loading
                 || ws.batch.library.info_busy
                 || ws.batch.running.is_some()
@@ -226,6 +227,84 @@ async fn run(
                 return Ok(ToolResult::text("Export preset operation completed"));
             }
 
+            if action.action == "maintain_cache" {
+                let report = cx
+                    .background_spawn(async { emulsion_io::thumb::maintain_cache() })
+                    .await?;
+                return Ok(ToolResult::text(serde_json::to_string(&report)?));
+            }
+            if action.action == "relink_root" {
+                if action.paths.len() != 1 {
+                    bail!("relink_root requires one old root in paths");
+                }
+                let old = action.paths[0].clone();
+                let new = action.path.ok_or_else(|| {
+                    anyhow!("relink_root requires the replacement folder in path")
+                })?;
+                let (catalog, report) = cx
+                    .background_spawn(async move {
+                        catalog::update(&root, |c| {
+                            emulsion_io::photo_catalog::relink_root(c, &old, &new)
+                        })
+                    })
+                    .await?;
+                publish(this, catalog, cx).await?;
+                return Ok(ToolResult::text(serde_json::to_string(&report)?));
+            }
+            if action.action == "create_proxy" {
+                let files = action.paths;
+                if files.is_empty() {
+                    bail!("create_proxy requires paths");
+                }
+                let count = files.len();
+                cx.background_spawn(async move {
+                    for file in files {
+                        emulsion_io::photo_proxy::create(&file)?;
+                    }
+                    Ok::<_, emulsion_io::IoError>(())
+                })
+                .await?;
+                return Ok(ToolResult::text(format!(
+                    "Created {count} offline edit proxies"
+                )));
+            }
+            if action.action == "import_profile" {
+                let file = action
+                    .path
+                    .ok_or_else(|| anyhow!("import_profile requires path"))?;
+                let profile = cx
+                    .background_spawn(async move { emulsion_io::camera_profiles::install(&file) })
+                    .await?;
+                this.update(cx, |ws, cx| {
+                    ws.batch.develop.profiles = None;
+                    cx.notify();
+                })?;
+                return Ok(ToolResult::text(
+                    json!({"name":profile.name,"camera":profile.camera,"digest":profile.digest})
+                        .to_string(),
+                ));
+            }
+            if action.action == "undo_metadata" {
+                let changes = this
+                    .update(cx, |ws, _| ws.batch.library.metadata_undo.pop())?
+                    .ok_or_else(|| anyhow!("No metadata edit to undo"))?;
+                let rollback = changes.clone();
+                let result = cx
+                    .background_spawn(async move {
+                        catalog::update(&root, |c| {
+                            emulsion_io::photo_catalog::undo_metadata(c, &changes)
+                        })
+                    })
+                    .await;
+                match result {
+                    Ok((catalog, _)) => publish(this, catalog, cx).await?,
+                    Err(e) => {
+                        this.update(cx, |ws, _| ws.batch.library.metadata_undo.push(rollback))?;
+                        return Err(e.into());
+                    }
+                }
+                return Ok(ToolResult::text("Metadata edit undone"));
+            }
             if action.action == "import_presets" {
                 let path = action
                     .path
@@ -433,9 +512,10 @@ async fn run(
         }
         Request::Metadata(metadata) => {
             this.update(cx, |ws, _| available(ws, &metadata.paths))??;
-            let catalog = cx
+            let (catalog, changes) = cx
                 .background_spawn(async move {
                     catalog::update(&root, |c| {
+                        let before = c.assets.clone();
                         for path in metadata.paths {
                             let id = c.add_asset(path, AssetKind::Image)?;
                             let a = c.assets.iter_mut().find(|a| a.id == id).unwrap();
@@ -461,11 +541,23 @@ async fn run(
                                 }
                             }
                         }
-                        Ok(())
+                        Ok(before
+                            .into_iter()
+                            .filter_map(|a| {
+                                c.assets
+                                    .iter()
+                                    .find(|b| b.id == a.id && **b != a)
+                                    .map(|b| (a, b.clone()))
+                            })
+                            .collect::<Vec<_>>())
                     })
-                    .map(|(c, _)| c)
                 })
                 .await?;
+            this.update(cx, |ws, _| {
+                if !changes.is_empty() {
+                    ws.batch.library.metadata_undo.push(changes);
+                }
+            })?;
             publish(this, catalog, cx).await?;
         }
         Request::Collection(collection) => {
@@ -564,12 +656,31 @@ fn apply_view(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> Result<()> {
+    if let Some(color) = &view.color_view {
+        color.validate()?;
+    }
+    if view
+        .detail_region
+        .is_some_and(|p| p.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)))
+    {
+        bail!("Invalid detail region");
+    }
     // Validate every fallible input before changing any view state.
     let develop_section = match &view.develop_section {
         Some(name) => Some(
             [
-                "basic", "crop", "curve", "mixer", "grading", "masks", "kelvin", "history",
+                "basic",
+                "crop",
+                "curve",
+                "mixer",
+                "grading",
+                "masks",
+                "kelvin",
+                "history",
                 "enhance",
+                "detail",
+                "calibration",
+                "parametric",
             ]
             .iter()
             .position(|n| n == name)
@@ -627,6 +738,39 @@ fn apply_view(
             .unwrap()
             .update(cx, |s, cx| s.set_value(query, window, cx));
     }
+    if let Some(color) = view.color_view {
+        ws.batch.develop.color_view = color;
+        ws.invalidate_library_preview();
+    }
+    if let Some(v) = view.dust_visualization {
+        ws.batch.develop.dust_visualization = v;
+        ws.invalidate_library_preview();
+    }
+    if view.fit_preview == Some(true) {
+        ws.batch.develop.detail_region = None;
+        ws.batch.navigation.borrow_mut().fit();
+        ws.invalidate_library_preview();
+    }
+    if let Some(center) = view.detail_region {
+        ws.batch.develop.detail_region = Some(center);
+        ws.batch.develop.canvas_tool = 0;
+        ws.batch.navigation.borrow_mut().manual = false;
+        ws.invalidate_library_preview();
+    }
+    if let Some(overlay) = view.mask_overlay {
+        ws.batch.develop.mask_overlay = overlay;
+        ws.batch.develop.canvas_tool = if overlay { 1 } else { 0 };
+        ws.invalidate_library_preview();
+    }
+    if let Some(value) = view.auto_advance {
+        ws.batch.develop.auto_advance = value;
+    }
+    if let Some(value) = view.panels_hidden {
+        ws.batch.develop.panels_hidden = value;
+    }
+    if let Some(value) = view.filmstrip_hidden {
+        ws.batch.develop.filmstrip_hidden = value;
+    }
     if let Some(section) = develop_section {
         ws.batch.develop.section = section;
         ws.batch.develop.slider_key = None;
@@ -682,11 +826,25 @@ fn apply_view(
         let d = &mut ws.batch.develop;
         d.loupe = matches!(
             mode,
+            api::Mode::Loupe
+                | api::Mode::Develop
+                | api::Mode::Before
+                | api::Mode::Compare
+                | api::Mode::PhotoCompare
+                | api::Mode::Survey
+        );
+        d.module_develop = matches!(
+            mode,
             api::Mode::Develop | api::Mode::Before | api::Mode::Compare
         );
         d.list = matches!(mode, api::Mode::List);
         d.before = matches!(mode, api::Mode::Before);
         d.compare = matches!(mode, api::Mode::Compare);
+        d.culling_mode = match mode {
+            api::Mode::PhotoCompare => 1,
+            api::Mode::Survey => 2,
+            _ => 0,
+        };
     }
     if let Some(inspector) = view.inspector {
         ws.batch.develop.inspector = match inspector {
@@ -855,6 +1013,16 @@ async fn develop_request(
                     .copied()
             })?
             .ok_or_else(|| anyhow!("Unknown snapshot"))?,
+        A::LocalEdits => {
+            let edits = request.edits.unwrap();
+            let digest = cx
+                .background_spawn(async move { emulsion_io::develop_edits::store(&edits) })
+                .await?;
+            emulsion_core::raw::DevelopParams {
+                local_edits: Some(digest),
+                ..params
+            }
+        }
         A::Adjust => {
             api::patch(params, request.settings.as_ref().unwrap()).map_err(|e| anyhow!(e))?
         }
@@ -927,6 +1095,7 @@ async fn develop_request(
         | A::Denoise
         | A::SuperResolution => unreachable!(),
     };
+    source.validate_settings(&next)?;
     this.update(cx, |ws, cx| -> Result<()> {
         if active(ws)? != path
             || ws.batch.develop.current_params(&path) != Some(params)
@@ -940,6 +1109,8 @@ async fn develop_request(
             ws.batch.develop.before = false;
             ws.invalidate_library_preview();
         } else {
+            ws.batch.develop.gesture_active = false;
+            ws.batch.develop.gesture_recorded = false;
             ws.library_adjust(next, cx);
         }
         ws.batch.develop.save_task = None;
@@ -981,7 +1152,8 @@ async fn preview(this: &WeakEntity<Workspace>, cx: &mut AsyncApp) -> Result<Tool
         let mut result=ToolResult::text(json!({"path":path,"settings":params,"mode":if compare{"compare"}else if before{"before"}else{"edited"},"snapshot":true}).to_string());
         for original in if compare{vec![true,false]}else{vec![before]}{
             let raster=if let Some(source)=&source{
-                let raster=source.develop_with(&if original{Default::default()}else{params.unwrap()})?;
+                let settings=if original{Default::default()}else{params.unwrap()};
+                let raster=if source.is_proxy(){source.develop_preview(&settings,&std::sync::atomic::AtomicBool::new(false))?}else{source.develop_with(&settings)?};
                 let (w,h,rgba)=super::develop::display_raster(&raster).ok_or_else(||anyhow!("Could not resize RAW preview"))?;
                 Raster::from_srgba8(w,h,&rgba)
             }else{small_raster(&path,PREVIEW).ok_or_else(||anyhow!("Could not decode preview"))?};

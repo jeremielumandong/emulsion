@@ -217,14 +217,9 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let wide = window.viewport_size().width >= px(WIDE_CHROME);
-        // Photo mode docks the tabs above the canvas; the header keeps the
-        // menus alone, like Photoshop's menu bar.
-        let tabs = if self.compact.overlay {
-            tabs.into_any_element()
-        } else {
-            self.document_tabs = Some(tabs);
-            div().into_any_element()
-        };
+        // Document navigation keeps the same row in Photo and Paint,
+        // independently of whether the toolbars float over the canvas.
+        self.document_tabs = Some(tabs);
         let d = &self.editor.doc;
         let dimensions = format!(
             "{}×{} · {} bit",
@@ -254,7 +249,7 @@ impl EditorView {
                     .overflow_hidden()
                     .child(self.effect_menus(p, wide, cx)),
             )
-            // Document tabs, size and branch give way first when the window
+            // Document size and branch give way first when the window
             // is narrow, so the actions and app controls on the right stay
             // on screen in Photo and Draw alike.
             .child(
@@ -277,7 +272,6 @@ impl EditorView {
                             .flex_none()
                             .window_control_area(WindowControlArea::Drag),
                     )
-                    .when(self.compact.overlay, |d| d.child(tabs))
                     .child(
                         div()
                             .id("compact-window-drag")
@@ -323,11 +317,9 @@ impl EditorView {
                         },
                     )))
                     .when(self.editor.kind().is_none(), |actions| {
-                        actions.child(
-                            control("export", "Export").outline().on_click(
-                                cx.listener(|this, _, _, cx| this.toggle_export_panel(cx)),
-                            ),
-                        )
+                        actions.child(control("export", "Export").outline().on_click(
+                            cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx)),
+                        ))
                     })
                     .when(self.editor.kind().is_some(), |actions| {
                         actions.child(self.project_export_button(cx))
@@ -993,11 +985,21 @@ impl EditorView {
         let [tops, lefts, rights, bottoms] = sides;
         let overlay = self.compact.overlay;
         let status = self.status_strip(p, cx);
-        let tab_bar = if overlay {
-            None
-        } else {
-            self.document_tabs.clone()
-        };
+        let tab_bar = self.document_tabs.clone().map(|tabs| {
+            div()
+                .id("document-tab-bar")
+                .test_support()
+                .flex()
+                .flex_none()
+                .items_end()
+                .min_w_0()
+                .h(rems(2.375))
+                .px_1()
+                .bg(p.paper)
+                .border_b_1()
+                .border_color(p.line)
+                .child(tabs)
+        });
         stage = stage
             .child(
                 div()
@@ -1015,41 +1017,18 @@ impl EditorView {
                             .min_h_0()
                             .children(lefts)
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .min_h_0()
-                                    .when_some(tab_bar, |d, tabs| {
-                                        d.child(
-                                            div()
-                                                .id("document-tab-bar")
-                                                .test_support()
-                                                .flex()
-                                                .flex_none()
-                                                .items_end()
-                                                .min_w_0()
-                                                .h(rems(2.375))
-                                                .px_1()
-                                                .bg(p.paper)
-                                                .border_b_1()
-                                                .border_color(p.line)
-                                                .child(tabs),
-                                        )
-                                    })
-                                    .child(
-                                        div()
-                                            .relative()
-                                            .flex()
-                                            .flex_col()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .min_h_0()
-                                            .overflow_hidden()
-                                            .child(canvas_view)
-                                            .child(self.photo_shortcuts(p, window, cx)),
-                                    ),
+                                div().flex().flex_col().flex_1().min_w_0().min_h_0().child(
+                                    div()
+                                        .relative()
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .min_h_0()
+                                        .overflow_hidden()
+                                        .child(canvas_view)
+                                        .child(self.photo_shortcuts(p, window, cx)),
+                                ),
                             )
                             .children(rights),
                     )
@@ -1111,8 +1090,8 @@ impl EditorView {
                 }
             }))
             .children(self.size_panel_view(p, cx))
-            .children(self.export_panel_view(p, cx))
             .children(self.ask_area(p, cx))
+            .children(tab_bar)
             .child(
                 div()
                     .id("editor-work-area")

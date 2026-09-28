@@ -279,3 +279,156 @@ fn pre_shared_dock_workspace_json_keeps_custom_layout_and_defaults_new_sections(
     );
     assert_eq!(saved.sidebar_colors_height, 64.);
 }
+
+#[gpui_kit::test]
+fn paint_properties_summarizes_brush_and_settings_have_one_host(cx: &mut TestAppContext) {
+    let original = doc(&["Paint"], None);
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(size(px(1440.), px(1000.)));
+    let editor = cx.update(|window, cx| {
+        cx.global_mut::<AppSettings>().0.compact_chrome = true;
+        let editor = ws.read(cx).editor.clone().unwrap();
+        editor.update(cx, |editor, cx| {
+            editor.toggle_draw_mode(cx);
+            editor.set_tool(crate::editor::Tool::Brush, cx);
+            editor.show_sidebar_tab(SidebarTab::Properties, cx);
+        });
+        window.refresh();
+        editor
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("brush-summary").visible());
+        assert!(window.try_find("brush-settings-panel").is_none());
+        assert!(window.try_find(("shelf-brush", 4usize)).is_none());
+        window.click("brush-summary-settings", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("brush-settings-panel").visible());
+        assert!(window.try_find("brush-summary").is_none());
+        window.click(("photo-shortcut", 1usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            window
+                .within("photo-shortcut-panel")
+                .find("brush-settings-panel")
+                .visible()
+        );
+        assert!(window.try_find("brush-settings-close").is_none());
+        window.click("photo-shortcut-dock", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("photo-shortcut-panel").is_none());
+        assert!(window.find("brush-settings-panel").visible());
+        assert_eq!(editor.read(cx).editor.doc, original);
+        assert!(editor.read(cx).editor.history.is_empty());
+    });
+}
+
+#[gpui_kit::test]
+fn header_and_file_export_share_dialog_formats_and_cancellation(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(size(px(1440.), px(1000.)));
+    let editor = cx.update(|window, cx| {
+        cx.global_mut::<AppSettings>().0.compact_chrome = true;
+        window.refresh();
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    let before = cx.update(|window, cx| {
+        let bounds = window.find("document-tab-bar").bounds();
+        window.click("file-menu-button", cx);
+        bounds
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.within("popup-menu").click(8usize, cx));
+    cx.run_until_parked();
+    assert!(!cx.did_prompt_for_new_path());
+    cx.update(|window, cx| {
+        assert!(window.find("export-dialog-body").visible());
+        window.click(("export-fmt", 1usize), cx); // JPEG
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).export_prefs.ext, "jpg");
+        assert_eq!(window.find("document-tab-bar").bounds(), before);
+        window.click("export-cancel", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!editor.read(cx).export_prefs.open);
+        assert!(window.try_find("export-dialog-body").is_none());
+        window.click("export", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).export_prefs.ext, "jpg");
+        assert!(window.find(("export-fmt", 1usize)).visible());
+        window.click("export-go", cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("export-dialog-body").is_none());
+        assert_eq!(editor.read(cx).editor.doc, original);
+        assert!(editor.read(cx).editor.history.is_empty());
+        window.click("export", cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(480.), px(600.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("export-more", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let confirm = window.find("export-go");
+        assert!(confirm.visible());
+        assert!(confirm.bounds().right() <= px(480.) && confirm.bounds().bottom() <= px(600.));
+        window.press("escape", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert!(!editor.read(cx).export_prefs.open));
+}
+
+#[gpui_kit::test]
+fn project_header_export_keeps_page_formats_inside_common_dialog(cx: &mut TestAppContext) {
+    use emulsion_core::project::{ProjectEditor, ProjectKind};
+    let original = doc(&["Design"], None);
+    let (ws, cx) = open(cx, original.clone());
+    cx.simulate_resize(size(px(1440.), px(1000.)));
+    let editor = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, original.clone()).unwrap(),
+                "Design export".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("project-export-pages", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("export-dialog-body").visible());
+        window.click("project-export-options", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.within("popup-menu").click(13usize, cx)); // Current page SVG.
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("export-dialog-body").is_none());
+        assert!(!editor.read(cx).export_prefs.open);
+        assert_eq!(editor.read(cx).editor.doc, original);
+    });
+}

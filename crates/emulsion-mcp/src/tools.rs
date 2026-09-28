@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 /// Tools that only read; the CLI may run them without asking.
 pub const READ_ONLY: &[&str] = &[
+    "create_diagram_link",
     "get_library",
     "get_library_preview",
     "describe_raw",

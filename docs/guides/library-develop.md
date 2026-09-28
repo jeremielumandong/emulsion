@@ -4,8 +4,12 @@ Reference layout: `Emulsion Editor v2.dc.html`, Library screen.
 
 ## Layout and implemented workflow
 
-- Workspace navigation above a 220px collections/filter/presets sidebar, central
-  photo grid, and 300px inspector. Narrow windows expose the inspector as a drawer.
+- Library/Develop module bar, resizable GPUI Kit side panels, central grid/canvas,
+  and full-width filmstrip. Develop places Navigator, presets, snapshots/history
+  and collections on the left, histogram and adjustment accordions on the right.
+  Tab toggles side panels; Filmstrip toggles the bottom strip.
+- Library keeps Auto, B&W and Reset in compact Quick Develop so recipe browsing
+  remains accessible. Switch to Develop for the complete adjustment panels.
 - Search names and keywords; sort by filename or EXIF capture time; grid, list,
   Develop/loupe, and RAW before/after comparison; bounded filmstrip navigation.
 - Import local folders into the persistent catalog, create collections, and add
@@ -14,7 +18,7 @@ Reference layout: `Emulsion Editor v2.dc.html`, Library screen.
   Click selects a photo; Shift extends a range; Ctrl/Cmd toggles individual photos.
   Ratings 0–5, pick/unflag/reject, five color labels, keywords, and matching filters.
 - Keyboard culling while the grid has focus: 0–5 for ratings, P/U/X for flags,
-  arrows to navigate, Shift+arrows for ranges, G for grid, D/E for Develop, Enter
+  arrows to navigate, Shift+arrows for ranges, G for grid, E for Library loupe, D for Develop, Enter
   for Photo. Typing in search fields does not trigger culling shortcuts.
 - Light: exposure ±5 EV, contrast, highlights, shadows, whites, blacks. Existing
   Photo documents retain their separate black clipping and brightness settings.
@@ -212,3 +216,88 @@ adjust/save/sync/preset/undo/comparison/export, including pixel agreement with
 Photo, original-byte preservation and external-sidecar conflicts. A loopback
 relay test checks workspace routing and ensures progress reads do not release
 another tool's mutation queue reservation.
+
+
+## Desktop development additions
+
+- Click a numeric readout for exact entry, use arrow keys to nudge its focused control,
+  or double-click the control label to reset it. Sliders create one undo step per drag.
+- Process 1 preserves previous rendering. New tonal/detail controls use Process 2;
+  upgrades are explicit settings changes and appear in history.
+- Parametric tonal regions, primary calibration/shadow tint, global grading and
+  grading balance/blending render through the same engine as imported presets.
+- Detail separates luminance and chroma noise controls and sharpening amount,
+  radius, detail and masking. The 100% button displays native pixels; click Navigator
+  to choose another region, and Fit to return. Current region rendering evaluates the
+  full image before extracting the region, preserving surrounding filter samples.
+- Fit RAW previews reuse a bounded camera-channel cache. After 900 ms at rest in
+  Develop, full processing refines the selected preview. New edits cancel obsolete
+  work; the previous image remains visible during same-photo updates. Grid thumbnails
+  retain their independent cache. Demosaicing itself cannot be interrupted mid-stage.
+- Import compatible DCP camera profiles through Profile. The supported subset has
+  three-channel matrices, two illuminants, tone curves and HSV tables. Unsupported
+  operations are rejected. Missing or mismatched profiles remain errors. Dual-profile
+  interpolation uses the selected Kelvin value, with D65 as the as-shot fallback.
+- Masking supports up to 64 named masks, brush/erase, radial/linear, luminance/color
+  ranges, add/subtract/intersect, and existing AI bitmap masks. Local exposure,
+  contrast, saturation, temperature and tint are saved nondestructively. O toggles
+  the selected mask overlay. Range and adjustment values are editable from each mask.
+- Heal/Clone stores editable source/target pins and bounded freehand strokes. Alt-click chooses a source; drag pins
+  to reposition them. Each spot has radius, feather and opacity controls. Visualize
+  spots is a preview-only high-pass view. Healing currently blends source texture with
+  a local color correction; it does not synthesize missing content.
+- R activates direct crop handles with a grid; straightening and a perspective guide
+  use dragged lines. Q selects healing, K brush, M linear and Shift+M radial masking.
+- A toggles auto advance; Shift+rating/flag advances once; 6–9 apply color labels.
+  Compare photos links zoom/pan for two selected photos; Survey shows up to eight.
+  These start with cached thumbnails and refine to developed fit previews.
+  Ctrl/Cmd+Z in Library undoes metadata with conflict checks.
+
+## Offline, catalog and color workflows
+
+Build proxies prepares bounded, verified 8-bit previews for disconnected originals.
+Proxy edits are approximate, and the interface identifies them. Full-resolution
+inspection and export require the matching original. Unwritable originals use
+app-managed sidecars; originals remain unchanged. Portable full-library backups
+include originals, settings, local edit assets, masks, profiles and presets. Reconnect
+originals before creating a full portable backup; proxies are a local offline cache.
+
+Catalog migration pages up to 100,000 photo references, retaining offline entries,
+keyword hierarchies, labels and category counts. Relink folder root matches verified
+originals and reports individual skips. Offline entries without fingerprints may bind
+metadata to a replacement only when no saved edits depend on the unverified original.
+The rebuildable photo index accelerates metadata filtering while retaining shared
+creative IDs. The shared JSON catalog remains authoritative for writes. Thumbnail
+maintenance caps generated disk previews at 2 GiB / 20,000 files and leaves originals
+alone.
+
+Soft Proofing / Display accepts RGB ICC profiles, with gamut warnings. Default display
+handling remains with the system; manual display conversion is opt-in. Proofing affects
+viewing only. CMYK proofing is not provided in Library.
+
+Wide-gamut RAW working space is opt-in and saved in the recipe. Floating camera RGB
+converts to linear ProPhoto primaries before tonal processing and quantization. Library
+export can retain that gamut in ProPhoto RGB or convert to Adobe RGB/sRGB, embedding the
+matching ICC profile. Preview and Photo documents remain display-oriented sRGB.
+Additional Photo recipes currently require sRGB working space; Develop presets and
+local edits are supported on the wide RAW path. RGB imports retain their existing
+sRGB input path. Choose 16-bit TIFF/PNG for wide output; JPEG/WebP remain 8-bit.
+
+## Automation for the additions
+
+`develop_library` and `develop_raw` share the expanded settings schema, including
+`process_version`, `wide_gamut`, `camera_profile`, tonal/detail families and local-edit
+asset identity. `develop_library` action `local_edits` accepts the complete bounded
+mask/spot object with stable IDs. All changes use the shared save and render path.
+
+`set_library_view` adds `loupe`, `photo_compare`, `survey`, panel/filmstrip visibility,
+auto advance, mask/dust overlays, `detail_region`, `fit_preview` and `color_view`.
+`library_catalog` adds `import_profile`, `create_proxy`, `relink_root`, `undo_metadata`
+and `maintain_cache`. `export_library.settings.color_space` accepts `srgb`, `adobe_rgb`
+and `pro_photo`; output presets preserve that choice. `get_library` exposes profile,
+proxy, settings/history and layout state. Unsupported dependencies remain visible.
+
+These controls implement Emulsion's independent rendering and workflows. They do not
+promise pixel-for-pixel Adobe processing or support executable Lightroom plug-ins,
+proprietary adaptive profiles, sensor highlight reconstruction, AI sensor denoise,
+HDR/panorama merge or depth-aware blur.

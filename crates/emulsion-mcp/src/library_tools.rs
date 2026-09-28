@@ -41,6 +41,14 @@ pub struct Import {
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct View {
+    pub color_view: Option<emulsion_io::icc::PhotoView>,
+    pub detail_region: Option<[f32; 2]>,
+    pub fit_preview: Option<bool>,
+    pub mask_overlay: Option<bool>,
+    pub dust_visualization: Option<bool>,
+    pub auto_advance: Option<bool>,
+    pub panels_hidden: Option<bool>,
+    pub filmstrip_hidden: Option<bool>,
     pub query: Option<String>,
     pub develop_section: Option<String>,
     pub collapse_stacks: Option<bool>,
@@ -82,6 +90,9 @@ pub enum Sort {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
+    Loupe,
+    PhotoCompare,
+    Survey,
     Grid,
     List,
     Develop,
@@ -130,6 +141,7 @@ pub enum CollectionAction {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Develop {
+    pub edits: Option<emulsion_core::develop_edits::LocalEdits>,
     pub action: DevelopAction,
     pub point: Option<[f32; 2]>,
     pub name: Option<String>,
@@ -141,6 +153,7 @@ pub struct Develop {
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum DevelopAction {
+    LocalEdits,
     Adjust,
     Auto,
     Reset,
@@ -308,6 +321,12 @@ pub fn parse(name: &str, args: &Value) -> Result<Request, String> {
         }
         Request::Develop(d) => {
             use DevelopAction as A;
+            if (d.action == A::LocalEdits) != d.edits.is_some() {
+                return Err("local_edits requires edits".into());
+            }
+            if let Some(edits) = &d.edits {
+                edits.validate().map_err(str::to_owned)?;
+            }
             if (d.action == A::Adjust) != d.settings.is_some()
                 || (d.action == A::Preset) != d.preset.is_some()
                 || matches!(d.action, A::SavePreset | A::LoadPreset) != d.path.is_some()
@@ -403,7 +422,7 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "set_library_view",
             "Patch Library search, filters, sorting, view, inspector or optional film recipe. source=all clears the collection; collection selects a catalog collection. Empty recipe clears it. Changes are reflected in the desktop Library.",
-            json!({"query":{"type":"string"},"collapse_stacks":{"type":"boolean"},"develop_section":{"type":"string","enum":["basic","crop","curve","mixer","grading","masks","kelvin","history","enhance"]},"source":{"type":"string","enum":["all","folder"]},"collection":{"type":"integer","minimum":1},"minimum_rating":label,"flag":{"type":"string","enum":["all","picked","rejected"]},"color_label":label,"raw_only":{"type":"boolean"},"clipping":{"type":"boolean"},"unedited":{"type":"boolean"},"sort":{"type":"string","enum":["filename","capture_time"]},"reverse":{"type":"boolean"},"mode":{"type":"string","enum":["grid","list","develop","before","compare"]},"inspector":{"type":"string","enum":["develop","info","keywords"]},"recipe":{"type":"string"}}),
+            json!({"color_view":{"type":"object","additionalProperties":false,"properties":{"display":{"type":["string","null"]},"proof":{"type":["string","null"]},"gamut_warning":{"type":"boolean"}}},"detail_region":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}},"fit_preview":{"type":"boolean"},"mask_overlay":{"type":"boolean"},"dust_visualization":{"type":"boolean"},"auto_advance":{"type":"boolean"},"panels_hidden":{"type":"boolean"},"filmstrip_hidden":{"type":"boolean"},"query":{"type":"string"},"collapse_stacks":{"type":"boolean"},"develop_section":{"type":"string","enum":["basic","crop","curve","mixer","grading","masks","kelvin","history","enhance","detail","calibration","parametric"]},"source":{"type":"string","enum":["all","folder"]},"collection":{"type":"integer","minimum":1},"minimum_rating":label,"flag":{"type":"string","enum":["all","picked","rejected"]},"color_label":label,"raw_only":{"type":"boolean"},"clipping":{"type":"boolean"},"unedited":{"type":"boolean"},"sort":{"type":"string","enum":["filename","capture_time"]},"reverse":{"type":"boolean"},"mode":{"type":"string","enum":["grid","list","loupe","develop","before","compare","photo_compare","survey"]},"inspector":{"type":"string","enum":["develop","info","keywords"]},"recipe":{"type":"string"}}),
             &[],
         ),
         def(
@@ -427,19 +446,19 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "library_catalog",
             "Photo catalog operations: smart_collection creates a live rule; stack/unstack use canonical paths; virtual_copy creates an independent recipe reference; backup/restore_backup use .emulibrary for a portable archive including photo originals, sidecars, presets and masks, or .json for catalog references; relink verifies identical original bytes and rewrites virtual references with their histories; import_lightroom reads .lrcat references, ratings, collections and supported readable histories, or an Adobe companion handoff JSON; import_presets installs XMP/lrtemplate/JSON/ZIP preset packs with compatibility warnings; save_export_preset/load_export_preset use a JSON path for the visible output settings.",
-            json!({"action":{"type":"string","enum":["smart_collection","stack","unstack","virtual_copy","backup","relink","import_lightroom","restore_backup","import_presets","save_export_preset","load_export_preset"]},"paths":paths,"name":{"type":"string"},"path":{"type":"string"},"rule":{"type":"object","additionalProperties":false,"properties":{"minimum_rating":label,"color_label":label,"flagged":{"type":"boolean"},"rejected":{"type":"boolean"},"raw_only":{"type":"boolean"},"keyword":{"type":"string","maxLength":200}}}}),
+            json!({"action":{"type":"string","enum":["maintain_cache","relink_root","create_proxy","import_profile","undo_metadata","smart_collection","stack","unstack","virtual_copy","backup","relink","import_lightroom","restore_backup","import_presets","save_export_preset","load_export_preset"]},"paths":paths,"name":{"type":"string"},"path":{"type":"string"},"rule":{"type":"object","additionalProperties":false,"properties":{"minimum_rating":label,"color_label":label,"flagged":{"type":"boolean"},"rejected":{"type":"boolean"},"raw_only":{"type":"boolean"},"keyword":{"type":"string","maxLength":200}}}}),
             &["action"],
         ),
         def(
             "develop_library",
             "Operate on the active Library photo using the same drafts, undo and sidecars as the UI. adjust patches settings; auto/reset/as_shot/undo/preset/load_preset save immediately and report failures. sync copies group to selected photos. save flushes all drafts. reload explicitly discards active unsaved draft. Built-in preset names: neutral,warm,black_and_white,strong_contrast. Imports Emulsion JSON, Lightroom XMP and legacy lrtemplate presets with a compatibility report. snapshot/restore_snapshot use a name; match_lens resolves a measured Lensfun profile; subject_mask/sky_mask create local bitmap masks (sky_mask requires point); auto_sky uses local semantic sky segmentation; auto_perspective estimates level and perspective from image lines; denoise/super_resolution create new rendered derivatives. sensor_noise_reduction is a RAW-only pre-demosaic control in settings. point_curves contains composite/red/green/blue control points. Sampled camera WB cannot be synced across Library files. RAW highlights is recovery: positive darkens, negative brightens; UI slider uses the opposite sign.",
-            json!({"action":{"type":"string","enum":["adjust","auto","reset","as_shot","undo","reload","save","sync","preset","save_preset","load_preset","snapshot","restore_snapshot","subject_mask","sky_mask","auto_sky","auto_perspective","denoise","super_resolution","match_lens"]},"point":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1},"description":"Normalized point in the untransformed source sky"},"name":{"type":"string","minLength":1,"maxLength":200},"settings":settings,"preset":{"type":"string","enum":["neutral","warm","black_and_white","strong_contrast"]},"path":{"type":"string","minLength":1},"group":group}),
+            json!({"edits":local_edits_schema(),"action":{"type":"string","enum":["local_edits","adjust","auto","reset","as_shot","undo","reload","save","sync","preset","save_preset","load_preset","snapshot","restore_snapshot","subject_mask","sky_mask","auto_sky","auto_perspective","denoise","super_resolution","match_lens"]},"point":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1},"description":"Normalized point in the untransformed source sky"},"name":{"type":"string","minLength":1,"maxLength":200},"settings":settings,"preset":{"type":"string","enum":["neutral","warm","black_and_white","strong_contrast"]},"path":{"type":"string","minLength":1},"group":group}),
             &["action"],
         ),
         def(
             "export_library",
             "Export selected Library photos using saved edits and the selected recipe to jpg/png/tif/webp. settings controls resizing, JPEG quality, 8/16-bit output, sharpening and an image watermark. Rejects dirty drafts. Waits for completion and reports partial failures. Existing files and originals are preserved. Source metadata is omitted by default; metadata selects copyright, camera or camera_and_location retention. Serial numbers and maker notes are always excluded. Optional publish sends versioned exports to WebDAV without replacing existing remote files.",
-            json!({"out_dir":{"type":"string","minLength":1},"format":{"type":"string","enum":["jpg","png","tif","webp"]},"settings":{"type":"object","additionalProperties":false,"properties":{"publish":{"type":["object","null"],"additionalProperties":false,"required":["url"],"properties":{"url":{"type":"string"},"authorization_env":{"type":["string","null"]}}},"long_edge":{"type":"integer","minimum":0},"metadata":{"type":"string","enum":["none","copyright","camera","camera_and_location"]},"jpeg_quality":{"type":"integer","minimum":1,"maximum":100},"depth":{"type":"integer","enum":[0,8,16]},"sharpening":{"type":"number","minimum":0,"maximum":1},"watermark":{"type":["string","null"]},"watermark_opacity":{"type":"number","minimum":0,"maximum":1},"watermark_width":{"type":"number","minimum":0.01,"maximum":1}}}}),
+            json!({"out_dir":{"type":"string","minLength":1},"format":{"type":"string","enum":["jpg","png","tif","webp"]},"settings":{"type":"object","additionalProperties":false,"properties":{"publish":{"type":["object","null"],"additionalProperties":false,"required":["url"],"properties":{"url":{"type":"string"},"authorization_env":{"type":["string","null"]}}},"color_space":{"type":"string","enum":["srgb","adobe_rgb","pro_photo"]},"long_edge":{"type":"integer","minimum":0},"metadata":{"type":"string","enum":["none","copyright","camera","camera_and_location"]},"jpeg_quality":{"type":"integer","minimum":1,"maximum":100},"depth":{"type":"integer","enum":[0,8,16]},"sharpening":{"type":"number","minimum":0,"maximum":1},"watermark":{"type":["string","null"]},"watermark_opacity":{"type":"number","minimum":0,"maximum":1},"watermark_width":{"type":"number","minimum":0.01,"maximum":1}}}}),
             &["out_dir", "format"],
         ),
         def(
@@ -600,4 +619,13 @@ mod tests {
         assert_eq!(next.temperature, old.temperature);
         assert!(patch(old, &json!({"exposure":6})).is_err());
     }
+}
+
+fn local_edits_schema() -> Value {
+    let unit = json!({"type":"number","minimum":0,"maximum":1});
+    let signed = json!({"type":"number","minimum":-1,"maximum":1});
+    let point = json!({"type":"array","minItems":2,"maxItems":2,"items":unit});
+    let shape = json!({"type":"object","description":"Brush: points/radius/feather; radial: center/radius(two axes)/feather; linear: start/end; luminance: range/feather; color: rgb/tolerance/feather; bitmap: digest/inverted. Coordinates refer to oriented source before crop.","required":["type"],"properties":{"type":{"type":"string","enum":["brush","radial","linear","luminance","color","bitmap"]},"points":{"type":"array","minItems":1,"maxItems":4096,"items":point},"center":point,"start":point,"end":point,"range":point,"radius":{"oneOf":[unit,point]},"feather":unit,"rgb":{"type":"array","minItems":3,"maxItems":3,"items":unit},"tolerance":unit,"digest":{"type":"array","minItems":32,"maxItems":32,"items":{"type":"integer","minimum":0,"maximum":255}},"inverted":{"type":"boolean"}}});
+    let id = json!({"type":"integer","minimum":1});
+    json!({"type":"object","additionalProperties":false,"required":["version","masks","spots"],"properties":{"version":{"type":"integer","enum":[1]},"masks":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","name","enabled","components","exposure","contrast","saturation","temperature","tint"],"properties":{"id":id,"name":{"type":"string","minLength":1,"maxLength":200},"enabled":{"type":"boolean"},"components":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["operation","shape"],"properties":{"operation":{"type":"string","enum":["add","subtract","intersect"]},"shape":shape}}},"exposure":{"type":"number","minimum":-5,"maximum":5},"contrast":signed,"saturation":signed,"temperature":signed,"tint":signed}}},"spots":{"type":"array","maxItems":256,"items":{"type":"object","additionalProperties":false,"required":["id","source","target","radius","feather","opacity","mode"],"properties":{"id":id,"source":point,"target":point,"radius":unit,"feather":unit,"opacity":unit,"mode":{"type":"string","enum":["heal","clone"]}}}}}})
 }

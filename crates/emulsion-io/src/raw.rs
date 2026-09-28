@@ -122,6 +122,7 @@ pub struct RawSource {
     pub source: PathBuf,
     pub source_sha256: String,
     _reservation: PixelReservation,
+    preview_cache: std::sync::Mutex<Option<develop::PreviewStage>>,
 }
 
 impl RawSource {
@@ -198,12 +199,25 @@ impl RawSource {
                 source: path.canonicalize()?,
                 source_sha256: hash,
                 _reservation: reservation,
+                preview_cache: std::sync::Mutex::new(None),
             })
         })
     }
 
     pub fn develop_with(&self, params: &DevelopParams) -> Result<Raster> {
         self.develop_with_cancel(params, &AtomicBool::new(false))
+    }
+
+    /// Full-resolution pixels in the recipe's declared linear working primaries.
+    pub fn develop_working(&self,params:&DevelopParams)->Result<Raster>{
+        let _job=HEAVY_JOB.lock().unwrap_or_else(|e|e.into_inner());
+        guarded(||develop::render_in_space(&self.raw,params,&AtomicBool::new(false),true))
+    }
+    /// Bounded fit preview. Full-quality exports always use develop_with.
+    pub fn develop_preview(&self, params: &DevelopParams, cancel: &AtomicBool) -> Result<Raster> {
+        cancelled(cancel)?;
+        let _job = HEAVY_JOB.lock().unwrap_or_else(|e| e.into_inner());
+        guarded(|| develop::preview(&self.raw, params, &self.preview_cache, cancel))
     }
 
     /// Compute reproducible tonal settings from bounded, evenly spaced sensor

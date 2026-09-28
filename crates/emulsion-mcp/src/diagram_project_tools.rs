@@ -10,6 +10,7 @@ pub fn is_tool(name: &str) -> bool {
     matches!(
         name,
         "install_diagram_stencil_pack"
+            | "create_diagram_link" | "open_diagram_link"
             | "import_diagram"
             | "save_document_stencils"
             | "export_diagram"
@@ -115,6 +116,14 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
     }
     validate_args(name,args)?;
     match name {
+        "create_diagram_link" => {
+            let path=editor.path.as_ref().ok_or("Save the project before copying a diagram link")?;
+            let nodes:Vec<u64>=args.get("nodes").map(|v|serde_json::from_value(v.clone()).map_err(|e|e.to_string())).transpose()?.unwrap_or_default();
+            let view:Option<[f64;4]>=args.get("view").map(|v|serde_json::from_value(v.clone()).map_err(|e|e.to_string())).transpose()?;
+            let link=diagram::workspace::Link{project:Some(path.to_string_lossy().into()),page:editor.active_page(),nodes,view};link.check_project(editor)?;
+            Ok(json!({"link":link.encode()?}))
+        }
+        "open_diagram_link" => {let link=diagram::workspace::Link::decode(text(args,"link")?)?;link.check_project(editor)?;editor.set_active_page(link.page)?;Ok(json!({"page":link.page,"nodes":link.nodes,"view":link.view}))}
         "insert_diagram_pack_entry" => {
             let project = emulsion_io::project::read(Path::new(text(args, "path")?))
                 .map_err(|e| e.to_string())?;
@@ -251,6 +260,8 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
     };
     vec![
+        def("create_diagram_link","Copy a local saved-project reference to the current selection or view. View is [center_x,center_y,zoom,rotation].",json!({"nodes":{"type":"array","maxItems":1000,"items":{"type":"integer","minimum":1}},"view":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"number"}}}),&[]),
+        def("open_diagram_link","Navigate to a page, selection and view in the already-open matching project. Does not load external files or execute URLs.",json!({"link":string}),&["link"]),
         def(
             "insert_diagram_pack_entry",
             "Place an installed stencil entry onto the active diagram, preserving editable artwork and connections. Use a path returned by list_diagram_stencil_packs; page is one-based (default 1). Optional center [x,y] defaults to the canvas center. One undo step.",
@@ -304,6 +315,15 @@ mod tests {
         let r = execute(e, name, &args);
         assert!(!r.is_error, "{name}: {:?}", r.content);
         serde_json::from_str(r.content[0]["text"].as_str().unwrap()).unwrap()
+    }
+    #[test]
+    fn diagram_links_require_matching_saved_project_and_select_page(){
+        let mut e=project();assert!(execute(&mut e,"create_diagram_link",&json!({})).is_error);
+        e.path=Some(std::path::PathBuf::from("/tmp/diagram-link-test.emu"));
+        let page=e.active_page();let link=call(&mut e,"create_diagram_link",json!({"view":[120,240,2,0]}))["link"].as_str().unwrap().to_owned();
+        let result=call(&mut e,"open_diagram_link",json!({"link":link}));assert_eq!(result["page"],page);assert_eq!(result["view"],json!([120.,240.,2.,0.]));
+        e.path=Some(std::path::PathBuf::from("/tmp/other.emu"));assert!(execute(&mut e,"open_diagram_link",&json!({"link":link})).is_error);
+        assert!(crate::tools::is_read_only("create_diagram_link"));
     }
     fn project() -> ProjectEditor {
         ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600)).unwrap()
@@ -424,5 +444,22 @@ mod tests {
         e.doc.validate().unwrap();
         assert!(e.undo());
         assert_eq!(e.page_list().len(), 1);
+    }
+
+    #[test]
+    fn every_library_template_is_available_to_project_mcp() {
+        for template in emulsion_core::diagram_library::TEMPLATES {
+            let mut e = project();
+            let before = e.doc.clone();
+            call(&mut e, "insert_diagram_template", json!({"template":template.id}));
+            assert_eq!(e.page_list().len(), 2, "{}", template.id);
+            e.doc.validate().unwrap();
+            assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(), template.build().unwrap().diagram.as_ref().unwrap().shapes.len());
+            assert!(e.undo());
+            assert_eq!(e.page_list().len(), 1);
+            assert_eq!(e.doc, before);
+            assert!(e.redo());
+            assert_eq!(e.page_list().len(), 2);
+        }
     }
 }

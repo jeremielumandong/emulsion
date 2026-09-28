@@ -32,6 +32,7 @@ pub mod node;
 pub mod photo_source;
 pub mod project;
 pub mod raw;
+pub mod develop_edits;
 pub mod smart;
 pub mod styles;
 pub mod text;

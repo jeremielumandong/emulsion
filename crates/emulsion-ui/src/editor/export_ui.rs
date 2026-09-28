@@ -2,10 +2,10 @@
 //! dialog opens, instead of guessing from the extension typed there.
 
 use super::*;
-use crate::widgets::tip;
+
 use emulsion_io::export::{ExportColorSpace, ExportScale, ExportWorkflow};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{ActiveTheme, Selectable, Sizable};
+use gpui_kit::component::{Selectable, Sizable, WindowExt};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExportPrefs {
@@ -140,41 +140,116 @@ const MORE_FORMATS: &[(&str, &str, &str)] = &[
     ("ff", "farbfeld", "suckless 16-bit RGBA, lossless."),
 ];
 
+/// The dialog observes its editor so changing a format updates its controls
+/// without mounting a second editor or changing the canvas layout.
+struct ExportDialog {
+    owner: WeakEntity<EditorView>,
+    _subscription: Subscription,
+}
+impl Render for ExportDialog {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = crate::theme::palette(cx);
+        self.owner
+            .update(cx, |editor, cx| editor.export_dialog_body(&p, cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
 impl EditorView {
-    pub fn toggle_export_panel(&mut self, cx: &mut Context<Self>) {
-        self.export_prefs.open = !self.export_prefs.open;
+    pub(crate) fn open_export_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.export_prefs.open {
-            self.export_prefs.depth16 = self.editor.doc.source_depth == 16;
+            return;
         }
+        self.export_prefs.open = true;
+        self.export_prefs.depth16 = self.editor.doc.source_depth == 16;
+        let owner = cx.entity();
+        let body = cx.new(|cx| ExportDialog {
+            owner: owner.downgrade(),
+            _subscription: cx.observe(&owner, |_, _, cx| cx.notify()),
+        });
+        let owner = cx.weak_entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let close = owner.clone();
+            let cancel = owner.clone();
+            let confirm = owner.clone();
+            let enter = owner.clone();
+            dialog
+                .title("Export")
+                .width(px(620.))
+                .child(body.clone())
+                .footer(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(Button::new("export-cancel").label("Cancel").on_click(
+                            move |_, window, cx| {
+                                cancel
+                                    .update(cx, |editor, cx| {
+                                        editor.dismiss_export_dialog(window, cx)
+                                    })
+                                    .ok();
+                            },
+                        ))
+                        .child(
+                            Button::new("export-go")
+                                .label("Export…")
+                                .primary()
+                                .on_click(move |_, window, cx| {
+                                    confirm
+                                        .update(cx, |editor, cx| {
+                                            editor.confirm_export_dialog(window, cx)
+                                        })
+                                        .ok();
+                                }),
+                        ),
+                )
+                .on_ok(move |_, window, cx| {
+                    enter
+                        .update(cx, |editor, cx| editor.confirm_export_dialog(window, cx))
+                        .ok();
+                    false // Confirmation closes the dialog itself, once.
+                })
+                .on_close(move |_, _, cx| {
+                    close
+                        .update(cx, |editor, cx| {
+                            editor.export_prefs.open = false;
+                            cx.notify();
+                        })
+                        .ok();
+                })
+        });
         cx.notify();
     }
 
-    pub(crate) fn export_panel_view(
-        &mut self,
-        p: &Palette,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if !self.export_prefs.open {
-            return None;
-        }
+    pub(super) fn dismiss_export_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.export_prefs.open = false;
+        window.close_dialog(cx);
+        cx.notify();
+    }
+
+    fn export_dialog_body(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let prefs = self.export_prefs;
         let (w, h) = prefs
             .workflow()
             .scale
             .dimensions(self.editor.doc.width, self.editor.doc.height);
-        let mut row = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_2()
-            .px_4()
-            .py_2()
-            .border_b_1()
-            .border_color(p.line)
-            .bg(p.panel)
-            .child(label(format!("Export · {w}×{h}"), p));
+        let section = |title: &'static str, controls: AnyElement| {
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .child(controls)
+        };
+        let mut formats = crate::widgets::command_bar("export-formats", "Export format");
         let more_open = prefs.more || MORE_FORMATS.iter().any(|(e, _, _)| *e == prefs.ext);
-        let listed: Vec<&(&str, &str, &str)> = FORMATS
+        for (i, (ext, name, help)) in FORMATS
             .iter()
             .chain(
                 more_open
@@ -183,88 +258,106 @@ impl EditorView {
                     .flatten(),
             )
             .filter(|(ext, _, _)| {
-                emulsion_io::export::ExportFormat::from_path(std::path::Path::new(&format!(
-                    "x.{ext}"
-                )))
-                .is_some_and(|f| f.available())
+                emulsion_io::ExportFormat::from_path(std::path::Path::new(&format!("x.{ext}")))
+                    .is_some_and(|f| f.available())
             })
-            .collect();
-        for (i, (ext, name, help)) in listed.into_iter().enumerate() {
+            .enumerate()
+        {
             let (ext, name, help) = (*ext, *name, *help);
-            row = row.child(
-                tip(
-                    chip(("export-fmt", i), name, prefs.ext == ext, p).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.export_prefs.ext = ext;
-                            cx.notify();
-                        },
-                    )),
-                    help,
-                )
-                .into_any_element(),
+            formats = formats.child(
+                Button::new(("export-fmt", i))
+                    .small()
+                    .outline()
+                    .label(name)
+                    .selected(prefs.ext == ext)
+                    .tooltip(help)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.export_prefs.ext = ext;
+                        cx.notify();
+                    })),
             );
         }
-        row = row.child(
-            chip(
-                "export-more",
-                if more_open {
-                    "fewer formats"
+        formats = formats.child(
+            Button::new("export-more")
+                .small()
+                .ghost()
+                .label(if more_open {
+                    "Fewer formats"
                 } else {
-                    "more formats…"
-                },
-                false,
-                p,
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.export_prefs.more = !more_open;
-                if !this.export_prefs.more
-                    && MORE_FORMATS
-                        .iter()
-                        .any(|(e, _, _)| *e == this.export_prefs.ext)
-                {
-                    this.export_prefs.ext = "png";
-                }
-                cx.notify();
-            })),
+                    "More formats…"
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.export_prefs.more = !more_open;
+                    if !this.export_prefs.more
+                        && MORE_FORMATS
+                            .iter()
+                            .any(|(ext, _, _)| *ext == this.export_prefs.ext)
+                    {
+                        this.export_prefs.ext = "png";
+                    }
+                    cx.notify();
+                })),
         );
+        let mut body = div()
+            .id("export-dialog-body")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .min_w_0()
+            .child(div().text_sm().text_color(p.muted).child(format!(
+                "{} · {w} × {h} px{}",
+                self.name,
+                if self.editor.kind().is_some() {
+                    " · current page"
+                } else {
+                    ""
+                }
+            )))
+            .child(section("Format", formats.into_any_element()));
         if matches!(prefs.ext, "jpg" | "avif" | "heic" | "jxl") {
-            row = row.child(self.opt_slider(
-                SliderKey::ExportQuality,
-                "quality",
-                format!("{}", prefs.quality),
-                prefs.quality as f32 / 100.0,
-                (1.0, 100.0, 1.0),
-                p,
-                cx,
+            body = body.child(section(
+                "Quality",
+                self.opt_slider(
+                    SliderKey::ExportQuality,
+                    "quality",
+                    format!("{}", prefs.quality),
+                    prefs.quality as f32 / 100.,
+                    (1., 100., 1.),
+                    p,
+                    cx,
+                )
+                .into_any_element(),
             ));
         }
         if matches!(
             prefs.ext,
             "png" | "tif" | "exr" | "ff" | "avif" | "heic" | "jxl"
         ) {
-            for (bits, on) in [(8u8, !prefs.depth16), (16u8, prefs.depth16)] {
-                row = row.child(
-                    chip(
-                        ("export-depth", bits as usize),
-                        format!("{bits}-bit"),
-                        on,
-                        p,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.export_prefs.depth16 = bits == 16;
-                        cx.notify();
-                    })),
+            let mut controls = crate::widgets::command_bar("export-depth", "Bit depth");
+            for bits in [8usize, 16] {
+                controls = controls.child(
+                    Button::new(("export-depth", bits))
+                        .small()
+                        .ghost()
+                        .label(format!("{bits}-bit"))
+                        .selected(prefs.depth16 == (bits == 16))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.export_prefs.depth16 = bits == 16;
+                            cx.notify();
+                        })),
                 );
             }
+            body = body.child(section("Bit depth", controls.into_any_element()));
         }
         if matches!(prefs.ext, "png" | "jpg" | "tif" | "webp") {
-            row = row.child(div().text_sm().child("Size"));
+            let mut controls = crate::widgets::command_bar("export-size", "Output size");
             for (key, name, scale) in [
                 ("full", "Full", ExportScale::Full),
                 ("half", "Half", ExportScale::Half),
                 ("quarter", "Quarter", ExportScale::Quarter),
             ] {
-                row = row.child(
+                controls = controls.child(
                     Button::new(format!("export-size-{key}"))
                         .small()
                         .ghost()
@@ -276,12 +369,13 @@ impl EditorView {
                         })),
                 );
             }
-            row = row.child(div().text_sm().child("Output profile"));
+            body = body.child(section("Output size", controls.into_any_element()));
+            let mut controls = crate::widgets::command_bar("export-profile", "Output profile");
             for (key, name, space) in [
                 ("srgb", "sRGB", ExportColorSpace::Srgb),
                 ("adobe", "Adobe RGB", ExportColorSpace::AdobeRgb),
             ] {
-                row = row.child(
+                controls = controls.child(
                     Button::new(format!("export-profile-{key}"))
                         .small()
                         .ghost()
@@ -293,15 +387,24 @@ impl EditorView {
                         })),
                 );
             }
+            body = body.child(section("Output profile", controls.into_any_element()));
+            if prefs.color_space == ExportColorSpace::AdobeRgb {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child("Converts existing sRGB colors; does not recover clipped gamut."),
+                );
+            }
             if prefs.ext != "webp" {
-                row = row.child(div().text_sm().child("Resolution"));
+                let mut controls = crate::widgets::command_bar("export-ppi", "Resolution");
                 for (key, name, dpi) in [
                     ("none", "Unspecified", None),
                     ("72", "72 ppi", Some(72)),
                     ("240", "240 ppi", Some(240)),
                     ("300", "300 ppi", Some(300)),
                 ] {
-                    row = row.child(
+                    controls = controls.child(
                         Button::new(format!("export-ppi-{key}"))
                             .small()
                             .ghost()
@@ -313,45 +416,25 @@ impl EditorView {
                             })),
                     );
                 }
-            }
-            if prefs.color_space == ExportColorSpace::AdobeRgb {
-                row = row.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Converts existing sRGB colors; does not recover clipped gamut"),
-                );
+                body = body.child(section("Resolution", controls.into_any_element()));
             }
         }
-        let note = match prefs.ext {
-            "jpg" | "avif" | "heic" => "flat image · lossy · no transparency for JPEG",
-            "jxl" => "flat image · lossy below quality 100",
-            "webp" | "qoi" | "ff" | "tga" | "bmp" => "flat image · lossless",
-            "psd" => "layers kept · adjustments and styles flattened into pixels",
-            "xcf" => "visible layers kept, 8-bit · hidden layers left out",
-            "gif" => "flat image · 256 colours",
-            "ppm" | "hdr" | "pdf" => "flat image · no transparency",
-            "ico" => "flat image · 256 px at most",
-            _ => "flat image · lossless",
-        };
-        row = row
-            .child(mono(note, 10., p.muted))
-            .child(div().flex_1())
-            .child(
-                button("export-go", "Export…", true, p).on_click(cx.listener(
-                    |_, _, window, cx| {
-                        window.dispatch_action(Box::new(crate::actions::Export), cx);
-                    },
-                )),
-            )
-            .child(
-                button("export-cancel", "Cancel", false, p).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.export_prefs.open = false;
-                        cx.notify();
-                    },
-                )),
-            );
-        Some(row.into_any_element())
+        if let Some((_, _, help)) = FORMATS
+            .iter()
+            .chain(MORE_FORMATS)
+            .find(|(ext, _, _)| *ext == prefs.ext)
+        {
+            body = body.child(div().text_xs().text_color(p.muted).child(*help));
+        }
+        if self.editor.kind().is_some() {
+            body = body.child(section("Project export", self.project_export_options(cx)));
+        }
+        body.into_any_element()
+    }
+
+    fn confirm_export_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_export_dialog(window, cx);
+        window.focus(&self.canvas_focus, cx);
+        window.dispatch_action(Box::new(crate::actions::ConfirmExport), cx);
     }
 }
