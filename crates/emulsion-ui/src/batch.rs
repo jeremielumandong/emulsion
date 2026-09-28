@@ -585,6 +585,15 @@ impl Workspace {
         .detach();
     }
 
+    pub(super) fn library_edit_photo_button(&self, cx: &mut Context<Self>) -> Button {
+        Button::new("library-open-photo")
+            .label(if self.batch.develop.saving { "Saving edits…" } else { "Edit in Photo…" })
+            .tooltip("Open the saved development as a new Photo document for layers and retouching. Later Library edits will not change it.")
+            .disabled(self.batch.current.is_none() || self.batch.develop.dirty() || self.batch.develop.saving)
+            .small().ghost()
+            .on_click(cx.listener(|this, _, window, cx| this.library_open_photo(window, cx)))
+    }
+
     pub(crate) fn open_library_develop(
         &mut self,
         path: PathBuf,
@@ -636,15 +645,28 @@ impl Workspace {
                         &raw.source,
                         &raw.source_sha256,
                     )?;
-                    emulsion_io::photo_develop::create_virtual(
+                    let root = emulsion_io::creative_library::root();
+                    let copy = emulsion_io::photo_develop::create_virtual(
                         &raw.source,
                         raw.params,
-                        &emulsion_io::creative_library::root().join("virtual-copies"),
-                    )
+                        &root.join("virtual-copies"),
+                    )?;
+                    let (catalog, _) = emulsion_io::creative_library::update(&root, |catalog| {
+                        catalog.add_asset(
+                            copy.clone(),
+                            emulsion_io::creative_library::AssetKind::Image,
+                        )?;
+                        Ok(())
+                    })?;
+                    Ok::<_, emulsion_io::IoError>((copy, catalog))
                 })
                 .await;
             this.update_in(cx, |this, window, cx| match result {
-                Ok(path) => this.open_library_develop(path, window, cx),
+                Ok((path, catalog)) => {
+                    this.batch.library.catalog = catalog;
+                    this.batch.library.loaded = true;
+                    this.open_library_develop(path, window, cx);
+                }
                 Err(error) => {
                     this.error = Some(error.to_string().into());
                     cx.notify();
@@ -1600,24 +1622,7 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .child(
-                Button::new("library-open-photo")
-                    .label(if self.batch.develop.saving {
-                        "Saving edits…"
-                    } else {
-                        "Edit in Photo…"
-                    })
-                    .disabled(
-                        self.batch.current.is_none()
-                            || self.batch.develop.dirty()
-                            || self.batch.develop.saving,
-                    )
-                    .small()
-                    .ghost()
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.library_open_photo(window, cx)),
-                    ),
-            )
+            .child(self.library_edit_photo_button(cx))
             .child(
                 Button::new("library-list-view")
                     .label("List")

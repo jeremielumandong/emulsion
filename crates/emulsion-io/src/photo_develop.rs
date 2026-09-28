@@ -509,6 +509,40 @@ pub fn matched_lens(path: &Path) -> Result<emulsion_core::raw::LensCorrection> {
 mod tests {
     use super::*;
     #[test]
+    fn library_handoff_bakes_saved_recipe_and_protects_rgb_and_virtual_originals() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("photo.png");
+        let original = crate::export::png8(4, 2, &[90, 130, 160, 255].repeat(8)).unwrap();
+        std::fs::write(&file, &original).unwrap();
+        let source = PhotoSource::load(&file).unwrap();
+        let params = DevelopParams {
+            exposure: 0.75,
+            rotation: 1,
+            ..Default::default()
+        };
+        source.save(params).unwrap();
+        let copy = create_virtual(&file, params, &dir.path().join("copies")).unwrap();
+        for path in [&file, &copy] {
+            let doc = open_developed_photo(path).unwrap();
+            assert!(doc.raw.is_none());
+            assert_eq!(doc.raw_originals, vec![file.canonicalize().unwrap()]);
+            let pixels = emulsion_raster::composite::flatten(&doc.composite_tree(), 0).to_pixels();
+            assert_eq!(pixels, source.develop_with(&params).unwrap().to_pixels());
+            assert_eq!((doc.width, doc.height), (2, 4));
+            let native = dir.path().join("edited.ora");
+            crate::save(&doc, &native).unwrap();
+            let reopened = crate::open(&native).unwrap();
+            assert!(reopened.raw.is_none());
+            assert_eq!(reopened.raw_originals, doc.raw_originals);
+            assert_eq!(
+                emulsion_raster::composite::flatten(&reopened.composite_tree(), 0).to_pixels(),
+                pixels
+            );
+        }
+        assert_eq!(std::fs::read(file).unwrap(), original);
+    }
+
+    #[test]
     fn rendered_photo_sidecars_preserve_original_depth_alpha_and_history() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("photo.png");

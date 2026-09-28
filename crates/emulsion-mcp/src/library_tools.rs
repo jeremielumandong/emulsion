@@ -579,7 +579,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "open_library_photo",
-            "Open the active saved Library image in Photo. Rejects unsaved RAW drafts. Returns the opened document ID; RAW Photo tools operate through that document's assistant relay.",
+            "Open the active saved Library image as an independent developed Photo document for layers and retouching. Rejects unsaved development drafts. Returns the opened document ID. RAW development remains in Library; subsequent Library edits do not update this Photo document.",
             json!({}),
             &[],
         ),

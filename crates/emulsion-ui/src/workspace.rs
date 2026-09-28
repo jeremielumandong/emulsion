@@ -1078,12 +1078,7 @@ impl Workspace {
                     match result {
                         Ok(opened) => {
                             let native = emulsion_io::is_native(&path);
-                            let (mut doc, graph, broken) = (opened.doc, opened.graph, opened.history_error);
-                            if developed_photo {
-                                if let Some(raw) = doc.raw.take() {
-                                    if !doc.raw_originals.contains(&raw.source) { doc.raw_originals.push(raw.source); }
-                                }
-                            }
+                            let (doc, graph, broken) = (opened.doc, opened.graph, opened.history_error);
                             this.recents = recent::push(&path, summary(&doc));
                             this.install(
                                 doc,

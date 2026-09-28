@@ -100,8 +100,7 @@ fn opening_raw_routes_to_library_then_hands_developed_pixels_to_photo(cx: &mut T
         rotation: 1,
         ..raw.params
     };
-    emulsion_io::raw_settings::save_photo_settings(&fixture.0, &raw.source_sha256, &params)
-        .unwrap();
+    emulsion_io::raw_settings::save_photo_settings(&fixture.0, &raw.source_sha256, params).unwrap();
     let expected = emulsion_io::photo_develop::open_developed_photo(&fixture.0).unwrap();
     let expected_pixels =
         emulsion_raster::composite::flatten(&expected.composite_tree(), 0).to_srgba8();
@@ -114,7 +113,7 @@ fn opening_raw_routes_to_library_then_hands_developed_pixels_to_photo(cx: &mut T
         assert!(matches!(ws.read(cx).screen, Screen::Batch));
         assert_eq!(ws.read(cx).editor.as_ref().unwrap(), &previous);
         assert!(window.find("library-histogram-panel").visible());
-        window.click("library-compare-view", cx);
+        window.click("library-before-after", cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -611,11 +610,10 @@ fn raw_settings_picker_rejects_stale_document_before_writing(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn raw_real_dng_preview_and_clipping_buttons_leave_history_unchanged_and_escape_restores_view(
+fn legacy_raw_preview_and_clipping_leave_history_unchanged_and_escape_restores_view(
     cx: &mut TestAppContext,
 ) {
     use emulsion_raster::composite::flatten;
-    use gpui_kit::test::TestWindowExt;
 
     let path = std::env::temp_dir().join(format!(
         "emulsion-ui-raw-preview-{}-{}.dng",
@@ -717,4 +715,42 @@ fn raw_real_dng_preview_and_clipping_buttons_leave_history_unchanged_and_escape_
         });
     }
     std::fs::remove_file(&path).unwrap();
+}
+
+#[gpui_kit::test]
+fn legacy_photo_development_copies_unsaved_recipe_without_altering_layers(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+    let fixture = SidecarFixture::new();
+    let mut document = emulsion_io::open(&fixture.0).unwrap();
+    document.raw.as_mut().unwrap().params.exposure = 0.7;
+    let before = document.clone();
+    let (ws, cx) = open(cx, document);
+    let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("photo-edit-raw-library", cx));
+    cx.run_until_parked();
+    let copy = cx.update(|_, cx| {
+        let ws = ws.read(cx);
+        assert!(matches!(ws.screen, crate::workspace::Screen::Batch));
+        assert_eq!(editor.read(cx).editor.doc, before);
+        ws.batch.items[ws.batch.current.unwrap()].path.clone()
+    });
+    let reference = emulsion_io::open(&copy).unwrap().raw.unwrap();
+    assert_eq!(reference.source, fixture.0.canonicalize().unwrap());
+    assert_eq!(
+        emulsion_io::raw_settings::adjacent_settings(
+            &copy,
+            &emulsion_io::raw::source_digest(&copy).unwrap()
+        )
+        .unwrap(),
+        before.raw.unwrap().params
+    );
+    assert!(!fixture.sidecar().exists());
+    std::fs::remove_file(emulsion_io::raw_settings::sidecar_path(&copy).unwrap()).unwrap();
+    emulsion_io::creative_library::update(&emulsion_io::creative_library::root(), |catalog| {
+        catalog.assets.retain(|asset| asset.path != copy);
+        Ok(())
+    })
+    .unwrap();
+    std::fs::remove_file(copy).unwrap();
 }
