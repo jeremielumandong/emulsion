@@ -495,7 +495,7 @@ impl EditorView {
         } else {
             None
         };
-        let width = if connector.is_some() { 460. } else { 260. };
+        let width = if connector.is_some() { 495. } else { 295. };
         let x = (((left + right) / 2.) as f32 - width / 2.)
             .clamp(8., (f32::from(canvas.size.width) - width - 8.).max(8.));
         let y = (top as f32 - 48.).clamp(8., (f32::from(canvas.size.height) - 44.).max(8.));
@@ -557,6 +557,17 @@ impl EditorView {
                         .on_click(
                             cx.listener(|v, _, w, cx| v.diagram_color_dialog("stroke", w, cx)),
                         ),
+                )
+                .child(
+                    Button::new("diagram-object-text-color")
+                        .label("A̲")
+                        .accessibility_label("Text color")
+                        .tooltip("Text color")
+                        .xsmall()
+                        .ghost()
+                        .size(px(32.))
+                        .disabled(locked)
+                        .on_click(cx.listener(|v, _, w, cx| v.diagram_color_dialog("text", w, cx))),
                 )
                 .child(
                     button("diagram-object-text", "Edit text", "type")

@@ -346,6 +346,10 @@ impl EditorView {
             )
             .child(marker_button(false))
             .child(
+                button("diagram-connector-text-color", "A̲", "Text color")
+                    .on_click(cx.listener(|v, _, w, cx| v.diagram_color_dialog("text", w, cx))),
+            )
+            .child(
                 button("diagram-connector-label", "T", "Edit connector label")
                     .on_click(cx.listener(|v, _, w, cx| v.diagram_edit_caption(w, cx))),
             )

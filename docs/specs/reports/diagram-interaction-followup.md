@@ -47,3 +47,9 @@ Move commit: 0.20 ms. Evidence: `target/diagram-interaction-review/verified-impo
 This fixture still selects the SVG fallback despite a GPU engine scene being available; engine startup logs alone do not prove GPU canvas selection. The mixed-bitmap eligibility change does **not** remove this fixture's fallback bottleneck. Further work is needed to accelerate unsupported SVG content during pan/zoom. No 60-fps or general performance-improvement claim is made from this run.
 
 The final development AppImage, including the selection-handle revision, opened the same draw.io import in an isolated native GUI smoke run and remained running until deliberately closed. Packaged GUI connector gestures were not automated; those are covered by the native UI event tests above. The candidate is `target/diagram-interaction-review/appimage/Emulsion-0.0.3-x86_64.AppImage`; the installed release was not overwritten.
+
+## Rounded elbow segment drag correction
+
+The displayed rounded path contains two anchors around each elbow. Editing those display anchors as waypoints left the original corner behind when the middle segment moved. Orthogonal segment gestures now obtain the unrounded route from the shared router and move its logical corners; preview and commit then reapply the requested corner radius.
+
+All 29 diagram UI tests pass, including a new real mouse-drag regression requiring both ends of a rounded horizontal segment to move together, exactly two interior waypoints, unchanged endpoint attachments, and one-step undo restoring the original model. Log: `/tmp/emulsion-elbow-tests.log`.

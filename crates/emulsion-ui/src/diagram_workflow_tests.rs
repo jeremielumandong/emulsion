@@ -513,7 +513,7 @@ fn diagram_color_dialog_applies_to_selection_and_cancel_keeps_original(cx: &mut 
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert_eq!(view.read(cx).editor.doc, original);
-        window.click("diagram-color-text", cx);
+        window.click("diagram-object-text-color", cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -1664,6 +1664,86 @@ fn curved_connector_drag_hits_visible_curve_and_keeps_endpoints(cx: &mut TestApp
         assert_eq!(changed.source, edge.source);
         assert_eq!(changed.target, edge.target);
         assert_ne!(changed.waypoints, edge.waypoints);
+        assert_eq!(changed.routing, edge.routing);
+        e.editor.doc.validate().unwrap();
+        window.click("project-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc.diagram, original));
+}
+
+#[gpui_kit::test]
+fn rounded_elbow_segment_drag_moves_both_corners_without_stubs(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton};
+    let imported = emulsion_io::drawio::from_xml(r#"<mxGraphModel pageWidth="800" pageHeight="600"><root>
+        <mxCell id="0"/><mxCell id="1" parent="0"/>
+        <mxCell id="a" vertex="1" parent="1"><mxGeometry x="80" y="80" width="100" height="80"/></mxCell>
+        <mxCell id="b" vertex="1" parent="1"><mxGeometry x="560" y="400" width="100" height="80"/></mxCell>
+        <mxCell id="e" edge="1" parent="1" source="a" target="b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;endArrow=none;exitX=0.5;exitY=1;entryX=0.5;entryY=0;"><mxGeometry relative="1"><Array as="points"><mxPoint x="130" y="280"/><mxPoint x="610" y="280"/></Array></mxGeometry></mxCell>
+        </root></mxGraphModel>"#).unwrap();
+    let doc = imported.project.pages[0].doc.clone();
+    let (&id, edge) = doc.diagram.as_ref().unwrap().edges.iter().next().unwrap();
+    let edge = edge.clone();
+    let original = doc.diagram.clone();
+    assert!(edge.corner_radius > 0.);
+    let point = (370., 280.);
+    let (ws, cx) = open(cx, doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap(),
+                "Curve".into(),
+                window,
+                cx,
+            )
+        });
+        let view = ws.read(cx).editor.clone().unwrap();
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![id], Some(id));
+            cx.notify();
+        });
+        view
+    });
+    cx.run_until_parked();
+    let (from, to, revision) = cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert!(
+            e.transform_box().is_none(),
+            "connectors use line handles, not a transform rectangle"
+        );
+        assert!(
+            e.layer_outline().is_none(),
+            "connectors have no layer bounding rectangle"
+        );
+        (
+            e.doc_to_window(point).unwrap(),
+            e.doc_to_window((point.0, point.1 + 65.)).unwrap(),
+            e.editor.revision,
+        )
+    });
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.revision, revision));
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let e = view.read(cx);
+        let changed = &e.editor.doc.diagram.as_ref().unwrap().edges[&id];
+        assert_eq!(changed.source, edge.source);
+        assert_eq!(changed.target, edge.target);
+        assert_eq!(
+            changed.waypoints.len(),
+            2,
+            "rounded corner anchors must not become stray waypoints"
+        );
+        for (actual, expected) in changed.waypoints.iter().zip([(130., 345.), (610., 345.)]) {
+            assert!(
+                (actual.0 - expected.0).abs() < 1. && (actual.1 - expected.1).abs() < 1.,
+                "both elbow corners must follow the dragged middle segment: {actual:?}"
+            );
+        }
         assert_eq!(changed.routing, edge.routing);
         e.editor.doc.validate().unwrap();
         window.click("project-undo", cx);

@@ -1392,10 +1392,10 @@ impl Workspace {
             )
             .child(
                 Button::new("library-assistant")
-                    .label("Ask Library…")
+                    .label("Ask Library · F1")
                     .small()
                     .ghost()
-                    .on_click(cx.listener(|this, _, window, cx| this.library_ask(window, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.open_assistant(window, cx))),
             )
             .child(
                 div()

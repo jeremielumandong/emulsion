@@ -59,6 +59,7 @@ impl EditorView {
         if self.selected == Some(edge.label) {
             return false;
         }
+        let route = diagram::ConnectorPreview::new(&self.editor.doc).unwrap();
         let mut curve_point = None;
         let segment = if distance(ends[usize::from(!source)]) * self.view.zoom > 12. {
             let Some(Node {
@@ -116,7 +117,22 @@ impl EditorView {
                 curve_point = Some(index);
                 Some((points, index))
             } else {
-                let points: Vec<_> = line.anchors.iter().map(|a| a.p).collect();
+                // Rounded path anchors describe the two ends of each corner arc,
+                // not the logical elbow. Moving those anchors leaves the old
+                // corner behind. Edit the unrounded routing skeleton instead.
+                let points: Vec<_> = if edge.routing == diagram::Routing::Orthogonal {
+                    let mut skeleton = edge.clone();
+                    skeleton.corner_radius = 0.;
+                    let Some(path) = route.path(&skeleton) else {
+                        return false;
+                    };
+                    let Some(line) = path.subpaths.first() else {
+                        return false;
+                    };
+                    line.anchors.iter().map(|a| a.p).collect()
+                } else {
+                    line.anchors.iter().map(|a| a.p).collect()
+                };
                 let nearest = points
                     .windows(2)
                     .enumerate()
@@ -154,7 +170,7 @@ impl EditorView {
             start: point,
             segment,
             curve_point,
-            route: diagram::ConnectorPreview::new(&self.editor.doc).unwrap(),
+            route,
         });
         self.notify_canvas(cx);
         cx.notify();

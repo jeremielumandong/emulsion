@@ -1884,6 +1884,14 @@ impl Workspace {
     pub(crate) fn library_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.batch.assistant_host.is_none() {
             let workspace = cx.weak_entity();
+            // This host has no canvas. Closing its input returns keyboard control
+            // to the Library instead of focusing an unmounted editor surface.
+            let return_focus = self
+                .batch
+                .library
+                .focus
+                .get_or_insert_with(|| cx.focus_handle())
+                .clone();
             let host = cx.new(|cx| {
                 let mut editor = crate::editor::EditorView::new(
                     Document::new(1, 1),
@@ -1893,6 +1901,7 @@ impl Workspace {
                     "Library".into(),
                     cx,
                 );
+                editor.canvas_focus = return_focus;
                 editor.library_only = true;
                 editor.library_workspace = Some(workspace);
                 editor

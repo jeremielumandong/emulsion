@@ -248,6 +248,22 @@ impl Workspace {
         }
     }
 
+    /// Route every assistant entry point to the workspace currently on screen.
+    pub(crate) fn open_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.screen == Screen::Batch {
+            self.library_ask(window, cx);
+            return;
+        }
+        if self.style_dialog_open(cx) {
+            return;
+        }
+        if let Some(editor) = self.editor.clone() {
+            self.set_screen(Screen::Editor, window, cx);
+            editor.update(cx, |editor, cx| editor.open_ask(window, cx));
+            cx.notify();
+        }
+    }
+
     fn style_dialog_open(&self, cx: &App) -> bool {
         self.editor.as_ref().is_some_and(|editor| {
             let ui = &editor.read(cx).styles_ui;
@@ -2329,14 +2345,7 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.toggle_selected_visible(cx))
             }))
             .on_action(cx.listener(|this, _: &Ask, window, cx| {
-                if this.style_dialog_open(cx) {
-                    return;
-                }
-                if let Some(e) = this.editor.clone() {
-                    this.set_screen(Screen::Editor, window, cx);
-                    e.update(cx, |e, cx| e.open_ask(window, cx));
-                    cx.notify();
-                }
+                this.open_assistant(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ToolPen, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_pen_mode(crate::editor::PenMode::Pen, cx))
