@@ -455,97 +455,237 @@ fn graph_edits_and_history_accounting_never_force_cpu_vector_pixels() {
 
 #[test]
 fn rounded_and_jumped_routes_transform_semantic_bends_without_decorative_anchors() {
-    for (radius,jump) in [(6.,JumpStyle::None),(0.,JumpStyle::Arc),(6.,JumpStyle::Arc)] {
-        let (mut e,a,b,id)=fixture();
-        let mut model=e.doc.diagram.as_deref().unwrap().clone();
-        let edge=model.edges.get_mut(&id).unwrap();edge.corner_radius=radius;edge.jump_style=jump;edge.waypoints=vec![(230.,70.),(230.,190.)];
-        e.execute(Command::SetDiagram{diagram:Some(Arc::new(model))}).unwrap();
-        let before=e.doc.clone();
-        e.execute(Command::TransformNodes{ids:vec![a,b,id],transform:[1.,0.,0.,1.,50.,30.]}).unwrap();
-        assert_eq!(e.doc.diagram.as_ref().unwrap().edges[&id].waypoints,vec![(280.,100.),(280.,220.)]);
-        e.undo();assert_eq!(e.doc,before);
-        e.execute(Command::TranslateNode{id,dx:25.,dy:12.}).unwrap();
-        assert_eq!(e.doc.diagram.as_ref().unwrap().edges[&id].waypoints,vec![(255.,82.),(255.,202.)]);
-        e.undo();assert_eq!(e.doc,before);
+    for (radius, jump) in [
+        (6., JumpStyle::None),
+        (0., JumpStyle::Arc),
+        (6., JumpStyle::Arc),
+    ] {
+        let (mut e, a, b, id) = fixture();
+        let mut model = e.doc.diagram.as_deref().unwrap().clone();
+        let edge = model.edges.get_mut(&id).unwrap();
+        edge.corner_radius = radius;
+        edge.jump_style = jump;
+        edge.waypoints = vec![(230., 70.), (230., 190.)];
+        e.execute(Command::SetDiagram {
+            diagram: Some(Arc::new(model)),
+        })
+        .unwrap();
+        let before = e.doc.clone();
+        e.execute(Command::TransformNodes {
+            ids: vec![a, b, id],
+            transform: [1., 0., 0., 1., 50., 30.],
+        })
+        .unwrap();
+        assert_eq!(
+            e.doc.diagram.as_ref().unwrap().edges[&id].waypoints,
+            vec![(280., 100.), (280., 220.)]
+        );
+        e.undo();
+        assert_eq!(e.doc, before);
+        e.execute(Command::TranslateNode {
+            id,
+            dx: 25.,
+            dy: 12.,
+        })
+        .unwrap();
+        assert_eq!(
+            e.doc.diagram.as_ref().unwrap().edges[&id].waypoints,
+            vec![(255., 82.), (255., 202.)]
+        );
+        e.undo();
+        assert_eq!(e.doc, before);
     }
 }
 
 #[test]
 fn edge_attachments_follow_reroutes_reject_cycles_and_delete_transitively() {
-    let (mut e,a,b,parent)=fixture();
-    let child=connect(&mut e,Endpoint{shape:parent,port:Port::Custom{x:0.5,y:0.}},Endpoint{shape:b,port:Port::South},"Branch",Routing::Straight).unwrap();
-    let old=path(&e,child);
-    e.execute(Command::TranslateNode{id:a,dx:30.,dy:60.}).unwrap();
-    assert_ne!(path(&e,child),old);
-    let point=endpoint_position(&e.doc,&Endpoint{shape:parent,port:Port::Custom{x:0.5,y:0.}},(0.,0.)).unwrap();
-    assert_eq!(path(&e,child).subpaths[0].anchors[0].p,point);
-    let before=e.doc.clone();
-    let mut model=(**e.doc.diagram.as_ref().unwrap()).clone();
-    model.edges.get_mut(&parent).unwrap().source.shape=child;
-    assert!(e.execute(Command::SetDiagram{diagram:Some(Arc::new(model))}).is_err());
-    assert_eq!(e.doc,before);
-    e.execute(Command::RemoveNode{id:parent}).unwrap();
+    let (mut e, a, b, parent) = fixture();
+    let child = connect(
+        &mut e,
+        Endpoint {
+            shape: parent,
+            port: Port::Custom { x: 0.5, y: 0. },
+        },
+        Endpoint {
+            shape: b,
+            port: Port::South,
+        },
+        "Branch",
+        Routing::Straight,
+    )
+    .unwrap();
+    let old = path(&e, child);
+    e.execute(Command::TranslateNode {
+        id: a,
+        dx: 30.,
+        dy: 60.,
+    })
+    .unwrap();
+    assert_ne!(path(&e, child), old);
+    let point = endpoint_position(
+        &e.doc,
+        &Endpoint {
+            shape: parent,
+            port: Port::Custom { x: 0.5, y: 0. },
+        },
+        (0., 0.),
+    )
+    .unwrap();
+    assert_eq!(path(&e, child).subpaths[0].anchors[0].p, point);
+    let before = e.doc.clone();
+    let mut model = (**e.doc.diagram.as_ref().unwrap()).clone();
+    model.edges.get_mut(&parent).unwrap().source.shape = child;
+    assert!(
+        e.execute(Command::SetDiagram {
+            diagram: Some(Arc::new(model))
+        })
+        .is_err()
+    );
+    assert_eq!(e.doc, before);
+    e.execute(Command::RemoveNode { id: parent }).unwrap();
     assert!(!e.doc.diagram.as_ref().unwrap().edges.contains_key(&child));
-    e.undo();assert_eq!(e.doc,before);
-    let fragment=crate::fragment::Fragment::capture(&e.doc,&[a,b]).unwrap();
-    assert_eq!(fragment.diagram.as_ref().unwrap().edges.len(),2);
-    fragment.paste(&mut e,Slot::TOP,(20.,20.)).unwrap();e.doc.validate().unwrap();
+    e.undo();
+    assert_eq!(e.doc, before);
+    let fragment = crate::fragment::Fragment::capture(&e.doc, &[a, b]).unwrap();
+    assert_eq!(fragment.diagram.as_ref().unwrap().edges.len(), 2);
+    fragment.paste(&mut e, Slot::TOP, (20., 20.)).unwrap();
+    e.doc.validate().unwrap();
 }
 
 #[test]
 fn double_lines_and_label_pills_follow_style_text_and_undo() {
-    let (mut e,a,_,id)=fixture();
-    let original=e.doc.clone();let mut model=(**e.doc.diagram.as_ref().unwrap()).clone();
-    let edge=model.edges.get_mut(&id).unwrap();edge.double_line=true;edge.label_background=Some([255;4]);
-    e.execute(Command::SetDiagram{diagram:Some(Arc::new(model))}).unwrap();
-    let edge=&e.doc.diagram.as_ref().unwrap().edges[&id];
-    let double=edge.double_path.unwrap();let pill=edge.label_background_path.unwrap();
-    assert!(matches!(&e.doc.node(double).unwrap().kind,NodeKind::Path{path,..} if !path.is_empty()));
-    let old=e.doc.node(pill).unwrap().clone();
-    e.execute(Command::TranslateNode{id:a,dx:60.,dy:0.}).unwrap();
-    assert_ne!(e.doc.node(pill),Some(&old));
-    e.undo();e.undo();assert_eq!(e.doc,original);
+    let (mut e, a, _, id) = fixture();
+    let original = e.doc.clone();
+    let mut model = (**e.doc.diagram.as_ref().unwrap()).clone();
+    let edge = model.edges.get_mut(&id).unwrap();
+    edge.double_line = true;
+    edge.label_background = Some([255; 4]);
+    e.execute(Command::SetDiagram {
+        diagram: Some(Arc::new(model)),
+    })
+    .unwrap();
+    let edge = &e.doc.diagram.as_ref().unwrap().edges[&id];
+    let double = edge.double_path.unwrap();
+    let pill = edge.label_background_path.unwrap();
+    assert!(
+        matches!(&e.doc.node(double).unwrap().kind,NodeKind::Path{path,..} if !path.is_empty())
+    );
+    let old = e.doc.node(pill).unwrap().clone();
+    e.execute(Command::TranslateNode {
+        id: a,
+        dx: 60.,
+        dy: 0.,
+    })
+    .unwrap();
+    assert_ne!(e.doc.node(pill), Some(&old));
+    e.undo();
+    e.undo();
+    assert_eq!(e.doc, original);
 }
 
 #[test]
 fn curved_crossings_keep_beziers_and_do_not_accumulate_bridges() {
-    let mut b=Builder::new(600,400).unwrap();
-    let mut ids=Vec::new();
-    for bounds in [[10.,190.,20.,20.],[550.,190.,20.,20.],[290.,10.,20.,20.],[290.,370.,20.,20.]] {
-        ids.push(b.add_shape(ShapeKind::Process,bounds,"").unwrap());
+    let mut b = Builder::new(600, 400).unwrap();
+    let mut ids = Vec::new();
+    for bounds in [
+        [10., 190., 20., 20.],
+        [550., 190., 20., 20.],
+        [290., 10., 20., 20.],
+        [290., 370., 20., 20.],
+    ] {
+        ids.push(b.add_shape(ShapeKind::Process, bounds, "").unwrap());
     }
-    b.connect(Endpoint{shape:ids[2],port:Port::South},Endpoint{shape:ids[3],port:Port::North},"",Routing::Straight).unwrap();
-    let curved=b.connect(Endpoint{shape:ids[0],port:Port::East},Endpoint{shape:ids[1],port:Port::West},"",Routing::Curved).unwrap();
-    let mut e=Editor::new(b.finish().unwrap(),None);
-    let mut model=(**e.doc.diagram.as_ref().unwrap()).clone();
-    let edge=model.edges.get_mut(&curved).unwrap();edge.waypoints=vec![(200.,120.),(400.,280.)];edge.jump_style=JumpStyle::Gap;
-    e.execute(Command::SetDiagram{diagram:Some(Arc::new(model))}).unwrap();
-    let route=path(&e,curved);assert!(route.subpaths.len()>1,"curve must have a crossing gap");
-    assert!(route.subpaths.iter().flat_map(|s|&s.anchors).any(|a|a.h_in!=a.p || a.h_out!=a.p));
-    e.execute(Command::Rename{id:curved,name:"Crossing".into()}).unwrap();
-    assert_eq!(path(&e,curved),route);
+    b.connect(
+        Endpoint {
+            shape: ids[2],
+            port: Port::South,
+        },
+        Endpoint {
+            shape: ids[3],
+            port: Port::North,
+        },
+        "",
+        Routing::Straight,
+    )
+    .unwrap();
+    let curved = b
+        .connect(
+            Endpoint {
+                shape: ids[0],
+                port: Port::East,
+            },
+            Endpoint {
+                shape: ids[1],
+                port: Port::West,
+            },
+            "",
+            Routing::Curved,
+        )
+        .unwrap();
+    let mut e = Editor::new(b.finish().unwrap(), None);
+    let mut model = (**e.doc.diagram.as_ref().unwrap()).clone();
+    let edge = model.edges.get_mut(&curved).unwrap();
+    edge.waypoints = vec![(200., 120.), (400., 280.)];
+    edge.jump_style = JumpStyle::Gap;
+    e.execute(Command::SetDiagram {
+        diagram: Some(Arc::new(model)),
+    })
+    .unwrap();
+    let route = path(&e, curved);
+    assert!(route.subpaths.len() > 1, "curve must have a crossing gap");
+    assert!(
+        route
+            .subpaths
+            .iter()
+            .flat_map(|s| &s.anchors)
+            .any(|a| a.h_in != a.p || a.h_out != a.p)
+    );
+    e.execute(Command::Rename {
+        id: curved,
+        name: "Crossing".into(),
+    })
+    .unwrap();
+    assert_eq!(path(&e, curved), route);
 }
 
 #[test]
 fn picked_attachment_rotates_reflects_and_undo_restores_exactly() {
-    let (mut e,a,b,edge)=fixture();
-    let mut definition=e.doc.diagram.as_ref().unwrap().edges[&edge].clone();
-    definition.source.port=Port::Custom{x:1.,y:0.25};
-    let mut model=e.doc.diagram.as_deref().unwrap().clone();
-    model.edges.insert(edge,definition);
-    e.execute(Command::SetDiagram{diagram:Some(Arc::new(model))}).unwrap();
-    let original=e.doc.clone();
-    let start=endpoint_position(&e.doc,&e.doc.diagram.as_ref().unwrap().edges[&edge].source,(0.,0.)).unwrap();
-    for matrix in [[0.,1.,-1.,0.,300.,0.],[-1.,0.,0.,1.,400.,0.],[-1.,0.,0.,-1.,200.,140.]] {
-        let transform=glam::DAffine2::from_cols_array(&matrix);
-        e.execute(Command::TransformNodes{ids:vec![a],transform:matrix}).unwrap();
-        let endpoint=&e.doc.diagram.as_ref().unwrap().edges[&edge].source;
-        let actual=endpoint_position(&e.doc,endpoint,(400.,240.)).unwrap();
-        let expected=transform.transform_point2(glam::dvec2(start.0,start.1));
-        assert!((actual.0-expected.x).abs()<1e-8 && (actual.1-expected.y).abs()<1e-8);
-        assert_eq!(e.doc.diagram.as_ref().unwrap().edges[&edge].target.shape,b);
-        let p=path(&e,edge);let first=p.subpaths[0].anchors[0].p;
-        assert!((first.0-actual.0).abs()<1e-8 && (first.1-actual.1).abs()<1e-8);
-        e.undo();assert_eq!(e.doc,original);
+    let (mut e, a, b, edge) = fixture();
+    let mut definition = e.doc.diagram.as_ref().unwrap().edges[&edge].clone();
+    definition.source.port = Port::Custom { x: 1., y: 0.25 };
+    let mut model = e.doc.diagram.as_deref().unwrap().clone();
+    model.edges.insert(edge, definition);
+    e.execute(Command::SetDiagram {
+        diagram: Some(Arc::new(model)),
+    })
+    .unwrap();
+    let original = e.doc.clone();
+    let start = endpoint_position(
+        &e.doc,
+        &e.doc.diagram.as_ref().unwrap().edges[&edge].source,
+        (0., 0.),
+    )
+    .unwrap();
+    for matrix in [
+        [0., 1., -1., 0., 300., 0.],
+        [-1., 0., 0., 1., 400., 0.],
+        [-1., 0., 0., -1., 200., 140.],
+    ] {
+        let transform = glam::DAffine2::from_cols_array(&matrix);
+        e.execute(Command::TransformNodes {
+            ids: vec![a],
+            transform: matrix,
+        })
+        .unwrap();
+        let endpoint = &e.doc.diagram.as_ref().unwrap().edges[&edge].source;
+        let actual = endpoint_position(&e.doc, endpoint, (400., 240.)).unwrap();
+        let expected = transform.transform_point2(glam::dvec2(start.0, start.1));
+        assert!((actual.0 - expected.x).abs() < 1e-8 && (actual.1 - expected.y).abs() < 1e-8);
+        assert_eq!(e.doc.diagram.as_ref().unwrap().edges[&edge].target.shape, b);
+        let p = path(&e, edge);
+        let first = p.subpaths[0].anchors[0].p;
+        assert!((first.0 - actual.0).abs() < 1e-8 && (first.1 - actual.1).abs() < 1e-8);
+        e.undo();
+        assert_eq!(e.doc, original);
     }
 }

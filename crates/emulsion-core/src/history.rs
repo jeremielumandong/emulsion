@@ -162,17 +162,22 @@ impl Editor {
         r
     }
 
-    fn execute_inner(&mut self,cmd:Command)->Result<Option<NodeId>,CommandError>{
-        let (mut next,out)=cmd.applied(&self.doc)?;
-        if !cmd.is_view_only() && !matches!(cmd,Command::SetDesign{..}) {
-            crate::design_component_inference::infer(&self.doc,&mut next);
+    fn execute_inner(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
+        let (mut next, out) = cmd.applied(&self.doc)?;
+        if !cmd.is_view_only() && !matches!(cmd, Command::SetDesign { .. }) {
+            crate::design_component_inference::infer(&self.doc, &mut next);
         }
-        if next!=self.doc {
-            let rev=self.revision;
-            let before=std::mem::replace(&mut self.doc,next);
+        if next != self.doc {
+            let rev = self.revision;
+            let before = std::mem::replace(&mut self.doc, next);
             self.bump();
             if self.txn.is_none() && !cmd.is_view_only() {
-                self.push(Step{order:0,name:cmd.label(),before,revision_before:rev});
+                self.push(Step {
+                    order: 0,
+                    name: cmd.label(),
+                    before,
+                    revision_before: rev,
+                });
             }
         }
         Ok(out)
@@ -186,8 +191,10 @@ impl Editor {
         let Some((_, baseline, baseline_revision, 1)) = &self.txn else {
             return Err(CommandError::PreviewTransaction);
         };
-        let (mut next,out)=cmd.applied(baseline)?;
-        if !cmd.is_view_only() && !matches!(cmd,Command::SetDesign{..}) {crate::design_component_inference::infer(baseline,&mut next);}
+        let (mut next, out) = cmd.applied(baseline)?;
+        if !cmd.is_view_only() && !matches!(cmd, Command::SetDesign { .. }) {
+            crate::design_component_inference::infer(baseline, &mut next);
+        }
         next.retain_raw_originals(&self.doc);
         let restored_revision = (next == *baseline).then_some(*baseline_revision);
         if next != self.doc {

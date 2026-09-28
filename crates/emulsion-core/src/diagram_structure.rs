@@ -177,8 +177,8 @@ pub(super) fn synchronize(
         let old_shape = before.diagram.as_ref().and_then(|d| d.shapes.get(id));
         let metadata_unchanged = old_shape
             .is_some_and(|old| old.kind == shape.kind && old.data.get(KEY) == shape.data.get(KEY));
-        if metadata_unchanged {
-            if let Some(Node {
+        if metadata_unchanged
+            && let Some(Node {
                 kind: NodeKind::Text { spec: old, .. },
                 ..
             }) = before.node(shape.label)
@@ -203,7 +203,6 @@ pub(super) fn synchronize(
                     continue;
                 }
             }
-        }
         let matrix = spec.transform();
         let mut local_path = (**path).clone();
         local_path.transform(matrix.inverse());

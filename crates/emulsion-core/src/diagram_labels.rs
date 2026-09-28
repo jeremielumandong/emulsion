@@ -50,7 +50,7 @@ pub(super) fn synchronize(before: &Document, doc: &mut Document, diagram: &mut D
         .map(|n| (n.id, n))
         .collect::<HashMap<_, _>>();
     let (w, h) = (doc.width, doc.height);
-    for (id,edge) in &mut diagram.edges {
+    for (id, edge) in &mut diagram.edges {
         let Some(&path_index) = indices.get(&edge.path) else {
             continue;
         };
@@ -58,9 +58,9 @@ pub(super) fn synchronize(before: &Document, doc: &mut Document, diagram: &mut D
             continue;
         };
         let path = path.clone();
-        let path_unchanged = old
-            .get(&edge.path)
-            .is_some_and(|n| matches!(&n.kind,NodeKind::Path{path:p,..} if Arc::ptr_eq(p,&path)||**p==*path));
+        let path_unchanged = old.get(&edge.path).is_some_and(
+            |n| matches!(&n.kind,NodeKind::Path{path:p,..} if Arc::ptr_eq(p,&path)||**p==*path),
+        );
         if path_unchanged && before.diagram.as_ref().and_then(|d|d.edges.get(id)).is_some_and(|e|e.labels==edge.labels)
             && edge.labels.iter().all(|l|old.get(&l.node).is_some_and(|n|indices.get(&l.node).is_some_and(|i|matches!((&n.kind,&doc.nodes[*i].kind),(NodeKind::Text{spec:a,..},NodeKind::Text{spec:b,..}) if Arc::ptr_eq(a,b))))) {continue;}
         edge.labels.retain(|l| indices.contains_key(&l.node));

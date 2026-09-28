@@ -8,7 +8,10 @@ use emulsion_core::{
     command::Alignment,
     layer_links::{Arrange, ArrangeTarget, Distribution},
 };
-use gpui_kit::component::{menu::PopupMenu, input::{Textarea, TextareaState}};
+use gpui_kit::component::{
+    input::{Textarea, TextareaState},
+    menu::PopupMenu,
+};
 
 pub(super) use emulsion_core::diagram::ObjectStyle;
 
@@ -181,8 +184,13 @@ impl EditorView {
             dialog
                 .title(title)
                 .width(px(720.))
-                .child(div().id("diagram-object-detail-input").test_support().flex_shrink_0()
-                    .child(Textarea::new(&input).h(rems(12.)).aria_label(title)))
+                .child(
+                    div()
+                        .id("diagram-object-detail-input")
+                        .test_support()
+                        .flex_shrink_0()
+                        .child(Textarea::new(&input).h(rems(12.)).aria_label(title)),
+                )
                 .footer(crate::widgets::form_dialog_footer("Save"))
                 .on_ok(move |_, _, cx| {
                     let value = input_ok.read(cx).value().to_string();
@@ -340,8 +348,18 @@ impl EditorView {
             .item(item(editor, "Copy style", ready && object, |v, _, cx| {
                 v.diagram_copy_style(cx)
             }))
-            .item(item(editor, "Set default style", ready && object, |v, _, cx| v.diagram_default_style(false,cx)))
-            .item(item(editor, "Reset default style", ready && object, |v, _, cx| v.diagram_default_style(true,cx)))
+            .item(item(
+                editor,
+                "Set default style",
+                ready && object,
+                |v, _, cx| v.diagram_default_style(false, cx),
+            ))
+            .item(item(
+                editor,
+                "Reset default style",
+                ready && object,
+                |v, _, cx| v.diagram_default_style(true, cx),
+            ))
             .item(item(
                 editor,
                 "Paste style",
@@ -383,14 +401,36 @@ impl EditorView {
                 |v, w, cx| v.diagram_annotation_dialog("alt_text", "Alternative text", w, cx),
             ))
             .separator()
-            .item(item(editor,"Edit UML fields…",ready && object,|v,w,cx|v.diagram_edit_fields(diagram::ShapeKind::Class,w,cx)))
-            .item(item(editor,"Edit ER fields…",ready && object,|v,w,cx|v.diagram_edit_fields(diagram::ShapeKind::Entity,w,cx)))
-            .item(item(editor,"Comments…",ready && object,|v,w,cx|v.diagram_comments(w,cx)))
-            .item(item(editor,"Copy link to selection",ready,|v,_,cx|v.diagram_copy_link(true,cx)))
-            .item(item(editor,"Copy link to view",true,|v,_,cx|v.diagram_copy_link(false,cx)))
-            .item(item(editor,"Open diagram link…",true,|v,w,cx|v.diagram_open_link(w,cx)))
-            .item(item(editor,"Set as thumbnail",ready,|v,_,cx|v.diagram_thumbnail(false,cx)))
-            .item(item(editor,"Reset thumbnail",true,|v,_,cx|v.diagram_thumbnail(true,cx)))
+            .item(item(
+                editor,
+                "Edit UML fields…",
+                ready && object,
+                |v, w, cx| v.diagram_edit_fields(diagram::ShapeKind::Class, w, cx),
+            ))
+            .item(item(
+                editor,
+                "Edit ER fields…",
+                ready && object,
+                |v, w, cx| v.diagram_edit_fields(diagram::ShapeKind::Entity, w, cx),
+            ))
+            .item(item(editor, "Comments…", ready && object, |v, w, cx| {
+                v.diagram_comments(w, cx)
+            }))
+            .item(item(editor, "Copy link to selection", ready, |v, _, cx| {
+                v.diagram_copy_link(true, cx)
+            }))
+            .item(item(editor, "Copy link to view", true, |v, _, cx| {
+                v.diagram_copy_link(false, cx)
+            }))
+            .item(item(editor, "Open diagram link…", true, |v, w, cx| {
+                v.diagram_open_link(w, cx)
+            }))
+            .item(item(editor, "Set as thumbnail", ready, |v, _, cx| {
+                v.diagram_thumbnail(false, cx)
+            }))
+            .item(item(editor, "Reset thumbnail", true, |v, _, cx| {
+                v.diagram_thumbnail(true, cx)
+            }))
             .item(item(editor, "Export selection…", ready, |v, w, cx| {
                 v.show_selection_export(w, cx)
             }));

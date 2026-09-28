@@ -291,7 +291,9 @@ pub(super) fn copy_group(
     }
     crate::design_variables::merge_into(&mut design, &additions);
     design.interactions.extend(additions.interactions.clone());
-    design.interaction_triggers.extend(additions.interaction_triggers.clone());
+    design
+        .interaction_triggers
+        .extend(additions.interaction_triggers.clone());
     design.overlays.extend(additions.overlays.clone());
     design.local_media.extend(additions.local_media.clone());
     design.data_bindings.extend(additions.data_bindings.clone());

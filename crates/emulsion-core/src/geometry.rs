@@ -321,7 +321,11 @@ pub(crate) fn translate_node(
             node.mask = Some(Arc::new(translated));
         }
     }
-    crate::diagram::transform_decorated_waypoints(doc,&ids,DAffine2::from_translation(dvec2(dx,dy)));
+    crate::diagram::transform_decorated_waypoints(
+        doc,
+        &ids,
+        DAffine2::from_translation(dvec2(dx, dy)),
+    );
     Ok(())
 }
 
@@ -1857,7 +1861,17 @@ mod coverage_bounds_regression_tests {
 }
 
 /// Resize a source-space layer mask with the same bilinear sampling as image resize.
-pub fn resize_layer_mask(mask: &Mask, width: u32, height: u32) -> Result<Mask,String> {
-    if width==0 || height==0 || u64::from(width)*u64::from(height)>100_000_000 { return Err("Mask dimensions exceed the image limit.".into()); }
-    Ok(remap(mask,width,height,DAffine2::from_scale(dvec2(f64::from(mask.width())/f64::from(width),f64::from(mask.height())/f64::from(height)))))
+pub fn resize_layer_mask(mask: &Mask, width: u32, height: u32) -> Result<Mask, String> {
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 100_000_000 {
+        return Err("Mask dimensions exceed the image limit.".into());
+    }
+    Ok(remap(
+        mask,
+        width,
+        height,
+        DAffine2::from_scale(dvec2(
+            f64::from(mask.width()) / f64::from(width),
+            f64::from(mask.height()) / f64::from(height),
+        )),
+    ))
 }

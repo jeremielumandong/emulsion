@@ -142,9 +142,9 @@ impl EditorView {
         let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)
             - f64::from(f32::from(canvas.origin.y));
         let text = matches!(node.kind, NodeKind::Text { .. });
-        let raster = matches!(node.kind,NodeKind::Raster{..}|NodeKind::Smart{..});
-        let plain_image=matches!(node.kind,NodeKind::Raster{..});
-        let smart_image=matches!(node.kind,NodeKind::Smart{..});
+        let raster = matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. });
+        let plain_image = matches!(node.kind, NodeKind::Raster { .. });
+        let smart_image = matches!(node.kind, NodeKind::Smart { .. });
         let chart = self.editor.doc.design.charts.contains_key(&id);
         let width = if text || chart { 350. } else { 276. };
         let x = (((left + right) / 2.) as f32 - width / 2.)
@@ -175,9 +175,15 @@ impl EditorView {
             let font = if style.font.is_empty() {
                 "Default".into()
             } else {
-                self.editor.doc.design.fonts.get(&style.font).map(|font|format!("{} (embedded)",font.family())).unwrap_or(style.font.clone())
+                self.editor
+                    .doc
+                    .design
+                    .fonts
+                    .get(&style.font)
+                    .map(|font| format!("{} (embedded)", font.family()))
+                    .unwrap_or(style.font.clone())
             };
-            let embedded_fonts=self.editor.doc.design.fonts.clone();
+            let embedded_fonts = self.editor.doc.design.fonts.clone();
             bar = bar
                 .child(
                     small_button("design-text-font", font.clone())
@@ -190,12 +196,18 @@ impl EditorView {
                                     fonts.push(bundled.into());
                                 }
                             }
-                            fonts.retain(|font| !font.starts_with("EmulsionFont-") || embedded_fonts.contains_key(font));
+                            fonts.retain(|font| {
+                                !font.starts_with("EmulsionFont-")
+                                    || embedded_fonts.contains_key(font)
+                            });
                             fonts.sort();
                             fonts.dedup();
                             for font in fonts {
                                 let owner = owner.clone();
-                                let label=embedded_fonts.get(&font).map(|f|format!("{} (embedded)",f.family())).unwrap_or(font.clone());
+                                let label = embedded_fonts
+                                    .get(&font)
+                                    .map(|f| format!("{} (embedded)", f.family()))
+                                    .unwrap_or(font.clone());
                                 menu = menu.item(PopupMenuItem::new(label).on_click(
                                     move |_, _, cx| {
                                         owner
@@ -328,22 +340,97 @@ impl EditorView {
                     .item(item(&editor, "Saved styles", true, |e, _, cx| {
                         e.show_design_section(super::design_ui::Section::Brand, cx)
                     }))
-                    .item(item(&editor,"Bind CSV data…",!locked,|e,window,cx|e.design_data_binding_dialog(window,cx)))
-                    .when(raster, |menu| menu.item(item(&editor,"Trace to vector…",!locked,move |e,window,cx|e.show_bitmap_trace(id,window,cx))))
-                    .when(raster, |menu| menu
-                        .item(item(&editor,"Replace image source…",!locked,move|e,_,cx|e.replace_photo_source_dialog(id,cx)))
-                        .item(item(&editor,"Crop image…",!locked,move|e,window,cx|e.crop_photo_source_dialog(id,window,cx)))
-                        .item(item(&editor,"Adjust image · Curves",!locked,move|e,_,cx|e.adjust_design_photo(id,"curves",cx)))
-                        .item(item(&editor,"Adjust image · Hue / saturation",!locked,move|e,_,cx|e.adjust_design_photo(id,"hue_saturation",cx)))
-                        .item(item(&editor,"Photo filter · Gaussian blur",!locked,|e,_,cx|e.apply_filter_key("gaussian_blur",cx)))
-                        .item(item(&editor,"Photo filter · Sharpen",!locked,|e,_,cx|e.apply_filter_key("unsharp_mask",cx)))
-                        .item(item(&editor,"Image effects & blending…",!locked,move|e,window,cx|e.open_blending_options(id,window,cx))))
-                    .when(plain_image,|menu|menu.item(item(&editor,"Remove image background",!locked,|e,_,cx|e.remove_background(cx))))
-                    .when(smart_image,|menu|menu
-                        .item(item(&editor,"Edit Smart source…",!locked,move|e,_,cx|e.dispatch_smart_source(emulsion_mcp::smart_source_tools::Action::Open{node:id},cx)))
-                        .item(item(&editor,"Link / relink Smart source…",!locked,move|e,_,cx|e.smart_link_dialog(id,cx)))
-                        .item(item(&editor,"Restore editable smart source",!locked,|e,_,cx|e.convert_smart_to_layers(cx))))
-
+                    .item(item(
+                        &editor,
+                        "Bind CSV data…",
+                        !locked,
+                        |e, window, cx| e.design_data_binding_dialog(window, cx),
+                    ))
+                    .when(raster, |menu| {
+                        menu.item(item(
+                            &editor,
+                            "Trace to vector…",
+                            !locked,
+                            move |e, window, cx| e.show_bitmap_trace(id, window, cx),
+                        ))
+                    })
+                    .when(raster, |menu| {
+                        menu.item(item(
+                            &editor,
+                            "Replace image source…",
+                            !locked,
+                            move |e, _, cx| e.replace_photo_source_dialog(id, cx),
+                        ))
+                        .item(item(
+                            &editor,
+                            "Crop image…",
+                            !locked,
+                            move |e, window, cx| e.crop_photo_source_dialog(id, window, cx),
+                        ))
+                        .item(item(
+                            &editor,
+                            "Adjust image · Curves",
+                            !locked,
+                            move |e, _, cx| e.adjust_design_photo(id, "curves", cx),
+                        ))
+                        .item(item(
+                            &editor,
+                            "Adjust image · Hue / saturation",
+                            !locked,
+                            move |e, _, cx| e.adjust_design_photo(id, "hue_saturation", cx),
+                        ))
+                        .item(item(
+                            &editor,
+                            "Photo filter · Gaussian blur",
+                            !locked,
+                            |e, _, cx| e.apply_filter_key("gaussian_blur", cx),
+                        ))
+                        .item(item(
+                            &editor,
+                            "Photo filter · Sharpen",
+                            !locked,
+                            |e, _, cx| e.apply_filter_key("unsharp_mask", cx),
+                        ))
+                        .item(item(
+                            &editor,
+                            "Image effects & blending…",
+                            !locked,
+                            move |e, window, cx| e.open_blending_options(id, window, cx),
+                        ))
+                    })
+                    .when(plain_image, |menu| {
+                        menu.item(item(
+                            &editor,
+                            "Remove image background",
+                            !locked,
+                            |e, _, cx| e.remove_background(cx),
+                        ))
+                    })
+                    .when(smart_image, |menu| {
+                        menu.item(item(
+                            &editor,
+                            "Edit Smart source…",
+                            !locked,
+                            move |e, _, cx| {
+                                e.dispatch_smart_source(
+                                    emulsion_mcp::smart_source_tools::Action::Open { node: id },
+                                    cx,
+                                )
+                            },
+                        ))
+                        .item(item(
+                            &editor,
+                            "Link / relink Smart source…",
+                            !locked,
+                            move |e, _, cx| e.smart_link_dialog(id, cx),
+                        ))
+                        .item(item(
+                            &editor,
+                            "Restore editable smart source",
+                            !locked,
+                            |e, _, cx| e.convert_smart_to_layers(cx),
+                        ))
+                    })
                     .item(item(&editor, "Flip horizontally", !locked, |e, _, cx| {
                         e.flip_transform_selection(true, cx)
                     }))

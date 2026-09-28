@@ -49,13 +49,15 @@ impl Stencil {
             let NodeKind::Path { style, .. } = &editor.doc.node(body).unwrap().kind else {
                 unreachable!()
             };
-            if !matches!(self.kind, ShapeKind::Class | ShapeKind::Entity) { editor
-                .execute(Command::SetPath {
-                    id: body,
-                    path: Arc::new(self.path(bounds)),
-                    style: *style,
-                })
-                .map_err(|e| e.to_string())?; }
+            if !matches!(self.kind, ShapeKind::Class | ShapeKind::Entity) {
+                editor
+                    .execute(Command::SetPath {
+                        id: body,
+                        path: Arc::new(self.path(bounds)),
+                        style: *style,
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
             if self.label_below {
                 let NodeKind::Text { spec, .. } = &editor.doc.node(label).unwrap().kind else {
                     unreachable!()
@@ -181,8 +183,20 @@ pub const STENCILS: &[Stencil] = &[
         Document
     ),
     native!("note", "Note", "General", "annotation comment sticky", Note),
-    native!("uml-class", "UML Class", "UML / Software", "attributes methods object", Class),
-    native!("entity", "Entity", "Entity relationship", "erd table record fields database sql", Entity),
+    native!(
+        "uml-class",
+        "UML Class",
+        "UML / Software",
+        "attributes methods object",
+        Class
+    ),
+    native!(
+        "entity",
+        "Entity",
+        "Entity relationship",
+        "erd table record fields database sql",
+        Entity
+    ),
     native!(
         "container",
         "Container",

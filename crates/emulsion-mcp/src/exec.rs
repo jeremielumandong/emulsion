@@ -32,25 +32,55 @@ fn node_label(doc: &Document, id: NodeId) -> String {
 /// Run `name` with `args` against `editor`. Every change goes through the
 /// Command API for document edits; brush tools commit the independent catalog.
 pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
-    if let Some(result)=crate::design_brand_tools::execute(editor,name,args) { return result; }
-    if crate::workspace_tools::NAMES.contains(&name) { return err("Workspace tools require the live Emulsion workspace relay"); }
-    if crate::creative_catalog_tools::NAMES.contains(&name) { return crate::creative_catalog_tools::execute(&emulsion_io::creative_library::root(),name,args); }
-    if let Some(result)=crate::design_interaction_tools::execute(editor,name,args){return result;}
+    if let Some(result) = crate::design_brand_tools::execute(editor, name, args) {
+        return result;
+    }
+    if crate::workspace_tools::NAMES.contains(&name) {
+        return err("Workspace tools require the live Emulsion workspace relay");
+    }
+    if crate::creative_catalog_tools::NAMES.contains(&name) {
+        return crate::creative_catalog_tools::execute(
+            &emulsion_io::creative_library::root(),
+            name,
+            args,
+        );
+    }
+    if let Some(result) = crate::design_interaction_tools::execute(editor, name, args) {
+        return result;
+    }
     if let Some(result) = crate::diagram_tools::execute(editor, name, args) {
         return result;
     }
     if let Some(result) = crate::design_motion_tools::execute(editor, name, args) {
         return result;
     }
-    if let Some(result) = crate::design_data_tools::execute(editor, name, args) { return result; }
-    if let Some(result)=crate::diagram_format_tools::execute(editor,name,args){return result;}
-    if let Some(result)=crate::photo_source_tools::execute(editor,name,args){return result;}
-    if crate::print_tools::is_tool(name){return ToolResult::error("Printer tools require a live editor host.");}
-    if crate::smart_source_tools::is_tool(name){return ToolResult::error("Smart source sessions require a live editor host.");}
-    if crate::editor_host_tools::is_tool(name){return ToolResult::error("Editor controls require a live editor host.");}
-    if crate::project_variable_tools::is_tool(name){return ToolResult::error("Project variable tools require a live project host.");}
-    if let Some(result) = crate::design_variable_tools::execute(editor, name, args) { return result; }
-    if let Some(result)=crate::design_paragraph_tools::execute(editor,name,args){return result;}
+    if let Some(result) = crate::design_data_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::diagram_format_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::photo_source_tools::execute(editor, name, args) {
+        return result;
+    }
+    if crate::print_tools::is_tool(name) {
+        return ToolResult::error("Printer tools require a live editor host.");
+    }
+    if crate::smart_source_tools::is_tool(name) {
+        return ToolResult::error("Smart source sessions require a live editor host.");
+    }
+    if crate::editor_host_tools::is_tool(name) {
+        return ToolResult::error("Editor controls require a live editor host.");
+    }
+    if crate::project_variable_tools::is_tool(name) {
+        return ToolResult::error("Project variable tools require a live project host.");
+    }
+    if let Some(result) = crate::design_variable_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_paragraph_tools::execute(editor, name, args) {
+        return result;
+    }
     if let Some(result) = crate::design_vector_tools::execute(editor, name, args) {
         return result;
     }
@@ -1437,8 +1467,15 @@ fn doc_raster(doc: &Document) -> Raster {
 
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
     if let Some(result) = crate::design_selection_export_tools::execute(doc, name, args) {
-        if result.is_error { return Err(result); }
-        return Ok(Planned { commands:Vec::new(), message:"Exported selection".into(), feedback:Some(result), deferred:None });
+        if result.is_error {
+            return Err(result);
+        }
+        return Ok(Planned {
+            commands: Vec::new(),
+            message: "Exported selection".into(),
+            feedback: Some(result),
+            deferred: None,
+        });
     }
 
     if name == "import_image" {
@@ -3999,9 +4036,10 @@ pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, T
         };
     }
     match name {
-        "list_diagram_stencils" | "describe_diagram" | "list_diagram_library" | "list_diagram_stencil_packs" => {
-            crate::diagram_tools::inspect(doc, name, args)
-        }
+        "list_diagram_stencils"
+        | "describe_diagram"
+        | "list_diagram_library"
+        | "list_diagram_stencil_packs" => crate::diagram_tools::inspect(doc, name, args),
         "get_raw_preview" => crate::raw_preview::preview(doc, args),
         "describe_raw" => crate::raw_tools::describe(doc, args),
         "get_view" => view(doc, args),

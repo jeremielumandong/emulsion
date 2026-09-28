@@ -147,15 +147,25 @@ pub fn apply(
     name: &str,
     style: &SavedStyle,
 ) -> Result<String, String> {
-    apply_portable(editor,targets,name,style,&BTreeMap::new())
+    apply_portable(editor, targets, name, style, &BTreeMap::new())
 }
 /// Apply a cross-page style together with its portable font resources.
-pub fn apply_portable(editor:&mut Editor,targets:&[NodeId],name:&str,style:&SavedStyle,fonts:&BTreeMap<String,crate::design_fonts::EmbeddedFont>)->Result<String,String>{
+pub fn apply_portable(
+    editor: &mut Editor,
+    targets: &[NodeId],
+    name: &str,
+    style: &SavedStyle,
+    fonts: &BTreeMap<String, crate::design_fonts::EmbeddedFont>,
+) -> Result<String, String> {
     if targets.is_empty() {
         return Err("Select objects to apply a style.".into());
     }
     let mut design = editor.doc.design.clone();
-    for alias in style.appearance.font_families() {if let Some(font)=fonts.get(&alias){design.fonts.insert(alias,font.clone());}}
+    for alias in style.appearance.font_families() {
+        if let Some(font) = fonts.get(&alias) {
+            design.fonts.insert(alias, font.clone());
+        }
+    }
     let name = imported_name(&design, name, style);
     design.saved_styles.insert(name.clone(), style.clone());
     let mut commands = Vec::new();

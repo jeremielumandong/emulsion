@@ -51,11 +51,19 @@ impl EditorView {
             "diagram-connector-route",
             match edge.routing {
                 Routing::Straight => "Straight",
-                Routing::Orthogonal => if edge.routing_warning.is_some(){"Elbow ⚠"}else{"Elbow"},
+                Routing::Orthogonal => {
+                    if edge.routing_warning.is_some() {
+                        "Elbow ⚠"
+                    } else {
+                        "Elbow"
+                    }
+                }
                 Routing::Curved => "Bendy",
                 Routing::Cyclical => "Cyclical",
             },
-            edge.routing_warning.as_deref().unwrap_or("Connector routing"),
+            edge.routing_warning
+                .as_deref()
+                .unwrap_or("Connector routing"),
         )
         .dropdown_menu(move |mut menu, _, _| {
             let Some(editor) = route_owner.upgrade() else {
@@ -122,12 +130,20 @@ impl EditorView {
                     v.connector_line(id, None, Some(&dash), cx)
                 }));
             }
-            menu=menu.separator();
-            for (label,double) in [("Single line",false),("Double line",true)] {
-                menu=menu.item(item(&editor,label,!locked,move |v,_,cx|v.update_diagram_edge(id,|e|e.double_line=double,cx)));
+            menu = menu.separator();
+            for (label, double) in [("Single line", false), ("Double line", true)] {
+                menu = menu.item(item(&editor, label, !locked, move |v, _, cx| {
+                    v.update_diagram_edge(id, |e| e.double_line = double, cx)
+                }));
             }
-            for (label,color) in [("No label background",None),("White label pill",Some([255;4])),("Soft blue label pill",Some([236,244,255,255]))] {
-                menu=menu.item(item(&editor,label,!locked,move |v,_,cx|v.update_diagram_edge(id,|e|e.label_background=color,cx)));
+            for (label, color) in [
+                ("No label background", None),
+                ("White label pill", Some([255; 4])),
+                ("Soft blue label pill", Some([236, 244, 255, 255])),
+            ] {
+                menu = menu.item(item(&editor, label, !locked, move |v, _, cx| {
+                    v.update_diagram_edge(id, |e| e.label_background = color, cx)
+                }));
             }
             let e = editor.clone();
             menu = menu

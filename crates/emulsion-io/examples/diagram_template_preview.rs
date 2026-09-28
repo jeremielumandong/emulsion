@@ -16,14 +16,20 @@ fn main() -> anyhow::Result<()> {
     for t in emulsion_core::diagram_library::TEMPLATES {
         let doc = t.build().map_err(anyhow::Error::msg)?;
         let editor = emulsion_core::project::ProjectEditor::new_project(
-            emulsion_core::project::ProjectKind::Diagram, doc.clone(),
-        ).map_err(anyhow::Error::msg)?;
+            emulsion_core::project::ProjectKind::Diagram,
+            doc.clone(),
+        )
+        .map_err(anyhow::Error::msg)?;
         let mut project = editor.snapshot().unwrap();
         project.pages[0].meta.name = t.name.into();
         let native_path = directory.join(format!("{}.emu", t.id));
         emulsion_io::project::write(&project, &native_path)?;
         let reopened = emulsion_io::project::read(&native_path)?;
-        anyhow::ensure!(reopened.pages[0].doc == doc, "{} changed during native save/reopen", t.id);
+        anyhow::ensure!(
+            reopened.pages[0].doc == doc,
+            "{} changed during native save/reopen",
+            t.id
+        );
         let (svg, fallback) = emulsion_io::project_export::svg(&doc)?;
         anyhow::ensure!(!fallback, "{} unexpectedly flattened to raster", t.id);
         std::fs::write(directory.join(format!("{}.svg", t.id)), &svg)?;

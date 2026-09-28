@@ -415,12 +415,21 @@ pub fn load_pages(args: &Value) -> Result<(emulsion_core::project::Project, Vec<
         let pack = emulsion_io::template_pack::read(path).map_err(|e| e.to_string())?;
         Ok((pack.project, vec![]))
     } else if emulsion_io::pptx::is_pptx(path) {
-        emulsion_io::pptx::read(path).map(|p| (p.project, p.warnings)).map_err(|e| e.to_string())
-    } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        emulsion_io::pptx::read(path)
+            .map(|p| (p.project, p.warnings))
+            .map_err(|e| e.to_string())
+    } else if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
         && emulsion_io::lottie::is_lottie_path(path)
     {
         let (doc, report) = emulsion_io::lottie::read(path).map_err(|e| e.to_string())?;
-        let project = emulsion_core::project::ProjectEditor::new_project(emulsion_core::project::ProjectKind::Design, doc)?.snapshot().ok_or("Missing imported project")?;
+        let project = emulsion_core::project::ProjectEditor::new_project(
+            emulsion_core::project::ProjectKind::Design,
+            doc,
+        )?
+        .snapshot()
+        .ok_or("Missing imported project")?;
         Ok((project, report.diagnostics))
     } else if emulsion_io::project::is_project(path) {
         emulsion_io::project::read(path)
@@ -482,8 +491,11 @@ pub fn write_snapshot(
                     || project.pages.iter().map(|p| p.meta.id).collect(),
                     |a| a.iter().map(|v| v.as_u64().unwrap()).collect::<Vec<_>>(),
                 );
-                let report = emulsion_io::pptx::write(project, &pages, path).map_err(|e| e.to_string())?;
-                return Ok(json!({"path":path,"pages":report.pages,"objects":report.objects,"warnings":report.warnings}));
+                let report =
+                    emulsion_io::pptx::write(project, &pages, path).map_err(|e| e.to_string())?;
+                return Ok(
+                    json!({"path":path,"pages":report.pages,"objects":report.objects,"warnings":report.warnings}),
+                );
             }
             if args["format"] == "drawio" {
                 if args.get("pages").is_some() || args["include_bleed"].as_bool().unwrap_or(false) {

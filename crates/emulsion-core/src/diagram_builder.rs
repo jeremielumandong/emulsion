@@ -76,7 +76,11 @@ impl Builder {
                 }) as f32,
                 width: Some((w - 16.).max(1.) as f32),
                 // Leave the middle of a lane free for cross-lane connectors.
-                align: if kind.is_container() { Align::Left } else { Align::Center },
+                align: if kind.is_container() {
+                    Align::Left
+                } else {
+                    Align::Center
+                },
                 color: DEFAULT_TEXT,
                 ..Default::default()
             },
@@ -113,7 +117,9 @@ impl Builder {
     ) -> Result<NodeId, String> {
         let id = self.add_shape(stencil.kind, bounds, label)?;
         let shape = self.model.shapes.get_mut(&id).unwrap();
-        shape.data.insert("emulsion_stencil".into(), stencil.id.into());
+        shape
+            .data
+            .insert("emulsion_stencil".into(), stencil.id.into());
         let node = self.doc.node_mut(shape.body).unwrap();
         if let NodeKind::Path { path, .. } = &mut node.kind {
             *path = Arc::new(stencil.path(bounds));
@@ -206,10 +212,13 @@ impl Builder {
         self.model.edges.insert(
             group,
             Edge {
-                routing_warning:None,
-                double_line: false, label_background: None, double_path: None, label_background_path: None,
+                routing_warning: None,
+                double_line: false,
+                label_background: None,
+                double_path: None,
+                label_background_path: None,
                 corner_radius: 0.,
-                labels:Vec::new(),
+                labels: Vec::new(),
                 jump_style: JumpStyle::None,
                 jump_size: 10.,
                 path,

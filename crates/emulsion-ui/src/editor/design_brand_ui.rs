@@ -4,7 +4,7 @@ use emulsion_core::design_brand_assets::{self as brand, ColorTarget, TypographyR
 use emulsion_io::creative_library::Brand;
 use gpui_kit::component::{
     Sizable, WindowExt,
-    button::{Button,ButtonVariants},
+    button::{Button, ButtonVariants},
     checkbox::Checkbox,
     menu::{DropdownMenu, PopupMenuItem},
 };
@@ -656,8 +656,8 @@ impl EditorView {
 
 #[cfg(test)]
 mod tests {
-    use ::core::prelude::v1::test;
     use super::*;
+    use ::core::prelude::v1::test;
     use gpui_kit::test::TestWindowExt;
     #[gpui_kit::test]
     fn brand_palette_native_dialog_targets_fill_transparency_and_one_undo(cx: &mut TestAppContext) {

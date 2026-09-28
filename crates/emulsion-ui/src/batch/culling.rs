@@ -51,7 +51,7 @@ impl Workspace {
                                             "Comparison preview".into(),
                                         )
                                     })?;
-                                for p in pixels.chunks_exact_mut(4) {
+                                for p in pixels.as_chunks_mut::<4>().0 {
                                     p.swap(0, 2);
                                 }
                                 Ok((w, h, pixels))

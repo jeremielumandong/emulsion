@@ -569,13 +569,16 @@ impl Command {
     /// Apply to `doc`. Returns the id of a created node, if any. On error the
     /// document is unchanged.
     pub fn apply(&self, doc: &mut Document) -> Result<Option<NodeId>, CommandError> {
-        let (next,created)=self.applied(doc)?;
-        *doc=next;
+        let (next, created) = self.applied(doc)?;
+        *doc = next;
         Ok(created)
     }
 
     /// Prepare a validated result without cloning the caller's snapshot first.
-    pub(crate) fn applied(&self, doc: &Document) -> Result<(Document,Option<NodeId>),CommandError> {
+    pub(crate) fn applied(
+        &self,
+        doc: &Document,
+    ) -> Result<(Document, Option<NodeId>), CommandError> {
         let has_locks = doc.nodes.iter().any(|n| n.locked);
         if has_locks {
             self.check_locks(doc)?;
@@ -633,8 +636,13 @@ impl Command {
         }
         // Translation cannot remove metadata targets. Avoid rebuilding a full
         // ID set twice per pointer event on large diagrams.
-        if !matches!(self,Self::TranslateNode{..}|Self::TranslateNodes{..}) || next.nodes.len()!=doc.nodes.len() {
-            next.design.retain_nodes(&next.nodes.iter().map(|n|n.id).collect());
+        if !matches!(
+            self,
+            Self::TranslateNode { .. } | Self::TranslateNodes { .. }
+        ) || next.nodes.len() != doc.nodes.len()
+        {
+            next.design
+                .retain_nodes(&next.nodes.iter().map(|n| n.id).collect());
         }
         if !next.design.variable_bindings.is_empty() && !self.is_view_only() {
             crate::design_variables::synchronize(doc, &mut next)
@@ -671,8 +679,13 @@ impl Command {
         }
         // Translation cannot remove metadata targets. Avoid rebuilding a full
         // ID set twice per pointer event on large diagrams.
-        if !matches!(self,Self::TranslateNode{..}|Self::TranslateNodes{..}) || next.nodes.len()!=doc.nodes.len() {
-            next.design.retain_nodes(&next.nodes.iter().map(|n|n.id).collect());
+        if !matches!(
+            self,
+            Self::TranslateNode { .. } | Self::TranslateNodes { .. }
+        ) || next.nodes.len() != doc.nodes.len()
+        {
+            next.design
+                .retain_nodes(&next.nodes.iter().map(|n| n.id).collect());
         }
         if !next.design.frames.is_empty() {
             crate::design_layout::prune(&mut next);
@@ -693,7 +706,7 @@ impl Command {
             next.normalize();
         }
         next.validate()?;
-        Ok((next,created))
+        Ok((next, created))
     }
 
     fn check_locks(&self, doc: &Document) -> Result<(), CommandError> {
@@ -1740,12 +1753,21 @@ fn insert_at(doc: &mut Document, n: Node, slot: Slot) {
 
 /// Drop clip references that no longer point at a sibling below.
 fn fix_clips(doc: &mut Document) {
-    if !doc.nodes.iter().any(|n| n.clip_to.is_some()) { return; }
-    let positions = doc.nodes.iter().enumerate()
-        .map(|(i,n)| (n.id,(i,n.parent))).collect::<std::collections::HashMap<_,_>>();
-    for (i,n) in doc.nodes.iter_mut().enumerate() {
+    if !doc.nodes.iter().any(|n| n.clip_to.is_some()) {
+        return;
+    }
+    let positions = doc
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id, (i, n.parent)))
+        .collect::<std::collections::HashMap<_, _>>();
+    for (i, n) in doc.nodes.iter_mut().enumerate() {
         if let Some(base) = n.clip_to
-            && !positions.get(&base).is_some_and(|(b,parent)| *b < i && *parent == n.parent) {
+            && !positions
+                .get(&base)
+                .is_some_and(|(b, parent)| *b < i && *parent == n.parent)
+        {
             n.clip_to = None;
         }
     }

@@ -106,14 +106,17 @@ impl EditorView {
         if range {
             self.layer_selection.anchor = anchor.or(Some(id));
         }
-        if !self.sidebar_layout.flyout_open && !matches!(
-            self.sidebar_tab,
-            SidebarTab::Develop | SidebarTab::Reference
-                | SidebarTab::History
-                | SidebarTab::BrushSettings
-                | SidebarTab::BrushPresets
-                | SidebarTab::BlendingOptions
-        ) {
+        if !self.sidebar_layout.flyout_open
+            && !matches!(
+                self.sidebar_tab,
+                SidebarTab::Develop
+                    | SidebarTab::Reference
+                    | SidebarTab::History
+                    | SidebarTab::BrushSettings
+                    | SidebarTab::BrushPresets
+                    | SidebarTab::BlendingOptions
+            )
+        {
             self.select_sidebar(SidebarTab::Properties, cx);
         }
         cx.notify();

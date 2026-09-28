@@ -628,12 +628,10 @@ impl Workspace {
         if event.pressed_button == Some(MouseButton::Left)
             && !self.batch.develop.canvas_points.is_empty()
             && self.batch.develop.canvas_points.len() < 4096
-        {
-            if let Some(point) = self.library_canvas_point(event.position) {
+            && let Some(point) = self.library_canvas_point(event.position) {
                 self.batch.develop.canvas_points.push(point);
                 cx.notify();
             }
-        }
         true
     }
     pub(super) fn library_canvas_up(&mut self, cx: &mut Context<Self>) {
@@ -643,7 +641,7 @@ impl Workspace {
         };
         let tool = self.batch.develop.canvas_tool;
         let radius = brush_radius(self.batch.develop.brush_radius);
-        if tool >= 5 && tool <= 7 {
+        if (5..=7).contains(&tool) {
             let Some(mut p) = self
                 .batch
                 .current

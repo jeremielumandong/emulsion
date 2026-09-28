@@ -212,7 +212,15 @@ impl EditorView {
             .flex_col()
             .gap_2()
             .text_size(px(11.))
-            .child(Button::new("design-precision-open").label("Rulers, units and spacing…").small().outline().on_click(cx.listener(|this,_,window,cx|this.show_design_precision(window,cx))))
+            .child(
+                Button::new("design-precision-open")
+                    .label("Rulers, units and spacing…")
+                    .small()
+                    .outline()
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.show_design_precision(window, cx)),
+                    ),
+            )
             .child(div().text_color(p.muted).child("Align to page"))
             .child(
                 div().grid().grid_cols(2).gap(px(6.)).children(

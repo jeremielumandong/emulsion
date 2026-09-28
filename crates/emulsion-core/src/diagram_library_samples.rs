@@ -186,7 +186,7 @@ impl Composition {
         for spec in self.text {
             let id = doc.alloc_id();
             doc.nodes
-                .push(Node::text(id, &spec.text.clone(), spec, w, h));
+                .push(Node::text(id, spec.text.clone(), spec, w, h));
         }
         doc.diagram = Some(Arc::new(model));
         doc.normalize();

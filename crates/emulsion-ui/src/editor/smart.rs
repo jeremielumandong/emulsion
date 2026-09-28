@@ -283,7 +283,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let mut v: Vec<AnyElement> = Vec::new();
-        v.push(self.smart_source_controls(id,p,cx));
+        v.push(self.smart_source_controls(id, p, cx));
         v.push(
             div()
                 .flex()

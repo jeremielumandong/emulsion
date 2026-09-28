@@ -224,6 +224,49 @@ fn grid(start: Point, end: Point, obstacles: &[Bounds]) -> Option<Vec<Point>> {
     Some(out)
 }
 
+/// An exterior loop follows the attachment directions around the shape envelope.
+pub(super) fn cyclical(
+    start: (f64, f64),
+    sd: (f64, f64),
+    end: (f64, f64),
+    ed: (f64, f64),
+    a: [f64; 4],
+    b: [f64; 4],
+) -> Vec<(f64, f64)> {
+    let left = a[0].min(b[0]) - 48.;
+    let right = (a[0] + a[2]).max(b[0] + b[2]) + 48.;
+    let top = a[1].min(b[1]) - 48.;
+    let bottom = (a[1] + a[3]).max(b[1] + b[3]) + 48.;
+    let side = |(x, y): (f64, f64)| {
+        if x.abs() >= y.abs() {
+            if x >= 0. { 0 } else { 2 }
+        } else if y >= 0. {
+            1
+        } else {
+            3
+        }
+    };
+    let project = |p: (f64, f64), side: usize| match side {
+        0 => (right, p.1),
+        1 => (p.0, bottom),
+        2 => (left, p.1),
+        _ => (p.0, top),
+    };
+    let mut from = side(sd);
+    let to = side(ed);
+    let mut points = vec![start, project(start, from)];
+    loop {
+        points.push([(right, bottom), (left, bottom), (left, top), (right, top)][from]);
+        from = (from + 1) % 4;
+        if from == to {
+            break;
+        }
+    }
+    points.extend([project(end, to), end]);
+    points.dedup();
+    points
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,47 +357,4 @@ mod tests {
         );
         assert!(points[1].0 > 100.);
     }
-}
-
-/// An exterior loop follows the attachment directions around the shape envelope.
-pub(super) fn cyclical(
-    start: (f64, f64),
-    sd: (f64, f64),
-    end: (f64, f64),
-    ed: (f64, f64),
-    a: [f64; 4],
-    b: [f64; 4],
-) -> Vec<(f64, f64)> {
-    let left = a[0].min(b[0]) - 48.;
-    let right = (a[0] + a[2]).max(b[0] + b[2]) + 48.;
-    let top = a[1].min(b[1]) - 48.;
-    let bottom = (a[1] + a[3]).max(b[1] + b[3]) + 48.;
-    let side = |(x, y): (f64, f64)| {
-        if x.abs() >= y.abs() {
-            if x >= 0. { 0 } else { 2 }
-        } else if y >= 0. {
-            1
-        } else {
-            3
-        }
-    };
-    let project = |p: (f64, f64), side: usize| match side {
-        0 => (right, p.1),
-        1 => (p.0, bottom),
-        2 => (left, p.1),
-        _ => (p.0, top),
-    };
-    let mut from = side(sd);
-    let to = side(ed);
-    let mut points = vec![start, project(start, from)];
-    loop {
-        points.push([(right, bottom), (left, bottom), (left, top), (right, top)][from]);
-        from = (from + 1) % 4;
-        if from == to {
-            break;
-        }
-    }
-    points.extend([project(end, to), end]);
-    points.dedup();
-    points
 }

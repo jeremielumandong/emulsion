@@ -60,16 +60,18 @@ impl EditorView {
                 })
                 .width(px(960.))
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(help)
-                        .child(div().id("diagram-data-source").test_support().flex_shrink_0().child(
-                            Textarea::new(&input)
-                                .h(px((f32::from(window.viewport_size().height) * 0.5).clamp(240., 520.)))
-                                .aria_label("Diagram source")
-                        )),
+                    div().flex().flex_col().gap_3().child(help).child(
+                        div()
+                            .id("diagram-data-source")
+                            .test_support()
+                            .flex_shrink_0()
+                            .child(
+                                Textarea::new(&input)
+                                    .h(px((f32::from(window.viewport_size().height) * 0.5)
+                                        .clamp(240., 520.)))
+                                    .aria_label("Diagram source"),
+                            ),
+                    ),
                 )
                 .footer(crate::widgets::form_dialog_footer("Apply"))
                 .on_ok(move |_, _, cx| {

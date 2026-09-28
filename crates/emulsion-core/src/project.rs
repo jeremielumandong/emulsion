@@ -386,7 +386,12 @@ impl ProjectEditor {
         {
             return Err("Page ID limit reached.".into());
         }
-        let page_ids = project.pages.iter().enumerate().map(|(offset,page)|(page.meta.id,self.next_page_id+offset as u64)).collect();
+        let page_ids = project
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(offset, page)| (page.meta.id, self.next_page_id + offset as u64))
+            .collect();
         for page in &mut project.pages {
             page.doc.design.remap_pages(&page_ids);
             page.graph.remap_pages(&page_ids);

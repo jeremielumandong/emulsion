@@ -387,12 +387,41 @@ impl NewCanvas {
             });
         let blank = Button::new("new-template-blank")
             .accessibility_label(format!("New blank {} document", self.spec.kind.label()))
-            .outline().w_full().h(px(72.)).p_3().disabled(self.submitted)
-            .child(div().flex().items_center().gap_3().w_full()
-                .child(div().w(px(30.)).h(px(38.)).flex_none().border_1().border_color(p.line).bg(p.paper))
-                .child(div().flex().flex_col().items_start().gap_1()
-                    .child(div().child("Blank document"))
-                    .child(div().text_xs().text_color(p.muted).child("Start empty · choose your canvas size"))))
+            .outline()
+            .w_full()
+            .h(px(72.))
+            .p_3()
+            .disabled(self.submitted)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .w_full()
+                    .child(
+                        div()
+                            .w(px(30.))
+                            .h(px(38.))
+                            .flex_none()
+                            .border_1()
+                            .border_color(p.line)
+                            .bg(p.paper),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_start()
+                            .gap_1()
+                            .child(div().child("Blank document"))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(p.muted)
+                                    .child("Start empty · choose your canvas size"),
+                            ),
+                    ),
+            )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.templates.enabled = false;
                 this.templates.selected = None;

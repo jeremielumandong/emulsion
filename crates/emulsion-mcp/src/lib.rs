@@ -10,33 +10,33 @@
 //!   app over loopback TCP, authenticated with a per-session token.
 
 mod blending;
-mod diagram_tools;
-mod diagram_format_tools;
 mod brush_assets;
 mod brush_catalog;
 mod brush_discovery;
 pub mod brush_tools;
 mod design_appearance_tools;
 mod design_asset_tools;
-mod design_layout_tools;
-mod design_interaction_tools;
-mod design_variable_tools;
-pub mod project_variable_tools;
-pub mod editor_host_tools;
-pub mod print_tools;
-pub mod photo_source_tools;
 mod design_data_tools;
-mod design_selection_export_tools;
-mod design_vector_tools;
-mod design_paragraph_tools;
+mod design_interaction_tools;
+mod design_layout_tools;
 pub mod design_motion_tools;
+mod design_paragraph_tools;
+mod design_selection_export_tools;
+mod design_variable_tools;
+mod design_vector_tools;
+mod diagram_format_tools;
 pub mod diagram_project_tools;
+mod diagram_tools;
+pub mod editor_host_tools;
 pub mod exec;
 mod export_tools;
 mod image_import_tools;
 pub mod library_tools;
+pub mod photo_source_tools;
 mod preview;
+pub mod print_tools;
 pub mod project_tools;
+pub mod project_variable_tools;
 #[cfg(test)]
 #[path = "../../emulsion-io/tests/common/raw_fixture.rs"]
 pub(crate) mod raw_fixture;

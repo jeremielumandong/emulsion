@@ -119,10 +119,12 @@ fn main() -> anyhow::Result<()> {
         stats(&mut totals)
     );
     let after_pixels = output.read(&gpu)?;
-    anyhow::ensure!(before_pixels != after_pixels, "movement did not update visible GPU pixels");
     anyhow::ensure!(
-        after_pixels.chunks_exact(4)
-            .any(|p| p[3] > 0 && p[0] < 240),
+        before_pixels != after_pixels,
+        "movement did not update visible GPU pixels"
+    );
+    anyhow::ensure!(
+        after_pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 0 && p[0] < 240),
         "empty output"
     );
     Ok(())

@@ -10,7 +10,8 @@ pub fn is_tool(name: &str) -> bool {
     matches!(
         name,
         "install_diagram_stencil_pack"
-            | "create_diagram_link" | "open_diagram_link"
+            | "create_diagram_link"
+            | "open_diagram_link"
             | "import_diagram"
             | "save_document_stencils"
             | "export_diagram"
@@ -60,7 +61,7 @@ pub fn install_stencil_pack(args: &Value) -> ToolResult {
     }
 }
 
-pub fn validate_args(name:&str,args:&Value)->Result<(),String> {
+pub fn validate_args(name: &str, args: &Value) -> Result<(), String> {
     let def = definitions()
         .into_iter()
         .find(|d| d.name == name)
@@ -87,24 +88,47 @@ pub fn validate_args(name:&str,args:&Value)->Result<(),String> {
     }
     Ok(())
 }
-pub fn load_import(args:&Value)->Result<emulsion_io::drawio::Imported,String> {
-    validate_args("import_diagram",args)?;
-    match (args.get("path"),args.get("xml")) {
-        (Some(path),None)=>{
-            let path=Path::new(path.as_str().ok_or("path must be a string")?);
+pub fn load_import(args: &Value) -> Result<emulsion_io::drawio::Imported, String> {
+    validate_args("import_diagram", args)?;
+    match (args.get("path"), args.get("xml")) {
+        (Some(path), None) => {
+            let path = Path::new(path.as_str().ok_or("path must be a string")?);
             if emulsion_io::template_pack::is_pack(path) {
-                let pack=emulsion_io::template_pack::read(path).map_err(|e|e.to_string())?;
-                Ok(emulsion_io::drawio::Imported{project:pack.project,warnings:Vec::new()})
-            }else{emulsion_io::diagram_import::read(path).map_err(|e|e.to_string())}
+                let pack = emulsion_io::template_pack::read(path).map_err(|e| e.to_string())?;
+                Ok(emulsion_io::drawio::Imported {
+                    project: pack.project,
+                    warnings: Vec::new(),
+                })
+            } else {
+                emulsion_io::diagram_import::read(path).map_err(|e| e.to_string())
+            }
         }
-        (None,Some(xml))=>emulsion_io::drawio::from_xml(xml.as_str().ok_or("xml must be a string")?).map_err(|e|e.to_string()),
-        _=>Err("Provide exactly one of path or xml".into()),
+        (None, Some(xml)) => {
+            emulsion_io::drawio::from_xml(xml.as_str().ok_or("xml must be a string")?)
+                .map_err(|e| e.to_string())
+        }
+        _ => Err("Provide exactly one of path or xml".into()),
     }
 }
-pub fn save_stencil_snapshot(project:&emulsion_core::project::Project,args:&Value)->ToolResult {
-    if project.kind!=ProjectKind::Diagram {return ToolResult::error("Open a Diagram project first");}
-    let result=validate_args("save_document_stencils",args).and_then(|_|emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),project,args["name"].as_str().unwrap_or("Diagram")).map_err(|e|e.to_string()));
-    match result {Ok(ids)=>ToolResult::text(json!({"packs":ids}).to_string()),Err(e)=>ToolResult::error(e)}
+pub fn save_stencil_snapshot(
+    project: &emulsion_core::project::Project,
+    args: &Value,
+) -> ToolResult {
+    if project.kind != ProjectKind::Diagram {
+        return ToolResult::error("Open a Diagram project first");
+    }
+    let result = validate_args("save_document_stencils", args).and_then(|_| {
+        emulsion_io::document_stencils::save(
+            &emulsion_io::creative_library::root(),
+            project,
+            args["name"].as_str().unwrap_or("Diagram"),
+        )
+        .map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(ids) => ToolResult::text(json!({"packs":ids}).to_string()),
+        Err(e) => ToolResult::error(e),
+    }
 }
 
 fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, String> {
@@ -114,16 +138,37 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
     if editor.in_transaction() {
         return Err("Finish the current edit first".into());
     }
-    validate_args(name,args)?;
+    validate_args(name, args)?;
     match name {
         "create_diagram_link" => {
-            let path=editor.path.as_ref().ok_or("Save the project before copying a diagram link")?;
-            let nodes:Vec<u64>=args.get("nodes").map(|v|serde_json::from_value(v.clone()).map_err(|e|e.to_string())).transpose()?.unwrap_or_default();
-            let view:Option<[f64;4]>=args.get("view").map(|v|serde_json::from_value(v.clone()).map_err(|e|e.to_string())).transpose()?;
-            let link=diagram::workspace::Link{project:Some(path.to_string_lossy().into()),page:editor.active_page(),nodes,view};link.check_project(editor)?;
+            let path = editor
+                .path
+                .as_ref()
+                .ok_or("Save the project before copying a diagram link")?;
+            let nodes: Vec<u64> = args
+                .get("nodes")
+                .map(|v| serde_json::from_value(v.clone()).map_err(|e| e.to_string()))
+                .transpose()?
+                .unwrap_or_default();
+            let view: Option<[f64; 4]> = args
+                .get("view")
+                .map(|v| serde_json::from_value(v.clone()).map_err(|e| e.to_string()))
+                .transpose()?;
+            let link = diagram::workspace::Link {
+                project: Some(path.to_string_lossy().into()),
+                page: editor.active_page(),
+                nodes,
+                view,
+            };
+            link.check_project(editor)?;
             Ok(json!({"link":link.encode()?}))
         }
-        "open_diagram_link" => {let link=diagram::workspace::Link::decode(text(args,"link")?)?;link.check_project(editor)?;editor.set_active_page(link.page)?;Ok(json!({"page":link.page,"nodes":link.nodes,"view":link.view}))}
+        "open_diagram_link" => {
+            let link = diagram::workspace::Link::decode(text(args, "link")?)?;
+            link.check_project(editor)?;
+            editor.set_active_page(link.page)?;
+            Ok(json!({"page":link.page,"nodes":link.nodes,"view":link.view}))
+        }
         "insert_diagram_pack_entry" => {
             let project = emulsion_io::project::read(Path::new(text(args, "path")?))
                 .map_err(|e| e.to_string())?;
@@ -178,20 +223,37 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             Ok(json!({"page":page,"template":template.id}))
         }
         "save_document_stencils" => {
-            let project=editor.snapshot().ok_or("No project")?;
-            let ids=emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),&project,args["name"].as_str().unwrap_or("Diagram")).map_err(|e|e.to_string())?;
+            let project = editor.snapshot().ok_or("No project")?;
+            let ids = emulsion_io::document_stencils::save(
+                &emulsion_io::creative_library::root(),
+                &project,
+                args["name"].as_str().unwrap_or("Diagram"),
+            )
+            .map_err(|e| e.to_string())?;
             Ok(json!({"packs":ids}))
         }
         "import_diagram" => {
-            let imported=load_import(args)?;
-            let captured=(args["save_stencils"]==true).then(||imported.project.clone());
+            let imported = load_import(args)?;
+            let captured = (args["save_stencils"] == true).then(|| imported.project.clone());
             let pages = editor.import_pages(imported.project)?;
-            let mut warnings=imported.warnings;
-            let packs=if let Some(project)=captured {
-                match emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),&project,"Diagram") {
-                    Ok(ids)=>ids,Err(e)=>{warnings.push(format!("Diagram imported; stencil library could not be saved: {e}"));Vec::new()}
+            let mut warnings = imported.warnings;
+            let packs = if let Some(project) = captured {
+                match emulsion_io::document_stencils::save(
+                    &emulsion_io::creative_library::root(),
+                    &project,
+                    "Diagram",
+                ) {
+                    Ok(ids) => ids,
+                    Err(e) => {
+                        warnings.push(format!(
+                            "Diagram imported; stencil library could not be saved: {e}"
+                        ));
+                        Vec::new()
+                    }
                 }
-            }else{Vec::new()};
+            } else {
+                Vec::new()
+            };
             Ok(json!({"pages":pages,"warnings":warnings,"stencil_packs":packs}))
         }
         "export_diagram" => {
@@ -260,8 +322,18 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
     };
     vec![
-        def("create_diagram_link","Copy a local saved-project reference to the current selection or view. View is [center_x,center_y,zoom,rotation].",json!({"nodes":{"type":"array","maxItems":1000,"items":{"type":"integer","minimum":1}},"view":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"number"}}}),&[]),
-        def("open_diagram_link","Navigate to a page, selection and view in the already-open matching project. Does not load external files or execute URLs.",json!({"link":string}),&["link"]),
+        def(
+            "create_diagram_link",
+            "Copy a local saved-project reference to the current selection or view. View is [center_x,center_y,zoom,rotation].",
+            json!({"nodes":{"type":"array","maxItems":1000,"items":{"type":"integer","minimum":1}},"view":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"number"}}}),
+            &[],
+        ),
+        def(
+            "open_diagram_link",
+            "Navigate to a page, selection and view in the already-open matching project. Does not load external files or execute URLs.",
+            json!({"link":string}),
+            &["link"],
+        ),
         def(
             "insert_diagram_pack_entry",
             "Place an installed stencil entry onto the active diagram, preserving editable artwork and connections. Use a path returned by list_diagram_stencil_packs; page is one-based (default 1). Optional center [x,y] defaults to the canvas center. One undo step.",
@@ -280,7 +352,12 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
             json!({"template":{"type":"string"}}),
             &["template"],
         ),
-        def("save_document_stencils","Save shapes from all project pages as permanent offline stencil packs. Preserves editable artwork, deduplicates repeat imports, and leaves the document unchanged.",json!({"name":{"type":"string","maxLength":150}}),&[]),
+        def(
+            "save_document_stencils",
+            "Save shapes from all project pages as permanent offline stencil packs. Preserves editable artwork, deduplicates repeat imports, and leaves the document unchanged.",
+            json!({"name":{"type":"string","maxLength":150}}),
+            &[],
+        ),
         def(
             "import_diagram",
             "Add all pages from a local draw.io, supported Visio/Lucid file or native stencil/template pack; alternatively supply draw.io XML. Returns compatibility warnings. One undo step; binary legacy Visio requires conversion first.",
@@ -317,12 +394,20 @@ mod tests {
         serde_json::from_str(r.content[0]["text"].as_str().unwrap()).unwrap()
     }
     #[test]
-    fn diagram_links_require_matching_saved_project_and_select_page(){
-        let mut e=project();assert!(execute(&mut e,"create_diagram_link",&json!({})).is_error);
-        e.path=Some(std::path::PathBuf::from("/tmp/diagram-link-test.emu"));
-        let page=e.active_page();let link=call(&mut e,"create_diagram_link",json!({"view":[120,240,2,0]}))["link"].as_str().unwrap().to_owned();
-        let result=call(&mut e,"open_diagram_link",json!({"link":link}));assert_eq!(result["page"],page);assert_eq!(result["view"],json!([120.,240.,2.,0.]));
-        e.path=Some(std::path::PathBuf::from("/tmp/other.emu"));assert!(execute(&mut e,"open_diagram_link",&json!({"link":link})).is_error);
+    fn diagram_links_require_matching_saved_project_and_select_page() {
+        let mut e = project();
+        assert!(execute(&mut e, "create_diagram_link", &json!({})).is_error);
+        e.path = Some(std::path::PathBuf::from("/tmp/diagram-link-test.emu"));
+        let page = e.active_page();
+        let link = call(&mut e, "create_diagram_link", json!({"view":[120,240,2,0]}))["link"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let result = call(&mut e, "open_diagram_link", json!({"link":link}));
+        assert_eq!(result["page"], page);
+        assert_eq!(result["view"], json!([120., 240., 2., 0.]));
+        e.path = Some(std::path::PathBuf::from("/tmp/other.emu"));
+        assert!(execute(&mut e, "open_diagram_link", &json!({"link":link})).is_error);
         assert!(crate::tools::is_read_only("create_diagram_link"));
     }
     fn project() -> ProjectEditor {
@@ -452,10 +537,24 @@ mod tests {
         for template in emulsion_core::diagram_library::TEMPLATES {
             let mut e = project();
             let before = e.doc.clone();
-            call(&mut e, "insert_diagram_template", json!({"template":template.id}));
+            call(
+                &mut e,
+                "insert_diagram_template",
+                json!({"template":template.id}),
+            );
             assert_eq!(e.page_list().len(), 2, "{}", template.id);
             e.doc.validate().unwrap();
-            assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(), template.build().unwrap().diagram.as_ref().unwrap().shapes.len());
+            assert_eq!(
+                e.doc.diagram.as_ref().unwrap().shapes.len(),
+                template
+                    .build()
+                    .unwrap()
+                    .diagram
+                    .as_ref()
+                    .unwrap()
+                    .shapes
+                    .len()
+            );
             assert!(e.undo());
             assert_eq!(e.page_list().len(), 1);
             assert_eq!(e.doc, before);

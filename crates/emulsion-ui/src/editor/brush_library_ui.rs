@@ -1359,11 +1359,18 @@ pub(super) fn stroke_preview_on(
     let largest = secondary.map_or(brush.size, |other| brush.size.max(other.size));
     let scale = (36. / largest.max(1.)).min(1.);
     brush.size *= scale;
-    let background = if dark { [35u8,35,39,255] } else { [245u8,245,245,255] };
+    let background = if dark {
+        [35u8, 35, 39, 255]
+    } else {
+        [245u8, 245, 245, 255]
+    };
     let base = Raster::from_srgba8(240, 64, &background.repeat(240 * 64));
     let samples = emulsion_raster::preview::sample_stroke(240, 64);
-    let ink =
-        emulsion_raster::preview::PreviewMode::Paint(color::srgba8_to_premul(if dark { [236,236,234,255] } else { [35,55,75,255] }));
+    let ink = emulsion_raster::preview::PreviewMode::Paint(color::srgba8_to_premul(if dark {
+        [236, 236, 234, 255]
+    } else {
+        [35, 55, 75, 255]
+    }));
     let raster = if let Some(mut secondary) = secondary {
         secondary.size *= scale;
         emulsion_raster::preview::render_dual_stroke(

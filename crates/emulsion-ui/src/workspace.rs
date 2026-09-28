@@ -945,7 +945,9 @@ impl Workspace {
 
     pub fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if emulsion_io::pptx::is_pptx(&path)
-            || path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))
+            || path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("json"))
             || emulsion_io::diagram_import::is_diagram(&path)
             || emulsion_io::template_pack::is_pack(&path)
         {
@@ -1264,8 +1266,22 @@ impl Workspace {
             return;
         };
         if !save_as && ed.read(cx).smart.source_session.is_some() {
-            let task=self.smart_source_task(ed,emulsion_mcp::smart_source_tools::Action::Apply,window,cx);
-            cx.spawn(async move|this,cx|{if let Err(error)=task.await{this.update(cx,|ws,cx|{ws.error=Some(error.into());cx.notify();}).ok();}}).detach();
+            let task = self.smart_source_task(
+                ed,
+                emulsion_mcp::smart_source_tools::Action::Apply,
+                window,
+                cx,
+            );
+            cx.spawn(async move |this, cx| {
+                if let Err(error) = task.await {
+                    this.update(cx, |ws, cx| {
+                        ws.error = Some(error.into());
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            })
+            .detach();
             return;
         }
         ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
@@ -1427,7 +1443,9 @@ impl Workspace {
                             e.source = Some(path.clone());
                         }
                         // A native Save As makes a source tab an independent document.
-                        if !sidecar { e.smart.source_session = None; }
+                        if !sidecar {
+                            e.smart.source_session = None;
+                        }
                         if (multipage && e.editor.stamp() == stamp)
                             || (!multipage && e.editor.revision == rev)
                         {
@@ -2013,7 +2031,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Save, window, cx| this.save(false, window, cx)))
             .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.save(true, window, cx)))
             .on_action(cx.listener(|this, _: &Export, window, cx| {
-                if this.style_dialog_open(cx) { return; }
+                if this.style_dialog_open(cx) {
+                    return;
+                }
                 if let Some(editor) = &this.editor {
                     editor.update(cx, |editor, cx| editor.open_export_dialog(window, cx));
                 }
@@ -2681,7 +2701,12 @@ mod compact_tests {
         cx.update(|window, _| {
             let tabs = window.find("document-tab-bar").bounds();
             assert!(tabs.top() >= window.find("editor-document-bar").bounds().bottom());
-            assert!(window.within("document-tab-bar").find(("compact-document", first.entity_id())).visible());
+            assert!(
+                window
+                    .within("document-tab-bar")
+                    .find(("compact-document", first.entity_id()))
+                    .visible()
+            );
             for id in ["window-menu-button", "compact-theme", "compact-settings"] {
                 let control = window.find(id);
                 assert!(control.visible(), "{id}");

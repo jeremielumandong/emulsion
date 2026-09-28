@@ -12,53 +12,53 @@
 pub mod abr;
 pub mod brush_library;
 pub mod brushset;
+pub mod camera_profiles;
 pub mod cloud;
 pub mod creative_library;
 pub mod design_bulk;
 pub mod design_charts;
+pub mod design_html;
 #[cfg(test)]
 mod design_layout_tests;
-#[cfg(test)]
-mod design_responsive_tests;
 pub mod design_media;
 #[cfg(test)]
+mod design_responsive_tests;
+#[cfg(test)]
 mod design_styles_tests;
+pub mod develop_edits;
 pub mod diagram_data;
 pub mod diagram_import;
 pub mod drawio;
 pub mod exif;
 pub mod export;
-pub mod photo_export;
-pub mod photo_catalog;
 pub mod external;
 pub mod history;
 pub mod icc;
 pub mod import;
 pub mod jxl;
 pub mod lensfun;
-pub mod lightroom_presets;
 pub mod lightroom_catalog;
+pub mod lightroom_presets;
 pub mod lottie;
 pub mod ora;
 mod path_data;
-pub mod printing;
+pub mod photo_catalog;
+pub mod photo_color;
+pub mod photo_develop;
+pub mod photo_export;
+pub mod photo_index;
+pub mod photo_proxy;
 pub mod pptx;
+pub mod printing;
 pub mod project;
 pub mod project_animation;
 pub mod project_export;
-pub mod selection_export;
-pub mod design_html;
 pub mod psd;
 pub mod raw;
-pub mod develop_edits;
-pub mod camera_profiles;
-pub mod photo_develop;
-pub mod photo_proxy;
-pub mod photo_color;
-pub mod photo_index;
 pub mod raw_probe;
 pub mod raw_settings;
 pub mod recent;
+pub mod selection_export;
 pub mod settings;
 pub mod svg;
 pub mod svg_viewport;
@@ -95,7 +95,9 @@ pub enum IoError {
     Unsupported(String),
     #[error("unsupported RAW camera or encoding: {0}")]
     UnsupportedRaw(String),
-    #[error("RAW memory budget is in use; wait for development/export to finish or close another RAW document")]
+    #[error(
+        "RAW memory budget is in use; wait for development/export to finish or close another RAW document"
+    )]
     RawMemoryBudget,
     #[error("malformed RAW file: {0}")]
     MalformedRaw(String),
@@ -236,13 +238,17 @@ pub fn is_native(path: &Path) -> bool {
 
 /// Open a native document or import an image.
 pub fn open(path: &Path) -> Result<Document> {
-    if photo_develop::is_virtual(path) {return photo_develop::open_virtual(path);}
+    if photo_develop::is_virtual(path) {
+        return photo_develop::open_virtual(path);
+    }
     Ok(open_full(path)?.doc)
 }
 
 /// Import anything that is not the native format as a fresh document.
 fn import_any(path: &Path) -> Result<Document> {
-    if photo_develop::is_virtual(path) {return photo_develop::open_virtual(path);}
+    if photo_develop::is_virtual(path) {
+        return photo_develop::open_virtual(path);
+    }
     if psd::is_psd(path) {
         psd::read(path)
     } else if xcf::is_xcf(path) {
@@ -491,8 +497,8 @@ mod design_vector_tests;
 
 pub mod design_motion_export;
 
-mod smart_source_data;
 pub mod smart_source;
+mod smart_source_data;
 
 mod photo_files;
 
@@ -502,7 +508,8 @@ pub mod photo_backup;
 
 pub mod photo_geometry;
 
-#[cfg(test)] mod photo_workflow_tests;
+#[cfg(test)]
+mod photo_workflow_tests;
 
 pub mod photo_publish;
 

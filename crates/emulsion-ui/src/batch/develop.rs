@@ -419,12 +419,11 @@ impl Workspace {
                         let path = key.0.clone();
                         if this.batch.finish_preview(generation, key, Some(pixels)) {
                             this.batch.develop.preview_stale = false;
-                            if detail_region.is_none() {
-                                if let Some((path, _, image)) = &this.batch.preview {
+                            if detail_region.is_none()
+                                && let Some((path, _, image)) = &this.batch.preview {
                                     this.batch.develop.navigator_preview =
                                         Some((path.clone(), image.clone()));
                                 }
-                            }
                             if let Some((w, h, bytes)) = baseline {
                                 this.batch.develop.baseline_preview =
                                     Some((path, Arc::new(bgra_image(w, h, bytes))));
@@ -1438,59 +1437,6 @@ impl Workspace {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use core::prelude::v1::test;
-    #[test]
-    fn luminance_histogram_counts_opaque_pixels_in_correct_bins() {
-        let bins = histogram(&[
-            0, 0, 0, 255, 255, 255, 255, 255, 128, 128, 128, 255, 255, 0, 0, 0,
-        ]);
-        assert_eq!(bins.iter().sum::<u32>(), 3);
-        assert_eq!((bins[0], bins[16], bins[31]), (1, 1, 1));
-    }
-    #[test]
-    fn returning_from_photo_reloads_saved_settings_but_keeps_unsaved_drafts() {
-        let mut state = Develop::default();
-        let clean = PathBuf::from("saved.dng");
-        let dirty = PathBuf::from("pending.dng");
-        let original = DevelopParams::default();
-        let edited = DevelopParams {
-            exposure: 1.,
-            ..original
-        };
-        state.saved.insert(clean.clone(), original);
-        state.drafts.insert(clean.clone(), original);
-        state.saved.insert(dirty.clone(), original);
-        state.drafts.insert(dirty.clone(), edited);
-        state.refresh_saved();
-        assert_eq!(state.current_params(&clean), None);
-        assert_eq!(state.current_params(&dirty), Some(edited));
-        assert_eq!(state.saved.get(&dirty), Some(&original));
-        assert!(state.dirty());
-    }
-    #[test]
-    fn drafts_remain_dirty_until_the_exact_settings_are_saved() {
-        let path = PathBuf::from("photo.dng");
-        let mut state = Develop::default();
-        let baseline = DevelopParams::default();
-        state.saved.insert(path.clone(), baseline);
-        state.drafts.insert(
-            path.clone(),
-            DevelopParams {
-                exposure: 1.,
-                ..baseline
-            },
-        );
-        assert!(state.dirty());
-        state.saved.insert(path.clone(), state.drafts[&path]);
-        assert!(!state.dirty());
-        state.drafts.insert(path, baseline);
-        assert!(state.dirty(), "undoing a saved edit must also be saved");
-    }
-}
-
 pub(super) fn rgb_histogram(rgba: &[u8]) -> [[u32; 32]; 3] {
     let mut bins = [[0; 32]; 3];
     for p in rgba.as_chunks::<4>().0 {
@@ -1603,5 +1549,58 @@ impl Workspace {
             panel = panel.child(details.test_support());
         }
         panel.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+    #[test]
+    fn luminance_histogram_counts_opaque_pixels_in_correct_bins() {
+        let bins = histogram(&[
+            0, 0, 0, 255, 255, 255, 255, 255, 128, 128, 128, 255, 255, 0, 0, 0,
+        ]);
+        assert_eq!(bins.iter().sum::<u32>(), 3);
+        assert_eq!((bins[0], bins[16], bins[31]), (1, 1, 1));
+    }
+    #[test]
+    fn returning_from_photo_reloads_saved_settings_but_keeps_unsaved_drafts() {
+        let mut state = Develop::default();
+        let clean = PathBuf::from("saved.dng");
+        let dirty = PathBuf::from("pending.dng");
+        let original = DevelopParams::default();
+        let edited = DevelopParams {
+            exposure: 1.,
+            ..original
+        };
+        state.saved.insert(clean.clone(), original);
+        state.drafts.insert(clean.clone(), original);
+        state.saved.insert(dirty.clone(), original);
+        state.drafts.insert(dirty.clone(), edited);
+        state.refresh_saved();
+        assert_eq!(state.current_params(&clean), None);
+        assert_eq!(state.current_params(&dirty), Some(edited));
+        assert_eq!(state.saved.get(&dirty), Some(&original));
+        assert!(state.dirty());
+    }
+    #[test]
+    fn drafts_remain_dirty_until_the_exact_settings_are_saved() {
+        let path = PathBuf::from("photo.dng");
+        let mut state = Develop::default();
+        let baseline = DevelopParams::default();
+        state.saved.insert(path.clone(), baseline);
+        state.drafts.insert(
+            path.clone(),
+            DevelopParams {
+                exposure: 1.,
+                ..baseline
+            },
+        );
+        assert!(state.dirty());
+        state.saved.insert(path.clone(), state.drafts[&path]);
+        assert!(!state.dirty());
+        state.drafts.insert(path, baseline);
+        assert!(state.dirty(), "undoing a saved edit must also be saved");
     }
 }

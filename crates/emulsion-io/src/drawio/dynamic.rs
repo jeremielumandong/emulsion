@@ -2,7 +2,7 @@
 //! Floor-plan dimensions follow jgraph/drawio mxFloorplan.js (Apache-2.0);
 //! pinned upstream attribution is distributed with assets/diagram-stencils.
 use super::*;
-#[path="dynamic_extra.rs"]
+#[path = "dynamic_extra.rs"]
 mod extra;
 use std::fmt::Write as FmtWrite;
 pub(super) const NAMES: &[&str] = &[
@@ -19,17 +19,26 @@ pub(super) const NAMES: &[&str] = &[
     "mxgraph.bpmn.gateway2",
     "mxgraph.bpmn.task",
     "mxgraph.arrows2.arrow",
-    "mxgraph.basic.arc", "mxgraph.basic.pie", "mxgraph.basic.partconcellipse",
-    "mxgraph.infographic.partconcellipse", "mxgraph.infographic.ribbonsimple",
-    "mxgraph.floorplan.stairs", "mxgraph.basic.rect", "mxgraph.bootstrap.rrect",
+    "mxgraph.basic.arc",
+    "mxgraph.basic.pie",
+    "mxgraph.basic.partconcellipse",
+    "mxgraph.infographic.partconcellipse",
+    "mxgraph.infographic.ribbonsimple",
+    "mxgraph.floorplan.stairs",
+    "mxgraph.basic.rect",
+    "mxgraph.bootstrap.rrect",
     "mxgraph.ios7ui.appbar",
-    "mxgraph.ios7ui.horlines", "mxgraph.atlassian.check", "mxgraph.atlassian.x",
-    "mxgraph.mockup.forms.searchbox", "mxgraph.mockup.forms.combobox",
-    "mxgraph.mockup.markup.line", "mxgraph.infographic.cylinder",
-
+    "mxgraph.ios7ui.horlines",
+    "mxgraph.atlassian.check",
+    "mxgraph.atlassian.x",
+    "mxgraph.mockup.forms.searchbox",
+    "mxgraph.mockup.forms.combobox",
+    "mxgraph.mockup.markup.line",
+    "mxgraph.infographic.cylinder",
 ];
 pub(super) fn supports(name: &str) -> bool {
-    NAMES.contains(&name.to_ascii_lowercase().as_str()) || extra::NAMES.contains(&name.to_ascii_lowercase().as_str())
+    NAMES.contains(&name.to_ascii_lowercase().as_str())
+        || extra::NAMES.contains(&name.to_ascii_lowercase().as_str())
 }
 pub(super) fn svg(
     name: &str,
@@ -45,54 +54,157 @@ pub(super) fn svg(
         format!("<rect x='{x}' y='{y}' width='{w}' height='{h}'/>")
     };
     match name.as_str() {
-        "mxgraph.ios7ui.appbar"=>{
-            let y=h*0.5;
-            let fill=escape(s.get("fillColor2").map_or("#222222",String::as_str));
-            content=format!("<rect width='{w}' height='{h}' stroke='none'/><g fill='{fill}'>");
-            for x in [6.5,10.5,14.5,18.5,22.5] {write!(content,"<circle cx='{x}' cy='{y}' r='1.5' stroke='none'/>").unwrap();}
+        "mxgraph.ios7ui.appbar" => {
+            let y = h * 0.5;
+            let fill = escape(s.get("fillColor2").map_or("#222222", String::as_str));
+            content = format!("<rect width='{w}' height='{h}' stroke='none'/><g fill='{fill}'>");
+            for x in [6.5, 10.5, 14.5, 18.5, 22.5] {
+                write!(content, "<circle cx='{x}' cy='{y}' r='1.5' stroke='none'/>").unwrap();
+            }
             write!(content,"<circle cx='55' cy='{}' r='1'/><path fill='none' stroke-width='2' d='M 52 {} A 3.5 3.5 0 0 1 58 {} M 50 {} A 6 6 0 0 1 60 {}'/>",y+3.,y+1.,y+1.,y-1.,y-1.).unwrap();
             write!(content,"<rect x='{}' y='{}' width='13' height='4' stroke='none'/><path fill='none' stroke-width='1' d='M {} {} L {} {} L {} {} V {} L {} {} L {} {} M {} {} H {} V {} H {} V {} H {} V {} H {} Z'/></g>",w-19.,y-2.,w-44.,y-2.5,w-36.,y+2.5,w-40.,y+5.,y-5.,w-36.,y-2.5,w-44.,y+2.5,w-20.,y-3.,w-5.,y-1.,w-3.5,y+1.,w-5.,y+3.,w-20.).unwrap();
         }
 
-        "mxgraph.basic.rect"=>content=rect(0.,0.,w,h),
-        "mxgraph.bootstrap.rrect"=>content=format!("<rect width='{w}' height='{h}' rx='{}'/>",number(s,"rSize",5.)?.clamp(0.,w.min(h)/2.)),
-        "mxgraph.mockup.markup.line"=>content=format!("<path fill='none' d='M 0 0 L {w} {h}'/>"),
-        "mxgraph.ios7ui.horlines"=>{
-            content=String::new();let count=number(s,"lines",3.)?.clamp(1.,100.) as usize;
-            for i in 0..count{write!(content,"<path fill='none' d='M 0 {} H {w}'/>",(i as f64+0.5)*h/count as f64).unwrap();}
+        "mxgraph.basic.rect" => content = rect(0., 0., w, h),
+        "mxgraph.bootstrap.rrect" => {
+            content = format!(
+                "<rect width='{w}' height='{h}' rx='{}'/>",
+                number(s, "rSize", 5.)?.clamp(0., w.min(h) / 2.)
+            )
         }
-        "mxgraph.atlassian.check"=>content=format!("<path fill='none' d='M 0 {} L {} {h} L {w} 0'/>",h*0.5,w*0.3),
-        "mxgraph.atlassian.x"=>content=format!("<path fill='none' d='M 0 0 L {w} {h} M {w} 0 L 0 {h}'/>"),
-        "mxgraph.mockup.forms.searchbox" | "mxgraph.mockup.forms.combobox"=>{
-            content=rect(0.,0.,w,h);
-            let r=(h*0.2).min(w*0.1);let cx=w-h*0.5;let cy=h*0.45;
-            if name.ends_with("searchbox") {write!(content,"<circle cx='{cx}' cy='{cy}' r='{r}' fill='none'/><path fill='none' d='M {} {} L {} {}'/>",cx+r*0.7,cy+r*0.7,cx+r*1.7,cy+r*1.7).unwrap();}
-            else{write!(content,"<path fill='none' d='M {} 0 V {h} M {} {} L {cx} {} L {} {}'/>",w-h,w-h*0.75,h*0.4,h*0.65,w-h*0.25,h*0.4).unwrap();}
+        "mxgraph.mockup.markup.line" => {
+            content = format!("<path fill='none' d='M 0 0 L {w} {h}'/>")
         }
-        "mxgraph.floorplan.stairs"=>{
-            content=rect(0.,0.,w,h);
-            for i in 1..((w/25.).ceil() as usize).min(1000){write!(content,"<path fill='none' d='M {} 0 V {h}'/>",i as f64*25.).unwrap();}
-            write!(content,"<path fill='none' d='M 0 {} H {w} M {} 0 L {w} {} L {} {h}'/>",h/2.,(w-25.).max(0.),h/2.,(w-25.).max(0.)).unwrap();
+        "mxgraph.ios7ui.horlines" => {
+            content = String::new();
+            let count = number(s, "lines", 3.)?.clamp(1., 100.) as usize;
+            for i in 0..count {
+                write!(
+                    content,
+                    "<path fill='none' d='M 0 {} H {w}'/>",
+                    (i as f64 + 0.5) * h / count as f64
+                )
+                .unwrap();
+            }
         }
-        "mxgraph.infographic.ribbonsimple"=>{
-            let a=number(s,"notch1",0.5)?.clamp(0.,w);let b=number(s,"notch2",0.5)?.clamp(0.,w);
-            content=format!("<path d='M 0 {h} L {a} {} L 0 0 H {} L {w} {} L {} {h} Z'/>",h/2.,w-b,h/2.,w-b);
+        "mxgraph.atlassian.check" => {
+            content = format!(
+                "<path fill='none' d='M 0 {} L {} {h} L {w} 0'/>",
+                h * 0.5,
+                w * 0.3
+            )
         }
-        "mxgraph.infographic.cylinder"=>{
-            let r=number(s,"size",0.15)?.clamp(0.,0.5)*h;
-            content=format!("<path d='M 0 {r} A {} {r} 0 0 1 {w} {r} V {} A {} {r} 0 0 1 0 {} Z'/><ellipse cx='{}' cy='{r}' rx='{}' ry='{r}'/>",w/2.,h-r,w/2.,h-r,w/2.,w/2.);
+        "mxgraph.atlassian.x" => {
+            content = format!("<path fill='none' d='M 0 0 L {w} {h} M {w} 0 L 0 {h}'/>")
         }
-        "mxgraph.basic.arc" | "mxgraph.basic.pie" | "mxgraph.basic.partconcellipse" | "mxgraph.infographic.partconcellipse"=>{
-            let start=number(s,"startAngle",0.25)?.clamp(0.,1.);
-            let end=number(s,"endAngle",0.75)?.clamp(0.,1.);
-            let span=if (end-start).abs()>=1. {1.}else{(end-start).rem_euclid(1.)};
-            let point=|t:f64,scale:f64|{let a=t*std::f64::consts::TAU;(w/2.+a.sin()*w/2.*scale,h/2.-a.cos()*h/2.*scale)};
-            let (a,b)=point(start,1.);let (mx,my)=point(start+span/2.,1.);let (c,d)=point(start+span,1.);
-            let outer=format!("M {a} {b} A {} {} 0 0 1 {mx} {my} A {} {} 0 0 1 {c} {d}",w/2.,h/2.,w/2.,h/2.);
-            if name.ends_with(".arc"){content=format!("<path fill='none' d='{outer}'/>");}
-            else if name.ends_with(".pie"){content=format!("<path d='{outer} L {} {} Z'/>",w/2.,h/2.);}
-            else{let inner=(1.-number(s,"arcWidth",0.5)?.clamp(0.,1.)).max(0.00001);let (a,b)=point(start,inner);let (mx,my)=point(start+span/2.,inner);let (c,d)=point(start+span,inner);
-                content=format!("<path d='{outer} L {c} {d} A {} {} 0 0 0 {mx} {my} A {} {} 0 0 0 {a} {b} Z'/>",w/2.*inner,h/2.*inner,w/2.*inner,h/2.*inner);
+        "mxgraph.mockup.forms.searchbox" | "mxgraph.mockup.forms.combobox" => {
+            content = rect(0., 0., w, h);
+            let r = (h * 0.2).min(w * 0.1);
+            let cx = w - h * 0.5;
+            let cy = h * 0.45;
+            if name.ends_with("searchbox") {
+                write!(content,"<circle cx='{cx}' cy='{cy}' r='{r}' fill='none'/><path fill='none' d='M {} {} L {} {}'/>",cx+r*0.7,cy+r*0.7,cx+r*1.7,cy+r*1.7).unwrap();
+            } else {
+                write!(
+                    content,
+                    "<path fill='none' d='M {} 0 V {h} M {} {} L {cx} {} L {} {}'/>",
+                    w - h,
+                    w - h * 0.75,
+                    h * 0.4,
+                    h * 0.65,
+                    w - h * 0.25,
+                    h * 0.4
+                )
+                .unwrap();
+            }
+        }
+        "mxgraph.floorplan.stairs" => {
+            content = rect(0., 0., w, h);
+            for i in 1..((w / 25.).ceil() as usize).min(1000) {
+                write!(
+                    content,
+                    "<path fill='none' d='M {} 0 V {h}'/>",
+                    i as f64 * 25.
+                )
+                .unwrap();
+            }
+            write!(
+                content,
+                "<path fill='none' d='M 0 {} H {w} M {} 0 L {w} {} L {} {h}'/>",
+                h / 2.,
+                (w - 25.).max(0.),
+                h / 2.,
+                (w - 25.).max(0.)
+            )
+            .unwrap();
+        }
+        "mxgraph.infographic.ribbonsimple" => {
+            let a = number(s, "notch1", 0.5)?.clamp(0., w);
+            let b = number(s, "notch2", 0.5)?.clamp(0., w);
+            content = format!(
+                "<path d='M 0 {h} L {a} {} L 0 0 H {} L {w} {} L {} {h} Z'/>",
+                h / 2.,
+                w - b,
+                h / 2.,
+                w - b
+            );
+        }
+        "mxgraph.infographic.cylinder" => {
+            let r = number(s, "size", 0.15)?.clamp(0., 0.5) * h;
+            content = format!(
+                "<path d='M 0 {r} A {} {r} 0 0 1 {w} {r} V {} A {} {r} 0 0 1 0 {} Z'/><ellipse cx='{}' cy='{r}' rx='{}' ry='{r}'/>",
+                w / 2.,
+                h - r,
+                w / 2.,
+                h - r,
+                w / 2.,
+                w / 2.
+            );
+        }
+        "mxgraph.basic.arc"
+        | "mxgraph.basic.pie"
+        | "mxgraph.basic.partconcellipse"
+        | "mxgraph.infographic.partconcellipse" => {
+            let start = number(s, "startAngle", 0.25)?.clamp(0., 1.);
+            let end = number(s, "endAngle", 0.75)?.clamp(0., 1.);
+            let span = if (end - start).abs() >= 1. {
+                1.
+            } else {
+                (end - start).rem_euclid(1.)
+            };
+            let point = |t: f64, scale: f64| {
+                let a = t * std::f64::consts::TAU;
+                (
+                    w / 2. + a.sin() * w / 2. * scale,
+                    h / 2. - a.cos() * h / 2. * scale,
+                )
+            };
+            let (a, b) = point(start, 1.);
+            let (mx, my) = point(start + span / 2., 1.);
+            let (c, d) = point(start + span, 1.);
+            let outer = format!(
+                "M {a} {b} A {} {} 0 0 1 {mx} {my} A {} {} 0 0 1 {c} {d}",
+                w / 2.,
+                h / 2.,
+                w / 2.,
+                h / 2.
+            );
+            if name.ends_with(".arc") {
+                content = format!("<path fill='none' d='{outer}'/>");
+            } else if name.ends_with(".pie") {
+                content = format!("<path d='{outer} L {} {} Z'/>", w / 2., h / 2.);
+            } else {
+                let inner = (1. - number(s, "arcWidth", 0.5)?.clamp(0., 1.)).max(0.00001);
+                let (a, b) = point(start, inner);
+                let (mx, my) = point(start + span / 2., inner);
+                let (c, d) = point(start + span, inner);
+                content = format!(
+                    "<path d='{outer} L {c} {d} A {} {} 0 0 0 {mx} {my} A {} {} 0 0 0 {a} {b} Z'/>",
+                    w / 2. * inner,
+                    h / 2. * inner,
+                    w / 2. * inner,
+                    h / 2. * inner
+                );
             }
         }
 
@@ -155,8 +267,12 @@ pub(super) fn svg(
             content = format!("<rect width='{w}' height='{h}' rx='{}'/>", w.min(h) * 0.12)
         }
         "mxgraph.bpmn.shape" | "mxgraph.bpmn.event" | "mxgraph.bpmn.gateway2" => {
-            let gateway=name.ends_with("gateway2");
-            let outline = if gateway {"gateway"} else {s.get("outline").map_or("standard", String::as_str)};
+            let gateway = name.ends_with("gateway2");
+            let outline = if gateway {
+                "gateway"
+            } else {
+                s.get("outline").map_or("standard", String::as_str)
+            };
             let ellipse = |inset: f64| {
                 format!(
                     "<ellipse cx='{}' cy='{}' rx='{}' ry='{}'/>",
@@ -189,14 +305,26 @@ pub(super) fn svg(
             };
             let symbol = if gateway {
                 match s.get("gwType").map(String::as_str) {
-                    Some("parallel")=>"parallelGw", Some("inclusive")=>"inclusiveGw",
-                    _=>s.get("symbol").map_or("general",String::as_str),
+                    Some("parallel") => "parallelGw",
+                    Some("inclusive") => "inclusiveGw",
+                    _ => s.get("symbol").map_or("general", String::as_str),
                 }
-            } else {s.get("symbol").map_or("general", String::as_str)};
+            } else {
+                s.get("symbol").map_or("general", String::as_str)
+            };
             content.push_str("<g fill='none'>");
             match symbol {
                 "general" | "none" => {}
-                "terminate" => write!(content,"<ellipse cx='{}' cy='{}' rx='{}' ry='{}' fill='{}'/>",w/2.,h/2.,w*0.32,h*0.32,escape(s.get("strokeColor").map_or("black",String::as_str))).unwrap(),
+                "terminate" => write!(
+                    content,
+                    "<ellipse cx='{}' cy='{}' rx='{}' ry='{}' fill='{}'/>",
+                    w / 2.,
+                    h / 2.,
+                    w * 0.32,
+                    h * 0.32,
+                    escape(s.get("strokeColor").map_or("black", String::as_str))
+                )
+                .unwrap(),
                 "message" => write!(
                     content,
                     "{}<path d='M {} {} L {} {} L {} {}'/>",
@@ -253,24 +381,87 @@ pub(super) fn svg(
                         .unwrap();
                     }
                 }
-                "conditional"=>{
-                    write!(content,"<rect x='{}' y='{}' width='{}' height='{}' fill='none'/>",w*0.32,h*0.26,w*0.36,h*0.48).unwrap();
-                    for y in [0.38,0.5,0.62]{write!(content,"<path d='M {} {} H {}'/>",w*0.38,h*y,w*0.62).unwrap();}
+                "conditional" => {
+                    write!(
+                        content,
+                        "<rect x='{}' y='{}' width='{}' height='{}' fill='none'/>",
+                        w * 0.32,
+                        h * 0.26,
+                        w * 0.36,
+                        h * 0.48
+                    )
+                    .unwrap();
+                    for y in [0.38, 0.5, 0.62] {
+                        write!(
+                            content,
+                            "<path d='M {} {} H {}'/>",
+                            w * 0.38,
+                            h * y,
+                            w * 0.62
+                        )
+                        .unwrap();
+                    }
                 }
-                "escalation"=>write!(content,"<path d='M {} {} L {} {} L {} {} L {} {} Z'/>",w*0.5,h*0.25,w*0.72,h*0.72,w*0.5,h*0.55,w*0.28,h*0.72).unwrap(),
-                "error"=>write!(content,"<path d='M {} {} L {} {} L {} {} L {} {} L {} {} L {} {} Z'/>",w*0.6,h*0.25,w*0.3,h*0.54,w*0.48,h*0.51,w*0.4,h*0.75,w*0.7,h*0.46,w*0.52,h*0.49).unwrap(),
-                "multiple"=>{
-                    let pts=(0..5).map(|i|{let a=(i as f64*72.-90.).to_radians();format!("{},{}",w*(0.5+0.26*a.cos()),h*(0.5+0.26*a.sin()))}).collect::<Vec<_>>().join(" ");
-                    write!(content,"<polygon points='{pts}'/>").unwrap();
+                "escalation" => write!(
+                    content,
+                    "<path d='M {} {} L {} {} L {} {} L {} {} Z'/>",
+                    w * 0.5,
+                    h * 0.25,
+                    w * 0.72,
+                    h * 0.72,
+                    w * 0.5,
+                    h * 0.55,
+                    w * 0.28,
+                    h * 0.72
+                )
+                .unwrap(),
+                "error" => write!(
+                    content,
+                    "<path d='M {} {} L {} {} L {} {} L {} {} L {} {} L {} {} Z'/>",
+                    w * 0.6,
+                    h * 0.25,
+                    w * 0.3,
+                    h * 0.54,
+                    w * 0.48,
+                    h * 0.51,
+                    w * 0.4,
+                    h * 0.75,
+                    w * 0.7,
+                    h * 0.46,
+                    w * 0.52,
+                    h * 0.49
+                )
+                .unwrap(),
+                "multiple" => {
+                    let pts = (0..5)
+                        .map(|i| {
+                            let a = (i as f64 * 72. - 90.).to_radians();
+                            format!(
+                                "{},{}",
+                                w * (0.5 + 0.26 * a.cos()),
+                                h * (0.5 + 0.26 * a.sin())
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    write!(content, "<polygon points='{pts}'/>").unwrap();
                 }
-                "terminate2"=>write!(content,"<ellipse cx='{}' cy='{}' rx='{}' ry='{}' fill='currentColor'/>",w*0.5,h*0.5,w*0.25,h*0.25).unwrap(),
+                "terminate2" => write!(
+                    content,
+                    "<ellipse cx='{}' cy='{}' rx='{}' ry='{}' fill='currentColor'/>",
+                    w * 0.5,
+                    h * 0.5,
+                    w * 0.25,
+                    h * 0.25
+                )
+                .unwrap(),
                 _ => {
                     warnings.insert(format!("BPMN symbol {symbol} needs appearance review"));
                 }
             }
             content.push_str("</g>");
         }
-        _ if extra::NAMES.contains(&name.as_str()) => content=extra::content(&name,s,w,h)?,
+        _ if extra::NAMES.contains(&name.as_str()) => content = extra::content(&name, s, w, h)?,
         _ => return Err(error("Unsupported parameterized stencil")),
     }
     Ok(format!(

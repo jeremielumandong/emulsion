@@ -291,11 +291,10 @@ pub fn parse(name: &str, args: &Value) -> Result<Request, String> {
                         .into(),
                 );
             }
-            if let Some(ev) = &v.options.exposure_ev {
-                if ev.len() != v.paths.len() || ev.iter().any(|e| !e.is_finite() || e.abs() > 40.) {
+            if let Some(ev) = &v.options.exposure_ev
+                && (ev.len() != v.paths.len() || ev.iter().any(|e| !e.is_finite() || e.abs() > 40.)) {
                     return Err("Provide one finite exposure EV per source (within ±40)".into());
                 }
-            }
             Request::Hdr(v)
         }
         "library_profiles" => {

@@ -305,14 +305,21 @@ impl Scene {
             }
             *spec = Arc::new(text);
             *cache = VectorRaster::text(spec.clone(), self.width, self.height);
-            if s.label_above_children { foreground_labels.push(shape.label); }
+            if s.label_above_children {
+                foreground_labels.push(shape.label);
+            }
             for (path, style) in s.extra_paths {
                 let path_id = doc.alloc_id();
                 let path = Arc::new(path);
-                let mut node = Node::new(path_id, "Visio geometry", NodeKind::Path {
-                    path: path.clone(), style,
-                    cache: VectorRaster::path(path, style, self.width, self.height),
-                });
+                let mut node = Node::new(
+                    path_id,
+                    "Visio geometry",
+                    NodeKind::Path {
+                        path: path.clone(),
+                        style,
+                        cache: VectorRaster::path(path, style, self.width, self.height),
+                    },
+                );
                 node.parent = Some(id);
                 let label_index = doc.nodes.iter().position(|n| n.id == shape.label).unwrap();
                 doc.nodes.insert(label_index, node);
@@ -377,15 +384,27 @@ impl Scene {
         // A Visio group paints its own text after its child artwork. Preserve
         // sibling order for everything else, including labels in nested groups.
         let labels = foreground_labels.into_iter().collect::<HashSet<_>>();
-        let (mut nodes, mut text): (Vec<_>, Vec<_>) = doc.nodes.drain(..).partition(|n| !labels.contains(&n.id));
+        let (mut nodes, mut text): (Vec<_>, Vec<_>) =
+            doc.nodes.drain(..).partition(|n| !labels.contains(&n.id));
         nodes.append(&mut text);
         doc.nodes = nodes;
         doc.normalize();
         doc.diagram = Some(Arc::new(model));
         diagram::synchronize(&Document::new(self.width, self.height), &mut doc).map_err(error)?;
         if self.fit {
-            let b=doc.nodes.iter().filter(|n|n.parent.is_none() && !matches!(n.kind,NodeKind::Fill{..})).filter_map(|n|emulsion_core::geometry::node_bounds(&doc,n.id)).fold(emulsion_raster::IRect::default(),|a,b|a.union(&b));
-            if !b.is_empty(){emulsion_core::geometry::crop(&mut doc,emulsion_raster::IRect::new(b.x-2,b.y-2,b.w+4,b.h+4),0.);}
+            let b = doc
+                .nodes
+                .iter()
+                .filter(|n| n.parent.is_none() && !matches!(n.kind, NodeKind::Fill { .. }))
+                .filter_map(|n| emulsion_core::geometry::node_bounds(&doc, n.id))
+                .fold(emulsion_raster::IRect::default(), |a, b| a.union(&b));
+            if !b.is_empty() {
+                emulsion_core::geometry::crop(
+                    &mut doc,
+                    emulsion_raster::IRect::new(b.x - 2, b.y - 2, b.w + 4, b.h + 4),
+                    0.,
+                );
+            }
         }
         doc.validate().map_err(|e| error(e.to_string()))?;
         if doc
@@ -419,7 +438,11 @@ impl Scene {
     }
 }
 fn finish(scenes: Vec<Scene>, mut warnings: BTreeSet<String>) -> Result<Imported> {
-    if scenes.is_empty() { return Err(error("Diagram contains no drawing pages or stencil masters.")); }
+    if scenes.is_empty() {
+        return Err(error(
+            "Diagram contains no drawing pages or stencil masters.",
+        ));
+    }
     if scenes.len() > emulsion_core::project::MAX_PAGES {
         return Err(error("Diagram page count exceeds the project limit."));
     }

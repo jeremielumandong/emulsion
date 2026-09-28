@@ -24,10 +24,7 @@ pub(super) fn refresh_keys(doc: &mut Document) {
         }
         definition.member_keys.retain(|id, _| ids.contains(id));
         for id in ids {
-            definition
-                .member_keys
-                .entry(id)
-                .or_insert_with(identity);
+            definition.member_keys.entry(id).or_insert_with(identity);
         }
     }
 }

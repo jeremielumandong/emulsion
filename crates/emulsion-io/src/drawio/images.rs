@@ -44,8 +44,13 @@ pub(crate) fn insert(
     let raster = if mime.starts_with("image/svg+xml") {
         let text = std::str::from_utf8(&bytes).map_err(|e| error(e.to_string()))?;
         if preserve_aspect {
-            let tree=resvg::usvg::Tree::from_str(text,&crate::svg_vectors::options()).map_err(|e|error(e.to_string()))?;
-            bounds=fit(bounds,f64::from(tree.size().width()),f64::from(tree.size().height()));
+            let tree = resvg::usvg::Tree::from_str(text, &crate::svg_vectors::options())
+                .map_err(|e| error(e.to_string()))?;
+            bounds = fit(
+                bounds,
+                f64::from(tree.size().width()),
+                f64::from(tree.size().height()),
+            );
         }
         match crate::svg_vectors::append(doc, parent, text, bounds) {
             Ok(notes) => {
@@ -114,7 +119,13 @@ pub(crate) fn insert(
     *pixels_remaining = pixels_remaining
         .checked_sub(pixels)
         .ok_or_else(|| error("Embedded images exceed the 16 megapixel page limit"))?;
-    if preserve_aspect && svg_source.is_none(){bounds=fit(bounds,f64::from(raster.width()),f64::from(raster.height()));}
+    if preserve_aspect && svg_source.is_none() {
+        bounds = fit(
+            bounds,
+            f64::from(raster.width()),
+            f64::from(raster.height()),
+        );
+    }
     let [x, y, w, h] = bounds;
     let placement = Placement {
         x,
@@ -152,7 +163,9 @@ pub(crate) fn insert(
     Ok(())
 }
 
-fn fit([x,y,w,h]:[f64;4],sw:f64,sh:f64)->[f64;4] {
-    let scale=(w/sw).min(h/sh);let width=sw*scale;let height=sh*scale;
-    [x+(w-width)/2.,y+(h-height)/2.,width,height]
+fn fit([x, y, w, h]: [f64; 4], sw: f64, sh: f64) -> [f64; 4] {
+    let scale = (w / sw).min(h / sh);
+    let width = sw * scale;
+    let height = sh * scale;
+    [x + (w - width) / 2., y + (h - height) / 2., width, height]
 }

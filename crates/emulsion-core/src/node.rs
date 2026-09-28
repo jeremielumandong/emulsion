@@ -61,7 +61,10 @@ impl LayerColor {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum SmartEditable {
     /// Bounded native layered document. Native IO stores bytes in deduplicated ZIP resources.
-    Document { archive: Arc<Vec<u8>>, external: Option<crate::smart_source::ExternalLink> },
+    Document {
+        archive: Arc<Vec<u8>>,
+        external: Option<crate::smart_source::ExternalLink>,
+    },
     /// Original SVG for resolution-independent placed artwork.
     Svg {
         xml: Arc<str>,

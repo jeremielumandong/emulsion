@@ -8,7 +8,8 @@ use emulsion_core::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 pub(crate) const READ_ONLY: &[&str] = &[
-    "get_diagram_review", "get_diagram_structure",
+    "get_diagram_review",
+    "get_diagram_structure",
     "list_document_stencils",
     "describe_diagram",
     "list_diagram_stencils",
@@ -16,7 +17,12 @@ pub(crate) const READ_ONLY: &[&str] = &[
     "list_diagram_stencil_packs",
 ];
 pub(crate) const DESTRUCTIVE: &[&str] = &[
-    "set_diagram_default_style", "set_diagram_thumbnail", "add_diagram_comment", "resolve_diagram_comment", "delete_diagram_comment", "set_diagram_structure",
+    "set_diagram_default_style",
+    "set_diagram_thumbnail",
+    "add_diagram_comment",
+    "resolve_diagram_comment",
+    "delete_diagram_comment",
+    "set_diagram_structure",
     "insert_document_stencil",
     "set_diagram_shape",
     "set_diagram_object_details",
@@ -68,16 +74,66 @@ fn def(name: &str, description: &str, properties: Value, required: &[&str]) -> T
 }
 pub(crate) fn definitions() -> Vec<ToolDef> {
     vec![
-        def("get_diagram_structure","Read structured UML/ERD fields for a diagram object.",json!({"node":node()}),&["node"]),
-        def("set_diagram_structure","Convert or edit a UML class / ER entity with native resizable compartments. Fields and methods are single-line strings. One undo step.",json!({"node":node(),"kind":{"type":"string","enum":["class","entity"]},"fields":{"type":"object","additionalProperties":false,"properties":{"title":{"type":"string"},"attributes":{"type":"array","items":{"type":"string"}},"methods":{"type":"array","items":{"type":"string"}}},"required":["title","attributes"]}}),&["node","kind","fields"]),
-        def("get_diagram_review", "Read saved shape/connector defaults, thumbnail selection and local comment threads.",json!({}),&[]),
-        def("set_diagram_default_style", "Save the selected object's style for newly created shapes or connectors. Omit source to reset. Saved with the document and undoable.",json!({"source":node(),"connector":{"type":"boolean"}}),&[]),
-        def("set_diagram_thumbnail", "Choose diagram objects for the page thumbnail. Empty nodes restores the full page.",json!({"nodes":{"type":"array","maxItems":1000,"items":node()}}),&["nodes"]),
-        def("add_diagram_comment", "Start a local comment thread on an object, or reply to a thread. Comments are persisted and undoable; this does not send messages externally.",json!({"node":node(),"thread":node(),"author":{"type":"string","maxLength":120},"text":{"type":"string","maxLength":4096}}),&["node","author","text"]),
-        def("resolve_diagram_comment", "Resolve or reopen a local comment thread.",json!({"thread":node(),"resolved":{"type":"boolean"}}),&["thread","resolved"]),
-        def("delete_diagram_comment", "Delete a local comment thread, with undo.",json!({"thread":node()}),&["thread"]),
-        def("list_document_stencils", "List reusable shapes automatically available from the active diagram, including imported artwork.",json!({}),&[]),
-        def("insert_document_stencil", "Place a reusable copy of a shape from this diagram at a document-space center. Preserves native vector artwork and styling, remaps IDs and excludes connections and container contents. One undo step.",json!({"source":node(),"center":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}}),&["source","center"]),
+        def(
+            "get_diagram_structure",
+            "Read structured UML/ERD fields for a diagram object.",
+            json!({"node":node()}),
+            &["node"],
+        ),
+        def(
+            "set_diagram_structure",
+            "Convert or edit a UML class / ER entity with native resizable compartments. Fields and methods are single-line strings. One undo step.",
+            json!({"node":node(),"kind":{"type":"string","enum":["class","entity"]},"fields":{"type":"object","additionalProperties":false,"properties":{"title":{"type":"string"},"attributes":{"type":"array","items":{"type":"string"}},"methods":{"type":"array","items":{"type":"string"}}},"required":["title","attributes"]}}),
+            &["node", "kind", "fields"],
+        ),
+        def(
+            "get_diagram_review",
+            "Read saved shape/connector defaults, thumbnail selection and local comment threads.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "set_diagram_default_style",
+            "Save the selected object's style for newly created shapes or connectors. Omit source to reset. Saved with the document and undoable.",
+            json!({"source":node(),"connector":{"type":"boolean"}}),
+            &[],
+        ),
+        def(
+            "set_diagram_thumbnail",
+            "Choose diagram objects for the page thumbnail. Empty nodes restores the full page.",
+            json!({"nodes":{"type":"array","maxItems":1000,"items":node()}}),
+            &["nodes"],
+        ),
+        def(
+            "add_diagram_comment",
+            "Start a local comment thread on an object, or reply to a thread. Comments are persisted and undoable; this does not send messages externally.",
+            json!({"node":node(),"thread":node(),"author":{"type":"string","maxLength":120},"text":{"type":"string","maxLength":4096}}),
+            &["node", "author", "text"],
+        ),
+        def(
+            "resolve_diagram_comment",
+            "Resolve or reopen a local comment thread.",
+            json!({"thread":node(),"resolved":{"type":"boolean"}}),
+            &["thread", "resolved"],
+        ),
+        def(
+            "delete_diagram_comment",
+            "Delete a local comment thread, with undo.",
+            json!({"thread":node()}),
+            &["thread"],
+        ),
+        def(
+            "list_document_stencils",
+            "List reusable shapes automatically available from the active diagram, including imported artwork.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "insert_document_stencil",
+            "Place a reusable copy of a shape from this diagram at a document-space center. Preserves native vector artwork and styling, remaps IDs and excludes connections and container contents. One undo step.",
+            json!({"source":node(),"center":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}}),
+            &["source", "center"],
+        ),
         def(
             "list_diagram_stencil_packs",
             "List installed local stencil packs and their reusable entries.",
@@ -96,8 +152,18 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
             json!({"theme":{"type":"string"},"nodes":{"type":"array","minItems":1,"items":node()}}),
             &["theme"],
         ),
-        def("set_diagram_object_details", "Patch a shape's note, alternative text and HTTP(S) link. Empty values remove fields; omitted fields remain unchanged. One undo step, shared with the object context menu.", json!({"node":node(),"note":{"type":"string","maxLength":4096},"alt_text":{"type":"string","maxLength":4096},"link":{"type":"string","maxLength":4096}}), &["node"]),
-        def("copy_diagram_style", "Copy native body/connector paint and label typography to diagram objects or groups. Content, geometry, IDs and connections remain unchanged; one undo step.", json!({"source":node(),"nodes":{"type":"array","minItems":1,"maxItems":10000,"items":node()}}), &["source","nodes"]),
+        def(
+            "set_diagram_object_details",
+            "Patch a shape's note, alternative text and HTTP(S) link. Empty values remove fields; omitted fields remain unchanged. One undo step, shared with the object context menu.",
+            json!({"node":node(),"note":{"type":"string","maxLength":4096},"alt_text":{"type":"string","maxLength":4096},"link":{"type":"string","maxLength":4096}}),
+            &["node"],
+        ),
+        def(
+            "copy_diagram_style",
+            "Copy native body/connector paint and label typography to diagram objects or groups. Content, geometry, IDs and connections remain unchanged; one undo step.",
+            json!({"source":node(),"nodes":{"type":"array","minItems":1,"maxItems":10000,"items":node()}}),
+            &["source", "nodes"],
+        ),
         def(
             "describe_diagram",
             "Inspect shape/connector IDs, geometry, labels, ports, container memberships, conditional styles and data without changing the document.",
@@ -240,8 +306,23 @@ fn label_command(editor: &Editor, id: NodeId, label: &str) -> Result<Command, St
 }
 fn read(doc: &Document, name: &str, args: &Value) -> Result<Value, String> {
     match name {
-        "get_diagram_structure" => {let id=args["node"].as_u64().ok_or("Invalid object")?;if !doc.diagram.as_ref().is_some_and(|m|m.shapes.contains_key(&id)){return Err("Select a diagram shape".into());}Ok(json!({"fields":diagram::structure::get(doc,id)}))}
-        "get_diagram_review" => Ok(json!(doc.diagram.as_deref().ok_or("Open a diagram first")?.settings)),
+        "get_diagram_structure" => {
+            let id = args["node"].as_u64().ok_or("Invalid object")?;
+            if !doc
+                .diagram
+                .as_ref()
+                .is_some_and(|m| m.shapes.contains_key(&id))
+            {
+                return Err("Select a diagram shape".into());
+            }
+            Ok(json!({"fields":diagram::structure::get(doc,id)}))
+        }
+        "get_diagram_review" => Ok(json!(
+            doc.diagram
+                .as_deref()
+                .ok_or("Open a diagram first")?
+                .settings
+        )),
         "list_document_stencils" => Ok(json!({"stencils":diagram::document_stencils(doc)})),
         "describe_diagram" => {
             let model = doc.diagram.as_deref().cloned().unwrap_or_default();
@@ -318,22 +399,70 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         return Err("Finish the current edit before changing the diagram".into());
     }
     match name {
-        "get_diagram_review" | "get_diagram_structure" => read(&editor.doc,name,args),
-        "set_diagram_structure" => {let id=args["node"].as_u64().filter(|id|*id>0).ok_or("Invalid node")?;let kind:ShapeKind=decode(&args["kind"],"kind")?;let fields=decode(&args["fields"],"fields")?;diagram::structure::set(editor,id,kind,fields)?;Ok(json!({"node":id}))}
-        "set_diagram_default_style" => {
-            let source=args.get("source").map(|v|v.as_u64().filter(|id|*id>0).ok_or("Invalid source")).transpose()?;
-            let connector=args.get("connector").map(|v|v.as_bool().ok_or("connector must be boolean")).transpose()?.unwrap_or(false);
-            diagram::workspace::set_default_style(editor,source,connector)?;Ok(json!({"saved":source.is_some()}))
+        "get_diagram_review" | "get_diagram_structure" => read(&editor.doc, name, args),
+        "set_diagram_structure" => {
+            let id = args["node"]
+                .as_u64()
+                .filter(|id| *id > 0)
+                .ok_or("Invalid node")?;
+            let kind: ShapeKind = decode(&args["kind"], "kind")?;
+            let fields = decode(&args["fields"], "fields")?;
+            diagram::structure::set(editor, id, kind, fields)?;
+            Ok(json!({"node":id}))
         }
-        "set_diagram_thumbnail" => {let ids:Vec<NodeId>=decode(&args["nodes"],"nodes")?;diagram::workspace::set_thumbnail(editor,ids)?;Ok(json!({"updated":true}))}
+        "set_diagram_default_style" => {
+            let source = args
+                .get("source")
+                .map(|v| v.as_u64().filter(|id| *id > 0).ok_or("Invalid source"))
+                .transpose()?;
+            let connector = args
+                .get("connector")
+                .map(|v| v.as_bool().ok_or("connector must be boolean"))
+                .transpose()?
+                .unwrap_or(false);
+            diagram::workspace::set_default_style(editor, source, connector)?;
+            Ok(json!({"saved":source.is_some()}))
+        }
+        "set_diagram_thumbnail" => {
+            let ids: Vec<NodeId> = decode(&args["nodes"], "nodes")?;
+            diagram::workspace::set_thumbnail(editor, ids)?;
+            Ok(json!({"updated":true}))
+        }
         "add_diagram_comment" => {
-            let id=args["node"].as_u64().filter(|id|*id>0).ok_or("Invalid node")?;
-            let thread=args.get("thread").map(|v|v.as_u64().filter(|id|*id>0).ok_or("Invalid thread")).transpose()?;
-            let thread=diagram::workspace::add_comment(editor,id,thread,text(args,"author",None)?,text(args,"text",None)?)?;Ok(json!({"thread":thread}))
+            let id = args["node"]
+                .as_u64()
+                .filter(|id| *id > 0)
+                .ok_or("Invalid node")?;
+            let thread = args
+                .get("thread")
+                .map(|v| v.as_u64().filter(|id| *id > 0).ok_or("Invalid thread"))
+                .transpose()?;
+            let thread = diagram::workspace::add_comment(
+                editor,
+                id,
+                thread,
+                text(args, "author", None)?,
+                text(args, "text", None)?,
+            )?;
+            Ok(json!({"thread":thread}))
         }
         "resolve_diagram_comment" | "delete_diagram_comment" => {
-            let thread=args["thread"].as_u64().filter(|id|*id>0).ok_or("Invalid thread")?;
-            if name=="delete_diagram_comment" {diagram::workspace::delete_comment_thread(editor,thread)?;}else{diagram::workspace::resolve_comment(editor,thread,args["resolved"].as_bool().ok_or("resolved must be boolean")?)?;}Ok(json!({"thread":thread}))
+            let thread = args["thread"]
+                .as_u64()
+                .filter(|id| *id > 0)
+                .ok_or("Invalid thread")?;
+            if name == "delete_diagram_comment" {
+                diagram::workspace::delete_comment_thread(editor, thread)?;
+            } else {
+                diagram::workspace::resolve_comment(
+                    editor,
+                    thread,
+                    args["resolved"]
+                        .as_bool()
+                        .ok_or("resolved must be boolean")?,
+                )?;
+            }
+            Ok(json!({"thread":thread}))
         }
         "describe_diagram"
         | "list_document_stencils"
@@ -341,24 +470,31 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         | "list_diagram_library"
         | "list_diagram_stencil_packs" => read(&editor.doc, name, args),
         "insert_document_stencil" => {
-            let source=id(&args["source"])?;
-            let center:[f64;2]=decode(&args["center"],"center")?;
-            let nodes=diagram::insert_document_stencil(editor,source,(center[0],center[1]))?;
+            let source = id(&args["source"])?;
+            let center: [f64; 2] = decode(&args["center"], "center")?;
+            let nodes = diagram::insert_document_stencil(editor, source, (center[0], center[1]))?;
             Ok(json!({"nodes":nodes}))
         }
         "set_diagram_object_details" => {
-            let node=id(&args["node"])?;
-            let mut fields=std::collections::BTreeMap::new();
-            for key in ["note","alt_text","link"] {if let Some(value)=args.get(key){fields.insert(key.into(),value.as_str().ok_or("Details must be text")?.to_string());}}
-            let commands=diagram::object_details_commands(&editor.doc,node,&fields)?;
-            commit(editor,commands)?;
+            let node = id(&args["node"])?;
+            let mut fields = std::collections::BTreeMap::new();
+            for key in ["note", "alt_text", "link"] {
+                if let Some(value) = args.get(key) {
+                    fields.insert(
+                        key.into(),
+                        value.as_str().ok_or("Details must be text")?.to_string(),
+                    );
+                }
+            }
+            let commands = diagram::object_details_commands(&editor.doc, node, &fields)?;
+            commit(editor, commands)?;
             Ok(json!({"node":node,"data":editor.doc.diagram.as_ref().unwrap().shapes[&node].data}))
         }
         "copy_diagram_style" => {
-            let style=diagram::ObjectStyle::capture(&editor.doc,id(&args["source"])?)?;
-            let targets=decode::<Vec<NodeId>>(&args["nodes"],"nodes")?;
-            let commands=style.commands(&editor.doc,&targets)?;
-            commit(editor,commands)?;
+            let style = diagram::ObjectStyle::capture(&editor.doc, id(&args["source"])?)?;
+            let targets = decode::<Vec<NodeId>>(&args["nodes"], "nodes")?;
+            let commands = style.commands(&editor.doc, &targets)?;
+            commit(editor, commands)?;
             Ok(json!({"nodes":targets}))
         }
         "apply_diagram_theme" => {
@@ -512,19 +648,33 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 if let Some(value) = args.get("target") {
                     edge.target = endpoint(value)?;
                 }
-                if let Some(value) = args.get("jump_style") { edge.jump_style=decode(value,"jump_style")?; }
-                if let Some(value)=args.get("double_line"){edge.double_line=decode(value,"double_line")?;}
-                if let Some(value)=args.get("label_background"){edge.label_background=decode(value,"label_background")?;}
-                if let Some(value) = args.get("corner_radius") { edge.corner_radius=decode(value,"corner_radius")?; }
-                if let Some(value) = args.get("jump_size") { edge.jump_size=decode(value,"jump_size")?; }
+                if let Some(value) = args.get("jump_style") {
+                    edge.jump_style = decode(value, "jump_style")?;
+                }
+                if let Some(value) = args.get("double_line") {
+                    edge.double_line = decode(value, "double_line")?;
+                }
+                if let Some(value) = args.get("label_background") {
+                    edge.label_background = decode(value, "label_background")?;
+                }
+                if let Some(value) = args.get("corner_radius") {
+                    edge.corner_radius = decode(value, "corner_radius")?;
+                }
+                if let Some(value) = args.get("jump_size") {
+                    edge.jump_size = decode(value, "jump_size")?;
+                }
                 if let Some(value) = args.get("routing") {
                     edge.routing = decode(value, "routing")?;
                 }
                 if let Some(value) = args.get("waypoints") {
                     edge.waypoints = decode(value, "waypoints")?;
                 }
-                if let Some(value) = args.get("label_position") { edge.label_position=decode(value,"label_position")?; }
-                if let Some(value) = args.get("label_normal") { edge.label_normal=decode(value,"label_normal")?; }
+                if let Some(value) = args.get("label_position") {
+                    edge.label_position = decode(value, "label_position")?;
+                }
+                if let Some(value) = args.get("label_normal") {
+                    edge.label_normal = decode(value, "label_normal")?;
+                }
                 if let Some(value) = args.get("label_offset") {
                     edge.label_offset = decode(value, "label_offset")?;
                 }
@@ -540,12 +690,25 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 if let Some(value) = args.get("arrow_end") {
                     edge.arrow_end = decode(value, "arrow_end")?;
                 }
-                if let Some(value) = args.get("reverse") { if decode::<bool>(value,"reverse")? { edge.reverse(); } }
-                if ["width", "dash", "color"].iter().any(|k| args.get(k).is_some()) {
-                    let width = args.get("width").map(|v|decode(v,"width")).transpose()?;
-                    let dash: Option<Vec<f32>> = args.get("dash").map(|v|decode(v,"dash")).transpose()?;
-                    let color = args.get("color").map(|v|decode(v,"color")).transpose()?;
-                    commands.push(diagram::connector_style_command(&editor.doc,node,width,dash.as_deref(),color)?);
+                if let Some(value) = args.get("reverse")
+                    && decode::<bool>(value, "reverse")? {
+                        edge.reverse();
+                    }
+                if ["width", "dash", "color"]
+                    .iter()
+                    .any(|k| args.get(k).is_some())
+                {
+                    let width = args.get("width").map(|v| decode(v, "width")).transpose()?;
+                    let dash: Option<Vec<f32>> =
+                        args.get("dash").map(|v| decode(v, "dash")).transpose()?;
+                    let color = args.get("color").map(|v| decode(v, "color")).transpose()?;
+                    commands.push(diagram::connector_style_command(
+                        &editor.doc,
+                        node,
+                        width,
+                        dash.as_deref(),
+                        color,
+                    )?);
                 }
             }
             if args.get("label").is_some() {
@@ -611,23 +774,67 @@ mod tests {
             .unwrap()
     }
     #[test]
-    fn diagram_review_and_structure_are_persistent_undoable_and_validated(){
-        let mut e=editor();let id=shape(&mut e,"process",30.);
-        call(&mut e,"set_diagram_structure",json!({"node":id,"kind":"class","fields":{"title":"Order","attributes":["id: uuid"],"methods":["submit()"]}}));
-        assert_eq!(call(&mut e,"get_diagram_structure",json!({"node":id}))["fields"]["title"],"Order");
-        call(&mut e,"set_diagram_default_style",json!({"source":id}));
-        call(&mut e,"set_diagram_thumbnail",json!({"nodes":[id]}));
-        let thread=call(&mut e,"add_diagram_comment",json!({"node":id,"author":"Reviewer","text":"Check status"}))["thread"].as_u64().unwrap();
-        call(&mut e,"add_diagram_comment",json!({"node":id,"thread":thread,"author":"Author","text":"Updated"}));
-        let before=e.doc.clone();
-        call(&mut e,"resolve_diagram_comment",json!({"thread":thread,"resolved":true}));e.undo();assert_eq!(e.doc,before);
-        let saved=call(&mut e,"get_diagram_review",json!({}));assert_eq!(saved["thumbnail"],json!([id]));
-        rejected(&mut e,"add_diagram_comment",json!({"node":id,"thread":999,"author":"A","text":"Bad reply"}));
-        rejected(&mut e,"set_diagram_structure",json!({"node":id,"kind":"entity","fields":{"title":"Order","attributes":[],"methods":["bad()"]}}));
-        let project=emulsion_core::project::ProjectEditor::new_project(emulsion_core::project::ProjectKind::Diagram,e.doc.clone()).unwrap();
-        let mut bytes=std::io::Cursor::new(Vec::new());emulsion_io::project::write_to(&project.snapshot().unwrap(),&mut bytes).unwrap();bytes.set_position(0);
-        assert_eq!(emulsion_io::project::read_from(bytes).unwrap().pages[0].doc,e.doc);
-        call(&mut e,"delete_diagram_comment",json!({"thread":thread}));e.undo();assert_eq!(e.doc,before);
+    fn diagram_review_and_structure_are_persistent_undoable_and_validated() {
+        let mut e = editor();
+        let id = shape(&mut e, "process", 30.);
+        call(
+            &mut e,
+            "set_diagram_structure",
+            json!({"node":id,"kind":"class","fields":{"title":"Order","attributes":["id: uuid"],"methods":["submit()"]}}),
+        );
+        assert_eq!(
+            call(&mut e, "get_diagram_structure", json!({"node":id}))["fields"]["title"],
+            "Order"
+        );
+        call(&mut e, "set_diagram_default_style", json!({"source":id}));
+        call(&mut e, "set_diagram_thumbnail", json!({"nodes":[id]}));
+        let thread = call(
+            &mut e,
+            "add_diagram_comment",
+            json!({"node":id,"author":"Reviewer","text":"Check status"}),
+        )["thread"]
+            .as_u64()
+            .unwrap();
+        call(
+            &mut e,
+            "add_diagram_comment",
+            json!({"node":id,"thread":thread,"author":"Author","text":"Updated"}),
+        );
+        let before = e.doc.clone();
+        call(
+            &mut e,
+            "resolve_diagram_comment",
+            json!({"thread":thread,"resolved":true}),
+        );
+        e.undo();
+        assert_eq!(e.doc, before);
+        let saved = call(&mut e, "get_diagram_review", json!({}));
+        assert_eq!(saved["thumbnail"], json!([id]));
+        rejected(
+            &mut e,
+            "add_diagram_comment",
+            json!({"node":id,"thread":999,"author":"A","text":"Bad reply"}),
+        );
+        rejected(
+            &mut e,
+            "set_diagram_structure",
+            json!({"node":id,"kind":"entity","fields":{"title":"Order","attributes":[],"methods":["bad()"]}}),
+        );
+        let project = emulsion_core::project::ProjectEditor::new_project(
+            emulsion_core::project::ProjectKind::Diagram,
+            e.doc.clone(),
+        )
+        .unwrap();
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        emulsion_io::project::write_to(&project.snapshot().unwrap(), &mut bytes).unwrap();
+        bytes.set_position(0);
+        assert_eq!(
+            emulsion_io::project::read_from(bytes).unwrap().pages[0].doc,
+            e.doc
+        );
+        call(&mut e, "delete_diagram_comment", json!({"thread":thread}));
+        e.undo();
+        assert_eq!(e.doc, before);
     }
     #[test]
     fn diagram_contracts_are_discoverable_and_read_tools_leave_history_unchanged() {
@@ -855,8 +1062,17 @@ mod tests {
             .unwrap();
         let mut e = Editor::new(doc.clone(), None);
         let library = call(&mut e, "list_diagram_library", json!({}));
-        assert_eq!(library["templates"].as_array().unwrap().len(), emulsion_core::diagram_library::TEMPLATES.len());
-        assert!(library["templates"].as_array().unwrap().iter().any(|t| t["id"] == "business-process"));
+        assert_eq!(
+            library["templates"].as_array().unwrap().len(),
+            emulsion_core::diagram_library::TEMPLATES.len()
+        );
+        assert!(
+            library["templates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["id"] == "business-process")
+        );
         let packs = call(&mut e, "list_diagram_stencil_packs", json!({}));
         assert_eq!(packs["available"].as_array().unwrap().len(), 12);
         assert!(
@@ -878,13 +1094,41 @@ mod tests {
     }
     #[test]
     fn crossing_style_patch_is_discoverable_and_undoable() {
-        let mut e=Editor::new(emulsion_core::diagram_library::TEMPLATES[0].build().unwrap(),None);
-        let edge=*e.doc.diagram.as_ref().unwrap().edges.keys().next().unwrap();let before=e.doc.clone();
-        call(&mut e,"set_diagram_connector",json!({"node":edge,"jump_style":"gap","jump_size":14}));
-        assert_eq!(e.doc.diagram.as_ref().unwrap().edges[&edge].jump_style,diagram::JumpStyle::Gap);
-        for value in [json!(0),json!(101),json!("large")] {rejected(&mut e,"set_diagram_connector",json!({"node":edge,"jump_size":value}));}
-        e.undo();assert_eq!(e.doc,before);
-        let defs=definitions();assert!(defs.iter().find(|d|d.name=="set_diagram_connector").unwrap().input_schema["properties"].get("jump_style").is_some());
+        let mut e = Editor::new(
+            emulsion_core::diagram_library::TEMPLATES[0]
+                .build()
+                .unwrap(),
+            None,
+        );
+        let edge = *e.doc.diagram.as_ref().unwrap().edges.keys().next().unwrap();
+        let before = e.doc.clone();
+        call(
+            &mut e,
+            "set_diagram_connector",
+            json!({"node":edge,"jump_style":"gap","jump_size":14}),
+        );
+        assert_eq!(
+            e.doc.diagram.as_ref().unwrap().edges[&edge].jump_style,
+            diagram::JumpStyle::Gap
+        );
+        for value in [json!(0), json!(101), json!("large")] {
+            rejected(
+                &mut e,
+                "set_diagram_connector",
+                json!({"node":edge,"jump_size":value}),
+            );
+        }
+        e.undo();
+        assert_eq!(e.doc, before);
+        let defs = definitions();
+        assert!(
+            defs.iter()
+                .find(|d| d.name == "set_diagram_connector")
+                .unwrap()
+                .input_schema["properties"]
+                .get("jump_style")
+                .is_some()
+        );
     }
     #[test]
     fn curved_marker_patch_moves_and_rejects_invalid_values_atomically() {
@@ -929,70 +1173,172 @@ mod tests {
     }
     #[test]
     fn connector_style_rounding_reversal_is_atomic_and_persistent() {
-        let mut e=editor();
-        let a=shape(&mut e,"process",30.);
-        let b=shape(&mut e,"decision",430.);
-        let id=call(&mut e,"add_diagram_connector",json!({"source":{"shape":a,"port":"east"},"target":{"shape":b,"port":"west"}}))["node"].as_u64().unwrap();
-        let before=e.doc.clone(); let history=e.history.len();
-        call(&mut e,"set_diagram_connector",json!({"node":id,"waypoints":[[250,90],[250,220]],"corner_radius":6,"double_line":true,"label":"Traffic","label_background":[240,245,255,255],"label_position":0.5,"label_normal":12,"width":3,"dash":[8,4,0,4],"color":[250,130,30,255],"reverse":true,"end_marker":{"kind":"diamond","size":20,"filled":false}}));
-        assert_eq!(e.history.len(),history+1);
-        let edge=&e.doc.diagram.as_ref().unwrap().edges[&id];
-        assert_eq!(edge.source.shape,b); assert_eq!(edge.target.shape,a);
-        assert_eq!(edge.waypoints,vec![(250.,220.),(250.,90.)]);
-        assert_eq!(edge.corner_radius,6.);
+        let mut e = editor();
+        let a = shape(&mut e, "process", 30.);
+        let b = shape(&mut e, "decision", 430.);
+        let id = call(
+            &mut e,
+            "add_diagram_connector",
+            json!({"source":{"shape":a,"port":"east"},"target":{"shape":b,"port":"west"}}),
+        )["node"]
+            .as_u64()
+            .unwrap();
+        let before = e.doc.clone();
+        let history = e.history.len();
+        call(
+            &mut e,
+            "set_diagram_connector",
+            json!({"node":id,"waypoints":[[250,90],[250,220]],"corner_radius":6,"double_line":true,"label":"Traffic","label_background":[240,245,255,255],"label_position":0.5,"label_normal":12,"width":3,"dash":[8,4,0,4],"color":[250,130,30,255],"reverse":true,"end_marker":{"kind":"diamond","size":20,"filled":false}}),
+        );
+        assert_eq!(e.history.len(), history + 1);
+        let edge = &e.doc.diagram.as_ref().unwrap().edges[&id];
+        assert_eq!(edge.source.shape, b);
+        assert_eq!(edge.target.shape, a);
+        assert_eq!(edge.waypoints, vec![(250., 220.), (250., 90.)]);
+        assert_eq!(edge.corner_radius, 6.);
         assert!(edge.double_path.is_some() && edge.label_background_path.is_some());
-        assert_eq!((edge.label_position,edge.label_normal),(-0.5,-12.));
-        assert!(matches!(&e.doc.node(edge.path).unwrap().kind,NodeKind::Path{path,style,..} if style.width==3. && style.dash_count==4 && style.stroke==Some([250,130,30,255]) && path.subpaths[0].anchors.iter().any(|a|a.h_in!=a.p)));
-        let serialized=serde_json::to_value(e.doc.diagram.as_deref().unwrap()).unwrap();
-        let restored:diagram::Diagram=serde_json::from_value(serialized).unwrap();
-        assert_eq!(&restored,e.doc.diagram.as_deref().unwrap());
-        e.undo(); assert_eq!(e.doc,before);
-        for patch in [json!({"width":0}),json!({"dash":[0,0]}),json!({"dash":[1,2,3,4,5,6,7]}),json!({"corner_radius":-1}),json!({"reverse":"true"}),json!({"double_line":"yes"}),json!({"label_background":[256,0,0,255]}),json!({"label_position":2}),json!({"label_normal":1000001})] {
-            let mut args=patch;args["node"]=json!(id);rejected(&mut e,"set_diagram_connector",args);
+        assert_eq!((edge.label_position, edge.label_normal), (-0.5, -12.));
+        assert!(
+            matches!(&e.doc.node(edge.path).unwrap().kind,NodeKind::Path{path,style,..} if style.width==3. && style.dash_count==4 && style.stroke==Some([250,130,30,255]) && path.subpaths[0].anchors.iter().any(|a|a.h_in!=a.p))
+        );
+        let serialized = serde_json::to_value(e.doc.diagram.as_deref().unwrap()).unwrap();
+        let restored: diagram::Diagram = serde_json::from_value(serialized).unwrap();
+        assert_eq!(&restored, e.doc.diagram.as_deref().unwrap());
+        e.undo();
+        assert_eq!(e.doc, before);
+        for patch in [
+            json!({"width":0}),
+            json!({"dash":[0,0]}),
+            json!({"dash":[1,2,3,4,5,6,7]}),
+            json!({"corner_radius":-1}),
+            json!({"reverse":"true"}),
+            json!({"double_line":"yes"}),
+            json!({"label_background":[256,0,0,255]}),
+            json!({"label_position":2}),
+            json!({"label_normal":1000001}),
+        ] {
+            let mut args = patch;
+            args["node"] = json!(id);
+            rejected(&mut e, "set_diagram_connector", args);
         }
-        call(&mut e,"set_diagram_connector",json!({"node":id,"routing":"cyclical"}));
-        e.execute(Command::TranslateNode{id:a,dx:20.,dy:30.}).unwrap();
+        call(
+            &mut e,
+            "set_diagram_connector",
+            json!({"node":id,"routing":"cyclical"}),
+        );
+        e.execute(Command::TranslateNode {
+            id: a,
+            dx: 20.,
+            dy: 30.,
+        })
+        .unwrap();
         e.doc.validate().unwrap();
-        assert_eq!(e.doc.diagram.as_ref().unwrap().edges[&id].routing,Routing::Cyclical);
+        assert_eq!(
+            e.doc.diagram.as_ref().unwrap().edges[&id].routing,
+            Routing::Cyclical
+        );
     }
     #[test]
     fn object_style_and_details_keep_geometry_and_one_undo() {
-        let mut e=editor();let a=shape(&mut e,"process",30.);let b=shape(&mut e,"decision",430.);
-        let edge=call(&mut e,"add_diagram_connector",json!({"source":{"shape":a},"target":{"shape":b}}))["node"].as_u64().unwrap();
-        let source=e.doc.diagram.as_ref().unwrap().shapes[&a].body;
-        let target=e.doc.diagram.as_ref().unwrap().shapes[&b].body;
-        let NodeKind::Path{path,style,..}=&e.doc.node(source).unwrap().kind else{panic!()};
-        let mut style=*style;style.fill=Some([178,242,235,255]);
-        e.execute(Command::SetPath{id:source,path:path.clone(),style}).unwrap();
-        let before=e.doc.clone();let history=e.history.len();
-        call(&mut e,"copy_diagram_style",json!({"source":a,"nodes":[b,edge]}));
-        assert_eq!(e.history.len(),history+1);
-        let NodeKind::Path{path:old,..}=&before.node(target).unwrap().kind else{panic!()};
-        assert!(matches!(&e.doc.node(target).unwrap().kind,NodeKind::Path{path,style,..} if path==old && style.fill==Some([178,242,235,255])));
-        let path=e.doc.diagram.as_ref().unwrap().edges[&edge].path;
-        assert!(matches!(&e.doc.node(path).unwrap().kind,NodeKind::Path{style,..} if style.fill.is_none()));
-        e.undo();assert_eq!(e.doc,before);
-        call(&mut e,"set_diagram_object_details",json!({"node":a,"note":"Operations","alt_text":"Start of flow","link":"https://example.org/flow"}));
-        let data=&e.doc.diagram.as_ref().unwrap().shapes[&a].data;
-        assert_eq!(data["note"],"Operations");assert_eq!(data["drawio_link"],"https://example.org/flow");
+        let mut e = editor();
+        let a = shape(&mut e, "process", 30.);
+        let b = shape(&mut e, "decision", 430.);
+        let edge = call(
+            &mut e,
+            "add_diagram_connector",
+            json!({"source":{"shape":a},"target":{"shape":b}}),
+        )["node"]
+            .as_u64()
+            .unwrap();
+        let source = e.doc.diagram.as_ref().unwrap().shapes[&a].body;
+        let target = e.doc.diagram.as_ref().unwrap().shapes[&b].body;
+        let NodeKind::Path { path, style, .. } = &e.doc.node(source).unwrap().kind else {
+            panic!()
+        };
+        let mut style = *style;
+        style.fill = Some([178, 242, 235, 255]);
+        e.execute(Command::SetPath {
+            id: source,
+            path: path.clone(),
+            style,
+        })
+        .unwrap();
+        let before = e.doc.clone();
+        let history = e.history.len();
+        call(
+            &mut e,
+            "copy_diagram_style",
+            json!({"source":a,"nodes":[b,edge]}),
+        );
+        assert_eq!(e.history.len(), history + 1);
+        let NodeKind::Path { path: old, .. } = &before.node(target).unwrap().kind else {
+            panic!()
+        };
+        assert!(
+            matches!(&e.doc.node(target).unwrap().kind,NodeKind::Path{path,style,..} if path==old && style.fill==Some([178,242,235,255]))
+        );
+        let path = e.doc.diagram.as_ref().unwrap().edges[&edge].path;
+        assert!(
+            matches!(&e.doc.node(path).unwrap().kind,NodeKind::Path{style,..} if style.fill.is_none())
+        );
+        e.undo();
+        assert_eq!(e.doc, before);
+        call(
+            &mut e,
+            "set_diagram_object_details",
+            json!({"node":a,"note":"Operations","alt_text":"Start of flow","link":"https://example.org/flow"}),
+        );
+        let data = &e.doc.diagram.as_ref().unwrap().shapes[&a].data;
+        assert_eq!(data["note"], "Operations");
+        assert_eq!(data["drawio_link"], "https://example.org/flow");
         assert!(e.doc.design.interactions.contains_key(&a));
-        e.undo();assert_eq!(e.doc,before);
-        rejected(&mut e,"set_diagram_object_details",json!({"node":a,"note":"must roll back","link":"javascript:alert(1)"}));
-        e.execute(Command::SetLocked{id:a,locked:true}).unwrap();
-        rejected(&mut e,"set_diagram_object_details",json!({"node":a,"note":"locked"}));
-        rejected(&mut e,"copy_diagram_style",json!({"source":b,"nodes":[a]}));
+        e.undo();
+        assert_eq!(e.doc, before);
+        rejected(
+            &mut e,
+            "set_diagram_object_details",
+            json!({"node":a,"note":"must roll back","link":"javascript:alert(1)"}),
+        );
+        e.execute(Command::SetLocked {
+            id: a,
+            locked: true,
+        })
+        .unwrap();
+        rejected(
+            &mut e,
+            "set_diagram_object_details",
+            json!({"node":a,"note":"locked"}),
+        );
+        rejected(
+            &mut e,
+            "copy_diagram_style",
+            json!({"source":b,"nodes":[a]}),
+        );
     }
 
     #[test]
     fn imported_object_toolbox_has_mcp_placement_and_atomic_undo() {
-        let mut e=editor();let a=shape(&mut e,"process",30.);
-        let entries=call(&mut e,"list_document_stencils",json!({}));assert_eq!(entries["stencils"][0]["source"],a);
-        let before=e.doc.clone();let history=e.history.len();
-        let placed=call(&mut e,"insert_document_stencil",json!({"source":a,"center":[500,400]}));
-        let id=placed["nodes"][0].as_u64().unwrap();assert_ne!(id,a);
-        assert_eq!(e.history.len(),history+1);assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(),2);
-        e.undo();assert_eq!(e.doc,before);
-        rejected(&mut e,"insert_document_stencil",json!({"source":a,"center":[1e7,0]}));
+        let mut e = editor();
+        let a = shape(&mut e, "process", 30.);
+        let entries = call(&mut e, "list_document_stencils", json!({}));
+        assert_eq!(entries["stencils"][0]["source"], a);
+        let before = e.doc.clone();
+        let history = e.history.len();
+        let placed = call(
+            &mut e,
+            "insert_document_stencil",
+            json!({"source":a,"center":[500,400]}),
+        );
+        let id = placed["nodes"][0].as_u64().unwrap();
+        assert_ne!(id, a);
+        assert_eq!(e.history.len(), history + 1);
+        assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(), 2);
+        e.undo();
+        assert_eq!(e.doc, before);
+        rejected(
+            &mut e,
+            "insert_document_stencil",
+            json!({"source":a,"center":[1e7,0]}),
+        );
     }
-
 }

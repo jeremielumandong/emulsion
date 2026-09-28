@@ -215,7 +215,7 @@ pub fn transform_nodes(
         doc.nodes[index] = node;
     }
     crate::diagram::apply_transformed_attachments(doc, attachments);
-    crate::diagram::transform_decorated_waypoints(doc,&all,m);
+    crate::diagram::transform_decorated_waypoints(doc, &all, m);
     Ok(None)
 }
 /// Sample stored mask data through an inverse source transform. Outside pixels

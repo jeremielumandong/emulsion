@@ -55,16 +55,56 @@ pub const TEMPLATES: &[Template] = &[
         name: "UML classes",
         description: "Three connected editable class objects",
     },
-    Template { id: "business-process", name: "Business process", description: "Sales and credit approval workflow across four team swimlanes" },
-    Template { id: "purchase-process", name: "Purchase approval", description: "Procurement requisitions, decisions, payment and purchase orders" },
-    Template { id: "family-tree", name: "Family tree", description: "Three generations of ancestry with editable person placeholders" },
-    Template { id: "fishbone", name: "Cause and effect", description: "Fishbone Ishikawa root cause analysis with six categories" },
-    Template { id: "org-profiles", name: "Team directory", description: "Organization hierarchy with person profiles and reporting lines" },
-    Template { id: "branching-tree", name: "Strategy tree", description: "Five workstreams with objectives and editable branch connectors" },
-    Template { id: "improvement-cycle", name: "Improvement cycle", description: "Three step circular process: discover, deliver and learn" },
-    Template { id: "infographic-flow", name: "Project roadmap", description: "Color coded branching infographic from discovery to launch" },
-    Template { id: "genogram", name: "Relationship map", description: "Genogram family relationships with symbols and a customizable legend" },
-    Template { id: "cloud-architecture", name: "Cloud architecture", description: "Cloud network stencils, load balancer, services, queue and storage" },
+    Template {
+        id: "business-process",
+        name: "Business process",
+        description: "Sales and credit approval workflow across four team swimlanes",
+    },
+    Template {
+        id: "purchase-process",
+        name: "Purchase approval",
+        description: "Procurement requisitions, decisions, payment and purchase orders",
+    },
+    Template {
+        id: "family-tree",
+        name: "Family tree",
+        description: "Three generations of ancestry with editable person placeholders",
+    },
+    Template {
+        id: "fishbone",
+        name: "Cause and effect",
+        description: "Fishbone Ishikawa root cause analysis with six categories",
+    },
+    Template {
+        id: "org-profiles",
+        name: "Team directory",
+        description: "Organization hierarchy with person profiles and reporting lines",
+    },
+    Template {
+        id: "branching-tree",
+        name: "Strategy tree",
+        description: "Five workstreams with objectives and editable branch connectors",
+    },
+    Template {
+        id: "improvement-cycle",
+        name: "Improvement cycle",
+        description: "Three step circular process: discover, deliver and learn",
+    },
+    Template {
+        id: "infographic-flow",
+        name: "Project roadmap",
+        description: "Color coded branching infographic from discovery to launch",
+    },
+    Template {
+        id: "genogram",
+        name: "Relationship map",
+        description: "Genogram family relationships with symbols and a customizable legend",
+    },
+    Template {
+        id: "cloud-architecture",
+        name: "Cloud architecture",
+        description: "Cloud network stencils, load balancer, services, queue and storage",
+    },
 ];
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -75,10 +115,27 @@ pub struct Theme {
     pub text: [u8; 4],
 }
 pub const THEMES: &[Theme] = &[
-    Theme { id: "charcoal", name: "Charcoal", fill: crate::diagram::DEFAULT_LINE, line: crate::diagram::DEFAULT_LINE, text: [255;4] },
-    Theme { id: "soft-teal", name: "Soft teal", fill: [178, 242, 235, 255], line: crate::diagram::DEFAULT_LINE, text: crate::diagram::DEFAULT_TEXT },
-    Theme { id: "soft-blue", name: "Soft blue", fill: [236, 244, 255, 255], line: crate::diagram::DEFAULT_LINE, text: crate::diagram::DEFAULT_TEXT },
-
+    Theme {
+        id: "charcoal",
+        name: "Charcoal",
+        fill: crate::diagram::DEFAULT_LINE,
+        line: crate::diagram::DEFAULT_LINE,
+        text: [255; 4],
+    },
+    Theme {
+        id: "soft-teal",
+        name: "Soft teal",
+        fill: [178, 242, 235, 255],
+        line: crate::diagram::DEFAULT_LINE,
+        text: crate::diagram::DEFAULT_TEXT,
+    },
+    Theme {
+        id: "soft-blue",
+        name: "Soft blue",
+        fill: [236, 244, 255, 255],
+        line: crate::diagram::DEFAULT_LINE,
+        text: crate::diagram::DEFAULT_TEXT,
+    },
     Theme {
         id: "neutral",
         name: "Monochrome grey",
@@ -125,7 +182,10 @@ pub const THEMES: &[Theme] = &[
 impl Template {
     pub fn matches(self, query: &str) -> bool {
         let text = format!("{} {} {}", self.id, self.name, self.description).to_lowercase();
-        query.to_lowercase().split_whitespace().all(|word| text.contains(word))
+        query
+            .to_lowercase()
+            .split_whitespace()
+            .all(|word| text.contains(word))
     }
     pub fn insert(self, editor: &mut crate::project::ProjectEditor) -> Result<u64, String> {
         if editor.kind() != Some(crate::project::ProjectKind::Diagram) {
@@ -269,15 +329,18 @@ impl Template {
                 .container = Some(parent);
         }
         doc.normalize();
-        if self.id=="uml" {
-            let mut editor=crate::Editor::new(doc,None);
+        if self.id == "uml" {
+            let mut editor = crate::Editor::new(doc, None);
             for id in nodes {
-                let shape=&editor.doc.diagram.as_ref().unwrap().shapes[&id];
-                let NodeKind::Text{spec,..}=&editor.doc.node(shape.label).unwrap().kind else{continue;};
-                let fields=crate::diagram::structure::StructuredObject::from_text(&spec.text);
-                crate::diagram::structure::set(&mut editor,id,ShapeKind::Class,fields)?;
+                let shape = &editor.doc.diagram.as_ref().unwrap().shapes[&id];
+                let NodeKind::Text { spec, .. } = &editor.doc.node(shape.label).unwrap().kind
+                else {
+                    continue;
+                };
+                let fields = crate::diagram::structure::StructuredObject::from_text(&spec.text);
+                crate::diagram::structure::set(&mut editor, id, ShapeKind::Class, fields)?;
             }
-            doc=editor.doc;
+            doc = editor.doc;
         }
         doc.validate().map_err(|e| e.to_string())?;
         Ok(doc)
@@ -345,28 +408,73 @@ mod tests {
         for template in TEMPLATES {
             assert!(ids.insert(template.id), "duplicate template ID");
             let doc = template.build().unwrap();
-            let restored: crate::diagram::Diagram = serde_json::from_slice(&serde_json::to_vec(doc.diagram.as_ref().unwrap()).unwrap()).unwrap();
+            let restored: crate::diagram::Diagram =
+                serde_json::from_slice(&serde_json::to_vec(doc.diagram.as_ref().unwrap()).unwrap())
+                    .unwrap();
             restored.validate(&doc).unwrap();
-            assert_eq!(doc.diagram.as_deref().unwrap(), &restored, "{} graph serialization", template.id);
-            if !matches!(template.id, "network" | "business-process" | "purchase-process" | "family-tree" | "fishbone" | "org-profiles" | "branching-tree" | "improvement-cycle" | "infographic-flow" | "genogram" | "cloud-architecture") { continue; }
+            assert_eq!(
+                doc.diagram.as_deref().unwrap(),
+                &restored,
+                "{} graph serialization",
+                template.id
+            );
+            if !matches!(
+                template.id,
+                "network"
+                    | "business-process"
+                    | "purchase-process"
+                    | "family-tree"
+                    | "fishbone"
+                    | "org-profiles"
+                    | "branching-tree"
+                    | "improvement-cycle"
+                    | "infographic-flow"
+                    | "genogram"
+                    | "cloud-architecture"
+            ) {
+                continue;
+            }
             let graph = doc.diagram.as_ref().unwrap();
             assert!(!graph.edges.is_empty());
             for shape in graph.shapes.values() {
                 let stencil = &shape.data["emulsion_stencil"];
-                assert!(crate::diagram::stencils::STENCILS.iter().any(|s| s.id == stencil));
-                let [x,y,w,h] = crate::diagram::shape_bounds(&doc, shape).unwrap();
-                assert!(x >= 0. && y >= 0. && x+w <= doc.width as f64 && y+h <= doc.height as f64, "{} shape outside page", template.id);
+                assert!(
+                    crate::diagram::stencils::STENCILS
+                        .iter()
+                        .any(|s| s.id == stencil)
+                );
+                let [x, y, w, h] = crate::diagram::shape_bounds(&doc, shape).unwrap();
+                assert!(
+                    x >= 0. && y >= 0. && x + w <= doc.width as f64 && y + h <= doc.height as f64,
+                    "{} shape outside page",
+                    template.id
+                );
             }
             // Each shape can move independently, keeping the graph valid and undo exact.
             for id in graph.shapes.keys() {
                 let mut editor = crate::Editor::new(doc.clone(), None);
-                editor.execute(Command::TranslateNode { id: *id, dx: 17., dy: 11. }).unwrap();
+                editor
+                    .execute(Command::TranslateNode {
+                        id: *id,
+                        dx: 17.,
+                        dy: 11.,
+                    })
+                    .unwrap();
                 editor.doc.validate().unwrap();
-                assert_eq!(editor.doc.diagram.as_ref().unwrap().edges.len(), graph.edges.len());
+                assert_eq!(
+                    editor.doc.diagram.as_ref().unwrap().edges.len(),
+                    graph.edges.len()
+                );
                 editor.undo();
                 assert_eq!(editor.doc, doc, "{} move undo", template.id);
             }
-            assert!(doc.nodes.iter().all(|n| matches!(n.kind, NodeKind::Fill { .. } | NodeKind::Group { .. } | NodeKind::Text { .. } | NodeKind::Path { .. })));
+            assert!(doc.nodes.iter().all(|n| matches!(
+                n.kind,
+                NodeKind::Fill { .. }
+                    | NodeKind::Group { .. }
+                    | NodeKind::Text { .. }
+                    | NodeKind::Path { .. }
+            )));
         }
         assert!(TEMPLATES.iter().any(|t| t.matches("credit workflow")));
         assert!(TEMPLATES.iter().any(|t| t.matches("CLOUD storage")));
@@ -374,12 +482,27 @@ mod tests {
     #[test]
     fn swimlane_frames_do_not_cover_connectors() {
         for id in ["swimlanes", "business-process"] {
-            let doc = TEMPLATES.iter().find(|t| t.id == id).unwrap().build().unwrap();
+            let doc = TEMPLATES
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .build()
+                .unwrap();
             let graph = doc.diagram.as_ref().unwrap();
             let roots = doc.children(None);
-            let last_lane = graph.shapes.iter().filter(|(_,s)| s.kind.is_container())
-                .map(|(id,_)| roots.iter().position(|root| root == id).unwrap()).max().unwrap();
-            assert!(graph.edges.keys().all(|id| roots.iter().position(|root| root == id).unwrap() > last_lane));
+            let last_lane = graph
+                .shapes
+                .iter()
+                .filter(|(_, s)| s.kind.is_container())
+                .map(|(id, _)| roots.iter().position(|root| root == id).unwrap())
+                .max()
+                .unwrap();
+            assert!(
+                graph
+                    .edges
+                    .keys()
+                    .all(|id| roots.iter().position(|root| root == id).unwrap() > last_lane)
+            );
         }
     }
     #[test]

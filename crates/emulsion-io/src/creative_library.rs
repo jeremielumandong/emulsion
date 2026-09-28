@@ -49,9 +49,10 @@ pub struct Asset {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Brand {
     #[serde(default)]
-    pub typography: std::collections::BTreeMap<String, emulsion_core::design_brand_assets::TypographyRole>,
+    pub typography:
+        std::collections::BTreeMap<String, emulsion_core::design_brand_assets::TypographyRole>,
     #[serde(default)]
-    pub palettes: std::collections::BTreeMap<String, Vec<[u8;4]>>,
+    pub palettes: std::collections::BTreeMap<String, Vec<[u8; 4]>>,
     #[serde(default)]
     pub fonts: std::collections::BTreeMap<String, emulsion_core::design_fonts::EmbeddedFont>,
     pub id: u64,
@@ -68,7 +69,12 @@ pub struct Collection {
     pub assets: Vec<u64>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AssetFolder {pub id:u64,pub name:String,#[serde(default)] pub parent:Option<u64>}
+pub struct AssetFolder {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub parent: Option<u64>,
+}
 /// Home organizes references to local files. Trashing a reference never deletes
 /// its source; restoring it preserves its name and folder.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -188,16 +194,42 @@ impl Catalog {
                 || asset.license.len() > 4000
                 || asset.variants.len() > emulsion_core::project::MAX_PAGES
                 || asset.variants.iter().any(|v| !label(v))
-                || asset.folder.is_some_and(|id| !self.asset_folders.iter().any(|f|f.id==id))
+                || asset
+                    .folder
+                    .is_some_and(|id| !self.asset_folders.iter().any(|f| f.id == id))
             {
                 return Err(error("Invalid asset metadata."));
             }
         }
         for brand in &self.brands {
             emulsion_core::design_fonts::validate(&brand.fonts).map_err(error)?;
-            if brand.typography.len()>64 || brand.palettes.len()>64 || brand.typography.keys().chain(brand.palettes.keys()).any(|name|!label(name)) || brand.palettes.values().any(|colors|colors.is_empty()||colors.len()>32) {return Err(error("Invalid named typography roles or palette collections."));}
-            for role in brand.typography.values(){role.validate().map_err(error)?;}
-            if std::iter::once(&brand.font).chain(brand.typography.values().map(|r|&r.font)).any(|font|font.starts_with("EmulsionFont-")&&!brand.fonts.contains_key(font)) {return Err(error("Brand typography references a missing embedded font."));}
+            if brand.typography.len() > 64
+                || brand.palettes.len() > 64
+                || brand
+                    .typography
+                    .keys()
+                    .chain(brand.palettes.keys())
+                    .any(|name| !label(name))
+                || brand
+                    .palettes
+                    .values()
+                    .any(|colors| colors.is_empty() || colors.len() > 32)
+            {
+                return Err(error(
+                    "Invalid named typography roles or palette collections.",
+                ));
+            }
+            for role in brand.typography.values() {
+                role.validate().map_err(error)?;
+            }
+            if std::iter::once(&brand.font)
+                .chain(brand.typography.values().map(|r| &r.font))
+                .any(|font| font.starts_with("EmulsionFont-") && !brand.fonts.contains_key(font))
+            {
+                return Err(error(
+                    "Brand typography references a missing embedded font.",
+                ));
+            }
 
             if !label(&brand.name)
                 || !label(&brand.font)
@@ -214,14 +246,11 @@ impl Catalog {
                 return Err(error("Invalid brand kit or logo references."));
             }
         }
-        let asset_ids:HashSet<_>=self.assets.iter().map(|a|a.id).collect();
+        let asset_ids: HashSet<_> = self.assets.iter().map(|a| a.id).collect();
         for collection in &self.collections {
             if !label(&collection.name)
                 || collection.assets.len() > 100_000
-                || collection
-                    .assets
-                    .iter()
-                    .any(|id| !asset_ids.contains(id))
+                || collection.assets.iter().any(|id| !asset_ids.contains(id))
             {
                 return Err(error("Invalid collection."));
             }
@@ -369,19 +398,57 @@ impl Catalog {
     }
     /// Bulk migration accepts absolute offline photo references; the caller
     /// validates the completed transaction once, not once per imported photo.
-    pub fn add_photo_reference(&mut self,path:PathBuf)->Result<u64> {
-        let path=path.canonicalize().unwrap_or(path);
-        if let Some(a)=self.assets.iter().find(|a|a.path==path && a.kind==AssetKind::Image){return Ok(a.id);}
+    pub fn add_photo_reference(&mut self, path: PathBuf) -> Result<u64> {
+        let path = path.canonicalize().unwrap_or(path);
+        if let Some(a) = self
+            .assets
+            .iter()
+            .find(|a| a.path == path && a.kind == AssetKind::Image)
+        {
+            return Ok(a.id);
+        }
         self.insert_photo_reference(path)
     }
-    pub(crate) fn insert_photo_reference(&mut self,path:PathBuf)->Result<u64> {
-        if !path.is_absolute() || path.components().any(|c|matches!(c,std::path::Component::ParentDir)) || !crate::photo_develop::supported(&path) {return Err(error("Invalid photo reference"));}
-        let path=path.canonicalize().unwrap_or(path);
-        if self.assets.len()>=100_000 || self.next_id>=u64::MAX-1 {return Err(error("Photo catalog limit reached"));}
-        let name=path.file_stem().unwrap_or_default().to_string_lossy().chars().take(200).collect::<String>();
-        if !label(&name){return Err(error("Invalid photo name"));}
-        let id=self.next_id;self.next_id+=1;
-        self.assets.push(Asset{id,path,name,kind:AssetKind::Image,tags:vec![],attribution:String::new(),license:String::new(),rating:0,flagged:false,rejected:false,color_label:0,variants:vec![],folder:None});
+    pub(crate) fn insert_photo_reference(&mut self, path: PathBuf) -> Result<u64> {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            || !crate::photo_develop::supported(&path)
+        {
+            return Err(error("Invalid photo reference"));
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        if self.assets.len() >= 100_000 || self.next_id >= u64::MAX - 1 {
+            return Err(error("Photo catalog limit reached"));
+        }
+        let name = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .chars()
+            .take(200)
+            .collect::<String>();
+        if !label(&name) {
+            return Err(error("Invalid photo name"));
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.assets.push(Asset {
+            id,
+            path,
+            name,
+            kind: AssetKind::Image,
+            tags: vec![],
+            attribution: String::new(),
+            license: String::new(),
+            rating: 0,
+            flagged: false,
+            rejected: false,
+            color_label: 0,
+            variants: vec![],
+            folder: None,
+        });
         Ok(id)
     }
     pub fn add_brand(&mut self, name: String, font: String, colors: Vec<[u8; 4]>) -> Result<u64> {
@@ -484,12 +551,21 @@ pub fn update<T>(
     let mut catalog = load(root)?;
     let result = edit(&mut catalog)?;
     // Photo records follow ordinary catalog deletion/relink operations too.
-    let assets:HashSet<_>=catalog.assets.iter().map(|a|a.id).collect();
-    let collections:HashSet<_>=catalog.collections.iter().map(|c|c.id).collect();
-    let paths:HashSet<_>=catalog.assets.iter().map(|a|a.path.clone()).collect();
-    catalog.photos.smart.retain(|id,_|collections.contains(id));
-    catalog.photos.stacks.retain(|top,members|{members.retain(|id|assets.contains(id));assets.contains(top)&&members.len()>1});
-    catalog.photos.fingerprints.retain(|path,_|paths.contains(path));
+    let assets: HashSet<_> = catalog.assets.iter().map(|a| a.id).collect();
+    let collections: HashSet<_> = catalog.collections.iter().map(|c| c.id).collect();
+    let paths: HashSet<_> = catalog.assets.iter().map(|a| a.path.clone()).collect();
+    catalog
+        .photos
+        .smart
+        .retain(|id, _| collections.contains(id));
+    catalog.photos.stacks.retain(|top, members| {
+        members.retain(|id| assets.contains(id));
+        assets.contains(top) && members.len() > 1
+    });
+    catalog
+        .photos
+        .fingerprints
+        .retain(|path, _| paths.contains(path));
     catalog.validate()?;
     catalog.revision = catalog
         .revision
@@ -503,15 +579,23 @@ pub fn update<T>(
         file.write_all(&bytes)?;
         Ok(())
     })?;
-    let index=crate::photo_index::Index::build(&catalog);
-    if !index.is_empty(){let _=index.save(root);}else{let _=fs::remove_file(root.join("photos.index.json"));}
+    let index = crate::photo_index::Index::build(&catalog);
+    if !index.is_empty() {
+        let _ = index.save(root);
+    } else {
+        let _ = fs::remove_file(root.join("photos.index.json"));
+    }
     Ok((catalog, result))
 }
 #[derive(Serialize, Deserialize)]
 struct BrandFile {
-    #[serde(default)] typography: std::collections::BTreeMap<String,emulsion_core::design_brand_assets::TypographyRole>,
-    #[serde(default)] palettes: std::collections::BTreeMap<String,Vec<[u8;4]>>,
-    #[serde(default)] fonts: std::collections::BTreeMap<String,emulsion_core::design_fonts::EmbeddedFont>,
+    #[serde(default)]
+    typography:
+        std::collections::BTreeMap<String, emulsion_core::design_brand_assets::TypographyRole>,
+    #[serde(default)]
+    palettes: std::collections::BTreeMap<String, Vec<[u8; 4]>>,
+    #[serde(default)]
+    fonts: std::collections::BTreeMap<String, emulsion_core::design_fonts::EmbeddedFont>,
     version: u32,
     name: String,
     font: String,
@@ -519,8 +603,17 @@ struct BrandFile {
 }
 pub fn export_brand(brand: &Brand, path: &Path) -> Result<()> {
     let file = BrandFile {
-        typography: brand.typography.clone(), palettes: brand.palettes.clone(), fonts: brand.fonts.clone(),
-        version: if brand.fonts.is_empty()&&brand.typography.is_empty()&&brand.palettes.is_empty(){1}else{2},
+        typography: brand.typography.clone(),
+        palettes: brand.palettes.clone(),
+        fonts: brand.fonts.clone(),
+        version: if brand.fonts.is_empty()
+            && brand.typography.is_empty()
+            && brand.palettes.is_empty()
+        {
+            1
+        } else {
+            2
+        },
         name: brand.name.clone(),
         font: brand.font.clone(),
         colors: brand.colors.clone(),
@@ -543,7 +636,16 @@ pub fn import_brand(root: &Path, path: &Path) -> Result<Catalog> {
     if !(1..=2).contains(&brand.version) {
         return Err(error("Unsupported brand kit version."));
     }
-    update(root, |c| {let id=c.add_brand(brand.name,"Geist".into(),brand.colors)?;let b=c.brands.iter_mut().find(|b|b.id==id).unwrap();b.font=brand.font;b.typography=brand.typography;b.palettes=brand.palettes;b.fonts=brand.fonts;Ok(id)}).map(|(c, _)| c)
+    update(root, |c| {
+        let id = c.add_brand(brand.name, "Geist".into(), brand.colors)?;
+        let b = c.brands.iter_mut().find(|b| b.id == id).unwrap();
+        b.font = brand.font;
+        b.typography = brand.typography;
+        b.palettes = brand.palettes;
+        b.fonts = brand.fonts;
+        Ok(id)
+    })
+    .map(|(c, _)| c)
 }
 
 #[cfg(test)]

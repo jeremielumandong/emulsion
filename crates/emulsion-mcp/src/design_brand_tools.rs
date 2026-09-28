@@ -128,7 +128,9 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 }
                 let mut trial = Editor::new(editor.doc.clone(), None);
                 let mut design = trial.doc.design.clone();
-                if let Some(font)=kit.fonts.get(&kit.font){design.fonts.insert(kit.font.clone(),font.clone());}
+                if let Some(font) = kit.fonts.get(&kit.font) {
+                    design.fonts.insert(kit.font.clone(), font.clone());
+                }
                 trial
                     .execute(emulsion_core::Command::SetDesign {
                         design: Box::new(design),

@@ -299,8 +299,11 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
             };
             let flags: components::Overrides = serde_json::from_value(args["overrides"].clone())
                 .map_err(|e| format!("Invalid overrides: {e}"))?;
-            let auto=args.get("auto_overrides").map(|v|v.as_bool().ok_or("auto_overrides must be boolean")).transpose()?;
-            components::configure_overrides(editor, instance, node, flags,auto)?;
+            let auto = args
+                .get("auto_overrides")
+                .map(|v| v.as_bool().ok_or("auto_overrides must be boolean"))
+                .transpose()?;
+            components::configure_overrides(editor, instance, node, flags, auto)?;
             Ok(json!({"instance":instance,"node":node,"overrides":flags}))
         }
         "create_design_component" => {
@@ -955,11 +958,37 @@ mod formula_tests {
     use super::*;
     #[test]
     fn design_chart_formulas_mcp_retains_sources_recalculates_and_rejects_cycles() {
-        let mut e=Editor::new(emulsion_core::Document::new(600,400),None);
-        let result=crate::exec::execute(&mut e,"add_design_chart",&json!({"kind":"bar","formulas":true,"rows":[["Item","Value"],["A","10"],["B","=B2*2"]]}));
-        assert!(!result.is_error,"{result:?}");let id=*e.doc.design.charts.keys().next().unwrap();let before=e.doc.clone();
-        assert_eq!(e.doc.design.charts[&id].resolved_rows().unwrap()[2][1],"20");
-        for args in [json!({"node":id,"formulas":"yes"}),json!({"node":id,"rows":[["A","B"],["A","=B2"]]})] {assert!(crate::exec::execute(&mut e,"update_design_chart",&args).is_error);assert_eq!(e.doc,before);}
-        let result=crate::exec::execute(&mut e,"update_design_chart",&json!({"node":id,"rows":[["Item","Value"],["A","15"],["B","=B2*2"]]}));assert!(!result.is_error,"{result:?}");assert_eq!(e.doc.design.charts[&id].resolved_rows().unwrap()[2][1],"30");e.undo();assert_eq!(e.doc,before);
+        let mut e = Editor::new(emulsion_core::Document::new(600, 400), None);
+        let result = crate::exec::execute(
+            &mut e,
+            "add_design_chart",
+            &json!({"kind":"bar","formulas":true,"rows":[["Item","Value"],["A","10"],["B","=B2*2"]]}),
+        );
+        assert!(!result.is_error, "{result:?}");
+        let id = *e.doc.design.charts.keys().next().unwrap();
+        let before = e.doc.clone();
+        assert_eq!(
+            e.doc.design.charts[&id].resolved_rows().unwrap()[2][1],
+            "20"
+        );
+        for args in [
+            json!({"node":id,"formulas":"yes"}),
+            json!({"node":id,"rows":[["A","B"],["A","=B2"]]}),
+        ] {
+            assert!(crate::exec::execute(&mut e, "update_design_chart", &args).is_error);
+            assert_eq!(e.doc, before);
+        }
+        let result = crate::exec::execute(
+            &mut e,
+            "update_design_chart",
+            &json!({"node":id,"rows":[["Item","Value"],["A","15"],["B","=B2*2"]]}),
+        );
+        assert!(!result.is_error, "{result:?}");
+        assert_eq!(
+            e.doc.design.charts[&id].resolved_rows().unwrap()[2][1],
+            "30"
+        );
+        e.undo();
+        assert_eq!(e.doc, before);
     }
 }

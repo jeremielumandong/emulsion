@@ -154,7 +154,9 @@ pub fn read_stencil_source(path: &Path) -> Result<(Pack, Vec<String>)> {
             vec![path.to_path_buf()]
         };
         if paths.is_empty() || paths.len() > emulsion_core::project::MAX_PAGES {
-            return Err(error("SVG folder entry count exceeds the project page limit."));
+            return Err(error(
+                "SVG folder entry count exceeds the project page limit.",
+            ));
         }
         let mut pages = Vec::new();
         for (index, path) in paths.drain(..).enumerate() {
@@ -401,12 +403,34 @@ pub fn install(root: &Path, pack: Pack) -> Result<(Catalog, u64)> {
         })?;
     }
     // Previews use the same vector renderer as the canvas, at thumbnail resolution.
-    for (index,page) in pack.project.pages.iter().enumerate() {
-        if let Ok(scene)=crate::svg_viewport::SvgViewport::new(&page.doc) {
-            let scale=192. / (page.doc.width.max(page.doc.height) as f64);
-            if let Ok(mut bytes)=scene.render((192,192),[scale,0.,0.,scale,(192.-page.doc.width as f64*scale)/2.,(192.-page.doc.height as f64*scale)/2.]) {
-                for p in bytes.as_chunks_mut::<4>().0 { p.swap(0,2); if p[3]>0 {for i in 0..3 {p[i]=(p[i] as u32*255/p[3] as u32).min(255) as u8;}} }
-                if let Ok(png)=crate::export::png8(192,192,&bytes) {crate::write_atomic(&dir.join(format!("entry-{index}.png")),|f|{f.write_all(&png)?;Ok(())})?;}
+    for (index, page) in pack.project.pages.iter().enumerate() {
+        if let Ok(scene) = crate::svg_viewport::SvgViewport::new(&page.doc) {
+            let scale = 192. / (page.doc.width.max(page.doc.height) as f64);
+            if let Ok(mut bytes) = scene.render(
+                (192, 192),
+                [
+                    scale,
+                    0.,
+                    0.,
+                    scale,
+                    (192. - page.doc.width as f64 * scale) / 2.,
+                    (192. - page.doc.height as f64 * scale) / 2.,
+                ],
+            ) {
+                for p in bytes.as_chunks_mut::<4>().0 {
+                    p.swap(0, 2);
+                    if p[3] > 0 {
+                        for i in 0..3 {
+                            p[i] = (p[i] as u32 * 255 / p[3] as u32).min(255) as u8;
+                        }
+                    }
+                }
+                if let Ok(png) = crate::export::png8(192, 192, &bytes) {
+                    crate::write_atomic(&dir.join(format!("entry-{index}.png")), |f| {
+                        f.write_all(&png)?;
+                        Ok(())
+                    })?;
+                }
             }
         }
     }

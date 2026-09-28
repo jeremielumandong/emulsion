@@ -316,7 +316,7 @@ pub(crate) fn encode(
     let mut masks = Pool::<u8>::new();
     let mut patterns = Vec::new();
     let mut pattern_ids = HashMap::new();
-    let mut source_pool=crate::smart_source_data::SourcePool::default();
+    let mut source_pool = crate::smart_source_data::SourcePool::default();
     let mut font_pool = crate::font_data::FontPool::default();
     let mut media_pool = crate::media_data::MediaPool::default();
     let mut encode_doc = |d: &Document| -> Result<HDoc> {
@@ -573,7 +573,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
     };
 
     let mut paths = PathReader::default();
-    let mut source_pool=crate::smart_source_data::SourcePool::default();
+    let mut source_pool = crate::smart_source_data::SourcePool::default();
     let mut font_pool = crate::font_data::FontPool::default();
     let mut media_pool = crate::media_data::MediaPool::default();
     let mut decode_doc = |h: HDoc| -> Result<Document> {
@@ -633,7 +633,12 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     filter_styles,
                     placement,
                 } => NodeKind::Smart {
-                    editable: source_pool.restore(editable,source_document,zip,"history/sources")?,
+                    editable: source_pool.restore(
+                        editable,
+                        source_document,
+                        zip,
+                        "history/sources",
+                    )?,
                     source: raster(source)?,
                     cache: raster(cache)?,
                     offset,

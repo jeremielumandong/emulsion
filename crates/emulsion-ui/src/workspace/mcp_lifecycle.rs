@@ -92,8 +92,8 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use ::core::prelude::v1::test;
     use super::*;
+    use ::core::prelude::v1::test;
     use emulsion_core::{Command, Node, NodeKind, command::Slot};
     #[gpui_kit::test]
     fn workspace_mcp_create_select_close_preserves_origin_and_unsaved_work(

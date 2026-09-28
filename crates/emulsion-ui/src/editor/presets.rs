@@ -144,7 +144,10 @@ impl EditorView {
         cx.notify();
     }
     pub fn toggle_presets(&mut self, cx: &mut Context<Self>) {
-        if self.draw_mode { self.open_shared_brush_panel(cx); return; }
+        if self.draw_mode {
+            self.open_shared_brush_panel(cx);
+            return;
+        }
         let tab = if self.sidebar_tab == SidebarTab::BrushPresets {
             SidebarTab::History
         } else {

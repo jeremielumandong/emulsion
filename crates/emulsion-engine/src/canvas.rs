@@ -384,18 +384,24 @@ pub fn text_supported(spec: &emulsion_core::text::TextSpec) -> bool {
 /// visible primitive stays vector. Rich SVG Smart Objects keep the SVG renderer
 /// instead of accidentally enlarging their preview raster during zoom.
 pub fn diagram_vector_supported(doc: &Document) -> bool {
-    doc.diagram.is_some() && doc.nodes.iter().all(|n| {
-        !n.visible || (n.mask.is_none()
-            && n.styles.is_empty()
-            && n.blending == Default::default()
-            && matches!(n.blend, emulsion_raster::BlendMode::Normal | emulsion_raster::BlendMode::PassThrough)
-            && match &n.kind {
-                NodeKind::Path { style, .. } => path_supported(style),
-                NodeKind::Text { spec, .. } => text_supported(spec),
-                NodeKind::Group { .. } | NodeKind::Fill { .. } => true,
-                _ => false,
-            })
-    })
+    doc.diagram.is_some()
+        && doc.nodes.iter().all(|n| {
+            !n.visible
+                || (n.mask.is_none()
+                    && n.styles.is_empty()
+                    && n.blending == Default::default()
+                    && matches!(
+                        n.blend,
+                        emulsion_raster::BlendMode::Normal
+                            | emulsion_raster::BlendMode::PassThrough
+                    )
+                    && match &n.kind {
+                        NodeKind::Path { style, .. } => path_supported(style),
+                        NodeKind::Text { spec, .. } => text_supported(spec),
+                        NodeKind::Group { .. } | NodeKind::Fill { .. } => true,
+                        _ => false,
+                    })
+        })
 }
 
 struct Compiler<'a> {
@@ -635,19 +641,27 @@ impl Compiler<'_> {
                     // descendant reads its backdrop (blend/adjustment/style).
                     fn independent(nodes: &[CompositeNode]) -> bool {
                         nodes.iter().all(|n| {
-                            !n.visible || (n.blending == Default::default()
-                                && match &n.content {
-                                    NodeContent::Group(children) => {
-                                        matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)
-                                            && independent(children)
-                                    }
-                                    NodeContent::Pixels { .. } | NodeContent::Fill(_) => n.blend == BlendMode::Normal,
-                                    _ => false,
-                                })
+                            !n.visible
+                                || (n.blending == Default::default()
+                                    && match &n.content {
+                                        NodeContent::Group(children) => {
+                                            matches!(
+                                                n.blend,
+                                                BlendMode::Normal | BlendMode::PassThrough
+                                            ) && independent(children)
+                                        }
+                                        NodeContent::Pixels { .. } | NodeContent::Fill(_) => {
+                                            n.blend == BlendMode::Normal
+                                        }
+                                        _ => false,
+                                    })
                         })
                     }
-                    if opacity == 1.0 && clip == NONE && alpha == NONE
-                        && clip_rect.is_none() && node.mask.is_none()
+                    if opacity == 1.0
+                        && clip == NONE
+                        && alpha == NONE
+                        && clip_rect.is_none()
+                        && node.mask.is_none()
                         && node.blending == Default::default()
                         && (node.blend == BlendMode::PassThrough
                             || (node.blend == BlendMode::Normal && independent(children)))

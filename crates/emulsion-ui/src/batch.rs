@@ -51,7 +51,7 @@ const PREVIEW: u32 = 1100;
 /// GPUI's RenderImage stores BGRA; exports and MCP previews retain RGBA.
 fn preview_bgra(raster: &Raster) -> (u32, u32, Vec<u8>) {
     let mut pixels = raster.to_srgba8();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     (raster.width(), raster.height(), pixels)

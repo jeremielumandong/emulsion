@@ -124,7 +124,7 @@ impl EditorView {
                 let name = name.clone();
                 let apply_name = name.clone();
                 let style = style.clone();
-                let fonts=editor.doc.design.fonts.clone();
+                let fonts = editor.doc.design.fonts.clone();
                 let owner = cx.weak_entity();
                 let can_update = roots.len() == 1;
                 let links = editor

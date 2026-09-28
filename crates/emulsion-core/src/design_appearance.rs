@@ -22,7 +22,12 @@ pub struct Appearance {
 }
 
 impl Appearance {
-    pub fn font_families(&self)->Vec<String>{self.text.as_ref().map(|(style,..)|vec![style.font.clone()]).unwrap_or_default()}
+    pub fn font_families(&self) -> Vec<String> {
+        self.text
+            .as_ref()
+            .map(|(style, ..)| vec![style.font.clone()])
+            .unwrap_or_default()
+    }
 
     pub fn validate(&self) -> Result<(), String> {
         if !self.opacity.is_finite()

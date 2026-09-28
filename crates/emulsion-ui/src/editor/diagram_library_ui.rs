@@ -158,8 +158,10 @@ impl EditorView {
                                 if !installed {
                                     this.install_bundled_diagram_pack(id.clone(), cx);
                                 } else {
-                                    this.diagram_ui.library_tab=0;
-                                    if let Some(search)=&this.diagram_ui.search {search.update(cx,|s,cx|s.set_value(*name,window,cx));}
+                                    this.diagram_ui.library_tab = 0;
+                                    if let Some(search) = &this.diagram_ui.search {
+                                        search.update(cx, |s, cx| s.set_value(*name, window, cx));
+                                    }
                                     cx.notify();
                                 }
                             })),
@@ -379,20 +381,43 @@ fn template_preview(doc: Arc<Document>) -> impl IntoElement + Styled {
             for node in &doc.nodes {
                 if let NodeKind::Text { spec, .. } = &node.kind {
                     let mut font = gpui::font(spec.font.clone());
-                    if spec.bold { font.weight = FontWeight::BOLD; }
+                    if spec.bold {
+                        font.weight = FontWeight::BOLD;
+                    }
                     for (index, text) in spec.text.lines().enumerate() {
                         let line = window.text_system().shape_line(
-                            text.to_owned().into(), px(spec.size * scale),
-                            &[gpui::TextRun { len: text.len(), font: font.clone(), color: gpui::rgba(u32::from_be_bytes(spec.color)).into(), background_color: None, underline: None, strikethrough: None }], None,
+                            text.to_owned().into(),
+                            px(spec.size * scale),
+                            &[gpui::TextRun {
+                                len: text.len(),
+                                font: font.clone(),
+                                color: gpui::rgba(u32::from_be_bytes(spec.color)).into(),
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            }],
+                            None,
                         );
                         let width = spec.width.unwrap_or(0.) * scale;
                         let offset = match spec.align {
-                            emulsion_core::text::Align::Center => (width - f32::from(line.width)) / 2.,
+                            emulsion_core::text::Align::Center => {
+                                (width - f32::from(line.width)) / 2.
+                            }
                             emulsion_core::text::Align::Right => width - f32::from(line.width),
                             _ => 0.,
                         };
-                        let at = point(px(dx + spec.x * scale + offset), px(dy + (spec.y + index as f32 * spec.size * spec.line_height) * scale));
-                        let _ = line.paint(at, px(spec.size * spec.line_height * scale), gpui::TextAlign::Left, None, window, cx);
+                        let at = point(
+                            px(dx + spec.x * scale + offset),
+                            px(dy + (spec.y + index as f32 * spec.size * spec.line_height) * scale),
+                        );
+                        let _ = line.paint(
+                            at,
+                            px(spec.size * spec.line_height * scale),
+                            gpui::TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
                     }
                     continue;
                 }

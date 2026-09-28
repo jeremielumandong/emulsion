@@ -12,8 +12,8 @@ use emulsion_raster::{IRect, Mask, fill};
 use glam::{DAffine2, dvec2};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::Button;
-use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::tab::{Tab, TabBar};
 
 #[path = "shape_fill.rs"]
 mod shape_fill;

@@ -227,8 +227,22 @@ fn visio_stencil_suffix_with_drawing_pages_and_themed_cells_imports_natively() {
     let imported = visio::package(&file).unwrap();
     assert_eq!(imported.project.pages.len(), 1);
     assert_eq!(imported.project.pages[0].meta.name, "Rack");
-    assert_eq!(imported.project.pages[0].doc.diagram.as_ref().unwrap().shapes.len(), 1);
-    assert!(imported.warnings.iter().any(|w| w.contains("instead of masters")));
+    assert_eq!(
+        imported.project.pages[0]
+            .doc
+            .diagram
+            .as_ref()
+            .unwrap()
+            .shapes
+            .len(),
+        1
+    );
+    assert!(
+        imported
+            .warnings
+            .iter()
+            .any(|w| w.contains("instead of masters"))
+    );
     std::fs::remove_file(file).unwrap();
 }
 
@@ -247,31 +261,54 @@ fn visio_group_labels_text_frames_and_geometry_visibility_are_preserved() {
     let imported = visio::from_xml(xml).unwrap();
     let doc = &imported.project.pages[0].doc;
     let model = doc.diagram.as_ref().unwrap();
-    let lookup = |key: &str| model.shapes.values().find(|s|s.data.get("import_id").map(String::as_str)==Some(key)).unwrap();
-    let parent = lookup("1"); let child = lookup("2"); let text_only = lookup("3");
-    let index = |id| doc.nodes.iter().position(|n|n.id==id).unwrap();
-    assert!(index(parent.label)>index(child.body));
-    for id in [child.body,text_only.body] {
-        let NodeKind::Path { style,.. } = &doc.node(id).unwrap().kind else { panic!() };
+    let lookup = |key: &str| {
+        model
+            .shapes
+            .values()
+            .find(|s| s.data.get("import_id").map(String::as_str) == Some(key))
+            .unwrap()
+    };
+    let parent = lookup("1");
+    let child = lookup("2");
+    let text_only = lookup("3");
+    let index = |id| doc.nodes.iter().position(|n| n.id == id).unwrap();
+    assert!(index(parent.label) > index(child.body));
+    for id in [child.body, text_only.body] {
+        let NodeKind::Path { style, .. } = &doc.node(id).unwrap().kind else {
+            panic!()
+        };
         assert!(style.fill.is_none() && style.stroke.is_none());
     }
     assert!(doc.nodes.iter().any(|n|n.parent==doc.node(child.body).unwrap().parent && matches!(&n.kind,NodeKind::Path{style,..} if style.fill.is_none()&&style.stroke.is_some())));
-    let NodeKind::Text { spec,.. } = &doc.node(parent.label).unwrap().kind else {panic!()};
-    assert!((spec.x-120.).abs()<0.01 && (spec.y-151.2).abs()<0.01, "{spec:?}");
-    assert_eq!(spec.width,Some(144.));
-    assert_eq!(spec.text,"Title value");
+    let NodeKind::Text { spec, .. } = &doc.node(parent.label).unwrap().kind else {
+        panic!()
+    };
+    assert!(
+        (spec.x - 120.).abs() < 0.01 && (spec.y - 151.2).abs() < 0.01,
+        "{spec:?}"
+    );
+    assert_eq!(spec.width, Some(144.));
+    assert_eq!(spec.text, "Title value");
     assert!(spec.bold && !spec.runs[0].style.bold);
-    assert_eq!((spec.runs[0].start,spec.runs[0].end),(6,11));
-    let mut moved=doc.clone();
-    let before=spec.clone();
-    emulsion_core::command::Command::TranslateNode{id:doc.node(parent.body).unwrap().parent.unwrap(),dx:20.,dy:30.}.apply(&mut moved).unwrap();
-    let NodeKind::Text {spec,..}=&moved.node(parent.label).unwrap().kind else{panic!()};
-    assert_eq!((spec.x,spec.y),(before.x+20.,before.y+30.));
+    assert_eq!((spec.runs[0].start, spec.runs[0].end), (6, 11));
+    let mut moved = doc.clone();
+    let before = spec.clone();
+    emulsion_core::command::Command::TranslateNode {
+        id: doc.node(parent.body).unwrap().parent.unwrap(),
+        dx: 20.,
+        dy: 30.,
+    }
+    .apply(&mut moved)
+    .unwrap();
+    let NodeKind::Text { spec, .. } = &moved.node(parent.label).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!((spec.x, spec.y), (before.x + 20., before.y + 30.));
 }
 
 #[test]
 fn visio_embedded_master_bitmap_uses_scaled_placement_and_native_clip() {
-    let png = crate::export::png8(2,1,&[255,0,0,255,0,0,255,255]).unwrap();
+    let png = crate::export::png8(2, 1, &[255, 0, 0, 255, 0, 0, 255, 255]).unwrap();
     let file = temp("bitmap.vsdx");
     write_zip(&file,&[
         ("visio/document.xml",b"<VisioDocument/>"),
@@ -286,58 +323,111 @@ fn visio_embedded_master_bitmap_uses_scaled_placement_and_native_clip() {
     ]);
     let imported = read(&file).unwrap();
     let doc = &imported.project.pages[0].doc;
-    let node = doc.nodes.iter().find(|n|matches!(n.kind,NodeKind::Raster{..})).unwrap();
-    let NodeKind::Raster{raster,placement}=&node.kind else {panic!()};
-    let matrix = placement.to_doc(raster.width(),raster.height());
-    assert_eq!(matrix.transform_point2(glam::dvec2(1.,0.5)),glam::dvec2(48.,144.));
+    let node = doc
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, NodeKind::Raster { .. }))
+        .unwrap();
+    let NodeKind::Raster { raster, placement } = &node.kind else {
+        panic!()
+    };
+    let matrix = placement.to_doc(raster.width(), raster.height());
+    assert_eq!(
+        matrix.transform_point2(glam::dvec2(1., 0.5)),
+        glam::dvec2(48., 144.)
+    );
     assert!(node.clip_to.is_some());
-    let (svg,fallback)=crate::project_export::svg(doc).unwrap();
+    let (svg, fallback) = crate::project_export::svg(doc).unwrap();
     assert!(!fallback);
-    assert!(String::from_utf8(svg).unwrap().contains("data:image/png;base64,"));
+    assert!(
+        String::from_utf8(svg)
+            .unwrap()
+            .contains("data:image/png;base64,")
+    );
     std::fs::remove_file(file).unwrap();
 }
 
 #[test]
 fn visio_loose_and_partial_lines_are_reconnectable_and_roundtrip() {
-    let xml=outlined_target().replace("<Connect FromSheet=\"3\" FromCell=\"EndX\" ToSheet=\"2\"/>","");
-    let imported=visio::from_xml(&xml).unwrap();
-    let doc=&imported.project.pages[0].doc;
-    let model=doc.diagram.as_ref().unwrap();assert_eq!(model.edges.len(),1);
-    let edge=model.edges.values().next().unwrap();
-    assert_eq!(model.shapes[&edge.source.shape].data["import_id"],"1");
-    assert_eq!(model.shapes[&edge.target.shape].data["import_id"],"2");
+    let xml = outlined_target().replace(
+        "<Connect FromSheet=\"3\" FromCell=\"EndX\" ToSheet=\"2\"/>",
+        "",
+    );
+    let imported = visio::from_xml(&xml).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    let model = doc.diagram.as_ref().unwrap();
+    assert_eq!(model.edges.len(), 1);
+    let edge = model.edges.values().next().unwrap();
+    assert_eq!(model.shapes[&edge.source.shape].data["import_id"], "1");
+    assert_eq!(model.shapes[&edge.target.shape].data["import_id"], "2");
     assert!(edge.arrow_end);
-    let before=diagram::endpoint_position(doc,&edge.source,(0.,0.)).unwrap();
-    let mut editor=emulsion_core::Editor::new(doc.clone(),None);
-    editor.execute(emulsion_core::Command::TranslateNode{id:edge.source.shape,dx:15.,dy:20.}).unwrap();
-    let after=diagram::endpoint_position(&editor.doc,&edge.source,(0.,0.)).unwrap();
-    assert_eq!(after,(before.0+15.,before.1+20.));editor.undo();assert_eq!(&editor.doc,doc);
-    let file=temp("loose-roundtrip.emu");crate::project::write(&imported.project,&file).unwrap();
-    assert_eq!(crate::project::read(&file).unwrap().pages[0].doc,*doc);std::fs::remove_file(file).unwrap();
+    let before = diagram::endpoint_position(doc, &edge.source, (0., 0.)).unwrap();
+    let mut editor = emulsion_core::Editor::new(doc.clone(), None);
+    editor
+        .execute(emulsion_core::Command::TranslateNode {
+            id: edge.source.shape,
+            dx: 15.,
+            dy: 20.,
+        })
+        .unwrap();
+    let after = diagram::endpoint_position(&editor.doc, &edge.source, (0., 0.)).unwrap();
+    assert_eq!(after, (before.0 + 15., before.1 + 20.));
+    editor.undo();
+    assert_eq!(&editor.doc, doc);
+    let file = temp("loose-roundtrip.emu");
+    crate::project::write(&imported.project, &file).unwrap();
+    assert_eq!(crate::project::read(&file).unwrap().pages[0].doc, *doc);
+    std::fs::remove_file(file).unwrap();
 }
 
 #[test]
 fn visio_floating_connector_move_keeps_owned_endpoints() {
-    let xml=r#"<VisioDocument><Pages><Page ID="0"><Shapes><Shape ID="1" Type="1D"><Cell N="BeginX" V="1"/><Cell N="BeginY" V="1"/><Cell N="EndX" V="2"/><Cell N="EndY" V="2"/></Shape></Shapes></Page></Pages></VisioDocument>"#;
-    let imported=visio::from_xml(xml).unwrap();let doc=&imported.project.pages[0].doc;
-    let model=doc.diagram.as_ref().unwrap();let (&id,edge)=model.edges.iter().next().unwrap();
-    for endpoint in [&edge.source,&edge.target] {assert_eq!(doc.node(endpoint.shape).unwrap().parent,Some(id));assert!(model.shapes[&endpoint.shape].layout_locked);}
-    let original=diagram::endpoint_position(doc,&edge.source,(0.,0.)).unwrap();
-    let mut editor=emulsion_core::Editor::new(doc.clone(),None);
-    editor.execute(emulsion_core::Command::TranslateNode{id,dx:30.,dy:20.}).unwrap();
-    assert_eq!(diagram::endpoint_position(&editor.doc,&edge.source,(0.,0.)).unwrap(),(original.0+30.,original.1+20.));
-    editor.undo();assert_eq!(&editor.doc,doc);
+    let xml = r#"<VisioDocument><Pages><Page ID="0"><Shapes><Shape ID="1" Type="1D"><Cell N="BeginX" V="1"/><Cell N="BeginY" V="1"/><Cell N="EndX" V="2"/><Cell N="EndY" V="2"/></Shape></Shapes></Page></Pages></VisioDocument>"#;
+    let imported = visio::from_xml(xml).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    let model = doc.diagram.as_ref().unwrap();
+    let (&id, edge) = model.edges.iter().next().unwrap();
+    for endpoint in [&edge.source, &edge.target] {
+        assert_eq!(doc.node(endpoint.shape).unwrap().parent, Some(id));
+        assert!(model.shapes[&endpoint.shape].layout_locked);
+    }
+    let original = diagram::endpoint_position(doc, &edge.source, (0., 0.)).unwrap();
+    let mut editor = emulsion_core::Editor::new(doc.clone(), None);
+    editor
+        .execute(emulsion_core::Command::TranslateNode {
+            id,
+            dx: 30.,
+            dy: 20.,
+        })
+        .unwrap();
+    assert_eq!(
+        diagram::endpoint_position(&editor.doc, &edge.source, (0., 0.)).unwrap(),
+        (original.0 + 30., original.1 + 20.)
+    );
+    editor.undo();
+    assert_eq!(&editor.doc, doc);
     assert!(diagram::document_stencils(doc).is_empty());
 }
 
 #[test]
 fn visio_ambiguous_contact_does_not_invent_attachment() {
-    let mut xml=outlined_target().replace("<Connect FromSheet=\"3\" FromCell=\"EndX\" ToSheet=\"2\"/>","");
-    let start=xml.find("<Shape ID=\"2\"").unwrap();let end=start+xml[start..].find("</Shape>").unwrap()+8;
-    let duplicate=xml[start..end].replace("ID=\"2\"","ID=\"4\"");xml.insert_str(end,&duplicate);
-    let imported=visio::from_xml(&xml).unwrap();let doc=&imported.project.pages[0].doc;let model=doc.diagram.as_ref().unwrap();
-    let edge=model.edges.values().next().unwrap();
-    assert!(model.shapes[&edge.target.shape].data.contains_key("emulsion_drawio_endpoint"));
+    let mut xml = outlined_target().replace(
+        "<Connect FromSheet=\"3\" FromCell=\"EndX\" ToSheet=\"2\"/>",
+        "",
+    );
+    let start = xml.find("<Shape ID=\"2\"").unwrap();
+    let end = start + xml[start..].find("</Shape>").unwrap() + 8;
+    let duplicate = xml[start..end].replace("ID=\"2\"", "ID=\"4\"");
+    xml.insert_str(end, &duplicate);
+    let imported = visio::from_xml(&xml).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    let model = doc.diagram.as_ref().unwrap();
+    let edge = model.edges.values().next().unwrap();
+    assert!(
+        model.shapes[&edge.target.shape]
+            .data
+            .contains_key("emulsion_drawio_endpoint")
+    );
 }
 
 fn outlined_target() -> String {

@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
     pool.install(|| files.par_iter().for_each(|path| {
         let start = std::time::Instant::now();
-        let result = emulsion_io::diagram_import::read(&path);
+        let result = emulsion_io::diagram_import::read(path);
         let mut row = serde_json::json!({"file": path.strip_prefix(root).unwrap(), "ms": start.elapsed().as_millis()});
         match result {
             Ok(imported) => {

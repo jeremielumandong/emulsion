@@ -2,7 +2,7 @@
 use super::*;
 use gpui_kit::component::{
     Sizable, WindowExt,
-    button::{Button,ButtonVariants},
+    button::{Button, ButtonVariants},
     menu::{DropdownMenu, PopupMenuItem},
 };
 use std::cell::Cell;

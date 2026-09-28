@@ -299,7 +299,7 @@ impl Link {
     fn validate(&self) -> Result<(), String> {
         if self.page == 0
             || self.nodes.len() > 1000
-            || self.nodes.iter().any(|n| *n == 0)
+            || self.nodes.contains(&0)
             || self.project.as_ref().is_some_and(|p| p.len() > 4096)
             || self.view.is_some_and(|v| {
                 !v.iter().all(|n| n.is_finite() && n.abs() <= 1e6)
@@ -431,14 +431,31 @@ mod tests {
         assert_eq!(editor.doc, saved);
     }
     #[test]
-    fn deleting_body_retires_comments_without_blocking_edit_and_undo_restores(){
-        let mut editor=Editor::new(Document::new(600,400),None);
-        let id=add_shape(&mut editor,ShapeKind::Process,[30.,30.,180.,80.],"Object").unwrap();
-        add_comment(&mut editor,id,None,"A","Review").unwrap();let before=editor.doc.clone();
-        let body=editor.doc.diagram.as_ref().unwrap().shapes[&id].body;
-        editor.execute(Command::RemoveNode{id:body}).unwrap();
-        assert!(editor.doc.diagram.as_ref().unwrap().settings.threads.is_empty());
-        editor.undo();assert_eq!(editor.doc,before);
+    fn deleting_body_retires_comments_without_blocking_edit_and_undo_restores() {
+        let mut editor = Editor::new(Document::new(600, 400), None);
+        let id = add_shape(
+            &mut editor,
+            ShapeKind::Process,
+            [30., 30., 180., 80.],
+            "Object",
+        )
+        .unwrap();
+        add_comment(&mut editor, id, None, "A", "Review").unwrap();
+        let before = editor.doc.clone();
+        let body = editor.doc.diagram.as_ref().unwrap().shapes[&id].body;
+        editor.execute(Command::RemoveNode { id: body }).unwrap();
+        assert!(
+            editor
+                .doc
+                .diagram
+                .as_ref()
+                .unwrap()
+                .settings
+                .threads
+                .is_empty()
+        );
+        editor.undo();
+        assert_eq!(editor.doc, before);
     }
     #[test]
     fn links_validate_and_roundtrip() {

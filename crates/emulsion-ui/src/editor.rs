@@ -21,41 +21,41 @@ pub mod canvas_benchmark;
 mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
-mod host_controls;
 mod compact;
 mod contextual_bar;
 mod contextual_tools;
 mod creative_pack_ui;
 mod creative_ui;
-mod design_brand_ui;
-mod design_asset_folders_ui;
 pub(crate) mod crop;
 mod design_appearance_ui;
+mod design_asset_folders_ui;
+mod design_brand_ui;
 mod design_controls;
 mod design_editor;
-mod design_photo_ui;
+mod design_gradient_ui;
 mod design_motion_ui;
+mod design_paragraph_ui;
+mod design_photo_ui;
+mod design_precision_ui;
 mod design_presentation_ui;
 mod design_selection;
+mod design_selection_export_ui;
 mod design_styles_ui;
-mod design_variables_ui;
-mod design_variable_library_ui;
+mod design_trace_ui;
 mod design_ui;
+mod design_variable_library_ui;
+mod design_variables_ui;
+mod design_vector_ui;
 mod diagram_data_ui;
 mod diagram_library_ui;
 mod diagram_ui;
 mod draw_workspace;
 pub(crate) mod export_ui;
-mod design_selection_export_ui;
-mod design_gradient_ui;
-mod design_vector_ui;
-mod design_trace_ui;
-mod design_precision_ui;
-mod design_paragraph_ui;
 mod filters;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
+mod host_controls;
 mod layer_effect_rows;
 mod layer_links_ui;
 mod layer_menu;
@@ -85,15 +85,15 @@ mod quick_mask;
 #[cfg(test)]
 pub(crate) use presets::shared_library;
 mod design_bulk_ui;
-mod design_data_ui;
 mod design_chart_data;
 mod design_charts_ui;
 mod design_components_ui;
+mod design_data_ui;
 mod design_layout_ui;
 mod design_responsive_preview_ui;
 mod design_video_ui;
-mod photo_shortcuts;
 mod photo_panels;
+mod photo_shortcuts;
 pub(crate) mod rail;
 mod raw_panel;
 mod raw_settings_ui;
@@ -777,7 +777,10 @@ impl EditorView {
     }
 
     pub fn execute(&mut self, cmd: Command, cx: &mut Context<Self>) -> Option<NodeId> {
-        if self.responsive_preview_active(){self.set_status("Exit responsive preview before editing.",false,cx);return None;}
+        if self.responsive_preview_active() {
+            self.set_status("Exit responsive preview before editing.", false, cx);
+            return None;
+        }
         match self.editor.execute(cmd) {
             Ok(created) => {
                 self.after_change(cx);
@@ -1511,7 +1514,9 @@ impl EditorView {
     // ── Pointer ─────────────────────────────────────────────────────────
 
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.responsive_preview_active(){return;}
+        if self.responsive_preview_active() {
+            return;
+        }
         if self.motion.presenting {
             self.presentation_interaction_click(e, window, cx);
             return;
@@ -1881,8 +1886,12 @@ impl EditorView {
         if key.edits_document() {
             self.close_text_field(cx);
             let name = match key {
-                SliderKey::Opacity(_) | SliderKey::LayerOpacity(_) | SliderKey::PhotoOpacity(_) => "Opacity".to_string(),
-                SliderKey::FillOpacity(_) | SliderKey::LayerFillOpacity(_) | SliderKey::PhotoFillOpacity(_) => "Fill opacity".into(),
+                SliderKey::Opacity(_) | SliderKey::LayerOpacity(_) | SliderKey::PhotoOpacity(_) => {
+                    "Opacity".to_string()
+                }
+                SliderKey::FillOpacity(_)
+                | SliderKey::LayerFillOpacity(_)
+                | SliderKey::PhotoFillOpacity(_) => "Fill opacity".into(),
                 SliderKey::BlendRange(..) => "Blend If".into(),
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
@@ -2006,11 +2015,15 @@ impl EditorView {
                 self.tools.brush.size = (1.0 + f * f * 499.0).round().max(1.0);
                 cx.notify();
             }
-            SliderKey::ToolHardness | SliderKey::QuickBrushHardness | SliderKey::PhotoBrushHardness => {
+            SliderKey::ToolHardness
+            | SliderKey::QuickBrushHardness
+            | SliderKey::PhotoBrushHardness => {
                 self.tools.brush.hardness = v / 100.0;
                 cx.notify();
             }
-            SliderKey::ToolOpacity | SliderKey::QuickBrushOpacity | SliderKey::PhotoBrushOpacity => {
+            SliderKey::ToolOpacity
+            | SliderKey::QuickBrushOpacity
+            | SliderKey::PhotoBrushOpacity => {
                 self.tools.brush.opacity = v / 100.0;
                 cx.notify();
             }
@@ -2119,7 +2132,9 @@ impl EditorView {
                 self.set_style_contour_param(id, idx, point, y, v, cx)
             }
             SliderKey::StyleGlobalLight(altitude) => self.set_style_global_light(altitude, v, cx),
-            SliderKey::FillOpacity(id) | SliderKey::LayerFillOpacity(id) | SliderKey::PhotoFillOpacity(id) => {
+            SliderKey::FillOpacity(id)
+            | SliderKey::LayerFillOpacity(id)
+            | SliderKey::PhotoFillOpacity(id) => {
                 let ids = if self.layer_is_selected(id) {
                     self.selected_layer_ids()
                 } else {
@@ -2463,13 +2478,23 @@ impl EditorView {
         let presenting = self.motion.presenting || self.responsive_preview_active();
         let svg_key = (self.editor.active_page(), self.editor.revision);
         let svg_enabled = self.is_diagram() && !previewing && !presenting && !self.before_active();
-        let diagram_gpu = svg_enabled && emulsion_engine::canvas::diagram_vector_supported(&self.editor.doc);
-        if !diagram_gpu || !self.gpu_canvas.borrow().defers_to_gpu(&self.view, self.editor.revision) {
+        let diagram_gpu =
+            svg_enabled && emulsion_engine::canvas::diagram_vector_supported(&self.editor.doc);
+        if !diagram_gpu
+            || !self
+                .gpu_canvas
+                .borrow()
+                .defers_to_gpu(&self.view, self.editor.revision)
+        {
             self.prepare_diagram_svg(cx);
         }
         let svg_canvas = self.svg_canvas.clone();
         let svg_canvas2 = svg_canvas.clone();
-        let overlay = if presenting {tools::Overlay::default()} else {self.overlay(window.scale_factor())};
+        let overlay = if presenting {
+            tools::Overlay::default()
+        } else {
+            self.overlay(window.scale_factor())
+        };
         let zoom_cursor = (!presenting).then(|| self.zoom_cursor(p, window)).flatten();
         let replay = (!presenting).then(|| self.replay_overlay(p, cx)).flatten();
         let job_card = (!presenting).then(|| self.ai_job_card(p, cx)).flatten();
@@ -2529,7 +2554,9 @@ impl EditorView {
         });
         let cache = self.cache.clone();
         let cache2 = self.cache.clone();
-        let presentation_frame = self.responsive_preview_gpu_frame().or_else(||self.presentation_gpu_frame());
+        let presentation_frame = self
+            .responsive_preview_gpu_frame()
+            .or_else(|| self.presentation_gpu_frame());
         let native_presentation = presentation_frame.is_some();
         let (gpu_doc, gpu_rev, gpu_canvas) = presentation_frame.unwrap_or_else(|| {
             (
@@ -2695,7 +2722,9 @@ impl EditorView {
             }))
             .cursor(cursor)
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                if !*hovered { this.motion.hovered_action = None; }
+                if !*hovered {
+                    this.motion.hovered_action = None;
+                }
                 if this.tool == Tool::Zoom {
                     this.notify_canvas(cx);
                 }
@@ -2708,9 +2737,21 @@ impl EditorView {
                 MouseButton::Middle,
                 cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)),
             )
-            .on_mouse_move(cx.listener(|this,event:&MouseMoveEvent,window,cx|this.presentation_interaction_move(event,window,cx)))
-            .on_mouse_up(MouseButton::Left,cx.listener(|this,event:&MouseUpEvent,window,cx|this.presentation_interaction_release(event,window,cx)))
-            .on_mouse_up_out(MouseButton::Left,cx.listener(|this,event:&MouseUpEvent,window,cx|this.presentation_interaction_release(event,window,cx)))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.presentation_interaction_move(event, window, cx)
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.presentation_interaction_release(event, window, cx)
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.presentation_interaction_release(event, window, cx)
+                }),
+            )
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 if event.button == MouseButton::Right {
                     window.focus(&this.canvas_focus, cx);
@@ -2727,12 +2768,20 @@ impl EditorView {
                     this.drop_diagram_stencil(d.0, window.mouse_position(), cx);
                 }),
             )
-            .on_drop(cx.listener(|this,d:&diagram_ui::DraggedDocumentStencil,window,cx|this.drop_document_stencil(d,window.mouse_position(),cx)))
-            .on_drop(cx.listener(|this,d:&creative_pack_ui::DraggedPackStencil,window,cx|{
-                if this.is_diagram() && let Some(center)=this.doc_point(window.mouse_position()) {
-                    this.use_local_stencil_at(d.path.clone(),d.index,Some(center),cx);
-                }
-            }))
+            .on_drop(
+                cx.listener(|this, d: &diagram_ui::DraggedDocumentStencil, window, cx| {
+                    this.drop_document_stencil(d, window.mouse_position(), cx)
+                }),
+            )
+            .on_drop(cx.listener(
+                |this, d: &creative_pack_ui::DraggedPackStencil, window, cx| {
+                    if this.is_diagram()
+                        && let Some(center) = this.doc_point(window.mouse_position())
+                    {
+                        this.use_local_stencil_at(d.path.clone(), d.index, Some(center), cx);
+                    }
+                },
+            ))
             .on_drop(cx.listener(|this, d: &DraggedColor, window, cx| {
                 if this.motion.presenting || this.responsive_preview_active() {
                     return;
@@ -2817,7 +2866,8 @@ impl EditorView {
                                     w1.update(cx, |this, cx| {
                                         // An old layout callback must not refit a later page,
                                         // resized window or restored editing viewport.
-                                        if (this.motion.presenting || this.responsive_preview_active())
+                                        if (this.motion.presenting
+                                            || this.responsive_preview_active())
                                             && this.canvas_bounds() == Some(b)
                                             && let Some(view) = design_presentation_ui::fit_page(
                                                 this.responsive_canvas_size().0,
@@ -2847,8 +2897,10 @@ impl EditorView {
                         // carries only the chrome -- stage, plate, grid, wipe,
                         // rulers -- which the engine does not draw. A refusal
                         // is sticky, so this yields for one frame at most.
-                        let svg_ready = svg_enabled && svg_canvas.borrow().displayable(svg_key)
-                            && !(diagram_gpu && gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
+                        let svg_ready = svg_enabled
+                            && svg_canvas.borrow().displayable(svg_key)
+                            && !(diagram_gpu
+                                && gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
                         let images = !svg_ready
                             && ((previewing && !native_presentation)
                                 || !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
@@ -4445,7 +4497,9 @@ impl EditorView {
         }
         let p = theme::palette(cx);
         self.sync_trees(cx);
-        if self.responsive_preview_active(){return self.responsive_preview_view(&p,cx);}
+        if self.responsive_preview_active() {
+            return self.responsive_preview_view(&p, cx);
+        }
         if self.motion.presenting {
             return self.presentation_view(&p, window, cx);
         }
@@ -4725,10 +4779,21 @@ mod design_html_ui;
 mod design_pptx_ui;
 
 impl Render for EditorView {
-    fn render(&mut self,window:&mut Window,cx:&mut Context<Self>)->impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.start_smart_source_watch(cx);
-        let content=self.render_editor_content(window,cx);
-        let banner=self.smart_source_banner(cx);
-        if let Some(banner)=banner {div().flex().flex_col().flex_1().min_h_0().child(banner).child(content).into_any_element()}else{content}
+        let content = self.render_editor_content(window, cx);
+        let banner = self.smart_source_banner(cx);
+        if let Some(banner) = banner {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .child(banner)
+                .child(content)
+                .into_any_element()
+        } else {
+            content
+        }
     }
 }

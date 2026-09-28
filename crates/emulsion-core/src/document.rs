@@ -309,14 +309,18 @@ impl Document {
         for n in &self.nodes {
             // Leave malformed input intact for validation instead of panicking
             // while transferring nodes out of the lookup table.
-            if !unique.insert(n.id) { return; }
+            if !unique.insert(n.id) {
+                return;
+            }
             kids.entry(n.parent).or_default().push(n.id);
         }
         let mut out = Vec::with_capacity(self.nodes.len());
         // Reordering transfers ownership; cloning every vector/text node twice made
         // an otherwise local diagram drag scale with all artwork in the page.
         let mut by_id: HashMap<NodeId, Node> = std::mem::take(&mut self.nodes)
-            .into_iter().map(|n| (n.id, n)).collect();
+            .into_iter()
+            .map(|n| (n.id, n))
+            .collect();
         fn emit(
             id: NodeId,
             kids: &HashMap<Option<NodeId>, Vec<NodeId>>,
@@ -407,9 +411,17 @@ impl Document {
             }
         }
         for n in &self.nodes {
-            if let NodeKind::Smart { editable: Some(crate::node::SmartEditable::Document { archive, external }), .. } = &n.kind {
-                if archive.is_empty() || archive.len()>crate::smart_source::MAX_SOURCE_BYTES {return Err(DocumentError::BadValue(n.id,"Smart source archive size"));}
-                if external.as_ref().is_some_and(|l|l.validate().is_err()) {return Err(DocumentError::BadValue(n.id,"Smart source link"));}
+            if let NodeKind::Smart {
+                editable: Some(crate::node::SmartEditable::Document { archive, external }),
+                ..
+            } = &n.kind
+            {
+                if archive.is_empty() || archive.len() > crate::smart_source::MAX_SOURCE_BYTES {
+                    return Err(DocumentError::BadValue(n.id, "Smart source archive size"));
+                }
+                if external.as_ref().is_some_and(|l| l.validate().is_err()) {
+                    return Err(DocumentError::BadValue(n.id, "Smart source link"));
+                }
             }
 
             if let Some(p) = n.parent {
@@ -507,8 +519,15 @@ impl Document {
     pub fn panel_rows(&self) -> Vec<PanelRow> {
         let mut out = Vec::new();
         let mut children: HashMap<Option<NodeId>, Vec<&Node>> = HashMap::new();
-        for node in &self.nodes { children.entry(node.parent).or_default().push(node); }
-        fn walk(children: &HashMap<Option<NodeId>, Vec<&Node>>, parent: Option<NodeId>, depth: usize, out: &mut Vec<PanelRow>) {
+        for node in &self.nodes {
+            children.entry(node.parent).or_default().push(node);
+        }
+        fn walk(
+            children: &HashMap<Option<NodeId>, Vec<&Node>>,
+            parent: Option<NodeId>,
+            depth: usize,
+            out: &mut Vec<PanelRow>,
+        ) {
             for node in children.get(&parent).into_iter().flatten().rev() {
                 out.push(PanelRow { id: node.id, depth });
                 if matches!(node.kind, NodeKind::Group { collapsed: false }) {
@@ -523,11 +542,23 @@ impl Document {
     /// Build the render description.
     pub fn composite_tree(&self) -> CompositeTree {
         let mut children: HashMap<Option<NodeId>, Vec<&Node>> = HashMap::new();
-        for node in &self.nodes { children.entry(node.parent).or_default().push(node); }
-        fn build(doc: &Document, children: &HashMap<Option<NodeId>, Vec<&Node>>, parent: Option<NodeId>) -> Vec<CompositeNode> {
+        for node in &self.nodes {
+            children.entry(node.parent).or_default().push(node);
+        }
+        fn build(
+            doc: &Document,
+            children: &HashMap<Option<NodeId>, Vec<&Node>>,
+            parent: Option<NodeId>,
+        ) -> Vec<CompositeNode> {
             let siblings = children.get(&parent).map(Vec::as_slice).unwrap_or(&[]);
-            let positions: HashMap<_, _> = siblings.iter().enumerate().map(|(i,n)|(n.id,i)).collect();
-            siblings.iter().copied()
+            let positions: HashMap<_, _> = siblings
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.id, i))
+                .collect();
+            siblings
+                .iter()
+                .copied()
                 .map(|n| {
                     let content = match &n.kind {
                         NodeKind::Raster { raster, placement } => NodeContent::Pixels {
@@ -759,7 +790,12 @@ impl Document {
         planes: &mut std::collections::HashSet<usize>,
     ) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
-        for font in self.design.fonts.values() { let allocation=font.allocation(); if planes.insert(allocation.0) { out.push(allocation); } }
+        for font in self.design.fonts.values() {
+            let allocation = font.allocation();
+            if planes.insert(allocation.0) {
+                out.push(allocation);
+            }
+        }
         let mut raster = |r: &emulsion_raster::Raster| {
             if planes.insert(r as *const _ as usize) {
                 out.extend(r.buffer_allocations());
@@ -781,13 +817,25 @@ impl Document {
             }
         }
         for n in &self.nodes {
-            if let NodeKind::Smart { editable: Some(crate::node::SmartEditable::Svg { xml }), .. } = &n.kind {
+            if let NodeKind::Smart {
+                editable: Some(crate::node::SmartEditable::Svg { xml }),
+                ..
+            } = &n.kind
+            {
                 let allocation = (xml.as_ptr() as usize, xml.len());
-                if planes.insert(allocation.0) { out.push(allocation); }
+                if planes.insert(allocation.0) {
+                    out.push(allocation);
+                }
             }
-            if let NodeKind::Smart { editable: Some(crate::node::SmartEditable::Document { archive, .. }), .. } = &n.kind {
-                let allocation=(Arc::as_ptr(archive) as usize, archive.capacity());
-                if planes.insert(allocation.0) { out.push(allocation); }
+            if let NodeKind::Smart {
+                editable: Some(crate::node::SmartEditable::Document { archive, .. }),
+                ..
+            } = &n.kind
+            {
+                let allocation = (Arc::as_ptr(archive) as usize, archive.capacity());
+                if planes.insert(allocation.0) {
+                    out.push(allocation);
+                }
             }
             if let Some(mask) = &n.mask
                 && planes.insert(Arc::as_ptr(mask) as usize)
@@ -1041,11 +1089,11 @@ mod hierarchy_validation_tests {
 mod normalization_regression {
     #[test]
     fn duplicate_ids_survive_normalization_for_validation() {
-        let mut doc=crate::diagram_library::TEMPLATES[0].build().unwrap();
+        let mut doc = crate::diagram_library::TEMPLATES[0].build().unwrap();
         doc.nodes.push(doc.nodes[0].clone());
-        let count=doc.nodes.len();
+        let count = doc.nodes.len();
         doc.normalize();
-        assert_eq!(doc.nodes.len(),count);
+        assert_eq!(doc.nodes.len(), count);
         assert!(doc.validate().is_err());
     }
 }

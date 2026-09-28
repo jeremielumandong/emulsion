@@ -46,19 +46,27 @@ fn main() -> Result<(), String> {
         started.elapsed().as_secs_f64() * 1000.
     );
     for phase in ["clone", "validate", "composite_tree", "synchronize"] {
-        let mut measured=Vec::new();
+        let mut measured = Vec::new();
         for _ in 0..21 {
-            let mut next=doc.clone();let start=Instant::now();
+            let mut next = doc.clone();
+            let start = Instant::now();
             match phase {
-                "clone"=>{std::hint::black_box(doc.clone());},
-                "composite_tree"=>{std::hint::black_box(doc.composite_tree());},
-                "validate"=>doc.validate().map_err(|e|e.to_string())?,
-                _=>emulsion_core::diagram::synchronize(&doc,&mut next)?,
+                "clone" => {
+                    std::hint::black_box(doc.clone());
+                }
+                "composite_tree" => {
+                    std::hint::black_box(doc.composite_tree());
+                }
+                "validate" => doc.validate().map_err(|e| e.to_string())?,
+                _ => emulsion_core::diagram::synchronize(&doc, &mut next)?,
             }
-            measured.push(start.elapsed().as_secs_f64()*1000.);
+            measured.push(start.elapsed().as_secs_f64() * 1000.);
         }
         measured.sort_by(f64::total_cmp);
-        println!("{phase} p50 {:.3} ms; p95 {:.3} ms",measured[10],measured[19]);
+        println!(
+            "{phase} p50 {:.3} ms; p95 {:.3} ms",
+            measured[10], measured[19]
+        );
     }
     let mut editor = Editor::new(doc, None);
     let mut times = Vec::new();

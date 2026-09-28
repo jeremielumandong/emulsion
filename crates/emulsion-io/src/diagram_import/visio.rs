@@ -36,13 +36,26 @@ fn value<'a>(node: &'a Xml, key: &str) -> Option<&'a str> {
         })
 }
 fn number(node: &Xml, master: Option<&Xml>, key: &str, default: f64) -> Result<f64> {
-    if let Some(v)=formula::cell(node,master,key,0).filter(|v|v.is_finite() && v.abs()<=1e6) {return Ok(v);}
+    if let Some(v) = formula::cell(node, master, key, 0).filter(|v| v.is_finite() && v.abs() <= 1e6)
+    {
+        return Ok(v);
+    }
     let Some(v) = value(node, key).or_else(|| master.and_then(|n| value(n, key))) else {
-        if node.children.iter().any(|c|c.name=="Cell" && c.attr("N")==key && !c.attr("F").is_empty()) {return Err(error(format!("Unsupported Visio formula in {key}.")));}
+        if node
+            .children
+            .iter()
+            .any(|c| c.name == "Cell" && c.attr("N") == key && !c.attr("F").is_empty())
+        {
+            return Err(error(format!("Unsupported Visio formula in {key}.")));
+        }
         return Ok(default);
     };
     if v.eq_ignore_ascii_case("Themed") {
-        return Ok(master.and_then(|m|value(m,key)).and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()&&v.abs()<=1e6).unwrap_or(default));
+        return Ok(master
+            .and_then(|m| value(m, key))
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && v.abs() <= 1e6)
+            .unwrap_or(default));
     }
     v.parse::<f64>()
         .ok()
@@ -110,7 +123,10 @@ struct Resources {
 }
 impl Resources {
     fn from_document(document: &Xml) -> Result<Self> {
-        let mut out = Self { available_fonts: emulsion_core::text::font_families().into_iter().collect(), ..Default::default() };
+        let mut out = Self {
+            available_fonts: emulsion_core::text::font_families().into_iter().collect(),
+            ..Default::default()
+        };
         for c in document.descendants("ColorEntry") {
             out.colors
                 .insert(c.attr("IX").into(), color(c.attr("RGB"))?);
@@ -127,23 +143,61 @@ impl Resources {
         Ok(out)
     }
     fn load_theme(&mut self, theme: &Xml) {
-        if let Some(scheme)=theme.descendants("clrScheme").next() {
+        if let Some(scheme) = theme.descendants("clrScheme").next() {
             for entry in &scheme.children {
-                if let Some(rgb)=entry.child("srgbClr").map(|c|c.attr("val")).or_else(||entry.child("sysClr").map(|c|c.attr("lastClr"))) {
-                    if let Ok(c)=color(&format!("#{rgb}")) {self.theme_colors.insert(entry.name.clone(),c);}
+                if let Some(rgb) = entry
+                    .child("srgbClr")
+                    .map(|c| c.attr("val"))
+                    .or_else(|| entry.child("sysClr").map(|c| c.attr("lastClr")))
+                {
+                    if let Ok(c) = color(&format!("#{rgb}")) {
+                        self.theme_colors.insert(entry.name.clone(), c);
+                    }
                 }
             }
         }
     }
-    fn formula_color(&self, node: &Xml, key: &str) -> Option<[u8;4]> {
-        let mut f=node.children.iter().find(|c|c.name=="Cell" && c.attr("N")==key)?.attr("F").trim().trim_start_matches('=');
-        for _ in 0..4 {if let Some(inner)=f.strip_prefix("THEMEGUARD(").or_else(||f.strip_prefix("GUARD(")) {f=inner.strip_suffix(')')?.trim();}else{break;}}
-        if let Some(args)=f.strip_prefix("RGB(").and_then(|s|s.strip_suffix(')')) {
-            let c=args.split(',').map(|s|s.trim().parse::<u8>().ok()).collect::<Option<Vec<_>>>()?;
-            return (c.len()==3).then(||[c[0],c[1],c[2],255]);
+    fn formula_color(&self, node: &Xml, key: &str) -> Option<[u8; 4]> {
+        let mut f = node
+            .children
+            .iter()
+            .find(|c| c.name == "Cell" && c.attr("N") == key)?
+            .attr("F")
+            .trim()
+            .trim_start_matches('=');
+        for _ in 0..4 {
+            if let Some(inner) = f
+                .strip_prefix("THEMEGUARD(")
+                .or_else(|| f.strip_prefix("GUARD("))
+            {
+                f = inner.strip_suffix(')')?.trim();
+            } else {
+                break;
+            }
         }
-        let arg=f.strip_prefix("THEMEVAL(")?.strip_suffix(')')?.trim().trim_matches('"');
-        let slot=match arg {"1"|"Dark"=>"dk1","2"|"Light"=>"lt1","3"|"AccentColor"=>"accent1","4"|"AccentColor2"=>"accent2","5"|"AccentColor3"=>"accent3","6"|"AccentColor4"=>"accent4","7"|"AccentColor5"=>"accent5","8"|"AccentColor6"=>"accent6",_=>return None};
+        if let Some(args) = f.strip_prefix("RGB(").and_then(|s| s.strip_suffix(')')) {
+            let c = args
+                .split(',')
+                .map(|s| s.trim().parse::<u8>().ok())
+                .collect::<Option<Vec<_>>>()?;
+            return (c.len() == 3).then(|| [c[0], c[1], c[2], 255]);
+        }
+        let arg = f
+            .strip_prefix("THEMEVAL(")?
+            .strip_suffix(')')?
+            .trim()
+            .trim_matches('"');
+        let slot = match arg {
+            "1" | "Dark" => "dk1",
+            "2" | "Light" => "lt1",
+            "3" | "AccentColor" => "accent1",
+            "4" | "AccentColor2" => "accent2",
+            "5" | "AccentColor3" => "accent3",
+            "6" | "AccentColor4" => "accent4",
+            "7" | "AccentColor5" => "accent5",
+            "8" | "AccentColor6" => "accent6",
+            _ => return None,
+        };
         self.theme_colors.get(slot).copied()
     }
     fn color(
@@ -154,11 +208,20 @@ impl Resources {
         default: [u8; 4],
         warnings: &mut BTreeSet<String>,
     ) -> [u8; 4] {
-        let resolved=value(node,key);
-        if resolved.is_none_or(|v|v.eq_ignore_ascii_case("Themed")) {
-            if let Some(c)=self.formula_color(node,key).or_else(||master.and_then(|m|self.formula_color(m,key))) {return c;}
+        let resolved = value(node, key);
+        if resolved.is_none_or(|v| v.eq_ignore_ascii_case("Themed")) {
+            if let Some(c) = self
+                .formula_color(node, key)
+                .or_else(|| master.and_then(|m| self.formula_color(m, key)))
+            {
+                return c;
+            }
         }
-        let Some(value) = resolved.filter(|v|!v.eq_ignore_ascii_case("Themed")).or_else(|| master.and_then(|n| value(n, key))).or(resolved) else {
+        let Some(value) = resolved
+            .filter(|v| !v.eq_ignore_ascii_case("Themed"))
+            .or_else(|| master.and_then(|n| value(n, key)))
+            .or(resolved)
+        else {
             return default;
         };
         if let Ok(c) = color(value) {
@@ -202,10 +265,16 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
     let package = Package::read(path)?;
     let document = xml::parse(package.text("visio/document.xml")?)?;
     let mut resources = Resources::from_document(&document)?;
-    let themes=package.entries.keys().filter(|p|p.starts_with("visio/theme/") && p.ends_with(".xml")).collect::<Vec<_>>();
+    let themes = package
+        .entries
+        .keys()
+        .filter(|p| p.starts_with("visio/theme/") && p.ends_with(".xml"))
+        .collect::<Vec<_>>();
     // Multiple theme assignments need per-page resolution; never silently choose
     // an arbitrary palette for such documents.
-    if themes.len()==1 {resources.load_theme(&xml::parse(package.text(themes[0])?)?);}
+    if themes.len() == 1 {
+        resources.load_theme(&xml::parse(package.text(themes[0])?)?);
+    }
     let mut warnings = BTreeSet::new();
     if package
         .entries
@@ -218,14 +287,24 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
         let masters = xml::parse(package.text("visio/masters/masters.xml")?)?;
         let rels = relationships(&package, "visio/masters/masters.xml")?;
         for master in masters.children("Master") {
-            let Some(rel)=master.child("Rel") else {
-                warnings.insert(format!("Skipped master {} without a drawing relationship.",master.attr("ID")));continue;
+            let Some(rel) = master.child("Rel") else {
+                warnings.insert(format!(
+                    "Skipped master {} without a drawing relationship.",
+                    master.attr("ID")
+                ));
+                continue;
             };
             let target = rels
                 .get(rel.attr("id"))
                 .ok_or_else(|| error("Missing Visio master part."))?;
             let mut content = xml::parse(package.text(target)?)?;
-            load_images(&mut content, target, &package, &mut resources, &mut warnings)?;
+            load_images(
+                &mut content,
+                target,
+                &package,
+                &mut resources,
+                &mut warnings,
+            )?;
             if resources
                 .masters
                 .insert(master.attr("ID").into(), content)
@@ -241,8 +320,12 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
             .iter()
             .any(|ext| e.eq_ignore_ascii_case(ext))
     });
-    if (!stencil_package || resources.masters.is_empty()) && package.entries.contains_key("visio/pages/pages.xml") {
-        if stencil_package { warnings.insert("This stencil package contains drawing pages instead of masters; its pages were imported.".into()); }
+    if (!stencil_package || resources.masters.is_empty())
+        && package.entries.contains_key("visio/pages/pages.xml")
+    {
+        if stencil_package {
+            warnings.insert("This stencil package contains drawing pages instead of masters; its pages were imported.".into());
+        }
         let pages = xml::parse(package.text("visio/pages/pages.xml")?)?;
         let rels = relationships(&package, "visio/pages/pages.xml")?;
         let mut page_ids = HashSet::new();
@@ -257,12 +340,21 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
                 .get(rel.attr("id"))
                 .ok_or_else(|| error("Missing Visio page part."))?;
             let mut content = xml::parse(package.text(target)?)?;
-            load_images(&mut content, target, &package, &mut resources, &mut warnings)?;
+            load_images(
+                &mut content,
+                target,
+                &package,
+                &mut resources,
+                &mut warnings,
+            )?;
             scenes.push(scene(page, &content, &resources, &mut warnings)?);
         }
     } else if !resources.masters.is_empty() {
         let masters = xml::parse(package.text("visio/masters/masters.xml")?)?;
-        for master in masters.children("Master").filter(|m|resources.masters.contains_key(m.attr("ID"))) {
+        for master in masters
+            .children("Master")
+            .filter(|m| resources.masters.contains_key(m.attr("ID")))
+        {
             scenes.push(scene(
                 master,
                 &resources.masters[master.attr("ID")],
@@ -314,10 +406,14 @@ fn scene(
     let sheet = header.child("PageSheet").unwrap_or(&empty);
     let mut w = number(sheet, None, "PageWidth", 8.5)? * DPI;
     let mut h = number(sheet, None, "PageHeight", 11.)? * DPI;
-    let invalid=!(1. ..=30000.).contains(&w) || !(1. ..=30000.).contains(&h);
-    if invalid {warnings.insert("Recovered invalid Visio page dimensions from object bounds.".into());w=816.;h=1056.;}
+    let invalid = !(1. ..=30000.).contains(&w) || !(1. ..=30000.).contains(&h);
+    if invalid {
+        warnings.insert("Recovered invalid Visio page dimensions from object bounds.".into());
+        w = 816.;
+        h = 1056.;
+    }
     let mut scene = Scene {
-        fit: invalid || header.name=="Master",
+        fit: invalid || header.name == "Master",
         name: header.attr("Name").to_string(),
         width: w.ceil() as u32,
         height: h.ceil() as u32,
@@ -366,47 +462,96 @@ fn scene(
         let mut endpoints = Vec::new();
         for (side, point, explicit) in [("begin", start, glued.0), ("end", end, glued.1)] {
             let candidate = if let Some(key) = explicit {
-                if !bounds.contains_key(&key) { return Err(error("Visio connector endpoint is missing.")); }
+                if !bounds.contains_key(&key) {
+                    return Err(error("Visio connector endpoint is missing."));
+                }
                 Some(key)
             } else {
                 // Only infer an unambiguous contact with an actual outline. Nearby
                 // captions, overlapping containers and decorative lines are not glue.
-                let mut candidates = scene.shapes.iter().filter(|s| s.visible && s.style.stroke.is_some() && s.image.is_none() && !s.kind.is_container() && !s.data.contains_key("emulsion_drawio_endpoint"))
-                    .filter(|s|point.x>=s.bounds[0]-2. && point.x<=s.bounds[0]+s.bounds[2]+2. && point.y>=s.bounds[1]-2. && point.y<=s.bounds[1]+s.bounds[3]+2.)
+                let mut candidates = scene
+                    .shapes
+                    .iter()
+                    .filter(|s| {
+                        s.visible
+                            && s.style.stroke.is_some()
+                            && s.image.is_none()
+                            && !s.kind.is_container()
+                            && !s.data.contains_key("emulsion_drawio_endpoint")
+                    })
+                    .filter(|s| {
+                        point.x >= s.bounds[0] - 2.
+                            && point.x <= s.bounds[0] + s.bounds[2] + 2.
+                            && point.y >= s.bounds[1] - 2.
+                            && point.y <= s.bounds[1] + s.bounds[3] + 2.
+                    })
                     .filter_map(|s| {
                         let fallback = s.kind.path(s.bounds);
                         let path = s.path.as_ref().unwrap_or(&fallback);
-                        let distance = path.flatten(0.25).into_iter().filter(|(_,closed)|*closed).flat_map(|(mut ps,_)| {
-                            if let Some(first)=ps.first().copied() {ps.push(first);}
-                            ps.windows(2).map(|p|(p[0],p[1])).collect::<Vec<_>>()
-                        }).map(|(a,b)| {
-                            let a=dvec2(a.0,a.1);let b=dvec2(b.0,b.1);let d=b-a;
-                            let t=((point-a).dot(d)/d.length_squared().max(1e-12)).clamp(0.,1.);
-                            (point-a-d*t).length()
-                        }).fold(f64::INFINITY,f64::min);
-                        (distance<=2.).then_some((distance,s.key.clone()))
-                    }).collect::<Vec<_>>();
-                candidates.sort_by(|a,b|a.0.total_cmp(&b.0));
-                if candidates.len()==1 || (candidates.len()>1 && candidates[1].0-candidates[0].0>0.5) {
-                    warnings.insert("Unambiguous Visio line contacts were attached to shape outlines.".into());
+                        let distance = path
+                            .flatten(0.25)
+                            .into_iter()
+                            .filter(|(_, closed)| *closed)
+                            .flat_map(|(mut ps, _)| {
+                                if let Some(first) = ps.first().copied() {
+                                    ps.push(first);
+                                }
+                                ps.windows(2).map(|p| (p[0], p[1])).collect::<Vec<_>>()
+                            })
+                            .map(|(a, b)| {
+                                let a = dvec2(a.0, a.1);
+                                let b = dvec2(b.0, b.1);
+                                let d = b - a;
+                                let t = ((point - a).dot(d) / d.length_squared().max(1e-12))
+                                    .clamp(0., 1.);
+                                (point - a - d * t).length()
+                            })
+                            .fold(f64::INFINITY, f64::min);
+                        (distance <= 2.).then_some((distance, s.key.clone()))
+                    })
+                    .collect::<Vec<_>>();
+                candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+                if candidates.len() == 1
+                    || (candidates.len() > 1 && candidates[1].0 - candidates[0].0 > 0.5)
+                {
+                    warnings.insert(
+                        "Unambiguous Visio line contacts were attached to shape outlines.".into(),
+                    );
                     Some(candidates[0].1.clone())
-                } else {None}
+                } else {
+                    None
+                }
             };
-            if let Some(key)=candidate {
-                let r=bounds[&key];
-                endpoints.push((key,Port::Custom{x:(point.x-r[0])/r[2],y:(point.y-r[1])/r[3]}));
+            if let Some(key) = candidate {
+                let r = bounds[&key];
+                endpoints.push((
+                    key,
+                    Port::Custom {
+                        x: (point.x - r[0]) / r[2],
+                        y: (point.y - r[1]) / r[3],
+                    },
+                ));
             } else {
-                let key=format!("__emulsion_free_{}_{}",line.key,side);
-                let mut anchor=Shape::new(key.clone(),ShapeKind::Process,[point.x-0.5,point.y-0.5,1.,1.],String::new());
-                anchor.name="Connector endpoint".into();anchor.visible=false;
-                anchor.parent=Some(line.key.clone());
-                anchor.data.insert("emulsion_drawio_endpoint".into(),"true".into());
+                let key = format!("__emulsion_free_{}_{}", line.key, side);
+                let mut anchor = Shape::new(
+                    key.clone(),
+                    ShapeKind::Process,
+                    [point.x - 0.5, point.y - 0.5, 1., 1.],
+                    String::new(),
+                );
+                anchor.name = "Connector endpoint".into();
+                anchor.visible = false;
+                anchor.parent = Some(line.key.clone());
+                anchor
+                    .data
+                    .insert("emulsion_drawio_endpoint".into(), "true".into());
                 scene.shapes.push(anchor);
-                endpoints.push((key,Port::Custom{x:0.5,y:0.5}));
+                endpoints.push((key, Port::Custom { x: 0.5, y: 0.5 }));
                 warnings.insert("Loose Visio endpoints remain at their original position and can be reattached using connector handles.".into());
             }
         }
-        line.source=endpoints.remove(0);line.target=endpoints.remove(0);
+        line.source = endpoints.remove(0);
+        line.target = endpoints.remove(0);
         scene.lines.push(line);
     }
     Ok(scene)
@@ -441,7 +586,16 @@ fn shape_into(
         return Err(error("Visio shape has no ID."));
     }
     let key = format!("{prefix}{id}");
-    if ["LineWeight","LinePattern","FillPattern","LineColorTrans","FillForegndTrans"].iter().any(|key|value(node,key).is_some_and(|v|v.eq_ignore_ascii_case("Themed"))) {
+    if [
+        "LineWeight",
+        "LinePattern",
+        "FillPattern",
+        "LineColorTrans",
+        "FillForegndTrans",
+    ]
+    .iter()
+    .any(|key| value(node, key).is_some_and(|v| v.eq_ignore_ascii_case("Themed")))
+    {
         warnings.insert("Theme-dependent Visio style values without evaluated numbers use inherited values or native defaults.".into());
     }
     let w = number(node, master, "Width", 1.)?;
@@ -557,7 +711,9 @@ fn shape_into(
             .round() as u8;
     }
     let mut parts = geometry_parts(node, master, w, h, style, warnings)?;
-    let geometry = if parts.is_empty() { None } else {
+    let geometry = if parts.is_empty() {
+        None
+    } else {
         let (path, first_style) = parts.remove(0);
         style = first_style;
         Some(path)
@@ -672,7 +828,17 @@ fn shape_into(
             s.text.font = font.clone();
         }
     }
-    visio_text(node, master, style_sheet("TextStyle"), resources, transform, w, h, &mut s, warnings)?;
+    visio_text(
+        node,
+        master,
+        style_sheet("TextStyle"),
+        resources,
+        transform,
+        w,
+        h,
+        &mut s,
+        warnings,
+    )?;
     for section in node
         .children("Section")
         .filter(|s| s.attr("N") == "Property")
@@ -692,19 +858,33 @@ fn shape_into(
                 .insert(key.into(), value(property, "Value").unwrap_or("").into());
         }
     }
-    let image_source = if node.child("ForeignData").is_some() { Some(node) } else { master.filter(|m|m.child("ForeignData").is_some()) };
+    let image_source = if node.child("ForeignData").is_some() {
+        Some(node)
+    } else {
+        master.filter(|m| m.child("ForeignData").is_some())
+    };
     if let Some(source) = image_source {
-        if let Some(image) = source.image_part.as_ref().and_then(|part|resources.images.get(part)) {
-            let iw = number(node,master,"ImgWidth",w)?;
-            let ih = number(node,master,"ImgHeight",h)?;
-            let center = transform.transform_point2(dvec2(number(node,master,"ImgOffsetX",0.)?+iw/2.,number(node,master,"ImgOffsetY",0.)?+ih/2.));
-            let x_axis = transform.transform_vector2(dvec2(iw / image.width() as f64,0.));
-            let y_axis = transform.transform_vector2(dvec2(0.,-ih / image.height() as f64));
+        if let Some(image) = source
+            .image_part
+            .as_ref()
+            .and_then(|part| resources.images.get(part))
+        {
+            let iw = number(node, master, "ImgWidth", w)?;
+            let ih = number(node, master, "ImgHeight", h)?;
+            let center = transform.transform_point2(dvec2(
+                number(node, master, "ImgOffsetX", 0.)? + iw / 2.,
+                number(node, master, "ImgOffsetY", 0.)? + ih / 2.,
+            ));
+            let x_axis = transform.transform_vector2(dvec2(iw / image.width() as f64, 0.));
+            let y_axis = transform.transform_vector2(dvec2(0., -ih / image.height() as f64));
             s.image_placement = Some(emulsion_raster::Placement {
-                x: center.x - image.width() as f64*x_axis.length()/2., y: center.y - image.height() as f64*y_axis.length()/2.,
-                scale_x: x_axis.length(), scale_y: y_axis.length(),
+                x: center.x - image.width() as f64 * x_axis.length() / 2.,
+                y: center.y - image.height() as f64 * y_axis.length() / 2.,
+                scale_x: x_axis.length(),
+                scale_y: y_axis.length(),
                 rotation: x_axis.y.atan2(x_axis.x).to_degrees(),
-                flip_y: x_axis.perp_dot(y_axis) < 0., ..Default::default()
+                flip_y: x_axis.perp_dot(y_axis) < 0.,
+                ..Default::default()
             });
             s.image = Some(image.clone());
             s.style.fill = Some([255; 4]);
@@ -840,32 +1020,102 @@ fn geometry(
                     number(row, None, "B", 0.)? * h
                 )),
                 "ArcTo" | "EllipticalArcTo" | "RelEllipticalArcTo" => {
-                    let start=current/dvec2(sx,sy);
-                    let end=dvec2(x/sx,y/sy);
-                    let (through,angle,ratio)=if typ=="ArcTo" {
-                        let bow=number(row,None,"A",0.)?;
-                        let delta=end-start;
-                        ((start+end)/2.+dvec2(-delta.y,delta.x).normalize_or_zero()*bow,0.,1.)
+                    let start = current / dvec2(sx, sy);
+                    let end = dvec2(x / sx, y / sy);
+                    let (through, angle, ratio) = if typ == "ArcTo" {
+                        let bow = number(row, None, "A", 0.)?;
+                        let delta = end - start;
+                        (
+                            (start + end) / 2. + dvec2(-delta.y, delta.x).normalize_or_zero() * bow,
+                            0.,
+                            1.,
+                        )
                     } else {
-                        (dvec2(number(row,None,"A",0.)?,number(row,None,"B",0.)?),number(row,None,"C",0.)?,number(row,None,"D",1.)?)
+                        (
+                            dvec2(number(row, None, "A", 0.)?, number(row, None, "B", 0.)?),
+                            number(row, None, "C", 0.)?,
+                            number(row, None, "D", 1.)?,
+                        )
                     };
-                    if let Some(curve)=super::visio_curves::ellipse_arc(start,through,end,angle,ratio,dvec2(sx,sy)) {
+                    if let Some(curve) = super::visio_curves::ellipse_arc(
+                        start,
+                        through,
+                        end,
+                        angle,
+                        ratio,
+                        dvec2(sx, sy),
+                    ) {
                         svg.push_str(&curve);
-                    } else {svg.push_str(&format!("L {x} {y} "));}
+                    } else {
+                        svg.push_str(&format!("L {x} {y} "));
+                    }
                 }
                 "NURBSTo" => {
-                    let formula=row.children.iter().find(|n|n.name=="Cell"&&n.attr("N")=="E").map(|n|if n.attr("F").is_empty(){n.attr("V")}else{n.attr("F")}).or_else(||row.child("E").map(|n|n.text.trim())).unwrap_or("");
-                    let values=super::visio_curves::formula(formula,"NURBS");
-                    let ends=[number(row,None,"A",0.)?,number(row,None,"B",1.)?,number(row,None,"C",0.)?,number(row,None,"D",1.)?];
-                    if let Some(curve)=values.and_then(|v|super::visio_curves::nurbs(current,dvec2(x,y),&v,ends,dvec2(w,h),dvec2(scale_x,scale_y))) {svg.push_str(&curve);}else{warnings.insert("NURBS has unevaluated or invalid knots; endpoint retained.".into());svg.push_str(&format!("L {x} {y} "));}
+                    let formula = row
+                        .children
+                        .iter()
+                        .find(|n| n.name == "Cell" && n.attr("N") == "E")
+                        .map(|n| {
+                            if n.attr("F").is_empty() {
+                                n.attr("V")
+                            } else {
+                                n.attr("F")
+                            }
+                        })
+                        .or_else(|| row.child("E").map(|n| n.text.trim()))
+                        .unwrap_or("");
+                    let values = super::visio_curves::formula(formula, "NURBS");
+                    let ends = [
+                        number(row, None, "A", 0.)?,
+                        number(row, None, "B", 1.)?,
+                        number(row, None, "C", 0.)?,
+                        number(row, None, "D", 1.)?,
+                    ];
+                    if let Some(curve) = values.and_then(|v| {
+                        super::visio_curves::nurbs(
+                            current,
+                            dvec2(x, y),
+                            &v,
+                            ends,
+                            dvec2(w, h),
+                            dvec2(scale_x, scale_y),
+                        )
+                    }) {
+                        svg.push_str(&curve);
+                    } else {
+                        warnings.insert(
+                            "NURBS has unevaluated or invalid knots; endpoint retained.".into(),
+                        );
+                        svg.push_str(&format!("L {x} {y} "));
+                    }
                 }
                 "PolylineTo" | "PolyLineTo" => {
-                    let formula=row.children.iter().find(|n|n.name=="Cell"&&n.attr("N")=="A").map(|n|if n.attr("F").is_empty(){n.attr("V")}else{n.attr("F")}).or_else(||row.child("A").map(|n|n.text.trim())).unwrap_or("");
-                    if let Some(values)=super::visio_curves::formula(formula,"POLYLINE").filter(|v|v.len()>=2&&v.len()%2==0) {
-                        let px=if values[0]==0.{w}else{scale_x};
-                        let py=if values[1]==0.{h}else{scale_y};
-                        for pair in values[2..].chunks_exact(2) {svg.push_str(&format!("L {} {} ",pair[0]*px,pair[1]*py));}
-                    } else {warnings.insert("Polyline formula has unevaluated values; endpoint retained.".into());}
+                    let formula = row
+                        .children
+                        .iter()
+                        .find(|n| n.name == "Cell" && n.attr("N") == "A")
+                        .map(|n| {
+                            if n.attr("F").is_empty() {
+                                n.attr("V")
+                            } else {
+                                n.attr("F")
+                            }
+                        })
+                        .or_else(|| row.child("A").map(|n| n.text.trim()))
+                        .unwrap_or("");
+                    if let Some(values) = super::visio_curves::formula(formula, "POLYLINE")
+                        .filter(|v| v.len() >= 2 && v.len() % 2 == 0)
+                    {
+                        let px = if values[0] == 0. { w } else { scale_x };
+                        let py = if values[1] == 0. { h } else { scale_y };
+                        for pair in values[2..].chunks_exact(2) {
+                            svg.push_str(&format!("L {} {} ", pair[0] * px, pair[1] * py));
+                        }
+                    } else {
+                        warnings.insert(
+                            "Polyline formula has unevaluated values; endpoint retained.".into(),
+                        );
+                    }
                     svg.push_str(&format!("L {x} {y} "));
                 }
                 "Ellipse" => {
@@ -892,7 +1142,7 @@ fn geometry(
                     }
                 }
             }
-            current=dvec2(x,y);
+            current = dvec2(x, y);
         }
         if !svg.is_empty() {
             let mut path = VectorPath::from_svg(&svg).map_err(|e| error(e.to_string()))?;
@@ -919,18 +1169,24 @@ fn sections_fn(n: &Xml) -> Vec<Xml> {
 
 include!("visio_text.rs");
 
-#[cfg(test)] mod theme_tests {
-use super::*;
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
 
-#[test]
-fn visio_theme_palette_and_explicit_color_formulas() {
-    let mut resources=Resources::default();
-    resources.load_theme(&xml::parse(r#"<theme><themeElements><clrScheme><accent1><srgbClr val="12ABEF"/></accent1></clrScheme></themeElements></theme>"#).unwrap());
-    let node=xml::parse(r#"<Shape><Cell N="FillForegnd" V="Themed" F="THEMEGUARD(THEMEVAL(3))"/><Cell N="LineColor" F="RGB(10,20,30)"/></Shape>"#).unwrap();
-    let mut notes=BTreeSet::new();
-    assert_eq!(resources.color(&node,None,"FillForegnd",[0;4],&mut notes),[18,171,239,255]);
-    assert_eq!(resources.color(&node,None,"LineColor",[0;4],&mut notes),[10,20,30,255]);
-    assert!(notes.is_empty());
-}
-
+    #[test]
+    fn visio_theme_palette_and_explicit_color_formulas() {
+        let mut resources = Resources::default();
+        resources.load_theme(&xml::parse(r#"<theme><themeElements><clrScheme><accent1><srgbClr val="12ABEF"/></accent1></clrScheme></themeElements></theme>"#).unwrap());
+        let node=xml::parse(r#"<Shape><Cell N="FillForegnd" V="Themed" F="THEMEGUARD(THEMEVAL(3))"/><Cell N="LineColor" F="RGB(10,20,30)"/></Shape>"#).unwrap();
+        let mut notes = BTreeSet::new();
+        assert_eq!(
+            resources.color(&node, None, "FillForegnd", [0; 4], &mut notes),
+            [18, 171, 239, 255]
+        );
+        assert_eq!(
+            resources.color(&node, None, "LineColor", [0; 4], &mut notes),
+            [10, 20, 30, 255]
+        );
+        assert!(notes.is_empty());
+    }
 }

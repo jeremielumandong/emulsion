@@ -87,7 +87,13 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.editor.doc.diagram.as_ref().is_none_or(|d|d.shapes.is_empty()) {
+        if self
+            .editor
+            .doc
+            .diagram
+            .as_ref()
+            .is_none_or(|d| d.shapes.is_empty())
+        {
             return div().into_any_element();
         }
         let active = self.editor.active_page();
@@ -111,15 +117,26 @@ impl EditorView {
                     cx.notify();
                 })));
         if cleared || collapsed {
-            return div().id("diagram-used-stencils").test_support().flex().flex_col().gap_2()
+            return div()
+                .id("diagram-used-stencils")
+                .test_support()
+                .flex()
+                .flex_col()
+                .gap_2()
                 .child(header)
-                .when(cleared && !collapsed,|d|d.child("Temporary shapes cleared for this page.")
-                    .child(Button::new("diagram-imported-restore").label("Show page shapes").xsmall().ghost()
-                        .on_click(cx.listener(move |v,_,_,cx| {
-                            v.diagram_ui.used.cleared.remove(&active);
-                            v.diagram_ui.used.requested=None;
-                            cx.notify();
-                        }))))
+                .when(cleared && !collapsed, |d| {
+                    d.child("Temporary shapes cleared for this page.").child(
+                        Button::new("diagram-imported-restore")
+                            .label("Show page shapes")
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.diagram_ui.used.cleared.remove(&active);
+                                v.diagram_ui.used.requested = None;
+                                cx.notify();
+                            })),
+                    )
+                })
                 .into_any_element();
         }
         if self
@@ -300,8 +317,13 @@ impl EditorView {
                 );
             }
             section = section.child(grid).child(
-                Button::new("diagram-save-used-stencils").label("Keep as stencil pack").xsmall().ghost()
-                .on_click(cx.listener(|v,_,_,cx|v.save_imported_stencils(&[v.editor.active_page()],cx)))
+                Button::new("diagram-save-used-stencils")
+                    .label("Keep as stencil pack")
+                    .xsmall()
+                    .ghost()
+                    .on_click(cx.listener(|v, _, _, cx| {
+                        v.save_imported_stencils(&[v.editor.active_page()], cx)
+                    })),
             );
             if used.total > PAGE_SIZE {
                 let page = used.page;

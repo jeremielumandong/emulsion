@@ -176,7 +176,10 @@ fn text_properties(include_text: bool) -> Value {
     let object = properties.as_object_mut().unwrap();
     if include_text {
         object.insert("text".into(), json!({ "type": "string" }));
-        object.insert("list".into(), json!({"type":"string","enum":["none","bullet","numbered"]}));
+        object.insert(
+            "list".into(),
+            json!({"type":"string","enum":["none","bullet","numbered"]}),
+        );
     }
     object.extend(json!({
         "x": { "type": "number" }, "y": { "type": "number" },
@@ -983,7 +986,7 @@ pub fn definitions() -> Vec<ToolDef> {
     definitions.extend(crate::photo_source_tools::definitions());
     definitions.extend(crate::smart_source_tools::definitions());
     definitions.extend(crate::diagram_format_tools::definitions());
-        definitions.extend(crate::design_data_tools::definitions());
+    definitions.extend(crate::design_data_tools::definitions());
     definitions.extend(crate::design_selection_export_tools::definitions());
     definitions.extend(crate::design_vector_tools::definitions());
     definitions.extend(crate::design_paragraph_tools::definitions());
@@ -1026,9 +1029,16 @@ pub fn is_read_only(name: &str) -> bool {
 }
 
 pub fn is_destructive(name: &str) -> bool {
-    if crate::design_brand_tools::DESTRUCTIVE.contains(&name) { return true; }
-    if crate::creative_catalog_tools::DESTRUCTIVE.contains(&name) || crate::workspace_tools::DESTRUCTIVE.contains(&name) { return true; }
-    name == crate::design_selection_export_tools::NAME || DESTRUCTIVE.contains(&name)
+    if crate::design_brand_tools::DESTRUCTIVE.contains(&name) {
+        return true;
+    }
+    if crate::creative_catalog_tools::DESTRUCTIVE.contains(&name)
+        || crate::workspace_tools::DESTRUCTIVE.contains(&name)
+    {
+        return true;
+    }
+    name == crate::design_selection_export_tools::NAME
+        || DESTRUCTIVE.contains(&name)
         || crate::design_asset_tools::DESTRUCTIVE.contains(&name)
         || crate::design_appearance_tools::DESTRUCTIVE.contains(&name)
         || crate::design_layout_tools::DESTRUCTIVE.contains(&name)
@@ -1065,7 +1075,7 @@ pub fn uses_native_history(name: &str) -> bool {
             crate::photo_source_tools::definitions(),
             crate::smart_source_tools::definitions(),
             crate::diagram_format_tools::definitions(),
-        crate::design_data_tools::definitions(),
+            crate::design_data_tools::definitions(),
             crate::design_selection_export_tools::definitions(),
             crate::design_vector_tools::definitions(),
             crate::design_paragraph_tools::definitions(),

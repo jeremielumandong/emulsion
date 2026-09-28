@@ -160,13 +160,20 @@ pub(super) fn parse(html: &str, base: &TextSpec, warnings: &mut BTreeSet<String>
                                             }
                                         }
                                         "line-height" => {
-                                            let ratio=if let Some(v)=value.strip_suffix('%') {
-                                                v.parse::<f32>().ok().map(|v|v/100.)
-                                            } else if value.ends_with("px") || value.ends_with("pt") || value.ends_with("em") {
-                                                size(value,style.size).map(|v|v/style.size.max(1.))
-                                            } else {value.parse::<f32>().ok()};
-                                            if let Some(v)=ratio.filter(|v|v.is_finite()) {spec.line_height=v.clamp(0.5,5.);}
-
+                                            let ratio = if let Some(v) = value.strip_suffix('%') {
+                                                v.parse::<f32>().ok().map(|v| v / 100.)
+                                            } else if value.ends_with("px")
+                                                || value.ends_with("pt")
+                                                || value.ends_with("em")
+                                            {
+                                                size(value, style.size)
+                                                    .map(|v| v / style.size.max(1.))
+                                            } else {
+                                                value.parse::<f32>().ok()
+                                            };
+                                            if let Some(v) = ratio.filter(|v| v.is_finite()) {
+                                                spec.line_height = v.clamp(0.5, 5.);
+                                            }
                                         }
                                         _ => {}
                                     }
@@ -289,10 +296,27 @@ mod tests {
     use super::*;
     #[test]
     fn css_line_height_preserves_percentage_and_absolute_spacing() {
-        let base=TextSpec{size:20.,..Default::default()};
-        for (css,expected) in [("170%",1.7),("30px",1.5),("24pt",1.6),("1.25em",1.25),("1.4",1.4)] {
-            let spec=parse(&format!("<p style='line-height:{css}'>One<br>Two</p>"),&base,&mut BTreeSet::new());
-            assert!((spec.line_height-expected).abs()<0.001,"{css}: {}",spec.line_height);
+        let base = TextSpec {
+            size: 20.,
+            ..Default::default()
+        };
+        for (css, expected) in [
+            ("170%", 1.7),
+            ("30px", 1.5),
+            ("24pt", 1.6),
+            ("1.25em", 1.25),
+            ("1.4", 1.4),
+        ] {
+            let spec = parse(
+                &format!("<p style='line-height:{css}'>One<br>Two</p>"),
+                &base,
+                &mut BTreeSet::new(),
+            );
+            assert!(
+                (spec.line_height - expected).abs() < 0.001,
+                "{css}: {}",
+                spec.line_height
+            );
         }
     }
     #[test]

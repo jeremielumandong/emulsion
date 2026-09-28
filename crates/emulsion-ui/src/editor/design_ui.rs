@@ -271,7 +271,11 @@ impl EditorView {
                                 (f64::from(size.0) * scale).round().max(1.) as u32,
                                 (f64::from(size.1) * scale).round().max(1.) as u32,
                             );
-                            let build_size=if matches!(template,Template::Responsive(_)){size}else{preview_size};
+                            let build_size = if matches!(template, Template::Responsive(_)) {
+                                size
+                            } else {
+                                preview_size
+                            };
                             let doc = template.create(build_size.0, build_size.1).ok()?;
                             let (w, h, bytes) = super::history::doc_thumb(&doc, 216);
                             Some((i, Arc::new(viewport::bgra_image(w, h, bytes))))

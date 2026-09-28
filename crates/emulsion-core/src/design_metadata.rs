@@ -202,7 +202,14 @@ impl Design {
         }
         crate::design_variables::validate(self, doc)?;
         crate::design_interactions::validate(&self.interactions, &self.overlays, doc)?;
-        if self.interaction_triggers.iter().any(|(id,trigger)| *trigger != crate::design_interactions::Trigger::Click && self.interactions.get(id).is_some_and(|actions| actions.iter().any(|a|matches!(a,crate::design_interactions::Action::Url{..})))) {
+        if self.interaction_triggers.iter().any(|(id, trigger)| {
+            *trigger != crate::design_interactions::Trigger::Click
+                && self.interactions.get(id).is_some_and(|actions| {
+                    actions
+                        .iter()
+                        .any(|a| matches!(a, crate::design_interactions::Action::Url { .. }))
+                })
+        }) {
             return Err("Web links require an explicit click trigger.".into());
         }
 

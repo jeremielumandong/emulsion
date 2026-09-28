@@ -30,7 +30,7 @@ fn command_toolbar_wraps_with_many_external_tab_stops_and_skips_disabled(cx: &mu
                 }))
         }
     }
-    cx.update(|cx| gpui_kit::init(cx));
+    cx.update(gpui_kit::init);
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|_| ToolbarHarness);
         Root::new(view, window, cx)

@@ -247,7 +247,12 @@ impl EditorView {
         })
         .detach();
     }
-    pub(super) fn asset_properties(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn asset_properties(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(asset) = self
             .creative
             .catalog
@@ -348,7 +353,7 @@ impl EditorView {
             .iter()
             .filter(|a| {
                 a.kind == kind
-                    && self.creative.folder.is_none_or(|id|a.folder==Some(id))
+                    && self.creative.folder.is_none_or(|id| a.folder == Some(id))
                     && (a.name.to_lowercase().contains(query)
                         || a.tags.iter().any(|t| t.to_lowercase().contains(query)))
             })
@@ -400,7 +405,16 @@ impl EditorView {
                                 let props = owner.clone();
                                 let folders = owner.clone();
                                 let remove = owner.clone();
-                                menu.item(PopupMenuItem::new("Move to asset folder…").on_click(move|_,window,cx|{folders.update(cx,|this,cx|this.move_creative_asset_dialog(id,window,cx)).ok();})).item(PopupMenuItem::new("Properties / relink…").on_click(
+                                menu.item(PopupMenuItem::new("Move to asset folder…").on_click(
+                                    move |_, window, cx| {
+                                        folders
+                                            .update(cx, |this, cx| {
+                                                this.move_creative_asset_dialog(id, window, cx)
+                                            })
+                                            .ok();
+                                    },
+                                ))
+                                .item(PopupMenuItem::new("Properties / relink…").on_click(
                                     move |_, window, cx| {
                                         props
                                             .update(cx, |this, cx| {
@@ -442,15 +456,21 @@ impl EditorView {
             .and_then(|id| self.creative.catalog.brands.iter().find(|b| b.id == id))
             .cloned()
             .unwrap_or(Brand {
-                typography: Default::default(), palettes: Default::default(), fonts: Default::default(),
+                typography: Default::default(),
+                palettes: Default::default(),
+                fonts: Default::default(),
                 id: 0,
                 name: "My brand".into(),
                 font: "Geist".into(),
                 colors: vec![[28, 30, 36, 255], [230, 103, 69, 255]],
                 logos: Vec::new(),
             });
-        let embedded_fonts=brand.fonts.clone();
-        let font_label=brand.fonts.get(&brand.font).map(|f|f.family().to_owned()).unwrap_or(brand.font.clone());
+        let embedded_fonts = brand.fonts.clone();
+        let font_label = brand
+            .fonts
+            .get(&brand.font)
+            .map(|f| f.family().to_owned())
+            .unwrap_or(brand.font.clone());
         let fields = [
             brand.name,
             font_label,
@@ -467,16 +487,20 @@ impl EditorView {
             let fields = fields.clone();
             let inputs = fields.clone();
             let owner = owner.clone();
-            let embedded_fonts=embedded_fonts.clone();
+            let embedded_fonts = embedded_fonts.clone();
             dialog
                 .title("Brand kit")
                 .width(px(460.))
                 .child(
                     div().flex().flex_col().gap_2().children(
-                        ["Name", "Font family", "Colors · #RRGGBB or #RRGGBBAA, text first"]
-                            .into_iter()
-                            .zip(&fields)
-                            .map(|(label, input)| div().child(label).child(Input::new(input))),
+                        [
+                            "Name",
+                            "Font family",
+                            "Colors · #RRGGBB or #RRGGBBAA, text first",
+                        ]
+                        .into_iter()
+                        .zip(&fields)
+                        .map(|(label, input)| div().child(label).child(Input::new(input))),
                     ),
                 )
                 .footer(crate::widgets::form_dialog_footer("Save brand"))
@@ -484,8 +508,13 @@ impl EditorView {
                     let mut values = inputs
                         .each_ref()
                         .map(|i| i.read(cx).value().trim().to_string());
-                    if let Some(font)=embedded_fonts.values().find(|f|f.family()==values[1]){values[1]=font.alias().into();}
-                    let colors=values[2].split(',').map(super::design_brand_ui::parse_rgba).collect::<Option<Vec<_>>>();
+                    if let Some(font) = embedded_fonts.values().find(|f| f.family() == values[1]) {
+                        values[1] = font.alias().into();
+                    }
+                    let colors = values[2]
+                        .split(',')
+                        .map(super::design_brand_ui::parse_rgba)
+                        .collect::<Option<Vec<_>>>();
                     let Some(colors) = colors else {
                         owner
                             .update(cx, |this, cx| {
@@ -537,7 +566,21 @@ impl EditorView {
         if ids.is_empty() {
             ids = self.editor.doc.children(None);
         }
-        let result=(||{let mut trial=emulsion_core::Editor::new(self.editor.doc.clone(),None);let mut design=trial.doc.design.clone();if let Some(font)=brand.fonts.get(&brand.font){design.fonts.insert(brand.font.clone(),font.clone());}trial.execute(Command::SetDesign{design:Box::new(design)}).map_err(|e|e.to_string())?;emulsion_core::design::brand::apply(&mut trial,&ids,&brand.font,&brand.colors)?;self.editor.commit_design_document(trial.doc,"Apply portable brand kit")})();
+        let result = (|| {
+            let mut trial = emulsion_core::Editor::new(self.editor.doc.clone(), None);
+            let mut design = trial.doc.design.clone();
+            if let Some(font) = brand.fonts.get(&brand.font) {
+                design.fonts.insert(brand.font.clone(), font.clone());
+            }
+            trial
+                .execute(Command::SetDesign {
+                    design: Box::new(design),
+                })
+                .map_err(|e| e.to_string())?;
+            emulsion_core::design::brand::apply(&mut trial, &ids, &brand.font, &brand.colors)?;
+            self.editor
+                .commit_design_document(trial.doc, "Apply portable brand kit")
+        })();
         match result {
             Ok(()) => {
                 self.after_change(cx);
@@ -658,7 +701,13 @@ impl EditorView {
                         this.load_creative_library(cx);
                     })),
             )
-            .child(Button::new("brand-embed-selection").label("Embed font in selected text…").small().outline().on_click(cx.listener(|this,_,_,cx|this.import_brand_font(None,cx))))
+            .child(
+                Button::new("brand-embed-selection")
+                    .label("Embed font in selected text…")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| this.import_brand_font(None, cx))),
+            )
             .child(
                 Button::new("brand-new")
                     .label("New brand kit…")
@@ -702,7 +751,7 @@ impl EditorView {
                             .border_color(p.line)
                             .rounded(px(6.))
                             .child(title)
-                            .child(self.brand_extended_controls(&brand,cx))
+                            .child(self.brand_extended_controls(&brand, cx))
                             .child(div().flex().gap_1().children(brand.colors.iter().map(|c| {
                                 div()
                                     .size(px(18.))

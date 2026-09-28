@@ -33,7 +33,9 @@ pub enum OverlayOperation {
 pub enum Action {
     Next,
     /// Open a validated HTTP(S) link only on an explicit presentation click.
-    Url { url: String },
+    Url {
+        url: String,
+    },
     Previous,
     Back,
     Slide {
@@ -51,9 +53,20 @@ pub enum Action {
 }
 /// A browser action never accepts executable/local schemes or embedded credentials.
 pub fn valid_url(url: &str) -> bool {
-    if url.len()>4096 || url.chars().any(|c|c.is_whitespace()||c.is_control()||c=='\\') {return false;}
-    let Some(rest)=url.strip_prefix("https://").or_else(||url.strip_prefix("http://")) else{return false;};
-    let host=rest.split(['/', '?', '#']).next().unwrap_or("");
+    if url.len() > 4096
+        || url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
+    {
+        return false;
+    }
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
     !host.is_empty() && !host.contains('@') && !host.starts_with(':')
 }
 impl Action {

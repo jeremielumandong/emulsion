@@ -11,20 +11,44 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 
+#[path = "diagram_hit_test.rs"]
+mod hit_test;
 #[path = "diagram_object_menu.rs"]
 mod object_menu;
-#[path="diagram_used_stencils.rs"]
+#[path = "diagram_used_stencils.rs"]
 mod used_stencils;
-#[path="diagram_hit_test.rs"]
-mod hit_test;
 pub(crate) use used_stencils::DraggedDocumentStencil;
 
 type DiagramPalette = ([u8; 4], [u8; 4], [u8; 4]);
 const DIAGRAM_STYLES: [(&str, DiagramPalette); 4] = [
-    ("White", (diagram::DEFAULT_FILL, diagram::DEFAULT_LINE, diagram::DEFAULT_TEXT)),
-    ("Soft teal", ([178, 242, 235, 255], diagram::DEFAULT_LINE, diagram::DEFAULT_TEXT)),
-    ("Soft blue", ([236, 244, 255, 255], diagram::DEFAULT_LINE, diagram::DEFAULT_TEXT)),
-    ("Charcoal", ([75, 81, 89, 255], diagram::DEFAULT_LINE, [255; 4])),
+    (
+        "White",
+        (
+            diagram::DEFAULT_FILL,
+            diagram::DEFAULT_LINE,
+            diagram::DEFAULT_TEXT,
+        ),
+    ),
+    (
+        "Soft teal",
+        (
+            [178, 242, 235, 255],
+            diagram::DEFAULT_LINE,
+            diagram::DEFAULT_TEXT,
+        ),
+    ),
+    (
+        "Soft blue",
+        (
+            [236, 244, 255, 255],
+            diagram::DEFAULT_LINE,
+            diagram::DEFAULT_TEXT,
+        ),
+    ),
+    (
+        "Charcoal",
+        ([75, 81, 89, 255], diagram::DEFAULT_LINE, [255; 4]),
+    ),
 ];
 
 #[derive(Clone)]
@@ -45,7 +69,7 @@ impl Render for DraggedStencil {
 }
 
 pub(super) struct DiagramUi {
-    hit_cache:RefCell<hit_test::HitCache>,
+    hit_cache: RefCell<hit_test::HitCache>,
     used: used_stencils::UsedStencils,
     copied_style: Option<object_menu::ObjectStyle>,
     open: bool,
@@ -78,7 +102,7 @@ struct DiagramMarquee {
 impl Default for DiagramUi {
     fn default() -> Self {
         Self {
-            hit_cache:Default::default(),
+            hit_cache: Default::default(),
             used: Default::default(),
             copied_style: None,
             open: true,
@@ -395,12 +419,16 @@ impl EditorView {
         }).detach();
     }
 
-    pub(crate) fn save_imported_stencils(&mut self,pages:&[u64],cx:&mut Context<Self>) {
-        let Some(mut project)=self.editor.snapshot() else{return;};
-        project.pages.retain(|p|pages.contains(&p.meta.id));
-        if project.pages.is_empty(){return;}
-        project.active=project.pages[0].meta.id;
-        let name=project.pages[0].meta.name.clone();
+    pub(crate) fn save_imported_stencils(&mut self, pages: &[u64], cx: &mut Context<Self>) {
+        let Some(mut project) = self.editor.snapshot() else {
+            return;
+        };
+        project.pages.retain(|p| pages.contains(&p.meta.id));
+        if project.pages.is_empty() {
+            return;
+        }
+        project.active = project.pages[0].meta.id;
+        let name = project.pages[0].meta.name.clone();
         cx.spawn(async move |this,cx| {
             let result=cx.background_spawn(async move {
                 emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),&project,&name)
@@ -461,8 +489,8 @@ impl EditorView {
         }
     }
     fn diagram_hit(&self, point: (f64, f64)) -> Option<Endpoint> {
-        let cache=self.diagram_hit_cache();
-        for (id,kind,[x,y,w,h]) in cache.shapes.iter().copied() {
+        let cache = self.diagram_hit_cache();
+        for (id, kind, [x, y, w, h]) in cache.shapes.iter().copied() {
             let tolerance = 10. / self.view.zoom;
             if point.0 < x - tolerance
                 || point.0 > x + w + tolerance
@@ -485,19 +513,23 @@ impl EditorView {
                 x: ((point.0 - x) / w.max(f64::EPSILON)).clamp(0., 1.),
                 y: ((point.1 - y) / h.max(f64::EPSILON)).clamp(0., 1.),
             };
-            return Some(Endpoint {
-                shape: id,
-                port,
-            });
+            return Some(Endpoint { shape: id, port });
         }
         drop(cache);
-        let id=self.diagram_edge_hit(point)?;
-        diagram::connector_attachment(&self.editor.doc,id,point).map(|(endpoint,_)|endpoint)
+        let id = self.diagram_edge_hit(point)?;
+        diagram::connector_attachment(&self.editor.doc, id, point).map(|(endpoint, _)| endpoint)
     }
     fn diagram_edge_hit(&self, point: (f64, f64)) -> Option<NodeId> {
-        let cache=self.diagram_hit_cache();let tolerance=7./self.view.zoom;
-        for (id,[x,y,w,h],lines) in &cache.edges {
-            if point.0 < x-tolerance || point.0>x+w+tolerance || point.1<y-tolerance || point.1>y+h+tolerance {continue;}
+        let cache = self.diagram_hit_cache();
+        let tolerance = 7. / self.view.zoom;
+        for (id, [x, y, w, h], lines) in &cache.edges {
+            if point.0 < x - tolerance
+                || point.0 > x + w + tolerance
+                || point.1 < y - tolerance
+                || point.1 > y + h + tolerance
+            {
+                continue;
+            }
             for line in lines {
                 for pair in line.windows(2) {
                     let (a, b) = (pair[0], pair[1]);
@@ -872,10 +904,16 @@ impl EditorView {
                 ]
             });
         }
-        if let (Some(source),Some(pointer))=(&self.diagram_ui.source,self.diagram_ui.pointer)
-            && let Some(start)=diagram::endpoint_position(&self.editor.doc,source,pointer) {
-            let hit=self.diagram_port_hit(pointer).or_else(||self.diagram_hit(pointer));
-            let end=hit.as_ref().and_then(|hit|diagram::endpoint_position(&self.editor.doc,hit,start)).unwrap_or(pointer);
+        if let (Some(source), Some(pointer)) = (&self.diagram_ui.source, self.diagram_ui.pointer)
+            && let Some(start) = diagram::endpoint_position(&self.editor.doc, source, pointer)
+        {
+            let hit = self
+                .diagram_port_hit(pointer)
+                .or_else(|| self.diagram_hit(pointer));
+            let end = hit
+                .as_ref()
+                .and_then(|hit| diagram::endpoint_position(&self.editor.doc, hit, start))
+                .unwrap_or(pointer);
             let mid = (start.0 + end.0) / 2.;
             overlay.preview = vec![start, (mid, start.1), (mid, end.1), end];
             overlay.target = hit.map(|_| end);
@@ -1043,13 +1081,23 @@ impl EditorView {
                         .flex_col()
                         .gap_2()
                         .child("Label")
-                        .child(Textarea::new(&label).h(rems(6.)).flex_shrink_0().aria_label("Object label"))
+                        .child(
+                            Textarea::new(&label)
+                                .h(rems(6.))
+                                .flex_shrink_0()
+                                .aria_label("Object label"),
+                        )
                         .child(if shape {
                             "Data · JSON object, e.g. {\"owner\":\"Design\"}"
                         } else {
                             "Waypoints · JSON coordinates, e.g. [[200,100],[200,300]]"
                         })
-                        .child(Textarea::new(&details).h(rems(16.)).flex_shrink_0().aria_label("Object data")),
+                        .child(
+                            Textarea::new(&details)
+                                .h(rems(16.))
+                                .flex_shrink_0()
+                                .aria_label("Object data"),
+                        ),
                 )
                 .footer(crate::widgets::form_dialog_footer("Apply changes"))
                 .on_ok(move |_, _, cx| {
@@ -1478,8 +1526,14 @@ impl EditorView {
             &self.editor.doc,
             &self.selected_layer_roots(),
             {
-                let (name,(fill,line,text)) = DIAGRAM_STYLES[index];
-                emulsion_core::diagram_library::Theme { id: "preset", name, fill, line, text }
+                let (name, (fill, line, text)) = DIAGRAM_STYLES[index];
+                emulsion_core::diagram_library::Theme {
+                    id: "preset",
+                    name,
+                    fill,
+                    line,
+                    text,
+                }
             },
         ) {
             Ok(commands) => {
@@ -1730,8 +1784,27 @@ impl EditorView {
                                 this.update_diagram_edge(id, |e| e.arrow_end = !arrow, cx)
                             })),
                     );
-                let jump=edge.jump_style;
-                content=content.child(Button::new("diagram-line-jumps").label(format!("Crossings: {}",jump.drawio())).small().outline().on_click(cx.listener(move |this,_,_,cx|this.update_diagram_edge(id,|e|e.jump_style=match jump {diagram::JumpStyle::None=>diagram::JumpStyle::Arc,diagram::JumpStyle::Arc=>diagram::JumpStyle::Gap,diagram::JumpStyle::Gap=>diagram::JumpStyle::Sharp,diagram::JumpStyle::Sharp=>diagram::JumpStyle::None},cx))));
+                let jump = edge.jump_style;
+                content = content.child(
+                    Button::new("diagram-line-jumps")
+                        .label(format!("Crossings: {}", jump.drawio()))
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.update_diagram_edge(
+                                id,
+                                |e| {
+                                    e.jump_style = match jump {
+                                        diagram::JumpStyle::None => diagram::JumpStyle::Arc,
+                                        diagram::JumpStyle::Arc => diagram::JumpStyle::Gap,
+                                        diagram::JumpStyle::Gap => diagram::JumpStyle::Sharp,
+                                        diagram::JumpStyle::Sharp => diagram::JumpStyle::None,
+                                    }
+                                },
+                                cx,
+                            )
+                        })),
+                );
                 for (index, start, marker) in [
                     (0usize, true, edge.start_marker),
                     (1usize, false, edge.end_marker),
@@ -2012,8 +2085,8 @@ impl EditorView {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search library"));
             self.diagram_ui.subscription = Some(cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
-                    this.diagram_ui.stencil_page=0;
-                    this.diagram_ui.used.page=0;
+                    this.diagram_ui.stencil_page = 0;
+                    this.diagram_ui.used.page = 0;
                     cx.notify();
                 }
             }));
@@ -2070,7 +2143,12 @@ impl EditorView {
             .overflow_y_scroll()
             .px(px(10.))
             .py(px(8.))
-            .child(div().id("diagram-stencil-search").test_support().child(Styled::h(Input::new(&search).small(), px(26.))));
+            .child(
+                div()
+                    .id("diagram-stencil-search")
+                    .test_support()
+                    .child(Styled::h(Input::new(&search).small(), px(26.))),
+            );
         content = content.child(
             div().grid().grid_cols(2).gap_1().children(
                 [
@@ -2121,7 +2199,9 @@ impl EditorView {
                     })),
             );
         }
-        if self.diagram_ui.library_tab == 0 { content=content.child(self.document_stencil_toolbox(&query,p,window,cx)); }
+        if self.diagram_ui.library_tab == 0 {
+            content = content.child(self.document_stencil_toolbox(&query, p, window, cx));
+        }
         if matches!(self.diagram_ui.library_tab, 0 | 2) {
             for (category_index, &label) in diagram::stencils::CATEGORIES.iter().enumerate() {
                 let stencils = diagram::stencils::STENCILS

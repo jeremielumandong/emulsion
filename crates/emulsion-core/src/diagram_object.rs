@@ -30,7 +30,10 @@ pub struct ObjectStyle {
     label: Appearance,
 }
 impl ObjectStyle {
-    pub fn validate(&self) -> Result<(), String> { self.body.validate()?; self.label.validate() }
+    pub fn validate(&self) -> Result<(), String> {
+        self.body.validate()?;
+        self.label.validate()
+    }
     pub fn capture(doc: &Document, id: NodeId) -> Result<Self, String> {
         let (body, label) = parts(doc, id)?;
         Ok(Self {

@@ -267,7 +267,7 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
 }
 
 fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Encoded> {
-    let mut sources=crate::smart_source_data::SourcePool::default();
+    let mut sources = crate::smart_source_data::SourcePool::default();
     enum Job<'a> {
         Png {
             path: String,
@@ -1071,7 +1071,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
         .truncate(emulsion_core::document::MAX_PROJECT_COLORS);
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     let mut paths = crate::path_data::PathReader::default();
-    let mut sources=crate::smart_source_data::SourcePool::default();
+    let mut sources = crate::smart_source_data::SourcePool::default();
     for mut n in m.nodes {
         if n.pattern_refs.len() > n.style_options.len() {
             return Err(IoError::Manifest(
@@ -1155,7 +1155,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 let (cache, offset) =
                     emulsion_core::smart::render_styled(&r, &filters, &filter_styles);
                 NodeKind::Smart {
-                    editable: sources.restore(editable,source_document,zip,"sources")?,
+                    editable: sources.restore(editable, source_document, zip, "sources")?,
                     source: r,
                     filters,
                     filter_styles,

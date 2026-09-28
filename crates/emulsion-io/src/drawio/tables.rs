@@ -89,7 +89,7 @@ struct CellLayout {
     spec: emulsion_core::text::TextSpec,
     bg: Option<[u8; 4]>,
     border: bool,
-    border_color: [u8;4],
+    border_color: [u8; 4],
     border_width: f32,
     border_dash: Vec<f32>,
     padding: [f64; 4],
@@ -200,17 +200,36 @@ pub(super) fn append(
             let border = attr(table, "border").is_some_and(|s| s != "0")
                 || css(table, "border").is_some_and(|s| !s.starts_with('0') && s != "none")
                 || css(child, "border").is_some_and(|s| !s.starts_with('0') && s != "none");
-            let border_css=css(child,"border").or_else(||css(table,"border")).unwrap_or_default();
-            let border_tokens=border_css.split_whitespace().collect::<Vec<_>>();
-            let border_color=css(child,"border-color").or_else(||css(table,"border-color"))
-                .and_then(|s|color(&s).ok().flatten()).or_else(||border_tokens.iter().find_map(|s|color(s).ok().flatten())).unwrap_or([0,0,0,255]);
-            let border_width=css(child,"border-width").or_else(||css(table,"border-width"))
-                .and_then(|s|dimension(&s,0.)).or_else(||border_tokens.iter().find_map(|s|dimension(s,0.))).unwrap_or(1.).min(20.) as f32;
-            let border_style=css(child,"border-style").or_else(||css(table,"border-style"));
-            let dashed=border_style.as_deref()==Some("dashed") || border_tokens.contains(&"dashed");
-            let dotted=border_style.as_deref()==Some("dotted") || border_tokens.contains(&"dotted");
-            let border_dash=if dashed{vec![4.*border_width,3.*border_width]}else if dotted{vec![border_width,2.*border_width]}else{vec![]};
-            let border=border && border_width>0. && !matches!(border_style.as_deref(),Some("none"|"hidden"));
+            let border_css = css(child, "border")
+                .or_else(|| css(table, "border"))
+                .unwrap_or_default();
+            let border_tokens = border_css.split_whitespace().collect::<Vec<_>>();
+            let border_color = css(child, "border-color")
+                .or_else(|| css(table, "border-color"))
+                .and_then(|s| color(&s).ok().flatten())
+                .or_else(|| border_tokens.iter().find_map(|s| color(s).ok().flatten()))
+                .unwrap_or([0, 0, 0, 255]);
+            let border_width = css(child, "border-width")
+                .or_else(|| css(table, "border-width"))
+                .and_then(|s| dimension(&s, 0.))
+                .or_else(|| border_tokens.iter().find_map(|s| dimension(s, 0.)))
+                .unwrap_or(1.)
+                .min(20.) as f32;
+            let border_style = css(child, "border-style").or_else(|| css(table, "border-style"));
+            let dashed =
+                border_style.as_deref() == Some("dashed") || border_tokens.contains(&"dashed");
+            let dotted =
+                border_style.as_deref() == Some("dotted") || border_tokens.contains(&"dotted");
+            let border_dash = if dashed {
+                vec![4. * border_width, 3. * border_width]
+            } else if dotted {
+                vec![border_width, 2. * border_width]
+            } else {
+                vec![]
+            };
+            let border = border
+                && border_width > 0.
+                && !matches!(border_style.as_deref(), Some("none" | "hidden"));
             if let Some(align) = css(child, "text-align")
                 .or_else(|| attr(child, "align"))
                 .or_else(|| css(tr, "text-align"))
@@ -284,7 +303,10 @@ pub(super) fn append(
             }
         }
     }
-    for cell in cells.iter().filter(|_|css(table,"table-layout").as_deref()!=Some("fixed")) {
+    for cell in cells
+        .iter()
+        .filter(|_| css(table, "table-layout").as_deref() != Some("fixed"))
+    {
         let preferred = f64::from(emulsion_core::text::layout(&cell.spec).bounds().width)
             + cell.padding[1]
             + cell.padding[3];
@@ -339,9 +361,14 @@ pub(super) fn append(
             *h += extra;
         }
     }
-    if let Some(requested)=css(table,"height").or_else(||attr(table,"height")).and_then(|s|dimension(&s,b[3])) {
-        let extra=(requested-heights.iter().sum::<f64>()).max(0.)/heights.len() as f64;
-        for h in &mut heights {*h+=extra;}
+    if let Some(requested) = css(table, "height")
+        .or_else(|| attr(table, "height"))
+        .and_then(|s| dimension(&s, b[3]))
+    {
+        let extra = (requested - heights.iter().sum::<f64>()).max(0.) / heights.len() as f64;
+        for h in &mut heights {
+            *h += extra;
+        }
     }
     let height = heights.iter().sum::<f64>();
     let x = b[0]
@@ -372,7 +399,11 @@ pub(super) fn append(
                     fill: cell.bg,
                     stroke: cell.border.then_some(cell.border_color),
                     width: cell.border_width,
-                    dash: {let mut dash=[0.;6];dash[..cell.border_dash.len()].copy_from_slice(&cell.border_dash);dash},
+                    dash: {
+                        let mut dash = [0.; 6];
+                        dash[..cell.border_dash.len()].copy_from_slice(&cell.border_dash);
+                        dash
+                    },
                     dash_count: cell.border_dash.len() as u8,
                     ..Default::default()
                 },

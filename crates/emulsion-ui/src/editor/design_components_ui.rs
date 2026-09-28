@@ -81,7 +81,10 @@ impl EditorView {
         let Some(target) = self.editor.doc.node(node) else {
             return;
         };
-        let content = matches!(target.kind, NodeKind::Text { .. } | NodeKind::Raster { .. } | NodeKind::Smart { .. });
+        let content = matches!(
+            target.kind,
+            NodeKind::Text { .. } | NodeKind::Raster { .. } | NodeKind::Smart { .. }
+        );
         let geometry = matches!(
             target.kind,
             NodeKind::Text { .. }

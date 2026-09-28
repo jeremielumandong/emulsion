@@ -203,8 +203,15 @@ pub fn png_gray(w: u32, h: u32, px: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Write the flattened document to `path`.
-pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> { export_with_exif(doc,path,opts,None) }
-pub fn export_with_exif(doc: &Document, path: &Path, opts: ExportOptions, exif:Option<&[u8]>) -> Result<()> {
+pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> {
+    export_with_exif(doc, path, opts, None)
+}
+pub fn export_with_exif(
+    doc: &Document,
+    path: &Path,
+    opts: ExportOptions,
+    exif: Option<&[u8]>,
+) -> Result<()> {
     let format = ExportFormat::from_path(path)
         .ok_or_else(|| IoError::Unsupported(path.display().to_string()))?;
     crate::ora::ensure_not_raw_original(doc, path)?;
@@ -325,9 +332,27 @@ pub fn export_with_exif(doc: &Document, path: &Path, opts: ExportOptions, exif:O
                 out.write_all(buf.get_ref())?;
             }
             ExportFormat::Png => {
-                let mut encoder=PngEncoder::new_with_quality(&mut out,CompressionType::Fast,FilterType::Adaptive);
-                tag_srgb(&mut encoder)?;if let Some(exif)=exif {encoder.set_exif_metadata(exif.to_vec()).map_err(image::ImageError::Unsupported)?;}
-                if wide {let bytes:Vec<u8>=flat.to_srgba16().iter().flat_map(|v|v.to_ne_bytes()).collect();encoder.write_image(&bytes,w,h,ExtendedColorType::Rgba16)?;}else{encoder.write_image(&flat.to_srgba8(),w,h,ExtendedColorType::Rgba8)?;}
+                let mut encoder = PngEncoder::new_with_quality(
+                    &mut out,
+                    CompressionType::Fast,
+                    FilterType::Adaptive,
+                );
+                tag_srgb(&mut encoder)?;
+                if let Some(exif) = exif {
+                    encoder
+                        .set_exif_metadata(exif.to_vec())
+                        .map_err(image::ImageError::Unsupported)?;
+                }
+                if wide {
+                    let bytes: Vec<u8> = flat
+                        .to_srgba16()
+                        .iter()
+                        .flat_map(|v| v.to_ne_bytes())
+                        .collect();
+                    encoder.write_image(&bytes, w, h, ExtendedColorType::Rgba16)?;
+                } else {
+                    encoder.write_image(&flat.to_srgba8(), w, h, ExtendedColorType::Rgba8)?;
+                }
             }
             ExportFormat::Jpeg => {
                 // JPEG has no alpha: composite over white.
@@ -335,13 +360,21 @@ pub fn export_with_exif(doc: &Document, path: &Path, opts: ExportOptions, exif:O
                 let mut encoder =
                     JpegEncoder::new_with_quality(&mut out, opts.jpeg_quality.clamp(1, 100));
                 tag_srgb(&mut encoder)?;
-                if let Some(exif)=exif {encoder.set_exif_metadata(exif.to_vec()).map_err(image::ImageError::Unsupported)?;}
+                if let Some(exif) = exif {
+                    encoder
+                        .set_exif_metadata(exif.to_vec())
+                        .map_err(image::ImageError::Unsupported)?;
+                }
                 encoder.write_image(&rgb, w, h, ExtendedColorType::Rgb8)?;
             }
             ExportFormat::Webp => {
                 let mut encoder = WebPEncoder::new_lossless(&mut out);
                 tag_srgb(&mut encoder)?;
-                if let Some(exif)=exif {encoder.set_exif_metadata(exif.to_vec()).map_err(image::ImageError::Unsupported)?;}
+                if let Some(exif) = exif {
+                    encoder
+                        .set_exif_metadata(exif.to_vec())
+                        .map_err(image::ImageError::Unsupported)?;
+                }
                 encoder.write_image(&flat.to_srgba8(), w, h, ExtendedColorType::Rgba8)?;
             }
             ExportFormat::Tiff => {
@@ -355,7 +388,11 @@ pub fn export_with_exif(doc: &Document, path: &Path, opts: ExportOptions, exif:O
                 } else {
                     encoder.write_image(&flat.to_srgba8(), w, h, ExtendedColorType::Rgba8)?;
                 }
-                let bytes=if let Some(exif)=exif {crate::photo_metadata::tiff(buf.into_inner(),exif)?}else{buf.into_inner()};
+                let bytes = if let Some(exif) = exif {
+                    crate::photo_metadata::tiff(buf.into_inner(), exif)?
+                } else {
+                    buf.into_inner()
+                };
                 out.write_all(&bytes)?;
             }
         }

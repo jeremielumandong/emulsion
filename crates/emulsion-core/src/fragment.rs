@@ -20,9 +20,10 @@ impl Fragment {
             return Err("Select existing layers to copy.".into());
         }
         if let Some(diagram) = &doc.diagram {
-            let mut included: HashSet<_> = selected.iter().flat_map(|id| doc.subtree(*id)).collect();
+            let mut included: HashSet<_> =
+                selected.iter().flat_map(|id| doc.subtree(*id)).collect();
             for id in diagram.edge_order()? {
-                let edge=&diagram.edges[&id];
+                let edge = &diagram.edges[&id];
                 if included.contains(&edge.source.shape) && included.contains(&edge.target.shape) {
                     selected.insert(id);
                     included.insert(id);
@@ -196,10 +197,12 @@ impl Fragment {
                 }
                 crate::design_variables::merge_into(&mut design, &additions);
                 design.interactions.extend(additions.interactions.clone());
-                design.interaction_triggers.extend(additions.interaction_triggers.clone());
+                design
+                    .interaction_triggers
+                    .extend(additions.interaction_triggers.clone());
                 design.overlays.extend(additions.overlays.clone());
                 design.local_media.extend(additions.local_media.clone());
-    design.data_bindings.extend(additions.data_bindings.clone());
+                design.data_bindings.extend(additions.data_bindings.clone());
                 design.fonts.extend(additions.fonts.clone());
                 design.keyframes.extend(additions.keyframes.clone());
                 crate::design_styles::merge_into(&mut design, &additions);

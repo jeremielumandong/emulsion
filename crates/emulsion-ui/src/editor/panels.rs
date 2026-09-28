@@ -63,7 +63,10 @@ impl EditorView {
         }
     }
 
-    pub(super) fn nav_thumb(&mut self, cx: &mut Context<Self>) -> Option<(Arc<RenderImage>, (u32, u32))> {
+    pub(super) fn nav_thumb(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(Arc<RenderImage>, (u32, u32))> {
         let rev = self.editor.revision;
         if let Some((r, img, size)) = &self.panels.thumb
             && *r == rev
@@ -79,7 +82,8 @@ impl EditorView {
                     .await;
                 this.update(cx, |this, cx| {
                     if this.editor.revision == rev {
-                        this.panels.thumb = Some((rev, Arc::new(viewport::bgra_image(w, h, bgra)), (w, h)));
+                        this.panels.thumb =
+                            Some((rev, Arc::new(viewport::bgra_image(w, h, bgra)), (w, h)));
                     }
                     this.panels.thumb_loading = None;
                     cx.notify();

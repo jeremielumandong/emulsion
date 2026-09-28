@@ -99,8 +99,10 @@ pub struct Graph {
 }
 
 impl Graph {
-    pub(crate) fn remap_pages(&mut self, pages: &BTreeMap<u64,u64>) {
-        for commit in self.commits.values_mut() { commit.doc.design.remap_pages(pages); }
+    pub(crate) fn remap_pages(&mut self, pages: &BTreeMap<u64, u64>) {
+        for commit in self.commits.values_mut() {
+            commit.doc.design.remap_pages(pages);
+        }
     }
     /// A graph with one root commit on main.
     pub fn new(doc: Document, name: impl Into<String>) -> Self {
@@ -918,7 +920,15 @@ pub fn merge(
         let side = choices.get(&ConflictKey::Diagram);
         let shapes = merge_metadata(&b.shapes, &o.shapes, &t.shapes, side, &mut conflict);
         let edges = merge_metadata(&b.edges, &o.edges, &t.edges, side, &mut conflict);
-        let settings = merge_metadata(&std::collections::BTreeMap::from([(0,b.settings.clone())]), &std::collections::BTreeMap::from([(0,o.settings.clone())]), &std::collections::BTreeMap::from([(0,t.settings.clone())]), side, &mut conflict).remove(&0).unwrap_or_default();
+        let settings = merge_metadata(
+            &std::collections::BTreeMap::from([(0, b.settings.clone())]),
+            &std::collections::BTreeMap::from([(0, o.settings.clone())]),
+            &std::collections::BTreeMap::from([(0, t.settings.clone())]),
+            side,
+            &mut conflict,
+        )
+        .remove(&0)
+        .unwrap_or_default();
         if conflict && side.is_none() {
             conflicts.push(Conflict {
                 key: ConflictKey::Diagram,
@@ -936,17 +946,79 @@ pub fn merge(
 
     let mut design_conflict = false;
     let side = choices.get(&ConflictKey::Design);
-    out.design.data_bindings = merge_metadata(&base.design.data_bindings, &ours.design.data_bindings, &theirs.design.data_bindings, side, &mut design_conflict);
-    out.design.variable_libraries = merge_metadata(&base.design.variable_libraries, &ours.design.variable_libraries, &theirs.design.variable_libraries, side, &mut design_conflict);
-    out.design.variables = merge_metadata(&base.design.variables, &ours.design.variables, &theirs.design.variables, side, &mut design_conflict);
-    out.design.variable_bindings = merge_metadata(&base.design.variable_bindings, &ours.design.variable_bindings, &theirs.design.variable_bindings, side, &mut design_conflict);
-    out.design.interaction_triggers = merge_metadata(&base.design.interaction_triggers,&ours.design.interaction_triggers,&theirs.design.interaction_triggers,side,&mut design_conflict);
-    out.design.interactions = merge_metadata(&base.design.interactions, &ours.design.interactions, &theirs.design.interactions, side, &mut design_conflict);
-    out.design.fonts = merge_metadata(&base.design.fonts, &ours.design.fonts, &theirs.design.fonts, side, &mut design_conflict);
-    out.design.local_media = merge_metadata(&base.design.local_media, &ours.design.local_media, &theirs.design.local_media, side, &mut design_conflict);
-    out.design.keyframes = merge_metadata(&base.design.keyframes, &ours.design.keyframes, &theirs.design.keyframes, side, &mut design_conflict);
+    out.design.data_bindings = merge_metadata(
+        &base.design.data_bindings,
+        &ours.design.data_bindings,
+        &theirs.design.data_bindings,
+        side,
+        &mut design_conflict,
+    );
+    out.design.variable_libraries = merge_metadata(
+        &base.design.variable_libraries,
+        &ours.design.variable_libraries,
+        &theirs.design.variable_libraries,
+        side,
+        &mut design_conflict,
+    );
+    out.design.variables = merge_metadata(
+        &base.design.variables,
+        &ours.design.variables,
+        &theirs.design.variables,
+        side,
+        &mut design_conflict,
+    );
+    out.design.variable_bindings = merge_metadata(
+        &base.design.variable_bindings,
+        &ours.design.variable_bindings,
+        &theirs.design.variable_bindings,
+        side,
+        &mut design_conflict,
+    );
+    out.design.interaction_triggers = merge_metadata(
+        &base.design.interaction_triggers,
+        &ours.design.interaction_triggers,
+        &theirs.design.interaction_triggers,
+        side,
+        &mut design_conflict,
+    );
+    out.design.interactions = merge_metadata(
+        &base.design.interactions,
+        &ours.design.interactions,
+        &theirs.design.interactions,
+        side,
+        &mut design_conflict,
+    );
+    out.design.fonts = merge_metadata(
+        &base.design.fonts,
+        &ours.design.fonts,
+        &theirs.design.fonts,
+        side,
+        &mut design_conflict,
+    );
+    out.design.local_media = merge_metadata(
+        &base.design.local_media,
+        &ours.design.local_media,
+        &theirs.design.local_media,
+        side,
+        &mut design_conflict,
+    );
+    out.design.keyframes = merge_metadata(
+        &base.design.keyframes,
+        &ours.design.keyframes,
+        &theirs.design.keyframes,
+        side,
+        &mut design_conflict,
+    );
     let overlay_map = |d: &Document| d.design.overlays.iter().map(|id| (*id, ())).collect();
-    out.design.overlays = merge_metadata(&overlay_map(base), &overlay_map(ours), &overlay_map(&theirs), side, &mut design_conflict).into_keys().collect();
+    out.design.overlays = merge_metadata(
+        &overlay_map(base),
+        &overlay_map(ours),
+        &overlay_map(&theirs),
+        side,
+        &mut design_conflict,
+    )
+    .into_keys()
+    .collect();
     out.design.saved_styles = merge_metadata(
         &base.design.saved_styles,
         &ours.design.saved_styles,
@@ -1010,8 +1082,16 @@ pub fn merge(
         side,
         &mut design_conflict,
     );
-    if ours.design.precision==base.design.precision { out.design.precision=theirs.design.precision; }
-    else if theirs.design.precision!=base.design.precision && theirs.design.precision!=ours.design.precision { design_conflict=true; if side==Some(&Side::Theirs){out.design.precision=theirs.design.precision;} }
+    if ours.design.precision == base.design.precision {
+        out.design.precision = theirs.design.precision;
+    } else if theirs.design.precision != base.design.precision
+        && theirs.design.precision != ours.design.precision
+    {
+        design_conflict = true;
+        if side == Some(&Side::Theirs) {
+            out.design.precision = theirs.design.precision;
+        }
+    }
     let presentation = |d: &Document| {
         (
             d.design.speaker_notes.clone(),
@@ -1149,15 +1229,34 @@ pub fn merge(
                 result.entry(node.id).or_insert_with(|| node.clone());
             }
             let settings = source.design.fragment(&ids);
-            for (key,value) in &settings.data_bindings { out.design.data_bindings.entry(*key).or_insert_with(||value.clone()); }
-            for (key,value) in settings.variable_libraries { out.design.variable_libraries.entry(key).or_insert(value); }
-            for (key,value) in settings.variables { out.design.variables.entry(key).or_insert(value); }
-            for (key,value) in settings.variable_bindings { out.design.variable_bindings.entry(key).or_insert(value); }
-            for (key,value) in settings.interaction_triggers { out.design.interaction_triggers.entry(key).or_insert(value); }
-            for (key,value) in settings.interactions { out.design.interactions.entry(key).or_insert(value); }
-            for (key,value) in settings.fonts { out.design.fonts.entry(key).or_insert(value); }
-            for (key,value) in settings.local_media { out.design.local_media.entry(key).or_insert(value); }
-            for (key,value) in settings.keyframes {
+            for (key, value) in &settings.data_bindings {
+                out.design
+                    .data_bindings
+                    .entry(*key)
+                    .or_insert_with(|| value.clone());
+            }
+            for (key, value) in settings.variable_libraries {
+                out.design.variable_libraries.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.variables {
+                out.design.variables.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.variable_bindings {
+                out.design.variable_bindings.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.interaction_triggers {
+                out.design.interaction_triggers.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.interactions {
+                out.design.interactions.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.fonts {
+                out.design.fonts.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.local_media {
+                out.design.local_media.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.keyframes {
                 for track in &value {
                     if let Some(frame) = track.frames.last() {
                         out.design.duration_ms = out.design.duration_ms.max(frame.time_ms);

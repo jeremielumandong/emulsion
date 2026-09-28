@@ -33,13 +33,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-mod presentation_mcp;
-mod photo_panel;
-mod workspace_mcp;
 mod editor_host_mcp;
-mod smart_source_mcp;
+mod photo_panel;
+mod presentation_mcp;
 mod project_mcp;
 mod raw_mcp;
+mod smart_source_mcp;
+mod workspace_mcp;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CardStatus {
@@ -456,8 +456,12 @@ impl EditorView {
     /// Plan without a language model; apply if complete, else hand over.
     pub fn submit_ask(&mut self, text: String, cx: &mut Context<Self>) {
         if self.library_only {
-            if self.assistant.running {self.set_status("The assistant is still working",false,cx);return;}
-            if let Err(error)=self.start_turn(format!("Work in the live Library using Library MCP tools. First inspect get_library; use get_library_preview for pixels. No Photo document is open in this host. User request: {text}"),cx){self.set_status(error,true,cx);}return;
+            if self.assistant.running {
+                self.set_status("The assistant is still working", false, cx);
+                return;
+            }
+            if let Err(error)=self.start_turn(format!("Work in the live Library using Library MCP tools. First inspect get_library; use get_library_preview for pixels. No Photo document is open in this host. User request: {text}"),cx){self.set_status(error,true,cx);}
+            return;
         }
         if self.editor.in_transaction() && !self.assistant.running {
             self.set_status(
@@ -1100,7 +1104,8 @@ impl EditorView {
     /// person's Apply/Skip when the CLI does not ask first itself.
     fn run_tool(&mut self, call: RelayCall, cx: &mut Context<Self>) {
         if self.library_only && !emulsion_mcp::library_tools::is_tool(&call.name) {
-            call.reply(emulsion_mcp::ToolResult::error("This is a Library session. Use the Library tools; open_library_photo opens a selected photo when document tools are needed."));return;
+            call.reply(emulsion_mcp::ToolResult::error("This is a Library session. Use the Library tools; open_library_photo opens a selected photo when document tools are needed."));
+            return;
         }
         if self.assistant.tool_stopped {
             call.reply(emulsion_mcp::server::ToolResult::error(
@@ -1257,9 +1262,18 @@ impl EditorView {
             self.editor.end();
             self.assistant.native_tool_steps = true;
         }
-        if emulsion_mcp::design_brand_tools::NAMES.contains(&call.name.as_str()) { self.execute_design_brand_tool(call,cx); return; }
-        if emulsion_mcp::workspace_tools::NAMES.contains(&call.name.as_str()) { self.execute_workspace_host_tool(call,cx); return; }
-        if emulsion_mcp::creative_catalog_tools::NAMES.contains(&call.name.as_str()) { self.execute_creative_catalog_tool(call,cx); return; }
+        if emulsion_mcp::design_brand_tools::NAMES.contains(&call.name.as_str()) {
+            self.execute_design_brand_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::workspace_tools::NAMES.contains(&call.name.as_str()) {
+            self.execute_workspace_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::creative_catalog_tools::NAMES.contains(&call.name.as_str()) {
+            self.execute_creative_catalog_tool(call, cx);
+            return;
+        }
         if emulsion_mcp::library_tools::is_tool(&call.name) {
             let workspace = self.library_workspace.clone();
             cx.spawn(async move |this, cx| {
@@ -1287,14 +1301,47 @@ impl EditorView {
             self.execute_presentation_host_tool(call, cx);
             return;
         }
-        if emulsion_mcp::smart_source_tools::is_tool(&call.name){self.execute_smart_source_host_tool(call,cx);return;}
-        if emulsion_mcp::photo_source_tools::is_tool(&call.name){self.execute_photo_source_host_tool(call,cx);return;}
-        if emulsion_mcp::print_tools::is_tool(&call.name){self.execute_print_host_tool(call,cx);return;}
-        if emulsion_mcp::editor_host_tools::is_tool(&call.name){self.execute_editor_host_tool(call,cx);return;}
+        if emulsion_mcp::smart_source_tools::is_tool(&call.name) {
+            self.execute_smart_source_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::photo_source_tools::is_tool(&call.name) {
+            self.execute_photo_source_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::print_tools::is_tool(&call.name) {
+            self.execute_print_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::editor_host_tools::is_tool(&call.name) {
+            self.execute_editor_host_tool(call, cx);
+            return;
+        }
         if emulsion_mcp::project_variable_tools::is_tool(&call.name) {
-            let generation=self.assistant.tool_generation;
-            let result=if !emulsion_mcp::project_variable_tools::READ_ONLY.contains(&call.name.as_str()) && (self.raw.is_pending() || self.editor.in_transaction()) {emulsion_mcp::ToolResult::error("Finish the active edit first.")} else {let result=emulsion_mcp::project_variable_tools::execute(&mut self.editor,&call.name,&call.arguments).unwrap();if !result.is_error && !emulsion_mcp::project_variable_tools::READ_ONLY.contains(&call.name.as_str()){self.after_change(cx);} result};
-            call.reply(result);self.complete_tool_work(generation,cx);return;
+            let generation = self.assistant.tool_generation;
+            let result = if !emulsion_mcp::project_variable_tools::READ_ONLY
+                .contains(&call.name.as_str())
+                && (self.raw.is_pending() || self.editor.in_transaction())
+            {
+                emulsion_mcp::ToolResult::error("Finish the active edit first.")
+            } else {
+                let result = emulsion_mcp::project_variable_tools::execute(
+                    &mut self.editor,
+                    &call.name,
+                    &call.arguments,
+                )
+                .unwrap();
+                if !result.is_error
+                    && !emulsion_mcp::project_variable_tools::READ_ONLY
+                        .contains(&call.name.as_str())
+                {
+                    self.after_change(cx);
+                }
+                result
+            };
+            call.reply(result);
+            self.complete_tool_work(generation, cx);
+            return;
         }
         if emulsion_mcp::project_tools::is_tool(&call.name)
             || (self.editor.kind().is_some()
@@ -1461,28 +1508,64 @@ impl EditorView {
             .detach();
             return;
         }
-        if call.name=="install_diagram_stencil_pack" {
-            let args=call.arguments.clone();
-            cx.spawn(async move |this,cx| {
-                let result=cx.background_spawn(async move {emulsion_mcp::diagram_project_tools::install_stencil_pack(&args)}).await;
-                this.update(cx,|this,cx| {
-                    if !result.is_error {this.refresh_creative_library(cx);}
+        if call.name == "install_diagram_stencil_pack" {
+            let args = call.arguments.clone();
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_spawn(async move {
+                        emulsion_mcp::diagram_project_tools::install_stencil_pack(&args)
+                    })
+                    .await;
+                this.update(cx, |this, cx| {
+                    if !result.is_error {
+                        this.refresh_creative_library(cx);
+                    }
                     call.reply(result);
-                    if ordered {this.complete_tool_work(tool_generation,cx);}
-                }).ok();
-            }).detach();return;
+                    if ordered {
+                        this.complete_tool_work(tool_generation, cx);
+                    }
+                })
+                .ok();
+            })
+            .detach();
+            return;
         }
-        if call.name=="save_document_stencils" {
-            let Some(project)=self.editor.snapshot() else {call.reply(emulsion_mcp::ToolResult::error("Open a Diagram project first"));if ordered{self.complete_tool_work(tool_generation,cx);}return;};
-            let args=call.arguments.clone();
-            cx.spawn(async move |this,cx| {
-                let result=cx.background_spawn(async move {emulsion_mcp::diagram_project_tools::save_stencil_snapshot(&project,&args)}).await;
-                this.update(cx,|v,cx|{if !result.is_error {v.refresh_creative_library(cx);}call.reply(result);if ordered{v.complete_tool_work(tool_generation,cx);}}).ok();
-            }).detach();return;
+        if call.name == "save_document_stencils" {
+            let Some(project) = self.editor.snapshot() else {
+                call.reply(emulsion_mcp::ToolResult::error(
+                    "Open a Diagram project first",
+                ));
+                if ordered {
+                    self.complete_tool_work(tool_generation, cx);
+                }
+                return;
+            };
+            let args = call.arguments.clone();
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_spawn(async move {
+                        emulsion_mcp::diagram_project_tools::save_stencil_snapshot(&project, &args)
+                    })
+                    .await;
+                this.update(cx, |v, cx| {
+                    if !result.is_error {
+                        v.refresh_creative_library(cx);
+                    }
+                    call.reply(result);
+                    if ordered {
+                        v.complete_tool_work(tool_generation, cx);
+                    }
+                })
+                .ok();
+            })
+            .detach();
+            return;
         }
-        if call.name=="import_diagram" {
-            let args=call.arguments.clone();let save=args["save_stencils"]==true;
-            let ticket=self.edit_ticket();let stamp=self.editor.stamp();
+        if call.name == "import_diagram" {
+            let args = call.arguments.clone();
+            let save = args["save_stencils"] == true;
+            let ticket = self.edit_ticket();
+            let stamp = self.editor.stamp();
             cx.spawn(async move |this,cx| {
                 let imported=cx.background_spawn(async move {emulsion_mcp::diagram_project_tools::load_import(&args)}).await;
                 let installed=this.update(cx,|v,cx|->Result<_,String>{
@@ -1505,12 +1588,26 @@ impl EditorView {
                     Err(e)=>emulsion_mcp::ToolResult::error(e.to_string()),
                 };
                 this.update(cx,|v,cx|{if !result.is_error{v.refresh_creative_library(cx);}call.reply(result);if ordered{v.complete_tool_work(tool_generation,cx);}}).ok();
-            }).detach();return;
+            }).detach();
+            return;
         }
         if call.name == "open_diagram_link" {
-            let result = emulsion_mcp::diagram_project_tools::validate_args(&call.name,&call.arguments).and_then(|_|call.arguments.get("link").and_then(|v|v.as_str()).ok_or_else(||"Missing diagram link".to_string())).and_then(|link|self.diagram_follow_link(link,cx));
-            call.reply(match result {Ok(())=>emulsion_mcp::ToolResult::text("Diagram link opened"),Err(e)=>emulsion_mcp::ToolResult::error(e)});
-            if ordered {self.complete_tool_work(tool_generation,cx);}
+            let result =
+                emulsion_mcp::diagram_project_tools::validate_args(&call.name, &call.arguments)
+                    .and_then(|_| {
+                        call.arguments
+                            .get("link")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| "Missing diagram link".to_string())
+                    })
+                    .and_then(|link| self.diagram_follow_link(link, cx));
+            call.reply(match result {
+                Ok(()) => emulsion_mcp::ToolResult::text("Diagram link opened"),
+                Err(e) => emulsion_mcp::ToolResult::error(e),
+            });
+            if ordered {
+                self.complete_tool_work(tool_generation, cx);
+            }
             return;
         }
         if emulsion_mcp::diagram_project_tools::is_tool(&call.name) {
@@ -1962,12 +2059,15 @@ impl EditorView {
     pub(crate) fn refresh_suggestions(&mut self, cx: &mut Context<Self>) {
         // A structured diagram is already classified. Photo analysis flattens
         // every vector into document-sized pixels and can consume gigabytes.
-        if self.editor.kind()==Some(emulsion_core::project::ProjectKind::Diagram) {
+        if self.editor.kind() == Some(emulsion_core::project::ProjectKind::Diagram) {
             self.suggestions.clear();
-            self.suggest_rev=self.editor.revision;
-            self.doc_kind=Some(emulsion_ai::kind::Classification {
-                kind:emulsion_ai::kind::DocKind::Graphic,confidence:1.,
-                evidence:"Structured diagram project".into(),by:"document",..Default::default()
+            self.suggest_rev = self.editor.revision;
+            self.doc_kind = Some(emulsion_ai::kind::Classification {
+                kind: emulsion_ai::kind::DocKind::Graphic,
+                confidence: 1.,
+                evidence: "Structured diagram project".into(),
+                by: "document",
+                ..Default::default()
             });
             return;
         }
@@ -2064,7 +2164,9 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 this.suggest_busy = false;
-                if this.editor.kind()==Some(emulsion_core::project::ProjectKind::Diagram) {return;}
+                if this.editor.kind() == Some(emulsion_core::project::ProjectKind::Diagram) {
+                    return;
+                }
                 this.suggest_rev = rev;
                 this.suggestions = s;
                 this.doc_kind = Some(kind);
@@ -2725,21 +2827,36 @@ mod mutation_queue_tests {
 
     #[gpui_kit::test]
     fn diagram_live_mcp_import_is_background_atomic_and_undoable(cx: &mut TestAppContext) {
-        use emulsion_core::project::{ProjectEditor,ProjectKind};
-        for stale in [false,true] {
-            let relay=Relay::start().unwrap();let view=painting(cx,false);
-            view.update(cx,|v,_|v.editor=ProjectEditor::new_project(ProjectKind::Diagram,Document::new(800,600)).unwrap());
-            let xml=r#"<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="a" vertex="1" parent="1" value="Imported"><mxGeometry x="40" y="50" width="120" height="60"/></mxCell></root></mxGraphModel>"#;
-            let (request,reply)=call(&relay,"import_diagram",serde_json::json!({"xml":xml,"save_stencils":false}));
-            view.update(cx,|v,cx|{
-                v.run_tool_now(request,cx);
-                if stale {v.operation_epoch=v.operation_epoch.wrapping_add(1);}
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        for stale in [false, true] {
+            let relay = Relay::start().unwrap();
+            let view = painting(cx, false);
+            view.update(cx, |v, _| {
+                v.editor = ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600))
+                    .unwrap()
+            });
+            let xml = r#"<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="a" vertex="1" parent="1" value="Imported"><mxGeometry x="40" y="50" width="120" height="60"/></mxCell></root></mxGraphModel>"#;
+            let (request, reply) = call(
+                &relay,
+                "import_diagram",
+                serde_json::json!({"xml":xml,"save_stencils":false}),
+            );
+            view.update(cx, |v, cx| {
+                v.run_tool_now(request, cx);
+                if stale {
+                    v.operation_epoch = v.operation_epoch.wrapping_add(1);
+                }
             });
             cx.run_until_parked();
-            let response=reply.join().unwrap();assert_eq!(response["isError"],stale,"{response}");
-            view.update(cx,|v,_|{
-                assert_eq!(v.editor.page_list().len(),if stale{1}else{2});
-                if !stale {assert!(v.editor.doc.diagram.as_ref().unwrap().shapes.len()==1);v.editor.undo();assert_eq!(v.editor.page_list().len(),1);}
+            let response = reply.join().unwrap();
+            assert_eq!(response["isError"], stale, "{response}");
+            view.update(cx, |v, _| {
+                assert_eq!(v.editor.page_list().len(), if stale { 1 } else { 2 });
+                if !stale {
+                    assert!(v.editor.doc.diagram.as_ref().unwrap().shapes.len() == 1);
+                    v.editor.undo();
+                    assert_eq!(v.editor.page_list().len(), 1);
+                }
             });
         }
     }

@@ -180,7 +180,7 @@ fn portable_font_archives_deduplicate_history_blobs_and_validate_references() {
     let live: serde_json::Value = serde_json::from_str(&live).unwrap();
     assert_eq!(live["fonts"], serde_json::json!([font.alias()]));
     // A resource-only Design becomes default after detaching blobs and may be omitted.
-    assert!(live["design"]["fonts"].is_null() || live["design"]["fonts"]==serde_json::json!({}));
+    assert!(live["design"]["fonts"].is_null() || live["design"]["fonts"] == serde_json::json!({}));
     let mut history = String::new();
     archive
         .by_name(crate::history::GRAPH)

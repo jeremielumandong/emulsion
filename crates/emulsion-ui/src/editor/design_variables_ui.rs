@@ -47,7 +47,15 @@ impl EditorView {
             .flex_col()
             .gap_2()
             .child("Design variables")
-            .child(Button::new("project-variable-import").label("Import from another page…").small().outline().on_click(cx.listener(|this,_,window,cx|this.project_variable_import_dialog(window,cx))))
+            .child(
+                Button::new("project-variable-import")
+                    .label("Import from another page…")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.project_variable_import_dialog(window, cx)
+                    })),
+            )
             .child(
                 Button::new("design-variable-new")
                     .label("New color or number…")
@@ -83,7 +91,7 @@ impl EditorView {
                     .flex_col()
                     .gap_1()
                     .child(format!("{name} · {} · {count} linked", display(value)))
-                    .child(self.design_variable_library_buttons(name,index,cx))
+                    .child(self.design_variable_library_buttons(name, index, cx))
                     .child(
                         div()
                             .flex()
