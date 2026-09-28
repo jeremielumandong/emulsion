@@ -27,7 +27,7 @@ Browser acceptance checks navigation, overlays, component states, responsive vie
 metadata escaping and hidden controls in fullscreen. Current run results are
 recorded separately; this matrix is not a substitute for executing those checks.
 
-## PowerPoint format evaluation
+## PowerPoint interchange
 
 A `.pptx` file is a package of linked presentation, slide, layout/master and notes
 parts; it is not an SVG or HTML page collection with a different suffix. Microsoft
@@ -35,26 +35,12 @@ also defines extensions for features beyond the base PresentationML standard.
 See Microsoft's [PresentationML structure](https://learn.microsoft.com/en-us/office/open-xml/presentation/structure-of-a-presentationml-document)
 and [PowerPoint extension specification](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-pptx/efd8bb2d-d888-4e2e-af25-cad476730c9f).
 
-Evaluation outcome: the existing native presentation workflow and standalone HTML
-meet local presentation playback/export needs without adding an Office runtime.
-Emulsion does not currently advertise `.pptx` import/export. Renaming an image
-archive, embedding one screenshot per slide, or depending on a locally installed
-converter would not provide editable PowerPoint parity.
+The native [editable PowerPoint bridge](design-pptx.md) imports and exports `.pptx` using bounded ZIP/XML processing. Slides retain editable text, vector shapes, groups and pictures, with notes, slide order and supported links. The native UI and MCP share the same reader/writer and compatibility diagnostics. No Office runtime is bundled.
 
-A future bridge should be a bounded native ZIP/XML importer/exporter with separate
-fixtures for text runs/font fallback, transformed shapes/groups, embedded media,
-notes, themes/master inheritance, timing, links and unsupported extensions. It
-must report losses per slide/object, reject executable macro packages, avoid
-fetching external relationships, and retain source files unchanged. Validate its
-files with independent PowerPoint/LibreOffice readers before listing the format
-in file pickers. Binary `.ppt` is a separate format and is not implied by `.pptx`.
+Unsupported geometry, charts/SmartArt/OLE, advanced effects, timelines and other format-specific behavior are reported per slide/object. Export retains supported editable base artwork rather than flattening complete slides. External resources are not fetched and macro packages are rejected. Binary `.ppt` is a separate format and remains unsupported. See the bridge documentation for its supported subset and independent-reader acceptance.
 
-## Motion export boundaries
+## Motion interchange boundaries
 
-[Animated SVG and rendered-frame Lottie](design-advanced-motion.md) export active-page
-animation. Animated SVG retains native outlined vectors where supported and
-reports rendered fallbacks. Lottie uses embedded PNG image layers up to 1024px on
-the longest side; it does not provide editable Lottie vector/text interchange.
-Both are bounded to 600 frames and 64 MiB, exclude slide transitions and object
-interactions, and represent media as silent posters. General Lottie import and
-PowerPoint import/export are not implemented.
+[Editable Lottie interchange](lottie-interchange.md) imports supported 2D shape/text/image layers and transform tracks with per-feature diagnostics. Default Lottie export writes editable vector geometry and supported keyframes. Unsupported native effects or motion combinations produce an explicit error directing the user to the separate rendered-frame option. No network resources are fetched during import.
+
+[Animated SVG and rendered-frame Lottie](design-advanced-motion.md) remain available for appearance-oriented animation output. Animated SVG retains native outlined vectors where supported and reports rendered fallbacks. Rendered Lottie embeds sampled PNG layers up to 1024px on the longest side. These outputs are bounded to 600 frames and 64 MiB, exclude slide transitions and object interactions, and represent media as silent posters.

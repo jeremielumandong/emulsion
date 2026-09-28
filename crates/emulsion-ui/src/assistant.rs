@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 mod presentation_mcp;
 mod workspace_mcp;
 mod editor_host_mcp;
+mod smart_source_mcp;
 mod project_mcp;
 mod raw_mcp;
 
@@ -1277,6 +1278,7 @@ impl EditorView {
             self.execute_presentation_host_tool(call, cx);
             return;
         }
+        if emulsion_mcp::smart_source_tools::is_tool(&call.name){self.execute_smart_source_host_tool(call,cx);return;}
         if emulsion_mcp::photo_source_tools::is_tool(&call.name){self.execute_photo_source_host_tool(call,cx);return;}
         if emulsion_mcp::print_tools::is_tool(&call.name){self.execute_print_host_tool(call,cx);return;}
         if emulsion_mcp::editor_host_tools::is_tool(&call.name){self.execute_editor_host_tool(call,cx);return;}

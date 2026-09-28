@@ -474,3 +474,8 @@ mod media_data;
 mod design_vector_tests;
 
 pub mod design_motion_export;
+
+pub mod lottie;
+pub mod pptx;
+mod smart_source_data;
+pub mod smart_source;

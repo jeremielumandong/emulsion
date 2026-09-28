@@ -27,8 +27,7 @@ Smart text/path/SVG sources explicitly become the chosen raster source. Existing
 identity masks resize with source dimensions. A transformed mask must first be
 reset when replacement dimensions differ. `restore_smart_source` restores the
 original editable source and removes its smart filter stack; Undo reverses it.
-These are embedded sources, not live external file links or nested source editor
-windows.
+These replacement/restoration tools edit embedded sources. Nested source tabs and external links use the dedicated Smart source tools described below.
 
 Printing tools discover installed queues and supported paper/media/tray/quality/
 duplex choices through the existing platform adapters. Preview and submission
@@ -47,3 +46,7 @@ or available queue permissions; the tool does not escape the sandbox.
 Tests cover strict parsing, device-free native print rendering, crop/replacement
 source preservation and Undo, actual crop dialog validation, and native editor
 state/guide/quick-mask history. No physical print job is submitted by tests.
+
+## Live Smart Object sources
+
+Nested source-editor tabs and persistent local external links are now available through the native source controls and nine matching MCP tools. See [Smart Object source editing and links](smart-object-sources.md) for Apply/Undo, stale-source protection, bounded background refresh and explicit file-write semantics. Replacement/restoration tools remain available for their existing workflows.

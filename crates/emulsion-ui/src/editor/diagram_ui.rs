@@ -405,10 +405,10 @@ impl EditorView {
         self.diagram_ui.import_notes = notes;
     }
 
-    fn show_diagram_import_notes(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn show_diagram_import_notes(&self, window: &mut Window, cx: &mut Context<Self>) {
         let notes = self.diagram_ui.import_notes.clone();
         window.open_dialog(cx, move |dialog, _, _| {
-            dialog.title("Diagram import notes").child(
+            dialog.title("Import / export notes").child(
                 div()
                     .id("diagram-import-notes-body")
                     .max_h(px(420.))

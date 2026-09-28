@@ -14,6 +14,7 @@ pub(crate) const READ_ONLY: &[&str] = &[
     "get_presentation_state",
 ];
 pub(crate) const DESTRUCTIVE: &[&str] = &[
+    "import_design_lottie",
     "set_design_presentation",
     "update_design_media",
     "detach_design_media",
@@ -66,9 +67,15 @@ fn effect() -> Value {
 pub(crate) fn definitions() -> Vec<ToolDef> {
     vec![
         def(
+            "import_design_lottie",
+            "Import Lottie JSON as editable native groups, paths, text, embedded images and property keyframes in one Undo. Does not fetch external assets. Returns explicit unsupported-feature diagnostics; existing page dimensions stay unchanged and duration extends as required.",
+            json!({"path":{"type":"string"}}),
+            &["path"],
+        ),
+        def(
             "export_design_motion",
-            "Export active-page motion to sampled animated SVG or rendered-frame Lottie JSON. Up to 600 frames/64MiB; Lottie uses embeddedPNG frames up to 1024px, not editable vectors. Returns explicit raster/poster/interaction diagnostics; native source is unchanged.",
-            json!({"path":{"type":"string"},"format":{"enum":["animated_svg","lottie"]}}),
+            "Export active-page motion as animated_svg, editable vector lottie, or explicit lottie_raster rendered frames. Vector export supports paths, gradients, native transform keyframes, plain text and embedded images; unsupported masks/effects/advanced typography return a diagnostic rather than silently rasterizing. Up to 600 frames/64MiB; rendered frames fit 1024px.",
+            json!({"path":{"type":"string"},"format":{"enum":["animated_svg","lottie","lottie_raster"]}}),
             &["path", "format"],
         ),
         def(
@@ -420,6 +427,13 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         return Err("Finish the current edit before changing presentation metadata".into());
     }
     match name {
+        "import_design_lottie" => {
+            let path: String = read(args, "path")?;
+            let (doc, report) = emulsion_io::lottie::read(std::path::Path::new(&path))
+                .map_err(|e| e.to_string())?;
+            let ids = emulsion_io::lottie::insert(editor, &doc).map_err(|e| e.to_string())?;
+            return Ok(json!({"nodes":ids,"report":report}));
+        }
         "export_design_motion" => {
             let path: String = read(args, "path")?;
             let report = emulsion_io::design_motion_export::write(
@@ -847,5 +861,72 @@ mod runtime_control_tests {
             assert!(execute(&mut editor, name, &args).unwrap().is_error);
             assert_eq!(editor.doc, before);
         }
+    }
+}
+
+#[cfg(test)]
+mod lottie_workflow_tests {
+    use super::*;
+    use emulsion_core::{Document, Node};
+    use std::sync::Arc;
+    #[test]
+    fn lottie_tools_import_export_validate_and_undo_native_objects() {
+        let dir = std::env::temp_dir().join(format!("emulsion-mcp-lottie-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("animation.json");
+        let mut source = Document::new(100, 80);
+        let id = source.alloc_id();
+        source.nodes.push(Node::path(
+            id,
+            "Editable",
+            Arc::new(emulsion_raster::vector_geometry::rectangle(
+                10., 10., 20., 20.,
+            )),
+            Default::default(),
+            100,
+            80,
+        ));
+        let (bytes, _) = emulsion_io::lottie::encode(&source).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        let mut editor = Editor::new(Document::new(200, 150), None);
+        let before = editor.doc.clone();
+        assert!(
+            !execute(&mut editor, "import_design_lottie", &json!({"path":path}))
+                .unwrap()
+                .is_error
+        );
+        assert!(!editor.doc.nodes.is_empty());
+        assert_eq!(editor.doc.width, 200);
+        let out = dir.join("vectors.json");
+        assert!(
+            !execute(
+                &mut editor,
+                "export_design_motion",
+                &json!({"path":out,"format":"lottie"})
+            )
+            .unwrap()
+            .is_error
+        );
+        let value: Value = serde_json::from_slice(&std::fs::read(out).unwrap()).unwrap();
+        assert!(
+            value["assets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["layers"].is_array())
+        );
+        assert!(editor.undo());
+        assert_eq!(editor.doc, before);
+        assert!(
+            execute(
+                &mut editor,
+                "import_design_lottie",
+                &json!({"path":path,"unsafe":true})
+            )
+            .unwrap()
+            .is_error
+        );
+        assert_eq!(editor.doc, before);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

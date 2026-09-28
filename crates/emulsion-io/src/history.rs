@@ -35,7 +35,8 @@ use zip::ZipArchive;
 // Version 6 records the complete editable rich-text model in undo snapshots.
 // Version 7 retains structured diagram endpoints and ports.
 // Version 8 shares portable fonts and local-media bytes across snapshots.
-pub const HISTORY_VERSION: u32 = 8;
+// Version 9 shares editable nested Smart source archives.
+pub const HISTORY_VERSION: u32 = 9;
 pub(crate) const GRAPH: &str = "history/graph.json";
 const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
 
@@ -220,6 +221,8 @@ enum HKind {
     Smart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         editable: Option<emulsion_core::node::SmartEditable>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_document: Option<String>,
         source: u32,
         cache: u32,
         offset: (i32, i32),
@@ -313,6 +316,7 @@ pub(crate) fn encode(
     let mut masks = Pool::<u8>::new();
     let mut patterns = Vec::new();
     let mut pattern_ids = HashMap::new();
+    let mut source_pool=crate::smart_source_data::SourcePool::default();
     let mut font_pool = crate::font_data::FontPool::default();
     let mut media_pool = crate::media_data::MediaPool::default();
     let mut encode_doc = |d: &Document| -> Result<HDoc> {
@@ -377,7 +381,8 @@ pub(crate) fn encode(
                             cache,
                             offset,
                         } => HKind::Smart {
-                            editable: editable.clone(),
+                            source_document: source_pool.reference(editable),
+                            editable: crate::smart_source_data::SourcePool::stripped(editable),
                             source: rasters.add(source),
                             cache: rasters.add(cache),
                             offset: *offset,
@@ -442,6 +447,7 @@ pub(crate) fn encode(
         .transpose()?;
     let mut entries = rasters.entries();
     entries.extend(masks.entries());
+    entries.extend(source_pool.entries("history/sources")?);
     entries.extend(font_pool.entries("history/fonts")?);
     entries.extend(media_pool.entries("history/media")?);
     let file = HFile {
@@ -567,6 +573,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
     };
 
     let mut paths = PathReader::default();
+    let mut source_pool=crate::smart_source_data::SourcePool::default();
     let mut font_pool = crate::font_data::FontPool::default();
     let mut media_pool = crate::media_data::MediaPool::default();
     let mut decode_doc = |h: HDoc| -> Result<Document> {
@@ -618,6 +625,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 HKind::Fill { rgba } => NodeKind::Fill { rgba },
                 HKind::Smart {
                     editable,
+                    source_document,
                     source,
                     cache,
                     offset,
@@ -625,7 +633,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     filter_styles,
                     placement,
                 } => NodeKind::Smart {
-                    editable,
+                    editable: source_pool.restore(editable,source_document,zip,"history/sources")?,
                     source: raster(source)?,
                     cache: raster(cache)?,
                     offset,

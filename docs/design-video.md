@@ -37,7 +37,7 @@ can continue editing the poster and link without an internet connection.
 
 **Elements → Video playback setup…** provides runtime setup without adding a browser to Emulsion's download. On supported Arch and Debian/Ubuntu native installations, **Install playback packages…** invokes the system package manager through the operating system's administrator-authentication dialog. It installs only the listed WebKitGTK/GStreamer packages; cancellation or installation errors leave the design untouched. This action runs only when the user presses the installation button. If the authentication helper is unavailable, the dialog lists the packages for manual installation. The installer itself is not exercised by automated tests.
 
-Windows setup opens Microsoft's [official WebView2 installer page](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section); macOS uses built-in WebKit and needs no separate runtime installer. The package lists follow [Arch's WebKitGTK package dependencies](https://archlinux.org/packages/extra/x86_64/webkit2gtk-4.1/) and [Ubuntu's WebKitGTK package](https://packages.ubuntu.com/jammy-updates/libwebkit2gtk-4.1-0). Other Linux distributions receive manual setup guidance. Flatpak setup explains its runtime limitation and does not attempt to install host packages.
+Windows setup opens Microsoft's [official WebView2 installer page](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download-section); macOS uses built-in WebKit and needs no separate runtime installer. The package lists follow [Arch's WebKitGTK package dependencies](https://archlinux.org/packages/extra/x86_64/webkit2gtk-4.1/) and [Ubuntu's WebKitGTK package](https://packages.ubuntu.com/jammy-updates/libwebkit2gtk-4.1-0). Other Linux distributions receive manual setup guidance. Flatpak setup directs users to update the shared runtime and does not attempt to install host packages.
 
 Emulsion does not bundle Chromium or another browser engine. It uses an installed
 system web runtime when playback starts:
@@ -47,7 +47,7 @@ system web runtime when playback starts:
 | macOS | Built-in WKWebView. |
 | Windows | Microsoft Edge WebView2 Runtime. The runtime must be installed separately if unavailable on the machine. |
 | Linux native/AppImage | WebKitGTK 4.1 and GStreamer video decoders. The small Emulsion adapter uses these system libraries. |
-| Current Linux Flatpak | Playback unavailable: the selected freedesktop 24.08 runtime has GTK3 but not WebKitGTK 4.1. Link/poster authoring and project sharing remain available. |
+| Linux Flatpak | Shared GNOME 50 runtime supplies GTK3, WebKitGTK 4.1 and GStreamer decoders. Audio uses the scoped PulseAudio socket. |
 
 On Arch-based Linux the runtime packages are `webkit2gtk-4.1`,
 `gst-plugins-good` and `gst-libav`. On Ubuntu the corresponding packages are
@@ -62,18 +62,9 @@ provided by the operating system or its package manager. Windows and macOS still
 require validation on their respective machines; a successful Linux test does
 not establish playback compatibility on those systems.
 
-The checked-in Flatpak manifest uses `org.freedesktop.Platform//24.08`; its
-[SDK source tree](https://gitlab.com/freedesktop-sdk/freedesktop-sdk/-/tree/release/24.08/elements)
-contains GTK3 but no WebKitGTK component. The sandbox cannot use a host-installed
-WebKit library, and the manifest does not build one into the application. The
-helper therefore remains unavailable in that build. The existing manifest also
-has no audio socket permission. Supporting playback there requires a separately
-validated shared runtime with the compatible GTK3/WebKitGTK 4.1 ABI and codecs,
-plus scoped audio access. No browser bundle, extra host filesystem access or
-host-process escape has been added for playback. Use the native/AppImage package
-when in-app video is required. Flatpak itself is not installed on the verification
-machine; this is a manifest and upstream runtime-source audit, not a Flatpak
-playback test.
+The Flatpak manifest uses `org.gnome.Platform//50`, whose [platform definition](https://raw.githubusercontent.com/GNOME/gnome-build-meta/gnome-50/elements/sdk-platform.bst) includes GTK3 and WebKitGTK 4.1. Its [SDK base](https://raw.githubusercontent.com/GNOME/gnome-build-meta/gnome-50/elements/freedesktop-sdk.bst) uses freedesktop 25.08, including the matching Rust SDK extension. Emulsion embeds only the small capture adapter. The build fails early if the required development libraries are missing.
+
+Linux sandbox acceptance compiled that adapter in GNOME SDK 50 and ran it in GNOME Platform 50 using the manifest's network, display, audio and GPU permissions. An H.264 MP4 played through the actual native media page/control adapter, producing 303 BGRA frames; pause, seek to 2500 ms while paused, resume, and trim completion passed. A separate official YouTube iframe test produced 1,282 frames, active uncorked audio, keyboard playback control and a resize from 640×360 to 800×450 without crashing. This verifies shared-runtime playback, not a complete packaged-app build or Windows/macOS behavior. GTK's offscreen Wayland capture still emits monitor/origin warnings; the player remains operational.
 
 ## Frame and playback constraints
 

@@ -22,6 +22,7 @@ fn action_schema() -> Value {
     options.push(json!({"type":"object","properties":{"type":{"const":"slide"},"page":{"type":"integer","minimum":1}},"required":["type","page"],"additionalProperties":false}));
     options.push(json!({"type":"object","properties":{"type":{"const":"overlay"},"target":{"type":"integer","minimum":1},"operation":{"enum":["show","hide","toggle"]}},"required":["type","target","operation"],"additionalProperties":false}));
     options.push(json!({"type":"object","properties":{"type":{"const":"variant"},"target":{"type":"integer","minimum":1},"variant":{"type":"string","minLength":1,"maxLength":80}},"required":["type","target","variant"],"additionalProperties":false}));
+    options.push(json!({"type":"object","properties":{"type":{"const":"url"},"url":{"type":"string","minLength":8,"maxLength":4096}},"required":["type","url"],"additionalProperties":false}));
     json!({"oneOf":options})
 }
 fn parse_actions(value: Value) -> Result<Vec<Action>, String> {
@@ -31,6 +32,7 @@ fn parse_actions(value: Value) -> Result<Vec<Action>, String> {
         let allowed: &[&str] = match value["type"].as_str() {
             Some("slide") => &["type", "page"],
             Some("overlay") => &["type", "target", "operation"],
+            Some("url") => &["type", "url"],
             Some("variant") => &["type", "target", "variant"],
             _ => &["type"],
         };
@@ -50,7 +52,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         ),
         definition(
             "set_presentation_actions",
-            "Replace one object's click actions atomically with native Undo. [] removes actions. Supports next/previous/back/specific slide, show/hide/toggle overlay, close top overlay and component variant. A navigation action must be last. Mark overlay targets first with set_presentation_overlay. Slide page IDs resolve within the project at runtime.",
+            "Replace one object's click actions atomically with native Undo. [] removes actions. Supports validated HTTP(S) web links on click, next/previous/back/specific slide, show/hide/toggle overlay, close top overlay and component variant. A navigation action must be last. Mark overlay targets first with set_presentation_overlay. Slide page IDs resolve within the project at runtime.",
             json!({"node":{"type":"integer","minimum":1},"actions":{"type":"array","maxItems":8,"items":action_schema()},"trigger":{"enum":["click","hover","drag_end"]}}),
             &["node", "actions"],
         ),

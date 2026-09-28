@@ -47,7 +47,8 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 // Older builds must reject these files instead of silently flattening those attributes.
 // Version 7 retains diagram graphs, conditional rules, design constraints and motion.
 // Version 8 externalizes portable font and local-media resources by content digest.
-pub const FORMAT_VERSION: u32 = 8;
+// Version 9 retains nested Smart source archives as content-addressed resources.
+pub const FORMAT_VERSION: u32 = 9;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -178,6 +179,8 @@ enum MKind {
     Smart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         editable: Option<emulsion_core::node::SmartEditable>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_document: Option<String>,
         /// Source pixels.
         src: String,
         width: u32,
@@ -264,6 +267,7 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
 }
 
 fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Encoded> {
+    let mut sources=crate::smart_source_data::SourcePool::default();
     enum Job<'a> {
         Png {
             path: String,
@@ -370,7 +374,8 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                     });
                 }
                 MKind::Smart {
-                    editable: editable.clone(),
+                    source_document: sources.reference(editable),
+                    editable: crate::smart_source_data::SourcePool::stripped(editable),
                     src,
                     width: source.width(),
                     height: source.height(),
@@ -532,6 +537,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         entries.push((path, bytes));
     }
     entries.extend(merged?);
+    entries.extend(sources.entries("sources")?);
 
     let mut fonts = crate::font_data::FontPool::default();
     let (design, font_refs) = fonts.detach(&doc.design);
@@ -1065,6 +1071,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
         .truncate(emulsion_core::document::MAX_PROJECT_COLORS);
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     let mut paths = crate::path_data::PathReader::default();
+    let mut sources=crate::smart_source_data::SourcePool::default();
     for mut n in m.nodes {
         if n.pattern_refs.len() > n.style_options.len() {
             return Err(IoError::Manifest(
@@ -1116,6 +1123,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             MKind::Fill { rgba } => NodeKind::Fill { rgba },
             MKind::Smart {
                 editable,
+                source_document,
                 src,
                 width,
                 height,
@@ -1147,7 +1155,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 let (cache, offset) =
                     emulsion_core::smart::render_styled(&r, &filters, &filter_styles);
                 NodeKind::Smart {
-                    editable,
+                    editable: sources.restore(editable,source_document,zip,"sources")?,
                     source: r,
                     filters,
                     filter_styles,

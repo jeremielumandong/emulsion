@@ -103,6 +103,7 @@ pub(crate) mod shapes;
 mod sidebar;
 pub(crate) use sidebar::{DockTab, SidebarTab};
 mod smart;
+pub(crate) mod smart_source_ui;
 mod snap;
 mod style_pattern;
 mod styles_ui;
@@ -4368,8 +4369,8 @@ enum MenuAction {
     Blend(NodeId, BlendMode),
 }
 
-impl Render for EditorView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl EditorView {
+    fn render_editor_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if let Some(workspace) = &self.brush_workspace {
             return div()
                 .flex()
@@ -4676,3 +4677,13 @@ mod rendering_tests {
 }
 
 mod design_html_ui;
+mod design_pptx_ui;
+
+impl Render for EditorView {
+    fn render(&mut self,window:&mut Window,cx:&mut Context<Self>)->impl IntoElement {
+        self.start_smart_source_watch(cx);
+        let content=self.render_editor_content(window,cx);
+        let banner=self.smart_source_banner(cx);
+        if let Some(banner)=banner {div().flex().flex_col().flex_1().min_h_0().child(banner).child(content).into_any_element()}else{content}
+    }
+}

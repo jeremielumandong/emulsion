@@ -67,3 +67,5 @@ pub mod design_brand_assets;
 pub mod design_data;
 
 mod design_component_inference;
+
+pub mod smart_source;

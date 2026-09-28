@@ -74,7 +74,7 @@ impl EditorView {
     pub(super) fn design_video_playing(&self) -> bool {
         self.video.active.is_some()
     }
-    pub(super) fn stop_design_video(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn stop_design_video(&mut self, cx: &mut Context<Self>) {
         self.video.task = None;
         if let Some(active) = self.video.active.take() {
             let image = active.image.clone();

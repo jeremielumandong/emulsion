@@ -61,3 +61,7 @@ pub mod creative_catalog_tools;
 pub mod workspace_tools;
 
 pub mod design_brand_tools;
+
+pub mod editor_layout_tools;
+
+pub mod smart_source_tools;

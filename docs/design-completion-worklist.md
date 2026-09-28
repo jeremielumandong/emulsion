@@ -40,7 +40,7 @@ Canva/PowerPoint/Lucid parity.
 - [x] Hover/drag presentation triggers and expanded transition controls.
 - [x] Bulk keyframe retiming, reveal channels, additional presets, sampled animated SVG and rendered-frame Lottie export with explicit fidelity diagnostics.
 - [x] Template breadth and responsive catalog integration.
-- [x] Feature-level interchange matrix and PowerPoint evaluation; no editable `.pptx` bridge is advertised.
+- [x] Feature-level interchange matrix and documented editable `.pptx` bridge.
 - [x] AI capability availability and native authoring workflow audit; runtime model/provider requirements documented.
 - [x] Extension workflow design; data-only packs must not silently execute scripts.
 - [x] Final source/package smoke, Linux playback and user-side Windows/macOS checklist.
@@ -54,13 +54,12 @@ claiming fidelity.
 
 - Windows/macOS runtime acceptance remains on the user's separate machines; see
   [platform checklist](design-platform-acceptance.md).
-- PowerPoint file support was evaluated; no editable `.pptx` bridge is implemented.
-- Lottie export uses rendered image layers; general Lottie import and editable
-  vector Lottie interchange are not advertised.
+- Editable PowerPoint interchange supports the documented subset and reports unsupported objects/effects. Binary `.ppt` remains unsupported; see [PowerPoint support](design-pptx.md).
+- Editable Lottie import/export supports the documented 2D subset and reports unsupported operators; the separate rendered-frame option remains available. See [Lottie interchange](lottie-interchange.md).
 - Cloud collaboration, remote publishing and executable plugin runtimes remain
   outside this local-editing delivery.
 
-## Completed Linux acceptance, 2026-09-28
+## Previous batch Linux acceptance, 2026-09-28
 
 - 311 core, 247 IO and 188 MCP tests passed; one core test remains intentionally ignored.
 - 64 focused native UI checks passed, including the inspector scroll regression.
@@ -73,8 +72,23 @@ claiming fidelity.
 - Release MCP inventory contains 315 unique tools with valid schemas/annotations.
 - AppImage version smoke passed; no browser runtime was bundled.
 
-Package: `target/appimage/Emulsion-0.0.3-advanced-design-x86_64.AppImage`.
+Previous package: `target/appimage/Emulsion-0.0.3-advanced-design-x86_64.AppImage`.
 Exact size, checksum, test counts and benchmark results are recorded in
 [completion results](design-completion-results.json). The responsive 1,000-object
 workload improved from 40.47 ms to 16.29 ms median; see
 [measurement boundaries](design-layout-performance.md).
+
+## Editable interchange and native host completion
+
+- [x] Flatpak shared GNOME 50 playback runtime and scoped audio access; H.264 and official YouTube sandbox checks passed.
+- [x] Editable native PPTX import/export, notes/links and per-object compatibility reports.
+- [x] Bounded Lottie import and editable vector export; separate rendered-frame fallback.
+- [x] Nested Smart Object source tabs, Apply/Undo, external links and opt-in background refresh.
+- [x] MCP panel layouts, saved workspaces, bounded native gestures and playback setup.
+- [x] Preserve exact floating-point geometry/keyframes across native JSON persistence.
+- [x] Final combined regression/lint results and branch publication.
+
+These changes are separate from the previous AppImage listed above. Current source
+validation is recorded in [interchange results](design-interchange-results.json); format boundaries are recorded in the associated feature documents.
+
+Current batch: 311 core, 260 IO, 194 MCP and 16 focused native UI tests passed (one core test intentionally ignored). Clippy passed with warnings denied for core/IO/MCP/UI library and test targets. Independent LibreOffice and official Lottie-player checks passed; the shared GNOME Flatpak runtime passed H.264 and YouTube playback checks.

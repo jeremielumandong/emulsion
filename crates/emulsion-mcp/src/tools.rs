@@ -980,6 +980,7 @@ pub fn definitions() -> Vec<ToolDef> {
     definitions.extend(crate::editor_host_tools::definitions());
     definitions.extend(crate::print_tools::definitions());
     definitions.extend(crate::photo_source_tools::definitions());
+    definitions.extend(crate::smart_source_tools::definitions());
     definitions.extend(crate::diagram_format_tools::definitions());
         definitions.extend(crate::design_data_tools::definitions());
     definitions.extend(crate::design_selection_export_tools::definitions());
@@ -1010,6 +1011,7 @@ pub fn read_only_names() -> impl Iterator<Item = &'static str> {
         .chain(crate::editor_host_tools::READ_ONLY)
         .chain(crate::print_tools::READ_ONLY)
         .chain(crate::photo_source_tools::READ_ONLY)
+        .chain(crate::smart_source_tools::READ_ONLY)
         .chain(crate::diagram_format_tools::READ_ONLY)
         .chain(crate::design_data_tools::READ_ONLY)
         .chain(crate::design_motion_tools::READ_ONLY)
@@ -1036,6 +1038,7 @@ pub fn is_destructive(name: &str) -> bool {
         || crate::editor_host_tools::DESTRUCTIVE.contains(&name)
         || crate::print_tools::DESTRUCTIVE.contains(&name)
         || crate::photo_source_tools::DESTRUCTIVE.contains(&name)
+        || crate::smart_source_tools::DESTRUCTIVE.contains(&name)
         || crate::diagram_format_tools::DESTRUCTIVE.contains(&name)
         || crate::design_data_tools::DESTRUCTIVE.contains(&name)
         || crate::design_motion_tools::DESTRUCTIVE.contains(&name)
@@ -1059,6 +1062,7 @@ pub fn uses_native_history(name: &str) -> bool {
             crate::editor_host_tools::definitions(),
             crate::print_tools::definitions(),
             crate::photo_source_tools::definitions(),
+            crate::smart_source_tools::definitions(),
             crate::diagram_format_tools::definitions(),
         crate::design_data_tools::definitions(),
             crate::design_selection_export_tools::definitions(),

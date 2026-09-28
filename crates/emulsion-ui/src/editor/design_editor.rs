@@ -340,7 +340,10 @@ impl EditorView {
                         .item(item(&editor,"Photo filter · Sharpen",!locked,|e,_,cx|e.apply_filter_key("unsharp_mask",cx)))
                         .item(item(&editor,"Image effects & blending…",!locked,move|e,window,cx|e.open_blending_options(id,window,cx))))
                     .when(plain_image,|menu|menu.item(item(&editor,"Remove image background",!locked,|e,_,cx|e.remove_background(cx))))
-                    .when(smart_image,|menu|menu.item(item(&editor,"Restore editable smart source",!locked,|e,_,cx|e.convert_smart_to_layers(cx))))
+                    .when(smart_image,|menu|menu
+                        .item(item(&editor,"Edit Smart source…",!locked,move|e,_,cx|e.dispatch_smart_source(emulsion_mcp::smart_source_tools::Action::Open{node:id},cx)))
+                        .item(item(&editor,"Link / relink Smart source…",!locked,move|e,_,cx|e.smart_link_dialog(id,cx)))
+                        .item(item(&editor,"Restore editable smart source",!locked,|e,_,cx|e.convert_smart_to_layers(cx))))
 
                     .item(item(&editor, "Flip horizontally", !locked, |e, _, cx| {
                         e.flip_transform_selection(true, cx)

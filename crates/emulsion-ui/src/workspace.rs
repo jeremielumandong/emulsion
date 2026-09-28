@@ -22,6 +22,7 @@ mod new_canvas;
 mod photoshop_shortcuts;
 mod projects;
 mod raw_sync;
+mod smart_sources;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
@@ -943,7 +944,9 @@ impl Workspace {
     }
 
     pub fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        if emulsion_io::diagram_import::is_diagram(&path)
+        if emulsion_io::pptx::is_pptx(&path)
+            || path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))
+            || emulsion_io::diagram_import::is_diagram(&path)
             || emulsion_io::template_pack::is_pack(&path)
         {
             self.open_diagram_path(path, window, cx);
@@ -1235,6 +1238,11 @@ impl Workspace {
         let Some(ed) = self.editor.clone() else {
             return;
         };
+        if !save_as && ed.read(cx).smart.source_session.is_some() {
+            let task=self.smart_source_task(ed,emulsion_mcp::smart_source_tools::Action::Apply,window,cx);
+            cx.spawn(async move|this,cx|{if let Err(error)=task.await{this.update(cx,|ws,cx|{ws.error=Some(error.into());cx.notify();}).ok();}}).detach();
+            return;
+        }
         ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         let (path, dir, name, multipage) = {
             let e = ed.read(cx);

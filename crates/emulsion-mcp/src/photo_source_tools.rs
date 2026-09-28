@@ -83,6 +83,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 Some(emulsion_core::node::SmartEditable::Text { .. }) => "text",
                 Some(emulsion_core::node::SmartEditable::Path { .. }) => "path",
                 Some(emulsion_core::node::SmartEditable::Svg { .. }) => "svg",
+                Some(emulsion_core::node::SmartEditable::Document { .. }) => "document",
                 None => "raster",
             },
         ),

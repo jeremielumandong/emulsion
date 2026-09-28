@@ -2,7 +2,7 @@ use super::*;
 use gpui_kit::component::{Disableable, Sizable, WindowExt, button::Button};
 
 impl EditorView {
-    pub(super) fn playback_setup_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn playback_setup_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let setup = crate::playback_setup::current();
         let owner = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, _| {

@@ -400,6 +400,11 @@ impl Document {
             }
         }
         for n in &self.nodes {
+            if let NodeKind::Smart { editable: Some(crate::node::SmartEditable::Document { archive, external }), .. } = &n.kind {
+                if archive.is_empty() || archive.len()>crate::smart_source::MAX_SOURCE_BYTES {return Err(DocumentError::BadValue(n.id,"Smart source archive size"));}
+                if external.as_ref().is_some_and(|l|l.validate().is_err()) {return Err(DocumentError::BadValue(n.id,"Smart source link"));}
+            }
+
             if let Some(p) = n.parent {
                 match indices.get(&p).map(|i| &self.nodes[*i]) {
                     None => return Err(DocumentError::MissingParent(n.id, p)),
@@ -767,6 +772,10 @@ impl Document {
         for n in &self.nodes {
             if let NodeKind::Smart { editable: Some(crate::node::SmartEditable::Svg { xml }), .. } = &n.kind {
                 let allocation = (xml.as_ptr() as usize, xml.len());
+                if planes.insert(allocation.0) { out.push(allocation); }
+            }
+            if let NodeKind::Smart { editable: Some(crate::node::SmartEditable::Document { archive, .. }), .. } = &n.kind {
+                let allocation=(Arc::as_ptr(archive) as usize, archive.capacity());
                 if planes.insert(allocation.0) { out.push(allocation); }
             }
             if let Some(mask) = &n.mask

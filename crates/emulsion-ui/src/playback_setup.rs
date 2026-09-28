@@ -67,7 +67,7 @@ pub(crate) fn current() -> Setup {
             || std::path::Path::new("/.flatpak-info").exists()
         {
             return Setup {
-                message: "This Flatpak runtime does not provide the required WebKitGTK player. Installing host codecs cannot enable playback inside this sandbox. Use the native or AppImage build for embedded video.".into(),
+                message: "This Flatpak uses the shared GNOME runtime for WebKitGTK and GStreamer playback. Update Emulsion and its runtime through your Flatpak software manager if playback is unavailable. Host codec packages do not modify the sandbox.".into(),
                 install: None, website: None,
             };
         }
@@ -115,7 +115,7 @@ pub(crate) fn current() -> Setup {
     }
 }
 
-/// Only called after the user presses the installation action in the setup dialog.
+/// Called by the explicit setup-dialog action or native MCP installation tool.
 /// Arguments are a fixed allowlist and never come from a document, URL or shell.
 pub(crate) fn install(plan: InstallPlan) -> Result<String, String> {
     if INSTALLING

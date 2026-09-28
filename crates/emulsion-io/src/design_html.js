@@ -80,6 +80,7 @@
     const target=node(id),top=overlays.at(-1);if(top&&!node(top)?.contains(target))return;
     for(const action of actions[id]||[]){
       switch(action.type){
+        case 'url':if(/^https?:\/\//.test(action.url))window.open(action.url,'_blank','noopener,noreferrer');break;
         case 'next':go(index+1);break;
         case 'previous':go(index-1);break;
         case 'back':if(history.length)go(history.pop(),false);break;

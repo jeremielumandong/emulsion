@@ -654,6 +654,57 @@ impl EditorView {
         })
         .detach();
     }
+    fn import_lottie_animation(&mut self, cx: &mut Context<Self>) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let ticket = self.edit_ticket();
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import editable Lottie JSON".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let result = cx
+                .background_spawn(async move { emulsion_io::lottie::read(&path) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.edit_ticket() != ticket {
+                    this.set_status("The page changed. Import the animation again.", true, cx);
+                    return;
+                }
+                match result.and_then(|(doc, report)| {
+                    emulsion_io::lottie::insert(&mut this.editor, &doc).map(|ids| (ids, report))
+                }) {
+                    Ok((ids, report)) => {
+                        let selected = ids.last().copied();
+                        this.set_layer_selection(ids, selected);
+                        this.after_change(cx);
+                        this.set_tool(Tool::Move, cx);
+                        this.set_status(
+                            format!(
+                                "Imported {} editable objects. {}",
+                                report.nodes,
+                                report.diagnostics.join(" ")
+                            ),
+                            false,
+                            cx,
+                        );
+                    }
+                    Err(error) => this.set_status(error.to_string(), true, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
     fn export_motion_interchange(
         &mut self,
         format: emulsion_io::design_motion_export::Format,
@@ -682,7 +733,7 @@ impl EditorView {
             };
             path.set_extension(extension);
             this.update(cx, |this, cx| {
-                this.set_status("Exporting sampled motion…", false, cx)
+                this.set_status("Exporting motion…", false, cx)
             })
             .ok();
             let result = cx
@@ -692,13 +743,17 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| match result {
                 Ok(report) => this.set_status(
-                    format!(
-                        "Exported {} frames ({} vector, {} rendered). {}",
-                        report.frames,
-                        report.vector_frames,
-                        report.raster_frames,
-                        report.diagnostics.join(" ")
-                    ),
+                    if report.format == emulsion_io::design_motion_export::Format::Lottie {
+                        format!("Exported editable Lottie. {}", report.diagnostics.join(" "))
+                    } else {
+                        format!(
+                            "Exported {} frames ({} vector, {} rendered). {}",
+                            report.frames,
+                            report.vector_frames,
+                            report.raster_frames,
+                            report.diagnostics.join(" ")
+                        )
+                    },
                     false,
                     cx,
                 ),
@@ -764,11 +819,28 @@ impl EditorView {
             )
             .child(
                 Button::new("design-export-lottie")
-                    .label("Export Lottie · rendered frames…")
+                    .label("Export Lottie · editable vectors…")
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.export_motion_interchange(
                             emulsion_io::design_motion_export::Format::Lottie,
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                Button::new("design-import-lottie")
+                    .label("Import Lottie animation…")
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| this.import_lottie_animation(cx))),
+            )
+            .child(
+                Button::new("design-export-lottie-raster")
+                    .label("Export Lottie · rendered frames…")
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.export_motion_interchange(
+                            emulsion_io::design_motion_export::Format::LottieRaster,
                             cx,
                         )
                     })),
@@ -957,3 +1029,82 @@ impl EditorView {
 
 #[path = "design_keyframes_ui.rs"]
 mod keyframe_ui;
+
+#[cfg(test)]
+mod lottie_workflow_tests {
+    use super::*;
+    use ::core::prelude::v1::test;
+    use gpui::TestAppContext;
+    #[gpui_kit::test]
+    fn design_lottie_native_picker_import_export_cancel_stale_and_undo(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input.json");
+        let mut source = Document::new(160, 100);
+        let id = source.alloc_id();
+        source.nodes.push(emulsion_core::Node::path(
+            id,
+            "Editable square",
+            Arc::new(emulsion_raster::vector_geometry::rectangle(
+                10., 10., 20., 20.,
+            )),
+            Default::default(),
+            160,
+            100,
+        ));
+        std::fs::write(&path, emulsion_io::lottie::encode(&source).unwrap().0).unwrap();
+        let original = Document::new(320, 200);
+        let (workspace, cx) = crate::tests::open(cx, original.clone());
+        let view = cx.update(|_, cx| workspace.read(cx).editor.clone().unwrap());
+        cx.update(|_, cx| view.update(cx, |this, cx| this.import_lottie_animation(cx)));
+        cx.run_until_parked();
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| None);
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original));
+        cx.update(|_, cx| view.update(cx, |this, cx| this.import_lottie_animation(cx)));
+        cx.run_until_parked();
+        cx.simulate_path_prompt_response(|_| Some(vec![path.clone()]));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert!(!view.read(cx).editor.doc.nodes.is_empty());
+            assert_eq!(view.read(cx).editor.doc.width, 320);
+        });
+        let output = dir.path().join("vectors.json");
+        cx.update(|_, cx| {
+            view.update(cx, |this, cx| {
+                this.export_motion_interchange(
+                    emulsion_io::design_motion_export::Format::Lottie,
+                    cx,
+                )
+            })
+        });
+        cx.run_until_parked();
+        assert!(cx.did_prompt_for_new_path());
+        cx.simulate_new_path_selection(|_| Some(output.clone()));
+        cx.run_until_parked();
+        assert!(emulsion_io::lottie::is_lottie_path(&output));
+        cx.update(|_, cx| {
+            view.update(cx, |this, cx| {
+                this.undo(cx);
+                assert_eq!(this.editor.doc, original);
+                this.import_lottie_animation(cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            view.update(cx, |this, cx| {
+                let mut design = this.editor.doc.design.clone();
+                design.duration_ms += 100;
+                this.editor
+                    .execute(emulsion_core::Command::SetDesign {
+                        design: Box::new(design),
+                    })
+                    .unwrap();
+                this.after_change(cx);
+            })
+        });
+        cx.simulate_path_prompt_response(|_| Some(vec![path.clone()]));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert!(view.read(cx).editor.doc.nodes.is_empty()));
+    }
+}

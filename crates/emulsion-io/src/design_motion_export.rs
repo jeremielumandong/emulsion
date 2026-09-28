@@ -4,6 +4,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use emulsion_core::Document;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::Digest;
 use std::{collections::HashMap, io::Write, path::Path};
 const MAX_BYTES: usize = 64 << 20;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -11,6 +12,7 @@ const MAX_BYTES: usize = 64 << 20;
 pub enum Format {
     AnimatedSvg,
     Lottie,
+    LottieRaster,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
@@ -25,7 +27,13 @@ pub struct Report {
 fn error(message: impl Into<String>) -> IoError {
     IoError::Manifest(message.into())
 }
-fn raster_frame(doc: &Document) -> Result<(u32, u32, Vec<u8>)> {
+struct RasterFrame {
+    width: u32,
+    height: u32,
+    png: Vec<u8>,
+    fingerprint: [u8; 32],
+}
+fn raster_frame(doc: &Document) -> Result<RasterFrame> {
     let mut doc = doc.clone();
     let scale = (1024. / f64::from(doc.width.max(doc.height))).min(1.);
     if scale < 1. {
@@ -34,11 +42,46 @@ fn raster_frame(doc: &Document) -> Result<(u32, u32, Vec<u8>)> {
         emulsion_core::geometry::resize(&mut doc, w, h);
     }
     let raster = emulsion_raster::composite::flatten(&doc.composite_tree(), 0);
-    let bytes = crate::export::png8(doc.width, doc.height, &raster.to_srgba8())?;
-    Ok((doc.width, doc.height, bytes))
+    let rgba = raster.to_srgba8();
+    // Encoded PNGs may differ because ICC profiles include creation metadata.
+    // Deduplicate visual pixels and dimensions, not the encoder's metadata.
+    let mut hash = sha2::Sha256::new();
+    hash.update(doc.width.to_le_bytes());
+    hash.update(doc.height.to_le_bytes());
+    hash.update(&rgba);
+    let mut fingerprint = [0u8; 32];
+    fingerprint.copy_from_slice(&hash.finalize());
+    let png = crate::export::png8(doc.width, doc.height, &rgba)?;
+    Ok(RasterFrame {
+        width: doc.width,
+        height: doc.height,
+        png,
+        fingerprint,
+    })
 }
 pub fn encode(doc: &Document, format: Format) -> Result<(Vec<u8>, Report)> {
     doc.validate().map_err(|e| error(e.to_string()))?;
+    if format == Format::Lottie {
+        let (bytes, mut vector) = crate::lottie::encode(doc)?;
+        vector.diagnostics.insert(
+            0,
+            format!(
+                "{} editable objects, {} animated objects; no rendered animation frames.",
+                vector.nodes, vector.animated_nodes
+            ),
+        );
+        let report = Report {
+            format,
+            frames: (u64::from(doc.design.duration_ms) * u64::from(doc.design.fps)).div_ceil(1000)
+                as u32,
+            fps: doc.design.fps,
+            vector_frames: 0,
+            raster_frames: 0,
+            bytes: bytes.len(),
+            diagnostics: vector.diagnostics,
+        };
+        return Ok((bytes, report));
+    }
     let fps = doc.design.fps;
     let frames = (u64::from(doc.design.duration_ms) * u64::from(fps)).div_ceil(1000) as u32;
     if frames > 600 {
@@ -58,7 +101,7 @@ pub fn encode(doc: &Document, format: Format) -> Result<(Vec<u8>, Report)> {
     );
     let mut layers = Vec::new();
     let mut assets = Vec::new();
-    let mut images = HashMap::<Vec<u8>, String>::new();
+    let mut images = HashMap::<[u8; 32], String>::new();
     let mut payload_size = 0usize;
     for index in 0..frames {
         let time = ((u64::from(index) * 1000) / u64::from(fps)) as u32;
@@ -73,7 +116,12 @@ pub fn encode(doc: &Document, format: Format) -> Result<(Vec<u8>, Report)> {
                         bytes
                     }
                     Err(_) => {
-                        let (w, h, png) = raster_frame(&frame)?;
+                        let RasterFrame {
+                            width: w,
+                            height: h,
+                            png,
+                            fingerprint: _,
+                        } = raster_frame(&frame)?;
                         report.raster_frames += 1;
                         format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {w} {h}\"><image width=\"{w}\" height=\"{h}\" href=\"data:image/png;base64,{}\"/></svg>",doc.width,doc.height,STANDARD.encode(png)).into_bytes()
                     }
@@ -105,17 +153,23 @@ pub fn encode(doc: &Document, format: Format) -> Result<(Vec<u8>, Report)> {
                 svg.push_str("</image>");
                 payload_size = svg.len();
             }
-            Format::Lottie => {
-                let (w, h, png) = raster_frame(&frame)?;
+            Format::Lottie => unreachable!(),
+            Format::LottieRaster => {
+                let RasterFrame {
+                    width: w,
+                    height: h,
+                    png,
+                    fingerprint,
+                } = raster_frame(&frame)?;
                 report.raster_frames += 1;
-                let id = if let Some(id) = images.get(&png) {
+                let id = if let Some(id) = images.get(&fingerprint) {
                     id.clone()
                 } else {
                     let id = format!("frame-{}", assets.len());
                     let encoded = STANDARD.encode(&png);
                     payload_size = payload_size.saturating_add(encoded.len());
                     assets.push(json!({"id":id,"w":w,"h":h,"u":"","p":format!("data:image/png;base64,{encoded}"),"e":1}));
-                    images.insert(png, id.clone());
+                    images.insert(fingerprint, id.clone());
                     id
                 };
                 layers.push(json!({"ty":2,"ind":index+1,"nm":format!("Sample {}",index+1),"refId":id,"ip":index,"op":index+1,"st":0,"sr":1,"ks":{"o":{"a":0,"k":100},"r":{"a":0,"k":0},"p":{"a":0,"k":[0,0,0]},"a":{"a":0,"k":[0,0,0]},"s":{"a":0,"k":[f64::from(doc.width)*100./f64::from(w),f64::from(doc.height)*100./f64::from(h),100]}}}));
@@ -127,7 +181,7 @@ pub fn encode(doc: &Document, format: Format) -> Result<(Vec<u8>, Report)> {
             ));
         }
     }
-    let bytes=match format{Format::AnimatedSvg=>{svg.push_str("</svg>");svg.into_bytes()},Format::Lottie=>serde_json::to_vec(&json!({"v":"5.12.2","fr":fps,"ip":0,"op":frames,"w":doc.width,"h":doc.height,"nm":"Emulsion rendered frame animation","ddd":0,"assets":assets,"layers":layers})).map_err(|e|error(e.to_string()))?};
+    let bytes=match format{Format::AnimatedSvg=>{svg.push_str("</svg>");svg.into_bytes()},Format::Lottie=>unreachable!(),Format::LottieRaster=>serde_json::to_vec(&json!({"v":"5.12.2","fr":fps,"ip":0,"op":frames,"w":doc.width,"h":doc.height,"nm":"Emulsion rendered frame animation","ddd":0,"assets":assets,"layers":layers})).map_err(|e|error(e.to_string()))?};
     if bytes.len() > MAX_BYTES {
         return Err(error("Motion export exceeds 64 MiB."));
     }
@@ -163,16 +217,16 @@ mod tests {
                 .unwrap()
                 .contains("calcMode=\"discrete\"")
         );
-        let (lottie, report) = encode(&doc, Format::Lottie).unwrap();
+        let (lottie, report) = encode(&doc, Format::LottieRaster).unwrap();
         let data: serde_json::Value = serde_json::from_slice(&lottie).unwrap();
         assert_eq!(data["layers"].as_array().unwrap().len(), 2);
         assert_eq!(data["assets"].as_array().unwrap().len(), 1);
         assert_eq!(report.raster_frames, 2);
         assert_eq!(doc, original);
         doc.design.duration_ms = 60000;
-        assert!(encode(&doc, Format::Lottie).is_ok());
+        assert!(encode(&doc, Format::LottieRaster).is_ok());
         doc.design.fps = 60;
-        assert!(encode(&doc, Format::Lottie).is_err());
+        assert!(encode(&doc, Format::LottieRaster).is_err());
     }
 }
 
@@ -295,7 +349,7 @@ mod appearance_tests {
         assert!(first.pixel(5, 5).unwrap().alpha() > 0);
         assert_eq!(second.pixel(5, 5).unwrap().alpha(), 0);
         assert!(second.pixel(15, 5).unwrap().alpha() > 0);
-        let (lottie, report) = encode(&editor.doc, Format::Lottie).unwrap();
+        let (lottie, report) = encode(&editor.doc, Format::LottieRaster).unwrap();
         let data: serde_json::Value = serde_json::from_slice(&lottie).unwrap();
         assert_eq!(report.raster_frames, 3);
         assert_eq!(data["assets"].as_array().unwrap().len(), 3);

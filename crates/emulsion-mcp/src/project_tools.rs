@@ -140,8 +140,8 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "export_project",
-            "Export selected pages, or all when pages is omitted, to PDF, animated GIF, editable draw.io, standalone interactive HTML, or a PNG/JPEG/SVG page archive. HTML supports optional responsive widths; other formats reject widths. Returns any rasterization warnings; source is unchanged.",
-            json!({"path":path,"format":{"enum":["pdf","png","jpeg","svg","gif","drawio","html"]},"pages":{"type":"array","items":id,"minItems":1,"uniqueItems":true},"include_bleed":{"type":"boolean"},"widths":{"type":"array","items":{"type":"integer","minimum":64,"maximum":8192},"maxItems":16,"uniqueItems":true}}),
+            "Export selected pages, or all when pages is omitted, to PDF, animated GIF, editable draw.io, standalone interactive HTML, editable PowerPoint PPTX, or a PNG/JPEG/SVG page archive. HTML supports optional responsive widths; other formats reject widths. Returns any rasterization warnings; source is unchanged.",
+            json!({"path":path,"format":{"enum":["pdf","png","jpeg","svg","gif","drawio","html","pptx"]},"pages":{"type":"array","items":id,"minItems":1,"uniqueItems":true},"include_bleed":{"type":"boolean"},"widths":{"type":"array","items":{"type":"integer","minimum":64,"maximum":8192},"maxItems":16,"uniqueItems":true}}),
             &["path", "format"],
         ),
         def(
@@ -152,7 +152,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "import_project_pages",
-            "Import pages from a local .emu, template/stencil pack, draw.io, supported Visio or Lucid file; or a GitHub template/stencil package URL. Data only; no repository scripts. Keeps existing pages and returns compatibility warnings. One Undo step.",
+            "Import pages from a local .emu, .pptx presentation, Lottie JSON, template/stencil pack, draw.io, supported Visio or Lucid file; or a GitHub template/stencil package URL. Data only; no repository scripts. Keeps existing pages and returns compatibility warnings. One Undo step.",
             json!({"source":path}),
             &["source"],
         ),
@@ -414,6 +414,14 @@ pub fn load_pages(args: &Value) -> Result<(emulsion_core::project::Project, Vec<
     } else if emulsion_io::template_pack::is_pack(path) {
         let pack = emulsion_io::template_pack::read(path).map_err(|e| e.to_string())?;
         Ok((pack.project, vec![]))
+    } else if emulsion_io::pptx::is_pptx(path) {
+        emulsion_io::pptx::read(path).map(|p| (p.project, p.warnings)).map_err(|e| e.to_string())
+    } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        && emulsion_io::lottie::is_lottie_path(path)
+    {
+        let (doc, report) = emulsion_io::lottie::read(path).map_err(|e| e.to_string())?;
+        let project = emulsion_core::project::ProjectEditor::new_project(emulsion_core::project::ProjectKind::Design, doc)?.snapshot().ok_or("Missing imported project")?;
+        Ok((project, report.diagnostics))
     } else if emulsion_io::project::is_project(path) {
         emulsion_io::project::read(path)
             .map(|p| (p, vec![]))
@@ -465,6 +473,17 @@ pub fn write_snapshot(
             }
             if args.get("widths").is_some() {
                 return Err("Responsive widths only apply to HTML export".into());
+            }
+            if args["format"] == "pptx" {
+                if args["include_bleed"].as_bool().unwrap_or(false) {
+                    return Err("PPTX export does not support print bleed".into());
+                }
+                let pages = args["pages"].as_array().map_or_else(
+                    || project.pages.iter().map(|p| p.meta.id).collect(),
+                    |a| a.iter().map(|v| v.as_u64().unwrap()).collect::<Vec<_>>(),
+                );
+                let report = emulsion_io::pptx::write(project, &pages, path).map_err(|e| e.to_string())?;
+                return Ok(json!({"path":path,"pages":report.pages,"objects":report.objects,"warnings":report.warnings}));
             }
             if args["format"] == "drawio" {
                 if args.get("pages").is_some() || args["include_bleed"].as_bool().unwrap_or(false) {
@@ -697,3 +716,7 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "pptx_tools_tests.rs"]
+mod pptx_tools_tests;

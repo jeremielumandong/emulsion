@@ -46,6 +46,7 @@ pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
     if let Some(result)=crate::diagram_format_tools::execute(editor,name,args){return result;}
     if let Some(result)=crate::photo_source_tools::execute(editor,name,args){return result;}
     if crate::print_tools::is_tool(name){return ToolResult::error("Printer tools require a live editor host.");}
+    if crate::smart_source_tools::is_tool(name){return ToolResult::error("Smart source sessions require a live editor host.");}
     if crate::editor_host_tools::is_tool(name){return ToolResult::error("Editor controls require a live editor host.");}
     if crate::project_variable_tools::is_tool(name){return ToolResult::error("Project variable tools require a live project host.");}
     if let Some(result) = crate::design_variable_tools::execute(editor, name, args) { return result; }

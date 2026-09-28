@@ -96,6 +96,86 @@ if !result.is_error&&!readonly{this.editor.commit_design_document(doc,"Edit imag
                 return;
             }
         };
+        if let Action::Workspace { operation, name } = action {
+            match self.host_workspace(&operation, name, cx) {
+                Ok((value, save)) => {
+                    cx.spawn(async move |this, cx| {
+                        let result = if let Some(save) = save {
+                            save.await.map(|_| value)
+                        } else {
+                            Ok(value)
+                        };
+                        call.reply(match result {
+                            Ok(v) => ToolResult::text(v.to_string()),
+                            Err(e) => ToolResult::error(format!(
+                                "Workspace changed in memory but could not be saved: {e}"
+                            )),
+                        });
+                        this.update(cx, |this, cx| this.complete_tool_work(generation, cx))
+                            .ok();
+                    })
+                    .detach();
+                }
+                Err(e) => {
+                    call.reply(ToolResult::error(e));
+                    self.complete_tool_work(generation, cx);
+                }
+            }
+            return;
+        }
+        if matches!(action, Action::PlaybackInstall) {
+            let setup = crate::playback_setup::current();
+            let Some(plan) = setup.install else {
+                call.reply(ToolResult::error(setup.message));
+                self.complete_tool_work(generation, cx);
+                return;
+            };
+            self.stop_design_video(cx);
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_spawn(async move { crate::playback_setup::install(plan) })
+                    .await;
+                call.reply(match result {
+                    Ok(message) => ToolResult::text(
+                        serde_json::json!({"installed":true,"message":message}).to_string(),
+                    ),
+                    Err(e) => ToolResult::error(e),
+                });
+                this.update(cx, |this, cx| this.complete_tool_work(generation, cx))
+                    .ok();
+            })
+            .detach();
+            return;
+        }
+        if matches!(action, Action::Gesture(_) | Action::PlaybackSetup) {
+            let gesture_origin = (self.editor.active_page(), self.edit_ticket(), self.tool);
+            let handle = self
+                .library_workspace
+                .as_ref()
+                .and_then(WeakEntity::upgrade)
+                .map(|w| w.read(cx).library_window);
+            let owner = cx.weak_entity();
+            cx.defer(move |cx| {
+                let result = handle.ok_or_else(||"No live workspace window.".to_owned()).and_then(|handle| {
+                    cx.update_window(handle, |_,window,cx| {
+                        owner.update(cx,|this,cx| {
+                            if this.assistant.tool_generation != generation {return Err("The originating relay ended.".to_owned());}
+                            match action {
+                                Action::Gesture(gesture)=>{
+                                    if (this.editor.active_page(),this.edit_ticket(),this.tool)!=gesture_origin {return Err("The originating page, revision or tool changed before the gesture. Read editor state and retry.".to_owned());}
+                                    this.host_canvas_gesture(gesture,window,cx)
+                                },
+                                Action::PlaybackSetup=>{this.playback_setup_dialog(window,cx);Ok(serde_json::json!({"opened":true,"dialog":"playback_setup"}))},
+                                _=>unreachable!(),
+                            }
+                        }).map_err(|_|"The originating editor closed.".to_owned())?
+                    }).map_err(|_|"The original window closed.".to_owned())?
+                });
+                call.reply(match result {Ok(v)=>ToolResult::text(v.to_string()),Err(e)=>ToolResult::error(e)});
+                owner.update(cx,|this,cx|this.complete_tool_work(generation,cx)).ok();
+            });
+            return;
+        }
         if !matches!(action, Action::Print) {
             let result = match self.editor_host_action(action, cx) {
                 Ok(v) => ToolResult::text(v.to_string()),

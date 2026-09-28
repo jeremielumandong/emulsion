@@ -110,6 +110,12 @@ impl EditorView {
                         owner.update(cx, |this, cx| this.export_design_html(all, window, cx)).ok();
                     }));
                 }
+                let notes_owner=owner.clone();
+                menu=menu.item(PopupMenuItem::new("Import / export notes…").on_click(move|_,window,cx|{notes_owner.update(cx,|this,cx|this.show_diagram_import_notes(window,cx)).ok();}));
+                for all in [true,false] {
+                    let owner=owner.clone();
+                    menu=menu.item(PopupMenuItem::new(if all {"Editable PowerPoint · all pages"}else{"Editable PowerPoint · current page"}).on_click(move|_,_,cx|{owner.update(cx,|this,cx|this.export_design_pptx(all,cx)).ok();}));
+                }
                 for format in emulsion_io::project_export::Format::ALL {
                     for all in [true, false] {
                         let owner = owner.clone();

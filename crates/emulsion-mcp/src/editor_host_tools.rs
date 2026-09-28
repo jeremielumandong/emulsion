@@ -2,13 +2,22 @@
 use crate::ToolDef;
 use serde::Deserialize;
 use serde_json::{Value, json};
-pub const READ_ONLY: &[&str] = &["get_editor_state"];
+pub const READ_ONLY: &[&str] = &[
+    "get_editor_state",
+    "get_editor_controls",
+    "get_playback_setup",
+];
 pub const DESTRUCTIVE: &[&str] = &[
     "set_editor_state",
     "set_document_guides",
     "editor_clipboard",
     "restore_smart_source",
     "open_print_dialog",
+    "set_editor_layout",
+    "manage_editor_workspace",
+    "canvas_gesture",
+    "open_playback_setup",
+    "install_playback_runtime",
 ];
 pub fn is_tool(name: &str) -> bool {
     READ_ONLY.contains(&name) || DESTRUCTIVE.contains(&name)
@@ -30,6 +39,16 @@ pub enum Action {
     Clipboard(String),
     Restore(u64),
     Print,
+    Controls,
+    Layout(Value),
+    Workspace {
+        operation: String,
+        name: Option<String>,
+    },
+    Gesture(crate::editor_layout_tools::Gesture),
+    PlaybackSetup,
+    PlaybackInspect,
+    PlaybackInstall,
 }
 pub fn definitions() -> Vec<ToolDef> {
     [
@@ -39,9 +58,38 @@ pub fn definitions() -> Vec<ToolDef> {
  ("editor_clipboard","Copy/cut selected native objects or pixels, or paste the system image clipboard using the existing native workflow. Returns after the native clipboard operation completes.",json!({"action":{"enum":["copy","cut","paste"]}}),vec!["action"]),
  ("restore_smart_source","Convert a Smart Object back to its editable original text/path/raster source, removing the smart filter stack. Preserves placement using native conversion; one Undo restores the Smart Object.",json!({"node":{"type":"integer","minimum":1}}),vec!["node"]),
  ("open_print_dialog","Open the native shared print preview/setup dialog for the originating editor's document or project. Printing occurs through its normal Print button.",json!({}),vec![]),
- ].into_iter().map(|(name,description,properties,required)|ToolDef{name:name.into(),description:description.into(),input_schema:json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})}).collect()
+ ].into_iter().map(|(name,description,properties,required)|ToolDef{name:name.into(),description:description.into(),input_schema:json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})}).chain(crate::editor_layout_tools::definitions()).collect()
 }
 pub fn parse(name: &str, args: &Value) -> Result<Action, String> {
+    if let Some(def) = crate::editor_layout_tools::definitions()
+        .into_iter()
+        .find(|d| d.name == name)
+    {
+        crate::editor_layout_tools::validate(&def.input_schema, args)?;
+        return Ok(match name {
+            "get_editor_controls" => Action::Controls,
+            "set_editor_layout" => Action::Layout(args["layout"].clone()),
+            "manage_editor_workspace" => {
+                let operation = args["operation"].as_str().unwrap().to_owned();
+                let name = args["name"].as_str().map(|s| s.trim().to_owned());
+                if matches!(operation.as_str(), "save" | "apply" | "remove")
+                    && name.as_ref().is_none_or(|s| s.is_empty())
+                {
+                    return Err("A preset name is required.".into());
+                }
+                if !matches!(operation.as_str(), "save" | "apply" | "remove") && name.is_some() {
+                    return Err("This operation does not accept a name.".into());
+                }
+                Action::Workspace { operation, name }
+            }
+            "canvas_gesture" => {
+                Action::Gesture(serde_json::from_value(args.clone()).map_err(|e| e.to_string())?)
+            }
+            "get_playback_setup" => Action::PlaybackInspect,
+            "open_playback_setup" => Action::PlaybackSetup,
+            _ => Action::PlaybackInstall,
+        });
+    }
     let object = args.as_object().ok_or("Expected an argument object.")?;
     let allowed: &[&str] = match name {
         "get_editor_state" | "open_print_dialog" => &[],
