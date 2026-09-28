@@ -593,7 +593,7 @@ impl EditorView {
                         Command::DevelopRaw {
                             id: source.node_id,
                             raster: raster.clone(),
-                            params,
+                            params: Box::new(params),
                         }
                         .apply(doc)
                         .map_err(|e| emulsion_io::IoError::Unsupported(e.to_string()))?;
@@ -644,7 +644,7 @@ impl EditorView {
                             Command::DevelopRaw {
                                 id: raw.node_id,
                                 raster,
-                                params,
+                                params: Box::new(params),
                             },
                             cx,
                         );

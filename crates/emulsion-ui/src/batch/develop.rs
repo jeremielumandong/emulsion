@@ -1,9 +1,6 @@
 //! Library RAW development uses Photo's decoder and portable sidecars.
 use super::*;
-use emulsion_io::{
-    raw::{DevelopParams, RawSource},
-    raw_settings,
-};
+use emulsion_io::{photo_develop::PhotoSource as RawSource, raw::DevelopParams, raw_settings};
 use gpui_kit::component::{
     Disableable, Selectable,
     slider::{Slider, SliderEvent, SliderState},
@@ -17,12 +14,26 @@ pub(super) struct Develop {
     pub(super) saved: HashMap<PathBuf, DevelopParams>,
     pub(super) fingerprints: HashMap<PathBuf, String>,
     pub(super) history: HashMap<PathBuf, Vec<DevelopParams>>,
-    sliders: Vec<(Entity<SliderState>, Subscription)>,
-    slider_key: Option<(PathBuf, DevelopParams)>,
+    pub(super) snapshots: HashMap<PathBuf, std::collections::BTreeMap<String, DevelopParams>>,
+    pub(super) sliders: Vec<(Entity<SliderState>, Subscription)>,
+    pub(super) slider_key: Option<(PathBuf, DevelopParams)>,
+    pub(super) section: usize,
+    pub(super) channel: usize,
+    pub(super) mask: usize,
+    pub(super) picking_sky: bool,
+    pub(super) mask_seed: Option<[f32; 2]>,
+    pub(super) curve_bounds: crate::widgets::TrackBounds,
+    pub(super) curve_drag: Option<usize>,
+    pub(super) presets_loaded: bool,
+    pub(super) preset_files: Vec<PathBuf>,
+    pub(super) preset_report: Option<emulsion_io::lightroom_presets::ImportedPreset>,
+    pub(super) ai_job: Option<Arc<emulsion_ai::jobs::Job>>,
     pub busy: bool,
     pub saving: bool,
     pub before: bool,
     pub histogram: [u32; 32],
+    pub rgb_histogram: [[u32; 32]; 3],
+    pub clipping: bool,
     pub loupe: bool,
     pub list: bool,
     pub compare: bool,
@@ -167,6 +178,7 @@ impl Workspace {
             .source
             .clone()
             .filter(|s| s.source == path);
+        let clipping = self.batch.develop.clipping;
         let before = self.batch.develop.before;
         let compare = self.batch.develop.compare;
         let recipe = if before { None } else { self.chosen_recipe() };
@@ -193,9 +205,13 @@ impl Workspace {
                     let (w, h, rgba) =
                         display_raster(&raster).ok_or("Could not build RAW preview")?;
                     let bins = histogram(&rgba);
-                    let pixels =
+                    let rgb_bins = rgb_histogram(&rgba);
+                    let mut pixels =
                         render_with(Arc::new(Raster::from_srgba8(w, h, &rgba)), recipe.as_ref())
                             .ok_or("Could not render recipe")?;
+                    if clipping {
+                        clipping_overlay(&mut pixels.2);
+                    }
                     let baseline = if compare {
                         let raster = source
                             .develop_with(&DevelopParams::default())
@@ -209,7 +225,12 @@ impl Workspace {
                     } else {
                         None
                     };
-                    Ok::<_, String>((source, saved, params, pixels, bins, baseline))
+                    let (history, snapshots) =
+                        raw_settings::photo_history(&source.source, &source.source_sha256)
+                            .map_err(|e| e.to_string())?;
+                    Ok::<_, String>((
+                        source, saved, params, pixels, bins, baseline, history, snapshots, rgb_bins,
+                    ))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -226,7 +247,26 @@ impl Workspace {
                     return;
                 }
                 match result {
-                    Ok((source, saved, params, pixels, bins, baseline)) => {
+                    Ok((
+                        source,
+                        saved,
+                        params,
+                        pixels,
+                        bins,
+                        baseline,
+                        history,
+                        snapshots,
+                        rgb_bins,
+                    )) => {
+                        this.batch
+                            .develop
+                            .history
+                            .entry(key.0.clone())
+                            .or_insert(history);
+                        this.batch
+                            .develop
+                            .snapshots
+                            .insert(key.0.clone(), snapshots);
                         // Cache just one decoded mosaic. Drafts contain settings, never full images.
                         this.batch
                             .develop
@@ -251,6 +291,7 @@ impl Workspace {
                                     Some((path, Arc::new(bgra_image(w, h, bytes))));
                             }
                             this.batch.develop.histogram = bins;
+                            this.batch.develop.rgb_histogram = rgb_bins;
                         }
                     }
                     Err(e) => {
@@ -330,7 +371,7 @@ impl Workspace {
                 .batch
                 .items
                 .iter()
-                .filter(|i| i.selected && emulsion_io::raw::is_raw(&i.path))
+                .filter(|i| i.selected && emulsion_io::photo_develop::supported(&i.path))
                 .map(|i| (i.path.clone(), params))
                 .collect();
         }
@@ -362,7 +403,7 @@ impl Workspace {
                                     return Err(emulsion_io::IoError::Manifest("The original or its saved settings changed outside Library; reload before saving.".into()));
                                 }
                                 if sync {let before=drafts.get(&path).copied().unwrap_or(current);previous=Some(before);params=raw_settings::merge_settings(before,params,group);}
-                                raw_settings::save_source_settings(&source, params)
+                                source.save(params)
                             })();
                             (path, params, previous, result.map_err(|e| e.to_string()))
                         })
@@ -475,6 +516,9 @@ impl Workspace {
             .and_then(|p| self.batch.develop.current_params(p));
         let mut panel = div()
             .id("library-develop")
+            .max_h(px(360.))
+            .overflow_y_scroll()
+            .flex_none()
             .test_support()
             .flex()
             .flex_col()
@@ -517,7 +561,7 @@ impl Workspace {
         if self.batch.develop.dirty() {
             panel = panel.child(
                 Button::new("library-save-all-drafts")
-                    .label("Save all RAW edits")
+                    .label("Save all photo edits")
                     .small()
                     .primary()
                     .disabled(self.batch.develop.saving)
@@ -529,15 +573,16 @@ impl Workspace {
                 .child(self.library_info_panel(self.batch.develop.inspector == 2, cx))
                 .into_any_element();
         }
-        let Some(params) =
-            params.filter(|_| path.as_ref().is_some_and(|p| emulsion_io::raw::is_raw(p)))
-        else {
+        let Some(params) = params.filter(|_| {
+            path.as_ref()
+                .is_some_and(|p| emulsion_io::photo_develop::supported(p))
+        }) else {
             return panel
                 .child(mono(
                     if self.batch.develop.busy {
-                        "Loading RAW controls…"
+                        "Loading Develop controls…"
                     } else {
-                        "Select a RAW photo to develop."
+                        "Select a photo to develop."
                     },
                     11.,
                     p.muted,
@@ -545,8 +590,55 @@ impl Workspace {
                 .into_any_element();
         };
         let path = path.unwrap();
+        if !self.batch.develop.presets_loaded {
+            self.batch.develop.presets_loaded = true;
+            cx.spawn(async move |this, cx| {
+                let files = cx
+                    .background_spawn(async { emulsion_io::lightroom_presets::installed() })
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.batch.develop.preset_files = files;
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        panel = panel.child(self.library_preset_bank(params, cx));
         let bins = self.batch.develop.histogram;
         let peak = bins.iter().copied().max().unwrap_or(1).max(1) as f32;
+        let rgb = self.batch.develop.rgb_histogram;
+        let rgb_peak = rgb.iter().flatten().copied().max().unwrap_or(1).max(1) as f32;
+        panel = panel
+            .child(
+                div()
+                    .h(px(48.))
+                    .flex()
+                    .items_end()
+                    .children((0..32).map(|bin| {
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_end()
+                            .children((0..3).map(move |c| {
+                                div()
+                                    .flex_1()
+                                    .h(px(45. * rgb[c][bin] as f32 / rgb_peak))
+                                    .bg(gpui_kit::rgb([0xdd6666, 0x66bb77, 0x6688dd][c]))
+                            }))
+                    })),
+            )
+            .child(
+                Checkbox::new("library-clipping")
+                    .label("Show clipping")
+                    .checked(self.batch.develop.clipping)
+                    .on_change(cx.listener(|this, value, _, cx| {
+                        this.batch.develop.clipping = *value;
+                        this.invalidate_library_preview();
+                        cx.notify();
+                    })),
+            );
+
         panel = panel
             .child(
                 div()
@@ -635,7 +727,51 @@ impl Workspace {
                     }
                 })),
         );
-        let fields: [(&str, f32, f32, f32, f32); 16] = [
+        let mut sections = div().flex().flex_wrap().gap_1();
+        for (index, title) in [
+            "Basic",
+            "Crop / lens",
+            "Curve",
+            "Mixer",
+            "Grading",
+            "Masks",
+            "Kelvin",
+            "History",
+            "Enhance",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sections = sections.child(
+                Button::new(("library-develop-section", index))
+                    .label(title)
+                    .small()
+                    .ghost()
+                    .selected(self.batch.develop.section == index)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.batch.develop.section = index;
+                        this.batch.develop.slider_key = None;
+                        cx.notify();
+                    })),
+            );
+        }
+        panel = panel.child(sections);
+        if self.batch.develop.section == 8 {
+            return panel
+                .child(self.library_enhance_panel(cx))
+                .into_any_element();
+        }
+        if self.batch.develop.section == 7 {
+            return panel
+                .child(self.library_history_panel(path, params, cx))
+                .into_any_element();
+        }
+        if self.batch.develop.section > 0 {
+            return panel
+                .child(self.library_advanced_panel(path, params, cx))
+                .into_any_element();
+        }
+        let fields: [(&str, f32, f32, f32, f32); 17] = [
             ("Exposure", params.exposure, -5., 5., 0.05),
             ("Contrast", params.contrast, -1., 1., 0.01),
             ("Highlights", -params.highlights, -1., 1., 0.01),
@@ -652,6 +788,13 @@ impl Workspace {
             ("Vignette", params.vignette, -1., 1., 0.01),
             ("Sharpening", params.sharpening, 0., 1., 0.01),
             ("Noise reduction", params.noise_reduction, 0., 1., 0.01),
+            (
+                "Sensor denoise (RAW)",
+                params.sensor_noise_reduction,
+                0.,
+                1.,
+                0.01,
+            ),
         ];
         if self.batch.develop.slider_key.as_ref() != Some(&(path.clone(), params)) {
             self.batch.develop.sliders.clear();
@@ -693,7 +836,8 @@ impl Workspace {
                             12 => params.dehaze = v,
                             13 => params.vignette = v,
                             14 => params.sharpening = v,
-                            _ => params.noise_reduction = v,
+                            15 => params.noise_reduction = v,
+                            _ => params.sensor_noise_reduction = v,
                         }
                         this.batch.develop.slider_key = Some((path, params));
                         this.library_adjust(params, cx);
@@ -735,10 +879,10 @@ impl Workspace {
                                 p.ink,
                             )),
                     )
-                    .child(
-                        Slider::new(&self.batch.develop.sliders[index].0)
-                            .disabled(self.batch.develop.saving),
-                    ),
+                    .child(Slider::new(&self.batch.develop.sliders[index].0).disabled(
+                        self.batch.develop.saving
+                            || (index == 16 && !emulsion_io::photo_develop::is_raw_photo(&path)),
+                    )),
             );
         }
         panel = panel
@@ -754,6 +898,7 @@ impl Workspace {
                                 temperature: 0.,
                                 tint: 0.,
                                 wb_override: None,
+                                kelvin: None,
                                 ..params
                             },
                             cx,
@@ -789,7 +934,7 @@ impl Workspace {
             )
             .child(
                 Button::new("library-raw-sync")
-                    .label("Sync to selected RAW photos")
+                    .label("Sync to selected photos")
                     .small()
                     .outline()
                     .disabled(
@@ -798,7 +943,9 @@ impl Workspace {
                                 .batch
                                 .items
                                 .iter()
-                                .filter(|i| i.selected && emulsion_io::raw::is_raw(&i.path))
+                                .filter(|i| {
+                                    i.selected && emulsion_io::photo_develop::supported(&i.path)
+                                })
                                 .count()
                                 < 2,
                     )
@@ -845,7 +992,7 @@ impl Workspace {
                 )
                 .child(
                     Button::new("library-load-preset")
-                        .label("Load preset…")
+                        .label("Import Lightroom / VSCO preset…")
                         .small()
                         .ghost()
                         .on_click(
@@ -876,6 +1023,16 @@ impl Workspace {
                         })),
                 ),
         );
+        if let Some(report) = &self.batch.develop.preset_report {
+            panel = panel.child(label("Imported preset", &p)).child(mono(
+                report.name.clone(),
+                11.,
+                p.ink,
+            ));
+            for warning in &report.warnings {
+                panel = panel.child(mono(warning.clone(), 10., p.muted));
+            }
+        }
         if let Some(source) = self
             .batch
             .develop
@@ -910,10 +1067,7 @@ impl Workspace {
             return;
         };
         let Some(mut params) = self.batch.develop.current_params(&path) else {
-            self.batch.note = Some((
-                "Select a RAW photo to apply a develop preset.".into(),
-                false,
-            ));
+            self.batch.note = Some(("Select a photo to apply a develop preset.".into(), false));
             cx.notify();
             return;
         };
@@ -929,10 +1083,12 @@ impl Workspace {
             }
             2 => {
                 params.saturation = -1.;
+                params.point_curves[0] = Default::default();
                 params.tone_curve = DevelopParams::MEDIUM_CONTRAST_CURVE;
                 params.smooth_curve = true;
             }
             _ => {
+                params.point_curves[0] = Default::default();
                 params.tone_curve = DevelopParams::STRONG_CONTRAST_CURVE;
                 params.smooth_curve = true;
             }
@@ -942,7 +1098,7 @@ impl Workspace {
 }
 
 impl Workspace {
-    fn library_schedule_save(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn library_schedule_save(&mut self, cx: &mut Context<Self>) {
         self.batch.develop.save_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(450))
@@ -987,7 +1143,7 @@ impl Workspace {
                     .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .child(mono("Before · original RAW", 10., p.muted))
+                    .child(mono("Before · original photo", 10., p.muted))
                     .child(div().flex_1().min_h_0().child(before)),
             )
             .child(
@@ -1027,7 +1183,7 @@ impl Workspace {
                 files: true,
                 directories: false,
                 multiple: false,
-                prompt: Some("Load Emulsion RAW preset".into()),
+                prompt: Some("Import preset (.xmp, .lrtemplate, .json)".into()),
             });
             cx.spawn(async move |_, _| {
                 rx.await
@@ -1044,7 +1200,7 @@ impl Workspace {
                     if save {
                         raw_settings::save_preset(params, &file).map(|_| None)
                     } else {
-                        raw_settings::load_preset(&file).map(Some)
+                        emulsion_io::lightroom_presets::load(&file, params).map(Some)
                     }
                 })
                 .await;
@@ -1060,7 +1216,8 @@ impl Workspace {
                             && this.batch.develop.current_params(&path) == Some(params)
                             && !this.batch.develop.saving
                         {
-                            this.library_adjust(loaded, cx);
+                            this.library_adjust(loaded.params, cx);
+                            this.batch.develop.preset_report = Some(loaded);
                         } else {
                             this.batch.note = Some((
                                 "Preset not applied because the active photo changed.".into(),
@@ -1129,5 +1286,30 @@ mod tests {
         assert!(!state.dirty());
         state.drafts.insert(path, baseline);
         assert!(state.dirty(), "undoing a saved edit must also be saved");
+    }
+}
+
+pub(super) fn rgb_histogram(rgba: &[u8]) -> [[u32; 32]; 3] {
+    let mut bins = [[0; 32]; 3];
+    for p in rgba.as_chunks::<4>().0 {
+        if p[3] > 0 {
+            for c in 0..3 {
+                bins[c][p[c] as usize / 8] += 1;
+            }
+        }
+    }
+    bins
+}
+/// Input is display BGRA. This overlay is never written into saved edits/export.
+pub(super) fn clipping_overlay(bgra: &mut [u8]) {
+    for p in bgra.as_chunks_mut::<4>().0 {
+        if p[3] == 0 {
+            continue;
+        }
+        if p[..3].contains(&255) {
+            p[..3].copy_from_slice(&[0, 0, 255]);
+        } else if p[..3].iter().all(|v| *v == 0) {
+            p[..3].copy_from_slice(&[255, 0, 0]);
+        }
     }
 }

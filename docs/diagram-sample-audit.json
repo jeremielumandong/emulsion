@@ -7,7 +7,7 @@
     "candidates": 623,
     "imported": 621,
     "pages": 821,
-    "import_ms": 6534,
+    "import_ms": 5771,
     "movement_undo_passed_files": 621,
     "movement_undo_failures": [],
     "failures_by_reason": {
@@ -15,78 +15,74 @@
       "invalid manifest: No mxGraphModel found.": 1
     },
     "notes_by_frequency": {
-      "Canvas expanded to include drawing content outside the original paper size.": 318,
-      "Style shadow requires manual review after import.": 137,
-      "Style rotation requires manual review after import.": 97,
-      "Additional connector labels remain editable text; their relative path positions need review.": 83,
+      "Canvas expanded to include drawing content outside the original paper size.": 322,
       "External image URLs are not embedded; replace the image from a local file.": 50,
       "Unsupported color \"default\"; retained the default.": 31,
       "Embedded artwork is retained; save the native project to preserve its source.": 31,
       "Style sketch requires manual review after import.": 21,
-      "Shape \"waypoint\" imported as an editable rectangle.": 21,
-      "Connector line jumps are not rendered.": 19,
-      "Shape \"umlFrame\" imported as an editable rectangle.": 17,
       "Unsupported color \"inherit\"; retained the default.": 17,
       "SVG retained as scalable artwork rather than separate editable paths: unsupported file type: SVG clipping, masks or filters require a retained appearance": 16,
-      "Shape \"tableRow\" imported as an editable rectangle.": 11,
       "Shape \"mxgraph.mockup.forms.searchBox\" imported as an editable rectangle.": 10,
-      "Shape \"cube\" imported as an editable rectangle.": 9,
       "HTML table labels retain editable rows, columns and text formatting; browser table sizing is approximated.": 9,
-      "Shape \"trapezoid\" imported as an editable rectangle.": 8,
       "Shape \"mxgraph.basic.partConcEllipse\" imported as an editable rectangle.": 8,
-      "Shape \"mxgraph.infographic.ribbonSimple\" imported as an editable rectangle.": 8
+      "Shape \"mxgraph.infographic.ribbonSimple\" imported as an editable rectangle.": 8,
+      "Shape \"mxgraph.mockup.graphics.simpleIcon\" imported as an editable rectangle.": 7,
+      "Shape \"mxgraph.mockup.graphics.iconGrid\" imported as an editable rectangle.": 6,
+      "Shape \"mxgraph.mockup.forms.comboBox\" imported as an editable rectangle.": 5,
+      "Shape \"mxgraph.floorplan.stairs\" imported as an editable rectangle.": 5,
+      "Shape \"mxgraph.basic.arc\" imported as an editable rectangle.": 5,
+      "Shape \"mxgraph.infographic.cylinder\" imported as an editable rectangle.": 5,
+      "Unsupported color \"strokeColor\"; retained the default.": 5,
+      "Shape \"mxgraph.ios7ui.horLines\" imported as an editable rectangle.": 5,
+      "Shape \"dimension\" imported as an editable rectangle.": 4
     }
   },
   "visio": {
     "candidates": 4481,
-    "imported": 3518,
-    "pages": 37475,
-    "import_ms": 1127490,
-    "movement_undo_passed_files": 3518,
+    "imported": 3695,
+    "pages": 61660,
+    "import_ms": 1753355,
+    "movement_undo_passed_files": 3695,
     "movement_undo_failures": [],
     "failures_by_reason": {
       "invalid manifest: No SVG drawings were produced by librevisio": 7,
-      "invalid manifest: Visio cell LinePattern has no finite evaluated value.": 2,
-      "invalid manifest: XML element or depth limit exceeded.": 9,
+      "invalid manifest: path data must start with M": 1,
       "invalid manifest: This file contains legacy binary Visio data despite its extension. Convert it in Visio to a real .vsdx, .vssx, or .vstx package before import.": 3,
-      "invalid manifest: Invalid Visio page dimensions.": 8,
+      "invalid manifest: XML element or depth limit exceeded.": 6,
+      "invalid manifest: Invalid Visio page dimensions.": 2,
       "invalid manifest: Empty or oversized legacy Visio file": 448,
-      "invalid manifest: Converted Visio file exceeds 100 pages; split the source library": 88,
       "invalid manifest: Librevisio could not convert this file, or output exceeded 64 MiB": 40,
-      "unsupported file type: SVG has an invalid size": 37,
-      "invalid manifest: A diagram must contain 1\u2013100 pages.": 33,
       "invalid manifest: Diagram archive exceeds its decoded size limit.": 4,
+      "invalid manifest: Project exceeds the total page area limit.": 2,
       "invalid manifest: Invalid shape size or label.": 8,
       "unsupported file type: SVG data parsing failed cause a non-XML character '\\u{14}' found at 80:1": 1,
-      "invalid manifest: Visio cell LineWeight has no finite evaluated value.": 14,
-      "invalid manifest: Visio cell LineColorTrans has no finite evaluated value.": 2,
-      "invalid manifest: Missing Visio master relationship.": 2,
-      "invalid manifest: Visio cell FillPattern has no finite evaluated value.": 2,
+      "unsupported file type: SVG has an invalid size": 8,
       "invalid manifest: Embedded image exceeds 32 MiB": 1,
+      "invalid manifest: Missing Visio master relationship.": 1,
       "not a valid archive: invalid Zip archive: Could not find EOCD": 253,
       "invalid manifest: Malformed XML document.": 1
     },
     "notes_by_frequency": {
-      "Legacy Visio converted locally with librevisio. Vector artwork is retained; original connector bindings and Visio formulas are not available in SVG output.": 3200,
-      "Visio stencil masters are imported as separate editable pages.": 214,
-      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: Visio cell LineWeight has no finite evaluated value.": 185,
-      "Unbound or partially bound Visio lines remain editable vectors; reconnect them to enable automatic routing.": 175,
-      "Some objects extend outside the page; enlarge the canvas to include them.": 110,
-      "Embedded Visio OLE/foreign objects use placeholders; their graphics need review.": 75,
-      "Visio geometry EllipticalArcTo uses its endpoint as a straight segment.": 60,
-      "Rotated outlines are preserved; review label alignment and ports.": 54,
-      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: path data must start with M": 48,
-      "Visio geometry PolylineTo uses its endpoint as a straight segment.": 39,
-      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: Visio cell FillPattern has no finite evaluated value.": 24,
-      "Visio geometry NURBSTo uses its endpoint as a straight segment.": 24,
-      "Shapes without supported geometry use editable outlines based on their bounds.": 22,
+      "Legacy Visio converted locally with librevisio. Vector artwork is retained; original connector bindings and Visio formulas are not available in SVG output.": 3205,
+      "Visio stencil masters are imported as separate editable pages.": 347,
+      "Unbound or partially bound Visio lines remain editable vectors; reconnect them to enable automatic routing.": 253,
+      "Some objects extend outside the page; enlarge the canvas to include them.": 239,
+      "Embedded Visio OLE/foreign objects use placeholders; their graphics need review.": 187,
+      "Theme-dependent Visio colors without evaluated RGB values use a default color.": 167,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: path data must start with M": 166,
+      "Rotated outlines are preserved; review label alignment and ports.": 114,
+      "Shapes without supported geometry use editable outlines based on their bounds.": 39,
+      "This stencil package contains drawing pages instead of masters; its pages were imported.": 24,
       "Skipped 1 empty converter placeholder pages.": 21,
-      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: Shape or graph size limit exceeded.": 21,
-      "Visio geometry RelEllipticalArcTo uses its endpoint as a straight segment.": 19,
-      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: XML element or depth limit exceeded.": 18,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: XML element or depth limit exceeded.": 21,
+      "NURBS has unevaluated or invalid knots; endpoint retained.": 19,
+      "Skipped 45 empty converter placeholder pages.": 18,
+      "Recovered 1 converter page dimensions from vector bounds.": 17,
       "Skipped 3 empty converter placeholder pages.": 17,
-      "Theme-dependent Visio colors without evaluated RGB values use a default color.": 14,
-      "Skipped 4 empty converter placeholder pages.": 11
+      "Visio decorative line patterns use a simple editable dash.": 14,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: Invalid Visio page dimensions.": 14,
+      "Skipped 4 empty converter placeholder pages.": 11,
+      "Skipped 2 empty converter placeholder pages.": 10
     }
   },
   "viewport_benchmark": {
@@ -227,5 +223,105 @@
     "project_export": 5,
     "failed": 0,
     "note": "Filtered suites overlap; counts are not unique tests. Executed against the current workspace, not a full-workspace certification."
+  },
+  "previous_corpus_counts": {
+    "drawio": {
+      "candidates": 623,
+      "imported": 621,
+      "pages": 821
+    },
+    "visio": {
+      "candidates": 4481,
+      "imported": 3518,
+      "pages": 37475
+    }
+  },
+  "corpus_validation": "Full draw.io and Visio import/movement/undo passes, followed by a complete draw.io rerun for caption/BPMN fixes and a failed-file Visio retry for page-based .vssx packages. Per-file records contain the latest result.",
+  "interactive_controls": {
+    "default_style": "White fill, 1 px charcoal outlines, centered dark text; subtle rounded process corners; soft teal/blue/charcoal presets",
+    "object_menu": [
+      "arrange",
+      "align/distribute",
+      "group/ungroup",
+      "lock",
+      "style copy/paste",
+      "notes",
+      "links",
+      "alt text",
+      "selection export"
+    ],
+    "connector_toolbar": [
+      "straight/elbow/bendy/cyclical routes",
+      "line color/width",
+      "dash patterns",
+      "start/end markers",
+      "reverse",
+      "endpoint size",
+      "corner radius",
+      "crossing bridges",
+      "label editing"
+    ],
+    "document_toolbox": "Automatically derives reusable editable shapes from the active page; background previews, search, pagination, click/drag placement; excludes original attached connectors and container contents",
+    "mcp": "Shares native commands for annotations, appearance, connector options and document stencil discovery/placement",
+    "not_implemented": [
+      "double connector strokes",
+      "label pills",
+      "curved-route crossing bridges"
+    ]
+  },
+  "latest_core_tests": {
+    "passed": 317,
+    "ignored": 1,
+    "log": "/tmp/diagram-complete-core.log"
+  },
+  "latest_drawio_tests": {
+    "passed": 36,
+    "failed": 0,
+    "log": "/tmp/diagram-drawio-complete.log"
+  },
+  "latest_mcp_diagram_tests": {
+    "passed": 15,
+    "failed": 0,
+    "log": "/tmp/diagram-verified-ui-mcp.log"
+  },
+  "gpu_vector_validation": {
+    "shapes": 1000,
+    "vector_objects": 4997,
+    "adapter": "AMD Radeon RX 7700 XT (RADV NAVI32)",
+    "movement_changed_visible_pixels": true,
+    "command_ms_p50_p95": [
+      54.15917,
+      74.451604
+    ],
+    "scene_update_ms_p50_p95": [
+      9.453642,
+      14.266496
+    ],
+    "gpu_completion_ms_p50_p95": [
+      4.819554,
+      6.692043
+    ],
+    "command_to_gpu_completion_ms_p50_p95": [
+      68.70388,
+      96.871831
+    ],
+    "conditions": "Concurrent release builds and test compilation; not comparable to idle timings or an end-to-end FPS claim",
+    "log": "/tmp/diagram-gpu-complete.log"
+  },
+  "latest_ui_diagram_tests": {
+    "passed": 16,
+    "failed": 0,
+    "log": "/tmp/diagram-ui-confirmed.log"
+  },
+  "delivery": {
+    "appimage": "/home/arkane/Applications/Emulsion.AppImage",
+    "sha256": "9355598ed467de8b9dd341fb4f2bc37133c21d7b6ef6d98ee98e72b91517f5b6",
+    "backup": "/home/arkane/Applications/Emulsion.AppImage.bak-diagram-20260928T101318Z",
+    "installation": "Atomic AppImage replacement; existing running process retained. Restart to load the new version."
+  },
+  "native_window_benchmark": {
+    "completed": false,
+    "note": "Run did not produce presentation measurements. Fixed the diagram benchmark host to use the fullscreen surface rather than a fixed 1000x700 editor; native frame latency remains unverified.",
+    "log": "/tmp/diagram-native-controls.log"
   }
 }

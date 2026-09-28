@@ -317,9 +317,6 @@ impl EditorView {
                     .items_center()
                     .gap_1()
                     .child(self.ask_ai_button(p, cx))
-                    .when(self.editor.kind().is_none(), |actions| {
-                        actions.child(self.workspace_menu(cx))
-                    })
                     .child(control("save", "Save").outline().on_click(cx.listener(
                         |_, _, window, cx| {
                             window.dispatch_action(Box::new(crate::actions::Save), cx)

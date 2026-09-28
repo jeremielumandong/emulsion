@@ -18,6 +18,7 @@ use std::{
 mod legacy_visio;
 mod lucid;
 mod visio;
+mod visio_curves;
 mod xml;
 pub use crate::drawio::Imported;
 const MAX_FILE: u64 = 64 << 20;
@@ -383,8 +384,9 @@ impl Scene {
     }
 }
 fn finish(scenes: Vec<Scene>, mut warnings: BTreeSet<String>) -> Result<Imported> {
-    if scenes.is_empty() || scenes.len() > 100 {
-        return Err(error("A diagram must contain 1–100 pages."));
+    if scenes.is_empty() { return Err(error("Diagram contains no drawing pages or stencil masters.")); }
+    if scenes.len() > emulsion_core::project::MAX_PAGES {
+        return Err(error("Diagram page count exceeds the project limit."));
     }
     let pages = scenes
         .into_iter()

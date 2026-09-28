@@ -828,3 +828,115 @@ fn library_kit_filter_checkboxes_apply_requested_values(cx: &mut TestAppContext)
     cx.run_until_parked();
     cx.update(|_, cx| assert_eq!(ws.read(cx).batch.items.len(), 5));
 }
+
+#[gpui_kit::test]
+fn library_rendered_develop_presets_snapshots_and_output_share_mcp(cx: &mut TestAppContext) {
+    use serde_json::json;
+    let fixture = Fixture::new();
+    let paths = fixture.pngs();
+    let original = std::fs::read(&paths[0]).unwrap();
+    let root = fixture.0.join("catalog");
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1700.), gpui_kit::px(1100.)));
+    cx.update(|_, cx| ws.update(cx, |ws, _| ws.screen = Screen::Batch));
+    cx.run_until_parked();
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "import_library",
+        json!({"folder":fixture.0}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "select_library_photos",
+        json!({"paths":[paths[0]],"active":paths[0]}),
+    ));
+    let result = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"adjust","settings":{"exposure":0.5,"crop":[0.,0.,0.5,1.]}}),
+    ));
+    assert_eq!(result["develop"]["dirty"], false);
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"snapshot","name":"Crop"}),
+    ));
+    let preset = fixture.0.join("film.xmp");
+    std::fs::write(&preset,r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="1.25" crs:CameraProfile="VSCO custom profile"/>"#).unwrap();
+    let imported = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"load_preset","path":preset}),
+    ));
+    assert_eq!(imported["develop"]["settings"]["exposure"], 1.25);
+    assert!(
+        imported["preset_import"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("VSCO"))
+    );
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"restore_snapshot","name":"Crop"}),
+    ));
+    let output = fixture.0.join("out");
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "export_library",
+        json!({"out_dir":output,"format":"tif","settings":{"long_edge":2,"depth":16,"metadata":"camera"}}),
+    ));
+    let exported = image::open(output.join("photo-0.tif")).unwrap();
+    assert_eq!((exported.width(), exported.height()), (1, 2));
+    assert_eq!(std::fs::read(&paths[0]).unwrap(), original);
+    for section in [
+        "basic", "crop", "curve", "mixer", "grading", "masks", "kelvin", "history", "enhance",
+    ] {
+        tool_json(library_tool(
+            &ws,
+            cx,
+            &root,
+            "set_library_view",
+            json!({"develop_section":section}),
+        ));
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+fn library_assistant_host_does_not_create_a_photo_tab(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.tabs.clear();
+            ws.editor = None;
+            ws.screen = Screen::Batch;
+            ws.library_ask(window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let ws = ws.read(cx);
+        assert!(ws.tabs.is_empty());
+        assert!(ws.editor.is_none());
+        let host = ws.batch.assistant_host.as_ref().unwrap().read(cx);
+        assert!(host.library_only);
+        assert!(host.library_workspace.is_some());
+        assert!(host.ask.is_some());
+    });
+}

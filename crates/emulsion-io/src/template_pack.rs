@@ -154,7 +154,7 @@ pub fn read_stencil_source(path: &Path) -> Result<(Pack, Vec<String>)> {
             vec![path.to_path_buf()]
         };
         if paths.is_empty() || paths.len() > emulsion_core::project::MAX_PAGES {
-            return Err(error("Choose 1–100 SVG files in one folder."));
+            return Err(error("SVG folder entry count exceeds the project page limit."));
         }
         let mut pages = Vec::new();
         for (index, path) in paths.drain(..).enumerate() {

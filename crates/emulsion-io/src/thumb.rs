@@ -16,6 +16,7 @@ fn decode<R: BufRead + Seek>(reader: ImageReader<R>) -> Result<DynamicImage> {
 }
 
 fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
+    if crate::photo_develop::is_virtual(path) || (!crate::raw::is_raw(path) && crate::photo_develop::supported(path) && crate::raw_settings::sidecar_path(path)?.exists()) {return composite(&crate::open(path)?,width,height);}
     if crate::diagram_import::is_diagram(path) {
         return composite(
             &crate::diagram_import::read(path)?.project.pages[0].doc,
@@ -130,7 +131,7 @@ fn cache_path(path: &Path, width: u32, height: u32) -> Option<std::path::PathBuf
     use std::io::Read;
     let meta = std::fs::metadata(path).ok()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    "thumb-v3-raw-sidecar".hash(&mut h);
+    "thumb-v4-photo-sidecar".hash(&mut h);
     path.hash(&mut h);
     meta.len().hash(&mut h);
     meta.modified()
@@ -143,8 +144,8 @@ fn cache_path(path: &Path, width: u32, height: u32) -> Option<std::path::PathBuf
     match std::fs::File::open(&sidecar) {
         Ok(file) => {
             let mut bytes = Vec::new();
-            file.take(64 * 1024 + 1).read_to_end(&mut bytes).ok()?;
-            if bytes.len() > 64 * 1024 {
+            file.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes).ok()?;
+            if bytes.len() > 4 * 1024 * 1024 {
                 return None;
             }
             Some(bytes).hash(&mut h);

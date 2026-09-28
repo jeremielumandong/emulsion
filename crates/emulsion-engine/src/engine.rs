@@ -56,6 +56,7 @@ pub struct Engine {
     /// The document structure this program was compiled from, so a reload can
     /// tell a pixel edit from a change that needs a new program.
     signature: Vec<crate::canvas::NodeSig>,
+    diagram_doc: Option<Document>,
     vello: bool,
     paint_node: Option<NodeId>,
 }
@@ -87,7 +88,11 @@ impl Engine {
         gpu.ensure_alive()?;
         let t = Instant::now();
         // Room for painting a full layer's worth of new tiles.
-        let headroom = doc.width.div_ceil(256) * doc.height.div_ceil(256) + 64;
+        let headroom = if paint_node.is_none() && vello && crate::canvas::diagram_vector_supported(doc) {
+            1 // Native diagram vectors need no document-sized raster paint reserve.
+        } else {
+            doc.width.div_ceil(256) * doc.height.div_ceil(256) + 64
+        };
         let (canvas, atlas) = Canvas::compile(doc, &gpu, paint_node, headroom, vello)?;
         let mut compositor = Compositor::new(gpu.clone());
         compositor.set_program(&canvas);
@@ -135,6 +140,7 @@ impl Engine {
             hud: Vec::new(),
             pending: None,
             signature: Canvas::signature(doc),
+            diagram_doc: (vello && crate::canvas::diagram_vector_supported(doc)).then(||doc.clone()),
             vello,
             paint_node,
         })
@@ -160,6 +166,22 @@ impl Engine {
         vello: bool,
     ) -> anyhow::Result<()> {
         self.gpu.ensure_alive()?;
+        // Moving native diagram paths changes neither compositing nor raster
+        // sources. Avoid rebuilding a composite tree merely to discover that.
+        if vello && self.vello && self.paint_node==paint_node
+            && let Some(previous)=self.diagram_doc.as_ref()
+            && let Some(changes)=diagram_vector_changes(previous,doc)
+        {
+            for (id,kind) in changes {
+                for item in self.canvas.runs.iter_mut().flatten().filter(|item|item.node==id){item.kind=kind.clone();}
+                self.vectors.edit(id,|old|*old=kind);
+            }
+            self.diagram_doc=Some(doc.clone());
+            // A later structural edit must not compare against a stale tree.
+            self.signature.clear();
+            return Ok(());
+        }
+        self.diagram_doc=None;
         // Pixel-only edits keep the program and tile tables. Masked or placed
         // sources rebake their changed pixels before replacing atlas tiles.
         let t0 = Instant::now();
@@ -229,6 +251,7 @@ impl Engine {
         // live only there, so without this they never reach the screen.
         // Re-encoding is skipped for documents with no vector content, which
         // is every purely raster document.
+        self.diagram_doc=(vello && crate::canvas::diagram_vector_supported(doc)).then(||doc.clone());
         let t_recompile = t0.elapsed().as_secs_f64() * 1e3;
         let t1 = Instant::now();
         let resynced = vectors_before != self.canvas.vector_signature();
@@ -512,5 +535,38 @@ impl Offscreen {
             out.extend_from_slice(&data[y * padded as usize..y * padded as usize + row as usize]);
         }
         Ok(out)
+    }
+}
+
+/// None means a full compile is necessary; empty means no visual changes.
+fn diagram_vector_changes(before:&Document,after:&Document)->Option<Vec<(NodeId,crate::canvas::VectorKind)>> {
+    use emulsion_core::NodeKind;
+    use crate::canvas::{VectorKind,path_supported,text_supported};
+    if before.width!=after.width||before.height!=after.height||before.blend_space!=after.blend_space||before.design!=after.design||before.nodes.len()!=after.nodes.len(){return None;}
+    let mut changed=Vec::new();
+    for (a,b) in before.nodes.iter().zip(&after.nodes){
+        if a==b {continue;}
+        let mut metadata=a.clone();metadata.kind=b.kind.clone();if metadata!=*b{return None;}
+        let kind=match (&a.kind,&b.kind){
+            (NodeKind::Path{..},NodeKind::Path{path,style,..}) if path_supported(style)=>VectorKind::Path{path:path.clone(),style:*style},
+            (NodeKind::Text{..},NodeKind::Text{spec,..}) if text_supported(spec)=>VectorKind::Text{spec:spec.clone()},
+            _=>return None,
+        };
+        changed.push((b.id,kind));
+    }
+    Some(changed)
+}
+
+#[cfg(test)]
+mod diagram_updates {
+    use super::*;
+    #[test]
+    fn diagram_movement_updates_vectors_but_group_opacity_requires_recompile(){
+        let doc=emulsion_core::diagram_library::TEMPLATES[0].build().unwrap();
+        let id=*doc.diagram.as_ref().unwrap().shapes.keys().next().unwrap();
+        let mut e=emulsion_core::Editor::new(doc.clone(),None);
+        e.execute(emulsion_core::Command::TranslateNode{id,dx:7.,dy:3.}).unwrap();
+        let changes=diagram_vector_changes(&doc,&e.doc).unwrap();assert!(!changes.is_empty());assert!(changes.len()<e.doc.nodes.len());
+        e.doc.node_mut(id).unwrap().opacity=0.5;assert!(diagram_vector_changes(&doc,&e.doc).is_none());
     }
 }

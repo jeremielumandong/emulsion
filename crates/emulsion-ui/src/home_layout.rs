@@ -35,6 +35,87 @@ fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
 }
 
 impl Workspace {
+    pub(super) fn home_empty(&self, cx: &Context<Self>) -> AnyElement {
+        let filtered = !self.home_search_query(cx).trim().is_empty()
+            || self.home_state.projects.kind.is_some()
+            || self.home_state.filter != HomeFilter::All
+            || self.home_state.folder.is_some();
+        let trash = self.home_state.projects.trash;
+        let (title, description, glyph) = if filtered {
+            (
+                "No matching files",
+                "Try another search or clear filters in this project.",
+                "search",
+            )
+        } else if trash {
+            (
+                "Trash is empty",
+                "Files moved to Trash will appear here.",
+                "trash",
+            )
+        } else if self.home_state.projects.folder.is_some() {
+            (
+                "This project is ready",
+                "Open a file or create something new to add work to this project.",
+                "folder-open",
+            )
+        } else {
+            (
+                "Your work starts here",
+                "Open a photo or start a new document. Saved work will appear here.",
+                "image",
+            )
+        };
+        let mut state = crate::widgets::empty_state(glyph, title, description);
+        if filtered {
+            state = state.child(
+                Button::new("home-empty-clear")
+                    .label("Clear filters")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.home_state.projects.kind = None;
+                        this.home_state.filter = HomeFilter::All;
+                        this.home_state.folder = None;
+                        this.home_state.page = 0;
+                        if let Some((input, _)) = &this.home_state.search {
+                            input.update(cx, |input, cx| input.set_value("", window, cx));
+                        }
+                        cx.notify();
+                    })),
+            );
+        } else if !trash {
+            state = state.child(
+                crate::widgets::command_bar("home-empty-actions", "Start a document")
+                    .justify_center()
+                    .child(
+                        Button::new("home-empty-open")
+                            .label("Open a file…")
+                            .small()
+                            .primary()
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(crate::actions::Open), cx)
+                            }),
+                    )
+                    .child(
+                        Button::new("home-empty-new")
+                            .label("New document…")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_new_canvas_kind(CanvasKind::Photo, window, cx)
+                            })),
+                    ),
+            );
+        }
+        div()
+            .id("home-empty")
+            .test_support()
+            .w_full()
+            .child(state)
+            .into_any_element()
+    }
+
     pub(super) fn home_navigation_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
         let owner = cx.weak_entity();
         div()
@@ -670,6 +751,8 @@ impl Workspace {
                         this.open_cloud_home(window, cx);
                     })),
             );
+        let mut filters =
+            crate::widgets::command_bar("home-kind-toolbar", "Filter by document type");
         for (i, kind) in [
             None,
             Some(CanvasKind::Photo),
@@ -681,7 +764,7 @@ impl Workspace {
         .enumerate()
         {
             let label = kind.map_or("All", CanvasKind::label);
-            row = row.child(
+            filters = filters.child(
                 Button::new(("home-kind", i))
                     .accessibility_label(label)
                     .xsmall()
@@ -697,28 +780,31 @@ impl Workspace {
                     })),
             );
         }
-        row = row.child(
-            button(
-                "home-sort",
-                if self.home_state.sort_name {
-                    "Name ↑"
-                } else {
-                    "Last opened ↓"
-                },
-            )
-            .h(px(24.))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.home_state.sort_name = !this.home_state.sort_name;
-                cx.notify();
-            })),
-        );
+        row = row.child(filters);
+        let mut view = crate::widgets::command_bar("home-view-toolbar", "File view and sorting")
+            .child(
+                button(
+                    "home-sort",
+                    if self.home_state.sort_name {
+                        "Name ↑"
+                    } else {
+                        "Last opened ↓"
+                    },
+                )
+                .h(px(24.))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.home_state.sort_name = !this.home_state.sort_name;
+                    cx.notify();
+                })),
+            );
         for (id, glyph, rows) in [
             ("home-grid", "layout-grid", false),
             ("home-list", "list", true),
         ] {
-            row = row.child(
+            view = view.child(
                 Button::new(id)
                     .accessibility_label(if rows { "List view" } else { "Grid view" })
+                    .tooltip(if rows { "List view" } else { "Grid view" })
                     .xsmall()
                     .outline()
                     .h(px(24.))
@@ -727,7 +813,7 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, _, cx| this.set_home_rows(rows, cx))),
             );
         }
-        row = row.child(
+        view = view.child(
             button("home-details", "Details")
                 .h(px(24.))
                 .selected(self.home_state.details)
@@ -736,6 +822,7 @@ impl Workspace {
                     cx.notify();
                 })),
         );
+        row = row.child(view);
         if !self.home_state.checked.is_empty() {
             row = row
                 .child(

@@ -224,3 +224,41 @@ pub fn document(xml: &str) -> Result<Document> {
     doc.validate().map_err(|e| error(e.to_string()))?;
     Ok(doc)
 }
+
+/// Converter SVGs sometimes contain valid geometry but a zero-sized page.
+/// Recover the page from visible vector bounds, retaining the vector source.
+pub(crate) fn fitted_document(xml:&str)->Result<Document>{
+    use quick_xml::{Reader,Writer,events::{Event,BytesStart}};
+    fn root(xml:&str,w:f64,h:f64,view:Option<[f64;4]>)->Result<String>{
+        let mut reader=Reader::from_str(xml);
+        loop {match reader.read_event().map_err(|e|error(e.to_string()))?{
+            Event::Start(e) if e.local_name().as_ref()=="svg"=>{
+                let name=e.name().as_ref().to_string();let mut start=BytesStart::new(name);
+                for attr in e.attributes(){let a=attr.map_err(|e|error(e.to_string()))?;if !matches!(a.key.as_ref(),"width"|"height"|"viewBox"){start.push_attribute(a);}}
+                let width=w.to_string();let height=h.to_string();start.push_attribute(("width",width.as_str()));start.push_attribute(("height",height.as_str()));
+                let view=view.map(|b|format!("{} {} {} {}",b[0],b[1],b[2],b[3]));if let Some(view)=view.as_ref(){start.push_attribute(("viewBox",view.as_str()));}
+                let mut writer=Writer::new(Vec::new());writer.write_event(Event::Start(start))?;
+                let mut out=String::from_utf8(writer.into_inner()).map_err(|e|error(e.to_string()))?;out.push_str(&xml[reader.buffer_position() as usize..]);return Ok(out);
+            }
+            Event::Eof=>return Err(error("SVG has no root")),_=>{}
+        }}
+    }
+    let provisional=root(xml,1000.,1000.,None)?;
+    let tree=usvg::Tree::from_str(&provisional,&options()).map_err(|e|error(e.to_string()))?;
+    if tree.root().children().is_empty(){return Err(error("SVG has no visible artwork"));}
+    let b=tree.root().abs_layer_bounding_box();
+    let (w,h)=(b.width().ceil().max(1.) as f64,b.height().ceil().max(1.) as f64);
+    crate::import::check_size(w as u32,h as u32)?;
+    document(&root(xml,w,h,Some([b.x() as f64,b.y() as f64,w,h]))?)
+}
+
+#[cfg(test)]
+mod fit_tests {
+    #[test]
+    fn zero_converter_page_uses_vector_ink_bounds(){
+        let doc=super::fitted_document(r#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"><rect x="20" y="30" width="80" height="40" fill="red"/></svg>"#).unwrap();
+        assert_eq!((doc.width,doc.height),(80,40));
+        let pixels=crate::svg_viewport::SvgViewport::new(&doc).unwrap().render((80,40),[1.,0.,0.,1.,0.,0.]).unwrap();
+        assert!(pixels.chunks_exact(4).all(|p|p==[0,0,255,255]));
+    }
+}

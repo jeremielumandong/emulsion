@@ -458,3 +458,20 @@ fn responsive_clips_keep_native_text_and_invalidate_canvas_signature() {
         "clip changes rebuild GPU program instead of reusing stale pixels"
     );
 }
+
+#[test]
+fn ordinary_diagram_groups_share_one_vector_target(){
+    use emulsion_core::diagram::{Builder,ShapeKind};
+    let mut b=Builder::new(1200,900).unwrap();
+    for i in 0..1000{b.add_shape(ShapeKind::Process,[10.+(i%40)as f64*25.,10.+(i/40)as f64*30.,20.,20.],"n").unwrap();}
+    let doc=b.finish().unwrap();
+    let compile=|doc:&Document|{
+        let mut c=Compiler{vectors:vector_nodes(doc),names:HashMap::new(),width:doc.width,height:doc.height,space:doc.blend_space,sources:Vec::new(),ops:Vec::new(),runs:Vec::new(),open_run:None,unsupported:Vec::new(),rasterized:Vec::new(),alpha_slots:0,paint:None,paint_node:None,baked_prev:Vec::new(),baked_new:Vec::new(),_doc:doc};
+        c.list(&doc.composite_tree().nodes,0);(c.runs.len(),c.ops)
+    };
+    let (runs,ops)=compile(&doc);assert_eq!(runs,1);assert!(!ops.iter().any(|o|matches!(o,Op::Push{..})));
+    let mut translucent=doc.clone();let group=*translucent.diagram.as_ref().unwrap().shapes.keys().next().unwrap();translucent.node_mut(group).unwrap().opacity=0.5;
+    let (runs,ops)=compile(&translucent);assert!(runs>1);assert!(ops.iter().any(|o|matches!(o,Op::Push{..})));
+    translucent.node_mut(group).unwrap().blend=BlendMode::Normal;
+    let (_,ops)=compile(&translucent);assert!(ops.iter().any(|o|matches!(o,Op::Push{isolated:true})));
+}

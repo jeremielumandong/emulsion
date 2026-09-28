@@ -44,7 +44,7 @@ fn developed(doc: &Document, params: DevelopParams) -> Document {
     Command::DevelopRaw {
         id: raw.node_id,
         raster: Arc::new(source.develop_with(&params).unwrap()),
-        params,
+        params: Box::new(params),
     }
     .apply(&mut result)
     .unwrap();

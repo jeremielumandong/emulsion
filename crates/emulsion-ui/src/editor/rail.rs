@@ -378,6 +378,10 @@ fn icon_bytes(id: &str) -> &'static [u8] {
         "library" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/library.svg")
         }
+        "lock" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/lock.svg"),
+        "unlock" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/lock-open.svg"),
+        "copy" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/copy.svg"),
+        "ellipsis" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/ellipsis.svg"),
         "link" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/link.svg"),
         "trash" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/trash.svg"),
         "file-plus" => {

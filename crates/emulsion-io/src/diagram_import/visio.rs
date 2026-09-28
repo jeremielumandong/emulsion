@@ -38,6 +38,9 @@ fn number(node: &Xml, master: Option<&Xml>, key: &str, default: f64) -> Result<f
     let Some(v) = value(node, key).or_else(|| master.and_then(|n| value(n, key))) else {
         return Ok(default);
     };
+    if v.eq_ignore_ascii_case("Themed") {
+        return Ok(master.and_then(|m|value(m,key)).and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()&&v.abs()<=1e6).unwrap_or(default));
+    }
     v.parse::<f64>()
         .ok()
         .filter(|v| v.is_finite() && v.abs() <= 1e6)
@@ -203,7 +206,8 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
             .iter()
             .any(|ext| e.eq_ignore_ascii_case(ext))
     });
-    if !stencil_package && package.entries.contains_key("visio/pages/pages.xml") {
+    if (!stencil_package || resources.masters.is_empty()) && package.entries.contains_key("visio/pages/pages.xml") {
+        if stencil_package { warnings.insert("This stencil package contains drawing pages instead of masters; its pages were imported.".into()); }
         let pages = xml::parse(package.text("visio/pages/pages.xml")?)?;
         let rels = relationships(&package, "visio/pages/pages.xml")?;
         let mut page_ids = HashSet::new();
@@ -383,7 +387,7 @@ fn shape_into(
     if depth >= 64 {
         return Err(error("Visio master/group nesting exceeds 64 levels."));
     }
-    if scene.shapes.len() + pending.len() >= 3000 {
+    if scene.shapes.len() + pending.len() >= diagram::MAX_SHAPES + diagram::MAX_EDGES {
         return Err(error("Visio object limit exceeded."));
     }
     let master = resources
@@ -397,6 +401,9 @@ fn shape_into(
         return Err(error("Visio shape has no ID."));
     }
     let key = format!("{prefix}{id}");
+    if ["LineWeight","LinePattern","FillPattern","LineColorTrans","FillForegndTrans"].iter().any(|key|value(node,key).is_some_and(|v|v.eq_ignore_ascii_case("Themed"))) {
+        warnings.insert("Theme-dependent Visio style values without evaluated numbers use inherited values or native defaults.".into());
+    }
     let w = number(node, master, "Width", 1.)?;
     let h = number(node, master, "Height", 0.6)?;
     let pin = dvec2(
@@ -723,6 +730,7 @@ fn geometry(
             continue;
         }
         let mut svg = String::new();
+        let mut current = dvec2(0., 0.);
         for row in section.children.iter().filter(|n| {
             n.name == "Row"
                 || [
@@ -730,6 +738,11 @@ fn geometry(
                     "LineTo",
                     "Ellipse",
                     "ArcTo",
+                    "EllipticalArcTo",
+                    "RelEllipticalArcTo",
+                    "PolylineTo",
+                    "NURBSTo",
+                    "PolyLineTo",
                     "RelMoveTo",
                     "RelLineTo",
                     "RelCubBezTo",
@@ -765,6 +778,35 @@ fn geometry(
                     number(row, None, "A", 0.)? * w,
                     number(row, None, "B", 0.)? * h
                 )),
+                "ArcTo" | "EllipticalArcTo" | "RelEllipticalArcTo" => {
+                    let start=current/dvec2(sx,sy);
+                    let end=dvec2(x/sx,y/sy);
+                    let (through,angle,ratio)=if typ=="ArcTo" {
+                        let bow=number(row,None,"A",0.)?;
+                        let delta=end-start;
+                        ((start+end)/2.+dvec2(-delta.y,delta.x).normalize_or_zero()*bow,0.,1.)
+                    } else {
+                        (dvec2(number(row,None,"A",0.)?,number(row,None,"B",0.)?),number(row,None,"C",0.)?,number(row,None,"D",1.)?)
+                    };
+                    if let Some(curve)=super::visio_curves::ellipse_arc(start,through,end,angle,ratio,dvec2(sx,sy)) {
+                        svg.push_str(&curve);
+                    } else {svg.push_str(&format!("L {x} {y} "));}
+                }
+                "NURBSTo" => {
+                    let formula=row.children.iter().find(|n|n.name=="Cell"&&n.attr("N")=="E").map(|n|if n.attr("F").is_empty(){n.attr("V")}else{n.attr("F")}).or_else(||row.child("E").map(|n|n.text.trim())).unwrap_or("");
+                    let values=super::visio_curves::formula(formula,"NURBS");
+                    let ends=[number(row,None,"A",0.)?,number(row,None,"B",1.)?,number(row,None,"C",0.)?,number(row,None,"D",1.)?];
+                    if let Some(curve)=values.and_then(|v|super::visio_curves::nurbs(current,dvec2(x,y),&v,ends,dvec2(w,h),dvec2(scale_x,scale_y))) {svg.push_str(&curve);}else{warnings.insert("NURBS has unevaluated or invalid knots; endpoint retained.".into());svg.push_str(&format!("L {x} {y} "));}
+                }
+                "PolylineTo" | "PolyLineTo" => {
+                    let formula=row.children.iter().find(|n|n.name=="Cell"&&n.attr("N")=="A").map(|n|if n.attr("F").is_empty(){n.attr("V")}else{n.attr("F")}).or_else(||row.child("A").map(|n|n.text.trim())).unwrap_or("");
+                    if let Some(values)=super::visio_curves::formula(formula,"POLYLINE").filter(|v|v.len()>=2&&v.len()%2==0) {
+                        let px=if values[0]==0.{w}else{scale_x};
+                        let py=if values[1]==0.{h}else{scale_y};
+                        for pair in values[2..].chunks_exact(2) {svg.push_str(&format!("L {} {} ",pair[0]*px,pair[1]*py));}
+                    } else {warnings.insert("Polyline formula has unevaluated values; endpoint retained.".into());}
+                    svg.push_str(&format!("L {x} {y} "));
+                }
                 "Ellipse" => {
                     let a = number(row, None, "A", master_w)? * scale_x;
                     let b = number(row, None, "B", y / scale_y)? * scale_y;
@@ -789,6 +831,7 @@ fn geometry(
                     }
                 }
             }
+            current=dvec2(x,y);
         }
         if !svg.is_empty() {
             let mut path = VectorPath::from_svg(&svg).map_err(|e| error(e.to_string()))?;

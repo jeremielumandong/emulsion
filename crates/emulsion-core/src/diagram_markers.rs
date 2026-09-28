@@ -261,3 +261,24 @@ mod tests {
         }
     }
 }
+
+/// Round polyline corners without changing the attachment endpoints.
+pub(super) fn rounded(points: &[(f64, f64)], radius: f64) -> Path {
+    let mut anchors = vec![Anchor::corner(points[0])];
+    for triple in points.windows(3) {
+        let [a, b, c] = [triple[0], triple[1], triple[2]];
+        let incoming = (a.0-b.0, a.1-b.1);
+        let outgoing = (c.0-b.0, c.1-b.1);
+        let l1 = incoming.0.hypot(incoming.1);
+        let l2 = outgoing.0.hypot(outgoing.1);
+        if l1 < 1e-6 || l2 < 1e-6 { continue; }
+        let r = radius.min(l1/2.).min(l2/2.);
+        let mut entry = Anchor::corner((b.0+incoming.0*r/l1, b.1+incoming.1*r/l1));
+        let mut exit = Anchor::corner((b.0+outgoing.0*r/l2, b.1+outgoing.1*r/l2));
+        entry.h_out = (entry.p.0+(b.0-entry.p.0)*2./3., entry.p.1+(b.1-entry.p.1)*2./3.);
+        exit.h_in = (exit.p.0+(b.0-exit.p.0)*2./3., exit.p.1+(b.1-exit.p.1)*2./3.);
+        anchors.extend([entry, exit]);
+    }
+    anchors.push(Anchor::corner(*points.last().unwrap()));
+    Path { subpaths: vec![SubPath { anchors, closed: false }] }
+}

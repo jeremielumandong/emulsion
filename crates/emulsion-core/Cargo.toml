@@ -26,3 +26,5 @@ unicode-segmentation = "1"
 base64 = { workspace = true }
 
 sha2 = { workspace = true }
+
+rstar = "0.12"

@@ -84,6 +84,11 @@ The migration is not marked complete while those gates remain open.
 Use the handoff's six destinations: Home, Photo, Paint, Library, Design, Diagram.
 Paint reuses Draw; old settings, shortcuts, saved workspaces, and Minimal remain
 supported. Workspace changes never convert or flatten document contents.
+The editor header no longer repeats the Photo/Paint layout picker. Layout
+presets, Minimal, reset, customization and saved layouts live under Window →
+Layout and affect the current document's presentation. Home's Photo/Paint
+destinations open or activate documents. Window stays reachable even for older
+presets that hid it, so layout recovery cannot disappear with the old picker.
 
 | Surface | Handoff target |
 | --- | --- |

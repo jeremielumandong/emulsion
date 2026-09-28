@@ -1605,11 +1605,11 @@ mod tests {
             .execute(Command::DevelopRaw {
                 id,
                 raster: pixels,
-                params: DevelopParams {
+                params: Box::new(DevelopParams {
                     exposure: -1.0,
                     temperature: 0.3,
                     ..Default::default()
-                },
+                }),
             })
             .unwrap();
         editor.commit("Developed", false);

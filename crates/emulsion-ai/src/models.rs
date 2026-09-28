@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Task {
+    Sky,
     /// Promptable segmentation (points, box).
     Segment,
     /// Salient-object matte, for Select Subject and Remove Background.
@@ -37,6 +38,7 @@ pub enum Task {
 impl Task {
     pub fn label(self) -> &'static str {
         match self {
+            Task::Sky => "sky segmentation",
             Task::Segment => "segmentation",
             Task::Matte => "subject matte",
             Task::Depth => "depth",
@@ -77,6 +79,19 @@ impl ModelSpec {
 
 /// Every model Emulsion knows how to run.
 pub const MANIFEST: &[ModelSpec] = &[
+    ModelSpec {
+        id: "skyseg",
+        name: "Sky segmentation (U-2-Net)",
+        task: Task::Sky,
+        files: &[ModelFile {
+            name: "skyseg.onnx",
+            url: "https://huggingface.co/JianyuanWang/skyseg/resolve/3ba8c6df1d9ba9ff26f637c7ba9568ac11a9aa7f/skyseg.onnx",
+            bytes: 175997079,
+        }],
+        license: "MIT",
+        note: "Automatic semantic sky selection. Original model: xiongzhu666/Sky-Segmentation-and-Post-processing; ONNX mirror JianyuanWang/skyseg.",
+        default: true,
+    },
     ModelSpec {
         id: "slimsam",
         name: "SlimSAM 77",
@@ -467,6 +482,7 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), MANIFEST.len(), "duplicate model id");
         for t in [
+            Task::Sky,
             Task::Segment,
             Task::Matte,
             Task::Depth,

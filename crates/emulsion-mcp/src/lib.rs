@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! `emulsion-mcp` — Emulsion's MCP server, which exposes editor commands to a
 //! coding CLI.
 //!

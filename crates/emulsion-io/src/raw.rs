@@ -292,3 +292,8 @@ mod tests {
         assert!(guarded::<()>(|| panic!("bad decoder input")).is_err());
     }
 }
+
+/// Shared development for decoded JPEG/TIFF/PNG images.
+pub fn develop_raster(raster: &Raster, params: &DevelopParams) -> Result<Raster> {
+    develop::render_raster(raster, params)
+}

@@ -1,4 +1,4 @@
-//! Painter controls: the workspace picker, the one-click brush shelf and
+//! Painter controls: layout presets, the one-click brush shelf and
 //! its gallery, Draw mode's large paint dock, and the project palette of
 //! colours already painted with. Presentation only; picking never edits
 //! the document.
@@ -7,7 +7,7 @@ use super::*;
 use gpui_kit::component::{
     Sizable,
     button::{Button, ButtonVariants},
-    menu::{DropdownMenu, PopupMenuItem},
+    menu::PopupMenuItem,
     tooltip::Tooltip,
 };
 
@@ -101,7 +101,7 @@ impl EditorView {
         cx.notify();
     }
 
-    /// The header picker's choice: Photo and Draw switch mode and bring back
+    /// The layout menu's choice: Photo and Draw switch mode and bring back
     /// the toolbars that mode was left with, as the old Photo | Draw switch
     /// did. Choosing the current mode from Minimal restores its toolbars.
     pub(super) fn switch_workspace(&mut self, workspace: BuiltinWorkspace, cx: &mut Context<Self>) {
@@ -113,74 +113,68 @@ impl EditorView {
         }
     }
 
-    /// One workspace picker at the header's right, named for the workspace
-    /// on screen. Built-ins, reset and customize keep fixed places at the
-    /// top; saved presets follow.
-    pub(super) fn workspace_menu(&self, cx: &mut Context<Self>) -> AnyElement {
-        let editor = cx.entity().downgrade();
-        Button::new("workspace-menu-button")
-            .label(self.builtin_workspace().label())
-            .dropdown_caret(true)
-            .xsmall()
-            .outline()
-            .tooltip("Workspace: Photo, Paint, Minimal or one you saved (Ctrl+Alt+Shift+D switches Photo and Paint)")
-            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, cx| {
-                let Some(view) = editor.upgrade() else {
-                    return menu;
-                };
-                let current = view.read(cx).builtin_workspace();
-                for workspace in BuiltinWorkspace::ALL {
-                    let editor = editor.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(workspace.label())
-                            .checked(current == workspace)
-                            .on_click(move |_, window, cx| {
-                                editor
-                                    .update(cx, |this, cx| {
-                                        this.switch_workspace(workspace, cx);
-                                        window.focus(&this.canvas_focus, cx);
-                                    })
-                                    .ok();
-                            }),
-                    );
-                }
-                let reset = editor.clone();
-                let customize = editor.clone();
-                menu = menu
-                    .separator()
-                    .item(PopupMenuItem::new("Reset Workspace").on_click(move |_, _, cx| {
-                        reset.update(cx, |this, cx| this.reset_workspace(cx)).ok();
-                    }))
-                    .item(PopupMenuItem::new("Customize Workspace…").on_click(
-                        move |_, window, cx| {
-                            customize
-                                .update(cx, |this, cx| {
-                                    if this.workspace_customizer.is_none() {
-                                        this.toggle_workspace_customizer(window, cx);
-                                    }
-                                })
-                                .ok();
-                        },
-                    ));
-                let saved = crate::app_state::settings(cx).workspace_presets.clone();
-                if !saved.is_empty() {
-                    menu = menu.separator().label("Saved");
-                    for preset in saved {
-                        let editor = editor.clone();
-                        menu = menu.item(PopupMenuItem::new(preset.name.clone()).on_click(
-                            move |_, _, cx| {
-                                editor
-                                    .update(cx, |this, cx| {
-                                        this.apply_workspace_layout(&preset.layout, cx)
-                                    })
-                                    .ok();
-                            },
-                        ));
-                    }
-                }
-                menu
-            })
-            .into_any_element()
+    /// Layout choices for the current document, hosted by Window > Layout.
+    pub(super) fn workspace_layout_items(
+        mut menu: gpui_kit::component::menu::PopupMenu,
+        editor: WeakEntity<Self>,
+        cx: &App,
+    ) -> gpui_kit::component::menu::PopupMenu {
+        let Some(view) = editor.upgrade() else {
+            return menu;
+        };
+        let current = view.read(cx).builtin_workspace();
+        for workspace in BuiltinWorkspace::ALL {
+            let editor = editor.clone();
+            menu = menu.item(
+                PopupMenuItem::new(format!("{} layout", workspace.label()))
+                    .checked(current == workspace)
+                    .on_click(move |_, window, cx| {
+                        editor
+                            .update(cx, |this, cx| {
+                                this.switch_workspace(workspace, cx);
+                                window.focus(&this.canvas_focus, cx);
+                            })
+                            .ok();
+                    }),
+            );
+        }
+        let reset = editor.clone();
+        let customize = editor.clone();
+        menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new("Reset layout").on_click(move |_, _, cx| {
+                    reset.update(cx, |this, cx| this.reset_workspace(cx)).ok();
+                }),
+            )
+            .item(
+                PopupMenuItem::new("Customize layout…").on_click(move |_, window, cx| {
+                    customize
+                        .update(cx, |this, cx| {
+                            if this.workspace_customizer.is_none() {
+                                this.toggle_workspace_customizer(window, cx);
+                            }
+                        })
+                        .ok();
+                }),
+            );
+        let saved = crate::app_state::settings(cx).workspace_presets.clone();
+        if !saved.is_empty() {
+            menu = menu.separator().label("Saved layouts");
+            for preset in saved {
+                let editor = editor.clone();
+                menu = menu.item(PopupMenuItem::new(preset.name.clone()).on_click(
+                    move |_, _, cx| {
+                        editor
+                            .update(cx, |this, cx| {
+                                this.apply_workspace_layout(&preset.layout, cx)
+                            })
+                            .ok();
+                    },
+                ));
+            }
+        }
+        menu
     }
 
     /// Pinned brushes, topped up with recent, current-set and then any

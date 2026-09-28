@@ -214,3 +214,20 @@ fn renamed_binary_visio_reports_conversion_requirement() {
     );
     std::fs::remove_file(file).unwrap();
 }
+
+#[test]
+fn visio_stencil_suffix_with_drawing_pages_and_themed_cells_imports_natively() {
+    let file = temp("pages-not-masters.vssx");
+    write_zip(&file, &[
+        ("visio/document.xml", b"<VisioDocument/>"),
+        ("visio/pages/pages.xml", br#"<Pages><Page ID="0" Name="Rack"><PageSheet><Cell N="PageWidth" V="5"/><Cell N="PageHeight" V="4"/></PageSheet><Rel r:id="r1"/></Page></Pages>"#),
+        ("visio/pages/_rels/pages.xml.rels", br#"<Relationships><Relationship Id="r1" Target="page1.xml"/></Relationships>"#),
+        ("visio/pages/page1.xml", br#"<PageContents><Shapes><Shape ID="1"><Cell N="PinX" V="2"/><Cell N="PinY" V="2"/><Cell N="Width" V="2"/><Cell N="Height" V="1"/><Cell N="LineWeight" V="Themed"/><Text>Network switch</Text></Shape></Shapes></PageContents>"#),
+    ]);
+    let imported = visio::package(&file).unwrap();
+    assert_eq!(imported.project.pages.len(), 1);
+    assert_eq!(imported.project.pages[0].meta.name, "Rack");
+    assert_eq!(imported.project.pages[0].doc.diagram.as_ref().unwrap().shapes.len(), 1);
+    assert!(imported.warnings.iter().any(|w| w.contains("instead of masters")));
+    std::fs::remove_file(file).unwrap();
+}

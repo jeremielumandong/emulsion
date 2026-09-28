@@ -321,6 +321,7 @@ pub(crate) fn translate_node(
             node.mask = Some(Arc::new(translated));
         }
     }
+    crate::diagram::transform_decorated_waypoints(doc,&ids,DAffine2::from_translation(dvec2(dx,dy)));
     Ok(())
 }
 

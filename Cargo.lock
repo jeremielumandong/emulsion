@@ -2154,6 +2154,7 @@ dependencies = [
  "glam",
  "parking_lot",
  "rayon",
+ "rstar",
  "serde",
  "serde_json",
  "sha2 0.11.0",

@@ -53,7 +53,7 @@ fn original_reopens_saved_recipe_but_native_project_keeps_its_own() {
     Command::DevelopRaw {
         id: doc.raw.as_ref().unwrap().node_id,
         raster: Arc::new(source.develop_with(&params).unwrap()),
-        params,
+        params: Box::new(params),
     }
     .apply(&mut doc)
     .unwrap();

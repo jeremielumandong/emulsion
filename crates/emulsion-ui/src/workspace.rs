@@ -2645,7 +2645,7 @@ mod compact_tests {
         cx.simulate_resize(size(px(900.), px(600.)));
         cx.run_until_parked();
         cx.update(|window, _| {
-            for id in ["workspace-menu-button", "compact-theme", "compact-settings"] {
+            for id in ["window-menu-button", "compact-theme", "compact-settings"] {
                 let control = window.find(id);
                 assert!(control.visible(), "{id}");
                 assert!(f32::from(control.bounds().right()) <= 900., "{id}");
@@ -2657,7 +2657,7 @@ mod compact_tests {
 
         cx.update(|window, cx| window.click("file-menu-button", cx));
         cx.run_until_parked();
-        cx.update(|window, cx| window.within("popup-menu").click(8usize, cx));
+        cx.update(|window, cx| window.within("popup-menu").click(9usize, cx));
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(workspace.read(cx).screen, Screen::Batch);

@@ -25,7 +25,7 @@ impl Stencil {
             ]));
             path
         } else {
-            self.kind.path([x, y, w, h])
+            self.kind.default_path([x, y, w, h])
         }
     }
     pub fn matches(self, query: &str) -> bool {

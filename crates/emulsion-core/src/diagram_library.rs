@@ -62,6 +62,10 @@ pub struct Theme {
     pub text: [u8; 4],
 }
 pub const THEMES: &[Theme] = &[
+    Theme { id: "charcoal", name: "Charcoal", fill: crate::diagram::DEFAULT_LINE, line: crate::diagram::DEFAULT_LINE, text: [255;4] },
+    Theme { id: "soft-teal", name: "Soft teal", fill: [178, 242, 235, 255], line: crate::diagram::DEFAULT_LINE, text: crate::diagram::DEFAULT_TEXT },
+    Theme { id: "soft-blue", name: "Soft blue", fill: [236, 244, 255, 255], line: crate::diagram::DEFAULT_LINE, text: crate::diagram::DEFAULT_TEXT },
+
     Theme {
         id: "neutral",
         name: "Monochrome grey",
@@ -100,9 +104,9 @@ pub const THEMES: &[Theme] = &[
     Theme {
         id: "default",
         name: "Emulsion default",
-        fill: [233, 239, 251, 255],
-        line: [69, 96, 154, 255],
-        text: [35, 47, 67, 255],
+        fill: crate::diagram::DEFAULT_FILL,
+        line: crate::diagram::DEFAULT_LINE,
+        text: crate::diagram::DEFAULT_TEXT,
     },
 ];
 impl Template {
@@ -288,7 +292,7 @@ pub fn theme_commands(
                 }
                 if style.stroke.is_some() {
                     style.stroke = Some(theme.line);
-                    style.width = 1.5;
+                    style.width = crate::diagram::DEFAULT_LINE_WIDTH;
                 }
                 commands.push(Command::SetPath {
                     id: n.id,

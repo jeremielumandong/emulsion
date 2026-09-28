@@ -3,7 +3,9 @@
 //! them all — the same non-destructive pipeline the editor uses, run one
 //! picture at a time off the UI thread.
 
+mod advanced;
 mod develop;
+mod enhance;
 mod library;
 mod mcp;
 pub(crate) mod preview;
@@ -48,7 +50,7 @@ fn thumb_stamp(path: &Path) -> ThumbStamp {
             .ok()
             .map(|m| (m.len(), m.modified().ok()))
     };
-    let sidecar = emulsion_io::raw::is_raw(path)
+    let sidecar = emulsion_io::photo_develop::supported(path)
         .then(|| emulsion_io::raw_settings::sidecar_path(path).ok())
         .flatten();
     (stamp(path), sidecar.as_deref().and_then(stamp))
@@ -64,8 +66,11 @@ pub(crate) struct BatchItem {
 pub(crate) struct BatchState {
     library: library::LibraryUi,
     mcp_busy: bool,
+    pub(crate) assistant_host: Option<Entity<crate::editor::EditorView>>,
+    assistant_observer: Option<Subscription>,
     develop: develop::Develop,
     settings_open: bool,
+    output_settings: emulsion_io::photo_export::OutputSettings,
     pub folder: Option<PathBuf>,
     pub items: Vec<BatchItem>,
     /// Retain failed requests too, so redraws do not retry converters forever.
@@ -309,13 +314,25 @@ fn render_with(source: Arc<Raster>, recipe: Option<&Recipe>) -> Option<(u32, u32
 }
 
 /// Open a picture at full size, apply the recipe and write it out.
+#[cfg(test)]
 fn process_one(
     path: &Path,
     recipe: Option<&Recipe>,
     out_dir: &Path,
     ext: &str,
 ) -> Result<PathBuf, String> {
-    let doc = emulsion_io::open(path).map_err(|e| format!("Could not open input: {e}"))?;
+    process_one_with(path, recipe, out_dir, ext, &Default::default())
+}
+
+fn process_one_with(
+    path: &Path,
+    recipe: Option<&Recipe>,
+    out_dir: &Path,
+    ext: &str,
+    settings: &emulsion_io::photo_export::OutputSettings,
+) -> Result<PathBuf, String> {
+    let doc = emulsion_io::photo_develop::open_saved(path)
+        .map_err(|e| format!("Could not open input: {e}"))?;
     let mut ed = Editor::new(doc, None);
     let (w, h) = (ed.doc.width, ed.doc.height);
     if let Some(r) = recipe {
@@ -335,10 +352,28 @@ fn process_one(
         .map_err(|e| format!("Could not create output folder {}: {e}", out_dir.display()))?;
     let stage = BatchStage::new(out_dir, ext)
         .map_err(|e| format!("Could not write to {}: {e}", out_dir.display()))?;
-    emulsion_io::export::export(&ed.doc, &stage.0, ExportOptions::for_doc(&ed.doc))
-        .map_err(|e| format!("Could not encode {ext}: {e}"))?;
-    publish_batch_file(&stage.0, out_dir, &format!("{stem}{suffix}"), ext)
-        .map_err(|e| format!("Could not save output in {}: {e}", out_dir.display()))
+    let mut output = settings.prepare(&ed.doc).map_err(|e| e.to_string())?;
+    // open_saved already developed these verified pixels. Avoid a second full RAW decode.
+    output.raw = None;
+    let metadata =
+        emulsion_io::photo_metadata::build(path, settings.metadata).map_err(|e| e.to_string())?;
+    emulsion_io::export::export_with_exif(
+        &output,
+        &stage.0,
+        ExportOptions {
+            depth: output.source_depth,
+            jpeg_quality: settings.jpeg_quality,
+        },
+        metadata.as_deref(),
+    )
+    .map_err(|e| format!("Could not encode {ext}: {e}"))?;
+    let output = publish_batch_file(&stage.0, out_dir, &format!("{stem}{suffix}"), ext)
+        .map_err(|e| format!("Could not save output in {}: {e}", out_dir.display()))?;
+    if let Some(destination) = &settings.publish {
+        emulsion_io::photo_publish::publish(&output, &format!("{stem}{suffix}"), destination)
+            .map_err(|e| format!("Saved {} locally. {e}", output.display()))?;
+    }
+    Ok(output)
 }
 
 /// Encode privately, then publish with an exclusive hard link. Unlike an
@@ -457,6 +492,7 @@ impl Workspace {
     }
 
     pub fn pick_batch_folder(&mut self, cx: &mut Context<Self>) {
+        let deduplicate = self.batch.library.deduplicate;
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -470,15 +506,40 @@ impl Workspace {
             let Some(dir) = paths.into_iter().next() else {
                 return;
             };
+            let folder = dir.clone();
             let listed = cx
-                .background_spawn({
-                    let dir = dir.clone();
-                    async move { list_folder(&dir) }
+                .background_spawn(async move { list_folder(&folder) })
+                .await;
+            if !deduplicate {
+                let folder = dir.clone();
+                let paths = listed.clone();
+                this.update(cx, |this, cx| this.load_batch(folder, paths, cx))
+                    .ok();
+            }
+            let result = cx
+                .background_spawn(async move {
+                    emulsion_io::creative_library::update(
+                        &emulsion_io::creative_library::root(),
+                        |c| emulsion_io::photo_catalog::import(c, &listed, deduplicate),
+                    )
                 })
                 .await;
-            this.update(cx, |this, cx| {
-                this.library_import_folder(listed.clone(), cx);
-                this.load_batch(dir, listed, cx);
+            this.update(cx, |this, cx| match result {
+                Ok((catalog, listed)) => {
+                    if catalog.revision >= this.batch.library.catalog.revision {
+                        this.batch.library.catalog = catalog;
+                    }
+                    this.batch.library.loaded = true;
+                    if deduplicate {
+                        this.load_batch(dir, listed, cx);
+                    } else {
+                        cx.notify();
+                    }
+                }
+                Err(e) => {
+                    this.batch.note = Some((e.to_string().into(), true));
+                    cx.notify();
+                }
             })
             .ok();
         })
@@ -561,7 +622,30 @@ impl Workspace {
                 let r = cx
                     .background_spawn(async move {
                         let stamp = thumb_stamp(&p);
-                        let result = if emulsion_io::raw::is_raw(&p) {
+                        let result = if !emulsion_io::raw::is_raw(&p)
+                            && emulsion_io::photo_develop::supported(&p)
+                            && emulsion_io::raw_settings::sidecar_path(&p).is_ok_and(|s| s.exists())
+                        {
+                            emulsion_io::photo_develop::PhotoSource::load(&p).and_then(|s| {
+                                let params = emulsion_io::raw_settings::adjacent_settings(
+                                    &p,
+                                    &s.source_sha256,
+                                )?;
+                                let raster = s.develop_with(&params)?;
+                                let image = image::RgbaImage::from_raw(
+                                    raster.width(),
+                                    raster.height(),
+                                    raster.to_srgba8(),
+                                )
+                                .ok_or_else(|| {
+                                    emulsion_io::IoError::Manifest("Invalid photo preview".into())
+                                })?;
+                                let small = image::DynamicImage::ImageRgba8(image)
+                                    .thumbnail(THUMB, THUMB)
+                                    .into_rgba8();
+                                Ok((small.width(), small.height(), small.into_raw()))
+                            })
+                        } else if emulsion_io::raw::is_raw(&p) {
                             emulsion_io::thumb::thumbnail(&p, THUMB)
                         } else {
                             emulsion_io::thumb::batch_thumbnail(&p, THUMB)
@@ -633,7 +717,7 @@ impl Workspace {
         let Some(path) = self.batch.items.get(i).map(|it| it.path.clone()) else {
             return;
         };
-        if emulsion_io::raw::is_raw(&path) {
+        if emulsion_io::photo_develop::supported(&path) {
             self.library_raw_preview(path, cx);
             return;
         }
@@ -720,6 +804,7 @@ impl Workspace {
         }
         let recipe = self.chosen_recipe();
         let ext = batch_ext(&self.batch.format).to_string();
+        let output_settings = self.batch.output_settings.clone();
         let total = paths.len();
         self.batch.run_generation = self.batch.run_generation.wrapping_add(1);
         let generation = self.batch.run_generation;
@@ -748,7 +833,12 @@ impl Workspace {
                 let r = cx
                     .background_spawn({
                         let (recipe, out_dir, ext) = (recipe.clone(), out_dir.clone(), ext.clone());
-                        async move { process_one(&path, recipe.as_ref(), &out_dir, &ext) }
+                        {
+                            let settings = output_settings.clone();
+                            async move {
+                                process_one_with(&path, recipe.as_ref(), &out_dir, &ext, &settings)
+                            }
+                        }
                     })
                     .await;
                 let go_on = this
@@ -1160,7 +1250,8 @@ impl Workspace {
                 chip("batch-out", "Choose folder…", false, &p)
                     .on_click(cx.listener(|this, _, _, cx| this.pick_batch_out_dir(cx)))
                     .test_support(),
-            );
+            )
+            .child(self.library_output_controls(cx));
         div()
             .id("batch-settings")
             .w(rems(18.75))
@@ -1220,6 +1311,13 @@ impl Workspace {
                 )
                 .py(px(5.))
                 .on_click(cx.listener(|this, _, _, cx| this.pick_batch_folder(cx))),
+            )
+            .child(
+                Button::new("library-assistant")
+                    .label("Ask Library…")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| this.library_ask(window, cx))),
             )
             .child(
                 div()
@@ -1801,6 +1899,7 @@ impl Workspace {
                                     .test_support(),
                             )
                             .child(filmstrip)
+                            .children(self.library_assistant_surface(cx))
                             .child(mono(caption, 10., p.muted))
                             .child(mono("⇧ range · Ctrl toggle · 0–5 rate · P/U/X flag · G grid · D develop",9.,p.muted)),
                     )

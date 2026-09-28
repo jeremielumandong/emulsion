@@ -25,6 +25,8 @@ pub(super) struct LibraryUi {
     pub(super) collection: Option<u64>,
     pub(super) rating: u8,
     pub(super) flagged: bool,
+    pub(super) collapse_stacks: bool,
+    pub(super) deduplicate: bool,
     pub(super) rejected: bool,
     pub(super) color_label: u8,
     pub(super) focus: Option<FocusHandle>,
@@ -63,7 +65,7 @@ impl Workspace {
         })
         .detach();
     }
-    fn library_edit(
+    pub(super) fn library_edit(
         &mut self,
         edit: impl FnOnce(&mut Catalog) -> emulsion_io::Result<()> + Send + 'static,
         cx: &mut Context<Self>,
@@ -75,14 +77,17 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 match result {
                     Ok((c, _)) => {
+                        let membership_changed=c.assets.iter().map(|a|(&a.id,&a.path)).ne(this.batch.library.catalog.assets.iter().map(|a|(&a.id,&a.path))) || c.photos.stacks!=this.batch.library.catalog.photos.stacks;
                         if c.revision >= this.batch.library.catalog.revision {
                             this.batch.library.catalog = c;
                         }
                         if this.batch.running.is_none()
-                            && (this.batch.library.rating > 0
+                            && (membership_changed || this.batch.library.rating > 0
                                 || this.batch.library.flagged
                                 || this.batch.library.rejected
-                                || this.batch.library.color_label > 0)
+                                || this.batch.library.color_label > 0
+                                || this.batch.library.collapse_stacks
+                                || this.batch.library.collection.is_some())
                         {
                             this.library_show(cx);
                         }
@@ -96,7 +101,7 @@ impl Workspace {
         })
         .detach();
     }
-    fn library_paths(&self) -> Vec<PathBuf> {
+    pub(super) fn library_paths(&self) -> Vec<PathBuf> {
         let mut paths = self
             .batch
             .items
@@ -147,7 +152,7 @@ impl Workspace {
                     .assets
                     .iter()
                     .find(|a| a.path == *path && a.kind == AssetKind::Image);
-                let raw = emulsion_io::raw::is_raw(path);
+                let raw = emulsion_io::photo_develop::is_raw_photo(path);
                 let edited =
                     raw && emulsion_io::raw_settings::sidecar_path(path).is_ok_and(|p| p.exists());
                 asset.map_or(0, |a| a.rating) >= state.rating
@@ -157,7 +162,8 @@ impl Workspace {
                         || asset.is_some_and(|a| a.color_label == state.color_label))
                     && (!state.raw_only || raw)
                     && (!state.unedited || !edited)
-                    && members.is_none_or(|c| asset.is_some_and(|a| c.assets.contains(&a.id)))
+                    && members.is_none_or(|c| asset.is_some_and(|a| state.catalog.photos.smart.get(&c.id).map_or_else(||c.assets.contains(&a.id),|r|r.matches(a))))
+                    && (!state.collapse_stacks || asset.is_none_or(|a| !state.catalog.photos.stacks.iter().any(|(top,members)|*top!=a.id && members.contains(&a.id))))
                     && (query.is_empty()
                         || path
                             .file_name()
@@ -598,7 +604,7 @@ impl Workspace {
             let id = collection.id;
             rows = rows.child(
                 Button::new(("library-collection-row", id))
-                    .label(format!("{} · {}", collection.name, collection.assets.len()))
+                    .label(format!("{} · {}", collection.name, self.batch.library.catalog.photos.smart.get(&collection.id).map_or(collection.assets.len(),|rule|self.batch.library.catalog.assets.iter().filter(|a|rule.matches(a)).count())))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -769,7 +775,8 @@ impl Workspace {
                     .flex_wrap()
                     .gap_1()
                     .child(filters)
-                    .child(actions),
+                    .child(actions)
+                    .child(self.library_catalog_controls(cx)),
             )
             .into_any_element()
     }
@@ -800,7 +807,7 @@ impl Workspace {
             .unwrap_or("");
         format!(
             "{}{}{} {label}",
-            if emulsion_io::raw::is_raw(path) {
+            if emulsion_io::photo_develop::is_raw_photo(path) {
                 "RAW "
             } else {
                 ""
@@ -1394,17 +1401,7 @@ impl Workspace {
         })
         .detach();
     }
-    pub(super) fn library_import_folder(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        self.library_edit(
-            move |catalog| {
-                for path in paths {
-                    catalog.add_asset(path, AssetKind::Image)?;
-                }
-                Ok(())
-            },
-            cx,
-        );
-    }
+
 }
 
 impl Workspace {

@@ -221,13 +221,19 @@ fn apply_external(next: Option<Palette>, cx: &mut App) {
 /// Project the application palette into GPUI's component colors. Keep semantic
 /// warning/error colors from its light/dark theme.
 fn map_kit_colors(t: &mut gpui_kit::component::ThemeColor, p: Palette) {
+    // GPUI's accent is the low-emphasis hover surface, not the brand color.
+    // Keep selection tinted and primary actions solid, with readable text on each.
+    let hover = p.soft_bg.blend(p.ink.opacity(0.06));
+    let selected = p
+        .soft_bg
+        .blend(p.accent.opacity(if p.dark { 0.26 } else { 0.16 }));
     t.background = p.paper;
     t.foreground = p.ink;
     t.border = p.line;
     t.input = p.line;
     t.caret = p.ink;
-    t.accent = p.accent;
-    t.accent_foreground = p.accent_fg;
+    t.accent = hover;
+    t.accent_foreground = p.ink;
     t.primary = p.accent;
     t.primary_hover = p.accent;
     t.primary_active = p.accent;
@@ -237,16 +243,16 @@ fn map_kit_colors(t: &mut gpui_kit::component::ThemeColor, p: Palette) {
     t.button_primary_active = p.accent;
     t.button_primary_foreground = p.accent_fg;
     t.button = p.soft_bg;
-    t.button_hover = p.soft_bg;
-    t.button_active = p.line;
+    t.button_hover = hover;
+    t.button_active = selected;
     t.button_foreground = p.ink;
     t.secondary = p.soft_bg;
-    t.secondary_hover = p.soft_bg;
-    t.secondary_active = p.line;
+    t.secondary_hover = hover;
+    t.secondary_active = selected;
     t.secondary_foreground = p.ink;
     t.button_secondary = p.soft_bg;
-    t.button_secondary_hover = p.soft_bg;
-    t.button_secondary_active = p.line;
+    t.button_secondary_hover = hover;
+    t.button_secondary_active = selected;
     t.button_secondary_foreground = p.ink;
     t.muted = p.soft_bg;
     t.muted_foreground = p.muted;
@@ -255,8 +261,8 @@ fn map_kit_colors(t: &mut gpui_kit::component::ThemeColor, p: Palette) {
     t.list = p.panel;
     t.list_even = p.paper;
     t.list_head = p.soft_bg;
-    t.list_hover = p.soft_bg;
-    t.list_active = p.soft_bg;
+    t.list_hover = hover;
+    t.list_active = selected;
     t.list_active_border = p.accent;
     t.ring = p.accent;
     t.selection = p.accent.opacity(0.25);
@@ -273,8 +279,8 @@ fn map_kit_colors(t: &mut gpui_kit::component::ThemeColor, p: Palette) {
     t.sidebar = p.panel;
     t.sidebar_foreground = p.ink;
     t.sidebar_border = p.line;
-    t.sidebar_accent = p.accent;
-    t.sidebar_accent_foreground = p.accent_fg;
+    t.sidebar_accent = selected;
+    t.sidebar_accent_foreground = p.ink;
     t.sidebar_primary = p.accent;
     t.sidebar_primary_foreground = p.accent_fg;
     t.slider_bar = p.accent;
@@ -308,6 +314,32 @@ pub fn toggle(cx: &mut App) {
 mod tests {
     use super::{ActivePalette, apply_external, c, dark, install, light, palette, sync_kit};
     use gpui_kit::TestAppContext;
+
+    #[gpui_kit::test]
+    fn hover_selection_and_primary_have_distinct_synced_surfaces(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::app_state::AppSettings(Default::default()));
+            install(cx);
+            for p in [light(), dark()] {
+                cx.set_global(ActivePalette(p));
+                sync_kit(cx);
+                let kit = gpui_kit::component::Theme::global(cx);
+                assert_ne!(kit.accent, kit.primary);
+                assert_ne!(kit.list_hover, kit.list_active);
+                assert_ne!(kit.button, kit.button_hover);
+                assert_eq!(kit.accent_foreground, p.ink);
+                assert_eq!(kit.primary, p.accent);
+                assert_eq!(kit.primary_foreground, p.accent_fg);
+                assert_eq!(kit.tokens.list_active.color, kit.list_active);
+                assert_eq!(kit.tokens.accent.color, kit.accent);
+                assert_eq!(
+                    gpui_kit::base::Theme::global(cx).tokens.colors.accent,
+                    kit.accent
+                );
+            }
+        });
+    }
 
     #[gpui_kit::test]
     fn appearance_choices_reach_widgets_and_survive_theme_changes(cx: &mut TestAppContext) {

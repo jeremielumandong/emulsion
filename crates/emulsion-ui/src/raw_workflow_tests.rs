@@ -342,7 +342,7 @@ fn raw_before_after_handle_drags_without_edits_and_escape_restores_view(cx: &mut
     Command::DevelopRaw {
         id: raw.node_id,
         raster: Arc::new(pixels),
-        params,
+        params: Box::new(params),
     }
     .apply(&mut document)
     .unwrap();
@@ -635,7 +635,7 @@ fn raw_real_dng_preview_and_clipping_buttons_leave_history_unchanged_and_escape_
     Command::DevelopRaw {
         id: raw.node_id,
         raster: Arc::new(pixels),
-        params,
+        params: Box::new(params),
     }
     .apply(&mut document)
     .unwrap();

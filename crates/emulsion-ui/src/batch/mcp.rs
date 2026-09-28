@@ -3,7 +3,7 @@ use super::*;
 use anyhow::{Result, anyhow, bail};
 use emulsion_io::{
     creative_library::{self as catalog, AssetKind, Catalog},
-    raw::RawSource,
+    photo_develop::PhotoSource as RawSource,
     raw_settings,
 };
 use emulsion_mcp::{
@@ -35,7 +35,10 @@ impl Workspace {
         };
         let mutating = !matches!(
             request,
-            Request::State(_) | Request::Preview | Request::CancelExport
+            Request::State(_)
+                | Request::Preview
+                | Request::CancelExport
+                | Request::CancelEnhancement
         );
         if mutating && (self.batch.mcp_busy || self.batch.running.is_some()) {
             return Task::ready(ToolResult::error(
@@ -64,14 +67,14 @@ impl Workspace {
         let limit = page.limit.unwrap_or(100);
         let files:Vec<_>=b.items.iter().skip(page.offset).take(limit).map(|item|{
             let asset=l.catalog.assets.iter().find(|a|a.kind==AssetKind::Image&&a.path==item.path);
-            json!({"path":item.path,"selected":item.selected,"raw":emulsion_io::raw::is_raw(&item.path),"metadata":asset,"exif":l.metadata.get(&item.path),"thumbnail":{"status":if item.thumb.is_some(){"ready"}else if b.thumbs_failed.contains_key(&item.path){"error"}else if b.thumbs_requested.contains(&item.path){"loading"}else{"pending"},"error":b.thumbs_failed.get(&item.path)}})
+            json!({"path":item.path,"selected":item.selected,"raw":emulsion_io::photo_develop::is_raw_photo(&item.path),"metadata":asset,"exif":l.metadata.get(&item.path),"thumbnail":{"status":if item.thumb.is_some(){"ready"}else if b.thumbs_failed.contains_key(&item.path){"error"}else if b.thumbs_requested.contains(&item.path){"loading"}else{"pending"},"error":b.thumbs_failed.get(&item.path)}})
         }).collect();
         json!({"total":b.items.len(),"offset":page.offset,"next_offset":(page.offset.saturating_add(limit)<b.items.len()).then(||page.offset+limit),"files":files,
-            "active":active,"selected":b.items.iter().filter(|i|i.selected).map(|i|&i.path).collect::<Vec<_>>(),"collections":l.catalog.collections,"catalog_revision":l.catalog.revision,
-            "filters":{"query":l.search.as_ref().map(|s|s.read(cx).value().to_string()).unwrap_or_default(),"source":if l.source_paths.is_some(){"folder"}else{"all"},"collection":l.collection,"minimum_rating":l.rating,"flag":if l.flagged{"picked"}else if l.rejected{"rejected"}else{"all"},"color_label":l.color_label,"raw_only":l.raw_only,"unedited":l.unedited,"sort":if l.capture_sort{"capture_time"}else{"filename"},"reverse":l.reverse},
+            "active":active,"selected":b.items.iter().filter(|i|i.selected).map(|i|&i.path).collect::<Vec<_>>(),"collections":l.catalog.collections,"photo_catalog":l.catalog.photos,"catalog_revision":l.catalog.revision,
+            "filters":{"collapse_stacks":l.collapse_stacks,"query":l.search.as_ref().map(|s|s.read(cx).value().to_string()).unwrap_or_default(),"source":if l.source_paths.is_some(){"folder"}else{"all"},"collection":l.collection,"minimum_rating":l.rating,"flag":if l.flagged{"picked"}else if l.rejected{"rejected"}else{"all"},"color_label":l.color_label,"raw_only":l.raw_only,"unedited":l.unedited,"sort":if l.capture_sort{"capture_time"}else{"filename"},"reverse":l.reverse},
             "view":if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.loupe{"develop"}else if b.develop.list{"list"}else{"grid"},"inspector":(["develop","info","keywords"][b.develop.inspector.min(2)]),"recipe":b.recipe,
-            "develop":{"settings":active.and_then(|p|b.develop.current_params(p)),"histogram":b.develop.histogram,"histogram_kind":"32-bin display luminance","histogram_pending":b.develop.busy||b.preview.is_none(),"dirty":b.develop.dirty(),"dirty_paths":b.develop.drafts.iter().filter(|(p,v)|b.develop.saved.get(*p)!=Some(*v)).map(|(p,_)|p).collect::<Vec<_>>(),"saving":b.develop.saving,"busy":b.develop.busy,"undo_steps":active.and_then(|p|b.develop.history.get(p)).map_or(0,Vec::len)},
-            "export":{"progress":b.running,"current":b.exporting,"out_dir":b.out_dir,"format":b.format},"mcp_busy":b.mcp_busy,"note":b.note.as_ref().map(|(text,error)|json!({"text":text,"error":error}))})
+            "preset_files":b.develop.preset_files,"preset_import":b.develop.preset_report,"snapshots":active.and_then(|p|b.develop.snapshots.get(p)),"develop":{"history":active.and_then(|p|b.develop.history.get(p)),"settings":active.and_then(|p|b.develop.current_params(p)),"histogram":b.develop.histogram,"rgb_histogram":b.develop.rgb_histogram,"clipping_overlay":b.develop.clipping,"enhancement":b.develop.ai_job.as_ref().map(|j|j.summary()),"histogram_kind":"32-bin display luminance","histogram_pending":b.develop.busy||b.preview.is_none(),"dirty":b.develop.dirty(),"dirty_paths":b.develop.drafts.iter().filter(|(p,v)|b.develop.saved.get(*p)!=Some(*v)).map(|(p,_)|p).collect::<Vec<_>>(),"saving":b.develop.saving,"busy":b.develop.busy,"undo_steps":active.and_then(|p|b.develop.history.get(p)).map_or(0,Vec::len)},
+            "export":{"settings":b.output_settings,"progress":b.running,"current":b.exporting,"out_dir":b.out_dir,"format":b.format},"mcp_busy":b.mcp_busy,"note":b.note.as_ref().map(|(text,error)|json!({"text":text,"error":error}))})
     }
 }
 fn active(ws: &Workspace) -> Result<PathBuf> {
@@ -101,7 +104,8 @@ async fn settle(this: &WeakEntity<Workspace>, cx: &mut AsyncApp) -> Result<()> {
     let start = Instant::now();
     loop {
         let busy = this.update(cx, |ws, _| {
-            ws.batch.develop.saving
+            ws.batch.develop.ai_job.is_some()
+                || ws.batch.develop.saving
                 || ws.batch.develop.busy
                 || ws.batch.library.loading
                 || ws.batch.library.info_busy
@@ -142,6 +146,16 @@ async fn run(
     root: PathBuf,
     cx: &mut AsyncApp,
 ) -> Result<ToolResult> {
+    if matches!(request, Request::CancelEnhancement) {
+        return this.update(cx, |ws, cx| {
+            let running = ws.batch.develop.ai_job.is_some();
+            if let Some(job) = &ws.batch.develop.ai_job {
+                job.cancel();
+            }
+            cx.notify();
+            ToolResult::text(json!({"cancellation_requested":running}).to_string())
+        });
+    }
     if matches!(request, Request::CancelExport) {
         return this.update(cx, |ws, cx| {
             let was_running = ws.batch.running.is_some();
@@ -184,6 +198,168 @@ async fn run(
     settle(this, cx).await?;
     this.update(cx, |ws, _| ws.batch.note = None)?;
     match request {
+        Request::Catalog(action) => {
+            if matches!(
+                action.action.as_str(),
+                "save_export_preset" | "load_export_preset"
+            ) {
+                let path = action
+                    .path
+                    .ok_or_else(|| anyhow!("Export preset action requires path"))?;
+                let settings = this.update(cx, |ws, _| ws.batch.output_settings.clone())?;
+                let loaded = cx
+                    .background_spawn(async move {
+                        if action.action == "save_export_preset" {
+                            emulsion_io::photo_export::save_preset(&path, &settings)?;
+                            Ok::<_, emulsion_io::IoError>(None)
+                        } else {
+                            emulsion_io::photo_export::load_preset(&path).map(Some)
+                        }
+                    })
+                    .await?;
+                if let Some(settings) = loaded {
+                    this.update(cx, |ws, cx| {
+                        ws.batch.output_settings = settings;
+                        cx.notify();
+                    })?;
+                }
+                return Ok(ToolResult::text("Export preset operation completed"));
+            }
+
+            if action.action == "import_presets" {
+                let path = action
+                    .path
+                    .ok_or_else(|| anyhow!("import_presets requires path"))?;
+                let report = cx
+                    .background_spawn(async move { emulsion_io::lightroom_presets::install(&path) })
+                    .await?;
+                let files = cx
+                    .background_spawn(async { emulsion_io::lightroom_presets::installed() })
+                    .await;
+                this.update(cx, |ws, cx| {
+                    ws.batch.develop.preset_files = files;
+                    ws.batch.develop.presets_loaded = true;
+                    cx.notify();
+                })?;
+                return Ok(ToolResult::text(serde_json::to_string(&report)?));
+            }
+
+            let virtual_copy = action.action == "virtual_copy";
+            let snapshot = this.update(cx, |ws, _| ws.batch.library.catalog.clone())?;
+            let current = this.update(cx, |ws, _| {
+                ws.batch
+                    .current
+                    .and_then(|i| ws.batch.items.get(i))
+                    .map(|i| (i.path.clone(), ws.batch.develop.current_params(&i.path)))
+            })?;
+            let (catalog, import_report) = cx
+                .background_spawn(async move {
+                    use emulsion_io::photo_catalog as photo;
+                    if action.action == "backup" {
+                        photo::backup(
+                            &snapshot,
+                            action
+                                .path
+                                .as_deref()
+                                .ok_or_else(|| anyhow!("backup requires path"))?,
+                        )?;
+                        return Ok::<_, anyhow::Error>((snapshot, None));
+                    }
+                    let copy_root = root.join("virtual-copies");
+                    let backups = root.join("backups");
+                    let (catalog, report) = catalog::update(&root, move |c| {
+                        let mut report = None;
+                        let error = |s: &str| emulsion_io::IoError::Manifest(s.into());
+                        match action.action.as_str() {
+                            "smart_collection" => {
+                                let rule = action
+                                    .rule
+                                    .ok_or_else(|| error("smart_collection requires rule"))?;
+                                rule.validate()?;
+                                let id = c.add_collection(
+                                    action
+                                        .name
+                                        .ok_or_else(|| error("smart_collection requires name"))?,
+                                    vec![],
+                                )?;
+                                c.photos.smart.insert(id, rule);
+                            }
+                            "restore_backup" => {
+                                emulsion_io::photo_catalog::restore(
+                                    c,
+                                    action
+                                        .path
+                                        .as_deref()
+                                        .ok_or_else(|| error("restore_backup requires path"))?,
+                                    &backups,
+                                )?;
+                            }
+                            "import_lightroom" => {
+                                report = Some(emulsion_io::lightroom_catalog::import(
+                                    action
+                                        .path
+                                        .as_deref()
+                                        .ok_or_else(|| error("import_lightroom requires path"))?,
+                                    c,
+                                )?);
+                            }
+                            "stack" => photo::stack(c, &action.paths)?,
+                            "unstack" => photo::unstack(c, &action.paths),
+                            "relink" => {
+                                if action.paths.len() != 1 {
+                                    return Err(error("relink requires one old path"));
+                                }
+                                photo::relink(
+                                    c,
+                                    &action.paths[0],
+                                    action
+                                        .path
+                                        .as_deref()
+                                        .ok_or_else(|| error("relink requires replacement path"))?,
+                                )?;
+                            }
+                            "virtual_copy" => {
+                                let (path, params) =
+                                    current.ok_or_else(|| error("Select a developed photo"))?;
+                                let params = params
+                                    .ok_or_else(|| error("Wait for Develop controls to load"))?;
+                                let copy = emulsion_io::photo_develop::create_virtual(
+                                    &path, params, &copy_root,
+                                )?;
+                                c.add_asset(copy, AssetKind::Image)?;
+                            }
+                            _ => return Err(error("Unknown catalog action")),
+                        }
+                        Ok(report)
+                    })?;
+                    Ok((catalog, report))
+                })
+                .await?;
+            let new_copy = virtual_copy
+                .then(|| catalog.assets.last().map(|a| a.path.clone()))
+                .flatten();
+            if virtual_copy {
+                this.update(cx, |ws, _| {
+                    ws.batch.library.source_paths = None;
+                    ws.batch.library.collection = None;
+                    ws.batch.library.raw_only = false;
+                    ws.batch.library.unedited = false;
+                })?;
+            }
+            publish(this, catalog, cx).await?;
+            if let Some(path) = new_copy {
+                this.update(cx, |ws, cx| {
+                    if let Some(index) = ws.batch.items.iter().position(|i| i.path == path) {
+                        ws.library_select(index, false, false, cx);
+                        ws.batch_preview(cx);
+                    }
+                })?;
+                settle(this, cx).await?;
+            }
+            if let Some(report) = import_report {
+                return Ok(ToolResult::text(serde_json::to_string(&report)?));
+            }
+        }
         Request::Import(import) => {
             let (folder, paths, catalog) = cx
                 .background_spawn(async move {
@@ -203,9 +379,7 @@ async fn run(
                         bail!("Folder contains no supported photos")
                     }
                     let (catalog, _) = catalog::update(&root, |c| {
-                        for path in &paths {
-                            c.add_asset(path.clone(), AssetKind::Image)?;
-                        }
+                        paths = emulsion_io::photo_catalog::import(c, &paths, import.deduplicate)?;
                         Ok(())
                     })?;
                     Ok::<_, anyhow::Error>((folder, paths, catalog))
@@ -342,6 +516,10 @@ async fn run(
                 if !ws.batch.items.iter().any(|i| i.selected) {
                     bail!("Select photos before exporting")
                 }
+                if let Some(settings) = export.settings {
+                    settings.validate()?;
+                    ws.batch.output_settings = settings;
+                }
                 ws.batch.out_dir = Some(export.out_dir);
                 ws.batch.format = export.format;
                 ws.run_batch(cx);
@@ -365,7 +543,10 @@ async fn run(
             settle(this, cx).await?;
             return this.update(cx,|ws,_|{if let Some(error)=&ws.error{bail!("{error}")}Ok(ToolResult::text(json!({"document_id":ws.editor.as_ref().map(|e|e.entity_id().as_u64()),"opened":true}).to_string()))})?;
         }
-        Request::State(_) | Request::Preview | Request::CancelExport => unreachable!(),
+        Request::State(_)
+        | Request::Preview
+        | Request::CancelExport
+        | Request::CancelEnhancement => unreachable!(),
     }
     this.update(cx, |ws, cx| -> Result<_> {
         check_note(ws)?;
@@ -383,6 +564,18 @@ fn apply_view(
     cx: &mut Context<Workspace>,
 ) -> Result<()> {
     // Validate every fallible input before changing any view state.
+    let develop_section = match &view.develop_section {
+        Some(name) => Some(
+            [
+                "basic", "crop", "curve", "mixer", "grading", "masks", "kelvin", "history",
+                "enhance",
+            ]
+            .iter()
+            .position(|n| n == name)
+            .ok_or_else(|| anyhow!("Unknown Develop section"))?,
+        ),
+        None => None,
+    };
     if let Some(id) = view.collection
         && !ws
             .batch
@@ -433,7 +626,14 @@ fn apply_view(
             .unwrap()
             .update(cx, |s, cx| s.set_value(query, window, cx));
     }
+    if let Some(section) = develop_section {
+        ws.batch.develop.section = section;
+        ws.batch.develop.slider_key = None;
+    }
     let l = &mut ws.batch.library;
+    if let Some(collapse) = view.collapse_stacks {
+        l.collapse_stacks = collapse;
+    }
     if let Some(source) = view.source {
         l.collection = None;
         l.source_paths = match source {
@@ -473,6 +673,9 @@ fn apply_view(
     }
     if let Some(reverse) = view.reverse {
         l.reverse = reverse;
+    }
+    if let Some(clipping) = view.clipping {
+        ws.batch.develop.clipping = clipping;
     }
     if let Some(mode) = view.mode {
         let d = &mut ws.batch.develop;
@@ -522,7 +725,7 @@ async fn develop_request(
         return Ok(());
     }
     let path = this.update(cx, |ws, _| active(ws))??;
-    if !emulsion_io::raw::is_raw(&path) {
+    if !emulsion_io::photo_develop::supported(&path) {
         bail!("Active Library photo is not an editable RAW")
     }
     if request.action == A::Reload {
@@ -566,12 +769,9 @@ async fn develop_request(
     }
     if request.action == A::Sync {
         this.update(cx, |ws, cx| -> Result<()> {
-            if !ws
-                .batch
-                .items
-                .iter()
-                .any(|i| i.selected && emulsion_io::raw::is_raw(&i.path) && i.path != path)
-            {
+            if !ws.batch.items.iter().any(|i| {
+                i.selected && emulsion_io::photo_develop::supported(&i.path) && i.path != path
+            }) {
                 bail!("Select at least one other RAW to synchronize")
             }
             ws.batch.develop.sync_group = request.group.unwrap_or(api::Group::All).raw();
@@ -582,7 +782,78 @@ async fn develop_request(
         this.update(cx, |ws, _| check_note(ws))??;
         return Ok(());
     }
+    if matches!(
+        request.action,
+        A::SubjectMask
+            | A::SkyMask
+            | A::AutoSky
+            | A::AutoPerspective
+            | A::Denoise
+            | A::SuperResolution
+    ) {
+        let action = match request.action {
+            A::SubjectMask => 0,
+            A::Denoise => 1,
+            A::SkyMask => 3,
+            A::AutoSky => 4,
+            A::AutoPerspective => 5,
+            _ => 2,
+        };
+        this.update(cx, |ws, cx| {
+            ws.batch.develop.mask_seed = request.point;
+            ws.library_enhance(action, cx);
+        })?;
+        settle(this, cx).await?;
+        this.update(cx, |ws, _| check_note(ws))??;
+        this.update(cx, |ws, cx| {
+            ws.batch.develop.save_task = None;
+            ws.library_save_develop(false, cx);
+        })?;
+        settle(this, cx).await?;
+        this.update(cx, |ws, _| check_note(ws))??;
+        return Ok(());
+    }
+    if request.action == A::Snapshot {
+        let name = request.name.unwrap();
+        let file = path.clone();
+        let digest = source.source_sha256.clone();
+        let title = name.clone();
+        cx.background_spawn(
+            async move { raw_settings::save_snapshot(&file, &digest, &title, params) },
+        )
+        .await?;
+        this.update(cx, |ws, cx| {
+            ws.batch
+                .develop
+                .snapshots
+                .entry(path)
+                .or_default()
+                .insert(name, params);
+            cx.notify();
+        })?;
+        return Ok(());
+    }
     let next = match request.action {
+        A::MatchLens => {
+            let file = path.clone();
+            let profile = cx
+                .background_spawn(async move { emulsion_io::photo_develop::matched_lens(&file) })
+                .await?;
+            emulsion_core::raw::DevelopParams {
+                lens_profile: Some(profile),
+                ..params
+            }
+        }
+        A::RestoreSnapshot => this
+            .update(cx, |ws, _| {
+                ws.batch
+                    .develop
+                    .snapshots
+                    .get(&path)
+                    .and_then(|s| s.get(request.name.as_ref().unwrap()))
+                    .copied()
+            })?
+            .ok_or_else(|| anyhow!("Unknown snapshot"))?,
         A::Adjust => {
             api::patch(params, request.settings.as_ref().unwrap()).map_err(|e| anyhow!(e))?
         }
@@ -597,14 +868,21 @@ async fn develop_request(
         ),
         A::AsShot => emulsion_core::raw::DevelopParams {
             wb_override: None,
+            kelvin: None,
             temperature: 0.,
             tint: 0.,
             ..params
         },
         A::LoadPreset => {
             let file = request.path.unwrap();
-            cx.background_spawn(async move { raw_settings::load_preset(&file) })
-                .await?
+            let imported = cx
+                .background_spawn(
+                    async move { emulsion_io::lightroom_presets::load(&file, params) },
+                )
+                .await?;
+            let next = imported.params;
+            this.update(cx, |ws, _| ws.batch.develop.preset_report = Some(imported))?;
+            next
         }
         A::Undo => this
             .update(cx, |ws, _| {
@@ -636,7 +914,17 @@ async fn develop_request(
                 ..params
             },
         },
-        A::Save | A::Reload | A::Sync | A::SavePreset => unreachable!(),
+        A::Save
+        | A::Reload
+        | A::Sync
+        | A::SavePreset
+        | A::Snapshot
+        | A::SubjectMask
+        | A::SkyMask
+        | A::AutoSky
+        | A::AutoPerspective
+        | A::Denoise
+        | A::SuperResolution => unreachable!(),
     };
     this.update(cx, |ws, cx| -> Result<()> {
         if active(ws)? != path
@@ -687,7 +975,7 @@ async fn preview(this: &WeakEntity<Workspace>, cx: &mut AsyncApp) -> Result<Tool
             ))
         })??;
     cx.background_spawn(async move{
-        let source=if emulsion_io::raw::is_raw(&path){Some(match fingerprint{Some(hash)=>RawSource::load_verified(&path,&hash)?,None=>RawSource::load(&path)?})}else{None};
+        let source=if emulsion_io::photo_develop::supported(&path){Some(match fingerprint{Some(hash)=>RawSource::load_verified(&path,&hash)?,None=>RawSource::load(&path)?})}else{None};
         let params=match &source{Some(source)=>Some(match params{Some(p)=>p,None=>raw_settings::adjacent_settings(&source.source,&source.source_sha256)?}),None=>None};
         let mut result=ToolResult::text(json!({"path":path,"settings":params,"mode":if compare{"compare"}else if before{"before"}else{"edited"},"snapshot":true}).to_string());
         for original in if compare{vec![true,false]}else{vec![before]}{

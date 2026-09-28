@@ -188,7 +188,7 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
         };
         let source = endpoint("source", cell.source_point, "exit")?;
         let target = endpoint("target", cell.target_point, "entry")?;
-        let routing = if style.get("curved").is_some_and(|v| v == "1") {
+        let routing = if style.get("emulsionRouting").is_some_and(|v| v == "cyclical") { Routing::Cyclical } else if style.get("curved").is_some_and(|v| v == "1") {
             Routing::Curved
         } else if style.get("edgeStyle").is_some_and(|s| {
             matches!(
@@ -254,6 +254,12 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 .data
                 .insert("drawio_geometry_style".into(), geometry_style);
         }
+        if let Some(link)=cell.attrs.get("link").filter(|s|!s.is_empty()) {
+            if emulsion_core::design_interactions::valid_url(link) && doc.design.interactions.len()<1024 {
+                doc.design.interactions.insert(id,vec![emulsion_core::design_interactions::Action::Url{url:link.clone()}]);
+                shape.data.insert("drawio_link".into(),link.clone());
+            } else {warnings.insert("Unsupported hyperlink retained as metadata; only HTTP(S) links can be opened.".into());if link.len()<=4096 {shape.data.insert("drawio_link".into(),link.clone());}}
+        }
         apply_style(&mut doc, shape.body, shape.label, style, warnings)?;
         super::labels::apply(&mut doc, shape.label, cell, style, warnings);
         apply_cell(&mut doc, id, cell, style)?;
@@ -268,6 +274,9 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
         if let Some(parent) = cell.attrs.get("parent").and_then(|p| ids.get(p)) {
             doc.node_mut(id).unwrap().parent = Some(*parent);
             shape.container = Some(*parent);
+        }
+        if style.get("shadow").is_some_and(|v|v=="1") {
+            doc.node_mut(id).unwrap().styles.push(emulsion_core::styles::LayerStyle::DropShadow{color:[0,0,0],opacity:25.,angle:135.,distance:2.828427,size:0.});
         }
         let b = bounds[key];
         let artwork_start = doc.next_id;
@@ -464,6 +473,24 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                     - number(style, "spacingRight", 0.)?)
                 .max(1.) as f32,
             );
+            let wrap = style.get("whiteSpace").is_some_and(|v| v == "wrap");
+            if let Some(width) = style.get("labelWidth") {
+                text.width = Some(width.parse::<f32>().ok().filter(|v| v.is_finite() && *v > 0.).ok_or_else(||error("Invalid label width"))?);
+            } else if !wrap {
+                // mxGraph labels overflow their shape unless wrapping is explicit.
+                // In particular, external icon captions must not wrap at a narrow
+                // icon width or at width minus a large label spacing offset.
+                text.width = None;
+                let width = (emulsion_core::text::layout(&text).bounds().width + 2.).max(1.);
+                text.width = Some(width);
+                let left = number(style, "spacingLeft", 0.)?;
+                let right = number(style, "spacingRight", 0.)?;
+                text.x = match text.align {
+                    emulsion_core::text::Align::Left => b[0] + spacing + left,
+                    emulsion_core::text::Align::Right => b[0] + b[2] - spacing - right - width as f64,
+                    _ => b[0] + (b[2] - width as f64 + left - right) / 2.,
+                } as f32;
+            }
             // Measure wrapped lines with the same shaping engine as the canvas.
             // Counting source newlines places wrapped paragraphs too low.
             let measured = emulsion_core::text::layout(&text).bounds();
@@ -493,7 +520,7 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 _ => {}
             }
             if style.get("horizontal").is_some_and(|v| v == "0") {
-                let label_width = (b[3] - spacing * 2.).max(1.);
+                let label_width = (b[3] - spacing * 2.).max(1.).max(if wrap {1.} else {text.width.unwrap_or(1.) as f64});
                 text.width = Some(label_width as f32);
                 text.rotation = -90.;
                 let measured = emulsion_core::text::layout(&text).bounds();
@@ -505,6 +532,12 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 };
                 text.x = (b[0] + header / 2. - height / 2.) as f32;
                 text.y = (b[1] + b[3] / 2. + label_width / 2.) as f32;
+            }
+            let rotation=number(style,"rotation",0.)?;
+            if rotation!=0. {
+                let center=glam::dvec2(b[0]+b[2]/2.,b[1]+b[3]/2.);
+                let position=center+glam::DMat2::from_angle(rotation.to_radians())*(glam::dvec2(text.x as f64,text.y as f64)-center);
+                text.x=position.x as f32;text.y=position.y as f32;text.rotation+=rotation as f32;
             }
             if style.contains_key("emulsionLabelRotation") {
                 text.rotation = number(style, "emulsionLabelRotation", 0.)? as f32;
@@ -548,6 +581,9 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
         edge.label_offset = cell.offset;
         edge.arrow_end = style.get("endArrow").is_none_or(|v| v != "none");
         edge.arrow_start = style.get("startArrow").is_some_and(|v| v != "none");
+        edge.jump_style = match style.get("jumpStyle").map(String::as_str) { Some("arc")=>diagram::JumpStyle::Arc, Some("gap")=>diagram::JumpStyle::Gap, Some("sharp")=>diagram::JumpStyle::Sharp, _=>diagram::JumpStyle::None };
+        edge.corner_radius=if style.get("rounded").is_some_and(|v| v == "1") { number(&style,"arcSize",6.)?.clamp(0.,100.) } else { 0. };
+        edge.jump_size=number(&style,"jumpSize",10.)?.clamp(1.,100.);
         for (prefix, marker) in [
             ("start", &mut edge.start_marker),
             ("end", &mut edge.end_marker),
@@ -614,8 +650,26 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             *spec = Arc::new(text);
             *cache = VectorRaster::text(spec.clone(), page.width, page.height);
         }
+        let label_id=node.id;
         doc.nodes.push(node);
-        warnings.insert("Additional connector labels remain editable text; their relative path positions need review.".into());
+        apply_style(&mut doc,label_id,label_id,&style(cell),warnings)?;
+        super::labels::apply(&mut doc,label_id,cell,&style(cell),warnings);
+        let position=number(&cell.geometry,"x",0.)?.clamp(-1.,1.);
+        let normal=number(&cell.geometry,"y",0.)?;
+        Arc::make_mut(doc.diagram.as_mut().unwrap()).edges.get_mut(&parent).unwrap().labels.push(diagram::EdgeLabel{node:label_id,position,normal,offset:cell.offset});
+    }
+    doc.normalize();
+    diagram::synchronize(&Document::new(page.width,page.height),&mut doc).map_err(error)?;
+    // Non-vertex mxCells are named drawing layers, not drawable rectangles.
+    let layer_keys=order.iter().filter(|key| {let c=&cells[*key];c.attrs.contains_key("parent") && !c.attrs.contains_key("vertex") && !c.attrs.contains_key("edge") && (c.attrs.get("value").is_some_and(|v|!v.is_empty()) || *key!="1")}).cloned().collect::<Vec<_>>();
+    for key in &layer_keys {
+        let cell=&cells[key];let id=doc.alloc_id();let mut layer=Node::group(id,cell.attrs.get("value").map_or("Layer",String::as_str));
+        layer.visible=cell.attrs.get("visible").is_none_or(|v|v!="0");doc.nodes.push(layer);ids.insert(key.clone(),id);
+    }
+    for key in &order {
+        if let Some(&id)=ids.get(key) && let Some(parent)=cells[key].attrs.get("parent").filter(|p|layer_keys.contains(p)).and_then(|p|ids.get(p)) {
+            doc.node_mut(id).unwrap().parent=Some(*parent);
+        }
     }
     // Preserve source sibling stacking. Native body/label children stay below
     // nested graph objects; putting every connector behind every shape hides

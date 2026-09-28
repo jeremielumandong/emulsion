@@ -452,3 +452,20 @@ fn graph_edits_and_history_accounting_never_force_cpu_vector_pixels() {
     editor.redo();
     editor.doc.validate().unwrap();
 }
+
+#[test]
+fn rounded_and_jumped_routes_transform_semantic_bends_without_decorative_anchors() {
+    for (radius,jump) in [(6.,JumpStyle::None),(0.,JumpStyle::Arc),(6.,JumpStyle::Arc)] {
+        let (mut e,a,b,id)=fixture();
+        let mut model=e.doc.diagram.as_deref().unwrap().clone();
+        let edge=model.edges.get_mut(&id).unwrap();edge.corner_radius=radius;edge.jump_style=jump;edge.waypoints=vec![(230.,70.),(230.,190.)];
+        e.execute(Command::SetDiagram{diagram:Some(Arc::new(model))}).unwrap();
+        let before=e.doc.clone();
+        e.execute(Command::TransformNodes{ids:vec![a,b,id],transform:[1.,0.,0.,1.,50.,30.]}).unwrap();
+        assert_eq!(e.doc.diagram.as_ref().unwrap().edges[&id].waypoints,vec![(280.,100.),(280.,220.)]);
+        e.undo();assert_eq!(e.doc,before);
+        e.execute(Command::TranslateNode{id,dx:25.,dy:12.}).unwrap();
+        assert_eq!(e.doc.diagram.as_ref().unwrap().edges[&id].waypoints,vec![(255.,82.),(255.,202.)]);
+        e.undo();assert_eq!(e.doc,before);
+    }
+}

@@ -419,7 +419,7 @@ fn compact_toolbars_restore_and_presets_preserve_document(cx: &mut TestAppContex
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.try_find("canvas-toolbar-tools").is_none());
-        if window.try_find("workspace-menu-button").is_some() {
+        if window.try_find("window-menu-button").is_some() {
             pick_workspace(window, CUSTOMIZE, cx);
         }
     });
@@ -578,7 +578,8 @@ fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContex
     let original = doc(&["Photo"], None);
     let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 900.);
     cx.update(|window, cx| {
-        assert!(window.find("workspace-menu-button").visible());
+        assert!(window.try_find("workspace-menu-button").is_none());
+        assert!(window.find("window-menu-button").visible());
         assert!(window.try_find("canvas-toolbar-dock").is_none());
         assert!(window.find("canvas-toolbar-options").visible());
         pick_workspace(window, DRAW, cx);
@@ -621,6 +622,47 @@ fn photo_and_draw_modes_each_remember_their_own_workspace(cx: &mut TestAppContex
     cx.dispatch_action(crate::actions::ToggleDrawMode);
     cx.run_until_parked();
     cx.update(|_, cx| assert!(!editor.read(cx).draw_mode, "Ctrl+Alt+Shift+D switches too"));
+}
+
+#[gpui_kit::test]
+fn window_layout_keeps_minimal_and_saved_presets_without_header_picker(cx: &mut TestAppContext) {
+    let original = doc(&["Photo"], None);
+    let (workspace, editor, cx) = compact(cx, original.clone(), 1440., 900.);
+    let saved = cx.update(|_, cx| {
+        let mut layout = editor.read(cx).workspace_snapshot();
+        // Old layouts could hide Window because the header picker was separate.
+        layout.hidden_menu_ids = vec!["window".into()];
+        layout.draw_mode = true;
+        cx.global_mut::<AppSettings>().0.workspace_presets =
+            vec![emulsion_io::settings::WorkspacePreset {
+                name: "My painting layout".into(),
+                layout: layout.clone(),
+            }];
+        editor.update(cx, |editor, cx| editor.apply_workspace_layout(&layout, cx));
+        layout
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.try_find("workspace-menu-button").is_none());
+        assert!(window.find("window-menu-button").visible());
+        pick_workspace(window, 2, cx); // Minimal layout.
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(editor.read(cx).workspace_snapshot().sidebar_collapsed);
+        assert!(window.try_find("canvas-toolbar-options").is_none());
+        assert_eq!(workspace.read(cx).editor.as_ref(), Some(&editor));
+        assert_eq!(editor.read(cx).editor.doc, original);
+        pick_workspace(window, 5, cx); // First saved layout, after Customize.
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).workspace_snapshot(), saved);
+        assert_eq!(editor.read(cx).editor.doc, original);
+        assert_eq!(editor.read(cx).editor.history.len(), 0);
+        assert_eq!(workspace.read(cx).tabs.len(), 1);
+        assert!(window.find("window-menu-button").visible());
+    });
 }
 
 #[gpui_kit::test]
@@ -849,7 +891,7 @@ fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut Tes
     });
     cx.run_until_parked();
     // Window ▸ Layers.
-    let point = cx.update(|window, _| window.within("popup-menu").find(21usize).bounds().center());
+    let point = cx.update(|window, _| window.within("popup-menu").find(17usize).bounds().center());
     cx.simulate_click(point, Default::default());
     cx.run_until_parked();
     cx.update(|_, cx| {
@@ -910,14 +952,17 @@ fn tools_panel_has_quick_mask_and_a_double_column_toggle(cx: &mut TestAppContext
     });
 }
 
-/// Entries of the header's workspace picker; separators take an index.
+/// Selectable entries under Window > Layout (separators are skipped).
 const PHOTO: usize = 0;
 const DRAW: usize = 1;
-const CUSTOMIZE: usize = 5;
+const CUSTOMIZE: usize = 4;
 
-/// Open the header's workspace picker and choose entry `index`.
 fn pick_workspace(window: &mut gpui_kit::Window, index: usize, cx: &mut gpui_kit::App) {
-    window.click("workspace-menu-button", cx);
-    window.render_frame(cx);
-    window.within("popup-menu").click(index, cx);
+    window.click("window-menu-button", cx);
+    window.within("popup-menu").click(2usize, cx);
+    window.press("right", cx);
+    for _ in 0..index {
+        window.press("down", cx);
+    }
+    window.press("enter", cx);
 }

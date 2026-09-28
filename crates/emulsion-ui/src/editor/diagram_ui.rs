@@ -11,36 +11,18 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 
+#[path = "diagram_object_menu.rs"]
+mod object_menu;
+#[path="diagram_used_stencils.rs"]
+mod used_stencils;
+pub(crate) use used_stencils::DraggedDocumentStencil;
+
 type DiagramPalette = ([u8; 4], [u8; 4], [u8; 4]);
 const DIAGRAM_STYLES: [(&str, DiagramPalette); 4] = [
-    (
-        "Neutral",
-        (
-            [248, 250, 252, 255],
-            [100, 116, 139, 255],
-            [30, 41, 59, 255],
-        ),
-    ),
-    (
-        "Blue",
-        (
-            [239, 246, 255, 255],
-            [59, 130, 246, 255],
-            [30, 58, 138, 255],
-        ),
-    ),
-    (
-        "Green",
-        ([236, 253, 245, 255], [16, 185, 129, 255], [6, 78, 59, 255]),
-    ),
-    (
-        "Amber",
-        (
-            [255, 251, 235, 255],
-            [245, 158, 11, 255],
-            [120, 53, 15, 255],
-        ),
-    ),
+    ("White", (diagram::DEFAULT_FILL, diagram::DEFAULT_LINE, diagram::DEFAULT_TEXT)),
+    ("Soft teal", ([178, 242, 235, 255], diagram::DEFAULT_LINE, diagram::DEFAULT_TEXT)),
+    ("Soft blue", ([236, 244, 255, 255], diagram::DEFAULT_LINE, diagram::DEFAULT_TEXT)),
+    ("Charcoal", ([75, 81, 89, 255], diagram::DEFAULT_LINE, [255; 4])),
 ];
 
 #[derive(Clone)]
@@ -61,6 +43,8 @@ impl Render for DraggedStencil {
 }
 
 pub(super) struct DiagramUi {
+    used: used_stencils::UsedStencils,
+    copied_style: Option<object_menu::ObjectStyle>,
     open: bool,
     pub(super) search: Option<Entity<InputState>>,
     subscription: Option<Subscription>,
@@ -77,6 +61,7 @@ pub(super) struct DiagramUi {
     pub(super) library_tab: usize,
     pub(super) theme_selection: bool,
     pub(super) pack_filter: usize,
+    pub(super) stencil_page: usize,
     import_notes: Vec<String>,
     pub(super) collapsed_categories: std::collections::HashSet<&'static str>,
 }
@@ -89,6 +74,8 @@ struct DiagramMarquee {
 impl Default for DiagramUi {
     fn default() -> Self {
         Self {
+            used: Default::default(),
+            copied_style: None,
             open: true,
             search: None,
             subscription: None,
@@ -105,6 +92,7 @@ impl Default for DiagramUi {
             library_tab: 0,
             theme_selection: false,
             pack_filter: 0,
+            stencil_page: 0,
             import_notes: Vec::new(),
             collapsed_categories: diagram::stencils::CATEGORIES
                 .iter()
@@ -517,9 +505,9 @@ impl EditorView {
             else {
                 continue;
             };
-            for line in &path.subpaths {
-                for pair in line.anchors.windows(2) {
-                    let (a, b) = (pair[0].p, pair[1].p);
+            for (line, _) in path.flatten((0.75/self.view.zoom).clamp(0.02,2.)) {
+                for pair in line.windows(2) {
+                    let (a, b) = (pair[0], pair[1]);
                     let delta = (b.0 - a.0, b.1 - a.1);
                     let length = delta.0 * delta.0 + delta.1 * delta.1;
                     let t = if length == 0. {
@@ -1515,7 +1503,10 @@ impl EditorView {
         match emulsion_core::diagram_library::theme_commands(
             &self.editor.doc,
             &self.selected_layer_roots(),
-            emulsion_core::diagram_library::THEMES[index],
+            {
+                let (name,(fill,line,text)) = DIAGRAM_STYLES[index];
+                emulsion_core::diagram_library::Theme { id: "preset", name, fill, line, text }
+            },
         ) {
             Ok(commands) => {
                 self.execute_layer_commands("Diagram style", commands, cx);
@@ -1735,6 +1726,7 @@ impl EditorView {
                                 Routing::Orthogonal => "Routing: orthogonal",
                                 Routing::Straight => "Routing: straight",
                                 Routing::Curved => "Routing: curved",
+                                Routing::Cyclical => "Routing: cyclical",
                             })
                             .small()
                             .outline()
@@ -1745,7 +1737,8 @@ impl EditorView {
                                         e.routing = match routing {
                                             Routing::Orthogonal => Routing::Straight,
                                             Routing::Straight => Routing::Curved,
-                                            Routing::Curved => Routing::Orthogonal,
+                                            Routing::Curved => Routing::Cyclical,
+                                            Routing::Cyclical => Routing::Orthogonal,
                                         };
                                         e.waypoints.clear();
                                     },
@@ -1763,6 +1756,8 @@ impl EditorView {
                                 this.update_diagram_edge(id, |e| e.arrow_end = !arrow, cx)
                             })),
                     );
+                let jump=edge.jump_style;
+                content=content.child(Button::new("diagram-line-jumps").label(format!("Crossings: {}",jump.drawio())).small().outline().on_click(cx.listener(move |this,_,_,cx|this.update_diagram_edge(id,|e|e.jump_style=match jump {diagram::JumpStyle::None=>diagram::JumpStyle::Arc,diagram::JumpStyle::Arc=>diagram::JumpStyle::Gap,diagram::JumpStyle::Gap=>diagram::JumpStyle::Sharp,diagram::JumpStyle::Sharp=>diagram::JumpStyle::None},cx))));
                 for (index, start, marker) in [
                     (0usize, true, edge.start_marker),
                     (1usize, false, edge.end_marker),
@@ -2041,8 +2036,10 @@ impl EditorView {
         self.load_creative_library(cx);
         if self.diagram_ui.search.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search library"));
-            self.diagram_ui.subscription = Some(cx.subscribe(&input, |_, _, event, cx| {
+            self.diagram_ui.subscription = Some(cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
+                    this.diagram_ui.stencil_page=0;
+                    this.diagram_ui.used.page=0;
                     cx.notify();
                 }
             }));
@@ -2150,6 +2147,7 @@ impl EditorView {
                     })),
             );
         }
+        if self.diagram_ui.library_tab == 0 { content=content.child(self.document_stencil_toolbox(&query,p,window,cx)); }
         if matches!(self.diagram_ui.library_tab, 0 | 2) {
             for (category_index, &label) in diagram::stencils::CATEGORIES.iter().enumerate() {
                 let stencils = diagram::stencils::STENCILS

@@ -150,8 +150,8 @@ fn parse(text: &str, package: Option<&Package>) -> Result<Imported> {
         ));
     }
     let pages = array(&root, "pages")?;
-    if pages.is_empty() || pages.len() > 100 {
-        return Err(error("Lucid document must contain 1–100 pages."));
+    if pages.is_empty() || pages.len() > emulsion_core::project::MAX_PAGES {
+        return Err(error("Lucid page count exceeds the project limit."));
     }
     let mut warnings = BTreeSet::new();
     let mut scenes = Vec::new();

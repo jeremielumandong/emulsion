@@ -314,6 +314,11 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut list = div().flex().flex_col().gap_1();
+        const PAGE:usize=96;
+        let total=self.creative.catalog.assets.iter().filter(|a|a.kind==AssetKind::Stencil).map(|a|a.variants.iter().filter(|name|format!("{} {name} {}",a.name,a.tags.join(" ")).to_lowercase().contains(query)).count()).sum::<usize>();
+        let page=self.diagram_ui.stencil_page.min(total.saturating_sub(1)/PAGE);
+        let mut matched=0;
+
         for asset in self
             .creative
             .catalog
@@ -328,6 +333,8 @@ impl EditorView {
                 {
                     continue;
                 }
+                matched+=1;
+                if matched<=page*PAGE || matched>(page+1)*PAGE {continue;}
                 let path = asset.path.clone();
                 let preview = path
                     .parent()
@@ -367,6 +374,12 @@ impl EditorView {
                         })),
                 );
             }
+        }
+        if total>PAGE {
+            list=list.child(div().flex().items_center().gap_2()
+                .child(Button::new("stencil-previous").label("Previous").small().on_click(cx.listener(move |this,_,_,cx|{this.diagram_ui.stencil_page=page.saturating_sub(1);cx.notify();})))
+                .child(format!("{} / {}",page+1,total.div_ceil(PAGE)))
+                .child(Button::new("stencil-next").label("Next").small().on_click(cx.listener(move |this,_,_,cx|{this.diagram_ui.stencil_page=(page+1).min(total.saturating_sub(1)/PAGE);cx.notify();}))));
         }
         list.child(self.creative_asset_list(AssetKind::Stencil, query, p, cx))
             .into_any_element()

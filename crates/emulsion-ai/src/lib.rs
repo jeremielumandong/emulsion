@@ -30,3 +30,5 @@ pub mod runner;
 pub mod sam;
 pub mod suggest;
 pub mod upscale;
+
+pub mod sky;

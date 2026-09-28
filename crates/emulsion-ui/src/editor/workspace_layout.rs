@@ -3,7 +3,7 @@ use super::compact::{Bar, CompactLayout, Edge, MAX_SCALE, MIN_SCALE};
 use super::*;
 use emulsion_io::settings::{ToolbarPlacement, WorkspaceLayout, WorkspacePreset};
 use gpui_kit::component::{
-    Sizable,
+    Disableable, Sizable,
     button::{Button, ButtonVariants},
     input::{Input, InputState},
 };
@@ -12,11 +12,14 @@ use super::menu_bar::MENUS;
 
 impl EditorView {
     pub(super) fn menu_visible(&self, id: &str) -> bool {
-        !self
-            .compact
-            .hidden_menu_ids
-            .iter()
-            .any(|hidden| hidden == id)
+        // Keep the layout recovery controls reachable, including old presets
+        // that hid Window while the separate header picker still existed.
+        id == "window"
+            || !self
+                .compact
+                .hidden_menu_ids
+                .iter()
+                .any(|hidden| hidden == id)
     }
 
     pub(crate) fn workspace_snapshot(&self) -> WorkspaceLayout {
@@ -272,6 +275,8 @@ impl EditorView {
             .child(div().flex().flex_wrap().gap_1().children(MENUS.into_iter().map(|(id, name)| {
                 let shown = self.menu_visible(id);
                 Button::new(SharedString::from(format!("workspace-menu-{id}"))).label(name).small()
+                    .disabled(id == "window")
+                    .when(id == "window", |b| b.tooltip("Window keeps layout controls accessible"))
                     .when(shown, |b| b.bg(p.soft_bg).border_1().border_color(p.line))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.menu_visible(id) { this.compact.hidden_menu_ids.push(id.into()); }

@@ -9,7 +9,11 @@ These tools work against the active document's structured diagram graph. Shapes 
 | `add_diagram_shape` | Add a native shape using a kind, `[x,y,width,height]` bounds and optional label. |
 | `insert_diagram_stencil` | Insert a bundled stencil by its discovered ID and bounds. |
 | `add_diagram_connector` | Attach two existing shapes with ports, routing and optional label. |
-| `set_diagram_connector` | Patch endpoints, routing, waypoints, label offsets and arrowheads. |
+| `set_diagram_connector` | Patch endpoints, routing, waypoints, label offsets, arrowheads, width, RGBA color, dash pattern, corner radius, crossing bridges and direction reversal. |
+| `set_diagram_object_details` | Set/clear a shape’s note, alt text and HTTP(S) link. |
+| `copy_diagram_style` | Copy appearance from a source shape/connector to target objects without changing geometry or captions. |
+| `list_document_stencils` | Discover reusable imported/current-page shapes and their source IDs. |
+| `insert_document_stencil` | Place a reusable source object at `center: [x,y]`, preserving artwork/style and excluding attached edges/container contents. |
 | `set_diagram_shape` | Patch label, replace data/conditional rules, toggle layout lock, or change container. |
 | `layout_diagram` | Arrange unlocked top-level shapes in vertical, horizontal, grid or mind-map layout. |
 
@@ -51,7 +55,7 @@ for sample coverage, the default catalog and remaining compatibility limits.
 
 | Tool | Purpose |
 | --- | --- |
-| `list_diagram_library` | Discover the eight bundled templates and six theme IDs. |
+| `list_diagram_library` | Discover the eight bundled templates and nine theme IDs. |
 | `insert_diagram_template` | Insert a discovered template as a new editable page, with one undo step. |
 | `apply_diagram_theme` | Apply a theme to the whole diagram or supplied `nodes`, atomically and with undo. |
 | `list_diagram_stencil_packs` | Inspect installed offline stencil packs and their entry paths. |
@@ -83,3 +87,36 @@ exactly one of `pack` (bundled ID) or `path` (local stencil source). Installatio
 returns compatibility notes. Native entries are then placed with
 `insert_diagram_pack_entry`, which preserves connections and supports undo.
 Visio conversion and vector-source preservation use the same importer as the UI.
+
+## Crossing bridges and larger libraries
+
+`set_diagram_connector` accepts `jump_style: "none" | "arc" | "gap" | "sharp"`
+and `jump_size` from 1 to 100 document pixels. Bridges are recalculated when
+connected objects move; straight and orthogonal routes are supported. Imported
+additional labels appear in each edge's `labels` metadata and remain editable
+through normal text commands. Invalid patches are atomic and undo restores the
+previous route and crossing style.
+
+```json
+{"node":42,"routing":"orthogonal","jump_style":"arc","jump_size":12}
+```
+
+Bundled families expose all available stencil definitions. The UI pages results
+in groups of 96; MCP listing and insertion use the same complete catalog. Limits
+are 4,096 project pages, 10,000 shapes and 20,000 edges per diagram page.
+
+## Floating connector controls and document stencils
+
+The floating toolbar shares native connector commands with MCP. `routing` accepts `straight`, `orthogonal`, `curved`, or `cyclical`. `width` is 0.25–100 px; `color` is RGBA; `dash` is an array of up to six alternating lengths (empty resets to solid); `corner_radius` is 0–100 px. `reverse: true` swaps attachments and reverses manual bends while retaining endpoint marker roles. Label positions remain attached to the route. Curved/cyclical routes do not use corner rounding or crossing bridges.
+
+```json
+{"node":42,"routing":"orthogonal","corner_radius":6,"width":1,"color":[75,81,89,255],"dash":[8,5],"reverse":true,"end_marker":{"kind":"block","size":10}}
+```
+
+After importing a diagram, call `list_document_stencils`, then `insert_document_stencil` with a returned source ID:
+
+```json
+{"source":12,"center":[600,400]}
+```
+
+The inserted object has independent IDs, editable vector/text content and no copied external attachments. One Undo removes the insertion. Original embedded bitmap imagery remains bitmap imagery.

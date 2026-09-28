@@ -1,6 +1,7 @@
 //! Home's paged cloud browser: one file per row, with history scoped to that file.
 use super::*;
 use gpui_kit::component::Selectable;
+use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::menu::PopupMenuItem;
 use std::collections::BTreeMap;
 
@@ -104,7 +105,8 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_3();
-        let mut controls = div().flex().flex_wrap().items_center().gap_2();
+        let mut controls =
+            crate::widgets::command_bar("cloud-home-toolbar", "Cloud filters and actions");
         for (n, provider) in std::iter::once(None)
             .chain(
                 Provider::ALL
@@ -131,7 +133,11 @@ impl Workspace {
         controls = controls
             .child(
                 Button::new("cloud-home-refresh")
-                    .label("Refresh / retry")
+                    .label(if busy {
+                        "Syncing…"
+                    } else {
+                        "Refresh / retry"
+                    })
                     .small()
                     .outline()
                     .disabled(busy)
@@ -342,9 +348,77 @@ impl Workspace {
             }
             root = root.child(grid);
             if total == 0 {
-                root = root.child("No matching cloud files. Sync a saved file from its Home card, or refresh to browse files from another device.");
+                let connected = self.cloud.index.as_ref().is_some_and(|index| {
+                    index
+                        .accounts
+                        .iter()
+                        .any(|a| a.provider != Provider::GooglePhotos)
+                });
+                let filtered = !query.trim().is_empty() || self.cloud.provider_filter.is_some();
+                let (title, description) = if busy {
+                    (
+                        "Checking your cloud files",
+                        "Your files will appear when the current sync finishes.",
+                    )
+                } else if !connected {
+                    (
+                        "Connect a drive",
+                        "Connect Google Drive, Dropbox or OneDrive to sync saved work and browse cloud copies.",
+                    )
+                } else if filtered {
+                    (
+                        "No matching cloud files",
+                        "Try another name or clear the search and drive filter.",
+                    )
+                } else {
+                    (
+                        "No cloud files yet",
+                        "Sync a saved file from its Home card, or refresh to find work from another device.",
+                    )
+                };
+                let mut empty = crate::widgets::empty_state("cloud", title, description);
+                if !busy && !connected {
+                    empty = empty.child(
+                        Button::new("cloud-empty-connect")
+                            .label("Manage connections…")
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.cloud.connections_open = true;
+                                cx.notify();
+                            })),
+                    );
+                } else if !busy && filtered {
+                    empty = empty.child(
+                        Button::new("cloud-empty-clear")
+                            .label("Clear filters")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.cloud.provider_filter = None;
+                                this.cloud.page = 0;
+                                this.clear_home_search(window, cx);
+                                cx.notify();
+                            })),
+                    );
+                } else if !busy {
+                    empty = empty.child(
+                        Button::new("cloud-empty-local")
+                            .label("Browse local files")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.home_state.cloud_files = false;
+                                this.home_state.page = 0;
+                                cx.notify();
+                            })),
+                    );
+                }
+                root = root.child(div().id("cloud-empty").test_support().child(empty));
             }
-            root = root.child(self.cloud_pages(total, "files", cx));
+            if total > PAGE_SIZE {
+                root = root.child(self.cloud_pages(total, "files", cx));
+            }
         }
         root.into_any_element()
     }
@@ -448,6 +522,59 @@ mod tests {
     use super::*;
     use core::prelude::v1::test;
     use gpui_kit::test::TestWindowExt;
+
+    #[gpui_kit::test]
+    fn cloud_empty_states_offer_connection_and_filter_recovery(cx: &mut TestAppContext) {
+        let (workspace, cx) = crate::tests::open(cx, emulsion_core::Document::new(32, 32));
+        cx.run_until_parked();
+        cx.simulate_resize(size(px(1440.), px(1000.)));
+        cx.update(|window, cx| {
+            workspace.update(cx, |this, cx| {
+                this.cloud = CloudUi {
+                    loaded: true,
+                    index: Some(Index::default()),
+                    ..Default::default()
+                };
+                this.home_state.cloud_files = true;
+                this.set_screen(Screen::Home, window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find("cloud-page-next").is_none());
+            window.click("cloud-empty-connect", cx);
+            assert!(workspace.read(cx).cloud.connections_open);
+            workspace.update(cx, |this, cx| {
+                this.cloud.connections_open = false;
+                this.cloud
+                    .index
+                    .as_mut()
+                    .unwrap()
+                    .accounts
+                    .push(collection()[0].0.clone());
+                this.cloud.provider_filter = Some(Provider::Dropbox);
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("cloud-empty-clear", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(workspace.read(cx).cloud.provider_filter, None);
+            assert!(window.find("cloud-empty-local").visible());
+            workspace.update(cx, |this, cx| {
+                this.cloud.busy = true;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find("cloud-empty-local").is_none());
+            assert_eq!(window.find("cloud-home-refresh").label(), Some("Syncing…"));
+            window.click("cloud-home-refresh", cx);
+            assert!(workspace.read(cx).cloud.busy);
+        });
+    }
     fn collection() -> Vec<(Account, RemoteRevision)> {
         let account = Account {
             provider: Provider::GoogleDrive,

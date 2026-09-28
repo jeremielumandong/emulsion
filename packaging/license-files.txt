@@ -9,6 +9,7 @@ THIRD_PARTY_NOTICES.md
 vendor/gpui/LICENSING.md
 vendor/gpui/UPSTREAM.json
 vendor/gpui/gpui-base/LICENSE-APACHE
+vendor/gpui/gpui-base/EMULSION_CHANGES.md
 vendor/gpui/gpui-component-macros/LICENSE-APACHE
 vendor/gpui/gpui-component/LICENSE-APACHE
 vendor/gpui/gpui-kit-assets/LICENSE-APACHE

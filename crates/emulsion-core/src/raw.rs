@@ -2,9 +2,167 @@
 use crate::NodeId;
 use std::path::PathBuf;
 
+/// Measured Lensfun coefficients, embedded so saved edits do not depend on a database revision.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LensCorrection {
+    pub distortion: [f32; 3],
+    pub vignette: [f32; 3],
+    pub tca: [f32; 6],
+    pub scale: f32,
+}
+
+/// Local coordinates are normalized to the oriented source, before crop/geometry.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LocalAdjustment {
+    pub enabled: bool,
+    pub bitmap: Option<[u8; 32]>,
+    pub linear: bool,
+    pub inverted: bool,
+    pub center: [f32; 2],
+    pub radius: [f32; 2],
+    pub feather: f32,
+    pub exposure: f32,
+    pub saturation: f32,
+    pub temperature: f32,
+}
+impl Default for LocalAdjustment {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bitmap: None,
+            linear: false,
+            inverted: false,
+            center: [0.5; 2],
+            radius: [0.25; 2],
+            feather: 0.5,
+            exposure: 0.,
+            saturation: 0.,
+            temperature: 0.,
+        }
+    }
+}
+impl LocalAdjustment {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        for (v, min, max) in [
+            (self.center[0], 0., 1.),
+            (self.center[1], 0., 1.),
+            (self.radius[0], 0.001, 2.),
+            (self.radius[1], 0.001, 2.),
+            (self.feather, 0.001, 1.),
+            (self.exposure, -5., 5.),
+            (self.saturation, -1., 1.),
+            (self.temperature, -1., 1.),
+        ] {
+            if !v.is_finite() || !(min..=max).contains(&v) {
+                return Err("Invalid local adjustment");
+            }
+        }
+        Ok(())
+    }
+    pub fn weight(&self, x: f32, y: f32) -> f32 {
+        if !self.enabled {
+            return 0.;
+        }
+        let distance = if self.linear {
+            (y - self.center[1]) / self.radius[1] + 0.5
+        } else {
+            (((x - self.center[0]) / self.radius[0]).powi(2)
+                + ((y - self.center[1]) / self.radius[1]).powi(2))
+            .sqrt()
+        };
+        let t = ((1. - distance) / self.feather).clamp(0., 1.);
+        let weight = t * t * (3. - 2. * t);
+        if self.inverted { 1. - weight } else { weight }
+    }
+}
+
+/// Up to 32 arbitrary control points. Empty means identity; x must increase,
+/// while y may decrease to preserve creative/inverted imported curves.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "Vec<[f32; 2]>", into = "Vec<[f32; 2]>")]
+pub struct PointCurve {
+    pub points: [[f32; 2]; 32],
+    pub len: u8,
+}
+impl Default for PointCurve {
+    fn default() -> Self {
+        Self {
+            points: [[0.; 2]; 32],
+            len: 0,
+        }
+    }
+}
+impl From<PointCurve> for Vec<[f32; 2]> {
+    fn from(v: PointCurve) -> Self {
+        v.points[..v.len as usize].to_vec()
+    }
+}
+impl TryFrom<Vec<[f32; 2]>> for PointCurve {
+    type Error = &'static str;
+    fn try_from(points: Vec<[f32; 2]>) -> Result<Self, Self::Error> {
+        if points.len() > 32
+            || points.len() == 1
+            || points
+                .iter()
+                .flatten()
+                .any(|v| !v.is_finite() || !(0. ..=1.).contains(v))
+            || points.windows(2).any(|p| p[0][0] >= p[1][0])
+        {
+            return Err(
+                "Curves need 2–32 normalized points in increasing x order, or [] for identity",
+            );
+        }
+        let mut curve = Self::default();
+        curve.len = points.len() as u8;
+        curve.points[..points.len()].copy_from_slice(&points);
+        Ok(curve)
+    }
+}
+impl PointCurve {
+    pub fn output(&self, x: f32) -> f32 {
+        let p = &self.points[..self.len as usize];
+        if p.is_empty() {
+            return x;
+        }
+        if x <= p[0][0] {
+            return p[0][1];
+        }
+        for pair in p.windows(2) {
+            if x <= pair[1][0] {
+                let t = (x - pair[0][0]) / (pair[1][0] - pair[0][0]);
+                return pair[0][1] * (1. - t) + pair[1][1] * t;
+            }
+        }
+        p.last().unwrap()[1]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DevelopParams {
+    /// Normalized left, top, right, bottom in the oriented source.
+    pub crop: [f32; 4],
+    /// Composite, red, green and blue point curves.
+    pub point_curves: [PointCurve; 4],
+    /// CFA-aware denoise before demosaicing; zero preserves the source.
+    pub sensor_noise_reduction: f32,
+    pub straighten: f32,
+    /// Horizontal and vertical keystone correction.
+    pub perspective: [f32; 2],
+    pub distortion: f32,
+    pub lens_profile: Option<LensCorrection>,
+    /// Red and blue radial scale corrections.
+    pub aberration: [f32; 2],
+    /// Hue shift, saturation and luminance for red/orange/yellow/green/aqua/blue/purple/magenta.
+    pub hsl: [[f32; 3]; 8],
+    /// Hue (degrees), saturation and luminance for shadows/midtones/highlights.
+    pub grading: [[f32; 3]; 3],
+    /// Absolute illuminant temperature. None retains camera as-shot balance.
+    pub kelvin: Option<f32>,
+    /// Up to eight nondestructive local radial/linear adjustments.
+    pub masks: [LocalAdjustment; 8],
     pub exposure: f32,
     pub temperature: f32,
     pub tint: f32,
@@ -36,6 +194,18 @@ pub struct DevelopParams {
 impl Default for DevelopParams {
     fn default() -> Self {
         Self {
+            crop: [0., 0., 1., 1.],
+            point_curves: [PointCurve::default(); 4],
+            sensor_noise_reduction: 0.,
+            straighten: 0.,
+            perspective: [0.; 2],
+            distortion: 0.,
+            lens_profile: None,
+            aberration: [0.; 2],
+            hsl: [[0.; 3]; 8],
+            grading: [[0.; 3]; 3],
+            kelvin: None,
+            masks: [LocalAdjustment::default(); 8],
             exposure: 0.0,
             temperature: 0.0,
             tint: 0.0,
@@ -82,7 +252,72 @@ impl DevelopParams {
     pub const STRONG_CONTRAST_CURVE: [f32; 5] = [0.0, 0.15, 0.5, 0.85, 1.0];
 
     pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.sensor_noise_reduction.is_finite()
+            || !(0. ..=1.).contains(&self.sensor_noise_reduction)
+        {
+            return Err("Sensor noise reduction must be 0–1");
+        }
+        for curve in self.point_curves {
+            if curve.len > 32 {
+                return Err("Too many curve points");
+            }
+            PointCurve::try_from(Vec::from(curve))?;
+        }
+        if self
+            .crop
+            .iter()
+            .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            || self.crop[2] - self.crop[0] < 0.001
+            || self.crop[3] - self.crop[1] < 0.001
+        {
+            return Err("Crop must be a nonempty normalized rectangle");
+        }
+        if let Some(lens) = self.lens_profile
+            && (lens
+                .distortion
+                .iter()
+                .chain(lens.vignette.iter())
+                .chain(lens.tca.iter())
+                .any(|v| !v.is_finite() || v.abs() > 100.)
+                || !lens.scale.is_finite()
+                || !(0.01..=100.).contains(&lens.scale))
+        {
+            return Err("Invalid measured lens profile");
+        }
+        if self
+            .kelvin
+            .is_some_and(|k| !k.is_finite() || !(2000.0..=50000.0).contains(&k))
+        {
+            return Err("White balance temperature must be 2000–50000 K");
+        }
+        for values in self.hsl {
+            for v in values {
+                if !v.is_finite() || !(-1.0..=1.0).contains(&v) {
+                    return Err("HSL values must be between -1 and 1");
+                }
+            }
+        }
+        for [h, s, l] in self.grading {
+            if !h.is_finite()
+                || !(0.0..=360.0).contains(&h)
+                || !s.is_finite()
+                || !(0.0..=1.0).contains(&s)
+                || !l.is_finite()
+                || !(-1.0..=1.0).contains(&l)
+            {
+                return Err("Invalid color grading values");
+            }
+        }
+        for mask in self.masks {
+            mask.validate()?;
+        }
         for (value, low, high) in [
+            (self.straighten, -45., 45.),
+            (self.perspective[0], -0.8, 0.8),
+            (self.perspective[1], -0.8, 0.8),
+            (self.distortion, -0.5, 0.5),
+            (self.aberration[0], -0.05, 0.05),
+            (self.aberration[1], -0.05, 0.05),
             (self.exposure, -5.0, 5.0),
             (self.temperature, -1.0, 1.0),
             (self.tint, -1.0, 1.0),
@@ -291,7 +526,7 @@ mod tests {
             .execute(Command::DevelopRaw {
                 id: 1,
                 raster: pixels.clone(),
-                params,
+                params: Box::new(params),
             })
             .unwrap();
         assert_eq!(editor.doc.raw.as_ref().unwrap().params, params);
@@ -302,6 +537,48 @@ mod tests {
         assert_eq!(editor.doc, before);
         editor.redo();
         assert_eq!(editor.doc.raw.as_ref().unwrap().params, params);
+    }
+
+    #[test]
+    fn raw_crop_resizes_single_photo_and_undo_restores_canvas() {
+        let before = document();
+        let mut editor = Editor::new(before.clone(), None);
+        let params = DevelopParams {
+            crop: [0., 0., 0.5, 1.],
+            ..Default::default()
+        };
+        let raster = Arc::new(Raster::solid(1, 2, [0.2, 0.3, 0.4, 1.]));
+        editor
+            .execute(Command::DevelopRaw {
+                id: 1,
+                raster: raster.clone(),
+                params: Box::new(params),
+            })
+            .unwrap();
+        assert_eq!((editor.doc.width, editor.doc.height), (1, 2));
+        editor.undo();
+        assert_eq!(editor.doc, before);
+        editor.redo();
+        assert_eq!((editor.doc.width, editor.doc.height), (1, 2));
+        let mut layered = before;
+        layered.nodes.push(Node::raster(
+            2,
+            "Overlay",
+            Arc::new(Raster::solid(2, 2, [1.; 4])),
+            Default::default(),
+        ));
+        layered.next_id = 3;
+        let mut editor = Editor::new(layered.clone(), None);
+        assert!(
+            editor
+                .execute(Command::DevelopRaw {
+                    id: 1,
+                    raster,
+                    params: Box::new(params),
+                })
+                .is_err()
+        );
+        assert_eq!(editor.doc, layered);
     }
 
     #[test]
@@ -329,10 +606,10 @@ mod tests {
         let mut command = Command::DevelopRaw {
             id: 1,
             raster: Arc::new(Raster::solid(2, 2, [1.0; 4])),
-            params: DevelopParams {
+            params: Box::new(DevelopParams {
                 exposure: f32::NAN,
                 ..Default::default()
-            },
+            }),
         };
         assert!(command.apply(&mut doc).is_err());
         assert_eq!(doc, before);
@@ -357,7 +634,7 @@ mod tests {
         Command::DevelopRaw {
             id: 1,
             raster: pixels.clone(),
-            params: DevelopParams::default(),
+            params: Box::default(),
         }
         .apply(&mut doc)
         .unwrap();
@@ -377,10 +654,10 @@ mod tests {
             Command::DevelopRaw {
                 id: 1,
                 raster: Arc::new(Raster::solid(2, 2, [level; 4])),
-                params: DevelopParams {
+                params: Box::new(DevelopParams {
                     exposure,
                     ..Default::default()
-                },
+                }),
             }
             .apply(doc)
             .unwrap();

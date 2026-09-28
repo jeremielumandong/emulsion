@@ -28,15 +28,21 @@ pub mod diagram_import;
 pub mod drawio;
 pub mod exif;
 pub mod export;
+pub mod photo_export;
+pub mod photo_catalog;
 pub mod external;
 pub mod history;
 pub mod icc;
 pub mod import;
 pub mod jxl;
 pub mod lensfun;
+pub mod lightroom_presets;
+pub mod lightroom_catalog;
+pub mod lottie;
 pub mod ora;
 mod path_data;
 pub mod printing;
+pub mod pptx;
 pub mod project;
 pub mod project_animation;
 pub mod project_export;
@@ -44,6 +50,7 @@ pub mod selection_export;
 pub mod design_html;
 pub mod psd;
 pub mod raw;
+pub mod photo_develop;
 pub mod raw_probe;
 pub mod raw_settings;
 pub mod recent;
@@ -96,6 +103,7 @@ pub type Result<T> = std::result::Result<T, IoError>;
 /// `image` crate's wider set (Targa, PNM, icons, Radiance HDR, OpenEXR,
 /// DDS, QOI, farbfeld), JPEG XL, SVG and camera RAW.
 pub const OPEN_EXTENSIONS: &[&str] = &[
+    "emuphoto",
     "ora",
     "emu",
     "drawio",
@@ -223,11 +231,13 @@ pub fn is_native(path: &Path) -> bool {
 
 /// Open a native document or import an image.
 pub fn open(path: &Path) -> Result<Document> {
+    if photo_develop::is_virtual(path) {return photo_develop::open_virtual(path);}
     Ok(open_full(path)?.doc)
 }
 
 /// Import anything that is not the native format as a fresh document.
 fn import_any(path: &Path) -> Result<Document> {
+    if photo_develop::is_virtual(path) {return photo_develop::open_virtual(path);}
     if psd::is_psd(path) {
         psd::read(path)
     } else if xcf::is_xcf(path) {
@@ -475,7 +485,19 @@ mod design_vector_tests;
 
 pub mod design_motion_export;
 
-pub mod lottie;
-pub mod pptx;
 mod smart_source_data;
 pub mod smart_source;
+
+mod photo_files;
+
+pub mod photo_metadata;
+
+pub mod photo_backup;
+
+pub mod photo_geometry;
+
+#[cfg(test)] mod photo_workflow_tests;
+
+pub mod photo_publish;
+
+pub mod lightroom_bridge;

@@ -98,7 +98,7 @@ fn develop(
         vec![Command::DevelopRaw {
             id: raw.node_id,
             raster,
-            params,
+            params: Box::new(params),
         }],
         json!({"settings":params,"undo_steps":1}).to_string(),
     ))
@@ -165,6 +165,7 @@ pub fn plan(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolRes
                         "Choose curve_preset or settings.tone_curve, not both",
                     ));
                 }
+                value["point_curves"][0] = json!([]);
                 value["tone_curve"] = json!(match preset.as_str() {
                     Some("linear") => DevelopParams::LINEAR_CURVE,
                     Some("medium") => DevelopParams::MEDIUM_CONTRAST_CURVE,
@@ -300,6 +301,7 @@ pub fn definitions() -> Vec<ToolDef> {
     fn range(min: f32, max: f32) -> Value {
         json!({"type":"number","minimum":min,"maximum":max})
     }
+    let point_curves = json!({"type":"array","minItems":4,"maxItems":4,"items":{"type":"array","maxItems":32,"items":{"type":"array","minItems":2,"maxItems":2,"items":range(0.,1.)}}});
     let groups =
         json!({"type":"string","enum":["all","white_balance","tone","curve"],"default":"all"});
     vec![
@@ -313,9 +315,16 @@ pub fn definitions() -> Vec<ToolDef> {
             "develop_raw",
             "Patch high-precision RAW development; omitted settings are preserved. One undo step updates pixels and recipe together. Temperature/tint are relative offsets, not Kelvin. tone_curve is five monotonic output values at inputs 0,.25,.5,.75,1; wb_override null restores camera gains.",
             json!({"settings":{"type":"object","additionalProperties":false,"properties":{
+            "lens_profile":{"type":["object","null"],"additionalProperties":false,"required":["distortion","vignette","tca","scale"],"properties":{"distortion":{"type":"array","minItems":3,"maxItems":3,"items":range(-100.,100.)},"vignette":{"type":"array","minItems":3,"maxItems":3,"items":range(-100.,100.)},"tca":{"type":"array","minItems":6,"maxItems":6,"items":range(-100.,100.)},"scale":range(0.01,100.)}},"crop":{"type":"array","minItems":4,"maxItems":4,"items":range(0.,1.)},"straighten":range(-45.,45.),
+            "perspective":{"type":"array","minItems":2,"maxItems":2,"items":range(-0.8,0.8)},"distortion":range(-0.5,0.5),
+            "aberration":{"type":"array","minItems":2,"maxItems":2,"items":range(-0.05,0.05)},
+            "kelvin":{"type":["number","null"],"minimum":2000,"maximum":50000},
+            "hsl":{"type":"array","minItems":8,"maxItems":8,"items":{"type":"array","minItems":3,"maxItems":3,"items":range(-1.,1.)}},
+            "grading":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"number"}},"description":"Shadows, midtones, highlights; each [hue 0..360, saturation 0..1, luminance -1..1]"},
+            "masks":{"type":"array","minItems":8,"maxItems":8,"items":{"type":"object","additionalProperties":false,"properties":{"bitmap":{"type":["array","null"],"minItems":32,"maxItems":32,"items":{"type":"integer","minimum":0,"maximum":255}},"enabled":{"type":"boolean"},"linear":{"type":"boolean"},"inverted":{"type":"boolean"},"center":{"type":"array","minItems":2,"maxItems":2,"items":range(0.,1.)},"radius":{"type":"array","minItems":2,"maxItems":2,"items":range(0.001,2.)},"feather":range(0.001,1.),"exposure":range(-5.,5.),"saturation":range(-1.,1.),"temperature":range(-1.,1.)}}},
             "exposure":range(-5.,5.),"temperature":range(-1.,1.),"tint":range(-1.,1.),"highlights":range(-1.,1.),"shadows":range(-1.,1.),"black_point":range(0.,0.25),"brightness":range(-1.,1.),"contrast":range(-1.,1.),"saturation":range(-1.,1.),
             "whites":range(-1.,1.),"blacks":range(-1.,1.),"vibrance":range(-1.,1.),"texture":range(-1.,1.),"clarity":range(-1.,1.),"dehaze":range(-1.,1.),"vignette":range(-1.,1.),"sharpening":range(0.,1.),"noise_reduction":range(0.,1.),
-            "smooth_curve":{"type":"boolean"},"tone_curve":{"type":"array","minItems":5,"maxItems":5,"items":range(0.,1.)},"wb_override":{"type":["array","null"],"minItems":4,"maxItems":4,"items":range(0.01,100.)}}},"curve_preset":{"type":"string","enum":["linear","medium","strong"]}}),
+            "sensor_noise_reduction":range(0.,1.),"point_curves":point_curves,"smooth_curve":{"type":"boolean"},"tone_curve":{"type":"array","minItems":5,"maxItems":5,"items":range(0.,1.)},"wb_override":{"type":["array","null"],"minItems":4,"maxItems":4,"items":range(0.01,100.)}}},"curve_preset":{"type":"string","enum":["linear","medium","strong"]}}),
             &[],
         ),
         def(

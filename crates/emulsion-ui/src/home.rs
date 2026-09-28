@@ -107,10 +107,85 @@ mod tests {
     use crate::app_state::{AppSettings, Capabilities, CliStatus};
     use core::prelude::v1::test;
     use emulsion_io::settings::Settings;
+    use gpui_kit::InputEvent as _;
     use gpui_kit::component::Root;
     use gpui_kit::test::TestWindowExt;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[gpui_kit::test]
+    fn home_toolbar_arrows_move_focus_and_space_applies_filter(cx: &mut TestAppContext) {
+        let (workspace, cx) = browser(cx);
+        cx.update(|window, cx| {
+            // Mouse clicks intentionally preserve editor/input focus in Kit.
+            // Enter the toolbar through keyboard traversal instead.
+            for _ in 0..80 {
+                window.focus_next(cx);
+                window.render_frame(cx);
+                if window.find(("home-kind", 0usize)).focused() == Some(true) {
+                    break;
+                }
+            }
+            assert_eq!(window.find(("home-kind", 0usize)).focused(), Some(true));
+            window.press("right", cx);
+            assert_eq!(window.find(("home-kind", 1usize)).focused(), Some(true));
+            assert_eq!(workspace.read(cx).home_state.projects.kind, None);
+            window.press("space", cx);
+            window.dispatch_event(
+                KeyUpEvent {
+                    keystroke: Keystroke::parse("space").unwrap(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+            assert_eq!(
+                workspace.read(cx).home_state.projects.kind,
+                Some(emulsion_core::creation::CanvasKind::Photo)
+            );
+            window.press("left", cx);
+            window.press("left", cx);
+            assert_eq!(window.find(("home-kind", 4usize)).focused(), Some(true));
+        });
+        cx.simulate_resize(size(px(680.), px(800.)));
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            for id in ["home-sort", "home-grid", "home-list", "home-details"] {
+                let bounds = window.find(id).bounds();
+                assert!(
+                    bounds.right() <= window.viewport_size().width,
+                    "{id}: {bounds:?}"
+                );
+            }
+        });
+    }
+
+    #[gpui_kit::test]
+    fn home_empty_clear_filters_preserves_project_and_new_uses_it(cx: &mut TestAppContext) {
+        let (workspace, cx) = browser(cx);
+        cx.update(|window, cx| {
+            workspace.update(cx, |this, cx| {
+                this.home_state.projects.folder = Some(42);
+                this.home_state.projects.kind = Some(emulsion_core::creation::CanvasKind::Diagram);
+                let input = this.home_state.search.as_ref().unwrap().0.clone();
+                input.update(cx, |input, cx| input.set_value("missing", window, cx));
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("home-empty-clear", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let state = workspace.read(cx);
+            assert_eq!(state.home_state.projects.folder, Some(42));
+            assert_eq!(state.home_state.projects.kind, None);
+            assert!(state.home_search_query(cx).is_empty());
+            assert!(window.try_find("home-empty-clear").is_none());
+            window.click("home-empty-new", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(window.find("new-canvas-form").visible()));
+    }
 
     fn browser(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
         cx.update(|cx| {
@@ -723,6 +798,14 @@ impl Workspace {
             .map(|(input, _)| input.read(cx).value().to_lowercase())
             .unwrap_or_default()
     }
+
+    pub(crate) fn clear_home_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((input, _)) = &self.home_state.search {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        self.home_state.page = 0;
+        self.cloud_reset_page();
+    }
     fn visible_recents(&self, cx: &App) -> Vec<recent::Recent> {
         let query = self.home_search_query(cx);
         let query = query.trim();
@@ -901,18 +984,7 @@ impl Workspace {
         let gallery = if self.home_state.cloud_files {
             self.cloud_home_browser(columns, cx)
         } else if cells.is_empty() {
-            div()
-                .id("home-empty")
-                .test_support()
-                .p_5()
-                .text_size(px(12.))
-                .text_color(p.muted)
-                .child(if self.recents.is_empty() {
-                    "No recent files yet. Open a file or start something new."
-                } else {
-                    "No work matches these filters."
-                })
-                .into_any_element()
+            self.home_empty(cx)
         } else if self.home_state.rows {
             div()
                 .id("home-recent-rows")

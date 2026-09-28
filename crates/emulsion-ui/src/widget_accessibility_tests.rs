@@ -1,6 +1,54 @@
 use super::*;
 use core::prelude::v1::test;
 
+#[gpui_kit::test]
+fn command_toolbar_wraps_with_many_external_tab_stops_and_skips_disabled(cx: &mut TestAppContext) {
+    use gpui_kit::component::{Disableable as _, Root, button::Button};
+    use gpui_kit::test::TestWindowExt;
+    struct ToolbarHarness;
+    impl Render for ToolbarHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    command_bar("commands", "Commands")
+                        .child(Button::new("first").label("First"))
+                        .child(
+                            Button::new("disabled-command")
+                                .label("Disabled")
+                                .disabled(true),
+                        )
+                        .child(Button::new("last").label("Last")),
+                )
+                .children((0usize..150).map(|i| {
+                    div()
+                        .id(("external", i))
+                        .focusable()
+                        .tab_index(0)
+                        .size(px(1.))
+                }))
+        }
+    }
+    cx.update(|cx| gpui_kit::init(cx));
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|_| ToolbarHarness);
+        Root::new(view, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.focus_next(cx);
+        window.render_frame(cx);
+        assert_eq!(window.find("first").focused(), Some(true));
+        window.press("left", cx);
+        assert_eq!(window.find("last").focused(), Some(true));
+        window.press("right", cx);
+        assert_eq!(window.find("first").focused(), Some(true));
+        window.press("right", cx);
+        assert_eq!(window.find("last").focused(), Some(true));
+    });
+}
+
 struct Controls {
     clicks: Rc<[Cell<usize>; 4]>,
 }

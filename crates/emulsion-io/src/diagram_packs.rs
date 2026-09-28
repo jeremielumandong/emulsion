@@ -32,7 +32,7 @@ pub fn entries(pack: &str) -> Vec<&'static str> {
     let mut names = crate::drawio::vendor::names()
         .filter(|n| n.starts_with(&prefix))
         .collect::<Vec<_>>();
-    // Prefer common building blocks; bound each first-use catalog to 64 entries.
+    // Prefer common building blocks while exposing every definition in the family.
     names.sort_by_key(|n| {
         (
             !([
@@ -45,7 +45,6 @@ pub fn entries(pack: &str) -> Vec<&'static str> {
             *n,
         )
     });
-    names.truncate(64);
     names
 }
 pub fn document(name: &str) -> Result<Document> {
@@ -143,7 +142,7 @@ mod tests {
         for (id, _, _) in PACKS {
             let (pack, notes) = build(id).unwrap_or_else(|e| panic!("{id}: {e}"));
             assert!(!pack.project.pages.is_empty(), "{id}: {notes:?}");
-            assert!(pack.project.pages.len() <= 64);
+            assert!(pack.project.pages.len() <= emulsion_core::project::MAX_PAGES);
             for page in &pack.project.pages {
                 assert!(
                     page.doc
@@ -163,14 +162,17 @@ mod tests {
     }
     #[test]
     fn installed_pack_has_per_entry_preview_and_native_artwork() {
-        let (mut pack, _) = build("kubernetes").unwrap();
-        pack.project.pages.truncate(1);
+        let (mut pack, _) = build("aws4").unwrap();
+        assert!(pack.project.pages.len() > 1000);
+        pack.project.pages.truncate(101);
         let mut bytes = Cursor::new(Vec::new());
         crate::project::write_to(&pack.project, &mut bytes).unwrap();
         pack.project_bytes = bytes.into_inner();
         let dir = tempfile::tempdir().unwrap();
         let (catalog, _) = crate::template_pack::install(dir.path(), pack).unwrap();
         let asset = catalog.assets.first().unwrap();
+        assert_eq!(asset.variants.len(), 101);
+        assert!(asset.path.parent().unwrap().join("entry-100.png").exists());
         assert!(asset.path.parent().unwrap().join("entry-0.png").exists());
         let reopened = crate::project::read(&asset.path).unwrap();
         assert!(

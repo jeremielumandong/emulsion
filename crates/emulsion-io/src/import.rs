@@ -181,7 +181,12 @@ pub fn import(path: &Path) -> Result<Document> {
 
 /// A one-layer document from `decoded`, named after `path` and carrying
 /// its EXIF facts.
-pub fn document_from(path: &Path, decoded: Decoded) -> Result<Document> {
+pub fn document_from(path: &Path, mut decoded: Decoded) -> Result<Document> {
+    if crate::photo_develop::supported(path) && crate::raw_settings::sidecar_path(path)?.exists() {
+        let digest=crate::raw::source_digest(path)?;
+        let params=crate::raw_settings::adjacent_settings(path,&digest)?;
+        decoded.raster=crate::raw::develop_raster(&decoded.raster,&params)?;
+    }
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())

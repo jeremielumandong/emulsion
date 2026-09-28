@@ -454,6 +454,10 @@ impl EditorView {
 
     /// Plan without a language model; apply if complete, else hand over.
     pub fn submit_ask(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.library_only {
+            if self.assistant.running {self.set_status("The assistant is still working",false,cx);return;}
+            if let Err(error)=self.start_turn(format!("Work in the live Library using Library MCP tools. First inspect get_library; use get_library_preview for pixels. No Photo document is open in this host. User request: {text}"),cx){self.set_status(error,true,cx);}return;
+        }
         if self.editor.in_transaction() && !self.assistant.running {
             self.set_status(
                 "Finish the current edit before starting a request.",
@@ -1094,6 +1098,9 @@ impl EditorView {
     /// Run a relayed tool call against this document, or hold it for the
     /// person's Apply/Skip when the CLI does not ask first itself.
     fn run_tool(&mut self, call: RelayCall, cx: &mut Context<Self>) {
+        if self.library_only && !emulsion_mcp::library_tools::is_tool(&call.name) {
+            call.reply(emulsion_mcp::ToolResult::error("This is a Library session. Use the Library tools; open_library_photo opens a selected photo when document tools are needed."));return;
+        }
         if self.assistant.tool_stopped {
             call.reply(emulsion_mcp::server::ToolResult::error(
                 "This assistant request has ended. Do not retry the change.",
@@ -1173,6 +1180,7 @@ impl EditorView {
                 | "get_library"
                 | "get_library_preview"
                 | "cancel_library_export"
+                | "cancel_library_enhancement"
         )
     }
 

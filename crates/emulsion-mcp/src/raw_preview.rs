@@ -139,7 +139,7 @@ pub fn preview(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> {
     Command::DevelopRaw {
         id: raw.node_id,
         raster: Arc::new(raster),
-        params,
+        params: Box::new(params),
     }
     .apply(&mut before)
     .map_err(|e| ToolResult::error(e.to_string()))?;

@@ -29,7 +29,12 @@ impl EditorView {
         name: &'static str,
         p: &Palette,
         cx: &Context<Self>,
-        build: fn(PopupMenu, &Entity<EditorView>, &mut App) -> PopupMenu,
+        build: fn(
+            PopupMenu,
+            &Entity<EditorView>,
+            &mut Window,
+            &mut Context<PopupMenu>,
+        ) -> PopupMenu,
     ) -> AnyElement {
         let editor = cx.entity().downgrade();
         div()
@@ -42,12 +47,12 @@ impl EditorView {
                     .small()
                     .ghost()
                     .text_color(p.ink)
-                    .dropdown_menu(move |menu, _, cx| {
+                    .dropdown_menu(move |menu, window, cx| {
                         let Some(editor) = editor.upgrade() else {
                             return menu;
                         };
                         let focus = editor.read(cx).canvas_focus.clone();
-                        build(menu.action_context(focus), &editor, cx)
+                        build(menu.action_context(focus), &editor, window, cx)
                     }),
             )
             .into_any_element()
@@ -89,7 +94,7 @@ impl EditorView {
     }
 
     pub(super) fn file_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("file", "File", p, cx, |menu, _, _| {
+        self.menu_button("file", "File", p, cx, |menu, _, _, _| {
             menu.menu("New…", Box::new(NewDocument))
                 .menu("Open…", Box::new(Open))
                 .separator()
@@ -106,7 +111,7 @@ impl EditorView {
     }
 
     pub(super) fn help_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("help", "Help", p, cx, |menu, _, _| {
+        self.menu_button("help", "Help", p, cx, |menu, _, _, _| {
             menu.menu("Ask AI Assistant…", Box::new(crate::actions::Ask))
                 .separator()
                 .menu("About Emulsion", Box::new(ShowAbout))
@@ -114,7 +119,7 @@ impl EditorView {
     }
 
     pub(super) fn edit_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("edit", "Edit", p, cx, |menu, _, _| {
+        self.menu_button("edit", "Edit", p, cx, |menu, _, _, _| {
             menu.menu("Undo", Box::new(Undo))
                 .menu("Redo", Box::new(Redo))
                 .separator()
@@ -140,7 +145,7 @@ impl EditorView {
     }
 
     pub(super) fn select_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("select", "Select", p, cx, |menu, _, _| {
+        self.menu_button("select", "Select", p, cx, |menu, _, _, _| {
             menu.menu("All", Box::new(SelectAll))
                 .menu("Deselect", Box::new(Deselect))
                 .menu("Inverse", Box::new(InvertSelection))
@@ -150,7 +155,7 @@ impl EditorView {
     }
 
     pub(super) fn view_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("view", "View", p, cx, |menu, _, _| {
+        self.menu_button("view", "View", p, cx, |menu, _, _, _| {
             menu.menu("Zoom In", Box::new(ZoomIn))
                 .menu("Zoom Out", Box::new(ZoomOut))
                 .menu("Fit on Screen", Box::new(ZoomFit))
@@ -167,9 +172,8 @@ impl EditorView {
 
     /// Photoshop's Window menu: workspaces, then every panel and toolbar.
     pub(super) fn window_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("window", "Window", p, cx, |mut menu, editor, cx| {
+        self.menu_button("window", "Window", p, cx, |mut menu, editor, window, cx| {
             let view = editor.read(cx);
-            let draw = view.draw_mode;
             let overlay = view.compact.overlay;
             let panels = !view.sidebar_layout.collapsed;
             let open: Vec<bool> = Bar::ALL
@@ -190,23 +194,10 @@ impl EditorView {
             menu = menu
                 .menu("Home", Box::new(ShowHome))
                 .separator()
-                .label("Workspace")
-                .item(item("Photo (Essentials)", !draw, |this, _, cx| {
-                    if this.draw_mode {
-                        this.toggle_draw_mode(cx)
-                    }
-                }))
-                .item(item("Paint", draw, |this, _, cx| {
-                    if !this.draw_mode {
-                        this.toggle_draw_mode(cx)
-                    }
-                }))
-                .item(item("Reset Workspace", false, |this, _, cx| {
-                    this.reset_workspace(cx)
-                }))
-                .item(item("Customize Workspace…", false, |this, window, cx| {
-                    this.toggle_workspace_customizer(window, cx)
-                }))
+                .submenu("Layout", window, cx, {
+                    let editor = editor.downgrade();
+                    move |menu, _, cx| Self::workspace_layout_items(menu, editor.clone(), cx)
+                })
                 .separator()
                 .label("Toolbars");
             for (bar, open) in Bar::ALL.into_iter().zip(open) {

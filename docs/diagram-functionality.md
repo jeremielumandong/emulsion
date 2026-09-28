@@ -9,14 +9,22 @@ pixel-for-pixel compatibility with another application.
 
 | Area | Behavior |
 | --- | --- |
-| Drawing | Editable vector shapes and text; bound connectors; drag ports to connect; straight, orthogonal and curved routing; custom ports, bends, reconnect and label offsets |
+| Drawing | Editable vector shapes and text; bound connectors; drag ports to connect; straight, orthogonal, curved and cyclical routing; custom ports, bends, reconnect and label offsets |
+| Object controls | Right-click arrange/alignment, grouping, locking, copy/paste style, annotations and selection export; floating selection toolbar |
 | Selection | Mouse marquee, Ctrl/Shift selection, group/ungroup, graph-aware copy/paste/delete, connected movement, undo/redo |
-| Formatting | Fill/stroke/text color pickers, typography, line style, filled/hollow connector markers, theme application |
-| Library | Shapes, Templates, Containers, Themes and Stencil packs drawers; search; 68 original default stencils, eight editable templates, six themes |
+| Formatting | Fill/stroke/text color pickers, typography, thin dark default outlines, white/soft teal/soft blue palettes, line patterns, rounded elbows, filled/hollow connector markers, theme application |
+| Library | Shapes, Templates, Containers, Themes and Stencil packs drawers; search; 68 original default stencils, eight editable templates, nine themes |
+| Diagram objects as stencils | Imported and existing shapes automatically appear in Shapes in this diagram; cached background previews, search and pagination; click/drag reuses editable artwork with fresh IDs and one undo step, excluding connections and container contents |
 | Installed stencils | Per-entry vector-generated previews; click or drag an installed entry to the pointer position; a drop is one undo step |
-| Offline vendor packs | AWS, Azure, Google Cloud, Kubernetes, Cisco, network devices, BPMN, flowchart, floor plans, electrical, wireframes and office; up to 64 curated entries per pack |
+| Offline vendor packs | AWS, Azure, Google Cloud, Kubernetes, Cisco, network devices, BPMN, flowchart, floor plans, electrical, wireframes and office; all available entries in each family, paginated 96 at a time |
 | Pages/data | Page management and persistence, four layouts, container membership, layout locks, text/CSV/Mermaid/SQL generation, data refresh and conditional fills |
 | Automation | Native graph/project MCP operations share the UI command, import and history implementations; see [MCP reference](mcp-diagrams.md) |
+
+New process shapes have a white fill, one-pixel charcoal outline, a subtle four-pixel corner radius, and centered dark text. The Style tab offers white, soft teal, soft blue and charcoal presets; themes use the same thin outlines. Existing imported colors and artwork retain their source appearance.
+
+Right-click an object to arrange, align/distribute, group, lock, copy/paste style, edit annotations or export the selection. Selecting a connector opens its dedicated floating toolbar: routing, color, width, dash patterns, arrowheads, reverse direction, endpoint size, corner radius, crossings and label editing. Corner rounding and crossing bridges apply to straight/elbow routes. Line double-strokes and label pills are not implemented.
+
+The document toolbox is reconstructed from the active page on import/open and after edits. Basic shapes with matching artwork/style share an entry; complex symbols retain individual entries. A container stencil includes its own frame and artwork, excluding the nested diagram. This is a page-local toolbox; permanent cross-project packs still use the existing stencil-pack export/install workflow.
 
 ## Scalable rendering and movement
 
@@ -33,18 +41,19 @@ changed connectors, including objects inside ordinary groups and containers.
 Offscreen roots are culled and only damaged screen pixels are redrawn. Selection clicks reuse the existing frame. Background scene
 preparation retains the prior image until replacement is ready. Structural and
 compositing changes may require a full redraw. Unsupported native effects use the
-existing compositor. This is a native SVG scene rasterized at screen resolution,
-not a browser SVG DOM or an entirely GPU-based SVG renderer.
+existing compositor. Compatible native diagrams use GPU vector paths and text, with ordinary groups batched into one vector pass. Moving a shape patches changed vectors without recompiling the compositing tree. Diagrams requiring richer SVG filters/masks retain the SVG scene rendered at screen resolution. This is a native renderer, not a browser SVG DOM.
 
 The 500- and 1,000-shape benchmark includes an attached connector between adjacent
 shapes, moves a visible shape, measures 21 edits, and samples five zoom levels.
+A GPU benchmark additionally measures native command execution, scene updates and completed GPU rendering. A native-window benchmark exercises pan, object dragging and command movement through the editor. These measurements exclude physical display latency.
 The measured runs are recorded in [the audit](diagram-sample-audit.json).
-Component timings exclude input dispatch, GPU upload and presentation; they are
-not an end-to-end FPS guarantee.
+SVG component timings exclude input dispatch, GPU upload and presentation. The GPU benchmark includes command execution, scene updates and GPU completion but excludes OS/compositor presentation. Neither is an end-to-end FPS guarantee.
 
 ```sh
 cargo run --release --locked -p emulsion-io --example diagram_viewport_bench -- 1000
 cargo run --release --locked -p emulsion-io --example diagram_viewport_bench -- 1000 --nested
+cargo run --release --locked -p emulsion-engine --example diagram_gpu_bench -- 1000
+EMULSION_BENCH_DIAGRAM=1000 cargo run --release --locked -p emulsion-app --features canvas-bench --example editor_canvas_bench
 ```
 
 ## draw.io fidelity
@@ -63,7 +72,7 @@ native vector implementations. AWS resource icons retain their colored/gradient
 backgrounds and inset white artwork. Vendor geometry supports fixed aspect ratio,
 direction, rotation and flips.
 
-HTML labels retain editable UTF-8 style runs, font sizes/colors, bold/italic,
+Icon captions overflow their shapes by default; explicit `whiteSpace=wrap` and `labelWidth` control wrapping. HTML labels retain editable UTF-8 style runs, font sizes/colors, bold/italic,
 underline/strikethrough, line breaks, basic tables and lists. Vertical labels use
 rotated text. Rich runs survive draw.io export and reopen. Swimlanes retain header
 artwork and header label placement. Connector paths never inherit an arrowhead's
@@ -71,7 +80,7 @@ fill, preventing the black polygons previously visible on bent routes.
 
 Connector markers include block, classic, open, diamond, oval, circle-plus and
 ER cardinalities. Curves, marker size and filled/hollow state round-trip through
-draw.io. Hollow closed markers shorten the visible line beneath the marker.
+draw.io. Hollow closed markers shorten the visible line beneath the marker. Straight and orthogonal connectors support arc, gap and sharp crossing bridges. Extra connector labels retain their route-relative position and follow rerouting. Named layers, HTTP(S) links and hard-edged vector shadows survive import/export.
 
 Compound artwork exports as an embedded **SVG** draw.io shape with a separate
 editable label and graph connections. Native projects preserve individually
@@ -86,7 +95,7 @@ pinned sources and verifies every checksum before replacing it.
 ## Visio and local packs
 
 Modern Visio XML/OPC imports native evaluated geometry, text and supported graph
-bindings. Legacy binary `.vss`, `.vsd` and `.vst` files use the installed librevisio
+bindings, including circular/elliptical arcs, polylines and evaluated numeric NURBS. Rational curves use adaptively fitted cubic segments. Themed scalar cells use inherited evaluated values when available. Visible converter output with invalid zero-size SVG roots is fitted to its ink bounds. Legacy binary `.vss`, `.vsd` and `.vst` files use the installed librevisio
 `vss2xhtml`/`vsd2xhtml` converter. Modern files can use the same fallback when their
 native formulas cannot be evaluated. Conversion runs locally with bounded input,
 output, runtime and page count. Empty converter placeholders are skipped.
@@ -109,7 +118,7 @@ checkout contains 623 candidates; 621 import successfully. The two rejected
 inputs are a URL catalog (`blog/template-index.xml`) and a drawing with a missing
 referenced source node (`blog/er-diagram-library.drawio`).
 
-The Visio audit loads **3,518 of 4,481 files / 37,475 pages** (previous native-only
+The Visio audit loads **3,695 of 4,481 files / 61,660 pages** (previous native-only
 baseline: 318 files / 2,029 pages). The compressed per-file reports are
 `drawio-sample-results.jsonl.gz` and `visio-sample-results.jsonl.gz`.
 
@@ -137,13 +146,12 @@ installed-entry mouse dragging, color application and undo.
 ## Remaining source-format differences
 
 Import notes identify approximations. Unsupported JavaScript-defined custom
-shapes, line jumps, exact draw.io routing, sketch/shadow effects, hyperlink actions,
-browser HTML-table sizing, named-layer organization and infinite-canvas page
-semantics are not fully reproduced. Edge-to-edge attachments become positioned
-endpoints. Additional connector-label placement can need adjustment. Remote image
+shapes, exact draw.io routing, sketch effects, browser HTML-table sizing and infinite-canvas page
+semantics are not fully reproduced. Crossing bridges currently apply to straight/orthogonal routes, not curved connectors. Edge-to-edge attachments become positioned
+endpoints. HTML table and rotated image placement can need adjustment. Remote image
 URLs are not fetched. Some rotations/image fitting remain approximate.
 
-A project is limited to 100 pages, 1,000 graph shapes and 2,000 connectors per
-page. Oversized libraries must be split; empty/corrupt files cannot supply
+A project is limited to 4,096 pages, 10,000 graph shapes and 20,000 connectors per
+page, with 150,000 document nodes. Larger libraries must be split; empty/corrupt files cannot supply
 artwork. The supplied Visio collection includes 701 zero-byte files. Loading a
 file does not imply that its bitmap source imagery becomes vector geometry.

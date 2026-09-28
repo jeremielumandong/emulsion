@@ -380,6 +380,24 @@ pub fn text_supported(spec: &emulsion_core::text::TextSpec) -> bool {
         && spec.anti_alias == emulsion_core::text::AntiAliasMode::Smooth
 }
 
+/// A diagram can use the device-resolution vector engine only when every
+/// visible primitive stays vector. Rich SVG Smart Objects keep the SVG renderer
+/// instead of accidentally enlarging their preview raster during zoom.
+pub fn diagram_vector_supported(doc: &Document) -> bool {
+    doc.diagram.is_some() && doc.nodes.iter().all(|n| {
+        !n.visible || (n.mask.is_none()
+            && n.styles.is_empty()
+            && n.blending == Default::default()
+            && matches!(n.blend, emulsion_raster::BlendMode::Normal | emulsion_raster::BlendMode::PassThrough)
+            && match &n.kind {
+                NodeKind::Path { style, .. } => path_supported(style),
+                NodeKind::Text { spec, .. } => text_supported(spec),
+                NodeKind::Group { .. } | NodeKind::Fill { .. } => true,
+                _ => false,
+            })
+    })
+}
+
 struct Compiler<'a> {
     vectors: HashMap<NodeId, VectorKind>,
     names: HashMap<NodeId, String>,
@@ -611,6 +629,32 @@ impl Compiler<'_> {
                     self.open_run = None;
                 }
                 NodeContent::Group(children) => {
+                    // At full opacity, source-over is associative. Ordinary
+                    // diagram groups can share one Vello run rather than each
+                    // allocating a screen-sized target. Keep isolation when a
+                    // descendant reads its backdrop (blend/adjustment/style).
+                    fn independent(nodes: &[CompositeNode]) -> bool {
+                        nodes.iter().all(|n| {
+                            !n.visible || (n.blending == Default::default()
+                                && match &n.content {
+                                    NodeContent::Group(children) => {
+                                        matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)
+                                            && independent(children)
+                                    }
+                                    NodeContent::Pixels { .. } | NodeContent::Fill(_) => n.blend == BlendMode::Normal,
+                                    _ => false,
+                                })
+                        })
+                    }
+                    if opacity == 1.0 && clip == NONE && alpha == NONE
+                        && clip_rect.is_none() && node.mask.is_none()
+                        && node.blending == Default::default()
+                        && (node.blend == BlendMode::PassThrough
+                            || (node.blend == BlendMode::Normal && independent(children)))
+                    {
+                        self.list(children, depth + 1);
+                        continue;
+                    }
                     let isolated = node.blend != BlendMode::PassThrough;
                     let mask = node.mask.as_ref().map(|_| {
                         let mut shape = node.clone();

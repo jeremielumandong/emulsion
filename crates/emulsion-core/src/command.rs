@@ -227,7 +227,7 @@ pub enum Command {
     DevelopRaw {
         id: NodeId,
         raster: Arc<Raster>,
-        params: crate::raw::DevelopParams,
+        params: Box<crate::raw::DevelopParams>,
     },
     /// Change the original's location after the IO layer verifies its digest.
     RelinkRaw {
@@ -624,9 +624,11 @@ impl Command {
                 }
             }
         }
-        next.design.retain_nodes(&next.nodes.iter().map(|n|n.id).collect());
+        next.design
+            .retain_nodes(&next.nodes.iter().map(|n| n.id).collect());
         if !next.design.variable_bindings.is_empty() && !self.is_view_only() {
-            crate::design_variables::synchronize(doc, &mut next).map_err(crate::DocumentError::BadDesign)?;
+            crate::design_variables::synchronize(doc, &mut next)
+                .map_err(crate::DocumentError::BadDesign)?;
         }
         if next.diagram.is_some() {
             let protected = next
@@ -662,10 +664,21 @@ impl Command {
         if !next.design.frames.is_empty() {
             crate::design_layout::prune(&mut next);
             if !self.is_view_only() {
-                crate::design_layout::reflow_after(doc, &mut next).map_err(crate::DocumentError::BadDesign)?;
+                crate::design_layout::reflow_after(doc, &mut next)
+                    .map_err(crate::DocumentError::BadDesign)?;
             }
         }
-        next.normalize();
+        // Pixel, text and geometry edits preserve the established tree order.
+        // Only structural changes need to rebuild the parent/child ordering.
+        if next.nodes.len() != doc.nodes.len()
+            || next
+                .nodes
+                .iter()
+                .zip(&doc.nodes)
+                .any(|(a, b)| a.id != b.id || a.parent != b.parent)
+        {
+            next.normalize();
+        }
         next.validate()?;
         *doc = next;
         Ok(created)
@@ -931,7 +944,9 @@ impl Command {
                 crate::design_variables::merge_into(&mut doc.design, &settings);
                 crate::design_styles::merge_into(&mut doc.design, &settings);
                 doc.design.interactions.extend(settings.interactions);
-                doc.design.interaction_triggers.extend(settings.interaction_triggers);
+                doc.design
+                    .interaction_triggers
+                    .extend(settings.interaction_triggers);
                 doc.design.overlays.extend(settings.overlays);
                 doc.design.local_media.extend(settings.local_media);
                 doc.design.data_bindings.extend(settings.data_bindings);
@@ -1148,10 +1163,19 @@ impl Command {
                 if locks.pixels || locks.transparency {
                     return Err(CommandError::Locked(*id));
                 }
+                let crop_changed = doc
+                    .raw
+                    .as_ref()
+                    .is_some_and(|raw| raw.params.crop != params.crop);
+                let resize = crop_changed
+                    && doc.nodes.len() == 1
+                    && doc.node(*id).is_some_and(|n| n.mask.is_none());
                 let node = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 match &mut node.kind {
                     NodeKind::Raster { raster: old, .. } => {
-                        if (old.width(), old.height()) != (raster.width(), raster.height()) {
+                        if (old.width(), old.height()) != (raster.width(), raster.height())
+                            && !resize
+                        {
                             return Err(crate::document::DocumentError::BadRaw(
                                 "RAW dimensions changed",
                             )
@@ -1168,7 +1192,9 @@ impl Command {
                         offset,
                         ..
                     } => {
-                        if (source.width(), source.height()) != (raster.width(), raster.height()) {
+                        if (source.width(), source.height()) != (raster.width(), raster.height())
+                            && !resize
+                        {
                             return Err(crate::document::DocumentError::BadRaw(
                                 "RAW dimensions changed",
                             )
@@ -1180,7 +1206,11 @@ impl Command {
                     }
                     _ => return Err(CommandError::NoSuchParam(*id, "RAW source".into())),
                 }
-                doc.raw.as_mut().unwrap().params = *params;
+                if resize {
+                    doc.width = raster.width();
+                    doc.height = raster.height();
+                }
+                doc.raw.as_mut().unwrap().params = **params;
                 Ok(None)
             }
             Command::SetMask { id, mask } => {

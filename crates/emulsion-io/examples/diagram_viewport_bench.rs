@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
         .nth(1)
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(100)
-        .clamp(2, 1000);
+        .clamp(2, emulsion_core::diagram::MAX_SHAPES);
     let columns = (count as f64).sqrt().ceil() as usize;
     let mut b = Builder::new(
         (columns * 230 + 40) as u32,

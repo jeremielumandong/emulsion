@@ -69,6 +69,7 @@ fn from_xhtml(text: &str, name: &str) -> Result<Imported> {
     let mut depth = 0;
     let mut pages = Vec::new();
     let mut skipped = 0;
+    let mut fitted = 0;
     loop {
         let before = reader.buffer_position() as usize;
         match reader.read_event().map_err(|e| error(e.to_string()))? {
@@ -118,10 +119,15 @@ fn from_xhtml(text: &str, name: &str) -> Result<Imported> {
                         }
                         if pages.len() >= emulsion_core::project::MAX_PAGES {
                             return Err(error(
-                                "Converted Visio file exceeds 100 pages; split the source library",
+                                "Converted Visio file exceeds the project page limit; split the source library",
                             ));
                         }
-                        let doc = crate::svg_vectors::document(fragment)?;
+                        let doc = match crate::svg_vectors::document(fragment) {
+                            Ok(doc)=>doc,
+                            Err(original)=>match crate::svg_vectors::fitted_document(fragment) {
+                                Ok(doc)=>{fitted+=1;doc}, Err(_)=>return Err(original)
+                            }
+                        };
                         let doc = attach(doc)?;
                         let id = pages.len() as u64 + 1;
                         pages.push(ProjectPage {
@@ -152,6 +158,7 @@ fn from_xhtml(text: &str, name: &str) -> Result<Imported> {
     };
     project.validate().map_err(error)?;
     let mut warnings=vec!["Legacy Visio converted locally with librevisio. Vector artwork is retained; original connector bindings and Visio formulas are not available in SVG output.".into()];
+    if fitted>0 {warnings.push(format!("Recovered {fitted} converter page dimensions from vector bounds."));}
     if skipped > 0 {
         warnings.push(format!(
             "Skipped {skipped} empty converter placeholder pages."

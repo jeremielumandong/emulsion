@@ -606,3 +606,109 @@ fn parameterized_wall_and_vertical_label_keep_orientation() {
     };
     assert_eq!(spec.rotation, -90.);
 }
+
+#[test]
+fn crossing_bridges_rebuild_after_move_and_roundtrip() {
+    let input=graph(r#"<mxCell id="h" edge="1" parent="1" style="edgeStyle=none;endArrow=none;"><mxGeometry relative="1"><mxPoint x="50" y="150" as="sourcePoint"/><mxPoint x="350" y="150" as="targetPoint"/></mxGeometry></mxCell><mxCell id="v" edge="1" parent="1" style="edgeStyle=none;endArrow=none;jumpStyle=arc;jumpSize=16;"><mxGeometry relative="1"><mxPoint x="200" y="30" as="sourcePoint"/><mxPoint x="200" y="270" as="targetPoint"/></mxGeometry></mxCell>"#);
+    let imported=from_xml(&input).unwrap();
+    let doc=&imported.project.pages[0].doc;
+    let (id,edge)=doc.diagram.as_ref().unwrap().edges.iter().find(|(_,e)|e.jump_style==diagram::JumpStyle::Arc).unwrap();
+    let path=|doc:&Document|match &doc.node(edge.path).unwrap().kind{NodeKind::Path{path,..}=>path.clone(),_=>panic!()};
+    assert!(path(doc).subpaths[0].anchors.iter().any(|a|a.h_in!=a.p||a.h_out!=a.p));
+    let mut editor=Editor::new(doc.clone(),None);
+    editor.execute(emulsion_core::Command::TranslateNode{id:*id,dx:300.,dy:0.}).unwrap();
+    assert!(path(&editor.doc).subpaths[0].anchors.iter().all(|a|a.h_in==a.p&&a.h_out==a.p));
+    editor.undo();assert_eq!(&editor.doc,doc);
+    let exported=to_xml(&imported.project).unwrap();
+    let reopened=from_xml(&exported).unwrap();
+    assert!(reopened.project.pages[0].doc.diagram.as_ref().unwrap().edges.values().any(|e|e.jump_style==diagram::JumpStyle::Arc&&e.jump_size==16.));
+}
+#[test]
+fn named_layers_links_and_vector_shadows_survive_import_export() {
+    let input=graph(&format!(r#"<mxCell id="network" value="Network" parent="0"/>{}"#,vertex("server","network","shape=cube;shadow=1;","x=\"100\" y=\"80\" width=\"100\" height=\"80\"").replace("vertex=\"1\"","vertex=\"1\" link=\"https://example.com/server\"")));
+    let imported=from_xml(&input).unwrap();
+    let doc=&imported.project.pages[0].doc;
+    let layer=doc.nodes.iter().find(|n|n.name=="Network").unwrap();
+    assert!(layer.is_group());
+    assert!(!doc.design.interactions.is_empty());
+    let (svg,raster)=crate::project_export::svg(doc).unwrap();assert!(!raster);assert!(String::from_utf8(svg).unwrap().contains("feOffset"));
+    let roundtrip=from_xml(&to_xml(&imported.project).unwrap()).unwrap();
+    assert!(roundtrip.project.pages[0].doc.nodes.iter().any(|n|n.name=="Network"));
+    assert!(!roundtrip.project.pages[0].doc.design.interactions.is_empty());
+}
+#[test]
+fn large_library_and_page_exceed_previous_caps_without_losing_entries() {
+    let mut xml=String::from("<mxfile>");
+    for i in 0..101 {xml.push_str(&format!("<diagram name=\"Page {i}\">{}</diagram>",graph(&vertex("a","1","","width=\"40\" height=\"30\""))));}
+    xml.push_str("</mxfile>");assert_eq!(from_xml(&xml).unwrap().project.pages.len(),101);
+    let cells=(0..1001).map(|i|vertex(&format!("s{i}"),"1","",&format!("x=\"{}\" y=\"{}\" width=\"20\" height=\"20\"",i%40*30,i/40*30))).collect::<String>();
+    assert_eq!(from_xml(&graph(&cells)).unwrap().project.pages[0].doc.diagram.as_ref().unwrap().shapes.len(),1001);
+}
+
+#[test]
+fn extra_connector_labels_follow_routes_and_export_without_losing_text(){
+    let xml=graph(r#"<mxCell id="edge" edge="1" parent="1" style="endArrow=none;edgeStyle=none;"><mxGeometry relative="1"><mxPoint as="sourcePoint" x="20" y="100"/><mxPoint as="targetPoint" x="400" y="100"/></mxGeometry></mxCell><mxCell id="extra" value="Approved" vertex="1" parent="edge" style="text;html=1;fontSize=14;"><mxGeometry relative="1" x="0.5" y="20"><mxPoint as="offset" x="3" y="4"/></mxGeometry></mxCell>"#);
+    let mut imported=from_xml(&xml).unwrap();let original=imported.project.pages[0].doc.clone();let (id,edge)=original.diagram.as_ref().unwrap().edges.iter().next().unwrap();let label=edge.labels[0].node;
+    let pos=|d:&Document|match &d.node(label).unwrap().kind{NodeKind::Text{spec,..}=>(spec.x,spec.y),_=>panic!()};
+    let mut editor=Editor::new(original.clone(),None);editor.execute(emulsion_core::Command::TranslateNode{id:*id,dx:35.,dy:17.}).unwrap();
+    assert_eq!(pos(&editor.doc),(pos(&original).0+35.,pos(&original).1+17.));
+    imported.project.pages[0].doc=editor.doc.clone();
+    let reopened=from_xml(&to_xml(&imported.project).unwrap()).unwrap();
+    let doc=&reopened.project.pages[0].doc;let edge=doc.diagram.as_ref().unwrap().edges.values().next().unwrap();assert_eq!(edge.labels.len(),1);assert_eq!(text(doc,edge.labels[0].node),"Approved");
+    editor.undo();assert_eq!(editor.doc,original);
+}
+
+#[test]
+fn icon_captions_do_not_wrap_unless_requested_and_bpmn_variants_keep_geometry() {
+    let xml = r#"<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>
+<mxCell id="2" parent="1" vertex="1" value="Reverse Proxy" style="shape=mxgraph.bpmn.event;symbol=message;verticalLabelPosition=bottom;spacingLeft=86"><mxGeometry x="100" y="100" width="60" height="60"/></mxCell>
+<mxCell id="3" parent="1" vertex="1" value="Feature Request?" style="shape=mxgraph.bpmn.gateway2;symbol=none;gwType=exclusive;verticalLabelPosition=top"><mxGeometry x="300" y="100" width="50" height="50"/></mxCell>
+</root></mxGraphModel>"#;
+    let imported=from_xml(xml).unwrap();
+    assert!(!imported.warnings.iter().any(|w|w.contains("editable rectangle")),"{:?}",imported.warnings);
+    let doc=&imported.project.pages[0].doc;
+    for shape in doc.diagram.as_ref().unwrap().shapes.values() {
+        let NodeKind::Text{spec,..}=&doc.node(shape.label).unwrap().kind else {panic!()};
+        assert!(spec.width.unwrap()>emulsion_core::diagram::shape_bounds(doc, shape).unwrap()[2] as f32);
+        let bounds=emulsion_core::text::layout(spec).bounds();
+        assert!(bounds.height < spec.size*2.,"Caption wrapped: {:?}",spec);
+    }
+}
+
+#[test]
+fn rounded_connector_and_cyclical_route_roundtrip() {
+    let input=graph(r#"<mxCell id="e" edge="1" parent="1" style="edgeStyle=none;rounded=1;arcSize=6;strokeWidth=1;endArrow=diamond;endSize=20;dashed=1;dashPattern=8 4 1 4;"><mxGeometry relative="1"><mxPoint x="40" y="60" as="sourcePoint"/><mxPoint x="400" y="240" as="targetPoint"/><Array as="points"><mxPoint x="240" y="60"/><mxPoint x="240" y="240"/></Array></mxGeometry></mxCell>"#);
+    let mut imported=from_xml(&input).unwrap();
+    let doc=&imported.project.pages[0].doc;
+    let edge=doc.diagram.as_ref().unwrap().edges.values().next().unwrap();
+    assert_eq!(edge.corner_radius,6.);
+    assert!(matches!(&doc.node(edge.path).unwrap().kind,NodeKind::Path{path,..} if path.subpaths[0].anchors.iter().any(|a|a.h_in!=a.p)));
+    let reopened=from_xml(&to_xml(&imported.project).unwrap()).unwrap();
+    let edge=reopened.project.pages[0].doc.diagram.as_ref().unwrap().edges.values().next().unwrap();
+    assert_eq!(edge.corner_radius,6.);assert_eq!(edge.end_marker.size,20.);
+    let doc=&mut imported.project.pages[0].doc;
+    let mut model=doc.diagram.as_deref().unwrap().clone();
+    model.edges.values_mut().next().unwrap().routing=Routing::Cyclical;
+    doc.diagram=Some(Arc::new(model));
+    let reopened=from_xml(&to_xml(&imported.project).unwrap()).unwrap();
+    assert_eq!(reopened.project.pages[0].doc.diagram.as_ref().unwrap().edges.values().next().unwrap().routing,Routing::Cyclical);
+}
+
+#[test]
+fn imported_vendor_stencil_reuse_preserves_all_artwork_without_connections() {
+    let cells=vertex("pc","1","shape=mxgraph.networks.pc;fillColor=#b2f2eb;",r#"x="40" y="50" width="120" height="100""#)
+        + &vertex("target","1","",r#"x="400" y="50" width="120" height="100""#)
+        + r#"<mxCell id="e" edge="1" parent="1" source="pc" target="target"><mxGeometry/></mxCell>"#;
+    let imported=from_xml(&graph(&cells)).unwrap();let before=imported.project.pages[0].doc.clone();
+    let id=*before.diagram.as_ref().unwrap().shapes.iter().find(|(_,s)|s.data.contains_key("drawio_vendor_stencil")).unwrap().0;
+    let original=diagram::document_stencil(&before,id).unwrap();
+    assert!(original.nodes.len()>3,"compound vendor paths are retained");
+    let mut editor=Editor::new(before.clone(),None);
+    let ids=diagram::insert_document_stencil(&mut editor,id,(350.,300.)).unwrap();
+    let copied=diagram::document_stencil(&editor.doc,ids[0]).unwrap();
+    assert_eq!(original.nodes.len(),copied.nodes.len());
+    assert_eq!(editor.doc.diagram.as_ref().unwrap().edges.len(),1);
+    assert!(copied.nodes.iter().all(|n| !matches!(n.kind,NodeKind::Raster{..})));
+    assert_eq!(copied.diagram.as_ref().unwrap().shapes[&ids[0]].data,original.diagram.as_ref().unwrap().shapes[&id].data);
+    editor.doc.validate().unwrap();editor.undo();assert_eq!(editor.doc,before);
+}

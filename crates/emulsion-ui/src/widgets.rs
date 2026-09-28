@@ -6,6 +6,41 @@ use gpui_kit::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
+/// Commands share arrow-key focus, semantics and spacing without a fixed height.
+/// Wrapping keeps controls reachable in narrow windows and at larger UI scales.
+pub fn command_bar(id: impl Into<ElementId>, label: &'static str) -> gpui_kit::base::Toolbar {
+    gpui_kit::base::Toolbar::new(id)
+        .aria_label(label)
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_2()
+        .min_w_0()
+}
+
+/// Shared empty-state presentation; the caller supplies the relevant next action.
+pub fn empty_state(
+    glyph: &'static str,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+) -> gpui_kit::component::empty::Empty {
+    use gpui_kit::component::{Icon, empty::*};
+    Empty::new().flex_none().header(
+        EmptyHeader::new()
+            .media(
+                EmptyMedia::new()
+                    .with_variant(EmptyMediaVariant::Icon)
+                    .child(
+                        Icon::empty()
+                            .path(format!("icons/{glyph}.svg"))
+                            .size(px(20.)),
+                    ),
+            )
+            .title(EmptyTitle::new().child(title.into()))
+            .description(EmptyDescription::new().child(description.into())),
+    )
+}
+
 /// Native form actions dispatch to their owning dialog, including its validation
 /// and focus restoration. `on_ok` alone does not render any action buttons.
 pub fn form_dialog_footer(confirm: &'static str) -> Div {

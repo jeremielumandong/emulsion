@@ -43,16 +43,16 @@ impl Builder {
         } else if kind.is_container() {
             [241, 244, 249, 255]
         } else {
-            [233, 239, 251, 255]
+            DEFAULT_FILL
         };
         let mut path = Node::path(
             body,
             "Shape",
-            Arc::new(kind.path(bounds)),
+            Arc::new(kind.default_path(bounds)),
             PathStyle {
                 fill: Some(color),
-                stroke: Some([69, 96, 154, 255]),
-                width: 2.,
+                stroke: Some(DEFAULT_LINE),
+                width: DEFAULT_LINE_WIDTH,
                 ..Default::default()
             },
             self.doc.width,
@@ -76,7 +76,7 @@ impl Builder {
                 }) as f32,
                 width: Some((w - 16.).max(1.) as f32),
                 align: Align::Center,
-                color: [35, 47, 67, 255],
+                color: DEFAULT_TEXT,
                 ..Default::default()
             },
             self.doc.width,
@@ -126,7 +126,7 @@ impl Builder {
         let label_id = self.doc.alloc_id();
         for (id, name, fill) in [
             (path, "Connection", None),
-            (arrow, "Arrow", Some([69, 96, 154, 255])),
+            (arrow, "Arrow", Some(DEFAULT_LINE)),
         ] {
             let mut node = Node::path(
                 id,
@@ -134,8 +134,8 @@ impl Builder {
                 Arc::new(Path::default()),
                 PathStyle {
                     fill,
-                    stroke: Some([69, 96, 154, 255]),
-                    width: 2.,
+                    stroke: Some(DEFAULT_LINE),
+                    width: DEFAULT_LINE_WIDTH,
                     ..Default::default()
                 },
                 self.doc.width,
@@ -153,7 +153,7 @@ impl Builder {
                 size: 12.,
                 width: Some(120.),
                 align: Align::Center,
-                color: [35, 47, 67, 255],
+                color: DEFAULT_TEXT,
                 ..Default::default()
             },
             self.doc.width,
@@ -167,6 +167,10 @@ impl Builder {
         self.model.edges.insert(
             group,
             Edge {
+                corner_radius: 0.,
+                labels:Vec::new(),
+                jump_style: JumpStyle::None,
+                jump_size: 10.,
                 path,
                 arrow,
                 label: label_id,

@@ -47,7 +47,7 @@ fn diagram_inspector_tabs_format_graph_objects_and_fill_is_undoable(cx: &mut Tes
     });
     cx.run_until_parked();
     cx.update(|window,cx| {
-        assert!(matches!(&view.read(cx).editor.doc.node(body).unwrap().kind,NodeKind::Path{style,..} if style.fill==Some([233,239,251,255])));
+        assert!(matches!(&view.read(cx).editor.doc.node(body).unwrap().kind,NodeKind::Path{style,..} if style.fill==Some(emulsion_core::diagram::DEFAULT_FILL)));
         window.click(("diagram-property-tab",1usize),cx);
     });
     cx.run_until_parked();
@@ -491,7 +491,7 @@ fn diagram_color_dialog_applies_to_selection_and_cancel_keeps_original(cx: &mut 
     cx.run_until_parked();
     cx.update(|window,cx| {
         let e=view.read(cx); let body=e.editor.doc.diagram.as_ref().unwrap().shapes[&a].body;
-        assert!(matches!(&e.editor.doc.node(body).unwrap().kind,NodeKind::Path{style,..} if style.fill==Some([239,246,255,255]) && style.stroke==Some([59,130,246,255])));
+        assert!(matches!(&e.editor.doc.node(body).unwrap().kind,NodeKind::Path{style,..} if style.fill==Some([178,242,235,255]) && style.stroke==Some(emulsion_core::diagram::DEFAULT_LINE) && style.width==1.));
         window.click("project-undo",cx);
     });
     cx.run_until_parked();
@@ -754,4 +754,114 @@ fn diagram_installed_pack_drag_drops_once_and_undoes(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     cx.update(|_, cx| assert!(view.read(cx).editor.doc.nodes.is_empty()));
+}
+
+#[gpui_kit::test]
+fn diagram_object_context_arrange_and_floating_lock_toolbar_share_selection_and_undo(cx:&mut TestAppContext) {
+    let mut b=Builder::new(800,600).unwrap();
+    let a=b.add_shape(ShapeKind::Process,[100.,140.,120.,60.],"First").unwrap();
+    let z=b.add_shape(ShapeKind::Process,[320.,140.,120.,60.],"Second").unwrap();
+    let doc=b.finish().unwrap();
+    let (ws,cx)=open(cx,doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.),gpui_kit::px(1000.)));
+    let view=cx.update(|window,cx|{
+        ws.update(cx,|ws,cx|ws.install_project(ProjectEditor::new_project(ProjectKind::Diagram,doc.clone()).unwrap(),"Context menu".into(),window,cx));
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    let point=cx.update(|_,cx|view.read(cx).doc_to_window((160.,170.)).unwrap());
+    cx.simulate_mouse_down(point,gpui_kit::MouseButton::Right,Default::default());
+    cx.run_until_parked();
+    cx.update(|window,cx|{
+        assert_eq!(view.read(cx).selected_layer_ids(),vec![a]);
+        assert!(window.find("diagram-object-toolbar").visible());
+        window.within("popup-menu").hover(8usize,cx);
+    });
+    cx.run_until_parked();cx.simulate_keystrokes("right");cx.run_until_parked();
+    let button=cx.update(|window,_|window.within("submenu").find(0usize).bounds().center());
+    cx.simulate_click(button,Default::default());cx.run_until_parked();
+    cx.update(|_,cx|{
+        assert_eq!(view.read(cx).editor.doc.children(None).into_iter().filter(|id| *id==a || *id==z).collect::<Vec<_>>(),vec![z,a]);
+        view.update(cx,|v,cx|v.undo(cx));
+        assert_eq!(view.read(cx).editor.doc,doc);
+    });
+    cx.run_until_parked();
+    cx.update(|window,cx|window.click("diagram-object-lock",cx));cx.run_until_parked();
+    cx.update(|window,cx|{
+        assert!(view.read(cx).editor.doc.node(a).unwrap().locked);
+        assert!(window.find("diagram-object-toolbar").visible());
+        window.click("diagram-object-fill",cx);
+    });cx.run_until_parked();
+    cx.update(|window,cx|{
+        assert!(window.try_find("diagram-color-ok").is_none());
+        window.click("diagram-object-lock",cx);
+    });cx.run_until_parked();
+    cx.update(|_,cx|assert!(!view.read(cx).editor.doc.node(a).unwrap().locked));
+}
+
+#[gpui_kit::test]
+fn diagram_connector_toolbar_routes_reverses_and_formats_with_undo(cx: &mut TestAppContext) {
+    use emulsion_core::diagram::{Endpoint, Port, Routing};
+    let mut builder=Builder::new(800,600).unwrap();
+    let a=builder.add_shape(ShapeKind::Process,[100.,140.,100.,60.],"A").unwrap();
+    let b=builder.add_shape(ShapeKind::Process,[400.,300.,100.,60.],"B").unwrap();
+    let id=builder.connect(Endpoint{shape:a,port:Port::East},Endpoint{shape:b,port:Port::West},"Next",Routing::Orthogonal).unwrap();
+    let doc=builder.finish().unwrap();
+    let (ws,cx)=open(cx,doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.),gpui_kit::px(1000.)));
+    let view=cx.update(|window,cx|{
+        ws.update(cx,|ws,cx|ws.install_project(ProjectEditor::new_project(ProjectKind::Diagram,doc.clone()).unwrap(),"Connector controls".into(),window,cx));
+        let view=ws.read(cx).editor.clone().unwrap();
+        view.update(cx,|v,cx|{v.set_layer_selection(vec![id],Some(id));cx.notify();});view
+    });
+    cx.run_until_parked();
+    cx.update(|window,cx|{
+        assert!(window.find("diagram-connector-toolbar").visible());
+        window.click("diagram-connector-reverse",cx);
+    });cx.run_until_parked();
+    cx.update(|_,cx|{
+        assert_eq!(view.read(cx).editor.doc.diagram.as_ref().unwrap().edges[&id].source.shape,b);
+        view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
+    });cx.run_until_parked();
+    cx.update(|window,cx|window.click("diagram-connector-width",cx));cx.run_until_parked();
+    cx.update(|window,cx|window.within("popup-menu").click(4usize,cx));cx.run_until_parked();
+    cx.update(|_,cx|{
+        let e=view.read(cx);let path=e.editor.doc.diagram.as_ref().unwrap().edges[&id].path;
+        assert!(matches!(&e.editor.doc.node(path).unwrap().kind,NodeKind::Path{style,..} if style.width==3.));
+        view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
+    });cx.run_until_parked();
+    cx.update(|window,cx|window.click("diagram-connector-route",cx));cx.run_until_parked();
+    cx.update(|window,cx|window.within("popup-menu").click(3usize,cx));cx.run_until_parked();
+    cx.update(|_,cx|assert_eq!(view.read(cx).editor.doc.diagram.as_ref().unwrap().edges[&id].routing,Routing::Cyclical));
+}
+
+#[gpui_kit::test]
+fn diagram_imported_object_toolbox_drag_preserves_artwork_and_one_undo(cx: &mut TestAppContext) {
+    use gpui_kit::{MouseButton, Modifiers};
+    let mut builder=Builder::new(800,600).unwrap();
+    let source=builder.add_shape(ShapeKind::Process,[100.,120.,140.,80.],"Imported server").unwrap();
+    let doc=builder.finish().unwrap();
+    let (ws,cx)=open(cx,doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.),gpui_kit::px(1000.)));
+    let view=cx.update(|window,cx|{
+        ws.update(cx,|ws,cx|ws.install_project(ProjectEditor::new_project(ProjectKind::Diagram,doc.clone()).unwrap(),"Imported objects".into(),window,cx));
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(std::time::Duration::from_millis(200));cx.run_until_parked();
+    let (from,to)=cx.update(|window,cx|{
+        assert!(window.find(("diagram-used-shape",source)).visible());
+        (window.find(("diagram-used-shape",source)).bounds().center(),view.read(cx).doc_to_window((500.,350.)).unwrap())
+    });
+    cx.simulate_mouse_down(from,MouseButton::Left,Modifiers::none());
+    cx.simulate_mouse_move(from+gpui_kit::point(gpui_kit::px(12.),gpui_kit::px(0.)),Some(MouseButton::Left),Modifiers::none());
+    cx.simulate_mouse_move(to,Some(MouseButton::Left),Modifiers::none());
+    cx.simulate_mouse_up(to,MouseButton::Left,Modifiers::none());cx.run_until_parked();
+    cx.update(|_,cx|{
+        let e=view.read(cx);let model=e.editor.doc.diagram.as_ref().unwrap();assert_eq!(model.shapes.len(),2);
+        let (_,copy)=model.shapes.iter().find(|(id,_)|**id!=source).unwrap();
+        let bounds=emulsion_core::diagram::shape_bounds(&e.editor.doc,copy).unwrap();
+        assert_eq!(bounds,[430.,310.,140.,80.]);
+        view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
+    });
 }

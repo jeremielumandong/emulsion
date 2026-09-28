@@ -67,14 +67,17 @@ pub fn orthogonal(start: Point, sd: Point, end: Point, ed: Point, bounds: &[Boun
         vec![a, (mx, a.1), (mx, b.1), b],
         vec![a, (a.0, my), (b.0, my), b],
     ];
-    let min_x = obstacles.iter().map(|r| r[0]).fold(a.0.min(b.0), f64::min) - 12.;
-    let max_x = obstacles
+    // Far-away objects must not send a short connection around the whole page.
+    // Use a local corridor to propose routes, then verify against every obstacle.
+    let local=obstacles.iter().copied().filter(|r|r[0]<a.0.max(b.0)+96. && r[0]+r[2]>a.0.min(b.0)-96. && r[1]<a.1.max(b.1)+96. && r[1]+r[3]>a.1.min(b.1)-96.).collect::<Vec<_>>();
+    let min_x = local.iter().map(|r| r[0]).fold(a.0.min(b.0), f64::min) - 12.;
+    let max_x = local
         .iter()
         .map(|r| r[0] + r[2])
         .fold(a.0.max(b.0), f64::max)
         + 12.;
-    let min_y = obstacles.iter().map(|r| r[1]).fold(a.1.min(b.1), f64::min) - 12.;
-    let max_y = obstacles
+    let min_y = local.iter().map(|r| r[1]).fold(a.1.min(b.1), f64::min) - 12.;
+    let max_y = local
         .iter()
         .map(|r| r[1] + r[3])
         .fold(a.1.max(b.1), f64::max)
@@ -94,7 +97,12 @@ pub fn orthogonal(start: Point, sd: Point, end: Point, ed: Point, bounds: &[Boun
             cost(a).total_cmp(&cost(b))
         });
     let route = best
-        .or_else(|| grid(a, b, &obstacles))
+        .or_else(|| grid(a, b, &local).filter(|p|p.windows(2).all(|s|clear(s[0],s[1],&obstacles))))
+        .or_else(|| {
+            let left=obstacles.iter().map(|r|r[0]).fold(a.0.min(b.0),f64::min)-12.;
+            let top=obstacles.iter().map(|r|r[1]).fold(a.1.min(b.1),f64::min)-12.;
+            [vec![a,(left,a.1),(left,b.1),b],vec![a,(a.0,top),(b.0,top),b]].into_iter().find(|p|p.windows(2).all(|s|clear(s[0],s[1],&obstacles)))
+        })
         .unwrap_or_else(|| vec![a, (mx, a.1), (mx, b.1), b]);
     simplify(
         std::iter::once(start)
@@ -174,6 +182,14 @@ fn grid(start: Point, end: Point, obstacles: &[Bounds]) -> Option<Vec<Point>> {
 mod tests {
     use super::*;
     #[test]
+    fn distant_objects_do_not_force_page_wide_detours(){
+        let mut obstacles=vec![[20.,20.,80.,60.],[240.,20.,80.,60.],[140.,0.,60.,100.]];
+        obstacles.extend((0..100).map(|i|[1000.+i as f64*100.,1000.,50.,50.]));
+        let points=orthogonal((100.,50.),(1.,0.),(240.,50.),(-1.,0.),&obstacles);
+        assert!(points.iter().all(|p|p.0>-100.&&p.0<400.&&p.1>-100.&&p.1<200.));
+        assert!(points.windows(2).all(|p|clear(p[0],p[1],&obstacles[2..])));
+    }
+    #[test]
     fn connectors_avoid_obstacles_and_keep_explicit_port_directions() {
         let obstacles = [
             [20., 20., 80., 60.],
@@ -195,4 +211,19 @@ mod tests {
         );
         assert!(points[1].0 > 100.);
     }
+}
+
+/// An exterior loop follows the attachment directions around the shape envelope.
+pub(super) fn cyclical(start:(f64,f64),sd:(f64,f64),end:(f64,f64),ed:(f64,f64),a:[f64;4],b:[f64;4])->Vec<(f64,f64)> {
+    let left=a[0].min(b[0])-48.;let right=(a[0]+a[2]).max(b[0]+b[2])+48.;
+    let top=a[1].min(b[1])-48.;let bottom=(a[1]+a[3]).max(b[1]+b[3])+48.;
+    let side=|(x,y):(f64,f64)|if x.abs()>=y.abs(){if x>=0.{0}else{2}}else if y>=0.{1}else{3};
+    let project=|p:(f64,f64),side:usize|match side{0=>(right,p.1),1=>(p.0,bottom),2=>(left,p.1),_=>(p.0,top)};
+    let mut from=side(sd);let to=side(ed);
+    let mut points=vec![start,project(start,from)];
+    loop {
+        points.push([(right,bottom),(left,bottom),(left,top),(right,top)][from]);
+        from=(from+1)%4;if from==to{break;}
+    }
+    points.extend([project(end,to),end]);points.dedup();points
 }

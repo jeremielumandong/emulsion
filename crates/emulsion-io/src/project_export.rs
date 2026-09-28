@@ -255,16 +255,28 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
     if native_styles::write(doc, id, out)? {
         return Ok(());
     }
+    let svg_shadows = n.style_options.iter().all(|o|*o==Default::default()) && n.styles.iter().all(|s|matches!(s,emulsion_core::styles::LayerStyle::DropShadow{size,..} if *size==0.));
     if !(n.blend == BlendMode::Normal || (n.is_group() && n.blend == BlendMode::PassThrough))
         || n.blending != Default::default()
         || (n.mask_enabled && n.mask.is_some())
-        || (n.effects_enabled && !n.styles.is_empty())
+        || (n.effects_enabled && !n.styles.is_empty() && !svg_shadows)
     {
         return Err(error(
             "Layer blending, masks, or effects require a rendered appearance.",
         ));
     }
     write!(out, "<g data-node=\"{id}\" opacity=\"{}\">", n.opacity).unwrap();
+    if n.effects_enabled && !n.styles.is_empty() && svg_shadows {
+        write!(out,"<defs><filter id=\"shadow-{id}\" x=\"-100%\" y=\"-100%\" width=\"300%\" height=\"300%\" color-interpolation-filters=\"sRGB\">").unwrap();
+        for (index,s) in n.styles.iter().enumerate() {
+            if let emulsion_core::styles::LayerStyle::DropShadow{color,opacity,angle,distance,..}=s {
+                let a=angle.to_radians();let dx=(-a.cos()*distance).round();let dy=(a.sin()*distance).round();
+                write!(out,"<feOffset in=\"SourceAlpha\" dx=\"{dx}\" dy=\"{dy}\" result=\"offset-{index}\"/><feFlood flood-color=\"#{:02x}{:02x}{:02x}\" flood-opacity=\"{}\"/><feComposite in2=\"offset-{index}\" operator=\"in\" result=\"shade-{index}\"/>",color[0],color[1],color[2],opacity/100.).unwrap();
+            }
+        }
+        out.push_str("<feMerge>");for index in 0..n.styles.len(){write!(out,"<feMergeNode in=\"shade-{index}\"/>").unwrap();}
+        write!(out,"<feMergeNode in=\"SourceGraphic\"/></feMerge></filter></defs><g filter=\"url(#shadow-{id})\">").unwrap();
+    }
     if let Some(base) = n.clip_to {
         let base = doc
             .node(base)
@@ -425,6 +437,7 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
     if n.clip_to.is_some() {
         out.push_str("</g>");
     }
+    if n.effects_enabled && !n.styles.is_empty() && svg_shadows {out.push_str("</g>");}
     out.push_str("</g>");
     Ok(())
 }

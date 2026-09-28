@@ -96,6 +96,7 @@ pub struct ProjectFolder {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Catalog {
+    pub photos: crate::photo_catalog::PhotoRecords,
     pub version: u32,
     pub revision: u64,
     pub next_id: u64,
@@ -109,6 +110,7 @@ pub struct Catalog {
 impl Default for Catalog {
     fn default() -> Self {
         Self {
+            photos: Default::default(),
             version: 1,
             revision: 0,
             next_id: 1,
@@ -155,6 +157,7 @@ impl Catalog {
             return Err(error("Library ID limit reached."));
         }
         self.validate_asset_folders()?;
+        self.photos.validate(self)?;
         let mut paths = HashSet::new();
         for folder in &self.folders {
             if !label(&folder.name) {
@@ -183,7 +186,7 @@ impl Catalog {
                 || asset.tags.iter().any(|s| !label(s))
                 || asset.attribution.len() > 4000
                 || asset.license.len() > 4000
-                || asset.variants.len() > 100
+                || asset.variants.len() > emulsion_core::project::MAX_PAGES
                 || asset.variants.iter().any(|v| !label(v))
                 || asset.folder.is_some_and(|id| !self.asset_folders.iter().any(|f|f.id==id))
             {
@@ -462,6 +465,13 @@ pub fn update<T>(
         .map_err(|e| error(format!("Creative library is busy: {e}")))?;
     let mut catalog = load(root)?;
     let result = edit(&mut catalog)?;
+    // Photo records follow ordinary catalog deletion/relink operations too.
+    let assets:HashSet<_>=catalog.assets.iter().map(|a|a.id).collect();
+    let collections:HashSet<_>=catalog.collections.iter().map(|c|c.id).collect();
+    let paths:HashSet<_>=catalog.assets.iter().map(|a|a.path.clone()).collect();
+    catalog.photos.smart.retain(|id,_|collections.contains(id));
+    catalog.photos.stacks.retain(|top,members|{members.retain(|id|assets.contains(id));assets.contains(top)&&members.len()>1});
+    catalog.photos.fingerprints.retain(|path,_|paths.contains(path));
     catalog.validate()?;
     catalog.revision = catalog
         .revision

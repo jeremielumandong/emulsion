@@ -8,7 +8,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
 pub type PageId = u64;
-pub const MAX_PAGES: usize = 100;
+pub const MAX_PAGES: usize = 4096;
 pub const MAX_PROJECT_PIXELS: u64 = 1_000_000_000;
 const MAX_PAGE_STEPS: usize = 100;
 

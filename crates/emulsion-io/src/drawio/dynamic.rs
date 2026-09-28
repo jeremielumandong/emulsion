@@ -13,6 +13,8 @@ pub(super) const NAMES: &[&str] = &[
     "mxgraph.floorplan.doorright",
     "mxgraph.floorplan.doordouble",
     "mxgraph.bpmn.shape",
+    "mxgraph.bpmn.event",
+    "mxgraph.bpmn.gateway2",
     "mxgraph.bpmn.task",
     "mxgraph.arrows2.arrow",
 ];
@@ -91,8 +93,9 @@ pub(super) fn svg(
         "mxgraph.bpmn.task" => {
             content = format!("<rect width='{w}' height='{h}' rx='{}'/>", w.min(h) * 0.12)
         }
-        "mxgraph.bpmn.shape" => {
-            let outline = s.get("outline").map_or("standard", String::as_str);
+        "mxgraph.bpmn.shape" | "mxgraph.bpmn.event" | "mxgraph.bpmn.gateway2" => {
+            let gateway=name.ends_with("gateway2");
+            let outline = if gateway {"gateway"} else {s.get("outline").map_or("standard", String::as_str)};
             let ellipse = |inset: f64| {
                 format!(
                     "<ellipse cx='{}' cy='{}' rx='{}' ry='{}'/>",
@@ -123,10 +126,16 @@ pub(super) fn svg(
                 ),
                 _ => ellipse(0.),
             };
-            let symbol = s.get("symbol").map_or("general", String::as_str);
+            let symbol = if gateway {
+                match s.get("gwType").map(String::as_str) {
+                    Some("parallel")=>"parallelGw", Some("inclusive")=>"inclusiveGw",
+                    _=>s.get("symbol").map_or("general",String::as_str),
+                }
+            } else {s.get("symbol").map_or("general", String::as_str)};
             content.push_str("<g fill='none'>");
             match symbol {
-                "general" => {}
+                "general" | "none" => {}
+                "terminate" => write!(content,"<ellipse cx='{}' cy='{}' rx='{}' ry='{}' fill='{}'/>",w/2.,h/2.,w*0.32,h*0.32,escape(s.get("strokeColor").map_or("black",String::as_str))).unwrap(),
                 "message" => write!(
                     content,
                     "{}<path d='M {} {} L {} {} L {} {}'/>",

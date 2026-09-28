@@ -103,6 +103,11 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    if this.batch.develop.picking_sky && this.batch.preview.is_some() && !this.batch.develop.busy {
+                        let seed={let nav=this.batch.navigation.borrow();nav.bounds.map(|bounds|{let (x,y)=nav.view.screen_to_doc((f32::from(e.position.x) as f64,f32::from(e.position.y) as f64),&bounds);[x as f32/nav.dimensions.0 as f32,y as f32/nav.dimensions.1 as f32]})};
+                        if let Some(seed)=seed.filter(|s|s.iter().all(|v|(0.0..=1.0).contains(v))){this.batch.develop.picking_sky=false;this.batch.develop.mask_seed=Some(seed);this.library_enhance(3,cx);}
+                        cx.stop_propagation();return;
+                    }
                     let mut nav = this.batch.navigation.borrow_mut();
                     if e.click_count == 2 {
                         nav.fit();

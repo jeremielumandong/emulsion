@@ -15,6 +15,9 @@ are retained. No GPUI API version upgrade accompanies this import.
 
 ## Local patches
 
+- [Toolbar behavior](gpui-base/EMULSION_CHANGES.md): bounded arrow-key focus
+  traversal and semantic command groups backported from GPUI Kit 0.7.0.
+
 - [Core frame presentation](gpui-pre/EMULSION_CHANGES.md): skip unchanged-scene
   keepalive presentation on software devices; preserve virtual-list height
   estimates across layout and resizing; opt-in cross-frame Taffy layout reuse.

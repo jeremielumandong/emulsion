@@ -1,4 +1,5 @@
 use super::{DevelopParams, cancelled};
+mod advanced;
 mod detail;
 use crate::{IoError, Result};
 use emulsion_raster::{Raster, TILE, TILE_PX, TileCoord};
@@ -188,6 +189,27 @@ fn white_balance(raw: &RawImage, params: &DevelopParams, channels: usize) -> Res
             "Missing or invalid as-shot white balance for this RAW variant".into(),
         ));
     }
+    if let Some(k) = params.kelvin {
+        let xyz = illuminant_xyz(k);
+        let (_, matrix) = raw
+            .color_matrix_find_first([
+                Illuminant::D65,
+                Illuminant::D50,
+                Illuminant::A,
+                Illuminant::Daylight,
+            ])
+            .ok_or_else(|| invalid("No camera calibration for Kelvin white balance"))?;
+        if matrix.len() != channels * 3 {
+            return Err(invalid("Invalid camera white balance matrix"));
+        }
+        for (c, row) in matrix.as_chunks::<3>().0.iter().enumerate() {
+            let response = row[0] * xyz[0] + row[1] * xyz[1] + row[2] * xyz[2];
+            if response <= 0. || !response.is_finite() {
+                return Err(invalid("White point is outside camera calibration"));
+            }
+            wb[c] = 1. / response;
+        }
+    }
     let green = wb[1];
     for value in &mut wb[..channels] {
         *value /= green;
@@ -197,6 +219,95 @@ fn white_balance(raw: &RawImage, params: &DevelopParams, channels: usize) -> Res
     wb[1] *= 2f32.powf(-0.4 * params.tint);
     // Four-color sensors have a distinct fourth primary, not a second green.
     Ok(wb)
+}
+
+// CIE daylight locus above 4000 K, Planckian locus below it.
+fn illuminant_xyz(t: f32) -> [f32; 3] {
+    let x = if t < 4000. {
+        -0.2661239e9 / t.powi(3) - 0.2343589e6 / t.powi(2) + 0.8776956e3 / t + 0.179910
+    } else if t <= 7000. {
+        -4.607e9 / t.powi(3) + 2.9678e6 / t.powi(2) + 99.11 / t + 0.244063
+    } else {
+        -2.0064e9 / t.powi(3) + 1.9018e6 / t.powi(2) + 247.48 / t + 0.237040
+    };
+    let y = if t < 4000. {
+        -0.9549476 * x.powi(3) - 1.3741859 * x * x + 2.09137 * x - 0.16748867
+    } else {
+        -3. * x * x + 2.87 * x - 0.275
+    };
+    [x / y, 1., (1. - x - y) / y]
+}
+
+/// Develop an already decoded, linear RGB image through the same tone/detail path.
+pub(super) fn render_raster(source: &Raster, params: &DevelopParams) -> Result<Raster> {
+    if params.sensor_noise_reduction > 0. {
+        return Err(invalid("Sensor denoise requires a camera RAW mosaic"));
+    }
+    params.validate().map_err(invalid)?;
+    if *params == DevelopParams::default() {
+        return Ok(source.clone());
+    }
+    let original = source.to_pixels();
+    let gain = if let Some(k) = params.kelvin {
+        let white = illuminant_xyz(k);
+        let d65 = illuminant_xyz(6504.);
+        let matrix = rawler::imgop::xyz::XYZ_TO_SRGB_D65;
+        std::array::from_fn(|c| {
+            let response = (0..3).map(|i| matrix[c][i] * white[i]).sum::<f32>();
+            let reference = (0..3).map(|i| matrix[c][i] * d65[i]).sum::<f32>();
+            (reference / response.max(0.01)).clamp(0.05, 20.)
+        })
+    } else {
+        [1.; 3]
+    };
+    let wb = [
+        gain[0] * 2f32.powf(params.temperature * 0.7),
+        gain[1] * 2f32.powf(-params.tint * 0.4),
+        gain[2] * 2f32.powf(-params.temperature * 0.7),
+    ];
+    let pixels = original
+        .iter()
+        .map(|p| {
+            std::array::from_fn(|c| {
+                if p[3] > 0 {
+                    p[c] as f32 / p[3] as f32 * wb[c]
+                } else {
+                    0.
+                }
+            })
+        })
+        .collect();
+    let neutral_geometry = DevelopParams {
+        crop: [0., 0., 1., 1.],
+        straighten: 0.,
+        perspective: [0.; 2],
+        distortion: 0.,
+        aberration: [0.; 2],
+        lens_profile: None,
+        ..*params
+    };
+    let result = finish(
+        source.width() as usize,
+        source.height() as usize,
+        pixels,
+        Orientation::Normal,
+        &neutral_geometry,
+        &AtomicBool::new(false),
+    )?;
+    let mut pixels = result.to_pixels();
+    for (out, input) in pixels.iter_mut().zip(original) {
+        for value in &mut out[..3] {
+            *value = (*value as f32 * input[3] as f32 / 65535.)
+                .round()
+                .min(input[3] as f32) as u16;
+        }
+        out[3] = input[3];
+    }
+    advanced::geometry(
+        Raster::from_pixels(source.width(), source.height(), [0; 4], &pixels),
+        params,
+        &AtomicBool::new(false),
+    )
 }
 
 fn shape(value: f32, params: &DevelopParams) -> f32 {
@@ -255,6 +366,14 @@ fn tone(pixel: [f32; 3], params: &DevelopParams) -> [f32; 3] {
             [after; 3]
         };
     }
+    for (c, v) in pixel.iter_mut().enumerate() {
+        if params.point_curves[0].len > 0 || params.point_curves[c + 1].len > 0 {
+            let encoded = v.clamp(0., 1.).powf(1. / 2.2);
+            *v = params.point_curves[c + 1]
+                .output(params.point_curves[0].output(encoded))
+                .powf(2.2);
+        }
+    }
     if params.dehaze != 0.0 {
         if params.dehaze > 0.0 {
             let dark = pixel
@@ -270,7 +389,7 @@ fn tone(pixel: [f32; 3], params: &DevelopParams) -> [f32; 3] {
         }
     }
     if params.saturation == 0.0 && params.vibrance == 0.0 {
-        return pixel;
+        return advanced::color(pixel, params);
     }
     let gray = luminance(pixel);
     let max = pixel.iter().copied().fold(0., f32::max);
@@ -281,7 +400,10 @@ fn tone(pixel: [f32; 3], params: &DevelopParams) -> [f32; 3] {
         0.
     };
     let vibrance = 1. + params.vibrance * (1. - chroma);
-    pixel.map(|v| gray + (v - gray) * (1.0 + params.saturation) * vibrance)
+    advanced::color(
+        pixel.map(|v| gray + (v - gray) * (1.0 + params.saturation) * vibrance),
+        params,
+    )
 }
 
 pub(super) fn render(
@@ -292,15 +414,59 @@ pub(super) fn render(
     params.validate().map_err(invalid)?;
     cancelled(cancel)?;
     validate(raw)?;
-    let developed = demosaic(raw, cancel)?;
+    let developed = demosaic_denoised(raw, params.sensor_noise_reduction, cancel)?;
     let (w, h, pixels) = working_rgb(raw, params, developed)?;
     cancelled(cancel)?;
     finish(w, h, pixels, raw.orientation, params, cancel)
 }
 
 fn demosaic(raw: &RawImage, cancel: &AtomicBool) -> Result<Intermediate> {
+    demosaic_denoised(raw, 0., cancel)
+}
+fn demosaic_denoised(raw: &RawImage, strength: f32, cancel: &AtomicBool) -> Result<Intermediate> {
     let mut linear = raw.clone();
-    linear.data = RawImageData::Float(normalized(raw, cancel)?);
+    let mut data = normalized(raw, cancel)?;
+    if strength > 0. {
+        let RawPhotometricInterpretation::Cfa(cfa) = &raw.photometric else {
+            return Err(invalid("Sensor denoise requires a CFA RAW original"));
+        };
+        let source = &data;
+        let rows: Result<Vec<Vec<f32>>> = source
+            .par_chunks(raw.width)
+            .enumerate()
+            .map(|(y, row)| {
+                cancelled(cancel)?;
+                Ok(row
+                    .iter()
+                    .enumerate()
+                    .map(|(x, &center)| {
+                        let color = cfa.cfa.color_at(y, x);
+                        let sigma = 0.002 + 0.025 * strength * center.max(0.).sqrt();
+                        let mut sum = center;
+                        let mut weight = 1.;
+                        for yy in y.saturating_sub(3)..=(y + 3).min(raw.height - 1) {
+                            for xx in x.saturating_sub(3)..=(x + 3).min(raw.width - 1) {
+                                if (xx == x && yy == y) || cfa.cfa.color_at(yy, xx) != color {
+                                    continue;
+                                }
+                                let value = source[yy * raw.width + xx];
+                                let distance =
+                                    (xx as f32 - x as f32).powi(2) + (yy as f32 - y as f32).powi(2);
+                                let w = (-(value - center).powi(2) / (2. * sigma * sigma)
+                                    - distance / 18.)
+                                    .exp();
+                                sum += value * w;
+                                weight += w;
+                            }
+                        }
+                        center + (sum / weight - center) * strength
+                    })
+                    .collect())
+            })
+            .collect();
+        data = rows?.into_iter().flatten().collect();
+    }
+    linear.data = RawImageData::Float(data);
     // Keep rawler's sensor demosaic and crop implementation, but skip its
     // calibration: that path modifies over-range colors before exposure.
     let dev = RawDevelop::new_with(&[
@@ -434,6 +600,7 @@ pub(super) fn neutral_white_balance(
     }
     let result = DevelopParams {
         wb_override: Some(wb),
+        kelvin: None,
         temperature: 0.0,
         tint: 0.0,
         ..*params
@@ -526,6 +693,8 @@ fn finish(
     } else {
         rgb
     };
+    let local_adjustments = params.masks.iter().any(|m| m.enabled);
+    let bitmaps = crate::photo_develop::load_masks(params)?;
     let edge = TILE as usize;
     let columns = ow.div_ceil(edge);
     // Write linear RGBA16 directly into tiles, avoiding a full-frame buffer
@@ -546,6 +715,15 @@ fn finish(
                     } else {
                         tone(rgb[index], params)
                     };
+                    if local_adjustments {
+                        p = advanced::local(
+                            p,
+                            ((x0 + lx) as f32 + 0.5) / ow as f32,
+                            ((y0 + ly) as f32 + 0.5) / oh as f32,
+                            params,
+                            &bitmaps,
+                        );
+                    }
                     if params.vignette != 0. {
                         let nx = ((x0 + lx) as f32 + 0.5) / ow as f32 * 2. - 1.;
                         let ny = ((y0 + ly) as f32 + 0.5) / oh as f32 * 2. - 1.;
@@ -562,8 +740,9 @@ fn finish(
         .collect();
     let tiles = tiles?;
     cancelled(cancel)?;
-    Raster::from_tiles(ow as u32, oh as u32, [0; 4], tiles)
-        .ok_or_else(|| invalid("Invalid developed RAW tiles"))
+    let raster = Raster::from_tiles(ow as u32, oh as u32, [0; 4], tiles)
+        .ok_or_else(|| invalid("Invalid developed RAW tiles"))?;
+    advanced::geometry(raster, params, cancel)
 }
 
 #[cfg(test)]
@@ -574,6 +753,55 @@ mod tests {
         rawimage::{BlackLevel, WhiteLevel},
     };
     use std::collections::HashMap;
+    #[test]
+    fn sensor_denoise_reduces_cfa_noise_and_preserves_original_samples() {
+        let mut raw = sensor();
+        raw.width = 64;
+        raw.height = 64;
+        raw.cpp = 1;
+        raw.whitelevel = WhiteLevel::new(vec![4095]);
+        raw.blacklevel = BlackLevel::new(&[64u16], 1, 1, 1);
+        let cfa = rawler::CFA::new("RGGB");
+        raw.photometric = RawPhotometricInterpretation::Cfa(rawler::rawimage::CFAConfig::new(
+            &cfa,
+            &Default::default(),
+        ));
+        raw.data = RawImageData::Integer(
+            (0..4096)
+                .map(|i| {
+                    let color = cfa.color_at(i / 64, i % 64);
+                    let signal = [0.2, 0.3, 0.4][color];
+                    let noise = if (i * 13 + i / 64 * 7) % 5 < 2 {
+                        -0.005
+                    } else {
+                        0.005
+                    };
+                    (64. + (signal + noise) * 4031.) as u16
+                })
+                .collect(),
+        );
+        let before = raw.data.as_f32().into_owned();
+        let cancel = AtomicBool::new(false);
+        let plain = render(&raw, &DevelopParams::default(), &cancel).unwrap();
+        let denoised = render(
+            &raw,
+            &DevelopParams {
+                sensor_noise_reduction: 1.,
+                ..Default::default()
+            },
+            &cancel,
+        )
+        .unwrap();
+        let variance = |r: &Raster| {
+            let pixels: Vec<f32> = (12..52)
+                .flat_map(|y| (12..52).map(move |x| r.get(x, y)[1] as f32))
+                .collect();
+            let mean = pixels.iter().sum::<f32>() / pixels.len() as f32;
+            pixels.iter().map(|v| (v - mean).powi(2)).sum::<f32>()
+        };
+        assert!(variance(&denoised) < variance(&plain));
+        assert_eq!(raw.data.as_f32().into_owned(), before);
+    }
     fn sensor() -> RawImage {
         RawImage {
             camera: Camera::default(),

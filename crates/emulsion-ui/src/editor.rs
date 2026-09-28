@@ -419,6 +419,7 @@ pub struct EditorView {
     /// RAW develop panel state.
     pub(crate) raw: raw_panel::RawState,
     /// Other open tabs, supplied by the workspace; weak references never keep closed photos alive.
+    pub(crate) library_only: bool,
     pub(crate) library_workspace: Option<WeakEntity<crate::workspace::Workspace>>,
     pub(crate) raw_peers: Vec<WeakEntity<EditorView>>,
     /// Generative fill prompt and state.
@@ -587,6 +588,7 @@ impl EditorView {
             anim: Default::default(),
             raw: Default::default(),
             raw_peers: Vec::new(),
+            library_only: false,
             library_workspace: None,
             generate: Default::default(),
             rail: Default::default(),
@@ -2451,9 +2453,12 @@ impl EditorView {
     ) -> impl IntoElement + use<> {
         let previewing = self.previewing();
         let presenting = self.motion.presenting || self.responsive_preview_active();
-        self.prepare_diagram_svg(cx);
         let svg_key = (self.editor.active_page(), self.editor.revision);
         let svg_enabled = self.is_diagram() && !previewing && !presenting && !self.before_active();
+        let diagram_gpu = svg_enabled && emulsion_engine::canvas::diagram_vector_supported(&self.editor.doc);
+        if !diagram_gpu || !self.gpu_canvas.borrow().defers_to_gpu(&self.view, self.editor.revision) {
+            self.prepare_diagram_svg(cx);
+        }
         let svg_canvas = self.svg_canvas.clone();
         let svg_canvas2 = svg_canvas.clone();
         let overlay = if presenting {tools::Overlay::default()} else {self.overlay(window.scale_factor())};
@@ -2701,6 +2706,7 @@ impl EditorView {
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 if event.button == MouseButton::Right {
                     window.focus(&this.canvas_focus, cx);
+                    this.diagram_context_select(event.position, cx);
                 }
             }))
             .on_scroll_wheel(cx.listener(|this, e, window, cx| {
@@ -2713,6 +2719,7 @@ impl EditorView {
                     this.drop_diagram_stencil(d.0, window.mouse_position(), cx);
                 }),
             )
+            .on_drop(cx.listener(|this,d:&diagram_ui::DraggedDocumentStencil,window,cx|this.drop_document_stencil(d,window.mouse_position(),cx)))
             .on_drop(cx.listener(|this,d:&creative_pack_ui::DraggedPackStencil,window,cx|{
                 if this.is_diagram() && let Some(center)=this.doc_point(window.mouse_position()) {
                     this.use_local_stencil_at(d.path.clone(),d.index,Some(center),cx);
@@ -2832,7 +2839,8 @@ impl EditorView {
                         // carries only the chrome -- stage, plate, grid, wipe,
                         // rulers -- which the engine does not draw. A refusal
                         // is sticky, so this yields for one frame at most.
-                        let svg_ready = svg_enabled && svg_canvas.borrow().displayable(svg_key);
+                        let svg_ready = svg_enabled && svg_canvas.borrow().displayable(svg_key)
+                            && !(diagram_gpu && gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
                         let images = !svg_ready
                             && ((previewing && !native_presentation)
                                 || !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
@@ -2894,6 +2902,8 @@ impl EditorView {
                             let drawn = if external
                                 && svg_enabled
                                 && svg_canvas2.borrow().displayable(svg_key)
+                                && !(diagram_gpu
+                                    && gpu_canvas2.borrow().defers_to_gpu(&gpu_view, gpu_rev))
                             {
                                 viewport::paint_under(&plan, &scene2, window);
                                 let drawn = svg_canvas2.borrow_mut().paint(
@@ -3116,6 +3126,9 @@ impl EditorView {
                         let Some(editor) = editor.upgrade() else {
                             return menu;
                         };
+                        if editor.read(cx).is_diagram() {
+                            return Self::diagram_object_menu(menu, &editor, window, cx);
+                        }
                         let menu = if editor.read(cx).brushy() {
                             brush_quick::menu(menu, &editor, cx).separator()
                         } else {
@@ -3141,6 +3154,7 @@ impl EditorView {
             // shortcuts otherwise compete with the inline font-size field.
             .when(!presenting, |area| {
                 area.children(self.design_selection_toolbar(p, window, cx))
+                    .children(self.diagram_object_toolbar(p, cx))
             })
             .children(self.design_video_overlays(p, window, cx))
             .when(

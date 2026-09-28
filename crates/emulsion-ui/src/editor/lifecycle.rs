@@ -38,6 +38,7 @@ impl EditorView {
         self.suspend_playback(window, cx);
         self.cache.borrow_mut().release(window);
         self.svg_canvas.borrow_mut().release(window);
+        self.release_document_stencil_previews(window);
         for (_, image) in self.thumbs.drain() {
             let _ = window.drop_image(image);
         }

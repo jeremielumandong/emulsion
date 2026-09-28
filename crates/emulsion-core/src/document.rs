@@ -45,7 +45,7 @@ pub enum DocumentError {
 pub const MAX_SIDE: u32 = 30_000;
 pub const MAX_PIXELS: u64 = 400_000_000;
 pub const MAX_DEPTH: usize = 64;
-pub const MAX_NODES: usize = 10_000;
+pub const MAX_NODES: usize = 150_000;
 
 /// A ruler guide: a vertical line at x = pos, or a horizontal one at y = pos.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -304,16 +304,23 @@ impl Document {
     /// Rebuild `nodes` in canonical order (each group directly above its
     /// descendants) from parent pointers and current sibling order.
     pub fn normalize(&mut self) {
-        let by_id: HashMap<NodeId, Node> = self.nodes.iter().map(|n| (n.id, n.clone())).collect();
         let mut kids: HashMap<Option<NodeId>, Vec<NodeId>> = HashMap::new();
+        let mut unique = std::collections::HashSet::with_capacity(self.nodes.len());
         for n in &self.nodes {
+            // Leave malformed input intact for validation instead of panicking
+            // while transferring nodes out of the lookup table.
+            if !unique.insert(n.id) { return; }
             kids.entry(n.parent).or_default().push(n.id);
         }
         let mut out = Vec::with_capacity(self.nodes.len());
+        // Reordering transfers ownership; cloning every vector/text node twice made
+        // an otherwise local diagram drag scale with all artwork in the page.
+        let mut by_id: HashMap<NodeId, Node> = std::mem::take(&mut self.nodes)
+            .into_iter().map(|n| (n.id, n)).collect();
         fn emit(
             id: NodeId,
             kids: &HashMap<Option<NodeId>, Vec<NodeId>>,
-            by_id: &HashMap<NodeId, Node>,
+            by_id: &mut HashMap<NodeId, Node>,
             out: &mut Vec<Node>,
         ) {
             if let Some(ch) = kids.get(&Some(id)) {
@@ -321,11 +328,11 @@ impl Document {
                     emit(*c, kids, by_id, out);
                 }
             }
-            out.push(by_id[&id].clone());
+            out.push(by_id.remove(&id).expect("normalized node exists"));
         }
         if let Some(roots) = kids.get(&None) {
             for r in roots {
-                emit(*r, &kids, &by_id, &mut out);
+                emit(*r, &kids, &mut by_id, &mut out);
             }
         }
         self.nodes = out;
@@ -1023,5 +1030,18 @@ mod hierarchy_validation_tests {
         doc.validate().unwrap();
         doc.nodes[1].clip_to = Some(2);
         assert_eq!(doc.validate(), Err(DocumentError::BadClip(3, 2)));
+    }
+}
+
+#[cfg(test)]
+mod normalization_regression {
+    #[test]
+    fn duplicate_ids_survive_normalization_for_validation() {
+        let mut doc=crate::diagram_library::TEMPLATES[0].build().unwrap();
+        doc.nodes.push(doc.nodes[0].clone());
+        let count=doc.nodes.len();
+        doc.normalize();
+        assert_eq!(doc.nodes.len(),count);
+        assert!(doc.validate().is_err());
     }
 }

@@ -358,6 +358,7 @@ fn shape_kind(style: &BTreeMap<String, String>, warnings: &mut BTreeSet<String>)
         value
             if value.starts_with("stencil(")
                 || vendor::contains(value)
+                || shapes::supports(value)
                 || style.get("resIcon").is_some_and(|v| vendor::contains(v)) =>
         {
             ShapeKind::Process
@@ -544,10 +545,7 @@ fn apply_style(
             ));
         }
     }
-    if style.get("jumpStyle").is_some_and(|v| v != "none") {
-        warnings.insert("Connector line jumps are not rendered.".into());
-    }
-    for key in ["rotation", "shadow", "sketch"] {
+    for key in ["sketch"] {
         if style.get(key).is_some_and(|v| v != "0" && v != "none") {
             warnings.insert(format!("Style {key} requires manual review after import."));
         }
@@ -795,7 +793,7 @@ fn compound_artwork(
         .filter(|n| !excluded.contains(n))
         .collect();
     let complex_paint = doc.node(shape.body).is_some_and(|n| matches!(&n.kind, NodeKind::Path { style, .. } if style.fill_paint != emulsion_raster::vector::PathPaint::Solid || style.stroke_paint != emulsion_raster::vector::PathPaint::Solid));
-    if own.len() <= 2 && !complex_paint {
+    if own.len() <= 2 && !complex_paint && doc.node(id).is_none_or(|n|n.styles.is_empty()) {
         return Ok(None);
     }
     let mut artwork = doc.clone();
@@ -838,7 +836,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
                     break;
                 }
                 if let Some(edge) = model.edges.get(&id) {
-                    if ![edge.path, edge.arrow, edge.label].contains(&node.id) {
+                    if ![edge.path, edge.arrow, edge.label].contains(&node.id) && !edge.labels.iter().any(|l|l.node==node.id) {
                         return Err(error(
                             "Additional connector artwork requires native project or SVG export.",
                         ));
@@ -848,6 +846,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 parent = doc.node(id).and_then(|n| n.parent);
             }
         }
+        let layers:HashSet<_>=doc.nodes.iter().filter(|n|n.is_group() && !model.shapes.contains_key(&n.id) && !model.edges.contains_key(&n.id) && doc.subtree(n.id).iter().any(|id|model.shapes.contains_key(id)||model.edges.contains_key(id))).map(|n|n.id).collect();
         let included: HashSet<_> = model
             .shapes
             .keys()
@@ -857,7 +856,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
         if doc
             .nodes
             .iter()
-            .any(|n| !included.contains(&n.id) && !matches!(n.kind, NodeKind::Fill { .. }))
+            .any(|n| !included.contains(&n.id) && !layers.contains(&n.id) && !matches!(n.kind, NodeKind::Fill { .. }))
         {
             return Err(error(
                 "This page includes artwork outside the diagram graph. Use SVG/PDF or the native project to retain it.",
@@ -876,10 +875,14 @@ pub fn to_xml(project: &Project) -> Result<String> {
             .unwrap_or([0; 4]);
         xml.push_str(&format!("<diagram id=\"{}\" name=\"{}\"><mxGraphModel pageWidth=\"{}\" pageHeight=\"{}\" background=\"{}\" grid=\"1\" gridSize=\"20\"><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/>",page.meta.id,escape(&page.meta.name),doc.width,doc.height,hex((background[3]>0).then_some(background))));
         let mut cells = HashMap::new();
+        for layer in doc.nodes.iter().filter(|n|layers.contains(&n.id)) {
+            let parent=layer.parent.filter(|id|layers.contains(id)).map_or("0".into(),|id|format!("l{id}"));
+            cells.insert(layer.id,format!("<mxCell id=\"l{}\" value=\"{}\" parent=\"{parent}\" visible=\"{}\"/>",layer.id,escape(&layer.name),u8::from(layer.visible)));
+        }
         for (id, shape) in &model.shapes {
             let [mut x, mut y, w, h] =
                 diagram::shape_bounds(doc, shape).ok_or_else(|| error("Missing shape bounds"))?;
-            let parent = shape.container.map_or("1".into(), |id| format!("s{id}"));
+            let parent = shape.container.map(|id|format!("s{id}")).or_else(||doc.node(*id).and_then(|n|n.parent).filter(|id|layers.contains(id)).map(|id|format!("l{id}"))).unwrap_or("1".into());
             if let Some(container) = shape
                 .container
                 .and_then(|id| model.shapes.get(&id))
@@ -906,7 +909,8 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 ShapeKind::Cloud => "shape=cloud;",
             };
             let artwork = compound_artwork(doc, *id, shape, model)?;
-            let custom = if shape.data.contains_key("emulsion_stencil")
+            let curved_process = shape.kind == ShapeKind::Process && matches!(&doc.node(shape.body).unwrap().kind, NodeKind::Path {path,..} if path.subpaths.iter().flat_map(|s|&s.anchors).any(|a|a.h_in!=a.p || a.h_out!=a.p));
+            let custom = if curved_process || shape.data.contains_key("emulsion_stencil")
                 || shape.data.contains_key("drawio_custom_path")
             {
                 if let NodeKind::Path { path, .. } = &doc.node(shape.body).unwrap().kind {
@@ -953,12 +957,15 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 label_style(doc, shape.label)?,
                 node.opacity * 100.
             ));
-            cells.insert(*id, format!("<mxCell id=\"s{id}\" value=\"{}\" vertex=\"1\" visible=\"{}\" parent=\"{parent}\" style=\"{style}\" emulsionData=\"{}\"><mxGeometry x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" as=\"geometry\"/></mxCell>",escape(&label_html(doc,shape.label)),u8::from(node.visible),escape(&serde_json::to_string(&shape.data).map_err(|e|error(e.to_string()))?)));
+            let link=doc.design.interactions.get(id).and_then(|actions|actions.iter().find_map(|a|if let emulsion_core::design_interactions::Action::Url{url}=a{Some(url)}else{None})).or_else(||shape.data.get("drawio_link")).map_or(String::new(),|url|format!(" link=\"{}\"",escape(url)));
+            cells.insert(*id, format!("<mxCell{link} id=\"s{id}\" value=\"{}\" vertex=\"1\" visible=\"{}\" parent=\"{parent}\" style=\"{style}\" emulsionData=\"{}\"><mxGeometry x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" as=\"geometry\"/></mxCell>",escape(&label_html(doc,shape.label)),u8::from(node.visible),escape(&serde_json::to_string(&shape.data).map_err(|e|error(e.to_string()))?)));
         }
         for (id, edge) in &model.edges {
             let mut cell_xml = String::new();
             let routing = if edge.routing == Routing::Orthogonal {
                 "edgeStyle=orthogonalEdgeStyle;"
+            } else if edge.routing == Routing::Cyclical {
+                "edgeStyle=none;curved=1;emulsionRouting=cyclical;"
             } else if edge.routing == Routing::Curved {
                 "edgeStyle=none;curved=1;"
             } else {
@@ -966,7 +973,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
             };
             let node = doc.node(*id).unwrap();
             let style = escape(&format!(
-                "{routing}{}{}{}{}opacity={};endArrow={};startArrow={};html=1;endFill={};startFill={};endSize={};startSize={};",
+                "{routing}{}{}{}{}opacity={};endArrow={};startArrow={};html=1;endFill={};startFill={};endSize={};startSize={};jumpStyle={};jumpSize={};rounded={};arcSize={};",
                 port_style(edge.source.port, "exit"),
                 port_style(edge.target.port, "entry"),
                 paint(doc, edge.path),
@@ -985,7 +992,8 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 u8::from(edge.end_marker.filled),
                 u8::from(edge.start_marker.filled),
                 edge.end_marker.size,
-                edge.start_marker.size
+                edge.start_marker.size,
+                edge.jump_style.drawio(), edge.jump_size, u8::from(edge.corner_radius > 0.), edge.corner_radius
             ));
             let mut refs = String::new();
             let mut endpoints = String::new();
@@ -1002,11 +1010,16 @@ pub fn to_xml(project: &Project) -> Result<String> {
                     refs.push_str(&format!(" {name}=\"s{}\"", endpoint.shape));
                 }
             }
-            cell_xml.push_str(&format!("<mxCell id=\"e{id}\" value=\"{}\" visible=\"{}\" edge=\"1\" parent=\"1\"{refs} style=\"{style}\"><mxGeometry relative=\"1\" as=\"geometry\">{endpoints}<mxPoint x=\"{}\" y=\"{}\" as=\"offset\"/><Array as=\"points\">",escape(&label_html(doc,edge.label)),u8::from(node.visible),edge.label_offset.0,edge.label_offset.1));
+            let edge_parent=node.parent.filter(|id|layers.contains(id)).map_or("1".into(),|id|format!("l{id}"));
+            cell_xml.push_str(&format!("<mxCell id=\"e{id}\" value=\"{}\" visible=\"{}\" edge=\"1\" parent=\"{edge_parent}\"{refs} style=\"{style}\"><mxGeometry relative=\"1\" as=\"geometry\">{endpoints}<mxPoint x=\"{}\" y=\"{}\" as=\"offset\"/><Array as=\"points\">",escape(&label_html(doc,edge.label)),u8::from(node.visible),edge.label_offset.0,edge.label_offset.1));
             for (x, y) in &edge.waypoints {
                 cell_xml.push_str(&format!("<mxPoint x=\"{x}\" y=\"{y}\"/>"));
             }
             cell_xml.push_str("</Array></mxGeometry></mxCell>");
+            for label in &edge.labels {
+                let style=escape(&format!("text;html=1;{}",label_style(doc,label.node)?));
+                cell_xml.push_str(&format!("<mxCell id=\"label{}\" value=\"{}\" vertex=\"1\" parent=\"e{id}\" style=\"{style}\"><mxGeometry x=\"{}\" y=\"{}\" relative=\"1\" as=\"geometry\"><mxPoint x=\"{}\" y=\"{}\" as=\"offset\"/></mxGeometry></mxCell>",label.node,escape(&label_html(doc,label.node)),label.position,label.normal,label.offset.0,label.offset.1));
+            }
             cells.insert(*id, cell_xml);
         }
         for node in &doc.nodes {
