@@ -144,9 +144,19 @@ impl PointCurve {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DevelopParams {
+    /// Portable relative-depth map in untransformed source coordinates.
+    pub depth_map: Option<[u8; 32]>,
+    /// Blur radius as a fraction of the short image side; zero disables it.
+    pub depth_blur: f32,
+    pub depth_focus: f32,
+    pub depth_range: f32,
     /// Content-addressed, scalable composed masks and healing spots.
     pub local_edits: Option<[u8; 32]>,
     pub camera_profile: Option<[u8; 32]>,
+    /// Opt-in camera-neutral-based interpolation; old recipes retain D65 fallback.
+    pub profile_as_shot: bool,
+    /// Reconstruct partially saturated camera channels before WB and color conversion.
+    pub highlight_reconstruction: f32,
     /// Renderer contract. Recipes without this field retain process 1.
     #[serde(default = "legacy_process")]
     pub process_version: u32,
@@ -180,6 +190,10 @@ pub struct DevelopParams {
     pub smooth_point_curves: [bool; 4],
     /// CFA-aware denoise before demosaicing; zero preserves the source.
     pub sensor_noise_reduction: f32,
+    pub sensor_ai_denoise: bool,
+    /// Zero preserves legacy decoding; one is cancellable color-difference interpolation.
+    #[serde(default)]
+    pub demosaic_version: u8,
     pub straighten: f32,
     /// Horizontal and vertical keystone correction.
     pub perspective: [f32; 2],
@@ -230,8 +244,14 @@ fn legacy_process() -> u32 {
 impl Default for DevelopParams {
     fn default() -> Self {
         Self {
+            depth_map: None,
+            depth_blur: 0.,
+            depth_focus: 0.5,
+            depth_range: 0.1,
             local_edits: None,
             camera_profile: None,
+            profile_as_shot: false,
+            highlight_reconstruction: 0.,
             process_version: 2,
             wide_gamut: false,
             parametric: [0.; 4],
@@ -254,6 +274,8 @@ impl Default for DevelopParams {
             point_curves: [PointCurve::default(); 4],
             smooth_point_curves: [true; 4],
             sensor_noise_reduction: 0.,
+            sensor_ai_denoise: false,
+            demosaic_version: 1,
             straighten: 0.,
             perspective: [0.; 2],
             distortion: 0.,
@@ -320,6 +342,23 @@ impl DevelopParams {
     pub const STRONG_CONTRAST_CURVE: [f32; 5] = [0.0, 0.15, 0.5, 0.85, 1.0];
 
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self.demosaic_version > 1 {
+            return Err("Unsupported demosaicing version");
+        }
+        if !self.highlight_reconstruction.is_finite()
+            || !(0.0..=1.0).contains(&self.highlight_reconstruction)
+        {
+            return Err("Invalid RAW highlight reconstruction amount");
+        }
+        if !self.depth_blur.is_finite()
+            || !(0.0..=0.05).contains(&self.depth_blur)
+            || [self.depth_focus, self.depth_range]
+                .iter()
+                .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            || (self.depth_blur > 0. && self.depth_map.is_none())
+        {
+            return Err("Depth blur requires a depth map and valid focus/radius settings");
+        }
         if !(1..=2).contains(&self.process_version) {
             return Err("Unsupported rendering process version");
         }
@@ -898,6 +937,42 @@ mod point_curve_tests {
             DevelopParams {
                 rotation: 4,
                 ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod processing_compatibility_tests {
+    use super::*;
+    #[test]
+    fn old_recipes_keep_legacy_reconstruction_and_new_settings_roundtrip() {
+        let old: DevelopParams = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.demosaic_version, 0);
+        assert!(!old.sensor_ai_denoise);
+        assert_eq!(old.highlight_reconstruction, 0.);
+        assert_eq!(DevelopParams::default().demosaic_version, 1);
+        let next = DevelopParams {
+            depth_map: Some([17; 32]),
+            depth_blur: 0.02,
+            depth_focus: 0.75,
+            depth_range: 0.15,
+            profile_as_shot: true,
+            highlight_reconstruction: 0.8,
+            sensor_ai_denoise: true,
+            ..Default::default()
+        };
+        next.validate().unwrap();
+        assert_eq!(
+            serde_json::from_str::<DevelopParams>(&serde_json::to_string(&next).unwrap()).unwrap(),
+            next
+        );
+        assert!(
+            DevelopParams {
+                depth_map: None,
+                ..next
             }
             .validate()
             .is_err()

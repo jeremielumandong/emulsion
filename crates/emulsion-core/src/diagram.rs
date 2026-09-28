@@ -826,33 +826,6 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                 continue;
             }
         }
-        let source_on_edge = edge_paths
-            .get(&edge.source.shape)
-            .map(|p| endpoints::on_path(p, edge.source.port));
-        let target_on_edge = edge_paths
-            .get(&edge.target.shape)
-            .map(|p| endpoints::on_path(p, edge.target.port));
-        let bounds_for = |endpoint: &Endpoint, point: Option<((f64, f64), (f64, f64))>| {
-            point
-                .map(|(p, _)| [p.0, p.1, 0., 0.])
-                .or_else(|| new_bounds.get(&endpoint.shape).copied())
-                .ok_or("Missing connector endpoint bounds")
-        };
-        let a = bounds_for(&edge.source, source_on_edge)?;
-        let b = bounds_for(&edge.target, target_on_edge)?;
-        let self_loop = edge.source.shape == edge.target.shape;
-        let source_port = if self_loop && edge.source.port == Port::Auto {
-            Port::East
-        } else {
-            edge.source.port
-        };
-        let target_port = if self_loop && edge.target.port == Port::Auto {
-            Port::North
-        } else {
-            edge.target.port
-        };
-        let (start, sd) = source_on_edge.unwrap_or_else(|| source_port.anchor(a, center(b)));
-        let (end, ed) = target_on_edge.unwrap_or_else(|| target_port.anchor(b, center(a)));
         // Native transforms move the editable path too. Retain its transformed
         // interior anchors as manual waypoints before rebuilding bound endpoints.
         if !edge.waypoints.is_empty()
@@ -878,39 +851,7 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                 .map(|a| a.p)
                 .collect();
         }
-        edge.routing_warning = None;
-        let points = if !edge.waypoints.is_empty() {
-            std::iter::once(start)
-                .chain(edge.waypoints.iter().copied())
-                .chain(std::iter::once(end))
-                .collect()
-        } else if edge.routing == Routing::Cyclical {
-            router::cyclical(start, sd, end, ed, a, b)
-        } else if edge.routing != Routing::Orthogonal {
-            vec![start, end]
-        } else {
-            let (points, blocked) = router::orthogonal(start, sd, end, ed, &obstacles);
-            if blocked {
-                edge.routing_warning = Some(
-                    "No clear automatic route. Move overlapping objects or add manual waypoints."
-                        .into(),
-                );
-            }
-            points
-        };
-
-        let mut route = if matches!(edge.routing, Routing::Curved | Routing::Cyclical) {
-            markers::curved(&points)
-        } else if edge.corner_radius > 0. {
-            markers::rounded(&points, edge.corner_radius)
-        } else {
-            Path {
-                subpaths: vec![SubPath {
-                    anchors: points.iter().copied().map(Anchor::corner).collect(),
-                    closed: false,
-                }],
-            }
-        };
+        let (start, end, mut route) = route_geometry(edge, &new_bounds, &edge_paths, &obstacles)?;
         let middle = labels::point(&route, edge.label_position, edge.label_normal);
         if let (Some(old), Some(new)) = (
             before_nodes.get(&edge.label).copied(),
@@ -995,6 +936,136 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
     decorations::synchronize(before, doc, &mut diagram);
     doc.diagram = Some(Arc::new(diagram));
     Ok(())
+}
+
+/// Immutable routing context captured once per drag; each preview routes only
+/// the edited connector and never rebuilds document or raster caches.
+pub struct ConnectorPreview {
+    bounds: HashMap<NodeId, Bounds>,
+    paths: HashMap<NodeId, Arc<Path>>,
+    obstacles: Vec<Bounds>,
+}
+impl ConnectorPreview {
+    pub fn new(doc: &Document) -> Option<Self> {
+        let diagram = doc.diagram.as_ref()?;
+        let nodes = doc
+            .nodes
+            .iter()
+            .map(|n| (n.id, n))
+            .collect::<HashMap<_, _>>();
+        let shape_bounds = diagram
+            .shapes
+            .iter()
+            .filter_map(|(id, s)| {
+                let NodeKind::Path { path, .. } = &nodes.get(&s.body)?.kind else {
+                    return None;
+                };
+                emulsion_raster::vector_geometry::bounds(path)
+                    .map(|(x, y, w, h)| (*id, [x, y, w.max(1.), h.max(1.)]))
+            })
+            .collect::<HashMap<_, _>>();
+        let paths = diagram
+            .edges
+            .iter()
+            .filter_map(|(id, e)| match &nodes.get(&e.path)?.kind {
+                NodeKind::Path { path, .. } => Some((*id, path.clone())),
+                _ => None,
+            })
+            .collect();
+        let obstacles = diagram
+            .shapes
+            .iter()
+            .filter(|(_, s)| !s.kind.is_container())
+            .filter_map(|(id, _)| shape_bounds.get(id).copied())
+            .collect();
+        Some(Self {
+            bounds: shape_bounds,
+            paths,
+            obstacles,
+        })
+    }
+    /// Includes rounded corners and curves. Arrow insets and crossing decorations
+    /// are omitted so attachment handles stay at the actual connection point.
+    pub fn path(&self, edge: &Edge) -> Option<Path> {
+        route_geometry(
+            &mut edge.clone(),
+            &self.bounds,
+            &self.paths,
+            &self.obstacles,
+        )
+        .ok()
+        .map(|(_, _, path)| path)
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn route_geometry(
+    edge: &mut Edge,
+    new_bounds: &HashMap<NodeId, Bounds>,
+    edge_paths: &HashMap<NodeId, Arc<Path>>,
+    obstacles: &[Bounds],
+) -> Result<((f64, f64), (f64, f64), Path), String> {
+    let source_on_edge = edge_paths
+        .get(&edge.source.shape)
+        .map(|p| endpoints::on_path(p, edge.source.port));
+    let target_on_edge = edge_paths
+        .get(&edge.target.shape)
+        .map(|p| endpoints::on_path(p, edge.target.port));
+    let bounds_for = |endpoint: &Endpoint, point: Option<((f64, f64), (f64, f64))>| {
+        point
+            .map(|(p, _)| [p.0, p.1, 0., 0.])
+            .or_else(|| new_bounds.get(&endpoint.shape).copied())
+            .ok_or("Missing connector endpoint bounds")
+    };
+    let a = bounds_for(&edge.source, source_on_edge)?;
+    let b = bounds_for(&edge.target, target_on_edge)?;
+    let self_loop = edge.source.shape == edge.target.shape;
+    let source_port = if self_loop && edge.source.port == Port::Auto {
+        Port::East
+    } else {
+        edge.source.port
+    };
+    let target_port = if self_loop && edge.target.port == Port::Auto {
+        Port::North
+    } else {
+        edge.target.port
+    };
+    let (start, sd) = source_on_edge.unwrap_or_else(|| source_port.anchor(a, center(b)));
+    let (end, ed) = target_on_edge.unwrap_or_else(|| target_port.anchor(b, center(a)));
+    edge.routing_warning = None;
+    let points = if !edge.waypoints.is_empty() {
+        std::iter::once(start)
+            .chain(edge.waypoints.iter().copied())
+            .chain(std::iter::once(end))
+            .collect()
+    } else if edge.routing == Routing::Cyclical {
+        router::cyclical(start, sd, end, ed, a, b)
+    } else if edge.routing != Routing::Orthogonal {
+        vec![start, end]
+    } else {
+        let (points, blocked) = router::orthogonal(start, sd, end, ed, obstacles);
+        if blocked {
+            edge.routing_warning = Some(
+                "No clear automatic route. Move overlapping objects or add manual waypoints."
+                    .into(),
+            );
+        }
+        points
+    };
+
+    let route = if matches!(edge.routing, Routing::Curved | Routing::Cyclical) {
+        markers::curved(&points)
+    } else if edge.corner_radius > 0. {
+        markers::rounded(&points, edge.corner_radius)
+    } else {
+        Path {
+            subpaths: vec![SubPath {
+                anchors: points.iter().copied().map(Anchor::corner).collect(),
+                closed: false,
+            }],
+        }
+    };
+    Ok((start, end, route))
 }
 
 pub fn add_shape(

@@ -7,7 +7,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-pub const MAX_PIXELS: usize = 24_000_000;
+pub const MAX_PIXELS: usize = 60_000_000;
 const MARKER: &str = "Emulsion HDR 1\n";
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 fn bad(message: impl Into<String>) -> IoError {
@@ -61,8 +61,12 @@ pub struct Source {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
+    #[serde(default)]
+    pub panorama: bool,
     pub sources: Vec<Source>,
     pub offsets: Vec<[i32; 2]>,
+    #[serde(default)]
+    pub homographies: Vec<[f64; 9]>,
     pub reference: usize,
     pub deghosted_pixels: usize,
     pub options: Options,
@@ -97,7 +101,7 @@ fn validate_image(image: &FloatImage) -> Result<()> {
             .flatten()
             .any(|v| !v.is_finite() || v.abs() > 1e12)
     {
-        return Err(bad("Invalid or oversized HDR pixels (24 megapixel limit)"));
+        return Err(bad("Invalid or oversized HDR pixels (60 megapixel limit)"));
     }
     Ok(())
 }
@@ -122,6 +126,27 @@ impl FloatImage {
             width: w,
             height: h,
             pixels,
+        }
+    }
+    pub fn develop_display(
+        &self,
+        params: &crate::raw::DevelopParams,
+        display_exposure: f32,
+        panorama: bool,
+        cancel: &AtomicBool,
+    ) -> Result<Raster> {
+        if panorama {
+            validate_image(self)?;
+            check(cancel)?;
+            crate::raw::develop_linear_rgb(
+                self.width,
+                self.height,
+                self.pixels.clone(),
+                params,
+                cancel,
+            )
+        } else {
+            self.develop(params, display_exposure, cancel)
         }
     }
     pub fn develop(
@@ -309,6 +334,51 @@ fn weight(signal: f32) -> f32 {
         signal.min(1. - signal).max(0.)
     }
 }
+
+fn warp_frame(source: Frame, matrix: &[f64; 9], cancel: &AtomicBool) -> Result<Frame> {
+    let (w, h) = (source.image.width, source.image.height);
+    let mut pixels = vec![[0.; 3]; source.image.pixels.len()];
+    let mut signal = vec![0.; pixels.len()];
+    for y in 0..h {
+        check(cancel)?;
+        for x in 0..w {
+            let Some([sx, sy]) = crate::photo_registration::project(
+                matrix,
+                x as f64 / w as f64,
+                y as f64 / h as f64,
+            ) else {
+                continue;
+            };
+            let (sx, sy) = ((sx * w as f64) as f32, (sy * h as f64) as f32);
+            if sx < 0. || sy < 0. || sx > (w - 1) as f32 || sy > (h - 1) as f32 {
+                continue;
+            }
+            let (ix, iy) = (sx as u32, sy as u32);
+            let (fx, fy) = (sx - ix as f32, sy - iy as f32);
+            let dest = (y * w + x) as usize;
+            for (xx, yy, a) in [
+                (ix, iy, (1. - fx) * (1. - fy)),
+                ((ix + 1).min(w - 1), iy, fx * (1. - fy)),
+                (ix, (iy + 1).min(h - 1), (1. - fx) * fy),
+                ((ix + 1).min(w - 1), (iy + 1).min(h - 1), fx * fy),
+            ] {
+                let i = (yy * w + xx) as usize;
+                for (dst, src) in pixels[dest].iter_mut().zip(source.image.pixels[i]) {
+                    *dst += src * a;
+                }
+                signal[dest] += source.signal[i] * a;
+            }
+        }
+    }
+    Ok(Frame {
+        image: FloatImage {
+            width: w,
+            height: h,
+            pixels,
+        },
+        signal,
+    })
+}
 #[expect(
     clippy::too_many_arguments,
     reason = "Keeps existing explicit workflow inputs together"
@@ -345,7 +415,13 @@ fn accumulate(
             let yy = lum(rgb);
             let moving = weight(reference.signal[i]) > 0.02
                 && wgt > 0.02
-                && ((yy + 0.001) / (reference_y + 0.001)).log2().abs() > threshold;
+                && (((yy + 0.001) / (reference_y + 0.001)).log2().abs() > threshold
+                    || (0..3).any(|c| {
+                        ((rgb[c] + 0.001) / (reference.image.pixels[i][c] + 0.001))
+                            .log2()
+                            .abs()
+                            > threshold * 1.5
+                    }));
             if moving {
                 ghosts[i] = 255;
                 continue;
@@ -437,6 +513,7 @@ pub fn merge(
     let mut fallback = vec![[0., 0., 0., f32::INFINITY]; n];
     let mut ghosts = vec![0; n];
     let mut offsets = vec![[0, 0]; paths.len()];
+    let mut homographies = vec![crate::photo_registration::IDENTITY; paths.len()];
     accumulate(
         &reference,
         &reference,
@@ -457,10 +534,18 @@ pub fn merge(
         if (image.image.width, image.image.height) != dimensions {
             return Err(bad("HDR bracket dimensions/orientation do not match"));
         }
-        let image = reduce(image);
+        let mut image = reduce(image);
         let ratio = 2f32.powf(ev[i]);
         let offset = if options.align {
-            align(&reference.image, &image.image, ratio, cancel)?
+            if let Ok(matrix) =
+                crate::photo_registration::register(&reference.image, &image.image, cancel)
+            {
+                homographies[i] = matrix;
+                image = warp_frame(image, &matrix, cancel)?;
+                [0, 0]
+            } else {
+                align(&reference.image, &image.image, ratio, cancel)?
+            }
         } else {
             [0, 0]
         };
@@ -476,6 +561,23 @@ pub fn merge(
             &mut ghosts,
             cancel,
         )?;
+    }
+    // Cover motion boundaries as well as their centers, avoiding colored edge ghosts.
+    let detected = ghosts.clone();
+    for y in 0..reference.image.height as usize {
+        for x in 0..reference.image.width as usize {
+            let w = reference.image.width as usize;
+            if detected[y * w + x] == 0
+                && (y.saturating_sub(2)..=(y + 2).min(reference.image.height as usize - 1)).any(
+                    |yy| {
+                        (x.saturating_sub(2)..=(x + 2).min(w - 1))
+                            .any(|xx| detected[yy * w + xx] > 0)
+                    },
+                )
+            {
+                ghosts[y * w + x] = 255;
+            }
+        }
     }
     let mut pixels = Vec::with_capacity(n);
     for i in 0..n {
@@ -513,8 +615,10 @@ pub fn merge(
         }
     }
     let report = Report {
+        panorama: false,
         sources,
         offsets,
+        homographies,
         reference: reference_index,
         deghosted_pixels: ghosts.iter().filter(|v| **v > 0).count(),
         options: options.clone(),
@@ -531,7 +635,12 @@ pub fn merge(
 impl Merge {
     pub fn preview(&self, overlay: bool, cancel: &AtomicBool) -> Result<Raster> {
         let small = self.image.resized(1400);
-        let raster = small.develop(&Default::default(), self.report.display_exposure, cancel)?;
+        let raster = small.develop_display(
+            &Default::default(),
+            self.report.display_exposure,
+            self.report.panorama,
+            cancel,
+        )?;
         if !overlay {
             return Ok(raster);
         }
@@ -832,5 +941,39 @@ mod tests {
         assert!(merged.save(&path, &cancel).is_err());
         assert!(!path.exists());
         assert!(merge(&paths, &options, false, &cancel).is_err());
+    }
+}
+
+#[cfg(test)]
+mod large_input_tests {
+    use super::*;
+    #[test]
+    #[ignore = "Full-resolution memory and throughput acceptance check"]
+    fn merges_more_than_twenty_four_megapixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..2)
+            .map(|i| dir.path().join(format!("{i}.png")))
+            .collect();
+        for (i, path) in paths.iter().enumerate() {
+            image::RgbImage::from_pixel(6000, 4200, image::Rgb([80 + i as u8 * 30; 3]))
+                .save(path)
+                .unwrap();
+        }
+        let started = std::time::Instant::now();
+        let merged = merge(
+            &paths,
+            &Options {
+                align: false,
+                auto_tone: false,
+                exposure_ev: Some(vec![0., 1.]),
+                ..Default::default()
+            },
+            false,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!((merged.image.width, merged.image.height), (6000, 4200));
+        assert!(merged.image.pixels.iter().flatten().all(|v| v.is_finite()));
+        eprintln!("25.2 MP HDR: {:?}", started.elapsed());
     }
 }

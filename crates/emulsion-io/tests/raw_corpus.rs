@@ -107,3 +107,78 @@ fn real_camera_open_edit_reopen_export() {
         std::fs::remove_file(export).unwrap();
     }
 }
+
+#[test]
+#[ignore = "requires licensed camera fixtures; compares new and legacy reconstruction"]
+fn real_camera_color_and_inspection_regression() {
+    let directory =
+        PathBuf::from(std::env::var_os("EMULSION_RAW_CORPUS").expect("set EMULSION_RAW_CORPUS"));
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/raw-corpus.json")).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    for fixture in fixtures.as_array().unwrap() {
+        let name = fixture["file"].as_str().unwrap();
+        let path = directory.join(name);
+        assert_eq!(
+            emulsion_io::raw::source_digest(&path).unwrap(),
+            fixture["sha256"].as_str().unwrap()
+        );
+        let source = RawSource::load(&path).unwrap();
+        let base = DevelopParams {
+            exposure: -0.5,
+            ..Default::default()
+        };
+        let new = source.develop_preview(&base, &cancel).unwrap();
+        let legacy = source
+            .develop_preview(
+                &DevelopParams {
+                    demosaic_version: 0,
+                    ..base
+                },
+                &cancel,
+            )
+            .unwrap();
+        assert_eq!(
+            (new.width(), new.height()),
+            (legacy.width(), legacy.height())
+        );
+        let a = new.to_pixels();
+        let b = legacy.to_pixels();
+        let mse = a
+            .iter()
+            .zip(&b)
+            .map(|(a, b)| {
+                (0..3)
+                    .map(|c| ((a[c] as f64 - b[c] as f64) / 65535.).powi(2))
+                    .sum::<f64>()
+                    / 3.
+            })
+            .sum::<f64>()
+            / a.len() as f64;
+        assert!(mse.sqrt() < 0.08, "{name}: RGB RMSE {}", mse.sqrt());
+        eprintln!("{name}: new/legacy preview RGB RMSE {:.6}", mse.sqrt());
+        assert!(
+            source
+                .develop_with_cancel(&base, &std::sync::atomic::AtomicBool::new(true))
+                .is_err()
+        );
+        drop(source);
+        let photo = emulsion_io::photo_develop::PhotoSource::load(&path).unwrap();
+        let first = std::time::Instant::now();
+        let a = photo
+            .develop_region(&base, [0.5, 0.5], 512, &cancel)
+            .unwrap();
+        let cold = first.elapsed();
+        let repeat = std::time::Instant::now();
+        let b = photo
+            .develop_region(&base, [0.5, 0.5], 512, &cancel)
+            .unwrap();
+        let warm = repeat.elapsed();
+        assert_eq!(a.to_pixels(), b.to_pixels());
+        eprintln!("{name}: inspection cold {cold:?}, cached {warm:?}");
+        assert_eq!(
+            emulsion_io::raw::source_digest(&path).unwrap(),
+            fixture["sha256"].as_str().unwrap()
+        );
+    }
+}

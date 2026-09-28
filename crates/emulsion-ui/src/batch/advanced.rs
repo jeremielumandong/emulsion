@@ -16,6 +16,7 @@ pub(super) enum Field {
     Blend,
     Balance,
     Detail(usize),
+    Depth(usize),
     Crop(usize),
     Straighten,
     Perspective(usize),
@@ -29,6 +30,11 @@ pub(super) enum Field {
 }
 pub(super) fn assign(p: &mut DevelopParams, f: Field, v: f32) {
     match f {
+        Field::Depth(i) => match i {
+            0 => p.depth_blur = v,
+            1 => p.depth_focus = v,
+            _ => p.depth_range = v,
+        },
         Field::Basic(i) => match i {
             0 => p.exposure = v,
             1 => p.contrast = v,
@@ -89,7 +95,8 @@ pub(super) fn assign(p: &mut DevelopParams, f: Field, v: f32) {
                 7 => p.color_noise_reduction = v,
                 8 => p.color_noise_detail = v,
                 9 => p.color_noise_smoothness = v,
-                _ => p.sensor_noise_reduction = v,
+                10 => p.sensor_noise_reduction = v,
+                _ => p.highlight_reconstruction = v,
             }
         }
         Field::Crop(i) => {
@@ -534,6 +541,7 @@ impl Workspace {
                     params.color_noise_detail,
                     params.color_noise_smoothness,
                     params.sensor_noise_reduction,
+                    params.highlight_reconstruction,
                 ];
                 for (i, name) in [
                     "Sharpening",
@@ -547,11 +555,12 @@ impl Workspace {
                     "Color detail",
                     "Color smoothness",
                     "Sensor denoise (RAW)",
+                    "Reconstruct RAW highlights",
                 ]
                 .into_iter()
                 .enumerate()
                 {
-                    if i == 10 && !emulsion_io::photo_develop::is_raw_photo(&path) {
+                    if i >= 10 && !emulsion_io::photo_develop::is_raw_photo(&path) {
                         continue;
                     }
                     fields.push((
@@ -906,6 +915,8 @@ impl Workspace {
             Field::Split(i) => [0.25, 0.5, 0.75][i],
             Field::Blend => 0.5,
             Field::Detail(1) => 0.8,
+            Field::Depth(1) => 0.5,
+            Field::Depth(2) => 0.1,
             Field::Detail(2 | 5 | 8 | 9) => 0.5,
             Field::Mask(_, 0 | 1) => 0.5,
             Field::Mask(_, 2 | 3) => 0.25,

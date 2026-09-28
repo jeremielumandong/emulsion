@@ -388,6 +388,9 @@ impl EditorView {
 
     /// The selected node when it is a pixel node the Move tool can transform.
     pub(crate) fn transformable(&self) -> Option<(NodeId, u32, u32, Placement)> {
+        if self.single_selected_connector() {
+            return None;
+        }
         if self.tool != Tool::Move {
             return None;
         }
@@ -457,6 +460,9 @@ impl EditorView {
     /// canvas shows what a click in the Layers panel picked. The Move tool
     /// draws its own box instead.
     pub(crate) fn layer_outline(&self) -> Option<[(f64, f64); 4]> {
+        if self.single_selected_connector() {
+            return None;
+        }
         // Only after the user clicks a layer row, not for whatever happens to
         // be selected when a document opens.
         if !self.layer_outline_shown {

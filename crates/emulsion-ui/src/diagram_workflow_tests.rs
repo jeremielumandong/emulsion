@@ -1598,3 +1598,76 @@ fn diagram_connector_hit_uses_paint_order_over_background_shapes(cx: &mut TestAp
         )
     });
 }
+
+#[gpui_kit::test]
+fn curved_connector_drag_hits_visible_curve_and_keeps_endpoints(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton};
+    let imported = emulsion_io::drawio::from_xml(r#"<mxGraphModel pageWidth="800" pageHeight="600"><root>
+        <mxCell id="0"/><mxCell id="1" parent="0"/>
+        <mxCell id="a" vertex="1" parent="1"><mxGeometry x="80" y="200" width="100" height="80"/></mxCell>
+        <mxCell id="b" vertex="1" parent="1"><mxGeometry x="560" y="200" width="100" height="80"/></mxCell>
+        <mxCell id="e" edge="1" parent="1" source="a" target="b" style="curved=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;"><mxGeometry relative="1"><Array as="points"><mxPoint x="350" y="70"/></Array></mxGeometry></mxCell>
+        </root></mxGraphModel>"#).unwrap();
+    let doc = imported.project.pages[0].doc.clone();
+    let (&id, edge) = doc.diagram.as_ref().unwrap().edges.iter().next().unwrap();
+    let edge = edge.clone();
+    let original = doc.diagram.clone();
+    let NodeKind::Path { path, .. } = &doc.node(edge.path).unwrap().kind else {
+        panic!()
+    };
+    let points = path.flatten(0.1)[0].0.clone();
+    let point = points[points.len() / 3];
+    let (ws, cx) = open(cx, doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap(),
+                "Curve".into(),
+                window,
+                cx,
+            )
+        });
+        let view = ws.read(cx).editor.clone().unwrap();
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![id], Some(id));
+            cx.notify();
+        });
+        view
+    });
+    cx.run_until_parked();
+    let (from, to, revision) = cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert!(
+            e.transform_box().is_none(),
+            "connectors use line handles, not a transform rectangle"
+        );
+        assert!(
+            e.layer_outline().is_none(),
+            "connectors have no layer bounding rectangle"
+        );
+        (
+            e.doc_to_window(point).unwrap(),
+            e.doc_to_window((point.0, point.1 + 65.)).unwrap(),
+            e.editor.revision,
+        )
+    });
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.revision, revision));
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let e = view.read(cx);
+        let changed = &e.editor.doc.diagram.as_ref().unwrap().edges[&id];
+        assert_eq!(changed.source, edge.source);
+        assert_eq!(changed.target, edge.target);
+        assert_ne!(changed.waypoints, edge.waypoints);
+        assert_eq!(changed.routing, edge.routing);
+        e.editor.doc.validate().unwrap();
+        window.click("project-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc.diagram, original));
+}

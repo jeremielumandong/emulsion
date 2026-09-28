@@ -34,7 +34,7 @@ pub fn develop_document(doc: &Document) -> Result<Document> {
         return Ok(rendered);
     };
     raw.validate().map_err(|e| IoError::Manifest(e.into()))?;
-    let source = crate::raw::RawSource::load_verified(&raw.source, &raw.source_sha256)?;
+    let source = crate::photo_develop::PhotoSource::load_verified(&raw.source, &raw.source_sha256)?;
     let raster = Arc::new(source.develop_with(&raw.params)?);
     let node = rendered
         .node_mut(raw.node_id)

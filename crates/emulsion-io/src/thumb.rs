@@ -230,9 +230,10 @@ pub fn batch_thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
                 .ok_or_else(|| crate::IoError::Unsupported("Invalid proxy thumbnail".into()))?,
         )
     } else if let Some((image, report)) = crate::photo_hdr::load(path)? {
-        let r = image.resized(max).develop(
+        let r = image.resized(max).develop_display(
             &Default::default(),
             report.display_exposure,
+            report.panorama,
             &std::sync::atomic::AtomicBool::new(false),
         )?;
         DynamicImage::ImageRgba8(

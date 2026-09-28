@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Task {
+    SensorDenoise,
     Sky,
     /// Promptable segmentation (points, box).
     Segment,
@@ -38,6 +39,7 @@ pub enum Task {
 impl Task {
     pub fn label(self) -> &'static str {
         match self {
+            Task::SensorDenoise => "RAW sensor denoise",
             Task::Sky => "sky segmentation",
             Task::Segment => "segmentation",
             Task::Matte => "subject matte",
@@ -79,6 +81,19 @@ impl ModelSpec {
 
 /// Every model Emulsion knows how to run.
 pub const MANIFEST: &[ModelSpec] = &[
+    ModelSpec {
+        id: "rawnind-bayer-v1",
+        name: "RawNIND Bayer denoise",
+        task: Task::SensorDenoise,
+        files: &[ModelFile {
+            name: "rawnind.dtmodel",
+            url: "https://github.com/darktable-org/darktable-ai/releases/download/nightly-5.7.0/rawdenoise-nind.dtmodel",
+            bytes: 57_700_134,
+        }],
+        license: "GPL-3.0",
+        note: "Optional RAW-trained Bayer denoising and demosaicing. Local CPU inference; not available for X-Trans or monochrome sensors.",
+        default: true,
+    },
     ModelSpec {
         id: "skyseg",
         name: "Sky segmentation (U-2-Net)",

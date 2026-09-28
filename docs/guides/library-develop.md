@@ -356,3 +356,27 @@ conversion; this is not a calibrated camera-response reconstruction. Deghosting 
 conservative and reference-based. These are Emulsion algorithms, not Adobe's engine.
 MCP provides `merge_library_hdr` (preview or new output path), `cancel_library_hdr`,
 and `get_library.hdr_busy`. Existing outputs are never overwritten.
+
+### Additional photo processing
+
+In **Enhance**, enable **Interruptible RAW reconstruction** for older RAW recipes,
+choose **AI sensor denoise (Bayer RAW)** after installing its model in **Models**, or
+use **Generate depth map** to add adjustable depth blur. Depth focus runs from far
+(0) to near (1); the focus range keeps a band of depths sharp. These settings are
+nondestructive and participate in Library undo and saved recipes.
+
+The Detail panel's **Reconstruct RAW highlights** control estimates partially clipped
+sensor colors. With a compatible imported camera profile, **Use as-shot profile
+calibration** interpolates its illuminants from the camera's recorded white balance.
+
+**ProPhoto working gamut** supports RGB photographs as well as RAW. Embedded RGB
+profiles are converted before development without an intermediate sRGB clamp. Photo
+can keep a profiled original linked for development and export a single photographic
+layer in ProPhoto RGB; multilayer artwork still uses the sRGB compositor.
+
+Select 2–9 overlapping photos in capture order and choose **Stitch Panorama…**.
+Preview the planar stitch, then save a new float TIFF to the Library. Original files
+are preserved. HDR Merge now attempts projective alignment before its translation
+fallback and uses color-aware motion rejection. See the
+[implementation boundaries and validation](../specs/implementation/library-remaining-work.md)
+for supported sensor layouts, memory limits and current photographic limitations.

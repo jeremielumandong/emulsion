@@ -384,6 +384,17 @@ pub fn text_supported(spec: &emulsion_core::text::TextSpec) -> bool {
 /// visible primitive stays vector. Rich SVG Smart Objects keep the SVG renderer
 /// instead of accidentally enlarging their preview raster during zoom.
 pub fn diagram_vector_supported(doc: &Document) -> bool {
+    diagram_supported(doc, false)
+}
+
+/// Original bitmap assets can share the GPU compositor with native vector
+/// labels and shapes. Smart-object preview rasters still require SVG fallback.
+/// Kept separate from the all-vector incremental update contract.
+pub fn diagram_gpu_supported(doc: &Document) -> bool {
+    diagram_supported(doc, true)
+}
+
+fn diagram_supported(doc: &Document, allow_images: bool) -> bool {
     doc.diagram.is_some()
         && doc.nodes.iter().all(|n| {
             !n.visible
@@ -399,6 +410,7 @@ pub fn diagram_vector_supported(doc: &Document) -> bool {
                         NodeKind::Path { style, .. } => path_supported(style),
                         NodeKind::Text { spec, .. } => text_supported(spec),
                         NodeKind::Group { .. } | NodeKind::Fill { .. } => true,
+                        NodeKind::Raster { .. } => allow_images,
                         _ => false,
                     })
         })

@@ -506,7 +506,11 @@ pub mod photo_metadata;
 
 pub mod photo_backup;
 
+pub mod photo_depth;
 pub mod photo_geometry;
+pub mod photo_panorama;
+pub mod photo_registration;
+pub mod photo_wide;
 
 #[cfg(test)]
 mod photo_workflow_tests;

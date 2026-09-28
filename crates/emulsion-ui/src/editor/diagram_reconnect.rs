@@ -8,9 +8,23 @@ pub(super) struct EndpointDrag {
     revision: u64,
     start: (f64, f64),
     segment: Option<(Vec<(f64, f64)>, usize)>,
+    curve_point: Option<usize>,
+    route: diagram::ConnectorPreview,
 }
 
 impl EditorView {
+    pub(crate) fn single_selected_connector(&self) -> bool {
+        self.selected_layer_roots().len() == 1
+            && self.diagram_object().is_some_and(|id| {
+                self.editor
+                    .doc
+                    .diagram
+                    .as_ref()
+                    .and_then(|d| d.edges.get(&id))
+                    .is_some_and(|edge| self.selected != Some(edge.label))
+            })
+    }
+
     fn diagram_edge_ends(&self, id: NodeId) -> Option<[(f64, f64); 2]> {
         let cache = self.diagram_hit_cache();
         let (_, _, lines) = cache.edges.iter().find(|(edge, _, _)| *edge == id)?;
@@ -45,6 +59,7 @@ impl EditorView {
         if self.selected == Some(edge.label) {
             return false;
         }
+        let mut curve_point = None;
         let segment = if distance(ends[usize::from(!source)]) * self.view.zoom > 12. {
             let Some(Node {
                 kind: NodeKind::Path { path, .. },
@@ -59,28 +74,71 @@ impl EditorView {
             if line.anchors.len() > 128 {
                 return false;
             }
-            let points: Vec<_> = line.anchors.iter().map(|a| a.p).collect();
-            let nearest = points
-                .windows(2)
-                .enumerate()
-                .map(|(i, p)| {
-                    let (dx, dy) = (p[1].0 - p[0].0, p[1].1 - p[0].1);
-                    let t = (((point.0 - p[0].0) * dx + (point.1 - p[0].1) * dy)
-                        / (dx * dx + dy * dy).max(1e-12))
-                    .clamp(0., 1.);
-                    (
-                        i,
-                        (point.0 - p[0].0 - t * dx).hypot(point.1 - p[0].1 - t * dy),
-                    )
-                })
-                .min_by(|a, b| a.1.total_cmp(&b.1));
-            let Some((index, d)) = nearest else {
-                return false;
-            };
-            if d * self.view.zoom > 7. {
-                return false;
+            if matches!(
+                edge.routing,
+                diagram::Routing::Curved | diagram::Routing::Cyclical
+            ) {
+                // Hit-test the displayed curve, not the chord between its anchors.
+                if !path
+                    .flatten((0.75 / self.view.zoom).clamp(0.02, 2.))
+                    .iter()
+                    .any(|(line, _)| {
+                        line.windows(2)
+                            .any(|p| segment_distance(point, p[0], p[1]) * self.view.zoom <= 7.)
+                    })
+                {
+                    return false;
+                }
+                let mut points = if edge.waypoints.is_empty() {
+                    line.anchors.iter().map(|a| a.p).collect::<Vec<_>>()
+                } else {
+                    std::iter::once(ends[0])
+                        .chain(edge.waypoints.iter().copied())
+                        .chain(std::iter::once(ends[1]))
+                        .collect()
+                };
+                let nearby = (1..points.len() - 1)
+                    .min_by(|&a, &b| distance(points[a]).total_cmp(&distance(points[b])))
+                    .filter(|&i| distance(points[i]) * self.view.zoom <= 12.);
+                let index = nearby.unwrap_or_else(|| {
+                    let index = points
+                        .windows(2)
+                        .enumerate()
+                        .min_by(|(_, a), (_, b)| {
+                            segment_distance(point, a[0], a[1])
+                                .total_cmp(&segment_distance(point, b[0], b[1]))
+                        })
+                        .map(|(i, _)| i + 1)
+                        .unwrap_or(1);
+                    points.insert(index, point);
+                    index
+                });
+                curve_point = Some(index);
+                Some((points, index))
+            } else {
+                let points: Vec<_> = line.anchors.iter().map(|a| a.p).collect();
+                let nearest = points
+                    .windows(2)
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let (dx, dy) = (p[1].0 - p[0].0, p[1].1 - p[0].1);
+                        let t = (((point.0 - p[0].0) * dx + (point.1 - p[0].1) * dy)
+                            / (dx * dx + dy * dy).max(1e-12))
+                        .clamp(0., 1.);
+                        (
+                            i,
+                            (point.0 - p[0].0 - t * dx).hypot(point.1 - p[0].1 - t * dy),
+                        )
+                    })
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                let Some((index, d)) = nearest else {
+                    return false;
+                };
+                if d * self.view.zoom > 7. {
+                    return false;
+                }
+                Some((points, index))
             }
-            Some((points, index))
         } else {
             None
         };
@@ -95,6 +153,8 @@ impl EditorView {
             revision: self.editor.revision,
             start: point,
             segment,
+            curve_point,
+            route: diagram::ConnectorPreview::new(&self.editor.doc).unwrap(),
         });
         self.notify_canvas(cx);
         cx.notify();
@@ -211,7 +271,59 @@ impl EditorView {
             && !self.editor.doc.layer_locks(id).position
             && let Some(ends) = self.diagram_edge_ends(id)
         {
-            overlay.ports.extend(ends);
+            overlay.connector_ends.extend(ends);
+            let cache = self.diagram_hit_cache();
+            if let Some((_, _, lines)) = cache.edges.iter().find(|(edge, _, _)| *edge == id) {
+                overlay.connector_lines.extend(lines.iter().cloned());
+                let curved = self
+                    .editor
+                    .doc
+                    .diagram
+                    .as_ref()
+                    .unwrap()
+                    .edges
+                    .get(&id)
+                    .is_some_and(|e| {
+                        matches!(
+                            e.routing,
+                            diagram::Routing::Curved | diagram::Routing::Cyclical
+                        )
+                    });
+                for line in lines {
+                    let segments = line.windows(2).collect::<Vec<_>>();
+                    if curved {
+                        let total: f64 = segments
+                            .iter()
+                            .map(|p| (p[1].0 - p[0].0).hypot(p[1].1 - p[0].1))
+                            .sum();
+                        let mut remaining = total / 2.;
+                        for p in segments {
+                            let length = (p[1].0 - p[0].0).hypot(p[1].1 - p[0].1);
+                            if remaining <= length && length > 0. && total * self.view.zoom > 40. {
+                                let t = remaining / length;
+                                overlay.connector_bends.push((
+                                    (
+                                        p[0].0 + (p[1].0 - p[0].0) * t,
+                                        p[0].1 + (p[1].1 - p[0].1) * t,
+                                    ),
+                                    (p[1].1 - p[0].1).abs() > (p[1].0 - p[0].0).abs(),
+                                ));
+                                break;
+                            }
+                            remaining -= length;
+                        }
+                    } else {
+                        for p in segments {
+                            if (p[1].0 - p[0].0).hypot(p[1].1 - p[0].1) * self.view.zoom > 40. {
+                                overlay.connector_bends.push((
+                                    ((p[0].0 + p[1].0) / 2., (p[0].1 + p[1].1) / 2.),
+                                    (p[1].1 - p[0].1).abs() > (p[1].0 - p[0].0).abs(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
         let Some(drag) = &self.diagram_ui.endpoint_drag else {
             return;
@@ -219,47 +331,45 @@ impl EditorView {
         let Some(pointer) = self.diagram_ui.pointer else {
             return;
         };
-        if let Some(points) = drag.bend_preview(pointer) {
-            overlay.preview = points;
-            return;
-        }
-        let Some(ends) = self.diagram_edge_ends(drag.edge) else {
+        let Some(mut edge) = self
+            .editor
+            .doc
+            .diagram
+            .as_ref()
+            .and_then(|d| d.edges.get(&drag.edge))
+            .cloned()
+        else {
             return;
         };
-        let fixed = ends[usize::from(drag.source)];
-        let candidate = self.diagram_endpoint_candidate(pointer);
-        let moving = candidate
-            .as_ref()
-            .and_then(|e| diagram::endpoint_position(&self.editor.doc, e, fixed))
-            .unwrap_or(pointer);
-        let cache = self.diagram_hit_cache();
-        if let Some((_, _, lines)) = cache.edges.iter().find(|(id, _, _)| *id == drag.edge) {
-            overlay.preview = lines.iter().flatten().copied().collect();
+        if let Some(points) = drag.bend_preview(pointer) {
+            edge.waypoints = points[1..points.len() - 1].to_vec();
+        } else if let Some(candidate) = self.diagram_endpoint_candidate(pointer) {
             if drag.source {
-                overlay.preview.reverse();
+                edge.source = candidate;
+            } else {
+                edge.target = candidate;
             }
-            let n = overlay.preview.len();
-            if n >= 2 {
-                let old = overlay.preview[n - 1];
-                if n > 2
-                    && self
-                        .editor
-                        .doc
-                        .diagram
-                        .as_ref()
-                        .is_some_and(|d| d.edges[&drag.edge].waypoints.is_empty())
-                {
-                    let prior = &mut overlay.preview[n - 2];
-                    if (old.0 - prior.0).abs() < 0.001 {
-                        prior.0 = moving.0;
-                    } else if (old.1 - prior.1).abs() < 0.001 {
-                        prior.1 = moving.1;
-                    }
-                }
-                overlay.preview[n - 1] = moving;
+        } else {
+            // An unattached release cancels; show a tether while outside valid targets.
+            if let Some(ends) = self.diagram_edge_ends(drag.edge) {
+                overlay.preview = vec![ends[usize::from(drag.source)], pointer];
+            }
+            return;
+        }
+        if let Some(path) = drag.route.path(&edge) {
+            overlay.preview = path
+                .flatten((0.5 / self.view.zoom).clamp(0.02, 2.))
+                .into_iter()
+                .flat_map(|(points, _)| points)
+                .collect();
+            if drag.segment.is_none() {
+                overlay.target = if drag.source {
+                    overlay.preview.first().copied()
+                } else {
+                    overlay.preview.last().copied()
+                };
             }
         }
-        overlay.target = candidate.map(|_| moving);
     }
 
     /// A directly selected object stays editable through overlapping artwork.
@@ -292,6 +402,14 @@ impl EditorView {
 impl EndpointDrag {
     fn bend_preview(&self, pointer: (f64, f64)) -> Option<Vec<(f64, f64)>> {
         let (points, index) = self.segment.as_ref()?;
+        if let Some(index) = self.curve_point {
+            let mut moved = points.clone();
+            moved[index] = (
+                points[index].0 + pointer.0 - self.start.0,
+                points[index].1 + pointer.1 - self.start.1,
+            );
+            return Some(moved);
+        }
         let (a, b) = (points[*index], points[*index + 1]);
         let mut delta = (pointer.0 - self.start.0, pointer.1 - self.start.1);
         if (a.1 - b.1).abs() < 0.001 {
@@ -313,4 +431,10 @@ impl EndpointDrag {
         }
         Some(moved)
     }
+}
+
+fn segment_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / (dx * dx + dy * dy).max(1e-12)).clamp(0., 1.);
+    (p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dy)
 }

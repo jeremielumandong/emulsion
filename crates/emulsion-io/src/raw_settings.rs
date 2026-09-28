@@ -43,6 +43,8 @@ pub fn merge_settings(
         RawSettingsGroup::Tone => {
             target.process_version = source.process_version;
             target.camera_profile = source.camera_profile;
+            target.profile_as_shot = source.profile_as_shot;
+            target.highlight_reconstruction = source.highlight_reconstruction;
             target.wide_gamut = source.wide_gamut;
             target.calibration = source.calibration;
             target.shadow_tint = source.shadow_tint;
@@ -76,6 +78,8 @@ pub fn merge_settings(
             target.sharpening = source.sharpening;
             target.noise_reduction = source.noise_reduction;
             target.sensor_noise_reduction = source.sensor_noise_reduction;
+            target.sensor_ai_denoise = source.sensor_ai_denoise;
+            target.demosaic_version = source.demosaic_version;
         }
         RawSettingsGroup::Curve => {
             target.process_version = source.process_version;

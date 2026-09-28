@@ -165,3 +165,59 @@ fn invalid_workflow_leaves_destination_untouched() {
         assert_eq!(std::fs::read(path).unwrap(), b"keep output");
     }
 }
+
+#[test]
+fn profiled_photo_keeps_out_of_srgb_colors_through_edit_save_and_export() {
+    use crate::photo_color::{self, Space};
+    let temp = Scratch::new();
+    let original = temp.0.join("original.png");
+    let input = Raster::solid(24, 16, [0.08, 0.7, 0.03, 1.]);
+    photo_color::export(
+        &input,
+        Space::ProPhoto,
+        Space::ProPhoto,
+        &original,
+        16,
+        95,
+        None,
+    )
+    .unwrap();
+    let digest = crate::raw::source_digest(&original).unwrap();
+    let mut doc = crate::import::import(&original).unwrap();
+    assert!(doc.raw.as_ref().unwrap().params.wide_gamut);
+    doc.raw.as_mut().unwrap().params.exposure = -0.5;
+    let output = temp.0.join("edited.png");
+    export_with_workflow(
+        &doc,
+        &output,
+        ExportOptions::for_doc(&doc),
+        ExportWorkflow {
+            color_space: ExportColorSpace::ProPhoto,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let decoded = crate::photo_wide::decode(&output).unwrap();
+    let p = decoded.get(12, 8);
+    for (got, want) in p[..3].iter().zip([0.08, 0.7, 0.03]) {
+        assert!(
+            (*got as f32 / 65535. - want * 2f32.powf(-0.5)).abs() < 0.004,
+            "{p:?}"
+        );
+    }
+    let clipped =
+        crate::photo_color::convert_raster(input.clone(), Space::ProPhoto, Space::Srgb).unwrap();
+    let clipped =
+        crate::photo_color::convert_raster(clipped, Space::Srgb, Space::ProPhoto).unwrap();
+    assert!((clipped.get(12, 8)[1] as f32 / 65535. - 0.7).abs() > 0.02);
+    assert_eq!(crate::raw::source_digest(&original).unwrap(), digest);
+    assert!(
+        export_with_workflow(
+            &doc,
+            &original,
+            ExportOptions::for_doc(&doc),
+            ExportWorkflow::default()
+        )
+        .is_err()
+    );
+}

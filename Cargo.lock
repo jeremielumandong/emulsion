@@ -2070,6 +2070,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "ureq",
+ "zip",
 ]
 
 [[package]]
@@ -2222,6 +2223,7 @@ dependencies = [
  "anyhow",
  "ashpd",
  "base64 0.23.1",
+ "emulsion-ai",
  "emulsion-brushes",
  "emulsion-cloud",
  "emulsion-color",

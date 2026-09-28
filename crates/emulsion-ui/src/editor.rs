@@ -2480,7 +2480,7 @@ impl EditorView {
         let svg_key = (self.editor.active_page(), self.editor.revision);
         let svg_enabled = self.is_diagram() && !previewing && !presenting && !self.before_active();
         let diagram_gpu =
-            svg_enabled && emulsion_engine::canvas::diagram_vector_supported(&self.editor.doc);
+            svg_enabled && emulsion_engine::canvas::diagram_gpu_supported(&self.editor.doc);
         if !diagram_gpu
             || !self
                 .gpu_canvas

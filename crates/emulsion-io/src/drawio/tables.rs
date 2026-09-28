@@ -181,7 +181,9 @@ pub(super) fn append(
             cell_base.paragraphs.clear();
             let mut spec = super::labels::parse(
                 &format!(
-                    "<table><tr>{}</tr></table>",
+                    "<table style=\"{}\"><tr style=\"{}\">{}</tr></table>",
+                    escape(&attr(table, "style").unwrap_or_default()),
+                    escape(&attr(tr, "style").unwrap_or_default()),
                     String::from_utf8_lossy(&serialized)
                 ),
                 &cell_base,
@@ -250,6 +252,9 @@ pub(super) fn append(
                     .and_then(|v| dimension(&v, b[3])),
                 vertical: css(child, "vertical-align")
                     .or_else(|| attr(child, "valign"))
+                    .or_else(|| css(tr, "vertical-align"))
+                    .or_else(|| attr(tr, "valign"))
+                    .or_else(|| css(table, "vertical-align"))
                     .unwrap_or_else(|| "middle".into()),
                 row,
                 col,

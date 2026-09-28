@@ -47,7 +47,10 @@ fn geometry_parts(
     Ok(parts)
 }
 
-#[expect(clippy::too_many_arguments, reason = "Keeps existing explicit workflow inputs together")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keeps existing explicit workflow inputs together"
+)]
 fn visio_text(
     node: &Xml,
     master: Option<&Xml>,
@@ -91,15 +94,24 @@ fn visio_text(
             .get(font)
             .map(String::as_str)
             .unwrap_or(font);
+        let requested = resources
+            .theme_fonts
+            .get(requested)
+            .map(String::as_str)
+            .unwrap_or(requested);
         let font = if resources.available_fonts.contains(requested) {
             requested.to_string()
         } else {
-            let substitute = if matches!(
-                requested.to_ascii_lowercase().as_str(),
-                "arial" | "helvetica"
-            ) && resources.available_fonts.contains("Liberation Sans")
-            {
-                "Liberation Sans"
+            let metric_match = match requested.to_ascii_lowercase().as_str() {
+                "arial" | "helvetica" => "Liberation Sans",
+                "times new roman" | "times" => "Liberation Serif",
+                "courier new" | "courier" => "Liberation Mono",
+                "calibri" => "Carlito",
+                "cambria" => "Caladea",
+                _ => "Geist",
+            };
+            let substitute = if resources.available_fonts.contains(metric_match) {
+                metric_match
             } else {
                 "Geist"
             };
@@ -276,38 +288,38 @@ fn load_images(
             .and_then(|r| rels.get(r.attr("id")))
         {
             if !resources.images.contains_key(part)
-                && let Some(bytes) = package.entries.get(part) {
-                    // Compressed package limits alone do not bound bitmap allocation.
-                    let dimensions = image::ImageReader::new(std::io::Cursor::new(bytes))
-                        .with_guessed_format()
-                        .ok()
-                        .and_then(|r| r.into_dimensions().ok());
-                    let used: u64 = resources
-                        .images
-                        .values()
-                        .map(|r| r.width() as u64 * r.height() as u64)
-                        .sum();
-                    if dimensions.is_none_or(|(w, h)| {
-                        w == 0 || h == 0 || used + w as u64 * h as u64 > 32_000_000
-                    }) {
-                        warnings.insert(format!("Embedded Visio image {part} exceeds the decoded image budget or has unsupported dimensions."));
-                        return;
+                && let Some(bytes) = package.entries.get(part)
+            {
+                // Compressed package limits alone do not bound bitmap allocation.
+                let dimensions = image::ImageReader::new(std::io::Cursor::new(bytes))
+                    .with_guessed_format()
+                    .ok()
+                    .and_then(|r| r.into_dimensions().ok());
+                let used: u64 = resources
+                    .images
+                    .values()
+                    .map(|r| r.width() as u64 * r.height() as u64)
+                    .sum();
+                if dimensions.is_none_or(|(w, h)| {
+                    w == 0 || h == 0 || used + w as u64 * h as u64 > 32_000_000
+                }) {
+                    warnings.insert(format!("Embedded Visio image {part} exceeds the decoded image budget or has unsupported dimensions."));
+                    return;
+                }
+                match crate::import::import_bytes("Visio bitmap", bytes) {
+                    Ok(doc) => {
+                        if let Some(image) = doc.nodes.iter().find_map(|n| match &n.kind {
+                            NodeKind::Raster { raster, .. } => Some(raster.clone()),
+                            _ => None,
+                        }) {
+                            resources.images.insert(part.clone(), image);
+                        }
                     }
-                    match crate::import::import_bytes("Visio bitmap", bytes) {
-                        Ok(doc) => {
-                            if let Some(image) = doc.nodes.iter().find_map(|n| match &n.kind {
-                                NodeKind::Raster { raster, .. } => Some(raster.clone()),
-                                _ => None,
-                            }) {
-                                resources.images.insert(part.clone(), image);
-                            }
-                        }
-                        Err(_) => {
-                            warnings
-                                .insert(format!("Could not decode embedded Visio image {part}."));
-                        }
+                    Err(_) => {
+                        warnings.insert(format!("Could not decode embedded Visio image {part}."));
                     }
                 }
+            }
             node.image_part = Some(part.clone());
         }
         for child in &mut node.children {

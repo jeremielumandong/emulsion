@@ -1,35 +1,79 @@
 # Library follow-up implementation
 
-Requested after the Library/Develop audit on 2026-09-28. Items require working UI,
-shared rendering/persistence and automation where applicable, plus validation.
-Partial implementations must remain listed here until their acceptance checks pass.
+Updated 2026-09-28. The following implementations share persisted Develop recipes,
+rendering and Library automation. Scope limits below are intentional and must not
+be described as full photographic parity with another editor.
 
-- [x] Visible 90-degree rotation controls; rotation, undo and persistence tests pass.
-- [x] CMYK soft proofing with bidirectional printer-profile validation and alpha preservation.
-- [ ] Native-resolution region processing and interruptible demosaicing.
-- [x] Multi-guide perspective solver and guide workflow: solver and automation implemented;
-  numerical and desktop save/undo tests pass. Guide overlays are
-  session-only; the solved geometry persists.
-- [x] Content-aware healing with portable nondestructive spot/stroke settings. The
-  deterministic texture-fill engine has bounded search regions; preview and export
-  can synthesize different texture at different resolutions.
-- [ ] Sensor-channel highlight reconstruction with versioned rendering.
-- [ ] Optional AI sensor denoise with an actual sensor-domain model.
-- [ ] As-shot dual-illuminant profile interpolation from camera calibration.
-- [ ] Wide-gamut RGB input and Photo working/output pipeline.
-- [ ] Panorama alignment, projection, blending, export and catalog integration.
-- [ ] Depth-aware blur with editable focus and portable depth assets.
-- [ ] HDR rotation/perspective alignment, improved deghosting and measured larger-input support.
-- [ ] Broader camera/profile/illuminant corpus and photographic quality measurements.
+- [x] Visible quarter-turn rotation, undo and persistence.
+- [x] CMYK soft proofing with bidirectional printer-profile validation.
+- [x] Cached full-resolution inspection and cancellable three-color CFA reconstruction.
+- [x] Multi-guide perspective solving and its desktop workflow.
+- [x] Portable nondestructive content-aware healing.
+- [x] Partial-channel RAW highlight reconstruction, disabled for existing recipes.
+- [x] Optional sensor-domain Bayer AI denoise using the RawNIND model.
+- [x] As-shot dual-illuminant profile interpolation from camera white balance.
+- [x] Profile-preserving RGB development and linked-photo wide-gamut export.
+- [x] Planar panorama registration, feathered blending, TIFF output and catalog insertion.
+- [x] Portable generated depth maps with editable focus, focus range and blur strength.
+- [x] Projective HDR registration, color-aware deghosting and larger-image input support.
+- [x] Expanded numerical, real-model and real-camera regression checks.
 
-Existing RGB AI restoration is not sensor denoise. Existing translation-only HDR
-merge is not panorama stitching. Synthetic tests alone do not establish photographic
-quality or cross-camera equivalence.
+## Current boundaries
 
-Validation so far: two rotation UI tests, one guided-perspective desktop save/undo test,
-two synthetic guide-solver tests, five
-local-edit renderer tests, RGB viewing regression and the opt-in CMYK test using
-`/usr/share/ghostscript/iccprofiles/default_cmyk.icc` passed. The guided-perspective
-MCP request validation test, final workspace/all-target Clippy with warnings denied,
-and Rust formatting checks passed. No installation or broad-camera quality
-certification has been performed.
+Inspection caches one developed frame per source under a shared 256 MiB budget.
+The first inspection still develops the whole source; files that exceed the budget
+are not cached. The new demosaicer checks cancellation per row. Legacy recipes retain
+the previous demosaicer until **Interruptible RAW reconstruction** is enabled.
+Unsupported four-color or rotated sensor layouts retain the decoder's legacy path.
+RAW decoding and individual ONNX inference calls cannot be interrupted mid-call.
+
+Highlight reconstruction estimates a clipped channel from nearby unclipped color
+ratios. It cannot recover a region where every channel is saturated. As-shot profile
+interpolation requires a compatible imported matrix profile; it is opt-in for saved
+recipes and does not replace a measured camera calibration.
+
+Sensor AI denoise requires the optional **RawNIND Bayer denoise** download in Models.
+Its model weights are GPL-3.0 and inference runs locally. The tested model is pinned
+by checksum. Bayer phases and tile seams are tested; X-Trans and rotated Fuji sensors
+are rejected explicitly by this model. Existing RGB restoration remains a separate tool.
+
+Library RGB inputs can use **ProPhoto working gamut**, retaining embedded RGB ICC
+colors before development. Photo links profiled originals and supports nondestructive
+exposure/color edits and sRGB, Adobe RGB or ProPhoto export. Wide Photo export currently
+supports the linked raster layer with its placement and mask. A multilayer document
+uses the existing sRGB compositor; requesting a wide export of such a linked document
+returns an explicit error rather than silently discarding the original gamut.
+
+Panoramas require 2–9 opaque, overlapping photos in capture order. They use a planar
+projection, robust feature registration, exposure matching and feathered overlaps.
+They do not yet provide spherical/cylindrical projections, content-aware seams or
+moving-subject removal. Existing Develop settings are applied to panorama inputs.
+
+Depth blur uses relative monocular depth, an editable focus interval and a Gaussian
+blurred image. It is not a physical lens simulation and can show halos at depth
+boundaries. Depth assets travel with Library backups. Generate a new map after
+replacing the original photo.
+
+HDR uses projective registration when textured matches are sufficient and translation
+alignment as fallback. Color and luminance disagreement identify motion, with a small
+expanded rejection boundary. The 60 MP limit is a safety ceiling, not a promise of
+low memory use. A 25.2 MP two-input test measured 4.4 seconds for merge and approximately
+1.9 GiB peak process memory on the development machine.
+
+## Validation
+
+Nikon D50 NEF, Fujifilm X-Pro1 RAF and Canon EOS M50 CRAW passed full-resolution
+open/edit/save/reopen/export with pixel-identical preview/export and unchanged source
+hashes. New/legacy preview RGB RMSE was 0.004795, 0.006155 and 0.000919 respectively.
+These comparisons detect regressions; legacy output is not a calibrated ground truth.
+
+On those fixtures, cold inspection measured 0.44, 1.07 and 3.49 seconds; repeated
+cached inspection measured 5.7, 20.8 and 29.0 milliseconds. Timings are observations,
+not portable performance thresholds.
+
+Additional tests cover all Bayer phases, interruption during reconstruction,
+partial-channel recovery, profile temperature interpolation, wide RGB gamut retention,
+real denoise-model noise reduction/color/seams, real depth inference, focus editing,
+textured overlap registration, panorama save/reopen/no-clobber output, and HDR inputs
+larger than 24 MP. Broader camera vendors, calibrated color charts, real handheld
+panorama sets and difficult motion/occlusion scenes still need photographic evaluation.

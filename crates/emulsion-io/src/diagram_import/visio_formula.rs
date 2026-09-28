@@ -62,6 +62,28 @@ impl Parser<'_, '_> {
         }
     }
     fn expr(&mut self, level: usize) -> Option<f64> {
+        let a = self.sum(level)?;
+        self.rest = self.rest.trim_start();
+        for operator in ["<=", ">=", "<>", "=", "<", ">"] {
+            if let Some(rest) = self.rest.strip_prefix(operator) {
+                self.rest = rest;
+                let b = self.sum(level)?;
+                if !a.is_finite() || !b.is_finite() {
+                    return None;
+                }
+                return Some(f64::from(match operator {
+                    "<=" => a <= b,
+                    ">=" => a >= b,
+                    "<>" => a != b,
+                    "=" => a == b,
+                    "<" => a < b,
+                    _ => a > b,
+                }));
+            }
+        }
+        Some(a)
+    }
+    fn sum(&mut self, level: usize) -> Option<f64> {
         if level > 32 || *self.budget == 0 {
             return None;
         }
@@ -110,12 +132,15 @@ impl Parser<'_, '_> {
         let len = self
             .rest
             .bytes()
-            .take_while(|b| b.is_ascii_alphabetic() || *b == b'_')
+            .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
             .count();
-        if len > 0 {
+        if len > 0 && self.rest.as_bytes()[0].is_ascii_alphabetic() {
             let name = &self.rest[..len];
             self.rest = &self.rest[len..];
             if self.eat('(') {
+                if name.eq_ignore_ascii_case("PI") {
+                    return self.eat(')').then_some(std::f64::consts::PI);
+                }
                 let v = self.expr(level + 1)?;
                 let v = match name.to_ascii_uppercase().as_str() {
                     "GUARD" | "THEMEGUARD" => v,
@@ -124,6 +149,36 @@ impl Parser<'_, '_> {
                     "SIN" => v.sin(),
                     "COS" => v.cos(),
                     "TAN" => v.tan(),
+                    "ASIN" => v.asin(),
+                    "ACOS" => v.acos(),
+                    "ATAN" => v.atan(),
+                    "INT" => v.floor(),
+                    "SIGN" => {
+                        if v == 0. {
+                            0.
+                        } else {
+                            v.signum()
+                        }
+                    }
+                    "NOT" => f64::from(v == 0.),
+                    "IF" => {
+                        if !v.is_finite() || !self.eat(',') {
+                            return None;
+                        }
+                        let yes = self.expr(level + 1)?;
+                        if !self.eat(',') {
+                            return None;
+                        }
+                        let no = self.expr(level + 1)?;
+                        if v != 0. { yes } else { no }
+                    }
+                    "ATAN2" => {
+                        if !self.eat(',') {
+                            return None;
+                        }
+                        let y = self.expr(level + 1)?;
+                        if v == 0. && y == 0. { 0. } else { y.atan2(v) }
+                    }
                     "MIN" | "MAX" => {
                         let mut r = v;
                         while self.eat(',') {
@@ -139,6 +194,12 @@ impl Parser<'_, '_> {
                     _ => return None,
                 };
                 return self.eat(')').then_some(v);
+            }
+            if name.eq_ignore_ascii_case("TRUE") {
+                return Some(1.);
+            }
+            if name.eq_ignore_ascii_case("FALSE") {
+                return Some(0.);
             }
             return cell_budget(self.node, self.master, name, self.depth + 1, self.budget);
         }
@@ -193,6 +254,30 @@ mod tests {
             Some(std::f64::consts::FRAC_PI_2)
         );
         assert_eq!(cell(&n, None, "Cycle", 0), None);
+        assert_eq!(cell(&n, None, "Bad", 0), None);
+    }
+    #[test]
+    fn conditional_geometry_and_inverse_trigonometry() {
+        let n = super::super::xml::parse(
+            r#"<Shape>
+          <Cell N="Width" V="4"/><Cell N="Height" V="2"/>
+          <Cell N="X" F="IF(Width&gt;=Height,Width/2,Height/2)"/>
+          <Cell N="Y" F="IF(Width&lt;Height,1/0,3)"/>
+          <Cell N="Angle" F="ATAN2(0,1)"/>
+          <Cell N="Turn" F="PI()/2"/>
+          <Cell N="Flag" F="NOT(FALSE)"/>
+          <Cell N="Bad" F="IF(1/0,1,2)"/>
+        </Shape>"#,
+        )
+        .unwrap();
+        assert_eq!(cell(&n, None, "X", 0), Some(2.));
+        assert_eq!(cell(&n, None, "Y", 0), Some(3.));
+        assert_eq!(
+            cell(&n, None, "Angle", 0),
+            Some(std::f64::consts::FRAC_PI_2)
+        );
+        assert_eq!(cell(&n, None, "Turn", 0), Some(std::f64::consts::FRAC_PI_2));
+        assert_eq!(cell(&n, None, "Flag", 0), Some(1.));
         assert_eq!(cell(&n, None, "Bad", 0), None);
     }
 }

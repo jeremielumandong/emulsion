@@ -1247,3 +1247,78 @@ mod tests {
         }
     }
 }
+
+/// Permanent toolbox cards reuse the template's typography, palette and icons.
+pub(crate) fn insert_stencil(
+    editor: &mut crate::Editor,
+    id: &str,
+    bounds: [f64; 4],
+) -> Result<NodeId, String> {
+    if bounds.iter().any(|v| !v.is_finite() || v.abs() > 1e6) || bounds[2] < 1. || bounds[3] < 1. {
+        return Err("Invalid web stencil bounds".into());
+    }
+    let (label, tone) = match id {
+        "web-browser" => ("CLIENT\nBrowser\nRequest • render • interact", PURPLE),
+        "web-edge" => ("NETWORK\nDNS / CDN edge\nResolve • cache • deliver", CYAN),
+        "web-gateway" => ("ENTRY POINT\nAPI gateway\nRoute • limit • observe", CYAN),
+        "web-auth" => (
+            "SECURITY\nIdentity / auth\nVerify token • enforce policy",
+            ROSE,
+        ),
+        "web-api" => (
+            "APPLICATION\nApplication server\nValidate • execute • respond",
+            BLUE,
+        ),
+        "web-database" => ("PERSISTENCE\nDatabase\nQuery • transact • commit", SLATE),
+        "web-cache" => ("FAST PATH\nCache\nLookup • expire • invalidate", AMBER),
+        "web-queue" => ("ASYNC\nMessage queue\nBuffer • deliver • retry", AMBER),
+        "web-worker" => (
+            "PROCESSING\nBackground worker\nConsume • execute • acknowledge",
+            BLUE,
+        ),
+        "web-response" => ("SUCCESS\nHTTP response\nStatus • headers • payload", TEAL),
+        "web-error" => ("FAILURE\nError / retry\nTimeout • backoff • recover", ROSE),
+        "web-websocket" => (
+            "REALTIME\nWebSocket connection\nSubscribe • publish • reconnect",
+            CYAN,
+        ),
+        "web-outbox" => (
+            "RELIABILITY\nTransactional outbox\nCommit event • relay • deduplicate",
+            AMBER,
+        ),
+        "web-storage" => (
+            "ASSETS\nObject storage\nUpload • version • distribute",
+            SLATE,
+        ),
+        _ => return Err("Unknown web stencil".into()),
+    };
+    let mut board = Board::new("", "", "")?;
+    let root = board.shape("process", [0., 0., 288., 148.], label, tone, None)?;
+    let mut doc = board.finish()?;
+    Arc::make_mut(doc.diagram.as_mut().unwrap())
+        .shapes
+        .get_mut(&root)
+        .unwrap()
+        .data
+        .insert("emulsion_stencil".into(), id.into());
+    let ids = doc.subtree(root);
+    crate::transform::transform_nodes(
+        &mut doc,
+        &ids,
+        [
+            bounds[2] / 288.,
+            0.,
+            0.,
+            bounds[3] / 148.,
+            bounds[0],
+            bounds[1],
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    let fragment = crate::fragment::Fragment::capture(&doc, &[root])?;
+    let roots = fragment.paste(editor, crate::command::Slot::TOP, (0., 0.))?;
+    roots
+        .first()
+        .copied()
+        .ok_or("Web stencil has no root".into())
+}

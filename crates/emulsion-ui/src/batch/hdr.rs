@@ -7,22 +7,45 @@ use std::sync::atomic::{AtomicBool, Ordering};
 impl Workspace {
     pub(super) fn library_hdr_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let count = self.batch.items.iter().filter(|i| i.selected).count();
-        Button::new("library-hdr-merge")
-            .label("HDR Merge…")
-            .small()
-            .ghost()
-            .disabled(
-                !(2..=9).contains(&count)
-                    || self.batch.hdr_cancel.is_some()
-                    || self.batch.mcp_busy
-                    || self.batch.develop.saving
-                    || self.batch.develop.busy
-                    || self.batch.profiles.busy,
+        div()
+            .flex()
+            .gap_1()
+            .child(
+                Button::new("library-panorama-merge")
+                    .label("Stitch Panorama…")
+                    .small()
+                    .ghost()
+                    .disabled(
+                        !(2..=9).contains(&count)
+                            || self.batch.hdr_cancel.is_some()
+                            || self.batch.mcp_busy,
+                    )
+                    .on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.library_hdr_dialog(window, cx, true)
+                        }),
+                    ),
             )
-            .on_click(cx.listener(|this, _, window, cx| this.library_hdr_dialog(window, cx)))
+            .child(
+                Button::new("library-hdr-merge")
+                    .label("HDR Merge…")
+                    .small()
+                    .ghost()
+                    .disabled(
+                        !(2..=9).contains(&count)
+                            || self.batch.hdr_cancel.is_some()
+                            || self.batch.mcp_busy
+                            || self.batch.develop.saving
+                            || self.batch.develop.busy
+                            || self.batch.profiles.busy,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.library_hdr_dialog(window, cx, false)
+                    })),
+            )
             .into_any_element()
     }
-    fn library_hdr_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn library_hdr_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>, panorama: bool) {
         let paths = self
             .batch
             .items
@@ -36,13 +59,17 @@ impl Workspace {
         let owner = cx.weak_entity();
         let view=cx.new(|cx| {
             let ev=paths.iter().map(|_|cx.new(|cx|InputState::new(window,cx).placeholder("EXIF EV"))).collect();
-            HdrDialog{owner,paths,ev,options:Options::default(),overlay:false,image:None,busy:false,cancel:Arc::new(AtomicBool::new(false)),note:"Merge original exposures into a new 32-bit float TIFF. Existing Develop edits are not included.".into()}
+            HdrDialog{panorama,owner,paths,ev,options:Options::default(),overlay:false,image:None,busy:false,cancel:Arc::new(AtomicBool::new(false)),note:if panorama {"Stitch overlapping photos into a new TIFF. Originals remain unchanged.".into()} else {"Merge original exposures into a new 32-bit float TIFF. Existing Develop edits are not included.".into()}}
         });
         let cancel = view.read(cx).cancel.clone();
         window.open_dialog(cx, move |dialog, _, _| {
             let cancel = cancel.clone();
             dialog
-                .title("HDR Merge")
+                .title(if panorama {
+                    "Stitch Panorama"
+                } else {
+                    "HDR Merge"
+                })
                 .width(px(960.))
                 .overlay_closable(false)
                 .on_close(move |_, _, _| cancel.store(true, Ordering::Relaxed))
@@ -51,6 +78,7 @@ impl Workspace {
     }
 }
 struct HdrDialog {
+    panorama: bool,
     owner: WeakEntity<Workspace>,
     paths: Vec<PathBuf>,
     ev: Vec<Entity<InputState>>,
@@ -114,23 +142,32 @@ impl HdrDialog {
         self.image = None;
         self.cancel.store(false, Ordering::Relaxed);
         self.note = if full {
-            "Merging full-resolution exposures…"
+            if self.panorama {
+                "Stitching full-resolution photos…"
+            } else {
+                "Merging full-resolution exposures…"
+            }
         } else {
-            "Building HDR preview…"
+            if self.panorama {
+                "Building panorama preview…"
+            } else {
+                "Building HDR preview…"
+            }
         }
         .into();
         let paths = self.paths.clone();
         let cancel = self.cancel.clone();
         let owner = self.owner.clone();
         let overlay = self.overlay;
+        let panorama = self.panorama;
         cx.spawn(async move|this,cx| {
             let result=cx.background_spawn(async move {
-                let merged=photo_hdr::merge(&paths,&options,!full,&cancel)?;
+                let merged=if panorama {emulsion_io::photo_panorama::merge(&paths,!full,&cancel)?} else {photo_hdr::merge(&paths,&options,!full,&cancel)?};
                 let preview=merged.preview(overlay,&cancel)?;
                 let output=if full {
-                    let root=emulsion_io::creative_library::root().join("hdr");std::fs::create_dir_all(&root)?;
+                    let root=emulsion_io::creative_library::root().join(if panorama {"panoramas"} else {"hdr"});std::fs::create_dir_all(&root)?;
                     let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-                    let path=root.join(format!("{stamp}-HDR.tif"));merged.save(&path,&cancel)?;Some(path)
+                    let suffix=if panorama {"Panorama"} else {"HDR"};let path=root.join(format!("{stamp}-{suffix}.tif"));merged.save(&path,&cancel)?;Some(path)
                 }else {None};
                 let catalog=if let Some(path)=&output {
                     Some(emulsion_io::creative_library::update(&emulsion_io::creative_library::root(),|c|{c.add_asset(path.clone(),emulsion_io::creative_library::AssetKind::Image)?;Ok(())})
@@ -148,7 +185,7 @@ impl HdrDialog {
                 cx.notify();
             }).ok();
             this.update(cx,|this,cx| {this.busy=false;match result {
-                Ok((w,h,pixels,output,_))=>{this.image=Some(Arc::new(bgra_image(w,h,pixels)));this.note=output.map_or_else(||"Reduced-resolution preview. Merge creates a full-resolution HDR TIFF.".into(),|p|format!("Saved {} and added it to the catalog.",p.display()));},
+                Ok((w,h,pixels,output,_))=>{this.image=Some(Arc::new(bgra_image(w,h,pixels)));this.note=output.map_or_else(||"Reduced-resolution preview. Save creates a full-resolution float TIFF.".into(),|p|format!("Saved {} and added it to the catalog.",p.display()));},
                 Err(e)=>this.note=e.to_string(),
             }cx.notify();}).ok();
         }).detach();
@@ -274,13 +311,13 @@ impl Render for HdrDialog {
                                     if self.busy {
                                         "Processing…"
                                     } else {
-                                        "Preview selected exposures"
+                                        "Preview selected photos"
                                     },
                                     &p,
                                 )))
                             }),
                     )
-                    .child(options),
+                    .child(if self.panorama {div().w(px(245.)).child(label("Select overlapping photos in capture order. Saved Develop edits are included. Planar projection; uncovered edges remain black.",&p)).into_any_element()} else {options.into_any_element()}),
             )
             .child(mono(self.note.clone(), 11., p.muted))
             .child(
@@ -298,7 +335,7 @@ impl Render for HdrDialog {
                     )
                     .child(
                         Button::new("hdr-merge")
-                            .label("Merge to HDR TIFF")
+                            .label(if self.panorama {"Save panorama TIFF"} else {"Merge to HDR TIFF"})
                             .small()
                             .primary()
                             .disabled(self.busy)

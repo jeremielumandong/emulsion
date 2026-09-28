@@ -520,3 +520,37 @@ fn ordinary_diagram_groups_share_one_vector_target() {
     let (_, ops) = compile(&translucent);
     assert!(ops.iter().any(|o| matches!(o, Op::Push { isolated: true })));
 }
+
+#[test]
+fn bitmap_diagram_assets_keep_vector_labels_gpu_eligible() {
+    use emulsion_core::{
+        Node,
+        diagram::{Builder, ShapeKind},
+    };
+    let mut b = Builder::new(800, 600).unwrap();
+    b.add_shape(
+        ShapeKind::Process,
+        [40., 40., 120., 60.],
+        "Native vector text",
+    )
+    .unwrap();
+    let mut doc = b.finish().unwrap();
+    assert!(diagram_vector_supported(&doc));
+    let id = doc.alloc_id();
+    doc.nodes.push(Node::raster(
+        id,
+        "Original bitmap",
+        Arc::new(Raster::solid(32, 32, [0.2, 0.3, 0.4, 1.])),
+        Placement::default(),
+    ));
+    assert!(diagram_gpu_supported(&doc));
+    assert!(
+        !diagram_vector_supported(&doc),
+        "Mixed diagrams must not enter vector-only updates"
+    );
+    doc.node_mut(id).unwrap().mask = Some(Arc::new(Mask::from_fn(32, 32, 255, |_, _| 128)));
+    assert!(
+        !diagram_gpu_supported(&doc),
+        "Unsupported appearance must retain fallback"
+    );
+}

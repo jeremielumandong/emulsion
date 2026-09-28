@@ -122,7 +122,13 @@ pub(super) fn parse(html: &str, base: &TextSpec, warnings: &mut BTreeSet<String>
                                             }
                                         }
                                         "font-family" => {
-                                            style.font = value.trim_matches(['\'', '"']).into()
+                                            style.font = value
+                                                .split(',')
+                                                .map(str::trim)
+                                                .map(|v| v.trim_matches(['\'', '"']))
+                                                .find(|v| !v.is_empty())
+                                                .unwrap_or("")
+                                                .into()
                                         }
                                         "font-weight" => {
                                             style.bold = value == "bold"

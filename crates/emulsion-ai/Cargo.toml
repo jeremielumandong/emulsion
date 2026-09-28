@@ -10,6 +10,7 @@ description = "Optional local AI"
 workspace = true
 
 [dependencies]
+zip = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

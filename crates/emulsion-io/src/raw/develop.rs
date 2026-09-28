@@ -1,5 +1,6 @@
 use super::{DevelopParams, cancelled};
 mod advanced;
+mod demosaic;
 mod detail;
 use crate::{IoError, Result};
 use emulsion_raster::{Raster, TILE, TILE_PX, TileCoord};
@@ -190,7 +191,7 @@ fn profile_matrix(raw: &RawImage, p: &DevelopParams, channels: usize) -> Result<
     if channels != 3 || !profile.compatible(&raw.clean_make, &raw.clean_model) {
         return Err(invalid("Camera profile does not match this camera"));
     }
-    let blend = profile.blend(p.kelvin);
+    let blend = profile.blend(profile_temperature(raw, p, &profile));
     if !profile.forward[0].is_empty() {
         let f: [[f32; 3]; 3] = std::array::from_fn(|r| {
             std::array::from_fn(|c| {
@@ -242,6 +243,108 @@ fn profile_matrix(raw: &RawImage, p: &DevelopParams, channels: usize) -> Result<
         return Err(invalid("Unstable camera profile matrix"));
     }
     Ok(result)
+}
+
+fn profile_temperature(
+    raw: &RawImage,
+    p: &DevelopParams,
+    profile: &crate::camera_profiles::Profile,
+) -> Option<f32> {
+    p.kelvin.or_else(|| {
+        p.profile_as_shot
+            .then(|| estimate_profile_temperature(profile, p.wb_override.unwrap_or(raw.wb_coeffs)))
+            .flatten()
+    })
+}
+
+fn estimate_profile_temperature(
+    profile: &crate::camera_profiles::Profile,
+    wb: [f32; 4],
+) -> Option<f32> {
+    if profile.matrices[0].len() != 9 || wb[..3].iter().any(|v| !v.is_finite() || *v <= 0.) {
+        return None;
+    }
+    let observed = [wb[1] / wb[0], wb[1] / wb[2]];
+    let error = |mired: f32| {
+        let temperature = 1e6 / mired;
+        let blend = profile.blend(Some(temperature));
+        let xyz = illuminant_xyz(temperature);
+        let response: [f32; 3] = std::array::from_fn(|r| {
+            (0..3)
+                .map(|c| {
+                    let i = r * 3 + c;
+                    let first = profile.matrices[0][i];
+                    (first * (1. - blend)
+                        + profile.matrices[1].get(i).copied().unwrap_or(first) * blend)
+                        * xyz[c]
+                })
+                .sum()
+        });
+        if response.iter().any(|v| !v.is_finite() || *v <= 0.) {
+            return f32::INFINITY;
+        }
+        ((response[0] / response[1] / observed[0]).ln()).powi(2)
+            + ((response[2] / response[1] / observed[1]).ln()).powi(2)
+    };
+    let mut best = (20., f32::INFINITY);
+    for i in 0..=480 {
+        let m = 20. + i as f32;
+        let e = error(m);
+        if e < best.1 {
+            best = (m, e);
+        }
+    }
+    best.1.is_finite().then_some(1e6 / best.0)
+}
+
+/// Estimate clipped channels only where a nearby unclipped color ratio supplies evidence.
+fn reconstruct<const N: usize>(pixels: &mut [[f32; N]], w: usize, h: usize, strength: f32) {
+    if strength == 0. {
+        return;
+    }
+    let source = pixels.to_vec();
+    pixels.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        for (x, p) in row.iter_mut().enumerate() {
+            let original = source[y * w + x];
+            let Some(reference) = (0..N)
+                .filter(|&c| original[c] > 0.01 && original[c] < 0.97)
+                .max_by(|&a, &b| original[a].total_cmp(&original[b]))
+            else {
+                continue;
+            };
+            for c in 0..N {
+                if original[c] < 0.98 {
+                    continue;
+                }
+                let mut sum = 0.;
+                let mut weights = 0.;
+                for yy in y.saturating_sub(12)..=(y + 12).min(h - 1) {
+                    for xx in x.saturating_sub(12)..=(x + 12).min(w - 1) {
+                        let q = source[yy * w + xx];
+                        if q[c] <= 0.02
+                            || q[c] >= 0.95
+                            || q[reference] <= 0.02
+                            || q[reference] >= 0.95
+                        {
+                            continue;
+                        }
+                        let weight = 1.
+                            / (1.
+                                + (xx as f32 - x as f32).powi(2)
+                                + (yy as f32 - y as f32).powi(2));
+                        sum += (q[c] / q[reference]).clamp(0.0625, 16.) * weight;
+                        weights += weight;
+                    }
+                }
+                if weights > 0. {
+                    let inferred = (original[reference] * sum / weights)
+                        .max(original[c])
+                        .min(16.);
+                    p[c] += (inferred - original[c]) * strength;
+                }
+            }
+        }
+    });
 }
 
 fn white_balance(raw: &RawImage, params: &DevelopParams, channels: usize) -> Result<[f32; 4]> {
@@ -330,9 +433,14 @@ fn illuminant_xyz(t: f32) -> [f32; 3] {
 
 /// Develop an already decoded, linear RGB image through the same tone/detail path.
 pub(super) fn render_raster(source: &Raster, params: &DevelopParams) -> Result<Raster> {
-    if params.wide_gamut {
-        return Err(invalid("Wide-gamut working space requires a RAW original"));
-    }
+    render_raster_space(source, params, false, false)
+}
+pub(super) fn render_raster_space(
+    source: &Raster,
+    params: &DevelopParams,
+    wide_input: bool,
+    working: bool,
+) -> Result<Raster> {
     if params.camera_profile.is_some() {
         return Err(invalid("Camera profiles require a RAW original"));
     }
@@ -340,10 +448,12 @@ pub(super) fn render_raster(source: &Raster, params: &DevelopParams) -> Result<R
         return Err(invalid("Sensor denoise requires a camera RAW mosaic"));
     }
     params.validate().map_err(invalid)?;
-    if (DevelopParams {
-        rotation: 0,
-        ..*params
-    }) == DevelopParams::default()
+    if !wide_input
+        && !working
+        && (DevelopParams {
+            rotation: 0,
+            ..*params
+        }) == DevelopParams::default()
     {
         return advanced::geometry(source.clone(), params, &AtomicBool::new(false));
     }
@@ -365,18 +475,30 @@ pub(super) fn render_raster(source: &Raster, params: &DevelopParams) -> Result<R
         gain[1] * 2f32.powf(-params.tint * 0.4),
         gain[2] * 2f32.powf(-params.temperature * 0.7),
     ];
-    let pixels = original
+    let mut pixels: Vec<[f32; 3]> = original
         .iter()
         .map(|p| {
             std::array::from_fn(|c| {
                 if p[3] > 0 {
-                    p[c] as f32 / p[3] as f32 * wb[c]
+                    p[c] as f32 / p[3] as f32
                 } else {
                     0.
                 }
             })
         })
         .collect();
+    if wide_input {
+        crate::photo_color::convert_float(
+            &mut pixels,
+            crate::photo_color::Space::ProPhoto,
+            crate::photo_color::Space::Srgb,
+        )?;
+    }
+    for pixel in &mut pixels {
+        for c in 0..3 {
+            pixel[c] *= wb[c];
+        }
+    }
     let neutral_geometry = DevelopParams {
         rotation: 0,
         crop: [0., 0., 1., 1.],
@@ -387,13 +509,14 @@ pub(super) fn render_raster(source: &Raster, params: &DevelopParams) -> Result<R
         lens_profile: None,
         ..*params
     };
-    let result = finish(
+    let result = finish_in_space(
         source.width() as usize,
         source.height() as usize,
         pixels,
         Orientation::Normal,
         &neutral_geometry,
         &AtomicBool::new(false),
+        working,
     )?;
     let mut pixels = result.to_pixels();
     for (out, input) in pixels.iter_mut().zip(original) {
@@ -524,13 +647,20 @@ pub(super) fn render_in_space(
     params.validate().map_err(invalid)?;
     cancelled(cancel)?;
     validate(raw)?;
-    let developed = demosaic_denoised(raw, params.sensor_noise_reduction, cancel)?;
+    let developed = demosaic_denoised(
+        raw,
+        params.sensor_noise_reduction,
+        params.sensor_ai_denoise,
+        params.demosaic_version,
+        cancel,
+    )?;
     let (w, h, mut pixels) = working_rgb(raw, params, developed)?;
     if let Some(d) = params.camera_profile {
+        let profile = crate::camera_profiles::load(&d)?;
         crate::camera_profiles::apply(
-            crate::camera_profiles::load(&d)?.as_ref(),
+            &profile,
             &mut pixels,
-            params.kelvin,
+            profile_temperature(raw, params, &profile),
         )?;
     }
     cancelled(cancel)?;
@@ -543,6 +673,8 @@ static PREVIEW_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 const PREVIEW_BUDGET: usize = 128 * 1024 * 1024;
 pub(super) struct PreviewStage {
     strength: f32,
+    ai: bool,
+    version: u8,
     width: usize,
     height: usize,
     channels: usize,
@@ -575,15 +707,22 @@ pub(super) fn preview(
     p.validate().map_err(invalid)?;
     cancelled(cancel)?;
     let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-    if cache
-        .as_ref()
-        .is_some_and(|s| s.strength != p.sensor_noise_reduction)
-    {
+    if cache.as_ref().is_some_and(|s| {
+        s.strength != p.sensor_noise_reduction
+            || s.ai != p.sensor_ai_denoise
+            || s.version != p.demosaic_version
+    }) {
         *cache = None;
     }
     if cache.is_none() {
         validate(raw)?;
-        let developed = demosaic_denoised(raw, p.sensor_noise_reduction, cancel)?;
+        let developed = demosaic_denoised(
+            raw,
+            p.sensor_noise_reduction,
+            p.sensor_ai_denoise,
+            p.demosaic_version,
+            cancel,
+        )?;
         let (w, h, channels) = match &developed {
             Intermediate::Monochrome(v) => (v.width, v.height, 1),
             Intermediate::ThreeColor(v) => (v.width, v.height, 3),
@@ -602,6 +741,8 @@ pub(super) fn preview(
         }
         let mut stage = PreviewStage {
             strength: p.sensor_noise_reduction,
+            ai: p.sensor_ai_denoise,
+            version: p.demosaic_version,
             width: pw,
             height: ph,
             channels,
@@ -645,18 +786,28 @@ pub(super) fn preview(
     } else {
         let matrix = profile_matrix(raw, p, stage.channels)?;
         let wb = white_balance(raw, p, stage.channels)?;
-        stage
-            .data
-            .par_iter()
-            .map(|v| transform(*v, matrix, wb))
-            .collect()
+        let mut reconstructed;
+        let data = if p.highlight_reconstruction > 0. {
+            reconstructed = stage.data.clone();
+            reconstruct(
+                &mut reconstructed,
+                stage.width,
+                stage.height,
+                p.highlight_reconstruction,
+            );
+            &reconstructed
+        } else {
+            &stage.data
+        };
+        data.par_iter().map(|v| transform(*v, matrix, wb)).collect()
     };
     cancelled(cancel)?;
     if let Some(d) = p.camera_profile {
+        let profile = crate::camera_profiles::load(&d)?;
         crate::camera_profiles::apply(
-            crate::camera_profiles::load(&d)?.as_ref(),
+            &profile,
             &mut pixels,
-            p.kelvin,
+            profile_temperature(raw, p, &profile),
         )?;
     }
     finish(
@@ -670,9 +821,15 @@ pub(super) fn preview(
 }
 
 fn demosaic(raw: &RawImage, cancel: &AtomicBool) -> Result<Intermediate> {
-    demosaic_denoised(raw, 0., cancel)
+    demosaic_denoised(raw, 0., false, 0, cancel)
 }
-fn demosaic_denoised(raw: &RawImage, strength: f32, cancel: &AtomicBool) -> Result<Intermediate> {
+fn demosaic_denoised(
+    raw: &RawImage,
+    strength: f32,
+    ai: bool,
+    version: u8,
+    cancel: &AtomicBool,
+) -> Result<Intermediate> {
     let mut linear = raw.clone();
     let mut data = normalized(raw, cancel)?;
     if strength > 0. {
@@ -715,15 +872,61 @@ fn demosaic_denoised(raw: &RawImage, strength: f32, cancel: &AtomicBool) -> Resu
             .collect();
         data = rows?.into_iter().flatten().collect();
     }
+    if ai {
+        if raw.fuji_rotation_width.is_some() {
+            return Err(invalid(
+                "AI sensor denoise does not support rotated Fuji sensors",
+            ));
+        }
+        let RawPhotometricInterpretation::Cfa(cfa) = &raw.photometric else {
+            return Err(invalid("AI sensor denoise requires Bayer RAW"));
+        };
+        let colors: Vec<_> = (0..2)
+            .flat_map(|y| (0..2).map(move |x| cfa.cfa.color_at(y, x)))
+            .collect();
+        if raw.cpp != 1
+            || colors.iter().filter(|&&c| c == 0).count() != 1
+            || colors.iter().filter(|&&c| c == 1).count() != 2
+            || colors.iter().filter(|&&c| c == 2).count() != 1
+            || (0..6).any(|y| (0..6).any(|x| cfa.cfa.color_at(y, x) != colors[(y % 2) * 2 + x % 2]))
+        {
+            return Err(invalid(
+                "AI sensor denoise supports Bayer sensors; this CFA is unsupported",
+            ));
+        }
+        let red = colors.iter().position(|c| *c == 0).unwrap();
+        let rgb =
+            emulsion_ai::sensor::denoise(&data, raw.width, raw.height, [red % 2, red / 2], cancel)
+                .map_err(|e| IoError::Unsupported(e.to_string()))?;
+        data = rgb.into_iter().flatten().collect();
+        linear.cpp = 3;
+        linear.photometric = RawPhotometricInterpretation::LinearRaw;
+    }
+    if !ai
+        && version == 1
+        && raw.cpp == 1
+        && raw.fuji_rotation_width.is_none()
+        && let RawPhotometricInterpretation::Cfa(cfa) = &raw.photometric
+        && (0..6).all(|y| (0..6).all(|x| cfa.cfa.color_at(y, x) < 3))
+    {
+        data = demosaic::interpolate(raw, &data, cancel)?;
+        linear.cpp = 3;
+        linear.photometric = RawPhotometricInterpretation::LinearRaw;
+    }
     linear.data = RawImageData::Float(data);
     // Keep rawler's sensor demosaic and crop implementation, but skip its
     // calibration: that path modifies over-range colors before exposure.
-    let dev = RawDevelop::new_with(&[
-        ProcessingStep::Demosaic,
-        ProcessingStep::FujiRotate,
-        ProcessingStep::CropActiveArea,
-        ProcessingStep::CropDefault,
-    ]);
+    let steps = if linear.cpp != raw.cpp {
+        vec![ProcessingStep::CropDefault]
+    } else {
+        vec![
+            ProcessingStep::Demosaic,
+            ProcessingStep::FujiRotate,
+            ProcessingStep::CropActiveArea,
+            ProcessingStep::CropDefault,
+        ]
+    };
+    let dev = RawDevelop::new_with(&steps);
     cancelled(cancel)?;
     let developed = dev
         .develop_intermediate(&linear)
@@ -744,7 +947,13 @@ fn working_rgb(
             pixels.height,
             pixels.data.into_iter().map(|v| [v; 3]).collect(),
         ),
-        Intermediate::ThreeColor(pixels) => {
+        Intermediate::ThreeColor(mut pixels) => {
+            reconstruct(
+                &mut pixels.data,
+                pixels.width,
+                pixels.height,
+                params.highlight_reconstruction,
+            );
             let matrix = profile_matrix(raw, params, 3)?;
             let wb = white_balance(raw, params, 3)?;
             let data = pixels
@@ -754,7 +963,13 @@ fn working_rgb(
                 .collect();
             (pixels.width, pixels.height, data)
         }
-        Intermediate::FourColor(pixels) => {
+        Intermediate::FourColor(mut pixels) => {
+            reconstruct(
+                &mut pixels.data,
+                pixels.width,
+                pixels.height,
+                params.highlight_reconstruction,
+            );
             let matrix = profile_matrix(raw, params, 4)?;
             let wb = white_balance(raw, params, 4)?;
             let data = pixels
@@ -1015,6 +1230,7 @@ fn finish_in_space(
     } else {
         raster
     };
+    let raster = crate::photo_depth::apply(raster, params, cancel)?;
     let raster = advanced::geometry(raster, params, cancel)?;
     if params.wide_gamut && !working {
         crate::photo_color::convert_raster(
@@ -1181,6 +1397,45 @@ mod tests {
                 tone([0.2, 0.3, 0.4], &DevelopParams::default())
             );
         }
+    }
+    #[test]
+    fn cancellable_demosaic_preserves_all_bayer_phases_and_stops_mid_frame() {
+        for pattern in ["RGGB", "BGGR", "GRBG", "GBRG"] {
+            let mut raw = sensor();
+            raw.width = 65;
+            raw.height = 63;
+            raw.cpp = 1;
+            let cfa = rawler::CFA::new(pattern);
+            raw.photometric = RawPhotometricInterpretation::Cfa(rawler::rawimage::CFAConfig::new(
+                &cfa,
+                &Default::default(),
+            ));
+            let data: Vec<_> = (0..raw.width * raw.height)
+                .map(|i| [0.2, 0.3, 0.4][cfa.color_at(i / raw.width, i % raw.width)])
+                .collect();
+            let output = demosaic::interpolate(&raw, &data, &AtomicBool::new(false)).unwrap();
+            for pixel in output.as_chunks::<3>().0 {
+                for (a, b) in pixel.iter().zip([0.2, 0.3, 0.4]) {
+                    assert!((a - b).abs() < 1e-5, "{pattern}: {pixel:?}");
+                }
+            }
+        }
+        let mut raw = sensor();
+        raw.width = 2048;
+        raw.height = 2048;
+        raw.cpp = 1;
+        raw.photometric = RawPhotometricInterpretation::Cfa(rawler::rawimage::CFAConfig::new(
+            &rawler::CFA::new("RGGB"),
+            &Default::default(),
+        ));
+        let data = vec![0.3; raw.width * raw.height];
+        let cancel = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| demosaic::interpolate(&raw, &data, &cancel));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            assert!(worker.join().unwrap().is_err());
+        });
     }
     #[test]
     fn sensor_denoise_reduces_cfa_noise_and_preserves_original_samples() {
@@ -1613,6 +1868,59 @@ mod tests {
                 .map(|p| (p[0] as f32 / 65535.0 * 10.0).round() as i32)
                 .collect();
             assert_eq!(actual, expected, "orientation {}", i + 1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod reconstruction_tests {
+    use super::*;
+    #[test]
+    fn partial_sensor_clipping_uses_nearby_color_ratios() {
+        let mut pixels = vec![[0.8, 0.4, 0.2]; 25 * 25];
+        pixels[12 * 25 + 12] = [1., 0.8, 0.4];
+        pixels[0] = [1.; 3];
+        reconstruct(&mut pixels, 25, 25, 1.);
+        assert!((pixels[12 * 25 + 12][0] - 1.6).abs() < 0.001);
+        assert_eq!(pixels[12 * 25 + 12][1], 0.8);
+        assert_eq!(pixels[0], [1.; 3]);
+        assert_eq!(pixels[1], [0.8, 0.4, 0.2]);
+    }
+    #[test]
+    fn as_shot_profile_temperature_tracks_warm_and_cool_neutrals() {
+        let profile = crate::camera_profiles::Profile {
+            name: "Synthetic calibration".into(),
+            camera: String::new(),
+            digest: [0; 32],
+            illuminants: [17, 21],
+            matrices: [
+                vec![1., 0., 0., 0., 1., 0., 0., 0., 1.],
+                vec![0.9, 0.1, 0., 0., 1., 0., 0., 0.1, 0.9],
+            ],
+            forward: Default::default(),
+            curve: vec![],
+            maps: Default::default(),
+            look: None,
+        };
+        for temperature in [2856., 4500., 6504., 10000.] {
+            let xyz = illuminant_xyz(temperature);
+            let blend = profile.blend(Some(temperature));
+            let mut wb = [1.; 4];
+            for (r, value) in wb[..3].iter_mut().enumerate() {
+                *value = 1.
+                    / (0..3)
+                        .map(|c| {
+                            (profile.matrices[0][r * 3 + c] * (1. - blend)
+                                + profile.matrices[1][r * 3 + c] * blend)
+                                * xyz[c]
+                        })
+                        .sum::<f32>();
+            }
+            let result = estimate_profile_temperature(&profile, wb).unwrap();
+            assert!(
+                (result - temperature).abs() / temperature < 0.02,
+                "{temperature} -> {result}"
+            );
         }
     }
 }

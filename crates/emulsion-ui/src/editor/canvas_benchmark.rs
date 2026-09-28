@@ -13,7 +13,7 @@ use std::time::Duration;
 
 const WARMUP: usize = 8;
 const SAMPLES: usize = 40;
-const CASES: [&str; 3] = ["pan", "brush", "vector_edit"];
+const CASES: [&str; 4] = ["pan", "brush", "vector_edit", "zoom"];
 static COMPLETED: AtomicBool = AtomicBool::new(false);
 
 // EditorView is a flex child of Workspace in the shipping app. Preserve that
@@ -47,6 +47,7 @@ pub(super) struct CanvasBenchmark {
     paint_node: NodeId,
     text_node: NodeId,
     gpu_brush: bool,
+    drag_origin: Option<(f64, f64)>,
     commit_ms: Option<f64>,
     inactive_samples: usize,
     canvas_size: Option<[f32; 2]>,
@@ -94,7 +95,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
             }
             if state.step == WARMUP + SAMPLES {
                 state.rows.push(serde_json::json!({
-                    "scenario": if state.diagram { ["pan","object_drag","command_move"][state.case] } else {CASES[state.case]}, "renderer": state.backend,
+                    "scenario": if state.diagram { ["pan","object_drag","command_move","zoom"][state.case] } else {CASES[state.case]}, "renderer": state.backend,
                     "gpu_brush": state.gpu_brush && state.case == 1, "samples": SAMPLES,
                     "inactive_window_samples": state.inactive_samples,
                     "input_to_canvas_submission_ms": percentiles(&mut state.submissions),
@@ -107,6 +108,18 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                 state.inactive_samples = 0;
                 let diagram=state.diagram;
                 editor.update(cx, |editor, cx| {
+                    if diagram && matches!(editor.drag, Some(Drag::Move(_))) {
+                        let start = Instant::now();
+                        editor.drag_end(cx);
+                        cx.global_mut::<CanvasBenchmark>().commit_ms = Some(start.elapsed().as_secs_f64() * 1000.0);
+                        assert!(!editor.editor.in_transaction(), "drag release commits the move");
+                        let moved = editor.editor.doc.clone();
+                        editor.undo(cx);
+                        assert_ne!(editor.editor.doc, moved, "drag must move artwork");
+                        editor.redo(cx);
+                        assert_eq!(editor.editor.doc, moved, "redo restores the committed move");
+                        return;
+                    }
                     if let Some(Drag::Tool(drag)) = editor.drag.take() {
                         let start = Instant::now();
                         editor.tool_up(drag, cx);
@@ -154,12 +167,13 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
         // Compositors may initially tile below the requested minimum or place
         // the window on another workspace. Wait for a usable, active surface;
         // starting there measures desktop throttling instead of the editor.
-        if !window.is_window_active() || window.viewport_size().width < px(1000.) || window.viewport_size().height < px(700.) {
+        if !window.is_window_active() || window.viewport_size().width < px(640.) || window.viewport_size().height < px(480.) {
             window.refresh();
             schedule(editor, window);
             return;
         }
         let (case, step, paint_node, text_node, diagram) = (state.case, state.step, state.paint_node, state.text_node,state.diagram);
+        if step == 0 { eprintln!("canvas benchmark scenario {case}: {:?}, active={}", window.viewport_size(), window.is_window_active()); }
         state.step += 1;
         state.started = Some(Instant::now());
         editor.update(cx, |editor, cx| {
@@ -174,11 +188,14 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                     if step==0 {editor.drag=None;editor.set_tool(Tool::Move,cx);}
                     let b=emulsion_core::geometry::node_bounds(&editor.editor.doc,text_node).unwrap();
                     let center=(b.x as f64+b.w as f64/2.,b.y as f64+b.h as f64/2.);
-                    let position=editor.doc_to_window(center).unwrap();
+                    if step == 0 { cx.global_mut::<CanvasBenchmark>().drag_origin = Some(center); }
+                    let origin = cx.global::<CanvasBenchmark>().drag_origin.unwrap();
+                    let position=editor.doc_to_window(origin).unwrap();
                     if step==0 {
-                        editor.diagram_pointer_down(center,false,1,cx);
-                        editor.tool_down(&MouseDownEvent{position,button:MouseButton::Left,..Default::default()},window,cx);
-                    } else {editor.drag_move(position+point(px(2.*sign as f32),px(0.)),window,cx);}
+                        editor.set_layer_selection(vec![text_node], Some(text_node));
+                        editor.begin_move(origin, cx);
+                        assert!(matches!(editor.drag, Some(Drag::Move(_))), "fixture starts an object move");
+                    } else {editor.drag_move(position+point(px(24.+8.*sign as f32),px(0.)),window,cx);}
                 }
                 1 => {
                     let w = editor.editor.doc.width as f64;
@@ -199,6 +216,13 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                         editor.tool_move(position, cx);
                     }
                 }
+                3 => {
+                    editor.drag = None;
+                    let bounds = editor.canvas_bounds().unwrap();
+                    editor.view.zoom_at(if sign > 0. { 1.08 } else { 1. / 1.08 }, (f32::from(bounds.center().x) as f64, f32::from(bounds.center().y) as f64), &bounds);
+                    editor.notify_canvas(cx);
+                    cx.notify();
+                }
                 _ => { editor.execute(Command::TranslateNode { id: text_node, dx: sign * 2.0, dy: 0.0 }, cx); }
             }
         });
@@ -207,7 +231,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
     });
 }
 
-/// Opens the real editor, runs three bounded workloads, and prints JSON to stdout.
+/// Opens the real editor, runs four bounded workloads, and prints JSON to stdout.
 /// The caller must isolate XDG_DATA_HOME before threads or libraries initialize.
 pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
     let diagram_count = std::env::var("EMULSION_BENCH_DIAGRAM")

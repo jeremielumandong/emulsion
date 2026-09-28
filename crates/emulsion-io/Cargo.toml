@@ -10,6 +10,7 @@ description = "Import and export"
 workspace = true
 
 [dependencies]
+emulsion-ai = { workspace = true }
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
 getrandom = "0.3"

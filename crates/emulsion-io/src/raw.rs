@@ -310,6 +310,15 @@ pub(crate) fn develop_linear_rgb(
     develop::render_linear_rgb(w, h, pixels, params, cancel)
 }
 
+/// Develop a linear ProPhoto RGB input without an intermediate sRGB clamp.
+pub fn develop_wide_raster(
+    source: &Raster,
+    params: &DevelopParams,
+    working: bool,
+) -> Result<Raster> {
+    develop::render_raster_space(source, params, true, working)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

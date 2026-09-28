@@ -962,6 +962,14 @@ impl EditorView {
             overlay.selected = self
                 .selected_layer_roots()
                 .into_iter()
+                .filter(|id| {
+                    !self
+                        .editor
+                        .doc
+                        .diagram
+                        .as_ref()
+                        .is_some_and(|d| d.edges.contains_key(id))
+                })
                 .filter_map(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, id))
                 .map(|b| [b.x as f64, b.y as f64, b.w as f64, b.h as f64])
                 .collect();
@@ -1029,11 +1037,7 @@ impl EditorView {
         let Some((x, y)) = self.doc_point(position) else {
             return;
         };
-        let (w, h) = if stencil.kind.is_container() {
-            (420., 280.)
-        } else {
-            (140., 80.)
-        };
+        let (w, h) = stencil.default_size();
         match stencil.insert(&mut self.editor, [x - w / 2., y - h / 2., w, h]) {
             Ok(id) => {
                 self.set_layer_selection(vec![id], Some(id));
@@ -1058,11 +1062,7 @@ impl EditorView {
             .diagram
             .as_ref()
             .map_or(0, |d| d.shapes.len());
-        let (w, h) = if stencil.kind.is_container() {
-            (420., 280.)
-        } else {
-            (140., 80.)
-        };
+        let (w, h) = stencil.default_size();
         let x = (self.editor.doc.width as f64 / 2. - w / 2. + (count % 5) as f64 * 24.).max(20.);
         let y = (self.editor.doc.height as f64 / 2. - h / 2. + (count % 5) as f64 * 24.).max(20.);
         match stencil.insert(&mut self.editor, [x, y, w, h]) {
@@ -2540,6 +2540,9 @@ impl EditorView {
 #[derive(Clone, Default)]
 pub(super) struct DiagramOverlay {
     selected: Vec<[f64; 4]>,
+    connector_lines: Vec<Vec<(f64, f64)>>,
+    connector_ends: Vec<(f64, f64)>,
+    connector_bends: Vec<((f64, f64), bool)>,
     marquee: Option<[f64; 4]>,
     ports: Vec<(f64, f64)>,
     preview: Vec<(f64, f64)>,
@@ -2586,6 +2589,35 @@ pub(super) fn paint_connections(
         if let Ok(path) = path.build() {
             window.paint_path(path, accent);
         }
+    }
+    for line in &overlay.connector_lines {
+        if let Some(first) = line.first() {
+            let mut path = PathBuilder::stroke(px(1.5));
+            path.move_to(screen(*first));
+            for p in &line[1..] {
+                path.line_to(screen(*p));
+            }
+            if let Ok(path) = path.build() {
+                window.paint_path(path, accent);
+            }
+        }
+    }
+    for (p, vertical) in &overlay.connector_bends {
+        let c = screen(*p);
+        let (w, h) = if *vertical { (10., 24.) } else { (24., 10.) };
+        let b = Bounds::new(c - point(px(w / 2.), px(h / 2.)), size(px(w), px(h)));
+        window.paint_quad(fill(b, white()).corner_radii(px(5.)));
+        window.paint_quad(
+            outline(b, accent, BorderStyle::Solid)
+                .border_widths(px(1.5))
+                .corner_radii(px(5.)),
+        );
+    }
+    for p in &overlay.connector_ends {
+        let c = screen(*p);
+        let b = Bounds::new(c - point(px(4.), px(4.)), size(px(8.), px(8.)));
+        window.paint_quad(fill(b, white()));
+        window.paint_quad(outline(b, accent, BorderStyle::Solid).border_widths(px(1.5)));
     }
     if let Some(first) = overlay.preview.first() {
         let mut path = PathBuilder::stroke(px(2.));

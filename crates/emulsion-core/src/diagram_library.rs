@@ -9,6 +9,7 @@ use std::sync::Arc;
 mod samples;
 #[path = "diagram_library_web.rs"]
 mod web;
+pub(crate) use web::insert_stencil as insert_web_stencil;
 
 #[derive(Clone, Copy)]
 pub struct Template {

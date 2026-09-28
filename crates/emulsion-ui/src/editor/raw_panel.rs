@@ -5,7 +5,8 @@
 
 use super::*;
 use emulsion_core::raw::RawDocument;
-use emulsion_io::raw::{DevelopParams, RawSource};
+use emulsion_io::photo_develop::PhotoSource;
+use emulsion_io::raw::DevelopParams;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Disableable, Selectable, Sizable};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -562,7 +563,7 @@ impl EditorView {
                             "RAW development cancelled".into(),
                         ));
                     }
-                    let src = RawSource::load_verified(&source.source, &source.source_sha256)?;
+                    let src = PhotoSource::load_verified(&source.source, &source.source_sha256)?;
                     let params = match analysis {
                         RawAnalysis::None => params,
                         RawAnalysis::Auto => src.auto_adjust(&params)?,
@@ -749,7 +750,7 @@ impl EditorView {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(label("RAW develop", p))
+                .child(label("Photo develop", p))
                 .child(div().flex_1())
                 .child(mono(
                     if self.raw.is_pending() {
@@ -762,7 +763,7 @@ impl EditorView {
                 ))
                 .child(
                     Button::new("raw-reset")
-                        .label("Reset RAW")
+                        .label("Reset development")
                         .xsmall()
                         .ghost()
                         .disabled(prm == DevelopParams::default())
@@ -784,6 +785,19 @@ impl EditorView {
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(description),
+        );
+        body = body.child(
+            Button::new("photo-wide-working")
+                .label("ProPhoto working gamut")
+                .xsmall()
+                .ghost()
+                .selected(prm.wide_gamut)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(mut params) = this.raw_params() {
+                        params.wide_gamut = !params.wide_gamut;
+                        this.raw_apply_params(params, cx);
+                    }
+                })),
         );
         if !warnings.is_empty() {
             body = body.child(

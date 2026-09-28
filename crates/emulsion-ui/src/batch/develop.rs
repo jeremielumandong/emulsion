@@ -274,7 +274,9 @@ impl Workspace {
                     } else {
                         params
                     };
-                    let raster = if detail_region.is_some() || full_preview {
+                    let raster = if let Some(center) = detail_region {
+                        source.develop_region(&render_params, center, 1024, &cancel)
+                    } else if full_preview {
                         source.develop_with_cancel(&render_params, &cancel)
                     } else {
                         source.develop_preview(&render_params, &cancel)
@@ -516,9 +518,11 @@ impl Workspace {
         }
         let dependencies_changed = self.batch.develop.current_params(&path).is_none_or(|p| {
             p.camera_profile != params.camera_profile
+                || p.depth_map != params.depth_map
                 || p.local_edits != params.local_edits
                 || p.wide_gamut != params.wide_gamut
                 || p.sensor_noise_reduction != params.sensor_noise_reduction
+                || p.sensor_ai_denoise != params.sensor_ai_denoise
                 || p.wb_override != params.wb_override
         });
         if dependencies_changed

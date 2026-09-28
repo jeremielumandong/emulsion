@@ -175,11 +175,11 @@ impl Workspace {
             .develop
             .source
             .as_ref()
-            .is_some_and(|s| emulsion_io::photo_develop::is_raw_photo(&s.source))
+            .is_some_and(|s| s.supports_wide_gamut())
         {
             panel = panel.child(
                 Checkbox::new("develop-wide-working")
-                    .label("Wide-gamut RAW working space")
+                    .label("ProPhoto working gamut")
                     .checked(params.wide_gamut)
                     .on_change(cx.listener(move |this, value, _, cx| {
                         this.library_adjust(

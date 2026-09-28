@@ -325,6 +325,7 @@ pub fn definitions() -> Vec<ToolDef> {
             "exposure":range(-5.,5.),"temperature":range(-1.,1.),"tint":range(-1.,1.),"highlights":range(-1.,1.),"shadows":range(-1.,1.),"black_point":range(0.,0.25),"brightness":range(-1.,1.),"contrast":range(-1.,1.),"saturation":range(-1.,1.),
             "whites":range(-1.,1.),"blacks":range(-1.,1.),"vibrance":range(-1.,1.),"texture":range(-1.,1.),"clarity":range(-1.,1.),"dehaze":range(-1.,1.),"vignette":range(-1.,1.),"sharpening":range(0.,1.),"noise_reduction":range(0.,1.),
             "camera_profile":{"type":["array","null"],"minItems":32,"maxItems":32,"items":{"type":"integer","minimum":0,"maximum":255}},
+            "profile_as_shot":{"type":"boolean"},"highlight_reconstruction":range(0.,1.),"depth_blur":range(0.,0.05),"depth_focus":range(0.,1.),"depth_range":range(0.,1.),"depth_map":{"type":["array","null"],"minItems":32,"maxItems":32,"items":{"type":"integer","minimum":0,"maximum":255}},
             "local_edits":{"type":["array","null"],"minItems":32,"maxItems":32,"items":{"type":"integer","minimum":0,"maximum":255}},
             "process_version":{"type":"integer","enum":[1,2]},"wide_gamut":{"type":"boolean"},
             "parametric":{"type":"array","minItems":4,"maxItems":4,"items":range(-1.,1.)},
@@ -335,7 +336,7 @@ pub fn definitions() -> Vec<ToolDef> {
             "grading_balance":range(-1.,1.),"grading_blending":range(0.,1.),
             "sharpening_radius":range(0.5,3.),"sharpening_detail":range(0.,1.),"sharpening_masking":range(0.,1.),
             "luminance_detail":range(0.,1.),"luminance_contrast":range(0.,1.),"color_noise_reduction":range(0.,1.),"color_noise_detail":range(0.,1.),"color_noise_smoothness":range(0.,1.),
-            "sensor_noise_reduction":range(0.,1.),"point_curves":point_curves,"smooth_point_curves":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"boolean"},"description":"Smooth Photo-style interpolation for composite, red, green, and blue point curves."},"smooth_curve":{"type":"boolean"},"tone_curve":{"type":"array","minItems":5,"maxItems":5,"items":range(0.,1.)},"wb_override":{"type":["array","null"],"minItems":4,"maxItems":4,"items":range(0.01,100.)}}},"curve_preset":{"type":"string","enum":["linear","medium","strong"]}}),
+            "demosaic_version":{"type":"integer","enum":[0,1]},"sensor_ai_denoise":{"type":"boolean"},"sensor_noise_reduction":range(0.,1.),"point_curves":point_curves,"smooth_point_curves":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"boolean"},"description":"Smooth Photo-style interpolation for composite, red, green, and blue point curves."},"smooth_curve":{"type":"boolean"},"tone_curve":{"type":"array","minItems":5,"maxItems":5,"items":range(0.,1.)},"wb_override":{"type":["array","null"],"minItems":4,"maxItems":4,"items":range(0.01,100.)}}},"curve_preset":{"type":"string","enum":["linear","medium","strong"]}}),
             &[],
         ),
         def(

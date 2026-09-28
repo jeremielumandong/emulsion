@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 pub const NAMES: &[&str] = &[
     "merge_library_hdr",
+    "stitch_library_panorama",
     "cancel_library_hdr",
     "library_profiles",
     "get_library",
@@ -177,6 +178,7 @@ pub enum DevelopAction {
     SkyMask,
     AutoSky,
     AutoPerspective,
+    DepthMap,
     Denoise,
     SuperResolution,
     MatchLens,
@@ -229,6 +231,8 @@ pub struct CatalogAction {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hdr {
+    #[serde(skip)]
+    pub panorama: bool,
     pub paths: Vec<PathBuf>,
     #[serde(default)]
     pub options: emulsion_io::photo_hdr::Options,
@@ -280,8 +284,9 @@ pub fn parse(name: &str, args: &Value) -> Result<Request, String> {
             empty(args)?;
             Request::CancelHdr
         }
-        "merge_library_hdr" => {
-            let v: Hdr = from(args)?;
+        "merge_library_hdr" | "stitch_library_panorama" => {
+            let mut v: Hdr = from(args)?;
+            v.panorama = name == "stitch_library_panorama";
             if !(2..=9).contains(&v.paths.len()) || v.paths.iter().any(|p| !p.is_absolute()) {
                 return Err("HDR needs 2–9 absolute source paths".into());
             }
@@ -478,7 +483,7 @@ pub fn definitions() -> Vec<ToolDef> {
     vec![
         def(
             "cancel_library_hdr",
-            "Cancel an active HDR merge or preview.",
+            "Cancel an active HDR or panorama merge or preview.",
             json!({}),
             &[],
         ),
@@ -489,8 +494,14 @@ pub fn definitions() -> Vec<ToolDef> {
             &["action"],
         ),
         def(
+            "stitch_library_panorama",
+            "Stitch 2–9 overlapping photos in capture order into a new planar panorama TIFF and add it to the Library. Uses saved Develop edits. Preview takes no output; full stitching requires a new absolute output path. cancel_library_hdr cancels either merge operation.",
+            json!({"paths":{"type":"array","minItems":2,"maxItems":9,"items":{"type":"string"}},"preview":{"type":"boolean"},"output":{"type":"string"}}),
+            &["paths"],
+        ),
+        def(
             "merge_library_hdr",
-            "Merge 2–9 original bracketed exposures into a NEW RGB32 float TIFF and add it to the catalog. Existing Develop edits are ignored. Preview returns a reduced-resolution image without writing. Uses EXIF exposure or explicit relative EV; translation alignment and reference-based deghosting.",
+            "Merge 2–9 original bracketed exposures into a NEW RGB32 float TIFF and add it to the catalog. Existing Develop edits are ignored. Preview returns a reduced-resolution image without writing. Uses EXIF exposure or explicit relative EV; projective alignment with translation fallback and color-aware reference deghosting.",
             json!({"paths":{"type":"array","minItems":2,"maxItems":9,"items":{"type":"string"}},"output":{"type":"string"},"preview":{"type":"boolean"},"overlay":{"type":"boolean"},"options":{"type":"object","additionalProperties":false,"properties":{"align":{"type":"boolean"},"auto_tone":{"type":"boolean"},"deghost":{"type":"string","enum":["none","low","medium","high"]},"exposure_ev":{"type":["array","null"],"minItems":2,"maxItems":9,"items":{"type":"number","minimum":-40,"maximum":40}}}}}),
             &["paths"],
         ),
@@ -545,7 +556,7 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "develop_library",
             "Operate on the active Library photo using the same drafts, undo and sidecars as the UI. adjust patches settings; auto/reset/as_shot/undo/preset/load_preset save immediately and report failures. sync copies group to selected photos. save flushes all drafts. reload explicitly discards active unsaved draft. Built-in preset names: neutral,warm,black_and_white,strong_contrast. Imports Emulsion JSON, Lightroom XMP and legacy lrtemplate presets with a compatibility report. snapshot/restore_snapshot use a name; match_lens resolves a measured Lensfun profile; subject_mask/sky_mask create local bitmap masks (sky_mask requires point); auto_sky uses local semantic sky segmentation; auto_perspective estimates level and perspective from image lines; denoise/super_resolution create new rendered derivatives. sensor_noise_reduction is a RAW-only pre-demosaic control in settings. point_curves contains composite/red/green/blue control points. Sampled camera WB cannot be synced across Library files. RAW highlights is recovery: positive darkens, negative brightens; UI slider uses the opposite sign.",
-            json!({"guides":{"type":"array","minItems":2,"maxItems":8,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}}}},"edits":local_edits_schema(),"action":{"type":"string","enum":["guided_perspective","local_edits","adjust","auto","reset","as_shot","undo","reload","save","sync","preset","save_preset","load_preset","snapshot","restore_snapshot","subject_mask","sky_mask","auto_sky","auto_perspective","denoise","super_resolution","match_lens"]},"point":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1},"description":"Normalized point in the untransformed source sky"},"name":{"type":"string","minLength":1,"maxLength":200},"settings":settings,"preset":{"type":"string","enum":["neutral","warm","black_and_white","strong_contrast"]},"path":{"type":"string","minLength":1},"group":group}),
+            json!({"guides":{"type":"array","minItems":2,"maxItems":8,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}}}},"edits":local_edits_schema(),"action":{"type":"string","enum":["guided_perspective","local_edits","adjust","auto","reset","as_shot","undo","reload","save","sync","preset","save_preset","load_preset","snapshot","restore_snapshot","subject_mask","sky_mask","auto_sky","auto_perspective","depth_map","denoise","super_resolution","match_lens"]},"point":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1},"description":"Normalized point in the untransformed source sky"},"name":{"type":"string","minLength":1,"maxLength":200},"settings":settings,"preset":{"type":"string","enum":["neutral","warm","black_and_white","strong_contrast"]},"path":{"type":"string","minLength":1},"group":group}),
             &["action"],
         ),
         def(

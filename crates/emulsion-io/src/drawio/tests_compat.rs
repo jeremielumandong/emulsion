@@ -347,6 +347,16 @@ fn inline_stencil_arcs_ellipses_and_invalid_geometry_are_bounded() {
     let path = stencils::decode(&encoded(xml), [20., 30., 100., 100.], &mut warnings).unwrap();
     assert_eq!(path.subpaths.len(), 2);
     assert!(path.anchor_count() > 4);
+    let rounded = stencils::decode(&encoded(r#"<shape w="100" h="100"><foreground><roundrect x="0" y="0" w="100" h="100" arcsize="20"/></foreground></shape>"#), [0., 0., 200., 100.], &mut warnings).unwrap();
+    assert!(
+        rounded.subpaths[0]
+            .anchors
+            .iter()
+            .any(|a| a.h_in != a.p || a.h_out != a.p)
+    );
+    assert!((rounded.subpaths[0].anchors[0].p.0 - 20.).abs() < 0.01);
+    assert!(!warnings.iter().any(|w| w.contains("square corners")));
+
     let error = stencils::decode(
         &encoded("<shape w=\"0\"/>"),
         [0., 0., 100., 100.],
@@ -1239,4 +1249,31 @@ fn ios_app_bar_imports_status_icons_as_editable_vectors() {
             .count()
             > 5
     );
+}
+
+#[test]
+fn table_inherits_row_and_table_typography_without_losing_cell_overrides() {
+    let value = escape(
+        "<table style='font-family:Arial,sans-serif;font-size:24px;color:#123456'><tr style='font-style:italic;vertical-align:top;height:90px'><td>Inherited</td><td style='font-size:16px;color:#654321'>Override</td></tr></table>",
+    );
+    let imported = from_xml(&graph(&format!(r#"<mxCell id="a" vertex="1" parent="1" value="{value}" style="html=1;align=left;verticalAlign=top;"><mxGeometry x="40" y="60" width="400" height="160" as="geometry"/></mxCell>"#))).unwrap();
+    let doc = &imported.project.pages[0].doc;
+    let specs = doc
+        .nodes
+        .iter()
+        .filter_map(|n| match &n.kind {
+            NodeKind::Text { spec, .. } if !spec.text.is_empty() => Some(spec),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(specs.len(), 2);
+    let inherited = &specs[0].runs[0].style;
+    assert_eq!(inherited.font, "Arial");
+    assert_eq!(inherited.size, 24.);
+    assert_eq!(inherited.color, [0x12, 0x34, 0x56, 255]);
+    assert!(inherited.italic);
+    assert_eq!(specs[1].runs[0].style.size, 16.);
+    assert_eq!(specs[1].runs[0].style.color, [0x65, 0x43, 0x21, 255]);
+    assert!((specs[0].y - specs[1].y).abs() < 0.01);
+    doc.validate().unwrap();
 }

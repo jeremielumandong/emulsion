@@ -1507,3 +1507,60 @@ fn library_guided_perspective_saves_and_undoes_shared_settings(cx: &mut TestAppC
     assert_eq!(state["develop"]["settings"]["perspective"], json!([0., 0.]));
     assert_eq!(std::fs::read(path).unwrap(), original);
 }
+
+#[gpui_kit::test]
+fn library_depth_and_rgb_gamut_edits_persist_and_undo(cx: &mut TestAppContext) {
+    use serde_json::json;
+    let fixture = Fixture::new();
+    let path = fixture.pngs().remove(0);
+    let root = fixture.0.join("catalog");
+    let original = std::fs::read(&path).unwrap();
+    let map = emulsion_raster::Mask::from_pixels(4, 4, 0, &[128; 16]);
+    let digest = emulsion_io::photo_develop::save_mask(&map).unwrap();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "import_library",
+        json!({"folder":fixture.0}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "select_library_photos",
+        json!({"paths":[path],"active":path}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"adjust","settings":{"wide_gamut":true,"depth_map":digest,"depth_blur":0.015,"depth_focus":0.7,"depth_range":0.08}}),
+    ));
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert_eq!(state["develop"]["settings"]["wide_gamut"], true);
+    assert!(
+        (state["develop"]["settings"]["depth_focus"]
+            .as_f64()
+            .unwrap()
+            - 0.7)
+            .abs()
+            < 1e-5
+    );
+    let source = emulsion_io::photo_develop::PhotoSource::load(&path).unwrap();
+    let saved = emulsion_io::raw_settings::adjacent_settings(&path, &source.source_sha256).unwrap();
+    assert_eq!(saved.depth_map, Some(digest));
+    assert!(saved.wide_gamut);
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"undo"}),
+    ));
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert_eq!(state["develop"]["settings"]["depth_blur"], 0.);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}

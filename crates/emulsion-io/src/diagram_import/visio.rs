@@ -118,6 +118,7 @@ struct Resources {
     available_fonts: BTreeSet<String>,
     colors: BTreeMap<String, [u8; 4]>,
     theme_colors: BTreeMap<String, [u8; 4]>,
+    theme_fonts: BTreeMap<String, String>,
     fonts: BTreeMap<String, String>,
     styles: BTreeMap<String, Xml>,
 }
@@ -143,6 +144,18 @@ impl Resources {
         Ok(out)
     }
     fn load_theme(&mut self, theme: &Xml) {
+        for (section, token) in [("majorFont", "+mj-lt"), ("minorFont", "+mn-lt")] {
+            if let Some(font) = theme
+                .descendants(section)
+                .next()
+                .and_then(|n| n.child("latin"))
+            {
+                let name = font.attr("typeface");
+                if !name.is_empty() {
+                    self.theme_fonts.insert(token.into(), name.into());
+                }
+            }
+        }
         if let Some(scheme) = theme.descendants("clrScheme").next() {
             for entry in &scheme.children {
                 if let Some(rgb) = entry
@@ -1176,6 +1189,9 @@ mod theme_tests {
         let mut resources = Resources::default();
         resources.load_theme(&xml::parse(r#"<theme><themeElements><clrScheme><accent1><srgbClr val="12ABEF"/></accent1></clrScheme></themeElements></theme>"#).unwrap());
         let node=xml::parse(r#"<Shape><Cell N="FillForegnd" V="Themed" F="THEMEGUARD(THEMEVAL(3))"/><Cell N="LineColor" F="RGB(10,20,30)"/></Shape>"#).unwrap();
+        resources.load_theme(&xml::parse(r#"<theme><fontScheme><majorFont><latin typeface="Cambria"/></majorFont><minorFont><latin typeface="Calibri"/></minorFont></fontScheme></theme>"#).unwrap());
+        assert_eq!(resources.theme_fonts["+mj-lt"], "Cambria");
+        assert_eq!(resources.theme_fonts["+mn-lt"], "Calibri");
         let mut notes = BTreeSet::new();
         assert_eq!(
             resources.color(&node, None, "FillForegnd", [0; 4], &mut notes),

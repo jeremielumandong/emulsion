@@ -374,6 +374,7 @@ impl EditorView {
             for (key, name, space) in [
                 ("srgb", "sRGB", ExportColorSpace::Srgb),
                 ("adobe", "Adobe RGB", ExportColorSpace::AdobeRgb),
+                ("prophoto", "ProPhoto RGB", ExportColorSpace::ProPhoto),
             ] {
                 controls = controls.child(
                     Button::new(format!("export-profile-{key}"))
@@ -389,12 +390,9 @@ impl EditorView {
             }
             body = body.child(section("Output profile", controls.into_any_element()));
             if prefs.color_space == ExportColorSpace::AdobeRgb {
-                body = body.child(
-                    div()
-                        .text_xs()
-                        .text_color(p.muted)
-                        .child("Converts existing sRGB colors; does not recover clipped gamut."),
-                );
+                body = body.child(div().text_xs().text_color(p.muted).child(
+                    "Linked wide-gamut photos preserve original color. Layered artwork uses sRGB.",
+                ));
             }
             if prefs.ext != "webp" {
                 let mut controls = crate::widgets::command_bar("export-ppi", "Resolution");

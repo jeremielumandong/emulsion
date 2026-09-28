@@ -689,3 +689,34 @@ fn picked_attachment_rotates_reflects_and_undo_restores_exactly() {
         assert_eq!(e.doc, original);
     }
 }
+
+#[test]
+fn drag_route_matches_committed_geometry_across_routing_modes() {
+    let (mut e, _, _, id) = fixture();
+    for routing in [
+        Routing::Straight,
+        Routing::Orthogonal,
+        Routing::Curved,
+        Routing::Cyclical,
+    ] {
+        for waypoints in [vec![], vec![(240., 120.), (300., 200.)]] {
+            let mut model = e.doc.diagram.as_deref().unwrap().clone();
+            let edge = model.edges.get_mut(&id).unwrap();
+            edge.routing = routing;
+            edge.waypoints = waypoints;
+            edge.corner_radius = 9.;
+            edge.arrow_start = false;
+            edge.arrow_end = false;
+            edge.source.port = Port::Custom { x: 1., y: 0.8 };
+            let before = e.doc.clone();
+            let preview = ConnectorPreview::new(&e.doc).unwrap().path(edge).unwrap();
+            assert_eq!(e.doc, before, "Preview must not mutate the document");
+            e.execute(Command::SetDiagram {
+                diagram: Some(Arc::new(model)),
+            })
+            .unwrap();
+            assert_eq!(*path(&e, id), preview, "routing {routing:?}");
+            e.undo();
+        }
+    }
+}

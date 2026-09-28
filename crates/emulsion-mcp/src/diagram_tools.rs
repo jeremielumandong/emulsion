@@ -880,6 +880,36 @@ mod tests {
         assert_eq!(e.doc, before);
     }
     #[test]
+    fn permanent_web_stencils_are_discoverable_and_insert_with_artwork() {
+        let mut e = editor();
+        let catalog = call(
+            &mut e,
+            "list_diagram_stencils",
+            json!({"category":"Web systems"}),
+        );
+        assert_eq!(catalog["stencils"].as_array().unwrap().len(), 14);
+        let before = e.doc.clone();
+        let created = call(
+            &mut e,
+            "insert_diagram_stencil",
+            json!({"stencil":"web-browser","bounds":[40,60,288,148]}),
+        );
+        let id = created["node"].as_u64().unwrap();
+        let model = e.doc.diagram.as_ref().unwrap();
+        assert_eq!(model.shapes[&id].data["emulsion_stencil"], "web-browser");
+        assert!(
+            e.doc.subtree(id).len() >= 7,
+            "Card retains editable icon, accent, and text"
+        );
+        let NodeKind::Path { style, .. } = &e.doc.node(model.shapes[&id].body).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(style.fill, Some([243, 238, 255, 255]));
+        e.doc.validate().unwrap();
+        e.undo();
+        assert_eq!(e.doc, before);
+    }
+    #[test]
     fn connector_mcp_preserves_ports_routing_editability_and_one_undo() {
         let mut e = editor();
         let a = shape(&mut e, "process", 30.);

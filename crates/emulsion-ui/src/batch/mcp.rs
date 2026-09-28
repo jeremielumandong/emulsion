@@ -228,12 +228,20 @@ async fn run(
             })??;
             let result = cx
                 .background_spawn(async move {
-                    let merged = emulsion_io::photo_hdr::merge(
-                        &request.paths,
-                        &request.options,
-                        request.preview,
-                        &cancel,
-                    )?;
+                    let merged = if request.panorama {
+                        emulsion_io::photo_panorama::merge(
+                            &request.paths,
+                            request.preview,
+                            &cancel,
+                        )?
+                    } else {
+                        emulsion_io::photo_hdr::merge(
+                            &request.paths,
+                            &request.options,
+                            request.preview,
+                            &cancel,
+                        )?
+                    };
                     let mut result = ToolResult::text(serde_json::to_string(&merged.report)?);
                     if request.preview {
                         let image = merged.preview(request.overlay, &cancel)?;
@@ -1090,6 +1098,7 @@ async fn develop_request(
             | A::SkyMask
             | A::AutoSky
             | A::AutoPerspective
+            | A::DepthMap
             | A::Denoise
             | A::SuperResolution
     ) {
@@ -1099,6 +1108,7 @@ async fn develop_request(
             A::SkyMask => 3,
             A::AutoSky => 4,
             A::AutoPerspective => 5,
+            A::DepthMap => 6,
             _ => 2,
         };
         this.update(cx, |ws, cx| {
@@ -1262,6 +1272,7 @@ async fn develop_request(
         | A::SkyMask
         | A::AutoSky
         | A::AutoPerspective
+        | A::DepthMap
         | A::Denoise
         | A::SuperResolution => unreachable!(),
     };

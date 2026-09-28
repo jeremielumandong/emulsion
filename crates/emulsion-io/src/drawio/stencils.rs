@@ -74,12 +74,22 @@ pub(super) fn decode(
                         let y = n("y", 0.)?;
                         let w = n("w", 0.)?;
                         let h = n("h", 0.)?;
-                        write!(svg, "M {x} {y}h {w}v {h}h {} Z ", -w).unwrap();
                         if e.name().as_ref() == "roundrect" {
-                            warnings.insert(
-                                "Inline stencil rounded rectangles currently use square corners."
-                                    .into(),
-                            );
+                            let arc = n("arcsize", 0.)?;
+                            let factor = if arc == 0. {
+                                0.15
+                            } else {
+                                (arc / 100.).clamp(0., 0.5)
+                            };
+                            let sx = bounds[2] / width;
+                            let sy = bounds[3] / height;
+                            let r = (w * sx).min(h * sy).max(0.) * factor;
+                            let (rx, ry) = (r / sx, r / sy);
+                            let (right, bottom) = (x + w, y + h);
+                            write!(svg, "M {} {y} H {} Q {right} {y} {right} {} V {} Q {right} {bottom} {} {bottom} H {} Q {x} {bottom} {x} {} V {} Q {x} {y} {} {y} Z ",
+                                x+rx, right-rx, y+ry, bottom-ry, right-rx, x+rx, bottom-ry, y+ry, x+rx).unwrap();
+                        } else {
+                            write!(svg, "M {x} {y}h {w}v {h}h {} Z ", -w).unwrap();
                         }
                     }
                     "ellipse" => {

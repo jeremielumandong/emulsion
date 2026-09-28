@@ -2,15 +2,77 @@
 use super::*;
 use gpui_kit::component::Disableable;
 impl Workspace {
-    pub(super) fn library_enhance_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn library_enhance_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = classic::palette(cx);
         let mut panel = div().flex().flex_col().gap_2();
+        let params = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .and_then(|i| self.batch.develop.current_params(&i.path));
+        panel = panel.child(
+            Checkbox::new("library-ai-sensor-denoise")
+                .label("AI sensor denoise (Bayer RAW)")
+                .checked(params.is_some_and(|p| p.sensor_ai_denoise))
+                .on_change(cx.listener(|this, value, _, cx| {
+                    if let Some(mut p) = this
+                        .batch
+                        .current
+                        .and_then(|i| this.batch.items.get(i))
+                        .and_then(|i| this.batch.develop.current_params(&i.path))
+                    {
+                        p.sensor_ai_denoise = *value;
+                        this.library_adjust(p, cx);
+                    }
+                })),
+        );
+        let raw = self
+            .batch
+            .develop
+            .source
+            .as_ref()
+            .is_some_and(|s| emulsion_io::photo_develop::is_raw_photo(&s.source));
+        panel = panel.child(
+            Checkbox::new("library-cancellable-demosaic")
+                .label("Interruptible RAW reconstruction")
+                .checked(params.is_some_and(|p| p.demosaic_version == 1))
+                .disabled(!raw)
+                .on_change(cx.listener(|this, value, _, cx| {
+                    if let Some(mut params) = this
+                        .batch
+                        .current
+                        .and_then(|i| this.batch.items.get(i))
+                        .and_then(|i| this.batch.develop.current_params(&i.path))
+                    {
+                        params.demosaic_version = u8::from(*value);
+                        this.library_adjust(params, cx);
+                    }
+                })),
+        );
+        panel = panel.child(
+            Checkbox::new("library-as-shot-profile")
+                .label("Use as-shot profile calibration")
+                .checked(params.is_some_and(|p| p.profile_as_shot))
+                .disabled(!raw || params.is_none_or(|p| p.camera_profile.is_none()))
+                .on_change(cx.listener(|this, value, _, cx| {
+                    if let Some(mut params) = this
+                        .batch
+                        .current
+                        .and_then(|i| this.batch.items.get(i))
+                        .and_then(|i| this.batch.develop.current_params(&i.path))
+                    {
+                        params.profile_as_shot = *value;
+                        this.library_adjust(params, cx);
+                    }
+                })),
+        );
         for (action, title) in [
             (0, "AI subject mask"),
             (1, "AI denoise / restore"),
             (2, "Super resolution"),
             (4, "Automatic sky mask"),
             (5, "Automatic perspective"),
+            (6, "Generate depth map"),
         ] {
             panel = panel.child(
                 Button::new(("library-ai", action))
@@ -56,6 +118,30 @@ impl Workspace {
                     })),
             );
         }
+        if let Some(params) = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .and_then(|i| self.batch.develop.current_params(&i.path))
+            .filter(|p| p.depth_map.is_some())
+        {
+            for (index, title, value, max) in [
+                (0, "Depth blur", params.depth_blur, 0.05),
+                (1, "Focus depth (far → near)", params.depth_focus, 1.),
+                (2, "In-focus range", params.depth_range, 1.),
+            ] {
+                panel = panel.child(self.library_numeric_control(
+                    1100 + index,
+                    title,
+                    super::advanced::Field::Depth(index),
+                    value,
+                    0.,
+                    max,
+                    0.01,
+                    cx,
+                ));
+            }
+        }
         panel.into_any_element()
     }
     pub(super) fn library_enhance(&mut self, action: usize, cx: &mut Context<Self>) {
@@ -94,7 +180,7 @@ impl Workspace {
             let result = cx
                 .background_spawn(async move {
                     (|| -> Result<_, String> {
-                        if matches!(action,0|3|4|5) {
+                        if matches!(action,0|3|4|5|6) {
                             let mut mask_params = params;
                             mask_params.crop = [0., 0., 1., 1.];
                             mask_params.straighten = 0.;
@@ -103,6 +189,8 @@ impl Workspace {
                             mask_params.lens_profile = None;
                             mask_params.aberration = [0.; 2];
                             mask_params.masks = Default::default();
+                            mask_params.rotation = 0;
+                            mask_params.depth_blur = 0.;
                             let raster = source
                                 .develop_with(&mask_params)
                                 .map_err(|e| e.to_string())?;
@@ -110,6 +198,12 @@ impl Workspace {
                                 .ok_or("Could not build subject input")?;
                             let image = Raster::from_srgba8(w, h, &pixels);
                             if action==5 {task.check().map_err(|e|e.to_string())?;let next=emulsion_io::photo_geometry::automatic(&image,params).map_err(|e|e.to_string())?;task.check().map_err(|e|e.to_string())?;return Ok((Some(next),None));}
+                            if action == 6 {
+                                let map = emulsion_ai::depth::estimate(&image, &task).map_err(|e| e.to_string())?;
+                                let digest = emulsion_io::photo_develop::save_mask(&map.to_mask()).map_err(|e| e.to_string())?;
+                                let next = emulsion_core::raw::DevelopParams { depth_map: Some(digest), depth_blur: 0.01, ..params };
+                                return Ok((Some(next), None));
+                            }
                             let mask = if action==4 {emulsion_ai::sky::mask(&image,&task).map_err(|e|e.to_string())?} else if action == 3 {
                                 let [x, y] = seed.ok_or("Pick a point inside the sky first")?;
                                 let embedding = emulsion_ai::sam::encode(&image, &task)

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 enum Pixels {
     Raw(Box<RawSource>),
     Rgb(Raster),
-    Hdr(crate::photo_hdr::FloatImage, f32),
+    Hdr(crate::photo_hdr::FloatImage, f32, bool),
     Proxy(Raster),
 }
 pub struct PhotoSource {
@@ -21,6 +21,20 @@ pub struct PhotoSource {
     pub info: RawInfo,
     pixels: Pixels,
     rgb_preview: std::sync::OnceLock<Raster>,
+    wide_rgb: std::sync::OnceLock<Raster>,
+    inspection: std::sync::Mutex<Option<Inspection>>,
+}
+static INSPECTION_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const INSPECTION_BUDGET: usize = 256 * 1024 * 1024;
+struct Inspection {
+    params: DevelopParams,
+    raster: Raster,
+    bytes: usize,
+}
+impl Drop for Inspection {
+    fn drop(&mut self) {
+        INSPECTION_BYTES.fetch_sub(self.bytes, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 pub fn supported(path: &Path) -> bool {
     is_virtual(path)
@@ -32,6 +46,9 @@ pub fn supported(path: &Path) -> bool {
         })
 }
 impl PhotoSource {
+    pub fn supports_wide_gamut(&self) -> bool {
+        matches!(self.pixels, Pixels::Raw(_) | Pixels::Rgb(_))
+    }
     pub fn is_proxy(&self) -> bool {
         matches!(self.pixels, Pixels::Proxy(_))
     }
@@ -40,6 +57,8 @@ impl PhotoSource {
             let (proxy, raster) = crate::photo_proxy::load(path)?;
             return Ok(Self {
                 rgb_preview: Default::default(),
+                wide_rgb: Default::default(),
+                inspection: Default::default(),
                 source: path.to_path_buf(),
                 source_sha256: proxy.source_sha256,
                 info: RawInfo {
@@ -62,6 +81,8 @@ impl PhotoSource {
             let source = RawSource::load(path)?;
             return Ok(Self {
                 rgb_preview: Default::default(),
+                wide_rgb: Default::default(),
+                inspection: Default::default(),
                 source: source.source.clone(),
                 source_sha256: source.source_sha256.clone(),
                 metadata: source.metadata.clone(),
@@ -80,6 +101,8 @@ impl PhotoSource {
             let (width, height) = (image.width, image.height);
             return Ok(Self {
                 rgb_preview: Default::default(),
+                wide_rgb: Default::default(),
+                inspection: Default::default(),
                 source,
                 source_sha256,
                 metadata: RawMetadata {
@@ -94,13 +117,15 @@ impl PhotoSource {
                     height,
                     ..Default::default()
                 },
-                pixels: Pixels::Hdr(image, report.display_exposure),
+                pixels: Pixels::Hdr(image, report.display_exposure, report.panorama),
             });
         }
         let decoded = crate::import::decode(&source)?;
         let (width, height) = (decoded.raster.width(), decoded.raster.height());
         Ok(Self {
             rgb_preview: Default::default(),
+            wide_rgb: Default::default(),
+            inspection: Default::default(),
             source,
             source_sha256,
             metadata: RawMetadata {
@@ -128,13 +153,14 @@ impl PhotoSource {
     }
     pub fn validate_settings(&self, params: &DevelopParams) -> Result<()> {
         params.validate().map_err(|e| IoError::Manifest(e.into()))?;
-        if matches!(self.pixels, Pixels::Rgb(_) | Pixels::Hdr(_, _))
-            && (params.wide_gamut
-                || params.camera_profile.is_some()
+        if matches!(self.pixels, Pixels::Rgb(_) | Pixels::Hdr(_, _, _))
+            && (params.camera_profile.is_some()
                 || params.sensor_noise_reduction > 0.
+                || params.sensor_ai_denoise
+                || params.highlight_reconstruction > 0.
                 || params.wb_override.is_some())
         {
-            return Err(IoError::Unsupported("Camera profile, sensor denoise, camera-channel white balance and wide-gamut working space require a RAW original".into()));
+            return Err(IoError::Unsupported("Camera profile, sensor denoise, camera-channel white balance and highlight reconstruction require a RAW original".into()));
         }
         if let Some(digest) = params.camera_profile {
             let profile = crate::camera_profiles::load(&digest)?;
@@ -147,11 +173,102 @@ impl PhotoSource {
         if let Some(digest) = params.local_edits {
             crate::develop_edits::load(&digest)?;
         }
+        if let Some(digest) = params.depth_map {
+            load_mask(&digest)?;
+        }
+        if params.sensor_ai_denoise
+            && emulsion_ai::models::installed_for(emulsion_ai::models::Task::SensorDenoise)
+                .is_none()
+        {
+            return Err(IoError::Unsupported(
+                "Install RawNIND Bayer denoise in Models before enabling AI sensor denoise".into(),
+            ));
+        }
         Ok(())
     }
+    /// Cache one developed frame under a global budget; panning extracts only the requested pixels.
+    pub fn develop_region(
+        &self,
+        params: &DevelopParams,
+        center: [f32; 2],
+        side: u32,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Raster> {
+        use std::sync::atomic::Ordering;
+        if side == 0
+            || side > 4096
+            || center
+                .iter()
+                .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+        {
+            return Err(IoError::Unsupported("Invalid inspection region".into()));
+        }
+        let mut cache = self.inspection.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.as_ref().is_some_and(|c| c.params != *params) {
+            *cache = None;
+        }
+        let raster = if let Some(c) = cache.as_ref() {
+            c.raster.clone()
+        } else {
+            let raster = self.develop_with_cancel(params, cancel)?;
+            let bytes = raster.width() as usize * raster.height() as usize * 8;
+            if INSPECTION_BYTES
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                    used.checked_add(bytes).filter(|n| *n <= INSPECTION_BUDGET)
+                })
+                .is_ok()
+            {
+                *cache = Some(Inspection {
+                    params: *params,
+                    raster: raster.clone(),
+                    bytes,
+                });
+            }
+            raster
+        };
+        if cancel.load(Ordering::Relaxed) {
+            return Err(IoError::Unsupported("Inspection cancelled".into()));
+        }
+        let (w, h) = (raster.width().min(side), raster.height().min(side));
+        let x = (center[0] * raster.width() as f32 - w as f32 * 0.5)
+            .clamp(0., (raster.width() - w) as f32) as u32;
+        let y = (center[1] * raster.height() as f32 - h as f32 * 0.5)
+            .clamp(0., (raster.height() - h) as f32) as u32;
+        let pixels = (0..h)
+            .flat_map(|dy| (0..w).map(move |dx| (dx, dy)))
+            .map(|(dx, dy)| raster.get(x + dx, y + dy))
+            .collect::<Vec<_>>();
+        Ok(Raster::from_pixels(w, h, [0; 4], &pixels))
+    }
+    fn wide_rgb(&self) -> Result<&Raster> {
+        if self.wide_rgb.get().is_none() {
+            let path = if is_virtual(&self.source) {
+                reference(&self.source)?.source
+            } else {
+                self.source.clone()
+            };
+            let expected = if is_virtual(&self.source) {
+                reference(&self.source)?.source_sha256
+            } else {
+                self.source_sha256.clone()
+            };
+            if raw::source_digest(&path)? != expected {
+                return Err(IoError::Manifest(
+                    "Photo original changed; reload before editing".into(),
+                ));
+            }
+            let image = crate::photo_wide::decode(&path)?;
+            let _ = self.wide_rgb.set(image);
+        }
+        Ok(self.wide_rgb.get().unwrap())
+    }
     pub fn develop_working(&self, params: &DevelopParams) -> Result<Raster> {
+        self.validate_settings(params)?;
         match &self.pixels {
             Pixels::Raw(raw) => raw.develop_working(params),
+            Pixels::Rgb(_) if params.wide_gamut => {
+                raw::develop_wide_raster(self.wide_rgb()?, params, true)
+            }
             _ => self.develop_with(params),
         }
     }
@@ -165,18 +282,25 @@ impl PhotoSource {
         }
         match &self.pixels {
             Pixels::Raw(raw) => raw.develop_with_cancel(params, cancel),
-            Pixels::Hdr(image, exposure) => image.develop(params, *exposure, cancel),
+            Pixels::Hdr(image, exposure, panorama) => {
+                image.develop_display(params, *exposure, *panorama, cancel)
+            }
             _ => self.develop_with(params),
         }
     }
     pub fn develop_with(&self, params: &DevelopParams) -> Result<Raster> {
+        self.validate_settings(params)?;
         match &self.pixels {
             Pixels::Raw(raw) => raw.develop_with(params),
-            Pixels::Hdr(image, exposure) => image.develop(
+            Pixels::Hdr(image, exposure, panorama) => image.develop_display(
                 params,
                 *exposure,
+                *panorama,
                 &std::sync::atomic::AtomicBool::new(false),
             ),
+            Pixels::Rgb(_) if params.wide_gamut => {
+                raw::develop_wide_raster(self.wide_rgb()?, params, false)
+            }
             Pixels::Rgb(rgb) => raw::develop_raster(rgb, params),
             Pixels::Proxy(_) => Err(IoError::Unsupported(
                 "Reconnect the verified original for full-quality rendering or export".into(),
@@ -190,7 +314,19 @@ impl PhotoSource {
     ) -> Result<Raster> {
         match &self.pixels {
             Pixels::Raw(raw) => raw.develop_preview(params, cancel),
-            Pixels::Hdr(image, exposure) => image.resized(1280).develop(params, *exposure, cancel),
+            Pixels::Hdr(image, exposure, panorama) => image
+                .resized(1280)
+                .develop_display(params, *exposure, *panorama, cancel),
+            Pixels::Rgb(_) if params.wide_gamut => {
+                let wide = self.wide_rgb()?;
+                let scale = (1280. / wide.width().max(wide.height()) as f64).min(1.);
+                let image = crate::photo_export::resize(
+                    wide,
+                    (wide.width() as f64 * scale).round().max(1.) as u32,
+                    (wide.height() as f64 * scale).round().max(1.) as u32,
+                )?;
+                raw::develop_wide_raster(&image, params, false)
+            }
             Pixels::Rgb(rgb) => {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err(IoError::Unsupported("Development cancelled".into()));
@@ -223,10 +359,38 @@ impl PhotoSource {
             ),
         }
     }
+    pub fn neutral_white_balance(
+        &self,
+        params: &DevelopParams,
+        x: u32,
+        y: u32,
+    ) -> Result<DevelopParams> {
+        if let Pixels::Raw(raw) = &self.pixels {
+            return raw.neutral_white_balance(params, x, y);
+        }
+        let image = self.develop_with(params)?;
+        if x >= image.width() || y >= image.height() {
+            return Err(IoError::Unsupported(
+                "Neutral sample is outside the image".into(),
+            ));
+        }
+        let p = image.get(x, y);
+        if p[..3].iter().any(|v| *v < 64 || *v > 65000) {
+            return Err(IoError::Unsupported(
+                "Choose an unclipped neutral midtone".into(),
+            ));
+        }
+        let [r, g, b] = [p[0] as f32, p[1] as f32, p[2] as f32];
+        Ok(DevelopParams {
+            temperature: (params.temperature + (b / r).log2() / 1.4).clamp(-1., 1.),
+            tint: (params.tint + (g / (r * b).sqrt()).log2() / 0.4).clamp(-1., 1.),
+            ..*params
+        })
+    }
     pub fn auto_adjust(&self, params: &DevelopParams) -> Result<DevelopParams> {
         match &self.pixels {
             Pixels::Raw(raw) => raw.auto_adjust(params),
-            Pixels::Hdr(image, display) => {
+            Pixels::Hdr(image, display, _) => {
                 let mean = (image
                     .pixels
                     .iter()
@@ -533,7 +697,7 @@ pub fn open_virtual(path: &Path) -> Result<emulsion_core::Document> {
         Default::default(),
     ));
     doc.next_id = 2;
-    if raw::is_raw(&reference.source) {
+    {
         doc.raw_originals.push(reference.source.clone());
         doc.raw = Some(emulsion_core::raw::RawDocument {
             schema_version: 1,

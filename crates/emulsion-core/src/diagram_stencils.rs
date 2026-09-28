@@ -12,7 +12,37 @@ pub struct Stencil {
     pub(super) label_below: bool,
 }
 impl Stencil {
+    pub fn default_size(self) -> (f64, f64) {
+        if self.id.starts_with("web-") {
+            (288., 148.)
+        } else if self.kind.is_container() {
+            (420., 280.)
+        } else {
+            (140., 80.)
+        }
+    }
+
     pub fn path(self, [x, y, w, h]: Bounds) -> Path {
+        if let Some(icon) = self.id.strip_prefix("web-") {
+            let icon = match icon {
+                "browser" => "browser",
+                "database" | "cache" | "storage" => "database",
+                "queue" | "outbox" => "queue",
+                "api" | "worker" => "server",
+                "auth" | "error" => "firewall",
+                "edge" | "gateway" | "websocket" => "cloud",
+                _ => "document",
+            };
+            let mut path = self.kind.default_path([x, y, w, h]);
+            if let Some(stencil) = STENCILS.iter().find(|s| s.id == icon) {
+                path.subpaths.extend(
+                    stencil
+                        .path([x + w * 0.6, y + h * 0.15, w * 0.28, h * 0.4])
+                        .subpaths,
+                );
+            }
+            return path;
+        }
         if let Some(svg) = self.svg {
             let mut path = Path::from_svg(svg).expect("bundled stencil path");
             path.transform(glam::DAffine2::from_cols_array(&[
@@ -37,6 +67,9 @@ impl Stencil {
     pub fn insert(self, editor: &mut Editor, bounds: Bounds) -> Result<NodeId, String> {
         if editor.in_transaction() {
             return Err("Finish the current edit first.".into());
+        }
+        if self.id.starts_with("web-") {
+            return crate::diagram_library::insert_web_stencil(editor, self.id, bounds);
         }
         editor.begin("Insert diagram stencil");
         let result = (|| {
@@ -137,6 +170,7 @@ pub const CATEGORIES: &[&str] = &[
     "Office / Floor plan",
     "Electrical",
     "Planning",
+    "Web systems",
 ];
 /// The initial twelve IDs retain the existing drawer's ordering for shortcuts.
 pub const STENCILS: &[Stencil] = &[
@@ -663,6 +697,104 @@ pub const STENCILS: &[Stencil] = &[
         "org chart team person hierarchy",
         "M0 0H100V100H0Z M0 30H100",
         false
+    ),
+    native!(
+        "web-browser",
+        "Browser / client",
+        "Web systems",
+        "frontend request",
+        Process
+    ),
+    native!(
+        "web-edge",
+        "DNS / CDN edge",
+        "Web systems",
+        "network cache",
+        Process
+    ),
+    native!(
+        "web-gateway",
+        "API gateway",
+        "Web systems",
+        "routing proxy",
+        Process
+    ),
+    native!(
+        "web-auth",
+        "Identity / auth",
+        "Web systems",
+        "security token",
+        Process
+    ),
+    native!(
+        "web-api",
+        "Application server",
+        "Web systems",
+        "backend service",
+        Process
+    ),
+    native!(
+        "web-database",
+        "Database",
+        "Web systems",
+        "persistence sql",
+        Process
+    ),
+    native!(
+        "web-cache",
+        "Cache",
+        "Web systems",
+        "redis storage",
+        Process
+    ),
+    native!(
+        "web-queue",
+        "Message queue",
+        "Web systems",
+        "async event",
+        Process
+    ),
+    native!(
+        "web-worker",
+        "Background worker",
+        "Web systems",
+        "async job",
+        Process
+    ),
+    native!(
+        "web-response",
+        "HTTP response",
+        "Web systems",
+        "success payload",
+        Process
+    ),
+    native!(
+        "web-error",
+        "Error / retry",
+        "Web systems",
+        "failure timeout",
+        Process
+    ),
+    native!(
+        "web-websocket",
+        "WebSocket connection",
+        "Web systems",
+        "realtime socket",
+        Process
+    ),
+    native!(
+        "web-outbox",
+        "Transactional outbox",
+        "Web systems",
+        "events delivery",
+        Process
+    ),
+    native!(
+        "web-storage",
+        "Object storage",
+        "Web systems",
+        "assets files",
+        Process
     ),
 ];
 

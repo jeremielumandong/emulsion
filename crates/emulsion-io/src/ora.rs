@@ -792,7 +792,7 @@ pub(crate) fn ensure_not_raw_original(doc: &Document, path: &Path) -> Result<()>
                 std::fs::canonicalize(source).ok().as_ref() == Some(destination)
             })
         {
-            return Err(IoError::Unsupported("Saving or exporting cannot overwrite an original RAW. Choose a different output file.".into()));
+            return Err(IoError::Unsupported("Saving or exporting cannot overwrite a linked original photograph. Choose a different output file.".into()));
         }
     }
     Ok(())

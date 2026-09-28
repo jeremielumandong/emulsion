@@ -192,10 +192,21 @@ pub fn import(path: &Path) -> Result<Document> {
 /// A one-layer document from `decoded`, named after `path` and carrying
 /// its EXIF facts.
 pub fn document_from(path: &Path, mut decoded: Decoded) -> Result<Document> {
-    if crate::photo_develop::supported(path) && crate::raw_settings::sidecar_path(path)?.exists() {
+    let mut recipe = None;
+    if crate::photo_develop::supported(path) && path.is_file() {
         let digest = crate::raw::source_digest(path)?;
-        let params = crate::raw_settings::adjacent_settings(path, &digest)?;
-        decoded.raster = crate::raw::develop_raster(&decoded.raster, &params)?;
+        let has_recipe = crate::raw_settings::sidecar_path(path)?.exists();
+        let mut params = crate::raw_settings::adjacent_settings(path, &digest)?;
+        if !has_recipe {
+            params.wide_gamut = crate::photo_wide::has_rgb_profile(path)?;
+        }
+        if params.wide_gamut {
+            decoded.raster =
+                crate::photo_develop::PhotoSource::load(path)?.develop_with(&params)?;
+            recipe = Some((digest, params));
+        } else if has_recipe {
+            decoded.raster = crate::raw::develop_raster(&decoded.raster, &params)?;
+        }
     }
     let name = path
         .file_stem()
@@ -211,6 +222,18 @@ pub fn document_from(path: &Path, mut decoded: Decoded) -> Result<Document> {
     }
     .apply(&mut doc)
     .map_err(|e| IoError::Manifest(e.to_string()))?;
+    if let Some((digest, params)) = recipe {
+        let source = path.canonicalize()?;
+        doc.raw_originals.push(source.clone());
+        doc.raw = Some(emulsion_core::raw::RawDocument {
+            schema_version: 1,
+            node_id: doc.nodes[0].id,
+            source,
+            source_sha256: digest,
+            params,
+            metadata: Default::default(),
+        });
+    }
     Ok(doc)
 }
 

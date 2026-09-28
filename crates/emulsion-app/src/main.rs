@@ -31,15 +31,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     let (files, edit) = match launch::parse(std::env::args_os().skip(1))? {
-        launch::Launch::Mcp => {
-            if let Err(error) = std::thread::Builder::new()
-                .name("image-compute".into())
-                .spawn(emulsion_gpu::initialize)
-            {
-                tracing::warn!(%error, "Compute initialization thread unavailable; using CPU");
-            }
-            return emulsion_mcp::serve_stdio();
-        }
+        // This process only serves schemas or relays calls to the GUI, which owns
+        // image acceleration. Starting Vulkan here races driver setup with EOF
+        // shutdown and can leave short-lived MCP discovery processes hanging.
+        launch::Launch::Mcp => return emulsion_mcp::serve_stdio(),
         launch::Launch::Version => {
             println!("emulsion {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
