@@ -1199,55 +1199,6 @@ fn realtime() -> Result<Document, String> {
     b.finish()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn web_boards_are_editable_colored_and_keep_connections_when_moved() {
-        for id in [
-            "web-page-journey",
-            "web-api-platform",
-            "web-async-checkout",
-            "web-realtime-updates",
-        ] {
-            let doc = build(id).unwrap().unwrap();
-            let graph = doc.diagram.as_ref().unwrap();
-            assert!(graph.shapes.len() >= 20 && graph.edges.len() >= 15, "{id}");
-            let mut colors = std::collections::HashSet::new();
-            for shape in graph.shapes.values() {
-                let [x, y, w, h] = diagram::shape_bounds(&doc, shape).unwrap();
-                assert!(
-                    x >= 0. && y >= 0. && x + w <= WIDTH as f64 && y + h <= HEIGHT as f64,
-                    "{id}: clipped object"
-                );
-                if let NodeKind::Path { style, .. } = &doc.node(shape.body).unwrap().kind {
-                    colors.insert(style.fill);
-                }
-            }
-            assert!(colors.len() >= 7, "{id}: incomplete palette");
-            assert!(doc.nodes.iter().all(|n| matches!(
-                n.kind,
-                NodeKind::Group { .. }
-                    | NodeKind::Fill { .. }
-                    | NodeKind::Text { .. }
-                    | NodeKind::Path { .. }
-            )));
-            let movable = graph.edges.values().next().unwrap().source.shape;
-            let mut editor = crate::Editor::new(doc.clone(), None);
-            editor
-                .execute(crate::Command::TranslateNode {
-                    id: movable,
-                    dx: 13.,
-                    dy: 17.,
-                })
-                .unwrap();
-            editor.doc.validate().unwrap();
-            editor.undo();
-            assert_eq!(editor.doc, doc, "{id}: move undo");
-        }
-    }
-}
-
 /// Permanent toolbox cards reuse the template's typography, palette and icons.
 pub(crate) fn insert_stencil(
     editor: &mut crate::Editor,
@@ -1321,4 +1272,53 @@ pub(crate) fn insert_stencil(
         .first()
         .copied()
         .ok_or("Web stencil has no root".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn web_boards_are_editable_colored_and_keep_connections_when_moved() {
+        for id in [
+            "web-page-journey",
+            "web-api-platform",
+            "web-async-checkout",
+            "web-realtime-updates",
+        ] {
+            let doc = build(id).unwrap().unwrap();
+            let graph = doc.diagram.as_ref().unwrap();
+            assert!(graph.shapes.len() >= 20 && graph.edges.len() >= 15, "{id}");
+            let mut colors = std::collections::HashSet::new();
+            for shape in graph.shapes.values() {
+                let [x, y, w, h] = diagram::shape_bounds(&doc, shape).unwrap();
+                assert!(
+                    x >= 0. && y >= 0. && x + w <= WIDTH as f64 && y + h <= HEIGHT as f64,
+                    "{id}: clipped object"
+                );
+                if let NodeKind::Path { style, .. } = &doc.node(shape.body).unwrap().kind {
+                    colors.insert(style.fill);
+                }
+            }
+            assert!(colors.len() >= 7, "{id}: incomplete palette");
+            assert!(doc.nodes.iter().all(|n| matches!(
+                n.kind,
+                NodeKind::Group { .. }
+                    | NodeKind::Fill { .. }
+                    | NodeKind::Text { .. }
+                    | NodeKind::Path { .. }
+            )));
+            let movable = graph.edges.values().next().unwrap().source.shape;
+            let mut editor = crate::Editor::new(doc.clone(), None);
+            editor
+                .execute(crate::Command::TranslateNode {
+                    id: movable,
+                    dx: 13.,
+                    dy: 17.,
+                })
+                .unwrap();
+            editor.doc.validate().unwrap();
+            editor.undo();
+            assert_eq!(editor.doc, doc, "{id}: move undo");
+        }
+    }
 }

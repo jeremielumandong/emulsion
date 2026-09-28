@@ -578,23 +578,49 @@ mod tests {
     }
     #[test]
     fn stencil_export_requires_artwork_and_preserves_source() {
-        let blank = ProjectEditor::new_project(ProjectKind::Diagram,
-            emulsion_core::Document::new(400, 240)).unwrap().snapshot().unwrap();
+        let blank = ProjectEditor::new_project(
+            ProjectKind::Diagram,
+            emulsion_core::Document::new(400, 240),
+        )
+        .unwrap()
+        .snapshot()
+        .unwrap();
         assert!(stencil_project(&blank).is_err());
         let mut builder = emulsion_core::diagram::Builder::new(400, 240).unwrap();
-        builder.add_shape(emulsion_core::diagram::ShapeKind::Process,
-            [20., 20., 120., 60.], "Service").unwrap();
-        let original = ProjectEditor::new_project(ProjectKind::Diagram,
-            builder.finish().unwrap()).unwrap().snapshot().unwrap();
+        builder
+            .add_shape(
+                emulsion_core::diagram::ShapeKind::Process,
+                [20., 20., 120., 60.],
+                "Service",
+            )
+            .unwrap();
+        let original = ProjectEditor::new_project(ProjectKind::Diagram, builder.finish().unwrap())
+            .unwrap()
+            .snapshot()
+            .unwrap();
         let before = original.clone();
         let prepared = stencil_project(&original).unwrap();
         assert_eq!(original.pages[0].doc, before.pages[0].doc);
         assert_eq!(prepared.pages[0].doc.diagram, original.pages[0].doc.diagram);
-        assert!(prepared.pages[0].doc.nodes.iter().all(|n| !matches!(n.kind, NodeKind::Fill { .. })));
+        assert!(
+            prepared.pages[0]
+                .doc
+                .nodes
+                .iter()
+                .all(|n| !matches!(n.kind, NodeKind::Fill { .. }))
+        );
         let root = folder("export-preparation");
         let path = root.join("service.emustencil");
-        write(&prepared, &Manifest::new(Kind::Stencil, "Service".into()), &path).unwrap();
-        assert_eq!(read(&path).unwrap().project.pages[0].doc, prepared.pages[0].doc);
+        write(
+            &prepared,
+            &Manifest::new(Kind::Stencil, "Service".into()),
+            &path,
+        )
+        .unwrap();
+        assert_eq!(
+            read(&path).unwrap().project.pages[0].doc,
+            prepared.pages[0].doc
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

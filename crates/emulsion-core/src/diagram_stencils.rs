@@ -862,8 +862,20 @@ pub const STENCILS: &[Stencil] = &[
         "M50 10C75 10 75 45 50 45C25 45 25 10 50 10ZM15 90V72C15 45 85 45 85 72V90Z",
         true
     ),
-    native!("container-frame", "Container frame", "Containers", "group boundary frame", Container),
-    native!("container-swimlane", "Swimlane", "Containers", "pool lane responsibility", Swimlane),
+    native!(
+        "container-frame",
+        "Container frame",
+        "Containers",
+        "group boundary frame",
+        Container
+    ),
+    native!(
+        "container-swimlane",
+        "Swimlane",
+        "Containers",
+        "pool lane responsibility",
+        Swimlane
+    ),
 ];
 
 #[cfg(test)]

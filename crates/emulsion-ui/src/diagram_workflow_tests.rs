@@ -88,7 +88,11 @@ fn diagram_default_categories_insert_network_stencils_with_undo(cx: &mut TestApp
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.try_find(("diagram-stencil-category", 5usize)).is_none());
+        assert!(
+            window
+                .try_find(("diagram-stencil-category", 5usize))
+                .is_none()
+        );
         window.click("diagram-more-shapes", cx);
     });
     cx.run_until_parked();
@@ -99,7 +103,11 @@ fn diagram_default_categories_insert_network_stencils_with_undo(cx: &mut TestApp
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.try_find(("diagram-stencil-category", 5usize)).is_none());
+        assert!(
+            window
+                .try_find(("diagram-stencil-category", 5usize))
+                .is_none()
+        );
         window.click("diagram-more-shapes", cx);
     });
     cx.run_until_parked();

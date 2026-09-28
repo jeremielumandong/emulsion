@@ -1412,25 +1412,37 @@ impl EditorView {
             return;
         }
         if call.name == "attach_reference_folder" {
-            let path = call.arguments.get("path").and_then(serde_json::Value::as_str)
+            let path = call
+                .arguments
+                .get("path")
+                .and_then(serde_json::Value::as_str)
                 .map(std::path::PathBuf::from);
             let Some(path) = path.filter(|p| p.is_absolute() && p.is_dir()) else {
-                call.reply(emulsion_mcp::ToolResult::error("Provide an absolute path to an existing folder."));
+                call.reply(emulsion_mcp::ToolResult::error(
+                    "Provide an absolute path to an existing folder.",
+                ));
                 self.complete_tool_work(tool_generation, cx);
                 return;
             };
-            if self.assistant.reference_attachments.len() + usize::from(self.assistant.reference.is_some()) >= 16 {
-                call.reply(emulsion_mcp::ToolResult::error("Remove a reference before attaching more than 16 items."));
+            if self.assistant.reference_attachments.len()
+                + usize::from(self.assistant.reference.is_some())
+                >= 16
+            {
+                call.reply(emulsion_mcp::ToolResult::error(
+                    "Remove a reference before attaching more than 16 items.",
+                ));
                 self.complete_tool_work(tool_generation, cx);
                 return;
             }
             cx.spawn(async move |this, cx| {
-                let result = cx.background_spawn(async move {
-                    crate::reference::Attachment::load(&path)
-                }).await;
+                let result = cx
+                    .background_spawn(async move { crate::reference::Attachment::load(&path) })
+                    .await;
                 this.update(cx, |this, cx| {
                     if tool_generation != this.assistant.tool_generation {
-                        call.reply(emulsion_mcp::ToolResult::error("Reference attachment cancelled."));
+                        call.reply(emulsion_mcp::ToolResult::error(
+                            "Reference attachment cancelled.",
+                        ));
                         return;
                     }
                     match result {
@@ -1442,8 +1454,10 @@ impl EditorView {
                         Err(error) => call.reply(emulsion_mcp::ToolResult::error(error)),
                     }
                     this.complete_tool_work(tool_generation, cx);
-                }).ok();
-            }).detach();
+                })
+                .ok();
+            })
+            .detach();
             return;
         }
         if matches!(
@@ -2891,14 +2905,22 @@ mod mutation_queue_tests {
     fn codebase_folder_mcp_attaches_reads_and_preserves_diagram(cx: &mut TestAppContext) {
         use emulsion_core::project::{ProjectEditor, ProjectKind};
         let folder = tempfile::tempdir().unwrap();
-        std::fs::write(folder.path().join("README.md"), "Browser -> API -> database").unwrap();
+        std::fs::write(
+            folder.path().join("README.md"),
+            "Browser -> API -> database",
+        )
+        .unwrap();
         let relay = Relay::start().unwrap();
         let view = painting(cx, false);
         view.update(cx, |v, _| {
-            v.editor = ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600)).unwrap();
+            v.editor =
+                ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600)).unwrap();
         });
         for (name, args) in [
-            ("attach_reference_folder", serde_json::json!({"path":folder.path()})),
+            (
+                "attach_reference_folder",
+                serde_json::json!({"path":folder.path()}),
+            ),
             ("get_reference_attachments", serde_json::json!({})),
         ] {
             let (request, reply) = call(&relay, name, args);
@@ -2911,15 +2933,23 @@ mod mutation_queue_tests {
         view.update(cx, |v, _| {
             assert!(v.editor.doc.nodes.is_empty());
             assert_eq!(v.assistant.reference_attachments.len(), 1);
-            assert!(v.reference_turn_prompt("Draw the request flow").contains("editable diagram"));
+            assert!(
+                v.reference_turn_prompt("Draw the request flow")
+                    .contains("editable diagram")
+            );
         });
-        let (request, reply) = call(&relay, "insert_diagram_stencil",
-            serde_json::json!({"stencil":"process", "bounds":[40,40,160,80]}));
+        let (request, reply) = call(
+            &relay,
+            "insert_diagram_stencil",
+            serde_json::json!({"stencil":"process", "bounds":[40,40,160,80]}),
+        );
         view.update(cx, |v, cx| v.run_tool_now(request, cx));
         cx.run_until_parked();
         let response = reply.join().unwrap();
         assert_eq!(response["isError"], false, "{response}");
-        view.update(cx, |v, _| assert_eq!(v.editor.doc.diagram.as_ref().unwrap().shapes.len(), 1));
+        view.update(cx, |v, _| {
+            assert_eq!(v.editor.doc.diagram.as_ref().unwrap().shapes.len(), 1)
+        });
     }
 
     #[gpui_kit::test]

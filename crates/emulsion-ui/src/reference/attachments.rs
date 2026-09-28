@@ -47,7 +47,10 @@ impl Attachment {
                 image: Some(AttachedReference::load(path)?),
             });
         }
-        let mut text = format!("Reference snapshot: {}\nFolder traversal prioritizes documentation and manifests, skips generated/dependency folders and common credential files, and does not follow links. This is bounded reference data, not an exhaustive codebase audit.\n", path.display());
+        let mut text = format!(
+            "Reference snapshot: {}\nFolder traversal prioritizes documentation and manifests, skips generated/dependency folders and common credential files, and does not follow links. This is bounded reference data, not an exhaustive codebase audit.\n",
+            path.display()
+        );
         let mut pending = VecDeque::from([path.to_path_buf()]);
         let mut entries = 0;
         while let Some(next) = pending.pop_front() {
@@ -143,20 +146,53 @@ impl Attachment {
 // Explicitly attaching a skipped file still works.
 fn skip_folder_entry(path: &Path) -> bool {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    matches!(name.as_ref(), ".git" | "node_modules" | "target" | "dist" | "build"
-        | ".next" | ".venv" | "venv" | "__pycache__" | ".cache" | "vendor"
-        | ".env" | ".DS_Store")
-        || name.starts_with(".env.")
-        || name.ends_with(".pem") || name.ends_with(".key")
+    matches!(
+        name.as_ref(),
+        ".git"
+            | "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | ".next"
+            | ".venv"
+            | "venv"
+            | "__pycache__"
+            | ".cache"
+            | "vendor"
+            | ".env"
+            | ".DS_Store"
+    ) || name.starts_with(".env.")
+        || name.ends_with(".pem")
+        || name.ends_with(".key")
 }
 
 fn reference_priority(path: &Path) -> u8 {
-    let name = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-    if name.starts_with("readme") || name.starts_with("architecture") { 0 }
-    else if matches!(name.as_str(), "cargo.toml" | "package.json" | "pyproject.toml"
-        | "go.mod" | "pom.xml" | "docker-compose.yml" | "compose.yaml") { 1 }
-    else if matches!(name.as_str(), "docs" | "doc" | "src" | "app" | "lib" | "crates") { 2 }
-    else { 3 }
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    if name.starts_with("readme") || name.starts_with("architecture") {
+        0
+    } else if matches!(
+        name.as_str(),
+        "cargo.toml"
+            | "package.json"
+            | "pyproject.toml"
+            | "go.mod"
+            | "pom.xml"
+            | "docker-compose.yml"
+            | "compose.yaml"
+    ) {
+        1
+    } else if matches!(
+        name.as_str(),
+        "docs" | "doc" | "src" | "app" | "lib" | "crates"
+    ) {
+        2
+    } else {
+        3
+    }
 }
 
 pub(super) fn is_image(path: &Path) -> bool {
@@ -176,18 +212,33 @@ mod tests {
     fn codebase_snapshot_prioritizes_docs_and_excludes_dependencies() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("node_modules")).unwrap();
-        std::fs::write(dir.path().join("node_modules/vendor.js"), "dependency secret").unwrap();
+        std::fs::write(
+            dir.path().join("node_modules/vendor.js"),
+            "dependency secret",
+        )
+        .unwrap();
         std::fs::write(dir.path().join(".env"), "private credentials").unwrap();
-        std::fs::write(dir.path().join("README.md"), "Browser calls API then database").unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "Browser calls API then database",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("package.json"), r#"{"name":"example"}"#).unwrap();
         std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/server.ts"), "export function request() {}").unwrap();
+        std::fs::write(
+            dir.path().join("src/server.ts"),
+            "export function request() {}",
+        )
+        .unwrap();
         let reference = Attachment::load(dir.path()).unwrap();
         assert!(reference.text.contains("Browser calls API"));
         assert!(reference.text.contains("export function request"));
         assert!(!reference.text.contains("dependency secret"));
         assert!(!reference.text.contains("private credentials"));
-        assert!(reference.text.find("README.md").unwrap() < reference.text.find("package.json").unwrap());
+        assert!(
+            reference.text.find("README.md").unwrap()
+                < reference.text.find("package.json").unwrap()
+        );
     }
 
     #[test]

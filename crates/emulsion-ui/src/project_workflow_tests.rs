@@ -884,7 +884,7 @@ fn creative_pack_export_form_open_install_and_stencil_placement(cx: &mut TestApp
     });
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1400.)));
     cx.run_until_parked();
-    cx.update(|window,cx|window.click(("diagram-library-tab",4usize),cx));
+    cx.update(|window, cx| window.click(("diagram-library-tab", 4usize), cx));
     cx.run_until_parked();
     cx.update(|window, cx| window.click("creative-export-pack", cx));
     cx.run_until_parked();
@@ -911,13 +911,15 @@ fn creative_pack_export_form_open_install_and_stencil_placement(cx: &mut TestApp
         .iter()
         .find(|a| a.name == "Workflow pack")
         .unwrap();
-    cx.update(|window, cx| {
+    cx.update(|_, cx| {
         assert_eq!(placed.read(cx).editor.doc, stencil);
-        crate::app_state::update_settings(cx, |settings| settings.diagram_stencil_packs=vec![asset.id]);
-        placed.update(cx, |_,cx|cx.notify());
+        crate::app_state::update_settings(cx, |settings| {
+            settings.diagram_stencil_packs = vec![asset.id]
+        });
+        placed.update(cx, |_, cx| cx.notify());
     });
     cx.run_until_parked();
-    cx.update(|window,cx| {
+    cx.update(|window, cx| {
         window.click(("stencil-pack-toggle", asset.id), cx);
     });
     cx.run_until_parked();

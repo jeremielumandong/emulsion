@@ -96,7 +96,11 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| match result {
                 Ok((catalog, id, count, warnings)) => {
-                    crate::app_state::update_settings(cx,|s| { if !s.diagram_stencil_packs.contains(&id) {s.diagram_stencil_packs.push(id);} });
+                    crate::app_state::update_settings(cx, |s| {
+                        if !s.diagram_stencil_packs.contains(&id) {
+                            s.diagram_stencil_packs.push(id);
+                        }
+                    });
                     this.diagram_ui.expanded_stencil_packs.insert(id);
                     this.install_catalog(catalog);
                     this.diagram_import_notes(warnings.clone());
@@ -167,7 +171,10 @@ impl EditorView {
         if kind == Kind::Stencil {
             match template_pack::stencil_project(&project) {
                 Ok(stencils) => project = stencils,
-                Err(error) => { self.set_status(error.to_string(), true, cx); return; }
+                Err(error) => {
+                    self.set_status(error.to_string(), true, cx);
+                    return;
+                }
             }
         }
         let fields = [
@@ -302,7 +309,9 @@ impl EditorView {
             .assets
             .iter()
             .filter(|a| {
-                a.kind == AssetKind::Stencil && enabled.contains(&a.id) && a.tags.iter().any(|t| t == "Imported shapes")
+                a.kind == AssetKind::Stencil
+                    && enabled.contains(&a.id)
+                    && a.tags.iter().any(|t| t == "Imported shapes")
             })
             .map(|a| a.id)
             .collect::<Vec<_>>();
@@ -322,7 +331,8 @@ impl EditorView {
             .assets
             .iter()
             .filter(|a| {
-                a.kind == AssetKind::Stencil && enabled.contains(&a.id)
+                a.kind == AssetKind::Stencil
+                    && enabled.contains(&a.id)
                     && (self.diagram_ui.expanded_stencil_packs.contains(&a.id) || !query.is_empty())
             })
             .map(|a| {

@@ -2153,7 +2153,12 @@ impl EditorView {
         }
         self.load_creative_library(cx);
         if self.diagram_ui.search.is_none() {
-            self.diagram_ui.expanded_stencil_packs.extend(crate::app_state::settings(cx).diagram_stencil_packs.iter().copied());
+            self.diagram_ui.expanded_stencil_packs.extend(
+                crate::app_state::settings(cx)
+                    .diagram_stencil_packs
+                    .iter()
+                    .copied(),
+            );
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search library"));
             self.diagram_ui.subscription = Some(cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -2185,10 +2190,17 @@ impl EditorView {
                     "Stencil packs",
                 ][self.diagram_ui.library_tab],
             )
-            .when(self.diagram_ui.open, |header| header.child(
-                Button::new("diagram-more-shapes").label("Add shapes…").xsmall().ghost()
-                    .on_click(cx.listener(|this,_,window,cx| this.diagram_library_dialog(window,cx)))
-            ))
+            .when(self.diagram_ui.open, |header| {
+                header.child(
+                    Button::new("diagram-more-shapes")
+                        .label("Add shapes…")
+                        .xsmall()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.diagram_library_dialog(window, cx)
+                        })),
+                )
+            })
             .child(
                 Button::new("diagram-toggle-drawer")
                     .label(if self.diagram_ui.open { "‹" } else { "›" })
@@ -2279,12 +2291,27 @@ impl EditorView {
             content = content.child(self.document_stencil_toolbox(&query, p, window, cx));
         }
         if matches!(self.diagram_ui.library_tab, 0 | 2) {
-            let enabled = crate::app_state::settings(cx).diagram_shape_libraries.clone();
-            let mut categories = diagram::stencils::CATEGORIES.iter().enumerate().collect::<Vec<_>>();
-            categories.sort_by_key(|(i, label)| match **label { "General" => 0, "Flowchart" => 1, _ => i + 2 });
+            let enabled = crate::app_state::settings(cx)
+                .diagram_shape_libraries
+                .clone();
+            let mut categories = diagram::stencils::CATEGORIES
+                .iter()
+                .enumerate()
+                .collect::<Vec<_>>();
+            categories.sort_by_key(|(i, label)| match **label {
+                "General" => 0,
+                "Flowchart" => 1,
+                _ => i + 2,
+            });
             for (category_index, &label) in categories {
-                if self.diagram_ui.library_tab == 0 && !enabled.iter().any(|c| c == label) { continue; }
-                let display_label = if label == "General" { "Standard" } else { label };
+                if self.diagram_ui.library_tab == 0 && !enabled.iter().any(|c| c == label) {
+                    continue;
+                }
+                let display_label = if label == "General" {
+                    "Standard"
+                } else {
+                    label
+                };
                 let stencils = diagram::stencils::STENCILS
                     .iter()
                     .copied()
