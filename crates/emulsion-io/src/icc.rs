@@ -191,7 +191,7 @@ macro_rules! cmyk_converter {
                 .is_some_and(|transform| transform.transform(cmyk, &mut rgb).is_ok());
             if !managed {
                 let max = <$sample>::MAX as u64;
-                for (inks, out) in cmyk.chunks_exact(4).zip(rgb.chunks_exact_mut(3)) {
+                for (inks, out) in cmyk.chunks_exact(4).zip(rgb.as_chunks_mut::<3>().0.iter_mut()) {
                     for channel in 0..3 {
                         out[channel] = (((max - inks[channel] as u64) * (max - inks[3] as u64)
                             + max / 2)
@@ -334,7 +334,7 @@ impl PhotoView {
                 .map_err(bad)?;
             let mut output = vec![0.; pixels.len()];
             transform.transform(&pixels, &mut output).map_err(bad)?;
-            for (index, p) in output.chunks_exact_mut(3).enumerate() {
+            for (index, p) in output.as_chunks_mut::<3>().0.iter_mut().enumerate() {
                 gamut[index] = p.iter().any(|v| *v < -0.0001 || *v > 1.0001);
                 for v in p {
                     *v = v.clamp(0., 1.);
@@ -368,7 +368,7 @@ impl PhotoView {
             pixels = output;
         }
         for (index, (p, rgb)) in bgra
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>().0.iter_mut()
             .zip(pixels.chunks_exact(3))
             .enumerate()
         {

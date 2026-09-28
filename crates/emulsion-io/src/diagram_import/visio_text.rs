@@ -47,6 +47,7 @@ fn geometry_parts(
     Ok(parts)
 }
 
+#[expect(clippy::too_many_arguments, reason = "Keeps existing explicit workflow inputs together")]
 fn visio_text(
     node: &Xml,
     master: Option<&Xml>,

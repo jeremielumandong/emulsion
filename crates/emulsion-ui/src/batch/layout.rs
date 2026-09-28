@@ -366,9 +366,9 @@ impl Workspace {
         }
         div().id("library-workflow-toolbar").flex().flex_wrap().items_center().gap_1().px_2()
             .child(self.library_hdr_button(cx))
-            .when(self.batch.develop.module_develop,|d|d.child(Button::new("library-before-after").label("Before / After").small().ghost().selected(self.batch.develop.compare).on_click(cx.listener(|this,_,_,cx|{this.batch.develop.compare=!this.batch.develop.compare;this.batch.develop.before=false;this.invalidate_library_preview();cx.notify();}))))
+            .when(self.batch.develop.module_develop,|d|d.child(Button::new("library-before-after").label("Before / After").small().ghost().selected(self.batch.develop.compare).on_click(cx.listener(|this,_,_,cx|{this.batch.develop.compare = !this.batch.develop.compare;this.batch.develop.before=false;this.invalidate_library_preview();cx.notify();}))))
             .child(Checkbox::new("library-auto-advance").label("Auto advance").checked(self.batch.develop.auto_advance)
-                .on_change(cx.listener(|this,value,_,cx|{this.batch.develop.auto_advance=*value;cx.notify();})))
+                .on_change(cx.listener(|this,value,_,cx|{this.batch.develop.auto_advance = *value;cx.notify();})))
             .children([(1usize,"Compare photos"),(2usize,"Survey")].into_iter().map(|(mode,title)|Button::new(("library-culling-mode",mode)).label(title).small().ghost().selected(self.batch.develop.culling_mode==mode).on_click(cx.listener(move|this,_,_,cx|{this.batch.develop.module_develop=false;this.batch.develop.culling_mode=if this.batch.develop.culling_mode==mode{0}else{mode};this.batch.develop.loupe=true;cx.notify();}))))
             .child(Button::new("library-create-proxy").label("Build proxies").small().ghost().on_click(cx.listener(|this,_,_,cx|{let paths=this.library_paths();cx.spawn(async move|this,cx|{let result=cx.background_spawn(async move{for path in paths{emulsion_io::photo_proxy::create(&path)?;}Ok::<_,emulsion_io::IoError>(())}).await;this.update(cx,|this,cx|{this.batch.note=Some(match result{Ok(())=>("Offline edit proxies ready. Originals are required for export.".into(),false),Err(e)=>(e.to_string().into(),true)});cx.notify();}).ok();}).detach();})))
             .into_any_element()

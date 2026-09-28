@@ -6,10 +6,11 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     menu::{DropdownMenu, PopupMenuItem},
 };
+type FolderRows = (u64, Arc<Vec<(PathBuf, usize)>>);
 #[derive(Default)]
 pub(super) struct LibraryUi {
     pub(super) catalog: Catalog,
-    pub(super) folder_rows: Option<(u64, Arc<Vec<(PathBuf, usize)>>)>,
+    pub(super) folder_rows: Option<FolderRows>,
     pub(super) photo_index: Option<emulsion_io::photo_index::Index>,
     pub(super) metadata_undo: Vec<Vec<(catalog::Asset, catalog::Asset)>>,
     pub(super) advance_to: Option<PathBuf>,

@@ -237,10 +237,10 @@ pub fn apply(input: Raster, edits: &LocalEdits, cancel: &AtomicBool) -> Result<R
                     continue;
                 }
                 let gray = luma(p);
-                for c in 0..3 {
-                    let v = (gray + (p[c] - gray) * (1. + mask.saturation * a))
+                for channel in &mut p {
+                    let v = (gray + (*channel - gray) * (1. + mask.saturation * a))
                         * 2f32.powf(mask.exposure * a);
-                    p[c] = (v - 0.18) * (1. + mask.contrast * a) + 0.18;
+                    *channel = (v - 0.18) * (1. + mask.contrast * a) + 0.18;
                 }
                 p[0] *= 2f32.powf(mask.temperature * a * 0.7);
                 p[2] *= 2f32.powf(-mask.temperature * a * 0.7);
@@ -285,7 +285,7 @@ pub fn overlay_oriented(
             }
         }
     }
-    for (i, p) in bytes.chunks_exact_mut(4).enumerate() {
+    for (i, p) in bytes.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let xy = [
             ((i as u32 % w) as f32 + 0.5) / w as f32,
             ((i as u32 / w) as f32 + 0.5) / h as f32,

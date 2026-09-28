@@ -177,8 +177,9 @@ pub(super) fn nurbs(
                 } else {
                     (t - knots[i]) / denominator
                 };
-                for k in 0..3 {
-                    d[j][k] = (1. - alpha) * d[j - 1][k] + alpha * d[j][k];
+                let previous = d[j - 1];
+                for (value, previous) in d[j].iter_mut().zip(previous) {
+                    *value = (1. - alpha) * previous + alpha * *value;
                 }
             }
         }

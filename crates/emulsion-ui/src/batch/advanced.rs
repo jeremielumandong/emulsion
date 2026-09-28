@@ -739,6 +739,7 @@ impl Workspace {
         }
         panel.into_any_element()
     }
+#[expect(clippy::too_many_arguments, reason = "Keeps existing explicit workflow inputs together")]
     pub(super) fn library_numeric_control(
         &self,
         index: usize,
@@ -1750,7 +1751,7 @@ impl Workspace {
                                     "Imported {} photos, {} keyword assignments, {} labels, {} collections and {} histories; {} offline. {}",
                                     report.imported, report.keywords, report.color_labels, report.collections, report.histories,
                                     report.missing.len(),
-                                    format!("{}{}",report.warnings.iter().take(3).cloned().collect::<Vec<_>>().join(" "),if report.warnings.len()>3{format!(" ({} more compatibility notes available through MCP.)",report.warnings.len()-3)}else{String::new()})
+                                    format_args!("{}{}",report.warnings.iter().take(3).cloned().collect::<Vec<_>>().join(" "),if report.warnings.len()>3{format!(" ({} more compatibility notes available through MCP.)",report.warnings.len()-3)}else{String::new()})
                                 )
                                 .into(),
                                 false,

@@ -212,19 +212,19 @@ fn profile_matrix(raw: &RawImage, p: &DevelopParams, channels: usize) -> Result<
         }));
     }
     let mut cameras = [[[0.; 3]; 4]; 2];
-    for i in 0..2 {
+    for (i, camera) in cameras.iter_mut().enumerate() {
         let values = if profile.matrices[i].is_empty() {
             &profile.matrices[0]
         } else {
             &profile.matrices[i]
         };
         for r in 0..3 {
-            cameras[i][r].copy_from_slice(&values[r * 3..r * 3 + 3]);
+            camera[r].copy_from_slice(&values[r * 3..r * 3 + 3]);
         }
         let illuminant = Illuminant::try_from(profile.illuminants[i])
             .map_err(|_| invalid("Unknown profile illuminant"))?;
-        cameras[i] = multiply(
-            &cameras[i],
+        *camera = multiply(
+            camera,
             &bradford_adaption_matrix(&Illuminant::D65, &illuminant),
         );
     }
@@ -257,19 +257,19 @@ fn white_balance(raw: &RawImage, params: &DevelopParams, channels: usize) -> Res
             let profile = crate::camera_profiles::load(&digest)?;
             let blend = profile.blend(Some(k));
             let mut matrices = [[[0.; 3]; 3]; 2];
-            for i in 0..2 {
+            for (i, matrix) in matrices.iter_mut().enumerate() {
                 let values = if profile.matrices[i].is_empty() {
                     &profile.matrices[0]
                 } else {
                     &profile.matrices[i]
                 };
                 for r in 0..3 {
-                    matrices[i][r].copy_from_slice(&values[r * 3..r * 3 + 3]);
+                    matrix[r].copy_from_slice(&values[r * 3..r * 3 + 3]);
                 }
                 let illuminant = Illuminant::try_from(profile.illuminants[i])
                     .map_err(|_| invalid("Unknown profile illuminant"))?;
-                matrices[i] = multiply(
-                    &matrices[i],
+                *matrix = multiply(
+                    matrix,
                     &bradford_adaption_matrix(&Illuminant::D65, &illuminant),
                 );
             }

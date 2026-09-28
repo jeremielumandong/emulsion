@@ -1,11 +1,12 @@
 //! Retain hit geometry between pointer events; rebuild once per document/zoom change.
 use super::*;
 type Key = (u64, u64, u64, u64);
+type EdgeHitGeometry = (NodeId, [f64; 4], Vec<Vec<(f64, f64)>>);
 #[derive(Default)]
 pub(super) struct HitCache {
     key: Option<Key>,
     pub(super) shapes: Vec<(NodeId, ShapeKind, [f64; 4])>,
-    pub(super) edges: Vec<(NodeId, [f64; 4], Vec<Vec<(f64, f64)>>)>,
+    pub(super) edges: Vec<EdgeHitGeometry>,
 }
 impl EditorView {
     pub(super) fn diagram_hit_cache(&self) -> std::cell::Ref<'_, HitCache> {
