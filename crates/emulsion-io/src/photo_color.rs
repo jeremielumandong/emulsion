@@ -112,7 +112,12 @@ pub fn export(
                 })
             })
             .collect();
-        let mut rgb: Vec<[f32; 3]> = input.as_chunks::<3>().0.iter().map(|p| [p[0], p[1], p[2]]).collect();
+        let mut rgb: Vec<[f32; 3]> = input
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| [p[0], p[1], p[2]])
+            .collect();
         convert_float(&mut rgb, working, output)?;
         let encode = |v: f32| {
             let v = v.max(0.);
@@ -180,7 +185,9 @@ pub fn export(
             F::Jpeg => {
                 let rgba = bytes8();
                 let rgb: Vec<_> = rgba
-                    .as_chunks::<4>().0.iter()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .flat_map(|p| p[..3].iter().copied())
                     .collect();
                 let mut e = image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality);

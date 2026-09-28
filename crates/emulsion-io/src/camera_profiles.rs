@@ -348,7 +348,12 @@ fn parse(bytes: &[u8]) -> Result<Profile> {
     if curve.len() > 8192 || !curve.len().is_multiple_of(2) {
         return Err(bad("invalid tone curve"));
     }
-    let curve: Vec<[f32; 2]> = curve.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect();
+    let curve: Vec<[f32; 2]> = curve
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| [p[0], p[1]])
+        .collect();
     if (!curve.is_empty()
         && (curve.len() < 2 || curve[0][0] != 0. || curve.last().unwrap()[0] != 1.))
         || curve.iter().flatten().any(|v| !(0.0..=1.0).contains(v))
@@ -383,7 +388,12 @@ fn parse(bytes: &[u8]) -> Result<Profile> {
         }
         Ok(Some(Table {
             dims,
-            data: data.as_chunks::<3>().0.iter().map(|p| [p[0], p[1], p[2]]).collect(),
+            data: data
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|p| [p[0], p[1], p[2]])
+                .collect(),
             srgb_encoding: encoding == 1.,
         }))
     };

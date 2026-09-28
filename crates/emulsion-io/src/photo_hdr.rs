@@ -309,7 +309,10 @@ fn weight(signal: f32) -> f32 {
         signal.min(1. - signal).max(0.)
     }
 }
-#[expect(clippy::too_many_arguments, reason = "Keeps existing explicit workflow inputs together")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keeps existing explicit workflow inputs together"
+)]
 fn accumulate(
     reference: &Frame,
     other: &Frame,

@@ -549,14 +549,13 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                     | "mxgraph.ios7ui.anchor"
                     | "mxgraph.bootstrap.anchor"
             )
-        })
-            && let NodeKind::Path { path, style, cache } =
-                &mut doc.node_mut(shape.body).unwrap().kind
-            {
-                style.fill = None;
-                style.stroke = None;
-                *cache = VectorRaster::path(path.clone(), *style, page.width, page.height);
-            }
+        }) && let NodeKind::Path { path, style, cache } =
+            &mut doc.node_mut(shape.body).unwrap().kind
+        {
+            style.fill = None;
+            style.stroke = None;
+            *cache = VectorRaster::path(path.clone(), *style, page.width, page.height);
+        }
         if shape.kind == ShapeKind::Swimlane {
             let horizontal = style.get("horizontal").is_none_or(|v| v != "0");
             let size =

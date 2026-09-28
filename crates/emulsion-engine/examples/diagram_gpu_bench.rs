@@ -124,7 +124,11 @@ fn main() -> anyhow::Result<()> {
         "movement did not update visible GPU pixels"
     );
     anyhow::ensure!(
-        after_pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 0 && p[0] < 240),
+        after_pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p[3] > 0 && p[0] < 240),
         "empty output"
     );
     Ok(())

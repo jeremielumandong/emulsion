@@ -739,7 +739,10 @@ impl Workspace {
         }
         panel.into_any_element()
     }
-#[expect(clippy::too_many_arguments, reason = "Keeps existing explicit workflow inputs together")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keeps existing explicit workflow inputs together"
+    )]
     pub(super) fn library_numeric_control(
         &self,
         index: usize,

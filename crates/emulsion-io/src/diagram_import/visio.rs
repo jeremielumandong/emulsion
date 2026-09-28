@@ -149,9 +149,10 @@ impl Resources {
                     .child("srgbClr")
                     .map(|c| c.attr("val"))
                     .or_else(|| entry.child("sysClr").map(|c| c.attr("lastClr")))
-                    && let Ok(c) = color(&format!("#{rgb}")) {
-                        self.theme_colors.insert(entry.name.clone(), c);
-                    }
+                    && let Ok(c) = color(&format!("#{rgb}"))
+                {
+                    self.theme_colors.insert(entry.name.clone(), c);
+                }
             }
         }
     }
@@ -211,9 +212,9 @@ impl Resources {
             && let Some(c) = self
                 .formula_color(node, key)
                 .or_else(|| master.and_then(|m| self.formula_color(m, key)))
-            {
-                return c;
-            }
+        {
+            return c;
+        }
         let Some(value) = resolved
             .filter(|v| !v.eq_ignore_ascii_case("Themed"))
             .or_else(|| master.and_then(|n| value(n, key)))

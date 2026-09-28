@@ -420,10 +420,11 @@ impl Workspace {
                         if this.batch.finish_preview(generation, key, Some(pixels)) {
                             this.batch.develop.preview_stale = false;
                             if detail_region.is_none()
-                                && let Some((path, _, image)) = &this.batch.preview {
-                                    this.batch.develop.navigator_preview =
-                                        Some((path.clone(), image.clone()));
-                                }
+                                && let Some((path, _, image)) = &this.batch.preview
+                            {
+                                this.batch.develop.navigator_preview =
+                                    Some((path.clone(), image.clone()));
+                            }
                             if let Some((w, h, bytes)) = baseline {
                                 this.batch.develop.baseline_preview =
                                     Some((path, Arc::new(bgra_image(w, h, bytes))));

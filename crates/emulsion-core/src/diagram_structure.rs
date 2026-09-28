@@ -182,27 +182,27 @@ pub(super) fn synchronize(
                 kind: NodeKind::Text { spec: old, .. },
                 ..
             }) = before.node(shape.label)
-            {
-                if old.text != spec.text {
-                    value = StructuredObject::from_text(&spec.text);
-                    value.validate()?;
-                    if shape.kind == ShapeKind::Entity {
-                        value.methods.clear();
-                    }
-                    shape
-                        .data
-                        .insert(KEY.into(), serde_json::to_string(&value).unwrap());
-                } else if old.size == spec.size
-                    && old.font == spec.font
-                    && old.line_height == spec.line_height
-                    && old.width == spec.width
-                    && old.letter_spacing == spec.letter_spacing
-                {
-                    // Geometry transforms already move/rotate/scale the separators and
-                    // glyphs together. Reflow only a content or typography edit.
-                    continue;
+        {
+            if old.text != spec.text {
+                value = StructuredObject::from_text(&spec.text);
+                value.validate()?;
+                if shape.kind == ShapeKind::Entity {
+                    value.methods.clear();
                 }
+                shape
+                    .data
+                    .insert(KEY.into(), serde_json::to_string(&value).unwrap());
+            } else if old.size == spec.size
+                && old.font == spec.font
+                && old.line_height == spec.line_height
+                && old.width == spec.width
+                && old.letter_spacing == spec.letter_spacing
+            {
+                // Geometry transforms already move/rotate/scale the separators and
+                // glyphs together. Reflow only a content or typography edit.
+                continue;
             }
+        }
         let matrix = spec.transform();
         let mut local_path = (**path).clone();
         local_path.transform(matrix.inverse());

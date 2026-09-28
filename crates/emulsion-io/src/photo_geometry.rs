@@ -56,7 +56,7 @@ pub fn automatic(image: &Raster, mut params: DevelopParams) -> Result<DevelopPar
             }
         }
     }
-    peaks.sort_by(|a, b| b.0.cmp(&a.0));
+    peaks.sort_by_key(|a| std::cmp::Reverse(a.0));
     let mut lines: Vec<Line> = vec![];
     let mut selected: Vec<(i32, bool, f32)> = vec![];
     let scale = w.min(h) as f32 / 2.;

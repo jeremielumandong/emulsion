@@ -38,8 +38,8 @@ pub(super) fn apply(
                 let y = luminance([p[0], p[1], p[2]]);
                 let sy = luminance([src[0], src[1], src[2]]);
                 let weight = ((sy - y).abs() * 20.).clamp(0., 1.) * params.luminance_contrast;
-                for c in 0..3 {
-                    p[c] += (sy - y) * weight;
+                for channel in p.iter_mut().take(3) {
+                    *channel += (sy - y) * weight;
                 }
             }
         }

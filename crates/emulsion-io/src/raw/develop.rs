@@ -1027,6 +1027,106 @@ fn finish_in_space(
     }
 }
 
+// HDR extraction bypasses tone curves and u16 quantization, preserving sensor range.
+pub(super) fn linear_hdr(
+    raw: &RawImage,
+    wb: [f32; 4],
+    cancel: &AtomicBool,
+) -> Result<crate::photo_hdr::Frame> {
+    validate(raw)?;
+    if raw
+        .width
+        .checked_mul(raw.height)
+        .is_none_or(|n| n > crate::photo_hdr::MAX_PIXELS)
+    {
+        return Err(invalid("HDR input exceeds 24 megapixels"));
+    }
+    let developed = demosaic(raw, cancel)?;
+    let signals: Vec<f32> = match &developed {
+        Intermediate::Monochrome(v) => v.data.clone(),
+        Intermediate::ThreeColor(v) => v
+            .data
+            .iter()
+            .map(|p| p.iter().copied().fold(0., f32::max))
+            .collect(),
+        Intermediate::FourColor(v) => v
+            .data
+            .iter()
+            .map(|p| p.iter().copied().fold(0., f32::max))
+            .collect(),
+    };
+    let params = DevelopParams {
+        wb_override: Some(wb),
+        ..Default::default()
+    };
+    let (w, h, rgb) = working_rgb(raw, &params, developed)?;
+    let swap = matches!(
+        raw.orientation,
+        Orientation::Transpose
+            | Orientation::Rotate90
+            | Orientation::Transverse
+            | Orientation::Rotate270
+    );
+    let (ow, oh) = if swap { (h, w) } else { (w, h) };
+    let mut pixels = Vec::with_capacity(ow * oh);
+    let mut signal = Vec::with_capacity(ow * oh);
+    for y in 0..oh {
+        cancelled(cancel)?;
+        for x in 0..ow {
+            let i = oriented_index(w, h, raw.orientation, x, y);
+            pixels.push(rgb[i]);
+            signal.push(signals[i]);
+        }
+    }
+    Ok(crate::photo_hdr::Frame {
+        image: crate::photo_hdr::FloatImage {
+            width: ow as u32,
+            height: oh as u32,
+            pixels,
+        },
+        signal,
+    })
+}
+pub(super) fn render_linear_rgb(
+    w: u32,
+    h: u32,
+    mut pixels: Vec<[f32; 3]>,
+    params: &DevelopParams,
+    cancel: &AtomicBool,
+) -> Result<Raster> {
+    params.validate().map_err(invalid)?;
+    let gain = if let Some(k) = params.kelvin {
+        let white = illuminant_xyz(k);
+        let d65 = illuminant_xyz(6504.);
+        let m = rawler::imgop::xyz::XYZ_TO_SRGB_D65;
+        std::array::from_fn(|c| {
+            let response = (0..3).map(|i| m[c][i] * white[i]).sum::<f32>();
+            let reference = (0..3).map(|i| m[c][i] * d65[i]).sum::<f32>();
+            (reference / response.max(0.01)).clamp(0.05, 20.)
+        })
+    } else {
+        [1.; 3]
+    };
+    let wb = [
+        gain[0] * 2f32.powf(params.temperature * 0.7),
+        gain[1] * 2f32.powf(-params.tint * 0.4),
+        gain[2] * 2f32.powf(-params.temperature * 0.7),
+    ];
+    for p in &mut pixels {
+        for c in 0..3 {
+            p[c] *= wb[c];
+        }
+    }
+    finish(
+        w as usize,
+        h as usize,
+        pixels,
+        Orientation::Normal,
+        params,
+        cancel,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1515,104 +1615,4 @@ mod tests {
             assert_eq!(actual, expected, "orientation {}", i + 1);
         }
     }
-}
-
-// HDR extraction bypasses tone curves and u16 quantization, preserving sensor range.
-pub(super) fn linear_hdr(
-    raw: &RawImage,
-    wb: [f32; 4],
-    cancel: &AtomicBool,
-) -> Result<crate::photo_hdr::Frame> {
-    validate(raw)?;
-    if raw
-        .width
-        .checked_mul(raw.height)
-        .is_none_or(|n| n > crate::photo_hdr::MAX_PIXELS)
-    {
-        return Err(invalid("HDR input exceeds 24 megapixels"));
-    }
-    let developed = demosaic(raw, cancel)?;
-    let signals: Vec<f32> = match &developed {
-        Intermediate::Monochrome(v) => v.data.clone(),
-        Intermediate::ThreeColor(v) => v
-            .data
-            .iter()
-            .map(|p| p.iter().copied().fold(0., f32::max))
-            .collect(),
-        Intermediate::FourColor(v) => v
-            .data
-            .iter()
-            .map(|p| p.iter().copied().fold(0., f32::max))
-            .collect(),
-    };
-    let params = DevelopParams {
-        wb_override: Some(wb),
-        ..Default::default()
-    };
-    let (w, h, rgb) = working_rgb(raw, &params, developed)?;
-    let swap = matches!(
-        raw.orientation,
-        Orientation::Transpose
-            | Orientation::Rotate90
-            | Orientation::Transverse
-            | Orientation::Rotate270
-    );
-    let (ow, oh) = if swap { (h, w) } else { (w, h) };
-    let mut pixels = Vec::with_capacity(ow * oh);
-    let mut signal = Vec::with_capacity(ow * oh);
-    for y in 0..oh {
-        cancelled(cancel)?;
-        for x in 0..ow {
-            let i = oriented_index(w, h, raw.orientation, x, y);
-            pixels.push(rgb[i]);
-            signal.push(signals[i]);
-        }
-    }
-    Ok(crate::photo_hdr::Frame {
-        image: crate::photo_hdr::FloatImage {
-            width: ow as u32,
-            height: oh as u32,
-            pixels,
-        },
-        signal,
-    })
-}
-pub(super) fn render_linear_rgb(
-    w: u32,
-    h: u32,
-    mut pixels: Vec<[f32; 3]>,
-    params: &DevelopParams,
-    cancel: &AtomicBool,
-) -> Result<Raster> {
-    params.validate().map_err(invalid)?;
-    let gain = if let Some(k) = params.kelvin {
-        let white = illuminant_xyz(k);
-        let d65 = illuminant_xyz(6504.);
-        let m = rawler::imgop::xyz::XYZ_TO_SRGB_D65;
-        std::array::from_fn(|c| {
-            let response = (0..3).map(|i| m[c][i] * white[i]).sum::<f32>();
-            let reference = (0..3).map(|i| m[c][i] * d65[i]).sum::<f32>();
-            (reference / response.max(0.01)).clamp(0.05, 20.)
-        })
-    } else {
-        [1.; 3]
-    };
-    let wb = [
-        gain[0] * 2f32.powf(params.temperature * 0.7),
-        gain[1] * 2f32.powf(-params.tint * 0.4),
-        gain[2] * 2f32.powf(-params.temperature * 0.7),
-    ];
-    for p in &mut pixels {
-        for c in 0..3 {
-            p[c] *= wb[c];
-        }
-    }
-    finish(
-        w as usize,
-        h as usize,
-        pixels,
-        Orientation::Normal,
-        params,
-        cancel,
-    )
 }

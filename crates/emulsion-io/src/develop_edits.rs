@@ -316,6 +316,36 @@ pub fn overlay_oriented(
     Ok(())
 }
 
+/// Preview-only high-pass view for finding small dust marks; alpha is preserved.
+pub fn visualize_dust(bgra: &mut [u8], width: u32, height: u32) {
+    if width == 0 || height == 0 || bgra.len() != width as usize * height as usize * 4 {
+        return;
+    }
+    let luma: Vec<f32> = bgra
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| (p[2] as f32 * 0.2126 + p[1] as f32 * 0.7152 + p[0] as f32 * 0.0722) / 255.)
+        .collect();
+    let (w, h) = (width as usize, height as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = 0.;
+            let mut count = 0.;
+            for dy in [-3isize, 0, 3] {
+                for dx in [-3isize, 0, 3] {
+                    let sx = x.saturating_add_signed(dx).min(w - 1);
+                    let sy = y.saturating_add_signed(dy).min(h - 1);
+                    sum += luma[sy * w + sx];
+                    count += 1.;
+                }
+            }
+            let value = ((luma[y * w + x] - sum / count).abs() * 1800.).clamp(0., 255.) as u8;
+            bgra[(y * w + x) * 4..(y * w + x) * 4 + 3].fill(value);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,33 +476,5 @@ mod tests {
         let output = apply(input.clone(), &edits, &AtomicBool::new(false)).unwrap();
         assert_eq!(output.get(15, 15), input.get(5, 5));
         assert!(apply(input, &edits, &AtomicBool::new(true)).is_err());
-    }
-}
-
-/// Preview-only high-pass view for finding small dust marks; alpha is preserved.
-pub fn visualize_dust(bgra: &mut [u8], width: u32, height: u32) {
-    if width == 0 || height == 0 || bgra.len() != width as usize * height as usize * 4 {
-        return;
-    }
-    let luma: Vec<f32> = bgra
-        .as_chunks::<4>().0.iter()
-        .map(|p| (p[2] as f32 * 0.2126 + p[1] as f32 * 0.7152 + p[0] as f32 * 0.0722) / 255.)
-        .collect();
-    let (w, h) = (width as usize, height as usize);
-    for y in 0..h {
-        for x in 0..w {
-            let mut sum = 0.;
-            let mut count = 0.;
-            for dy in [-3isize, 0, 3] {
-                for dx in [-3isize, 0, 3] {
-                    let sx = x.saturating_add_signed(dx).min(w - 1);
-                    let sy = y.saturating_add_signed(dy).min(h - 1);
-                    sum += luma[sy * w + sx];
-                    count += 1.;
-                }
-            }
-            let value = ((luma[y * w + x] - sum / count).abs() * 1800.).clamp(0., 255.) as u8;
-            bgra[(y * w + x) * 4..(y * w + x) * 4 + 3].fill(value);
-        }
     }
 }

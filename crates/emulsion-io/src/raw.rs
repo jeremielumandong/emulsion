@@ -295,6 +295,21 @@ pub fn open(path: &Path) -> Result<Document> {
     Ok(doc)
 }
 
+/// Shared development for decoded JPEG/TIFF/PNG images.
+pub fn develop_raster(raster: &Raster, params: &DevelopParams) -> Result<Raster> {
+    develop::render_raster(raster, params)
+}
+
+pub(crate) fn develop_linear_rgb(
+    w: u32,
+    h: u32,
+    pixels: Vec<[f32; 3]>,
+    params: &DevelopParams,
+    cancel: &AtomicBool,
+) -> Result<Raster> {
+    develop::render_linear_rgb(w, h, pixels, params, cancel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,19 +325,4 @@ mod tests {
     fn decoder_panic_is_an_error() {
         assert!(guarded::<()>(|| panic!("bad decoder input")).is_err());
     }
-}
-
-/// Shared development for decoded JPEG/TIFF/PNG images.
-pub fn develop_raster(raster: &Raster, params: &DevelopParams) -> Result<Raster> {
-    develop::render_raster(raster, params)
-}
-
-pub(crate) fn develop_linear_rgb(
-    w: u32,
-    h: u32,
-    pixels: Vec<[f32; 3]>,
-    params: &DevelopParams,
-    cancel: &AtomicBool,
-) -> Result<Raster> {
-    develop::render_linear_rgb(w, h, pixels, params, cancel)
 }

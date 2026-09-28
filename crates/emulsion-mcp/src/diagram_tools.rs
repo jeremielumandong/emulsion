@@ -691,9 +691,10 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                     edge.arrow_end = decode(value, "arrow_end")?;
                 }
                 if let Some(value) = args.get("reverse")
-                    && decode::<bool>(value, "reverse")? {
-                        edge.reverse();
-                    }
+                    && decode::<bool>(value, "reverse")?
+                {
+                    edge.reverse();
+                }
                 if ["width", "dash", "color"]
                     .iter()
                     .any(|k| args.get(k).is_some())

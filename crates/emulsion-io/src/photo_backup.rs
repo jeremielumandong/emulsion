@@ -217,10 +217,9 @@ pub fn restore(path: &Path, destination: &Path) -> Result<Catalog> {
             return Err(bad("Backup checksum mismatch"));
         }
         output.sync_all()?;
-        if entry.kind == "photo"
-            && mapped.insert(entry.source.clone(), out.clone()).is_some() {
-                return Err(bad("Duplicate photo in backup"));
-            }
+        if entry.kind == "photo" && mapped.insert(entry.source.clone(), out.clone()).is_some() {
+            return Err(bad("Duplicate photo in backup"));
+        }
         resources.push(out);
     }
     // Sidecars are located relative to the relocated originals, including virtual copies.

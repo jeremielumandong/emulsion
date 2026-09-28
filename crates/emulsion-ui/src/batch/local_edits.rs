@@ -628,10 +628,11 @@ impl Workspace {
         if event.pressed_button == Some(MouseButton::Left)
             && !self.batch.develop.canvas_points.is_empty()
             && self.batch.develop.canvas_points.len() < 4096
-            && let Some(point) = self.library_canvas_point(event.position) {
-                self.batch.develop.canvas_points.push(point);
-                cx.notify();
-            }
+            && let Some(point) = self.library_canvas_point(event.position)
+        {
+            self.batch.develop.canvas_points.push(point);
+            cx.notify();
+        }
         true
     }
     pub(super) fn library_canvas_up(&mut self, cx: &mut Context<Self>) {

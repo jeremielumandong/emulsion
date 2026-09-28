@@ -594,6 +594,128 @@ fn reset_camera_defaults_in(root: &Path, metadata: &RawMetadata) -> Result<()> {
     Ok(())
 }
 
+/// Fingerprint-bound sidecars also serve nondestructive rendered-photo development.
+pub fn save_photo_settings(source: &Path, digest: &str, params: DevelopParams) -> Result<()> {
+    let mut saved = record("emulsion-raw-sidecar", params)?;
+    saved.source_sha256 = Some(digest.to_ascii_lowercase());
+    let path = sidecar_path(source)?;
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => {
+            let previous = read(&path, "emulsion-raw-sidecar")?;
+            if !previous
+                .source_sha256
+                .as_ref()
+                .is_some_and(|d| d.eq_ignore_ascii_case(digest))
+            {
+                return Err(invalid("Original changed before save"));
+            }
+            saved.history = previous.history;
+            saved.snapshots = previous.snapshots;
+            if previous.params != params {
+                saved.history.push(previous.params);
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if params != DevelopParams::default() {
+                saved.history.push(DevelopParams::default());
+            }
+        }
+        Err(e) => return Err(e.into()),
+    }
+    if saved.history.len() > 100 {
+        saved.history.drain(..saved.history.len() - 100);
+    }
+    write_photo(source, &path, &saved)
+}
+
+pub fn photo_history(
+    source: &Path,
+    digest: &str,
+) -> Result<(
+    Vec<DevelopParams>,
+    std::collections::BTreeMap<String, DevelopParams>,
+)> {
+    let path = sidecar_path(source)?;
+    if !path.exists() {
+        return Ok(Default::default());
+    }
+    load_sidecar_verified(&path, digest)?;
+    let saved = read(&path, "emulsion-raw-sidecar")?;
+    Ok((saved.history, saved.snapshots))
+}
+pub fn save_snapshot(source: &Path, digest: &str, name: &str, params: DevelopParams) -> Result<()> {
+    if name.trim().is_empty() || name.len() > 200 || name.chars().any(char::is_control) {
+        return Err(invalid("Snapshot name must be 1–200 characters"));
+    }
+    let path = sidecar_path(source)?;
+    let mut saved = if path.exists() {
+        load_sidecar_verified(&path, digest)?;
+        read(&path, "emulsion-raw-sidecar")?
+    } else {
+        let mut saved = record("emulsion-raw-sidecar", DevelopParams::default())?;
+        saved.source_sha256 = Some(digest.into());
+        saved
+    };
+    if saved.snapshots.len() >= 100 && !saved.snapshots.contains_key(name) {
+        return Err(invalid("Maximum 100 snapshots per photo"));
+    }
+    params.validate().map_err(invalid)?;
+    saved.snapshots.insert(name.into(), params);
+    write_photo(source, &path, &saved)
+}
+
+pub(crate) fn rebind_bytes(path: &Path, old: &str, new: &str) -> Result<Vec<u8>> {
+    load_sidecar_verified(path, old)?;
+    let mut saved = read(path, "emulsion-raw-sidecar")?;
+    saved.source_sha256 = Some(new.into());
+    serde_json::to_vec_pretty(&saved).map_err(|e| invalid(e.to_string()))
+}
+
+/// Import translated history into a new sidecar only; never replace existing work.
+pub(crate) fn import_history(
+    source: &Path,
+    digest: &str,
+    states: &[(String, DevelopParams)],
+) -> Result<()> {
+    let Some((_, latest)) = states.last() else {
+        return Ok(());
+    };
+    let mut saved = record("emulsion-raw-sidecar", *latest)?;
+    saved.source_sha256 = Some(digest.into());
+    saved.history = states
+        .iter()
+        .rev()
+        .skip(1)
+        .take(100)
+        .map(|(_, p)| *p)
+        .collect();
+    saved.history.reverse();
+    for (index, (name, params)) in states.iter().rev().take(100).enumerate() {
+        params.validate().map_err(invalid)?;
+        saved.snapshots.insert(
+            format!(
+                "{} · {}",
+                states.len() - index,
+                name.chars()
+                    .filter(|c| !c.is_control())
+                    .take(100)
+                    .collect::<String>()
+            ),
+            *params,
+        );
+    }
+    let sidecar = sidecar_path(source)?;
+    let bytes = serde_json::to_vec_pretty(&saved).map_err(|e| invalid(e.to_string()))?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(invalid("Imported history too large"));
+    }
+    let mut file = tempfile::NamedTempFile::new_in(sidecar.parent().unwrap())?;
+    file.write_all(&bytes)?;
+    file.as_file().sync_all()?;
+    file.persist_noclobber(sidecar).map_err(|e| e.error)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,126 +950,4 @@ mod tests {
         reset_camera_defaults_in(&dir.0, &metadata).unwrap();
         assert!(save_camera_defaults_in(&dir.0, &RawMetadata::default(), params).is_err());
     }
-}
-
-/// Fingerprint-bound sidecars also serve nondestructive rendered-photo development.
-pub fn save_photo_settings(source: &Path, digest: &str, params: DevelopParams) -> Result<()> {
-    let mut saved = record("emulsion-raw-sidecar", params)?;
-    saved.source_sha256 = Some(digest.to_ascii_lowercase());
-    let path = sidecar_path(source)?;
-    match std::fs::symlink_metadata(&path) {
-        Ok(_) => {
-            let previous = read(&path, "emulsion-raw-sidecar")?;
-            if !previous
-                .source_sha256
-                .as_ref()
-                .is_some_and(|d| d.eq_ignore_ascii_case(digest))
-            {
-                return Err(invalid("Original changed before save"));
-            }
-            saved.history = previous.history;
-            saved.snapshots = previous.snapshots;
-            if previous.params != params {
-                saved.history.push(previous.params);
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if params != DevelopParams::default() {
-                saved.history.push(DevelopParams::default());
-            }
-        }
-        Err(e) => return Err(e.into()),
-    }
-    if saved.history.len() > 100 {
-        saved.history.drain(..saved.history.len() - 100);
-    }
-    write_photo(source, &path, &saved)
-}
-
-pub fn photo_history(
-    source: &Path,
-    digest: &str,
-) -> Result<(
-    Vec<DevelopParams>,
-    std::collections::BTreeMap<String, DevelopParams>,
-)> {
-    let path = sidecar_path(source)?;
-    if !path.exists() {
-        return Ok(Default::default());
-    }
-    load_sidecar_verified(&path, digest)?;
-    let saved = read(&path, "emulsion-raw-sidecar")?;
-    Ok((saved.history, saved.snapshots))
-}
-pub fn save_snapshot(source: &Path, digest: &str, name: &str, params: DevelopParams) -> Result<()> {
-    if name.trim().is_empty() || name.len() > 200 || name.chars().any(char::is_control) {
-        return Err(invalid("Snapshot name must be 1–200 characters"));
-    }
-    let path = sidecar_path(source)?;
-    let mut saved = if path.exists() {
-        load_sidecar_verified(&path, digest)?;
-        read(&path, "emulsion-raw-sidecar")?
-    } else {
-        let mut saved = record("emulsion-raw-sidecar", DevelopParams::default())?;
-        saved.source_sha256 = Some(digest.into());
-        saved
-    };
-    if saved.snapshots.len() >= 100 && !saved.snapshots.contains_key(name) {
-        return Err(invalid("Maximum 100 snapshots per photo"));
-    }
-    params.validate().map_err(invalid)?;
-    saved.snapshots.insert(name.into(), params);
-    write_photo(source, &path, &saved)
-}
-
-pub(crate) fn rebind_bytes(path: &Path, old: &str, new: &str) -> Result<Vec<u8>> {
-    load_sidecar_verified(path, old)?;
-    let mut saved = read(path, "emulsion-raw-sidecar")?;
-    saved.source_sha256 = Some(new.into());
-    serde_json::to_vec_pretty(&saved).map_err(|e| invalid(e.to_string()))
-}
-
-/// Import translated history into a new sidecar only; never replace existing work.
-pub(crate) fn import_history(
-    source: &Path,
-    digest: &str,
-    states: &[(String, DevelopParams)],
-) -> Result<()> {
-    let Some((_, latest)) = states.last() else {
-        return Ok(());
-    };
-    let mut saved = record("emulsion-raw-sidecar", *latest)?;
-    saved.source_sha256 = Some(digest.into());
-    saved.history = states
-        .iter()
-        .rev()
-        .skip(1)
-        .take(100)
-        .map(|(_, p)| *p)
-        .collect();
-    saved.history.reverse();
-    for (index, (name, params)) in states.iter().rev().take(100).enumerate() {
-        params.validate().map_err(invalid)?;
-        saved.snapshots.insert(
-            format!(
-                "{} · {}",
-                states.len() - index,
-                name.chars()
-                    .filter(|c| !c.is_control())
-                    .take(100)
-                    .collect::<String>()
-            ),
-            *params,
-        );
-    }
-    let sidecar = sidecar_path(source)?;
-    let bytes = serde_json::to_vec_pretty(&saved).map_err(|e| invalid(e.to_string()))?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(invalid("Imported history too large"));
-    }
-    let mut file = tempfile::NamedTempFile::new_in(sidecar.parent().unwrap())?;
-    file.write_all(&bytes)?;
-    file.as_file().sync_all()?;
-    file.persist_noclobber(sidecar).map_err(|e| e.error)?;
-    Ok(())
 }

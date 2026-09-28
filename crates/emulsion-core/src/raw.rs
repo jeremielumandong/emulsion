@@ -114,7 +114,10 @@ impl TryFrom<Vec<[f32; 2]>> for PointCurve {
                 "Curves need 2–32 normalized points in increasing x order, or [] for identity",
             );
         }
-        let mut curve = Self { len: points.len() as u8, ..Self::default() };
+        let mut curve = Self {
+            len: points.len() as u8,
+            ..Self::default()
+        };
         curve.points[..points.len()].copy_from_slice(&points);
         Ok(curve)
     }

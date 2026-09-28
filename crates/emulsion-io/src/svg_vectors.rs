@@ -322,7 +322,13 @@ mod fit_tests {
             .unwrap()
             .render((80, 40), [1., 0., 0., 1., 0., 0.])
             .unwrap();
-        assert!(pixels.chunks_exact(4).all(|p| p == [0, 0, 255, 255]));
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [0, 0, 255, 255])
+        );
     }
 }
 

@@ -191,7 +191,10 @@ macro_rules! cmyk_converter {
                 .is_some_and(|transform| transform.transform(cmyk, &mut rgb).is_ok());
             if !managed {
                 let max = <$sample>::MAX as u64;
-                for (inks, out) in cmyk.chunks_exact(4).zip(rgb.as_chunks_mut::<3>().0.iter_mut()) {
+                for (inks, out) in cmyk
+                    .chunks_exact(4)
+                    .zip(rgb.as_chunks_mut::<3>().0.iter_mut())
+                {
                     for channel in 0..3 {
                         out[channel] = (((max - inks[channel] as u64) * (max - inks[3] as u64)
                             + max / 2)
@@ -318,7 +321,9 @@ impl PhotoView {
         };
         let srgb = ColorProfile::new_srgb();
         let mut pixels = bgra
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [p[2] as f32 / 255., p[1] as f32 / 255., p[0] as f32 / 255.])
             .collect::<Vec<_>>();
         let mut gamut = vec![false; pixels.len() / 3];
@@ -346,8 +351,10 @@ impl PhotoView {
                 .map_err(bad)?;
             reverse.transform(&output, &mut pixels).map_err(bad)?;
             for (i, (a, b)) in original
-                .as_chunks::<3>().0.iter()
-                .zip(pixels.chunks_exact(3))
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .zip(pixels.as_chunks::<3>().0.iter())
                 .enumerate()
             {
                 gamut[i] |= a.iter().zip(b).any(|(a, b)| (a - b).abs() > 0.015);
@@ -368,8 +375,10 @@ impl PhotoView {
             pixels = output;
         }
         for (index, (p, rgb)) in bgra
-            .as_chunks_mut::<4>().0.iter_mut()
-            .zip(pixels.chunks_exact(3))
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(pixels.as_chunks::<3>().0.iter())
             .enumerate()
         {
             if self.gamut_warning && gamut[index] {
